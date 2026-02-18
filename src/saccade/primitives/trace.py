@@ -4,12 +4,12 @@ import warnings
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Self
 
-from cadence.primitives.bus import TraceBus
+from saccade.primitives.bus import TraceBus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from cadence.primitives.events import TraceEvent
+    from saccade.primitives.events import TraceEvent
 
 
 _current_bus: ContextVar[TraceBus | None] = ContextVar("_current_bus", default=None)

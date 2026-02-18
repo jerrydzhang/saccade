@@ -1,8 +1,9 @@
 """Tests for TraceEvent - the immutable event record."""
 
-import pytest
 import time
 from decimal import Decimal
+
+import pytest
 
 pytestmark = pytest.mark.unit
 
@@ -12,7 +13,7 @@ class TestEventType:
 
     def test_event_types_exist(self):
         """All event types should be defined."""
-        from cadence.primitives.events import EventType
+        from saccade.primitives.events import EventType
 
         assert EventType.START.value == "START"
         assert EventType.CHUNK.value == "CHUNK"
@@ -27,7 +28,7 @@ class TestSpanKind:
 
     def test_builtin_kinds_exist(self):
         """Built-in span kinds should be defined."""
-        from cadence.primitives.events import SpanKind
+        from saccade.primitives.events import SpanKind
 
         assert SpanKind.AGENT == "agent"
         assert SpanKind.TOOL == "tool"
@@ -37,7 +38,7 @@ class TestSpanKind:
 
     def test_custom_kind_allowed(self):
         """Users should be able to use custom kind strings."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(
             type=EventType.START,
@@ -53,7 +54,7 @@ class TestTraceEvent:
 
     def test_auto_generated_id(self):
         """TraceEvent should auto-generate a ULID id."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(type=EventType.START, span_id="span-123")
         assert event.id is not None
@@ -61,7 +62,7 @@ class TestTraceEvent:
 
     def test_auto_generated_timestamp(self):
         """TraceEvent should auto-generate a timestamp."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         before = time.time()
         event = TraceEvent(type=EventType.START, span_id="span-123")
@@ -71,7 +72,7 @@ class TestTraceEvent:
 
     def test_trace_id_required(self):
         """TraceEvent should require a trace_id."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(
             type=EventType.START,
@@ -83,7 +84,7 @@ class TestTraceEvent:
 
     def test_trace_id_groups_events(self):
         """Events with same trace_id belong to same trace."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         trace_id = "trace-xyz"
         events = [
@@ -96,7 +97,7 @@ class TestTraceEvent:
 
     def test_attributes_default_empty_dict(self):
         """TraceEvent should default attributes to empty dict."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(type=EventType.START, trace_id="t1", span_id="span-123")
 
@@ -104,7 +105,7 @@ class TestTraceEvent:
 
     def test_attributes_stores_arbitrary_metadata(self):
         """TraceEvent should store arbitrary attributes."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(
             type=EventType.START,
@@ -125,7 +126,7 @@ class TestTraceEvent:
 
     def test_attributes_immutable(self):
         """TraceEvent attributes should be immutable (frozen copy)."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         original_attrs = {"key": "value"}
         event = TraceEvent(
@@ -141,7 +142,7 @@ class TestTraceEvent:
 
     def test_start_event_with_context(self):
         """START event should capture name, inputs, kind, relations."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
+        from saccade.primitives.events import EventType, Relation, TraceEvent
 
         event = TraceEvent(
             type=EventType.START,
@@ -160,7 +161,7 @@ class TestTraceEvent:
 
     def test_start_event_with_dataflow(self):
         """START event should capture dataflow relations."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
+        from saccade.primitives.events import EventType, Relation, TraceEvent
 
         event = TraceEvent(
             type=EventType.START,
@@ -179,7 +180,7 @@ class TestTraceEvent:
 
     def test_chunk_event(self):
         """CHUNK event should capture streaming data."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(
             type=EventType.CHUNK,
@@ -192,7 +193,7 @@ class TestTraceEvent:
 
     def test_chunk_event_with_dict(self):
         """CHUNK event should support dict chunks."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(
             type=EventType.CHUNK,
@@ -205,7 +206,7 @@ class TestTraceEvent:
 
     def test_output_event(self):
         """OUTPUT event should capture the output value."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(
             type=EventType.OUTPUT,
@@ -218,13 +219,13 @@ class TestTraceEvent:
 
     def test_success_event_with_metrics(self):
         """SUCCESS event should capture final metrics."""
-        from cadence.primitives.events import (
-            TraceEvent,
-            EventType,
-            TokenMetrics,
+        from saccade.primitives.events import (
             CostMetrics,
+            EventType,
             LatencyMetrics,
             OperationMeta,
+            TokenMetrics,
+            TraceEvent,
         )
 
         event = TraceEvent(
@@ -247,7 +248,7 @@ class TestTraceEvent:
 
     def test_error_event_with_metrics(self):
         """ERROR event should capture error message and metrics."""
-        from cadence.primitives.events import TraceEvent, EventType, LatencyMetrics
+        from saccade.primitives.events import EventType, LatencyMetrics, TraceEvent
 
         event = TraceEvent(
             type=EventType.ERROR,
@@ -262,7 +263,7 @@ class TestTraceEvent:
 
     def test_cancel_event_with_metrics(self):
         """CANCEL event should capture metrics."""
-        from cadence.primitives.events import TraceEvent, EventType, LatencyMetrics
+        from saccade.primitives.events import EventType, LatencyMetrics, TraceEvent
 
         event = TraceEvent(
             type=EventType.CANCEL,
@@ -276,7 +277,7 @@ class TestTraceEvent:
 
     def test_frozen(self):
         """TraceEvent should be immutable (frozen)."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(type=EventType.START, trace_id="t1", span_id="span-123")
         with pytest.raises(Exception):
@@ -284,7 +285,7 @@ class TestTraceEvent:
 
     def test_unique_ids(self):
         """Each TraceEvent should have a unique ID."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="span-123") for _ in range(100)
@@ -294,7 +295,7 @@ class TestTraceEvent:
 
     def test_chronological_ids(self):
         """ULID IDs should have increasing timestamp component."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id=f"span-{i}") for i in range(10)

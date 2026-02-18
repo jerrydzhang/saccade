@@ -1,4 +1,4 @@
-# CADENCE PRIMITIVES - AGENTS.md
+# SACCADE PRIMITIVES - AGENTS.md
 
 Core tracing primitives: events, bus, spans, and projections.
 

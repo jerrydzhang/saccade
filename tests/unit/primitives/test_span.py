@@ -1,9 +1,10 @@
 """Tests for Span - the context manager for tracing a unit of work."""
 
-import pytest
 import asyncio
 import warnings
 from decimal import Decimal
+
+import pytest
 
 pytestmark = pytest.mark.unit
 
@@ -13,7 +14,7 @@ class TestSpanInit:
 
     def test_auto_generated_id(self):
         """Span should auto-generate a ULID id."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         assert span.id is not None
@@ -21,7 +22,7 @@ class TestSpanInit:
 
     def test_unique_ids(self):
         """Each Span should have a unique ID."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         spans = [Span("test") for _ in range(100)]
         ids = [s.id for s in spans]
@@ -29,7 +30,7 @@ class TestSpanInit:
 
     def test_name_and_kind(self):
         """Span should store name and kind."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("agent", kind="llm")
         assert span.name == "agent"
@@ -37,21 +38,21 @@ class TestSpanInit:
 
     def test_default_kind(self):
         """Span should default to 'generic' kind."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         assert span.kind == "generic"
 
     def test_inputs(self):
         """Span should store inputs."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test", inputs={"query": "hello", "count": 5})
         assert span.inputs == {"query": "hello", "count": 5}
 
     def test_initial_status(self):
         """Span should start in PENDING status."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         assert span.status == "PENDING"
@@ -62,35 +63,35 @@ class TestSpanRelations:
 
     def test_no_relations_by_default(self):
         """Span should have no relations by default."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         assert span.relations == {}
 
     def test_user_provided_relations(self):
         """Span should accept user-provided relations."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test", relations={"depends_on": ["span-123"]})
         assert span.relations == {"depends_on": ["span-123"]}
 
     def test_relations_validation_list_required(self):
         """Relations values must be lists."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with pytest.raises(TypeError, match="must be list"):
             Span("test", relations={"depends_on": "not-a-list"})
 
     def test_relations_validation_str_elements(self):
         """Relations list elements must be strings."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with pytest.raises(TypeError, match="must contain str"):
             Span("test", relations={"depends_on": [123]})
 
     def test_relate_adds_relation(self):
         """relate() should add a new relation."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         span.relate("depends_on", "span-123")
@@ -99,7 +100,7 @@ class TestSpanRelations:
 
     def test_relate_idempotent(self):
         """relate() should be idempotent - duplicate calls should not duplicate entries."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         span.relate("depends_on", "span-123")
@@ -111,7 +112,7 @@ class TestSpanRelations:
 
     def test_relate_multiple_targets(self):
         """relate() should support multiple targets for same relation type."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         span.relate("depends_on", "span-1")
@@ -121,7 +122,7 @@ class TestSpanRelations:
 
     def test_relate_validation_relation_type_str(self):
         """relate() should validate relation_type is a string."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         with pytest.raises(TypeError, match="relation_type must be str"):
@@ -129,7 +130,7 @@ class TestSpanRelations:
 
     def test_relate_validation_span_id_str(self):
         """relate() should validate span_id is a string."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         span = Span("test")
         with pytest.raises(TypeError, match="span_id must be str"):
@@ -141,14 +142,14 @@ class TestSpanContext:
 
     def test_enter_changes_status(self):
         """__enter__ should change status to RUNNING."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             assert span.status == "RUNNING"
 
     def test_exit_changes_status_completed(self):
         """__exit__ without error should change status to COMPLETED."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             pass
@@ -157,7 +158,7 @@ class TestSpanContext:
 
     def test_exit_on_error(self):
         """__exit__ with error should change status to FAILED."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with pytest.raises(ValueError):
             with Span("test") as span:
@@ -168,7 +169,7 @@ class TestSpanContext:
 
     def test_exit_on_cancelled_error(self):
         """__exit__ with CancelledError should change status to CANCELLED."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with pytest.raises(asyncio.CancelledError):
             with Span("test") as span:
@@ -178,7 +179,7 @@ class TestSpanContext:
 
     def test_exception_propagates(self):
         """Span should record error AND re-raise the exception."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with pytest.raises(ValueError, match="boom"):
             with Span("test"):
@@ -191,7 +192,7 @@ class TestSpanConcurrency:
     @pytest.mark.asyncio
     async def test_concurrent_writes_to_single_span(self):
         """Span should handle concurrent stream calls safely."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -215,7 +216,7 @@ class TestSpanOutputs:
 
     def test_set_output(self):
         """set_output() should store the output value."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             span.set_output("result")
@@ -224,7 +225,7 @@ class TestSpanOutputs:
 
     def test_set_output_multiple_times_last_wins(self):
         """Multiple set_output() calls - last value wins."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             span.set_output("v1")
@@ -239,7 +240,7 @@ class TestSpanStreaming:
 
     def test_stream_tracks_chunks(self):
         """stream() should store chunks locally."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             span.stream("Hello")
@@ -251,7 +252,8 @@ class TestSpanStreaming:
     def test_stream_tracks_ttft(self):
         """stream() should track time-to-first-token on first call."""
         import time
-        from cadence.primitives.span import Span
+
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             time.sleep(0.01)
@@ -270,8 +272,8 @@ class TestSpanMetrics:
 
     def test_set_metrics_tokens(self):
         """set_metrics() should store token metrics."""
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import TokenMetrics
+        from saccade.primitives.events import TokenMetrics
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             span.set_metrics(tokens=TokenMetrics(input=100, output=50))
@@ -281,8 +283,8 @@ class TestSpanMetrics:
 
     def test_set_metrics_cost(self):
         """set_metrics() should store cost metrics."""
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import CostMetrics
+        from saccade.primitives.events import CostMetrics
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             span.set_metrics(cost=CostMetrics(usd=Decimal("0.01")))
@@ -291,8 +293,8 @@ class TestSpanMetrics:
 
     def test_set_metrics_accumulates(self):
         """set_metrics() should accumulate metrics across calls."""
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import TokenMetrics
+        from saccade.primitives.events import TokenMetrics
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             span.set_metrics(tokens=TokenMetrics(input=100, output=50))
@@ -307,8 +309,8 @@ class TestSpanMeta:
 
     def test_set_meta(self):
         """set_meta() should store operation metadata."""
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import OperationMeta
+        from saccade.primitives.events import OperationMeta
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             span.set_meta(OperationMeta(model="gpt-4o", provider="openai"))
@@ -318,8 +320,8 @@ class TestSpanMeta:
 
     def test_set_meta_updates(self):
         """set_meta() can be called multiple times - last wins."""
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import OperationMeta
+        from saccade.primitives.events import OperationMeta
+        from saccade.primitives.span import Span
 
         with Span("test") as span:
             span.set_meta(OperationMeta(model="gpt-4o"))
@@ -334,7 +336,7 @@ class TestSpanWithoutBus:
 
     def test_warns_without_bus(self):
         """Span should warn when emitting events without a bus."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -348,7 +350,7 @@ class TestSpanWithoutBus:
 
     def test_works_locally_without_bus(self):
         """Span should still work locally even without a bus."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         # Suppress warnings for this test
         with warnings.catch_warnings():
@@ -365,7 +367,7 @@ class TestSpanContextPropagation:
 
     def test_auto_context_relation(self):
         """Nested spans should auto-capture context relation."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -379,7 +381,7 @@ class TestSpanContextPropagation:
 
     def test_context_stack_multiple_levels(self):
         """Deep nesting should capture correct context chain."""
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -394,7 +396,7 @@ class TestSpanContextPropagation:
 
     def test_context_resets_on_exit(self):
         """Context variable should reset when span exits."""
-        from cadence.primitives.span import Span, _current_span_id
+        from saccade.primitives.span import Span, _current_span_id
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

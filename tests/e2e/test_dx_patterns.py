@@ -18,8 +18,8 @@ class TestMultiTraceScenarios:
     @pytest.mark.asyncio
     async def test_independent_traces_dont_interfere(self):
         """Multiple traces running concurrently should remain isolated."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         results = {}
 
@@ -47,9 +47,9 @@ class TestMultiTraceScenarios:
 
     def test_sequential_traces_produce_independent_results(self):
         """Sequential traces should not carry over state from previous runs."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         traces = []
 
@@ -74,8 +74,8 @@ class TestTraceIDCorrelation:
 
     def test_user_provided_trace_id_flows_through(self):
         """User-provided trace_id appears in all events for correlation."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         external_request_id = "req-abc123-session-xyz"
 
@@ -93,9 +93,9 @@ class TestTraceIDCorrelation:
 
     def test_trace_id_matches_across_spans_and_projections(self):
         """Trace ID is consistent across spans and visible in projections."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree, project_cost
+        from saccade.primitives.projectors import project_cost, project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         trace_id = "unified-trace-123"
 
@@ -121,9 +121,9 @@ class TestErrorRecoveryPatterns:
 
     def test_partial_results_captured_before_failure(self):
         """Span captures output even when exception occurs after set_output."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with pytest.raises(RuntimeError):  # noqa: PT012
@@ -141,9 +141,9 @@ class TestErrorRecoveryPatterns:
 
     def test_nested_error_captures_context_at_each_level(self):
         """Error in nested span captures state at each level of hierarchy."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with pytest.raises(ValueError):  # noqa: PT012
@@ -174,9 +174,9 @@ class TestErrorRecoveryPatterns:
 
     def test_error_doesnt_corrupt_sibling_spans(self):
         """Error in one span doesn't affect sibling spans' results."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("orchestrator") as orch:
@@ -212,10 +212,10 @@ class TestCostTrackingPatterns:
 
     def test_cost_across_multiple_model_calls(self):
         """Multiple LLM calls aggregate costs with Decimal precision."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import TokenMetrics, CostMetrics
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import CostMetrics, TokenMetrics
+        from saccade.primitives.projectors import project_cost
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("call1") as s1:
@@ -245,10 +245,10 @@ class TestCostTrackingPatterns:
 
     def test_cost_by_model_attribution(self):
         """Cost correctly attributed by model for multi-model traces."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import TokenMetrics, CostMetrics, OperationMeta
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import CostMetrics, OperationMeta, TokenMetrics
+        from saccade.primitives.projectors import project_cost
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("complex_reasoning") as s:
@@ -282,10 +282,10 @@ class TestCostTrackingPatterns:
 
     def test_cost_by_kind_attribution(self):
         """Cost correctly attributed by span kind for analysis."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import TokenMetrics, CostMetrics, SpanKind
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import CostMetrics, SpanKind, TokenMetrics
+        from saccade.primitives.projectors import project_cost
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("planning", kind=SpanKind.AGENT) as s:
@@ -323,10 +323,10 @@ class TestMinimalBoilerplate:
 
     def test_complete_agent_trace_in_five_lines(self):
         """A complete traced agent workflow should be expressible concisely."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import SpanKind
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import SpanKind
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("agent", kind=SpanKind.AGENT) as agent:
@@ -346,10 +346,10 @@ class TestMinimalBoilerplate:
 
     def test_projection_access_is_explicit(self):
         """Projections accessed through direct function calls."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import TokenMetrics, CostMetrics
-        from cadence.primitives.projectors import project_tree, project_cost
+        from saccade.primitives.events import CostMetrics, TokenMetrics
+        from saccade.primitives.projectors import project_cost, project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("work") as s:
@@ -366,9 +366,9 @@ class TestMinimalBoilerplate:
 
     def test_streaming_with_automatic_accumulation(self):
         """Streamed chunks automatically accumulate in projections."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("streaming") as s:
@@ -390,9 +390,9 @@ class TestRealtimeSubscription:
 
     def test_subscribe_receives_events_immediately(self):
         """Subscribers receive events immediately during emit."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import EventType
+        from saccade.primitives.events import EventType
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         received = []
 
@@ -409,9 +409,9 @@ class TestRealtimeSubscription:
 
     def test_subscriber_filtering(self):
         """Subscribers can filter events they care about."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import EventType
+        from saccade.primitives.events import EventType
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         errors = []
 
@@ -438,15 +438,15 @@ class TestRealisticAgentWorkflows:
 
     def test_research_agent_workflow(self):
         """Complete research agent workflow with all primitives used."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import (
-            SpanKind,
-            TokenMetrics,
+        from saccade.primitives.events import (
             CostMetrics,
             OperationMeta,
+            SpanKind,
+            TokenMetrics,
         )
-        from cadence.primitives.projectors import project_tree, project_cost, project_graph
+        from saccade.primitives.projectors import project_cost, project_graph, project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace(trace_id="research-001") as trace:
             with Span("research_agent", kind=SpanKind.AGENT) as agent:
@@ -503,10 +503,10 @@ class TestRealisticAgentWorkflows:
     @pytest.mark.asyncio
     async def test_concurrent_tool_execution(self):
         """Agent executes tools concurrently with correct trace structure."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import SpanKind
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import SpanKind
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("orchestrator", kind=SpanKind.AGENT) as orch:

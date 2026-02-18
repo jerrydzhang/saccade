@@ -13,9 +13,9 @@ class TestSpanBusIntegration:
 
     def test_span_emits_to_bus(self):
         """Span should emit START, OUTPUT, SUCCESS events to the bus."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import EventType
+        from saccade.primitives.events import EventType
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         received = []
 
@@ -32,9 +32,9 @@ class TestSpanBusIntegration:
 
     def test_span_streaming_emits_chunks(self):
         """Span.stream() should emit CHUNK events to the bus."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import EventType
+        from saccade.primitives.events import EventType
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         received = []
 
@@ -51,9 +51,9 @@ class TestSpanBusIntegration:
 
     def test_span_metrics_in_end_event(self):
         """Span metrics should be included in SUCCESS event."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import EventType, TokenMetrics, CostMetrics
+        from saccade.primitives.events import CostMetrics, EventType, TokenMetrics
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         received = []
 
@@ -75,9 +75,9 @@ class TestTracePipelineIntegration:
 
     def test_trace_to_tree_projection(self):
         """Trace with spans should produce correct tree projection."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("agent") as agent:
@@ -96,9 +96,9 @@ class TestTracePipelineIntegration:
 
     def test_trace_to_graph_projection_with_dataflow(self):
         """Trace with dataflow relations should produce correct graph."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.projectors import project_graph
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("search") as search:
@@ -112,10 +112,10 @@ class TestTracePipelineIntegration:
 
     def test_trace_aggregates_metrics(self):
         """Trace should aggregate metrics from all spans."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import TokenMetrics
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import TokenMetrics
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("llm1") as s1:
@@ -130,9 +130,9 @@ class TestTracePipelineIntegration:
 
     def test_trace_error_propagates_to_projection(self):
         """Span errors should appear in projections."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with pytest.raises(ValueError):
@@ -151,9 +151,9 @@ class TestAsyncContextPropagation:
     @pytest.mark.asyncio
     async def test_context_propagates_to_async_tasks(self):
         """Parent span context should be visible in async tasks."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("orchestrator") as orch:
@@ -178,8 +178,8 @@ class TestAsyncContextPropagation:
 
     def test_bus_subscribers_receive_all_events(self):
         """All subscribers should receive all events."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         received1 = []
         received2 = []
@@ -201,8 +201,8 @@ class TestErrorHandlingIntegration:
 
     def test_subscriber_error_doesnt_break_pipeline(self):
         """Bus subscriber errors should not break the event pipeline."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         good_received = []
 
@@ -224,9 +224,9 @@ class TestErrorHandlingIntegration:
 
     def test_nested_span_error_captured_correctly(self):
         """Errors in nested spans should be captured at correct level."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("parent"):
@@ -246,9 +246,9 @@ class TestStreamingIntegration:
 
     def test_streaming_accumulates_in_projection(self):
         """Streamed chunks should accumulate in tree projection."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("streaming") as s:
@@ -265,9 +265,9 @@ class TestStreamingIntegration:
     @pytest.mark.asyncio
     async def test_streaming_with_metrics(self):
         """Streaming spans should capture TTFT in metrics."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("streaming") as s:

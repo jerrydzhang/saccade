@@ -10,8 +10,8 @@ Tracing/observability library for AI agents. Event-driven architecture with immu
 ## STRUCTURE
 
 ```
-cadence/
-├── src/cadence/          # Main package (import as `cadence`)
+saccade/
+├── src/saccade/          # Main package (import as `saccade`)
 │   └── primitives/       # Core: Trace, Span, events, projectors
 ├── tests/                # pytest (unit/integration/e2e markers)
 ├── scripts/              # ContextVar validation script
@@ -23,12 +23,12 @@ cadence/
 
 | Task | Location |
 |------|----------|
-| Add new event type | `src/cadence/primitives/events.py` |
-| Add new projector | `src/cadence/primitives/projectors.py` |
-| Modify span behavior | `src/cadence/primitives/span.py` |
-| Context management | `src/cadence/primitives/trace.py` |
-| Event collection/pub-sub | `src/cadence/primitives/bus.py` |
-| Public API exports | `src/cadence/__init__.py` |
+| Add new event type | `src/saccade/primitives/events.py` |
+| Add new projector | `src/saccade/primitives/projectors.py` |
+| Modify span behavior | `src/saccade/primitives/span.py` |
+| Context management | `src/saccade/primitives/trace.py` |
+| Event collection/pub-sub | `src/saccade/primitives/bus.py` |
+| Public API exports | `src/saccade/__init__.py` |
 | Unit tests | `tests/unit/primitives/test_*.py` |
 | Integration tests | `tests/integration/test_pipeline.py` |
 | E2E/usage patterns | `tests/e2e/test_dx_patterns.py` |

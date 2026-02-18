@@ -1,7 +1,8 @@
 """Tests for Trace - the high-level entry point for tracing."""
 
-import pytest
 import asyncio
+
+import pytest
 
 pytestmark = pytest.mark.unit
 
@@ -11,14 +12,14 @@ class TestTrace:
 
     def test_trace_lifecycle(self):
         """Trace should enter and exit cleanly."""
-        from cadence.primitives.trace import Trace
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             assert trace.bus is not None
 
     def test_trace_sets_bus_context(self):
         """Trace should set the bus in context variable."""
-        from cadence.primitives.trace import Trace, _current_bus
+        from saccade.primitives.trace import Trace, _current_bus
 
         assert _current_bus.get() is None
 
@@ -29,8 +30,8 @@ class TestTrace:
 
     def test_events_property(self):
         """trace.events should return raw events list."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("agent") as agent:
@@ -45,9 +46,9 @@ class TestTraceWithSpans:
 
     def test_simple_nested_structure(self):
         """Trace should capture nested span structure."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("agent") as agent:
@@ -63,9 +64,9 @@ class TestTraceWithSpans:
 
     def test_sequential_spans_are_siblings(self):
         """Sequential spans at same level should be siblings."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("step1"):
@@ -80,9 +81,9 @@ class TestTraceWithSpans:
 
     def test_span_captures_events(self):
         """Span should emit START, OUTPUT, SUCCESS events."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import EventType
+        from saccade.primitives.events import EventType
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("test") as span:
@@ -96,9 +97,9 @@ class TestTraceWithSpans:
 
     def test_error_captured(self):
         """Trace should capture span errors."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with pytest.raises(ValueError):
@@ -118,9 +119,9 @@ class TestTraceParallelExecution:
     @pytest.mark.asyncio
     async def test_parallel_children(self):
         """Parallel spans should all be children of parent."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         # Trace is sync context manager, but body can be async
         with Trace() as trace:
@@ -149,10 +150,10 @@ class TestTraceProjections:
 
     def test_project_graph(self):
         """project_graph should return GraphView."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import Relation
-        from cadence.primitives.projectors import project_graph, GraphView
+        from saccade.primitives.events import Relation
+        from saccade.primitives.projectors import GraphView, project_graph
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("step1") as s1:
@@ -166,10 +167,10 @@ class TestTraceProjections:
 
     def test_project_cost(self):
         """project_cost should return CostView."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
-        from cadence.primitives.events import TokenMetrics
-        from cadence.primitives.projectors import project_cost, CostView
+        from saccade.primitives.events import TokenMetrics
+        from saccade.primitives.projectors import CostView, project_cost
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with Trace() as trace:
             with Span("llm") as s:
@@ -185,7 +186,7 @@ class TestTraceEdgeCases:
 
     def test_nested_traces_isolation(self):
         """Nested traces should not corrupt each other's context."""
-        from cadence.primitives.trace import Trace, _current_bus
+        from saccade.primitives.trace import Trace, _current_bus
 
         with Trace() as t1:
             assert _current_bus.get() == t1.bus
@@ -198,9 +199,10 @@ class TestTraceEdgeCases:
 
     def test_dangling_span_warns(self):
         """Trace should warn when span is still running on exit."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
         import warnings
+
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -222,8 +224,8 @@ class TestTraceSubscribe:
 
     def test_subscribe_receives_events(self):
         """Subscribe should receive events in real-time."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         received = []
 
@@ -238,8 +240,8 @@ class TestTraceSubscribe:
 
     def test_subscribe_with_multiple_subscribers(self):
         """Multiple subscribers should all receive events."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         received1 = []
         received2 = []
@@ -256,8 +258,8 @@ class TestTraceSubscribe:
 
     def test_subscribe_error_isolation(self):
         """Subscriber errors should not crash the trace."""
-        from cadence.primitives.trace import Trace
-        from cadence.primitives.span import Span
+        from saccade.primitives.span import Span
+        from saccade.primitives.trace import Trace
 
         received = []
 

@@ -9,7 +9,7 @@ from typing import Any, Self
 
 from ulid import ULID
 
-from cadence.primitives.events import (
+from saccade.primitives.events import (
     CostMetrics,
     EventType,
     LatencyMetrics,
@@ -17,7 +17,7 @@ from cadence.primitives.events import (
     TokenMetrics,
     TraceEvent,
 )
-from cadence.primitives.trace import _current_bus
+from saccade.primitives.trace import _current_bus
 
 _current_span_id: ContextVar[str | None] = ContextVar("_current_span_id", default=None)
 

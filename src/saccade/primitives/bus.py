@@ -7,7 +7,7 @@ from ulid import ULID
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from talos.primitives.events import TraceEvent
+    from saccade.primitives.events import TraceEvent
 
 
 class TraceBus:

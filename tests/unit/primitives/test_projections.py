@@ -1,7 +1,8 @@
 """Tests for projections: tree, state, timeline, graph, cost."""
 
-import pytest
 from decimal import Decimal
+
+import pytest
 
 pytestmark = pytest.mark.unit
 
@@ -11,19 +12,19 @@ class TestRelation:
 
     def test_context_relation(self):
         """Relation.CONTEXT should be defined for hierarchy."""
-        from cadence.primitives.events import Relation
+        from saccade.primitives.events import Relation
 
         assert Relation.CONTEXT == "context"
 
     def test_dataflow_relation(self):
         """Relation.DATAFLOW should be defined for data movement."""
-        from cadence.primitives.events import Relation
+        from saccade.primitives.events import Relation
 
         assert Relation.DATAFLOW == "dataflow"
 
     def test_custom_relation_allowed(self):
         """Custom relations should be usable alongside built-ins."""
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.events import EventType, TraceEvent
 
         event = TraceEvent(
             type=EventType.START,
@@ -38,7 +39,7 @@ class TestProjectTree:
 
     def test_empty_events(self):
         """project_tree should handle empty events list."""
-        from cadence.primitives.projectors import project_tree, TreeView
+        from saccade.primitives.projectors import TreeView, project_tree
 
         tree = project_tree([])
         assert isinstance(tree, TreeView)
@@ -47,8 +48,8 @@ class TestProjectTree:
 
     def test_single_span(self):
         """project_tree should create a single root for a single span."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(
@@ -64,8 +65,8 @@ class TestProjectTree:
 
     def test_uses_context_by_default(self):
         """project_tree should use Relation.CONTEXT for hierarchy by default."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(
@@ -90,8 +91,8 @@ class TestProjectTree:
 
     def test_configurable_hierarchy_relation(self):
         """project_tree should accept custom hierarchy relation."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="parent", name="parent"),
@@ -112,8 +113,8 @@ class TestProjectTree:
 
     def test_deep_nesting(self):
         """project_tree should handle deep nesting."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="agent", name="agent"),
@@ -145,8 +146,8 @@ class TestProjectTree:
 
     def test_multiple_roots(self):
         """project_tree should handle multiple root spans."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="agent1", name="agent1"),
@@ -160,8 +161,8 @@ class TestProjectTree:
 
     def test_ignores_dataflow_relations(self):
         """project_tree should only use hierarchy relation for structure."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="search", name="search"),
@@ -181,8 +182,8 @@ class TestProjectTree:
 
     def test_chunks_accumulated(self):
         """project_tree should accumulate streaming chunks."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="streaming"),
@@ -198,14 +199,14 @@ class TestProjectTree:
 
     def test_metrics_accumulated(self):
         """project_tree should accumulate metrics from SUCCESS event."""
-        from cadence.primitives.events import (
-            TraceEvent,
-            EventType,
-            TokenMetrics,
+        from saccade.primitives.events import (
             CostMetrics,
+            EventType,
             LatencyMetrics,
+            TokenMetrics,
+            TraceEvent,
         )
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="llm"),
@@ -227,8 +228,8 @@ class TestProjectTree:
 
     def test_response_id_from_success_event(self):
         """project_tree should capture response_id from SUCCESS event."""
-        from cadence.primitives.events import TraceEvent, EventType, OperationMeta
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, OperationMeta, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(
@@ -251,8 +252,8 @@ class TestProjectTree:
 
     def test_error_status(self):
         """project_tree should set FAILED status on ERROR event."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="failing"),
@@ -265,8 +266,8 @@ class TestProjectTree:
 
     def test_cancel_status(self):
         """project_tree should set CANCELLED status on CANCEL event."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="cancelled"),
@@ -278,8 +279,8 @@ class TestProjectTree:
 
     def test_find_by_name(self):
         """TreeView.find_by_name should find nodes by name."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="agent"),
@@ -300,8 +301,8 @@ class TestProjectTree:
 
     def test_find_by_kind(self):
         """TreeView.find_by_kind should find all nodes of a kind."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(
@@ -332,8 +333,8 @@ class TestProjectTree:
 
     def test_find_failed(self):
         """TreeView.find_failed should find all failed spans."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="ok"),
@@ -349,8 +350,8 @@ class TestProjectTree:
 
     def test_find_incomplete(self):
         """TreeView.find_incomplete should find RUNNING/PENDING spans."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="running"),
@@ -363,8 +364,8 @@ class TestProjectTree:
 
     def test_total_tokens_recursive(self):
         """TreeNode.total_tokens should sum tokens recursively."""
-        from cadence.primitives.events import TraceEvent, EventType, TokenMetrics, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TokenMetrics, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="agent", name="agent"),
@@ -404,8 +405,8 @@ class TestProjectTree:
 
     def test_tree_view_total_tokens(self):
         """TreeView.total_tokens should sum all nodes."""
-        from cadence.primitives.events import TraceEvent, EventType, TokenMetrics
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TokenMetrics, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -428,8 +429,8 @@ class TestProjectTree:
 
     def test_nodes_index(self):
         """TreeView.nodes should provide O(1) lookup by span_id."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="agent", name="agent"),
@@ -454,7 +455,7 @@ class TestProjectState:
 
     def test_empty_events(self):
         """project_state should handle empty events."""
-        from cadence.primitives.projectors import project_state, StateView
+        from saccade.primitives.projectors import StateView, project_state
 
         state = project_state([])
         assert isinstance(state, StateView)
@@ -462,8 +463,8 @@ class TestProjectState:
 
     def test_state_from_inputs(self):
         """project_state should derive state from START inputs."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         events = [
             TraceEvent(
@@ -483,8 +484,8 @@ class TestProjectState:
 
     def test_state_from_output(self):
         """project_state should derive state from OUTPUT events."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         events = [
             TraceEvent(
@@ -506,8 +507,8 @@ class TestProjectState:
 
     def test_state_from_chunks(self):
         """project_state should accumulate state from CHUNK events."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         events = [
             TraceEvent(
@@ -531,8 +532,8 @@ class TestProjectState:
 
     def test_at_span(self):
         """StateView.at_span should return state at span's start."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         events = [
             TraceEvent(
@@ -565,8 +566,8 @@ class TestProjectState:
 
     def test_multiple_spans_isolated_state(self):
         """project_state should track state per span."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         events = [
             TraceEvent(
@@ -600,7 +601,7 @@ class TestProjectTimeline:
 
     def test_empty_events(self):
         """project_timeline should handle empty events."""
-        from cadence.primitives.projectors import project_timeline, TimelineView
+        from saccade.primitives.projectors import TimelineView, project_timeline
 
         timeline = project_timeline([])
         assert isinstance(timeline, TimelineView)
@@ -608,8 +609,8 @@ class TestProjectTimeline:
 
     def test_spans_sorted_by_start_time(self):
         """project_timeline should sort spans by start time."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(
@@ -628,8 +629,8 @@ class TestProjectTimeline:
 
     def test_duration_calculated(self):
         """project_timeline should calculate duration from start to terminal event."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(
@@ -643,8 +644,8 @@ class TestProjectTimeline:
 
     def test_depth_from_hierarchy(self):
         """project_timeline should compute depth from context relation."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(
@@ -670,8 +671,8 @@ class TestProjectTimeline:
 
     def test_total_duration(self):
         """TimelineView.total_duration_ms should span all spans."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1", timestamp=0.0),
@@ -689,8 +690,8 @@ class TestProjectTimeline:
 
     def test_running_span_has_no_end(self):
         """project_timeline should handle incomplete spans."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(
@@ -704,8 +705,8 @@ class TestProjectTimeline:
 
     def test_configurable_hierarchy_relation(self):
         """project_timeline should accept custom hierarchy relation."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(
@@ -732,7 +733,7 @@ class TestProjectGraph:
 
     def test_empty_events(self):
         """project_graph should handle empty events."""
-        from cadence.primitives.projectors import project_graph, GraphView
+        from saccade.primitives.projectors import GraphView, project_graph
 
         graph = project_graph([])
         assert isinstance(graph, GraphView)
@@ -741,8 +742,8 @@ class TestProjectGraph:
 
     def test_includes_dataflow_relations(self):
         """project_graph should include DATAFLOW relations as edges."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_graph
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="search", name="search"),
@@ -765,8 +766,8 @@ class TestProjectGraph:
 
     def test_includes_all_dataflow_by_default(self):
         """project_graph should include all DATAFLOW edges."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_graph
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="db", name="db"),
@@ -788,8 +789,8 @@ class TestProjectGraph:
 
     def test_edges_in_and_out(self):
         """GraphNode should track incoming and outgoing edges."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_graph
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="a", name="a"),
@@ -816,8 +817,8 @@ class TestProjectGraph:
 
     def test_ghost_nodes_for_missing_refs(self):
         """project_graph should create ghost nodes for missing references."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_graph
 
         events = [
             TraceEvent(
@@ -839,8 +840,8 @@ class TestProjectGraph:
 
     def test_no_ghost_nodes_when_all_exist(self):
         """GraphView.ghosts should be empty when all refs exist."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_graph
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -859,8 +860,8 @@ class TestProjectGraph:
 
     def test_adjacency_list(self):
         """GraphView.adjacency_list should return adjacency dict."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_graph
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -881,8 +882,8 @@ class TestProjectGraph:
 
     def test_agent_team_data_flow(self):
         """project_graph should show data flow between agents."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_graph
 
         events = [
             TraceEvent(
@@ -930,8 +931,8 @@ class TestProjectGraph:
 
     def test_hub_and_spoke_data_flow(self):
         """project_graph should show hub-spoke data flow patterns."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_graph
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_graph
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="agent", name="agent"),
@@ -967,7 +968,7 @@ class TestProjectCost:
 
     def test_empty_events(self):
         """project_cost should handle empty events."""
-        from cadence.primitives.projectors import project_cost, CostView
+        from saccade.primitives.projectors import CostView, project_cost
 
         cost = project_cost([])
         assert isinstance(cost, CostView)
@@ -975,8 +976,8 @@ class TestProjectCost:
 
     def test_total_tokens(self):
         """CostView should aggregate total tokens."""
-        from cadence.primitives.events import TraceEvent, EventType, TokenMetrics
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import EventType, TokenMetrics, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -999,8 +1000,8 @@ class TestProjectCost:
 
     def test_total_cost(self):
         """CostView should aggregate total cost."""
-        from cadence.primitives.events import TraceEvent, EventType, CostMetrics
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import CostMetrics, EventType, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -1024,8 +1025,8 @@ class TestProjectCost:
 
     def test_by_model(self):
         """CostView should group metrics by model."""
-        from cadence.primitives.events import TraceEvent, EventType, TokenMetrics, OperationMeta
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import EventType, OperationMeta, TokenMetrics, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -1052,8 +1053,8 @@ class TestProjectCost:
 
     def test_by_kind(self):
         """CostView should group metrics by kind."""
-        from cadence.primitives.events import TraceEvent, EventType, TokenMetrics
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import EventType, TokenMetrics, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1", kind="agent"),
@@ -1078,8 +1079,8 @@ class TestProjectCost:
 
     def test_by_name(self):
         """CostView should group metrics by span name."""
-        from cadence.primitives.events import TraceEvent, EventType, TokenMetrics
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import EventType, TokenMetrics, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="researcher"),
@@ -1110,8 +1111,8 @@ class TestProjectCost:
 
     def test_span_count(self):
         """CostView should count total spans."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -1125,8 +1126,8 @@ class TestProjectCost:
 
     def test_latency_aggregation(self):
         """CostView should aggregate latency metrics."""
-        from cadence.primitives.events import TraceEvent, EventType, LatencyMetrics
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import EventType, LatencyMetrics, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -1152,8 +1153,8 @@ class TestProjectTreeEdgeCases:
 
     def test_orphaned_events_promoted_to_root(self):
         """project_tree should promote events with missing parents to root."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(
@@ -1174,8 +1175,8 @@ class TestProjectTreeEdgeCases:
 
     def test_orphan_resolved_when_parent_arrives_later(self):
         """project_tree should resolve orphans when parent arrives (eventual consistency)."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(
@@ -1204,8 +1205,8 @@ class TestProjectTreeEdgeCases:
 
     def test_duplicate_start_raises_error(self):
         """project_tree should raise error on duplicate START for same span_id."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="first"),
@@ -1217,8 +1218,8 @@ class TestProjectTreeEdgeCases:
 
     def test_multiple_events_same_span_merged(self):
         """project_tree should merge multiple events for the same span_id."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="streaming"),
@@ -1237,8 +1238,8 @@ class TestProjectTreeEdgeCases:
 
     def test_out_of_order_events_sorted_internally(self):
         """project_tree should handle events arriving out of order."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.SUCCESS, trace_id="t1", span_id="child", timestamp=200.0),
@@ -1268,8 +1269,8 @@ class TestProjectTreeEdgeCases:
 
     def test_concurrent_spans_dont_bleed_chunks(self):
         """project_tree should not mix chunks between concurrent spans."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="a", name="span_a"),
@@ -1292,8 +1293,8 @@ class TestProjectTreeEdgeCases:
 
     def test_circular_dependency_handling(self):
         """project_tree should gracefully handle circular context loops."""
-        from cadence.primitives.events import TraceEvent, EventType, Relation
-        from cadence.primitives.projectors import project_tree
+        from saccade.primitives.events import EventType, Relation, TraceEvent
+        from saccade.primitives.projectors import project_tree
 
         events = [
             TraceEvent(
@@ -1319,8 +1320,8 @@ class TestProjectStateEdgeCases:
 
     def test_snapshots_are_independent(self):
         """project_state snapshots should be immutable/independent (deep copy)."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         events = [
             TraceEvent(
@@ -1350,8 +1351,8 @@ class TestProjectStateEdgeCases:
 
     def test_custom_reducer_shallow(self):
         """project_state should use custom reducer for state merges."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         def shallow_reducer(current: dict, new: dict) -> dict:
             return {**current, **new}
@@ -1378,9 +1379,10 @@ class TestProjectStateEdgeCases:
 
     def test_custom_reducer_deep_merge(self):
         """project_state should support deep merge via custom reducer."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
         import copy
+
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         def deep_merge_reducer(current: dict, new: dict) -> dict:
             result = copy.deepcopy(current)
@@ -1415,9 +1417,10 @@ class TestProjectStateEdgeCases:
 
     def test_custom_reducer_list_accumulate(self):
         """project_state should support list accumulation via custom reducer."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
         import copy
+
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         def list_accumulate_reducer(current: dict, new: dict) -> dict:
             result = copy.deepcopy(current)
@@ -1452,8 +1455,8 @@ class TestProjectStateEdgeCases:
 
     def test_default_reducer_is_shallow(self):
         """project_state default reducer should be shallow merge."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         events = [
             TraceEvent(
@@ -1477,8 +1480,8 @@ class TestProjectStateEdgeCases:
 
     def test_non_dict_inputs_handled_safely(self):
         """project_state should not crash on non-dict inputs (defensive coding)."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_state
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_state
 
         events = [
             TraceEvent.model_construct(
@@ -1498,8 +1501,8 @@ class TestProjectTimelineEdgeCases:
 
     def test_clock_skew_clamped_to_zero(self):
         """project_timeline should clamp negative duration to 0."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", timestamp=1000.0),
@@ -1513,8 +1516,8 @@ class TestProjectTimelineEdgeCases:
 
     def test_clock_skew_flagged(self):
         """project_timeline should flag clock skew in span metadata."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", timestamp=1000.0),
@@ -1528,8 +1531,8 @@ class TestProjectTimelineEdgeCases:
 
     def test_normal_duration_not_flagged(self):
         """project_timeline should not flag normal durations."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", timestamp=1000.0),
@@ -1543,8 +1546,8 @@ class TestProjectTimelineEdgeCases:
 
     def test_out_of_order_events_sorted_internally(self):
         """project_timeline should sort events by timestamp internally."""
-        from cadence.primitives.events import TraceEvent, EventType
-        from cadence.primitives.projectors import project_timeline
+        from saccade.primitives.events import EventType, TraceEvent
+        from saccade.primitives.projectors import project_timeline
 
         events = [
             TraceEvent(type=EventType.SUCCESS, trace_id="t1", span_id="s2", timestamp=2100.0),
@@ -1569,8 +1572,9 @@ class TestProjectCostEdgeCases:
     def test_decimal_precision_no_drift(self):
         """project_cost should use Decimal for precise cost aggregation."""
         from decimal import Decimal
-        from cadence.primitives.events import TraceEvent, EventType, CostMetrics
-        from cadence.primitives.projectors import project_cost
+
+        from saccade.primitives.events import CostMetrics, EventType, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -1592,8 +1596,8 @@ class TestProjectCostEdgeCases:
 
     def test_aggregation_propagates_clock_skew(self):
         """project_cost should propagate clock_skew_detected across spans."""
-        from cadence.primitives.events import TraceEvent, EventType, LatencyMetrics
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import EventType, LatencyMetrics, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         events = [
             TraceEvent(type=EventType.START, trace_id="t1", span_id="s1", name="s1"),
@@ -1615,8 +1619,8 @@ class TestProjectCostEdgeCases:
 
     def test_duplicate_events_ignored_for_cost(self):
         """project_cost should handle exact duplicate events without double counting."""
-        from cadence.primitives.events import TraceEvent, EventType, CostMetrics
-        from cadence.primitives.projectors import project_cost
+        from saccade.primitives.events import CostMetrics, EventType, TraceEvent
+        from saccade.primitives.projectors import project_cost
 
         success_event = TraceEvent(
             type=EventType.SUCCESS,

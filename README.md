@@ -1,4 +1,4 @@
-# Cadence
+# Saccade
 
 A tracing and observability library for AI agents with built-in metrics.
 
@@ -6,9 +6,9 @@ A tracing and observability library for AI agents with built-in metrics.
 
 ---
 
-## What is Cadence?
+## What is Saccade?
 
-Cadence provides primitives for tracing agent execution, capturing metrics (tokens, cost, latency), and analyzing execution patterns through flexible projections.
+Saccade provides primitives for tracing agent execution, capturing metrics (tokens, cost, latency), and analyzing execution patterns through flexible projections.
 
 **Core Philosophy:**
 - Event-driven architecture with immutable events
@@ -19,7 +19,7 @@ Cadence provides primitives for tracing agent execution, capturing metrics (toke
 ## Installation
 
 ```bash
-pip install cadence
+pip install saccade
 ```
 
 ## Quick Start
@@ -27,7 +27,7 @@ pip install cadence
 ### Basic Tracing
 
 ```python
-from cadence import Trace, Span, project_tree
+from saccade import Trace, Span, project_tree
 
 with Trace() as trace:
     with Span("agent", kind="agent") as agent:
@@ -41,7 +41,7 @@ print(f"Total tokens: {tree.total_tokens.input}")
 ### Streaming with Metrics
 
 ```python
-from cadence import Trace, Span, TokenMetrics, CostMetrics, project_cost
+from saccade import Trace, Span, TokenMetrics, CostMetrics, project_cost
 
 with Trace() as trace:
     with Span("llm_call", kind="llm") as llm:
@@ -62,7 +62,7 @@ print(f"Cost: ${cost_view.total_cost.usd}")
 ### Nested Spans and Relations
 
 ```python
-from cadence import Trace, Span, project_tree
+from saccade import Trace, Span, project_tree
 
 with Trace() as trace:
     with Span("agent", kind="agent") as agent:
@@ -84,7 +84,7 @@ for root in tree.roots:
 ### Real-Time Event Streaming
 
 ```python
-from cadence import Trace, Span, EventType
+from saccade import Trace, Span, EventType
 
 with Trace() as trace:
     # Subscribe to live events
@@ -109,7 +109,7 @@ with Trace() as trace:
 |-------|-------------|
 | `Trace` | Entry point for tracing. Creates a `TraceBus` and manages context. |
 | `Span` | Context manager for tracing operations. Emits events, tracks metrics. |
-| `TraceBus` | Collects events and notifies subscribers. (Internal, accessible via `cadence.primitives`) |
+| `TraceBus` | Collects events and notifies subscribers. (Internal, accessible via `saccade.primitives`) |
 
 ### Event Types
 
@@ -147,7 +147,7 @@ Transform events into different views:
 ### Tree View
 
 ```python
-from cadence import Trace, Span, project_tree
+from saccade import Trace, Span, project_tree
 
 with Trace() as trace:
     with Span("parent") as p:
@@ -168,7 +168,7 @@ print(f"Peak context: {tree.peak_context}")
 ### Graph View
 
 ```python
-from cadence import Trace, Span, Relation, project_graph
+from saccade import Trace, Span, Relation, project_graph
 
 with Trace() as trace:
     with Span("a") as a:
@@ -190,7 +190,7 @@ dataflow_edges = graph.edges_by_type(Relation.DATAFLOW)
 ### Cost View
 
 ```python
-from cadence import Trace, Span, TokenMetrics, CostMetrics, project_cost
+from saccade import Trace, Span, TokenMetrics, CostMetrics, project_cost
 
 with Trace() as trace:
     with Span("llm1") as s1:
@@ -214,7 +214,7 @@ print(f"Cost per 1k input: ${cost.cost_per_1k_input}")
 ### Timeline View
 
 ```python
-from cadence import Trace, Span, project_timeline
+from saccade import Trace, Span, project_timeline
 
 with Trace() as trace:
     with Span("a"):
@@ -232,7 +232,7 @@ for bucket in timeline.by_seconds(1.0):
 ### State View (Snapshot)
 
 ```python
-from cadence import Trace, Span, project_state
+from saccade import Trace, Span, project_state
 import time
 
 with Trace() as trace:
@@ -254,7 +254,7 @@ print(f"Active spans at snapshot: {[s.name for s in state.active_spans]}")
 ### Custom Relations
 
 ```python
-from cadence import Trace, Span, project_graph
+from saccade import Trace, Span, project_graph
 
 with Trace() as trace:
     with Span("task_a") as a:
@@ -270,10 +270,10 @@ depends_edges = graph.edges_by_type("depends_on")
 
 ### Span Kinds
 
-Cadence provides constants for common span kinds:
+Saccade provides constants for common span kinds:
 
 ```python
-from cadence import Span, SpanKind
+from saccade import Span, SpanKind
 
 with Span("agent", kind=SpanKind.AGENT):
     pass
@@ -295,7 +295,7 @@ Available kinds:
 ### Error Handling
 
 ```python
-from cadence import Trace, Span, EventType
+from saccade import Trace, Span, EventType
 
 with Trace() as trace:
     trace.subscribe(lambda e: print(f"{e.type}: {e.name}"))

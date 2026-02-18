@@ -10,8 +10,8 @@ class TestTraceBus:
 
     def test_emit_and_retrieve_events(self):
         """Events emitted to bus should be immediately available."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
 
@@ -25,8 +25,8 @@ class TestTraceBus:
 
     def test_subscriber_notification(self):
         """Subscribers should receive events immediately on emit."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
         received = []
@@ -44,8 +44,8 @@ class TestTraceBus:
 
     def test_subscriber_error_isolation(self):
         """Subscriber errors should not crash the bus or affect other subscribers."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
         received = []
@@ -67,8 +67,8 @@ class TestTraceBus:
 
     def test_multiple_subscribers(self):
         """Multiple subscribers should all receive events."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
         received1 = []
@@ -88,8 +88,8 @@ class TestTraceBus:
 
     def test_events_returns_copy(self):
         """events property should return a copy, not the internal list."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
 
@@ -104,8 +104,8 @@ class TestTraceBus:
 
     def test_order_preserved(self):
         """Events should be stored in emission order."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
 
@@ -119,7 +119,7 @@ class TestTraceBus:
 
     def test_trace_id_auto_generated(self):
         """TraceBus should auto-generate a trace_id if not provided."""
-        from cadence.primitives.bus import TraceBus
+        from saccade.primitives.bus import TraceBus
 
         bus = TraceBus()
         assert bus.trace_id is not None
@@ -127,15 +127,15 @@ class TestTraceBus:
 
     def test_trace_id_provided(self):
         """TraceBus should use provided trace_id."""
-        from cadence.primitives.bus import TraceBus
+        from saccade.primitives.bus import TraceBus
 
         bus = TraceBus(trace_id="custom-trace-id")
         assert bus.trace_id == "custom-trace-id"
 
     def test_events_property_reflects_real_time(self):
         """Events should be available immediately after emit (no drain needed)."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
 
@@ -149,8 +149,8 @@ class TestTraceBus:
 
     def test_subscriber_can_be_added_after_emit(self):
         """Subscribers added after emit should receive future events."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
         received = []
@@ -170,8 +170,8 @@ class TestTraceBusSubscribe:
 
     def test_subscribe_accepts_callable(self):
         """subscribe should accept any callable."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
         received = []
@@ -187,8 +187,8 @@ class TestTraceBusSubscribe:
 
     def test_subscriber_receives_all_event_types(self):
         """Subscribers should receive all event types."""
-        from cadence.primitives.bus import TraceBus
-        from cadence.primitives.events import TraceEvent, EventType
+        from saccade.primitives.bus import TraceBus
+        from saccade.primitives.events import EventType, TraceEvent
 
         bus = TraceBus()
         types_received = []

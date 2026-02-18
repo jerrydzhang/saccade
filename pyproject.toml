@@ -1,7 +1,7 @@
 [project]
-name = "cadence"
+name = "saccade"
 version = "0.1.0"
-description = "Cadence: Tracing and observability library for AI agents"
+description = "Saccade: Tracing and observability library for AI agents"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -40,8 +40,7 @@ ignore = [
     "PLR2004",  # magic values
     "ANN",      # type annotations
     "D",        # docstrings
-    "PLC0415",  # import not at top-level (intentional for TDD)
-    "I001",     # unsorted imports (intentional for TDD)
+    "PLC0415",  # import not at top-level (common in test fixtures)
     "SLF001",   # private member access (testing internals)
     "PT011",    # pytest.raises too broad
     "TRY003",   # long exception messages
@@ -53,6 +52,11 @@ ignore = [
 ]
 "__init__.py" = [
     "F401",     # unused imports (re-exports)
+]
+"src/saccade/primitives/projectors.py" = [
+    "C901",     # complex function (inherent to projection logic)
+    "PLR0912",  # too many branches
+    "PLR0915",  # too many statements
 ]
 
 [tool.ruff.format]
