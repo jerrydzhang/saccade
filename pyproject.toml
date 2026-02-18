@@ -1,0 +1,87 @@
+[project]
+name = "cadence"
+version = "0.1.0"
+description = "Cadence: Tracing and observability library for AI agents"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.4",
+    "python-ulid>=2.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.15.1",
+    "ty>=0.0.17",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",        # pydocstyle (enable selectively if needed)
+    "COM812",   # trailing comma (formatter conflict)
+    "ISC001",   # string concat (formatter conflict)
+    "ANN401",   # Dynamically typed Any
+    "TD002",    # Missing TODO author
+    "TD003",    # Missing TODO link
+    "FIX002",   # Line contains TODO
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",     # assert usage
+    "PLR2004",  # magic values
+    "ANN",      # type annotations
+    "D",        # docstrings
+    "PLC0415",  # import not at top-level (intentional for TDD)
+    "I001",     # unsorted imports (intentional for TDD)
+    "SLF001",   # private member access (testing internals)
+    "PT011",    # pytest.raises too broad
+    "TRY003",   # long exception messages
+    "EM101",    # exception string literal
+    "ARG001",   # unused function argument
+    "SIM117",   # nested with statements
+    "PLW0108",  # lambda may be unnecessary
+    "B017",     # assert blind exception (testing frozen dataclasses)
+]
+"__init__.py" = [
+    "F401",     # unused imports (re-exports)
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.ty.environment]
+python-version = "3.13"
+
+[tool.ty.rules]
+possibly-unresolved-reference = "error"
+unused-ignore-comment = "warn"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: unit tests (isolated component tests)",
+    "integration: integration tests (multi-component tests)",
+    "e2e: end-to-end tests (full system tests)",
+]
+filterwarnings = [
+    "ignore:Span has no TraceBus:RuntimeWarning",
+]
