@@ -80,14 +80,14 @@ class TestSpanRelations:
         from saccade.primitives.span import Span
 
         with pytest.raises(TypeError, match="must be list"):
-            Span("test", relations={"depends_on": "not-a-list"})
+            Span("test", relations={"depends_on": "not-a-list"})  # ty: ignore[invalid-argument-type]
 
     def test_relations_validation_str_elements(self):
         """Relations list elements must be strings."""
         from saccade.primitives.span import Span
 
         with pytest.raises(TypeError, match="must contain str"):
-            Span("test", relations={"depends_on": [123]})
+            Span("test", relations={"depends_on": [123]})  # ty: ignore[invalid-argument-type]
 
     def test_relate_adds_relation(self):
         """relate() should add a new relation."""
@@ -126,7 +126,7 @@ class TestSpanRelations:
 
         span = Span("test")
         with pytest.raises(TypeError, match="relation_type must be str"):
-            span.relate(123, "span-123")
+            span.relate(123, "span-123")  # ty: ignore[invalid-argument-type]
 
     def test_relate_validation_span_id_str(self):
         """relate() should validate span_id is a string."""
@@ -134,7 +134,7 @@ class TestSpanRelations:
 
         span = Span("test")
         with pytest.raises(TypeError, match="span_id must be str"):
-            span.relate("depends_on", 123)
+            span.relate("depends_on", 123)  # ty: ignore[invalid-argument-type]
 
 
 class TestSpanContext:
@@ -315,6 +315,7 @@ class TestSpanMeta:
         with Span("test") as span:
             span.set_meta(OperationMeta(model="gpt-4o", provider="openai"))
 
+        assert span._pending_operation is not None
         assert span._pending_operation.model == "gpt-4o"
         assert span._pending_operation.provider == "openai"
 
@@ -327,6 +328,7 @@ class TestSpanMeta:
             span.set_meta(OperationMeta(model="gpt-4o"))
             span.set_meta(OperationMeta(model="gpt-4o", correlation_id="chatcmpl-abc"))
 
+        assert span._pending_operation is not None
         assert span._pending_operation.model == "gpt-4o"
         assert span._pending_operation.correlation_id == "chatcmpl-abc"
 

@@ -174,6 +174,7 @@ class TestTraceEvent:
             },
         )
 
+        assert event.relations is not None
         assert Relation.CONTEXT in event.relations
         assert Relation.DATAFLOW in event.relations
         assert "researcher" in event.relations[Relation.DATAFLOW]
@@ -239,6 +240,10 @@ class TestTraceEvent:
             response_id="chatcmpl-abc",
         )
 
+        assert event.tokens is not None
+        assert event.cost is not None
+        assert event.latency is not None
+        assert event.operation is not None
         assert event.tokens.input == 100
         assert event.tokens.output == 50
         assert event.cost.usd == Decimal("0.01")
@@ -259,6 +264,7 @@ class TestTraceEvent:
         )
 
         assert event.error == "Connection failed"
+        assert event.latency is not None
         assert event.latency.total_ms == 500.0
 
     def test_cancel_event_with_metrics(self):
@@ -273,6 +279,7 @@ class TestTraceEvent:
         )
 
         assert event.type == EventType.CANCEL
+        assert event.latency is not None
         assert event.latency.total_ms == 100.0
 
     def test_frozen(self):

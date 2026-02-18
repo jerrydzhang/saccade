@@ -199,12 +199,15 @@ class TestErrorRecoveryPatterns:
         tool_a = tree.find_by_name("tool_a")
         tool_b = tree.find_by_name("tool_b")
 
+        assert tool_a is not None
+        assert tool_b is not None
+
         assert tool_a.status == "COMPLETED"
         assert tool_a.output == "tool_a result"
 
         assert tool_b.status == "FAILED"
         assert tool_b.output == "tool_b result"
-        assert "tool_b failed" in tool_b.error
+        assert "tool_b failed" in (tool_b.error or "")
 
 
 class TestCostTrackingPatterns:

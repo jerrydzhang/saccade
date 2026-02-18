@@ -31,6 +31,7 @@ class TestRelation:
             span_id="s1",
             relations={"custom_relation": ["s0"]},
         )
+        assert event.relations is not None
         assert event.relations["custom_relation"] == ["s0"]
 
 
@@ -247,6 +248,7 @@ class TestProjectTree:
 
         tree = project_tree(events)
         node = tree.roots[0]
+        assert node.operation is not None
         assert node.operation.model == "gpt-4o"
         assert node.response_id == "chatcmpl-abc123"
 
