@@ -398,21 +398,21 @@ class TestSpanContextPropagation:
 
     def test_context_resets_on_exit(self):
         """Context variable should reset when span exits."""
-        from saccade.primitives.span import Span, _current_span_id
+        from saccade.primitives.span import Span
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
 
-            assert _current_span_id.get() is None
+            assert Span.current() is None
 
             with Span("outer") as outer:
-                assert _current_span_id.get() == outer.id
+                assert Span.current() is outer
 
                 with Span("inner") as inner:
-                    assert _current_span_id.get() == inner.id
+                    assert Span.current() is inner
 
                 # After inner exits, should be back to outer
-                assert _current_span_id.get() == outer.id
+                assert Span.current() is outer
 
             # After outer exits, should be None
-            assert _current_span_id.get() is None
+            assert Span.current() is None

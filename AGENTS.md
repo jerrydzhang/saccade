@@ -57,6 +57,7 @@ This plan is self-contained and can be executed phase-by-phase by any agent.
 |--------|------|----------|------|
 | `Trace` | class | `primitives/trace.py` | Entry point, context manager |
 | `Span` | class | `primitives/span.py` | Operation tracing, event emission |
+| `Span.current()` | classmethod | `primitives/span.py` | Get active span from context |
 | `TraceBus` | class | `primitives/bus.py` | Event collection, pub/sub |
 | `TraceEvent` | class | `primitives/events.py` | Immutable event record |
 | `EventType` | enum | `primitives/events.py` | START/CHUNK/OUTPUT/SUCCESS/ERROR/CANCEL |
