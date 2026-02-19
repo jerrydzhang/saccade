@@ -1,4 +1,4 @@
-# CADENCE - AGENTS.md
+# SACCADE - AGENTS.md
 
 **Generated:** 2026-02-17
 **Python:** 3.13+
@@ -11,27 +11,45 @@ Tracing/observability library for AI agents. Event-driven architecture with immu
 
 ```
 saccade/
-├── src/saccade/          # Main package (import as `saccade`)
-│   └── primitives/       # Core: Trace, Span, events, projectors
-├── tests/                # pytest (unit/integration/e2e markers)
-├── scripts/              # ContextVar validation script
-├── pyproject.toml        # Config (ruff, pytest, ty)
-└── flake.nix             # Nix dev shell
+├── pyproject.toml              # Workspace root (config only)
+├── packages/
+│   └── saccade/                # Library package
+│       ├── src/saccade/        # Main package (import as `saccade`)
+│       │   ├── primitives/     # Core: Trace, Span, events, projectors
+│       │   └── integrations/   # LiteLLM wrapper, future exporters
+│       ├── tests/              # pytest (unit/integration/e2e markers)
+│       └── pyproject.toml      # Package config (ruff, pytest, ty)
+├── apps/
+│   └── research-agent/         # Dogfood project
+│       ├── PLAN.md             # Implementation plan (start here!)
+│       ├── src/research_agent/
+│       ├── tests/
+│       └── pyproject.toml
+└── flake.nix                   # Nix dev shell
 ```
+
+## IMPLEMENTATION PLAN
+
+For research-agent development, see `apps/research-agent/PLAN.md`.
+
+This plan is self-contained and can be executed phase-by-phase by any agent.
 
 ## WHERE TO LOOK
 
 | Task | Location |
 |------|----------|
-| Add new event type | `src/saccade/primitives/events.py` |
-| Add new projector | `src/saccade/primitives/projectors.py` |
-| Modify span behavior | `src/saccade/primitives/span.py` |
-| Context management | `src/saccade/primitives/trace.py` |
-| Event collection/pub-sub | `src/saccade/primitives/bus.py` |
-| Public API exports | `src/saccade/__init__.py` |
-| Unit tests | `tests/unit/primitives/test_*.py` |
-| Integration tests | `tests/integration/test_pipeline.py` |
-| E2E/usage patterns | `tests/e2e/test_dx_patterns.py` |
+| Add new event type | `packages/saccade/src/saccade/primitives/events.py` |
+| Add new projector | `packages/saccade/src/saccade/primitives/projectors.py` |
+| Modify span behavior | `packages/saccade/src/saccade/primitives/span.py` |
+| Context management | `packages/saccade/src/saccade/primitives/trace.py` |
+| Event collection/pub-sub | `packages/saccade/src/saccade/primitives/bus.py` |
+| Public API exports | `packages/saccade/src/saccade/__init__.py` |
+| LiteLLM integration | `packages/saccade/src/saccade/integrations/litellm.py` |
+| Unit tests | `packages/saccade/tests/unit/primitives/test_*.py` |
+| Integration tests | `packages/saccade/tests/integration/test_pipeline.py` |
+| E2E/usage patterns | `packages/saccade/tests/e2e/test_dx_patterns.py` |
+| Research agent | `apps/research-agent/src/research_agent/` |
+| Research agent plan | `apps/research-agent/PLAN.md` |
 
 ## CODE MAP
 
@@ -47,6 +65,11 @@ saccade/
 | `project_cost` | fn | `primitives/projectors.py` | Events → cost aggregation |
 | `project_state` | fn | `primitives/projectors.py` | Events → state snapshot |
 | `project_timeline` | fn | `primitives/projectors.py` | Events → temporal view |
+| `TracedLiteLLM` | class | `integrations/litellm.py` | LiteLLM wrapper with saccade spans |
+| `Agent` | class | `research_agent/agent.py` | Main agent loop |
+| `AgentBuilder` | class | `research_agent/agent.py` | Fluent agent configuration |
+| `@tool` | deco | `research_agent/tools/registry.py` | Tool registration decorator |
+| `WorkingMemory` | class | `research_agent/memory/working.py` | Message list management |
 
 ## CONVENTIONS
 
@@ -56,7 +79,7 @@ saccade/
 - **Linter**: `ruff` with `select = ["ALL"]`, line-length 100
 
 ### Test Relaxations (TDD-Friendly)
-`tests/**/*.py` has intentional ignores:
+`packages/saccade/tests/**/*.py` has intentional ignores:
 - `PLC0415`, `I001` - imports not at top (TDD pattern)
 - `SLF001` - private member access (testing internals)
 - `S101` - assert usage
@@ -84,25 +107,35 @@ saccade/
 nix develop                    # Enter Nix shell (runs uv sync)
 
 # Dependencies
-uv sync                        # Install/update deps
-uv add <pkg>                   # Add dependency
-uv remove <pkg>                # Remove dependency
+uv sync --all-packages         # Install/update all workspace deps
+uv add <pkg> --package saccade # Add dependency to saccade
+uv add <pkg> --package research-agent  # Add dependency to research-agent
 
 # Code quality
 uv run ruff check --fix        # Lint
 uv run ruff format             # Format
-uv run ty                      # Type check (strict)
+uv run ty check packages/saccade/src packages/saccade/tests  # Type check saccade
+uv run ty check apps/research-agent/src apps/research-agent/tests  # Type check research-agent
 
-# Testing
-uv run pytest tests/           # All tests
+# Testing (saccade)
+uv run pytest packages/saccade/tests/  # All tests
 uv run pytest -m unit          # Unit only
 uv run pytest -m integration   # Integration only
 uv run pytest -m e2e           # E2E only
-uv run pytest --cov=src        # With coverage
+uv run pytest --cov=packages/saccade/src  # With coverage
+
+# Testing (research-agent)
+uv run pytest apps/research-agent/tests/  # All tests
+uv run pytest apps/research-agent/tests/unit/  # Unit only
+uv run pytest apps/research-agent/tests/integration/  # Integration only
+
+# Building
+uv build --package saccade     # Build saccade for publishing
 ```
 
 ## NOTES
 
+- **Monorepo**: Uses uv workspaces with saccade library + research-agent app
 - **No CI/CD**: All checks run manually
 - **Asyncio only**: Not thread-safe, use asyncio
 - **In-memory only**: No built-in persistence
