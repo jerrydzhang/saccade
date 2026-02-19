@@ -19,7 +19,7 @@ from saccade.primitives.events import (
 )
 from saccade.primitives.trace import _current_bus
 
-_current_span_id: ContextVar[str | None] = ContextVar("_current_span_id", default=None)
+_current_span: ContextVar[Span | None] = ContextVar("_current_span", default=None)
 
 
 class Span:
@@ -46,7 +46,7 @@ class Span:
         self._pending_tokens: TokenMetrics = TokenMetrics()
         self._pending_cost: CostMetrics = CostMetrics()
         self._pending_operation: OperationMeta | None = None
-        self._token: Token[str | None] | None = None
+        self._token: Token[Span | None] | None = None
 
         if relations:
             self._validate_relations(relations)
@@ -61,6 +61,11 @@ class Span:
                 if not isinstance(target, str):
                     msg = f"Relations list for '{rel_type}' must contain str"
                     raise TypeError(msg)
+
+    @classmethod
+    def current(cls) -> Span | None:
+        """Get the currently active span from context, if any."""
+        return _current_span.get()
 
     def relate(self, relation_type: str, span_id: str) -> None:
         if not isinstance(relation_type, str):
@@ -79,11 +84,11 @@ class Span:
         self._start_time = time.time()
         self.status = "RUNNING"
 
-        parent_span_id = _current_span_id.get()
-        if parent_span_id:
-            self.relate("context", parent_span_id)
+        parent_span = _current_span.get()
+        if parent_span:
+            self.relate("context", parent_span.id)
 
-        self._token = _current_span_id.set(self.id)
+        self._token = _current_span.set(self)
 
         bus = _current_bus.get()
         if bus:
@@ -119,7 +124,7 @@ class Span:
         total_ms = (end_time - (self._start_time or end_time)) * 1000
 
         if self._token:
-            _current_span_id.reset(self._token)
+            _current_span.reset(self._token)
 
         bus = _current_bus.get()
 

@@ -14,7 +14,7 @@ primitives/
 ├── events.py        # TraceEvent, EventType, metrics (114 lines)
 ├── bus.py           # TraceBus event collection (45 lines)
 ├── trace.py         # Trace context manager (49 lines)
-├── span.py          # Span lifecycle (231 lines)
+├── span.py          # Span lifecycle (235 lines)
 └── projectors.py    # 5 projection functions (732 lines)
 ```
 
@@ -26,7 +26,7 @@ primitives/
 | Add event type | `events.py` | `EventType` enum |
 | Modify event structure | `events.py` | `TraceEvent` |
 | Change pub/sub behavior | `bus.py` | `TraceBus.emit()`, `TraceBus.subscribe()` |
-| Context propagation | `trace.py` | `_current_bus` ContextVar |
+| Context propagation | `trace.py`, `span.py` | `_current_bus`, `_current_span`, `Span.current()` |
 | Span lifecycle hooks | `span.py` | `Span.__enter__()`, `Span.__exit__()` |
 | Add new view | `projectors.py` | Follow `project_*` pattern |
 
@@ -45,13 +45,16 @@ def __add__(self, other: TokenMetrics) -> TokenMetrics:
 ### Context Propagation
 ```python
 _current_bus: ContextVar[TraceBus | None] = ContextVar("_current_bus", default=None)
-_current_span_id: ContextVar[str | None] = ContextVar("_current_span_id", default=None)
+_current_span: ContextVar[Span | None] = ContextVar("_current_span", default=None)
+
+# Access current span from integrations
+span = Span.current()  # Returns active Span or None
 ```
 
 ### Event Emission Flow
 ```
 Trace.__enter__() → sets _current_bus
-  Span.__enter__() → emits START, sets _current_span_id
+  Span.__enter__() → emits START, sets _current_span
     Span.stream() → emits CHUNK
     Span.set_output() → stores output
     Span.__exit__() → emits OUTPUT + SUCCESS/ERROR/CANCEL
@@ -73,6 +76,7 @@ All projectors: sort by timestamp → aggregate by span_id → build view
 
 ## NOTES
 
+- `Span.current()` is the public API for integrations to access the active span
 - Relations are extensible strings (not enums): `"depends_on"`, `"caused_by"` work
 - Orphan nodes marked with `metadata["orphan"] = True` in tree
 - Ghost nodes (referenced but no START) have `is_ghost = True` in graph
