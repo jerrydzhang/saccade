@@ -1,8 +1,6 @@
 """Pytest configuration for LiteLLM integration tests.
 
-Configuration is loaded from .env files in order of precedence:
-1. packages/saccade/.env (package-specific, for recording cassettes)
-2. .env in workspace root (project-wide defaults)
+Configuration is loaded from .env file at workspace root.
 
 Required variables for cassette recording:
     PROVIDER_MODEL - LiteLLM model string (e.g., "my-provider/glm-4.7")
@@ -23,8 +21,15 @@ from dotenv import load_dotenv
 if TYPE_CHECKING:
     from saccade.integrations.litellm import TracedLiteLLM
 
-load_dotenv(Path(__file__).parent.parent.parent.parent.parent / ".env")
-load_dotenv(Path(__file__).parent.parent.parent.parent.parent.parent.parent / ".env")
+load_dotenv(Path(__file__).parent.parent.parent.parent.parent.parent / ".env")
+
+
+@pytest.fixture(scope="module")
+def vcr_config():
+    return {
+        "filter_headers": ["Authorization"],
+        "decode_compressed_response": True,
+    }
 
 
 @pytest.fixture
@@ -49,7 +54,6 @@ def llm() -> "TracedLiteLLM":
 
 @pytest.fixture
 def llm_with_pricing() -> "TracedLiteLLM":
-    """LLM with custom pricing configured for testing cost calculation."""
     from saccade.integrations.litellm import (
         ModelPricing,
         OpenAICompatibleProvider,
