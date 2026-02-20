@@ -44,7 +44,8 @@ This plan is self-contained and can be executed phase-by-phase by any agent.
 | Context management | `packages/saccade/src/saccade/primitives/trace.py` |
 | Event collection/pub-sub | `packages/saccade/src/saccade/primitives/bus.py` |
 | Public API exports | `packages/saccade/src/saccade/__init__.py` |
-| LiteLLM integration | `packages/saccade/src/saccade/integrations/litellm.py` |
+| LiteLLM integration | `packages/saccade/src/saccade/integrations/litellm/` |
+| Custom OpenAI provider | `packages/saccade/src/saccade/integrations/litellm/openai_provider.py` |
 | Unit tests | `packages/saccade/tests/unit/primitives/test_*.py` |
 | Integration tests | `packages/saccade/tests/integration/test_pipeline.py` |
 | E2E/usage patterns | `packages/saccade/tests/e2e/test_dx_patterns.py` |
@@ -66,7 +67,8 @@ This plan is self-contained and can be executed phase-by-phase by any agent.
 | `project_cost` | fn | `primitives/projectors.py` | Events → cost aggregation |
 | `project_state` | fn | `primitives/projectors.py` | Events → state snapshot |
 | `project_timeline` | fn | `primitives/projectors.py` | Events → temporal view |
-| `TracedLiteLLM` | class | `integrations/litellm.py` | LiteLLM wrapper with saccade spans |
+| `TracedLiteLLM` | class | `integrations/litellm/traced_llm.py` | LiteLLM wrapper with saccade spans |
+| `OpenAICompatibleProvider` | class | `integrations/litellm/openai_provider.py` | Custom LiteLLM provider for OpenAI-compatible APIs |
 | `Agent` | class | `research_agent/agent.py` | Main agent loop |
 | `AgentBuilder` | class | `research_agent/agent.py` | Fluent agent configuration |
 | `@tool` | deco | `research_agent/tools/registry.py` | Tool registration decorator |
@@ -124,6 +126,11 @@ uv run pytest -m unit          # Unit only
 uv run pytest -m integration   # Integration only
 uv run pytest -m e2e           # E2E only
 uv run pytest --cov=packages/saccade/src  # With coverage
+
+# Recording VCR cassettes (pytest-vcr)
+# First, set up .env with your provider credentials, then:
+uv run pytest packages/saccade/tests/unit/integrations/litellm/ --vcr-record=new_episodes  # Record new cassettes
+uv run pytest packages/saccade/tests/unit/integrations/litellm/ --vcr-record=none  # CI mode (no new recordings)
 
 # Testing (research-agent)
 uv run pytest apps/research-agent/tests/  # All tests

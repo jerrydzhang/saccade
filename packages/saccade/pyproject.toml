@@ -49,6 +49,9 @@ ignore = [
     "SIM117",   # nested with statements
     "PLW0108",  # lambda may be unnecessary
     "B017",     # assert blind exception (testing frozen dataclasses)
+    "B007",     # unused loop variable (common in async for)
+    "F841",     # unused local variable (trace context managers)
+    "PERF401",  # async list comprehension (readability over perf in tests)
 ]
 "__init__.py" = [
     "F401",     # unused imports (re-exports)
@@ -58,6 +61,25 @@ ignore = [
     "PLR0912",  # too many branches
     "PLR0915",  # too many statements
 ]
+"src/saccade/integrations/litellm/*.py" = [
+    "C901",     # streaming has many branches by nature
+    "SLF001",   # private member access (LiteLLM ModelResponse._usage)
+    "ARG002",   # unused method argument (LiteLLM interface requires these)
+    "PLC0415",  # import not at top-level (lazy import litellm in register())
+]
+
+[[tool.ty.overrides]]
+include = ["src/saccade/integrations/litellm/*.py"]
+
+[tool.ty.overrides.rules]
+invalid-method-override = "ignore"
+
+[[tool.ty.overrides]]
+include = ["tests/unit/integrations/litellm/test_openai_provider.py"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+not-subscriptable = "ignore"
 
 [tool.ruff.format]
 quote-style = "double"
@@ -88,4 +110,5 @@ markers = [
 ]
 filterwarnings = [
     "ignore:Span has no TraceBus:RuntimeWarning",
+    "ignore:coroutine 'Logging.async_success_handler' was never awaited:RuntimeWarning",
 ]
