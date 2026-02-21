@@ -1,0 +1,62 @@
+interactions:
+- request:
+    body: '{"model":"glm-4.7","messages":[{"role":"user","content":"What''s the weather
+      in SF?"}],"stream":false,"tools":[{"type":"function","function":{"name":"get_weather","description":"Get
+      the current weather","parameters":{"type":"object","properties":{"location":{"type":"string","description":"The
+      city and state"}},"required":["location"]}}}]}'
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '339'
+      Content-Type:
+      - application/json
+      Host:
+      - api.z.ai
+      User-Agent:
+      - python-httpx/0.28.1
+    method: POST
+    uri: https://api.z.ai/api/coding/paas/v4/chat/completions
+  response:
+    body:
+      string: '{"choices":[{"finish_reason":"tool_calls","index":0,"message":{"content":"","reasoning_content":"The
+        user is asking about the weather in SF, which commonly refers to San Francisco.
+        I need to use the get_weather function, but it requires a location parameter
+        in the format \"city and state\". \"SF\" typically means San Francisco, California,
+        so I should use \"San Francisco, CA\" as the location parameter.","role":"assistant","tool_calls":[{"function":{"arguments":"{\"location\":\"San
+        Francisco, CA\"}","name":"get_weather"},"id":"call_-7881456921658515831","index":0,"type":"function"}]}}],"created":1771599475,"id":"20260220225753cd700ff5e887499f","model":"glm-4.7","object":"chat.completion","request_id":"20260220225753cd700ff5e887499f","usage":{"completion_tokens":80,"completion_tokens_details":{"reasoning_tokens":65},"prompt_tokens":167,"prompt_tokens_details":{"cached_tokens":165},"total_tokens":247}}'
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Fri, 20 Feb 2026 14:57:55 GMT
+      Keep-Alive:
+      - timeout=6
+      Server:
+      - nginx
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Accept-Encoding
+      - Origin
+      - Access-Control-Request-Method
+      - Access-Control-Request-Headers
+      - Origin
+      - Access-Control-Request-Method
+      - Access-Control-Request-Headers
+      X-LOG-ID:
+      - 20260220225753cd700ff5e887499f
+      content-length:
+      - '913'
+    status:
+      code: 200
+      message: OK
+version: 1

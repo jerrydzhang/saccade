@@ -1,5 +1,8 @@
 # SACCADE PRIMITIVES - AGENTS.md
 
+**Generated:** 2026-02-20
+**Commit:** 04272c9
+
 Core tracing primitives: events, bus, spans, and projections.
 
 ## OVERVIEW

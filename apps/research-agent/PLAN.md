@@ -1,7 +1,7 @@
 # Research-Agent Implementation Plan
 
-**Status:** Planning Complete, Ready for Phase 0
-**Updated:** 2026-02-18
+**Status:** Phase 2 Complete, Ready for Phase 3
+**Updated:** 2026-02-20
 
 ---
 
@@ -20,7 +20,7 @@ Build a research agent that dogfoods the saccade telemetry library. The agent wi
 saccade/                          # Workspace root
 ├── packages/saccade/             # Library (tracing primitives)
 │   ├── primitives/               # Trace, Span, Events, Projectors
-│   └── integrations/             # NEW: LiteLLM wrapper, future exporters
+│   └── integrations/             # LiteLLM wrapper, future exporters
 │
 └── apps/research-agent/          # Dogfood application
     └── src/research_agent/
@@ -39,6 +39,8 @@ saccade/                          # Workspace root
 | Configuration | Python templates (not YAML) | True composability, type safety |
 | LLM integration | Streaming-first | Better UX, real-time feedback |
 | Tool registration | `@tool` decorator | Simple, auto-generates schema |
+| Schema generation | Pydantic `create_model()` | Type coercion, validation, LLM-friendly errors |
+| Tool execution | Blocking only (v0.1) | Simplicity; non-blocking deferred for sub-agents |
 | Tracing | saccade (dogfooding) | Find pain points by using it |
 | Testing | TDD + cassettes | Save API costs, reproducible |
 
@@ -47,7 +49,7 @@ saccade/                          # Workspace root
 ## Development Principles
 
 1. **TDD**: Write test first, then implementation
-2. **Cassettes**: Record LLM responses, replay in tests (use `pytest-vcr` or `recurlib`)
+2. **Cassettes**: Record LLM responses, replay in tests (use `pytest-vcr`)
 3. **Phase-by-phase**: Complete each phase fully before moving to next
 4. **Learn and adapt**: Each phase may reveal gaps; iterate
 
@@ -57,9 +59,9 @@ saccade/                          # Workspace root
 
 Mark phases as complete by changing status.
 
-- [ ] **Phase 0**: Foundation
-- [ ] **Phase 1**: LiteLLM Integration (Streaming-First)
-- [ ] **Phase 2**: Tool Registry
+- [x] **Phase 0**: Foundation
+- [x] **Phase 1**: LiteLLM Integration (Streaming-First)
+- [x] **Phase 2**: Tool Registry
 - [ ] **Phase 3**: Working Memory
 - [ ] **Phase 4**: Reasoning Strategies
 - [ ] **Phase 5**: Agent Core
@@ -72,157 +74,485 @@ Mark phases as complete by changing status.
 
 ## Phase Details
 
-### Phase 0: Foundation
+### Phase 0: Foundation ✅ COMPLETE
 
 **Goal:** Set up dependencies and verify monorepo works.
 
-**Tasks:**
-- [ ] 0.1: Add `saccade[integrations]` optional dep with LiteLLM to `packages/saccade/pyproject.toml`
-- [ ] 0.2: Add pytest-vcr or similar for cassette recording to research-agent
-- [ ] 0.3: Run `uv sync --all-packages` and verify
-
-**Verification:**
-```bash
-uv sync --all-packages
-uv run pytest packages/saccade/tests/  # Still passes
-```
-
-**Files to modify:**
-- `packages/saccade/pyproject.toml`
-- `apps/research-agent/pyproject.toml`
+**Completed:**
+- Added `saccade[integrations]` optional dep with LiteLLM
+- Added pytest-vcr for cassette recording
+- Verified monorepo with `uv sync --all-packages`
 
 ---
 
-### Phase 1: LiteLLM Integration (Streaming-First)
+### Phase 1: LiteLLM Integration ✅ COMPLETE
 
 **Goal:** Traced LLM calls via saccade, streaming as default.
 
-**Test-first (write these first):**
-- [ ] 1.1: Test streaming response emits CHUNK events to active Span
-- [ ] 1.2: Test final response captures tokens, cost, latency
-- [ ] 1.3: Test tool calling works with streaming
+**What was implemented:**
 
-**Implementation:**
-- [ ] 1.4: Create `saccade/integrations/__init__.py`
-- [ ] 1.5: Create `saccade/integrations/litellm.py` with `TracedLiteLLM` class
-- [ ] 1.6: Implement streaming (default) and non-streaming modes
-- [ ] 1.7: Capture metrics on Span completion
-- [ ] 1.8: Create cassettes for tests
+| Component | File | Description |
+|-----------|------|-------------|
+| `TracedLiteLLM` | `integrations/litellm/traced_llm.py` | Streaming/non-streaming LLM wrapper with auto-tracing |
+| `ModelPricing` | `integrations/litellm/pricing.py` | Per-token cost configuration |
+| `OpenAICompatibleProvider` | `integrations/litellm/openai_provider.py` | Custom provider for OpenAI-compatible APIs |
+| `RegisterableProvider` | `integrations/litellm/pricing.py` | ABC for providers with pricing |
 
 **API:**
 ```python
 from saccade.integrations.litellm import TracedLiteLLM
 
-llm = TracedLiteLLM(model="claude-3.5-sonnet")
+llm = TracedLiteLLM(model="openai/gpt-4o-mini")
 
-# Streaming is default
+# Streaming (default)
 async for chunk in llm.stream(messages=[...]):
-    print(chunk.delta, end="")  # Emits CHUNK to active Span
+    print(chunk.delta, end="")
 
-# Non-streaming if needed
-response = await llm.complete(messages=[...])
+# Non-streaming
+result = await llm.complete(messages=[...])
+print(result.content)
 ```
 
-**Files to create:**
-- `packages/saccade/src/saccade/integrations/__init__.py`
-- `packages/saccade/src/saccade/integrations/litellm.py`
-- `packages/saccade/tests/unit/integrations/test_litellm.py`
-- `packages/saccade/tests/cassettes/` (for recorded responses)
+**Key features:**
+- Auto-emits CHUNK events during streaming
+- Captures tokens, cost, latency on Span completion
+- Supports tool calling with streaming
+- Custom providers with pricing registration
+- VCR cassettes for reproducible tests
 
-**Verification:**
-```bash
-uv run pytest packages/saccade/tests/unit/integrations/
-uv run ty check packages/saccade/src/saccade/integrations/
-```
+**Test coverage:** 281 tests, 95% coverage
 
 ---
 
-### Phase 2: Tool Registry
+### Phase 2: Tool Registry ✅ COMPLETE
 
-**Goal:** Decorator-based tool registration with auto-schema generation.
+**Goal:** Decorator-based tool registration with auto-schema generation, Pydantic validation, and automatic tracing.
 
-**Test-first:**
-- [ ] 2.1: Test `@tool` decorator extracts schema from function signature
-- [ ] 2.2: Test `ToolRegistry` executes tool with args
-- [ ] 2.3: Test tool execution creates saccade Span
+**What was implemented:**
 
-**Implementation:**
-- [ ] 2.4: Create `research_agent/tools/__init__.py`
-- [ ] 2.5: Create `research_agent/tools/registry.py` with `@tool` and `ToolRegistry`
-- [ ] 2.6: Generate OpenAI-compatible tool schema from type hints
-- [ ] 2.7: Implement async tool execution
+| Component | File | Description |
+|-----------|------|-------------|
+| `@tool` decorator | `tools/registry.py` | Extracts schema via Pydantic `create_model()` |
+| `ToolRegistry` | `tools/registry.py` | Register, get_schemas, execute |
+| `ToolDefinition` | `tools/registry.py` | Internal representation |
+| `ToolError` | `tools/registry.py` | Explicit tool errors with LLM-friendly messages |
 
 **API:**
 ```python
-from research_agent.tools import tool, ToolRegistry
+from research_agent.tools import tool, ToolRegistry, ToolError
 
 @tool
 def web_search(query: str, max_results: int = 5) -> str:
     """Search the web for information."""
-    return results
+    results = do_search(query, max_results)
+    return format_results(results)
 
+# Direct call (preserves sync/async)
+result = web_search("RAG techniques")  # sync
+
+# Execute method (always async, dict input, returns T | ToolError)
+result = await web_search.execute({"query": "RAG techniques"})
+
+# Registry for LLM loop
 registry = ToolRegistry()
 registry.register(web_search)
-
-# Get schema for LLM
-schema = registry.get_schemas()
-
-# Execute tool call
-result = await registry.execute("web_search", {"query": "RAG", "max_results": 3})
+schemas = registry.get_schemas()  # OpenAI function schemas
+result = await registry.execute("web_search", {"query": "RAG"})
 ```
 
-**Files to create:**
-- `apps/research-agent/src/research_agent/tools/__init__.py`
-- `apps/research-agent/src/research_agent/tools/registry.py`
-- `apps/research-agent/tests/unit/tools/test_registry.py`
+**Key behaviors:**
 
-**Verification:**
-```bash
-uv run pytest apps/research-agent/tests/unit/tools/
-uv run ty check apps/research-agent/src/research_agent/tools/
-```
+| Scenario | Behavior |
+|----------|----------|
+| Missing type annotation | Default to `str` |
+| `*args` or `**kwargs` | Not supported (explicit error) |
+| Function returns non-string | Convert with `str(result)` |
+| Tool raises `ToolError` | Return custom message to LLM |
+| Tool raises other exception | Return `"Tool '{name}' failed: {e}"` |
+| Validation fails | Return LLM-friendly error for retry |
+| Sync tool execution | Wrap in `asyncio.to_thread()` |
+| No active Span | Still works (warns but continues) |
+
+**Test coverage:** 113 tests
 
 ---
 
 ### Phase 3: Working Memory
 
-**Goal:** Simple message list with context window awareness.
+**Goal:** Message storage with token-aware truncation and pluggable backends for future memory strategies.
+
+**Key Design Decisions:**
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Default strategy | Sliding window | Simple, predictable, no LLM overhead |
+| Token counting | LiteLLM `token_counter()` + API response caching | Exact counts from API, estimate only for new messages |
+| Architecture | Pluggable `MemoryBackend` | Easy to add summarization, semantic retrieval later |
+| Thread safety | Single-threaded (asyncio only) | Agent loops are sequential; matches saccade pattern |
+| Persistence | Placeholder methods | Format TBD, defer to future version |
+| Truncation + exact count | Reset to 0 | After truncation, next API call provides new exact count |
+| Orphan tool results | Stored (no validation) | WorkingMemory is a dumb buffer; validation is agent's responsibility |
+| Tool call IDs | `generate_tool_call_id()` helper | Returns `"call_<ulid>"` - optional utility |
+| Context windows | Hardcoded lookup + override | Convenient defaults, explicit override available |
+
+**Test Strategy:**
+
+Token estimation tests mock `estimate_tokens()` for determinism:
+
+```python
+from unittest.mock import patch
+
+@patch("research_agent.memory.working.estimate_tokens")
+def test_truncation(self, mock_estimate):
+    mock_estimate.side_effect = lambda model, messages: len(messages) * 10
+    # Now tests are deterministic - each message = 10 tokens
+```
+
+This isolates test logic from LiteLLM's tokenizer variance.
+
+**Token Counting Strategy:**
+
+WorkingMemory uses a **hybrid approach** for accurate token counting:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    TOKEN COUNT STRATEGY                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  After each LLM API call, cache the exact token count:      │
+│                                                             │
+│  response.usage.prompt_tokens = EXACT count of ALL          │
+│  messages sent to the API (system, user, assistant, tool)   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ [system] You are...              ← EXACT (from API) │   │
+│  │ [user] Hello                     ← EXACT (from API) │   │
+│  │ [assistant] Hi!                  ← EXACT (from API) │   │
+│  │ [user] What is RAG?              ← EXACT (from API) │   │
+│  │ [assistant] RAG is...            ← EXACT (from API) │   │
+│  │ ─────────────────────────────────────────────────── │   │
+│  │ [user] Search for X              ← ESTIMATED (new)  │   │
+│  │ [tool result] Found 5 results    ← ESTIMATED (new)  │   │
+│  │                                                     │   │
+│  │ exact: 50K tokens (cached)                          │   │
+│  │ estimated: ~500 tokens (LiteLLM)                    │   │
+│  │ error: ±50 tokens (only on new messages!)           │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ERROR IS BOUNDED BY NEW MESSAGES, NOT TOTAL CONTEXT        │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Important:** The `prompt_tokens` from the API response represents the **entire conversation** sent to the model, not just the last message. This is cached via `add_assistant(prompt_tokens=...)` and used as the exact baseline for future estimations.
 
 **Test-first:**
-- [ ] 3.1: Test add/remove messages
-- [ ] 3.2: Test token counting (using tiktoken)
-- [ ] 3.3: Test truncate to fit context window
+
+#### Core Operations Tests
+- [ ] 3.1: Test `add_user()` creates user message
+- [ ] 3.2: Test `add_assistant()` creates assistant message (text only)
+- [ ] 3.3: Test `add_assistant()` with tool_calls creates message with tool_calls
+- [ ] 3.4: Test `add_assistant()` with prompt_tokens caches exact count
+- [ ] 3.5: Test `add_tool_result()` creates tool message with tool_call_id
+- [ ] 3.6: Test `set_system()` sets system message
+- [ ] 3.7: Test `to_list()` returns all messages in order
+- [ ] 3.8: Test `to_list()` includes system message first
+- [ ] 3.9: Test `clear()` removes messages but keeps system
+- [ ] 3.10: Test `message_count()` returns correct count
+- [ ] 3.11: Test `add()` accepts raw message dict
+
+#### Token Counting Tests
+- [ ] 3.12: Test `estimate_total_tokens()` returns exact count when no new messages
+- [ ] 3.13: Test `estimate_total_tokens()` returns exact + estimated when new messages added
+- [ ] 3.14: Test `add_assistant(prompt_tokens=X)` updates exact count baseline
+- [ ] 3.15: Test token estimation uses LiteLLM token_counter
+- [ ] 3.16: Test `fits_in_context()` uses estimated total
+- [ ] 3.17: Test exact count tracks how many messages are confirmed
+- [ ] 3.18: Test adding message after exact count increases only estimated portion
+
+#### Truncation Tests (Sliding Window)
+- [ ] 3.19: Test `to_list(truncate=True)` truncates to max_tokens
+- [ ] 3.20: Test truncation preserves system message
+- [ ] 3.21: Test truncation keeps most recent messages
+- [ ] 3.22: Test truncation with `keep_recent` minimum
+- [ ] 3.23: Test `to_list(truncate=False)` returns all messages
+- [ ] 3.24: Test truncation resets exact count to 0 (requires new API call for exact count)
+
+#### Tool Pair Preservation Tests (CRITICAL)
+- [ ] 3.25: Test truncation doesn't split assistant tool_calls from tool results
+- [ ] 3.26: Test cutoff on tool message finds its assistant message
+- [ ] 3.27: Test cutoff with multiple tool results finds their shared assistant
+- [ ] 3.28: Test orphan tool result (no matching tool_call) is stored (WorkingMemory is a dumb buffer)
+- [ ] 3.29: Test parallel tool calls (multiple IDs) preserved together
+
+#### Tool Call ID Helper Tests
+- [ ] 3.30: Test `generate_tool_call_id()` returns string with "call_" prefix
+- [ ] 3.31: Test `generate_tool_call_id()` returns unique IDs
+- [ ] 3.32: Test `generate_tool_call_id()` returns time-ordered IDs (ULID-based)
+
+#### Context Window Detection Tests
+- [ ] 3.33: Test auto-detect context window from model name
+- [ ] 3.34: Test explicit max_tokens overrides auto-detection
+- [ ] 3.35: Test unknown model falls back to safe default (4096)
+- [ ] 3.36: Test context window lookup table includes common models
+
+#### Pluggable Backend Tests
+- [ ] 3.37: Test default backend is SlidingWindowMemory
+- [ ] 3.38: Test custom backend can be injected
+- [ ] 3.39: Test MemoryBackend protocol methods are called
+
+#### Edge Cases Tests
+- [ ] 3.40: Test empty memory returns just system message
+- [ ] 3.41: Test empty memory without system returns empty list
+- [ ] 3.42: Test single message fits within context
+- [ ] 3.43: Test message exactly at token limit
+- [ ] 3.44: Test all messages exceed context (returns minimum viable)
+- [ ] 3.45: Test assistant message with content AND tool_calls
+- [ ] 3.46: Test tool result with error content
 
 **Implementation:**
-- [ ] 3.4: Create `research_agent/memory/__init__.py`
-- [ ] 3.5: Create `research_agent/memory/working.py` with `WorkingMemory`
-- [ ] 3.6: Implement token counting
-- [ ] 3.7: Implement truncate-oldest strategy
+- [ ] 3.47: Create `research_agent/memory/__init__.py`
+- [ ] 3.48: Create `research_agent/memory/working.py` with:
+  - `MemoryBackend` protocol
+  - `SlidingWindowMemory` class (default implementation)
+  - `WorkingMemory` class (public API)
+  - `generate_tool_call_id()` helper function
+  - `estimate_tokens()` wrapper function (for test mocking)
+- [ ] 3.49: Implement token counting via LiteLLM with exact/estimated split
+- [ ] 3.50: Implement sliding window truncation
+- [ ] 3.51: Implement tool pair preservation logic
+- [ ] 3.52: Add context window lookup table
 
 **API:**
 ```python
-from research_agent.memory import WorkingMemory
+from research_agent.memory import WorkingMemory, generate_tool_call_id
 
-memory = WorkingMemory(max_tokens=100000)
+# Tool call ID helper (optional - use if you need to generate IDs)
+call_id = generate_tool_call_id()  # Returns "call_<ulid>" (time-ordered)
+
+# Basic usage with model auto-detection
+memory = WorkingMemory(model="gpt-4o-mini")
+# ↑ max_tokens auto-detected as 128000
+
+# Or explicit context size
+memory = WorkingMemory(model="glm-5", max_tokens=200000)
+
+# System message (always preserved)
+memory.set_system("You are a research agent.")
+
+# Conversation messages
 memory.add_user("What is RAG?")
-memory.add_assistant("RAG stands for...")
-memory.add_tool_call("web_search", {"query": "RAG"})
-memory.add_tool_result("web_search", "Retrieved 5 results...")
+memory.add_assistant("RAG stands for Retrieval-Augmented Generation.")
 
-messages = memory.to_list()  # OpenAI format
+# After LLM response - cache exact token count from API
+response = await llm.complete(memory.to_list())
+memory.add_assistant(
+    content=response.content,
+    tool_calls=response.tool_calls,
+    prompt_tokens=response.usage.prompt_tokens,  # ← EXACT count of all messages
+)
+
+# Tool calling (IDs from LLM response)
+memory.add_tool_result("call_abc123", "Retrieved 5 results...")
+
+# Check if messages fit before sending
+if memory.fits_in_context():
+    response = await llm.complete(memory.to_list())
+
+# Get messages for LLM (optionally truncated to fit context)
+messages = memory.to_list()  # auto-truncates by default
+messages = memory.to_list(truncate=False)  # get all
+
+# Introspection
+estimated = memory.estimate_total_tokens()  # exact + estimated new
+count = memory.message_count()
 ```
 
-**Open question:** Session system for continuity across runs? Deferred to v0.2.
+**Token Counting Implementation:**
+```python
+class WorkingMemory:
+    def __init__(
+        self,
+        model: str,
+        max_tokens: int | None = None,
+        keep_recent: int = 20,
+        backend: MemoryBackend | None = None,
+    ):
+        self.model = model
+        self.max_tokens = max_tokens or self._lookup_context(model)
+        self.keep_recent = keep_recent
+        self._backend = backend or SlidingWindowMemory()
+        
+        # Token tracking: exact from API + estimated for new
+        self._exact_token_count: int = 0  # Cached from API response
+        self._exact_up_to: int = 0        # How many messages are exact
+    
+    def add_assistant(
+        self,
+        content: str | None = None,
+        tool_calls: list[dict] | None = None,
+        prompt_tokens: int | None = None,
+    ) -> None:
+        """Add assistant message.
+        
+        Args:
+            content: Text content of the response
+            tool_calls: List of tool call objects from LLM response
+            prompt_tokens: EXACT token count from API response.usage.prompt_tokens.
+                          This is the count of ALL messages sent to the LLM,
+                          not just this message. Used to cache exact counts.
+        """
+        msg: dict = {"role": "assistant"}
+        if content is not None:
+            msg["content"] = content
+        if tool_calls is not None:
+            msg["tool_calls"] = tool_calls
+        self._backend.add(msg)
+        
+        if prompt_tokens is not None:
+            self._exact_token_count = prompt_tokens
+            self._exact_up_to = len(self._backend.get_all())
+    
+    def estimate_total_tokens(self) -> int:
+        """Estimate total tokens: exact (cached) + estimated (new).
+        
+        After each API call, prompt_tokens is cached as the exact count.
+        Only messages added AFTER the last cache are estimated.
+        This keeps error bounded to new messages, not the entire context.
+        """
+        all_messages = self._backend.get_all()
+        new_messages = all_messages[self._exact_up_to:]
+        
+        if not new_messages:
+            return self._exact_token_count
+        
+        # Estimate new messages using LiteLLM
+        import litellm
+        estimated_new = litellm.token_counter(
+            model=self.model,
+            messages=new_messages
+        )
+        return self._exact_token_count + estimated_new
+    
+    def fits_in_context(self) -> bool:
+        """Check if current messages fit within context window."""
+        return self.estimate_total_tokens() <= self.max_tokens
+```
+
+**Tool Pair Preservation Logic:**
+```python
+def _find_safe_cutoff(self, cutoff: int) -> int:
+    """Adjust cutoff to avoid splitting tool call/result pairs.
+    
+    If cutoff lands on a ToolMessage, search backward for its AIMessage
+    and include it. This ensures the LLM receives complete tool exchanges.
+    """
+    messages = self._backend.get_all()
+    if cutoff >= len(messages):
+        return cutoff
+    
+    msg = messages[cutoff]
+    if msg.get("role") != "tool":
+        return cutoff
+    
+    # Collect tool_call_ids from consecutive tool messages at/after cutoff
+    tool_ids: set[str] = set()
+    i = cutoff
+    while i < len(messages) and messages[i].get("role") == "tool":
+        if tcid := messages[i].get("tool_call_id"):
+            tool_ids.add(tcid)
+        i += 1
+    
+    # Search backward for AIMessage with matching tool_calls
+    for j in range(cutoff - 1, -1, -1):
+        msg = messages[j]
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                if tc.get("id") in tool_ids:
+                    return j  # Include this assistant message
+    
+    return cutoff  # No match found, use original
+```
+
+**Pluggable Backend Architecture:**
+```python
+from typing import Protocol
+
+class MemoryBackend(Protocol):
+    """Protocol for memory storage backends."""
+    
+    def add(self, message: dict) -> None: ...
+    def get_all(self) -> list[dict]: ...
+    def get_for_context(
+        self, 
+        max_tokens: int,
+        token_counter: Callable[[list[dict]], int],
+    ) -> list[dict]: ...
+    def clear(self) -> None: ...
+
+# Future: SummarizingMemory, SemanticMemory, etc.
+```
+
+**Context Window Lookup:**
+```python
+CONTEXT_WINDOWS = {
+    # OpenAI
+    "gpt-4o": 128000,
+    "gpt-4o-mini": 128000,
+    "gpt-4-turbo": 128000,
+    "gpt-4": 8192,
+    "gpt-3.5-turbo": 16385,
+    # Anthropic
+    "claude-3.5-sonnet": 200000,
+    "claude-3-opus": 200000,
+    "claude-3-haiku": 200000,
+    # Zhipu AI / Z.AI
+    "glm-4": 128000,
+    "glm-4-plus": 128000,
+    "glm-4-air": 128000,
+    "glm-4-flash": 128000,
+    "glm-4.5": 128000,
+    "glm-4.7": 128000,
+    "glm-5": 200000,
+    # Default
+    "_default": 4096,
+}
+```
+
+**Agent Loop Integration Example:**
+```python
+async def agent_step(memory: WorkingMemory, llm: TracedLiteLLM, registry: ToolRegistry):
+    # Check if messages fit before sending
+    if not memory.fits_in_context():
+        messages = memory.to_list(truncate=True)  # Truncate to fit
+    else:
+        messages = memory.to_list()
+    
+    # Call LLM
+    response = await llm.complete(messages)
+    
+    # Add assistant response with EXACT token count from API
+    # This caches the exact count for future estimations
+    memory.add_assistant(
+        content=response.content,
+        tool_calls=response.tool_calls,
+        prompt_tokens=response.usage.prompt_tokens,  # ← Key: exact count
+    )
+    
+    # Handle tool calls if any...
+```
 
 **Files to create:**
 - `apps/research-agent/src/research_agent/memory/__init__.py`
 - `apps/research-agent/src/research_agent/memory/working.py`
+- `apps/research-agent/tests/unit/memory/__init__.py`
 - `apps/research-agent/tests/unit/memory/test_working.py`
 
 **Verification:**
 ```bash
 uv run pytest apps/research-agent/tests/unit/memory/
 uv run ty check apps/research-agent/src/research_agent/memory/
+uv run ruff check apps/research-agent/src/research_agent/memory/
 ```
 
 ---
@@ -465,6 +795,7 @@ Not in MVP, but noted for later:
 
 | Feature | Notes |
 |---------|-------|
+| Non-blocking tools | Needed for sub-agent delegation. Defer until we understand the pattern from blocking implementation. |
 | Session continuity | Working memory across runs |
 | More reasoning strategies | Reflexion, Tree of Thoughts |
 | Web search rotation | DuckDuckGo → Tavily → SerpAPI |

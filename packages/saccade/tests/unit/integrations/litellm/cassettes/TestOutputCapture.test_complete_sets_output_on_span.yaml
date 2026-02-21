@@ -1,0 +1,60 @@
+interactions:
+- request:
+    body: '{"model":"glm-4.7","messages":[{"role":"user","content":"Say hello"}],"stream":false}'
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '85'
+      Content-Type:
+      - application/json
+      Host:
+      - api.z.ai
+      User-Agent:
+      - python-httpx/0.28.1
+    method: POST
+    uri: https://api.z.ai/api/coding/paas/v4/chat/completions
+  response:
+    body:
+      string: '{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello!
+        How can I help you today?","reasoning_content":"The user just said \"Say hello\".
+        This is a straightforward request.\nI should respond with a greeting.\nCommon
+        greetings include \"Hello!\", \"Hi there!\", \"Hey!\", etc.\nSince the user
+        didn''t specify a language, I should default to English.\nI''ll provide a
+        simple, friendly response.\n\nPlan:\n1.  Acknowledge the request.\n2.  Output
+        a greeting.","role":"assistant"}}],"created":1771599495,"id":"202602202258135979886108a4421b","model":"glm-4.7","object":"chat.completion","request_id":"202602202258135979886108a4421b","usage":{"completion_tokens":88,"completion_tokens_details":{"reasoning_tokens":77},"prompt_tokens":7,"prompt_tokens_details":{"cached_tokens":2},"total_tokens":95}}'
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Fri, 20 Feb 2026 14:58:15 GMT
+      Keep-Alive:
+      - timeout=6
+      Server:
+      - nginx
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Accept-Encoding
+      - Origin
+      - Access-Control-Request-Method
+      - Access-Control-Request-Headers
+      - Origin
+      - Access-Control-Request-Method
+      - Access-Control-Request-Headers
+      X-LOG-ID:
+      - 202602202258135979886108a4421b
+      content-length:
+      - '811'
+    status:
+      code: 200
+      message: OK
+version: 1

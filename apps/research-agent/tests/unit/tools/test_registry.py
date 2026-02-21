@@ -222,9 +222,7 @@ class TestToolSchemaOpenAIFormat:
             ...
 
         func_schema = search.to_openai_schema()
-        assert (
-            func_schema["function"]["description"] == "Search the web for information."
-        )
+        assert func_schema["function"]["description"] == "Search the web for information."
 
 
 class TestDirectToolCalls:
@@ -503,6 +501,7 @@ class TestToolTracing:
 
         error_event = next((e for e in trace.events if e.type.name == "ERROR"), None)
         assert error_event is not None
+        assert error_event.error is not None
         assert "boom" in error_event.error
 
 
@@ -648,7 +647,7 @@ class TestToolRegistry:
             return value
 
         with pytest.raises(TypeError, match="ToolDefinition|decorated"):
-            ToolRegistry.from_functions([plain_func])
+            ToolRegistry.from_functions([plain_func])  # type: ignore[arg-type]
 
     def test_register_rejects_undecorated(self):
         from research_agent.tools import ToolRegistry
@@ -658,7 +657,7 @@ class TestToolRegistry:
 
         registry = ToolRegistry()
         with pytest.raises(TypeError, match="ToolDefinition|decorated"):
-            registry.register(plain_func)
+            registry.register(plain_func)  # type: ignore[arg-type]
 
 
 class TestToolIntegration:
@@ -1104,9 +1103,7 @@ class TestToolSchemaPydanticModel:
         def process_user(user: User):
             return {"greeting": f"Hello {user.name}"}
 
-        result = await process_user.execute(
-            {"user": {"name": "Alice", "age": "not_a_number"}}
-        )
+        result = await process_user.execute({"user": {"name": "Alice", "age": "not_a_number"}})
         assert isinstance(result, ToolError)
         assert "age" in result.error.lower()
 

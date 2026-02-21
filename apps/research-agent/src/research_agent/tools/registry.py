@@ -4,11 +4,14 @@ import copy
 import inspect
 import warnings
 from types import UnionType
-from typing import Any, Callable, Union, get_origin, get_args
+from typing import TYPE_CHECKING, Any, Union, get_args, get_origin
 
-from pydantic import BaseModel, create_model, ValidationError
+from pydantic import BaseModel, ValidationError, create_model
 from saccade import Span
 from saccade.primitives.trace import _current_bus
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class ToolError(Exception):
@@ -40,13 +43,9 @@ class ToolDefinition:
     def _validate_signature(self) -> None:
         for param in self._signature.parameters.values():
             if param.kind == inspect.Parameter.VAR_POSITIONAL:
-                raise ValueError(
-                    "*args not supported - tools must have explicit parameters"
-                )
+                raise ValueError("*args not supported - tools must have explicit parameters")
             if param.kind == inspect.Parameter.VAR_KEYWORD:
-                raise ValueError(
-                    "**kwargs not supported - tools must have explicit parameters"
-                )
+                raise ValueError("**kwargs not supported - tools must have explicit parameters")
 
     def _build_pydantic_model(self) -> type[BaseModel] | None:
         fields: dict[str, Any] = {}
@@ -88,9 +87,7 @@ class ToolDefinition:
         }
         if "properties" in schema:
             for name, prop in schema["properties"].items():
-                result["properties"][name] = self._convert_schema(
-                    prop, schema.get("$defs", {})
-                )
+                result["properties"][name] = self._convert_schema(prop, schema.get("$defs", {}))
         required = []
         for name, param in self._signature.parameters.items():
             if param.default is inspect.Parameter.empty:
@@ -98,9 +95,7 @@ class ToolDefinition:
         result["required"] = required
         return result
 
-    def _convert_schema(
-        self, schema: dict[str, Any], defs: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _convert_schema(self, schema: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
         if "$ref" in schema:
             ref_name = schema["$ref"].split("/")[-1]
             if ref_name in defs:
@@ -121,8 +116,7 @@ class ToolDefinition:
         if schema.get("type") == "object":
             if "properties" in schema:
                 result["properties"] = {
-                    k: self._convert_schema(v, defs)
-                    for k, v in schema["properties"].items()
+                    k: self._convert_schema(v, defs) for k, v in schema["properties"].items()
                 }
                 if "required" in schema:
                     result["required"] = schema["required"]
@@ -172,12 +166,8 @@ class ToolDefinition:
                     return
                 except TypeError:
                     continue
-            type_names = " or ".join(
-                t.__name__ if hasattr(t, "__name__") else str(t) for t in args
-            )
-            raise TypeError(
-                f"'{name}' must be {type_names}, got {type(value).__name__}"
-            )
+            type_names = " or ".join(t.__name__ if hasattr(t, "__name__") else str(t) for t in args)
+            raise TypeError(f"'{name}' must be {type_names}, got {type(value).__name__}")
         if origin is list:
             if not isinstance(value, list):
                 raise TypeError(f"'{name}' must be list, got {type(value).__name__}")
@@ -264,9 +254,7 @@ class ToolDefinition:
             value = coerced[name]
             coerced[name] = self._coerce_value(value, annotation, name)
         model = self._pydantic_model.model_validate(coerced)
-        return {
-            name: getattr(model, name) for name in self._pydantic_model.model_fields
-        }
+        return {name: getattr(model, name) for name in self._pydantic_model.model_fields}
 
     def _coerce_value(self, value: Any, annotation: Any, name: str) -> Any:
         origin = get_origin(annotation)
@@ -281,9 +269,7 @@ class ToolDefinition:
                     return self._coerce_to_type(value, target_type, name)
                 except (ValueError, TypeError):
                     continue
-            raise ValueError(
-                f"Cannot coerce {value!r} to {annotation} for parameter '{name}'"
-            )
+            raise ValueError(f"Cannot coerce {value!r} to {annotation} for parameter '{name}'")
         return self._coerce_to_type(value, annotation, name)
 
     def _sort_union_types(self, types: list[Any]) -> list[Any]:
@@ -318,21 +304,15 @@ class ToolDefinition:
                     return False
                 if value == 1:
                     return True
-                raise ValueError(
-                    f"Cannot coerce int {value} to bool for parameter '{name}'"
-                )
+                raise ValueError(f"Cannot coerce int {value} to bool for parameter '{name}'")
             if isinstance(value, str):
                 lower = value.lower()
                 if lower in ("true", "1"):
                     return True
                 if lower in ("false", "0"):
                     return False
-                raise ValueError(
-                    f"Cannot coerce string {value!r} to bool for parameter '{name}'"
-                )
-            raise ValueError(
-                f"Cannot coerce {type(value).__name__} to bool for parameter '{name}'"
-            )
+                raise ValueError(f"Cannot coerce string {value!r} to bool for parameter '{name}'")
+            raise ValueError(f"Cannot coerce {type(value).__name__} to bool for parameter '{name}'")
         if target_type is int:
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
@@ -346,14 +326,10 @@ class ToolDefinition:
                 except ValueError:
                     raise ValueError(
                         f"Cannot coerce string {value!r} to int for parameter '{name}'"
-                    )
+                    ) from None
             if isinstance(value, float):
-                raise ValueError(
-                    f"Cannot coerce float {value} to int for parameter '{name}'"
-                )
-            raise ValueError(
-                f"Cannot coerce {type(value).__name__} to int for parameter '{name}'"
-            )
+                raise ValueError(f"Cannot coerce float {value} to int for parameter '{name}'")
+            raise ValueError(f"Cannot coerce {type(value).__name__} to int for parameter '{name}'")
         if target_type is float:
             if isinstance(value, float):
                 return value
@@ -365,7 +341,7 @@ class ToolDefinition:
                 except ValueError:
                     raise ValueError(
                         f"Cannot coerce string {value!r} to float for parameter '{name}'"
-                    )
+                    ) from None
             raise ValueError(
                 f"Cannot coerce {type(value).__name__} to float for parameter '{name}'"
             )
@@ -378,9 +354,7 @@ class ToolDefinition:
                 return value
             if isinstance(value, dict):
                 return target_type.model_validate(value)
-            raise ValueError(
-                f"Cannot coerce {type(value).__name__} to {target_type.__name__}"
-            )
+            raise ValueError(f"Cannot coerce {type(value).__name__} to {target_type.__name__}")
         return value
 
     async def _execute_validated(self, validated: dict[str, Any]) -> Any:
@@ -390,7 +364,7 @@ class ToolDefinition:
             return self._func(**validated)
         except ToolError as e:
             return e
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - Tools must not crash agent loop
             return ToolError(error=str(e))
 
 

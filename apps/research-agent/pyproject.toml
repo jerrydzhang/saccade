@@ -31,6 +31,13 @@ ignore = [
     "TD002",    # Missing TODO author
     "TD003",    # Missing TODO link
     "FIX002",   # Line contains TODO
+    "TRY003",   # long exception messages (acceptable for internal lib)
+    "EM101",    # exception string literal
+    "EM102",    # exception f-string literal
+    "C901",     # function too complex (type coercion is inherently complex)
+    "PLR0911",  # too many return statements
+    "PLR0912",  # too many branches
+    "TRY300",   # else block for try (less readable for try-until-success pattern)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -45,6 +52,17 @@ ignore = [
     "TRY003",   # long exception messages
     "EM101",    # exception string literal
     "ARG001",   # unused function argument
+    "I001",     # import sorting (tests do local imports intentionally)
+    "PIE790",   # unnecessary ... literal
+    "FBT001",   # boolean positional arg
+    "FBT002",   # boolean default positional arg
+    "A002",     # shadowing builtin (e.g., filter=)
+    "UP045",    # Optional vs X | None
+    "UP007",    # Union vs X | Y
+    "RUF043",   # regex pattern in match=
+    "PT018",    # compound assertion
+    "SIM117",   # nested with statements
+    "N802",     # function name should be lowercase
 ]
 
 [tool.ruff.format]

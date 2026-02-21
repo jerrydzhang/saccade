@@ -1,6 +1,8 @@
 # SACCADE - AGENTS.md
 
-**Generated:** 2026-02-17
+**Generated:** 2026-02-20
+**Commit:** 04272c9
+**Branch:** main
 **Python:** 3.13+
 
 ## OVERVIEW
@@ -51,6 +53,8 @@ This plan is self-contained and can be executed phase-by-phase by any agent.
 | E2E/usage patterns | `packages/saccade/tests/e2e/test_dx_patterns.py` |
 | Research agent | `apps/research-agent/src/research_agent/` |
 | Research agent plan | `apps/research-agent/PLAN.md` |
+| Primitives details | `packages/saccade/src/saccade/primitives/AGENTS.md` |
+| Integrations details | `packages/saccade/src/saccade/integrations/AGENTS.md` |
 
 ## CODE MAP
 

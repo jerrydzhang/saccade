@@ -1,0 +1,62 @@
+interactions:
+- request:
+    body: '{"model":"glm-4.7","messages":[{"role":"user","content":"Say hello"}],"stream":false}'
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '85'
+      Content-Type:
+      - application/json
+      Host:
+      - api.z.ai
+      User-Agent:
+      - python-httpx/0.28.1
+    method: POST
+    uri: https://api.z.ai/api/coding/paas/v4/chat/completions
+  response:
+    body:
+      string: '{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello!
+        How can I help you today?","reasoning_content":"1.  **Analyze the input:**
+        The user said \"Say hello\". This is a simple greeting request.\n2.  **Determine
+        the intent:** The user wants me to greet them.\n3.  **Formulate the response:**
+        A standard, polite, and friendly greeting is appropriate.\n4.  **Select options:**\n    *   \"Hello!\"
+        (Simple, direct)\n    *   \"Hi there!\" (Friendly)\n    *   \"Hello! How can
+        I help you today?\" (Helpful)\n5.  **Final Choice:** \"Hello! How can I help
+        you today?\" is a good balance of politeness and readiness to assist.\n6.  **Output
+        generation.**","role":"assistant"}}],"created":1771599510,"id":"20260220225827f572453c6ac54130","model":"glm-4.7","object":"chat.completion","request_id":"20260220225827f572453c6ac54130","usage":{"completion_tokens":154,"completion_tokens_details":{"reasoning_tokens":143},"prompt_tokens":7,"prompt_tokens_details":{"cached_tokens":2},"total_tokens":161}}'
+    headers:
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Fri, 20 Feb 2026 14:58:30 GMT
+      Keep-Alive:
+      - timeout=6
+      Server:
+      - nginx
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Accept-Encoding
+      - Origin
+      - Access-Control-Request-Method
+      - Access-Control-Request-Headers
+      - Origin
+      - Access-Control-Request-Method
+      - Access-Control-Request-Headers
+      X-LOG-ID:
+      - 20260220225827f572453c6ac54130
+      content-length:
+      - '1007'
+    status:
+      code: 200
+      message: OK
+version: 1
