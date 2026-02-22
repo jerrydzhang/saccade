@@ -1465,16 +1465,26 @@ version = "0.1.0"
 source = { editable = "apps/research-agent" }
 dependencies = [
     { name = "httpx" },
+    { name = "litellm" },
     { name = "pydantic" },
     { name = "saccade" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "hypothesis" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "litellm", specifier = ">=1.81.13" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "saccade", editable = "packages/saccade" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "hypothesis", specifier = ">=6.151.9" }]
 
 [[package]]
 name = "rich"

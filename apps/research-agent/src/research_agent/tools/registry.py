@@ -4,7 +4,7 @@ import copy
 import inspect
 import warnings
 from types import UnionType
-from typing import TYPE_CHECKING, Any, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Union, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, ValidationError, create_model
 from saccade import Span
@@ -30,6 +30,7 @@ class ToolDefinition:
         self._description = self._extract_description(func)
         self._is_async = inspect.iscoroutinefunction(func)
         self._signature = inspect.signature(func)
+        self._type_hints: dict[str, Any] = get_type_hints(func) if hasattr(func, "__annotations__") else {}
         self._validate_signature()
         self._schema_cache: dict[str, Any] | None = None
         self._pydantic_model = self._build_pydantic_model()
@@ -50,7 +51,7 @@ class ToolDefinition:
     def _build_pydantic_model(self) -> type[BaseModel] | None:
         fields: dict[str, Any] = {}
         for name, param in self._signature.parameters.items():
-            annotation = param.annotation
+            annotation = self._type_hints.get(name, param.annotation)
             default = param.default
             if annotation is inspect.Parameter.empty:
                 annotation = str
@@ -147,7 +148,7 @@ class ToolDefinition:
         bound.apply_defaults()
         for name, value in bound.arguments.items():
             param = self._signature.parameters[name]
-            annotation = param.annotation
+            annotation = self._type_hints.get(name, param.annotation)
             if annotation is inspect.Parameter.empty:
                 continue
             self._validate_type_strict(value, annotation, name)
@@ -248,7 +249,7 @@ class ToolDefinition:
         for name, param in self._signature.parameters.items():
             if name not in coerced:
                 continue
-            annotation = param.annotation
+            annotation = self._type_hints.get(name, str)
             if annotation is inspect.Parameter.empty:
                 annotation = str
             value = coerced[name]
@@ -292,7 +293,7 @@ class ToolDefinition:
             if origin is dict and isinstance(value, dict):
                 return value
             return value
-        if isinstance(value, target_type) and not isinstance(value, bool | int):
+        if isinstance(value, target_type) and not isinstance(value, (bool, int)):
             return value
         if isinstance(value, target_type) and target_type not in (bool, int):
             return value

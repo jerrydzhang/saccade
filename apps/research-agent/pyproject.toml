@@ -5,6 +5,7 @@ description = "Autonomous research agent - dogfooding saccade"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
+    "litellm>=1.81.13",
     "pydantic>=2.12.5",
     "saccade",
 ]
@@ -90,4 +91,9 @@ markers = [
 filterwarnings = [
     "ignore:Tool executed with no active span:UserWarning",
     "ignore:Field name.*shadows an attribute in parent.*:UserWarning",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.151.9",
 ]

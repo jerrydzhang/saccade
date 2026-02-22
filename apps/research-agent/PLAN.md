@@ -1,7 +1,7 @@
 # Research-Agent Implementation Plan
 
-**Status:** Phase 2 Complete, Ready for Phase 3
-**Updated:** 2026-02-20
+**Status:** Phase 3 Complete, Ready for Phase 4
+**Updated:** 2026-02-22
 
 ---
 
@@ -62,7 +62,7 @@ Mark phases as complete by changing status.
 - [x] **Phase 0**: Foundation
 - [x] **Phase 1**: LiteLLM Integration (Streaming-First)
 - [x] **Phase 2**: Tool Registry
-- [ ] **Phase 3**: Working Memory
+- [x] **Phase 3**: Working Memory (MVP - no auto-truncation)
 - [ ] **Phase 4**: Reasoning Strategies
 - [ ] **Phase 5**: Agent Core
 - [ ] **Phase 6**: Built-in Tools
@@ -795,6 +795,7 @@ Not in MVP, but noted for later:
 
 | Feature | Notes |
 |---------|-------|
+| **Memory truncation/compaction** | Sliding window or summarization backends. Deferred until we understand real-world usage patterns. |
 | Non-blocking tools | Needed for sub-agent delegation. Defer until we understand the pattern from blocking implementation. |
 | Session continuity | Working memory across runs |
 | More reasoning strategies | Reflexion, Tree of Thoughts |
