@@ -27,55 +27,56 @@ fn enforce_tier(event: &Event, context: &Context) -> Result<(), Reject> {
     }
 }
 
-pub fn decide(world: &World, command: Command, context: &Context) -> Result<Vec<Event>, Reject> {
-    let events = match command {
+/// This function takes in its arguments and the either returns a vec of validated events or rejects
+/// the command
+pub fn decide(world: &World, context: &Context, command: Command) -> Result<Vec<Event>, Reject> {
+    let events = candidate(world, command);
+
+    for event in &events {
+        enforce_tier(event, context)?;
+    }
+
+    validate(world, &events)?;
+
+    Ok(events)
+}
+
+/// Takes the current world state and proposes a vec of events
+fn candidate(world: &World, command: Command) -> Vec<Event> {
+    match command {
         Command::CreateTask {
             task_name,
             parent_id,
-        } => {
-            let event = Event::TaskCreated {
-                id: world.next_task_id(),
-                task_name,
-                parent_id,
-            };
-            enforce_tier(&event, context)?;
+        } => vec![Event::TaskCreated {
+            id: world.next_task_id(),
+            task_name,
+            parent_id,
+        }],
+        Command::ClaimTask { id } => vec![Event::TaskClaimed { id }],
+        Command::CompleteTask { id, receipt } => vec![Event::TaskDone { id, receipt }],
+        Command::AbandonTask { id, note } => vec![Event::TaskDropped { id, note }],
+    }
+}
 
-            if parent_id.is_some_and(|id| world.tasks.len() <= id.0) {
-                return Err(Reject::InvalidParentTaskId);
+/// Validates an array of events against the current world state
+fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
+    for event in events {
+        match event {
+            Event::TaskCreated { parent_id, .. } => {
+                if parent_id.is_some_and(|id| world.tasks.len() <= id.0) {
+                    return Err(Reject::InvalidParentTaskId);
+                }
             }
-
-            vec![event]
+            event @ (Event::TaskClaimed { id }
+            | Event::TaskDone { id, .. }
+            | Event::TaskDropped { id, .. }) => {
+                let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+                task.state.validate(event)?;
+            }
         }
-        Command::ClaimTask { id } => {
-            let event = Event::TaskClaimed { id };
-            enforce_tier(&event, context)?;
+    }
 
-            let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
-            task.state.validate(&event)?;
-
-            vec![event]
-        }
-        Command::CompleteTask { id, receipt } => {
-            let event = Event::TaskDone { id, receipt };
-            enforce_tier(&event, context)?;
-
-            let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
-            task.state.validate(&event)?;
-
-            vec![event]
-        }
-        Command::AbandonTask { id, note } => {
-            let event = Event::TaskDropped { id, note };
-            enforce_tier(&event, context)?;
-
-            let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
-            task.state.validate(&event)?;
-
-            vec![event]
-        }
-    };
-
-    Ok(events)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -146,8 +147,8 @@ mod test {
             id: TaskId(0),
             note: Some("invalid abandon".into()),
         };
-        let err1 = decide(&world, cmd(), &agent_ctx);
-        let err2 = decide(&world, cmd(), &human_ctx);
+        let err1 = decide(&world, &agent_ctx, cmd());
+        let err2 = decide(&world, &human_ctx, cmd());
 
         assert!(matches!(err1, Err(Reject::HumanOnly)));
         assert!(matches!(err2, Err(Reject::InvalidTaskId)));

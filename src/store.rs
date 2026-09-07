@@ -121,7 +121,7 @@ impl Log {
         context: Context,
         now: u64,
     ) -> Result<Vec<Record>, Reject> {
-        let events = decide(&self.world, command, &context)?;
+        let events = decide(&self.world, &context, command)?;
 
         let current_record_len = self.records.len();
         let records: Vec<Record> = events
