@@ -1,0 +1,215 @@
+//! Saccade — an opinionated, agent-native issue tracker.
+//!
+//! Tier 1 core: event store, state machine, guards. See DESIGN.md.
+
+pub mod decide;
+pub mod events;
+pub mod store;
+pub mod task;
+
+pub use decide::decide;
+pub use events::{Command, Event};
+pub use store::{Actor, Context, Log, Record, RecordId, World};
+pub use task::{AbandonReason, Receipt, Reject, Task, TaskId, TaskState};
+
+#[cfg(test)]
+mod invariants {
+    use super::*;
+
+    fn agent() -> Context {
+        Context {
+            actor: "saccade bot".into(),
+            actor_type: Actor::Agent,
+        }
+    }
+
+    fn human() -> Context {
+        Context {
+            actor: "human person".into(),
+            actor_type: Actor::Human,
+        }
+    }
+
+    fn populate_log(log: &mut Log) {
+        let agent_ctx = agent();
+        let human_ctx = human();
+
+        log.execute(
+            Command::CreateTask {
+                task_name: "implement foo".into(),
+                parent_id: None,
+            },
+            agent_ctx.clone(),
+            1,
+        )
+        .unwrap();
+
+        log.execute(Command::ClaimTask { id: TaskId(0) }, agent_ctx.clone(), 2)
+            .unwrap();
+
+        log.execute(
+            Command::CreateTask {
+                task_name: "fix bar".into(),
+                parent_id: None,
+            },
+            human_ctx.clone(),
+            3,
+        )
+        .unwrap();
+
+        log.execute(Command::ClaimTask { id: TaskId(1) }, agent_ctx.clone(), 4)
+            .unwrap();
+
+        log.execute(
+            Command::CompleteTask {
+                id: TaskId(1),
+                receipt: Receipt("bar fixed".into()),
+            },
+            human_ctx.clone(),
+            5,
+        )
+        .unwrap();
+
+        log.execute(
+            Command::CreateTask {
+                task_name: "improve baz".into(),
+                parent_id: Some(TaskId(0)),
+            },
+            human_ctx.clone(),
+            6,
+        )
+        .unwrap();
+
+        log.execute(
+            Command::CompleteTask {
+                id: TaskId(0),
+                receipt: Receipt("foo completed successfully".into()),
+            },
+            human_ctx.clone(),
+            7,
+        )
+        .unwrap();
+
+        log.execute(
+            Command::CreateTask {
+                task_name: "migrate floop".into(),
+                parent_id: None,
+            },
+            human_ctx.clone(),
+            8,
+        )
+        .unwrap();
+
+        log.execute(Command::ClaimTask { id: TaskId(3) }, agent_ctx.clone(), 9)
+            .unwrap();
+    }
+
+    #[test]
+    fn normal_task_lifecycle_passes() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+
+        assert_eq!(log.records().len(), 9);
+        assert_eq!(
+            log.world().tasks[0].state,
+            TaskState::Done(Receipt("foo completed successfully".into())),
+        );
+        assert_eq!(
+            log.world().tasks[1].state,
+            TaskState::Done(Receipt("bar fixed".into())),
+        );
+        assert_eq!(log.world().tasks[2].state, TaskState::Open);
+        assert_eq!(log.world().tasks[3].state, TaskState::Claimed);
+
+        assert_eq!(log.records()[8].id.0, 8);
+        assert_eq!(log.records()[8].timestamp, 9);
+        assert_eq!(log.records()[8].context.actor, "saccade bot");
+    }
+
+    #[test]
+    fn block_invalid_taskstate_transitions() {
+        let mut log = Log::new();
+        let agent_ctx = agent();
+        populate_log(&mut log);
+
+        let err1 = log.execute(
+            Command::CompleteTask {
+                id: TaskId(2),
+                receipt: Receipt("foo completed successfully".into()),
+            },
+            agent_ctx.clone(),
+            1,
+        );
+
+        assert_eq!(log.records().len(), 9);
+        assert!(matches!(err1, Err(Reject::InvalidStateTransition)));
+
+        let err2 = log.execute(Command::ClaimTask { id: TaskId(3) }, agent_ctx.clone(), 2);
+
+        assert_eq!(log.records().len(), 9);
+        assert!(matches!(err2, Err(Reject::InvalidStateTransition)));
+    }
+
+    #[test]
+    fn block_invalid_task_id() {
+        let mut log = Log::new();
+        let agent_ctx = agent();
+        populate_log(&mut log);
+
+        let err = log.execute(
+            Command::CompleteTask {
+                id: TaskId(4),
+                receipt: Receipt("blip completed successfully".into()),
+            },
+            agent_ctx.clone(),
+            3,
+        );
+
+        assert_eq!(log.records().len(), 9);
+        assert!(matches!(err, Err(Reject::InvalidTaskId)));
+    }
+
+    #[test]
+    fn block_invalid_parent_task_id() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+        let agent_ctx = agent();
+
+        let err = log.execute(
+            Command::CreateTask {
+                task_name: "implement foo primatives".into(),
+                parent_id: Some(TaskId(4)),
+            },
+            agent_ctx.clone(),
+            1,
+        );
+
+        assert_eq!(log.records().len(), 9);
+        assert!(matches!(err, Err(Reject::InvalidParentTaskId)));
+    }
+
+    #[test]
+    fn replay_produces_identical_world() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+
+        let recreated_world = World::replay(log.records().to_vec());
+        assert_eq!(recreated_world, *log.world());
+    }
+
+    #[test]
+    fn replay_split_equals_whole() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+
+        for i in 0..log.records().len() {
+            let (head, tail) = log.records().split_at(i);
+            let mut staged = World::replay(head.to_vec());
+            for record in tail {
+                staged.apply(record.clone());
+            }
+
+            assert_eq!(staged, *log.world());
+        }
+    }
+}

@@ -1,0 +1,123 @@
+use crate::events::{Command, Event};
+use crate::store::{Actor, Context, World};
+use crate::task::Reject;
+
+/// Authority requirements per event kind
+#[derive(Clone, Debug)]
+pub enum Authority {
+    AnyTier,
+    Require(Actor),
+}
+
+fn required_tier(event: &Event) -> Authority {
+    match event {
+        Event::TaskCreated { .. } | Event::TaskClaimed { .. } | Event::TaskDone { .. } => {
+            Authority::AnyTier
+        }
+        Event::TaskDropped { .. } => Authority::Require(Actor::Human),
+    }
+}
+
+fn enforce_tier(event: &Event, context: &Context) -> Result<(), Reject> {
+    // this will probably need to be changed when the system actor is added
+    match required_tier(event) {
+        Authority::AnyTier => Ok(()),
+        Authority::Require(tier) if context.actor_type == tier => Ok(()),
+        Authority::Require(_) => Err(Reject::HumanOnly),
+    }
+}
+
+pub fn decide(world: &World, command: Command, context: &Context) -> Result<Vec<Event>, Reject> {
+    let events = match command {
+        Command::CreateTask {
+            task_name,
+            parent_id,
+        } => {
+            let event = Event::TaskCreated {
+                id: world.next_task_id(),
+                task_name,
+                parent_id,
+            };
+            enforce_tier(&event, context)?;
+
+            if let Some(id) = parent_id {
+                if world.tasks.len() <= id.0 {
+                    return Err(Reject::InvalidParentTaskId);
+                }
+            }
+
+            vec![event]
+        }
+        Command::ClaimTask { id } => {
+            let event = Event::TaskClaimed { id };
+            enforce_tier(&event, context)?;
+
+            let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+            task.state.validate(&event)?;
+
+            vec![event]
+        }
+        Command::CompleteTask { id, receipt } => {
+            let event = Event::TaskDone { id, receipt };
+            enforce_tier(&event, context)?;
+
+            let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+            task.state.validate(&event)?;
+
+            vec![event]
+        }
+        Command::AbandonTask { id, reason, note } => {
+            let event = Event::TaskDropped { id, reason, note };
+            enforce_tier(&event, context)?;
+
+            let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+            task.state.validate(&event)?;
+
+            vec![event]
+        }
+    };
+
+    Ok(events)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::AbandonReason;
+    use crate::TaskId;
+
+    fn agent() -> Context {
+        Context {
+            actor: "saccade bot".into(),
+            actor_type: Actor::Agent,
+        }
+    }
+    fn human() -> Context {
+        Context {
+            actor: "human person".into(),
+            actor_type: Actor::Human,
+        }
+    }
+    /// Authority errors supercede state transition errors. This is logical since it if you get
+    /// a state transition error first you might suspect it is an issue with the command
+    /// arguments when in reality no matter what arguments you input the command itself is invalid
+    #[test]
+    fn agent_abandoning_invalid_task_err_ordering() {
+        let agent_ctx = agent();
+        let human_ctx = human();
+
+        let world = World::new();
+
+        let cmd = || Command::AbandonTask {
+            id: TaskId(0),
+            reason: AbandonReason::Unwanted,
+            note: Some("invalid abandon".into()),
+        };
+
+        let err1 = decide(&world, cmd(), &agent_ctx);
+        let err2 = decide(&world, cmd(), &human_ctx);
+
+        assert!(matches!(err1, Err(Reject::HumanOnly)));
+        assert!(matches!(err2, Err(Reject::InvalidTaskId)));
+    }
+}
