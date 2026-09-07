@@ -81,8 +81,7 @@ pub fn decide(world: &World, command: Command, context: &Context) -> Result<Vec<
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::AbandonReason;
-    use crate::TaskId;
+    use crate::{AbandonReason, Receipt, TaskId};
 
     fn agent() -> Context {
         Context {
@@ -90,12 +89,50 @@ mod test {
             tier: Tier::Agent,
         }
     }
+
     fn human() -> Context {
         Context {
             actor: "human person".into(),
             tier: Tier::Human,
         }
     }
+    /// This test doesn't really test anything its more just a contract that at the time this test
+    /// was written this is the expected behavior that shouldn't regress
+    #[test]
+    fn authority_table_gates_exactly_the_gated_events() {
+        let events = [
+            Event::TaskCreated {
+                id: TaskId(0),
+                task_name: String::new(),
+                parent_id: None,
+            },
+            Event::TaskClaimed { id: TaskId(0) },
+            Event::TaskDone {
+                id: TaskId(0),
+                receipt: Receipt(String::new()),
+            },
+            Event::TaskDropped {
+                id: TaskId(0),
+                reason: AbandonReason::Unwanted,
+                note: None,
+            },
+        ];
+
+        for event in &events {
+            let gated = matches!(event, Event::TaskDropped { .. });
+
+            assert_eq!(
+                enforce_tier(event, &agent()).is_err(),
+                gated,
+                "agent rejected at the wrong cells: {event:?}"
+            );
+            assert!(
+                enforce_tier(event, &human()).is_ok(),
+                "human must pass every event kind: {event:?}"
+            );
+        }
+    }
+
     /// Authority errors supercede state transition errors. This is logical since it if you get
     /// a state transition error first you might suspect it is an issue with the command
     /// arguments when in reality no matter what arguments you input the command itself is invalid

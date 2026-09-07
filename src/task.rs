@@ -75,6 +75,8 @@ impl Task {
 mod test {
     use super::*;
 
+    /// This test doesn't really test anything its more just a contract that at the time this test
+    /// was written this is the expected behavior that shouldn't regress
     #[test]
     fn transition_table_admits_exactly_the_legal_cells() {
         let states = [

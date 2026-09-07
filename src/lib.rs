@@ -100,6 +100,28 @@ mod invariant {
 
         log.execute(Command::ClaimTask { id: TaskId(3) }, agent_ctx.clone(), 9)
             .unwrap();
+
+        log.execute(
+            Command::AbandonTask {
+                id: TaskId(2),
+                reason: AbandonReason::Unwanted,
+                note: Some("scope covered by fix bar".into()),
+            },
+            human_ctx.clone(),
+            10,
+        )
+        .unwrap();
+
+        log.execute(
+            Command::AbandonTask {
+                id: TaskId(1),
+                reason: AbandonReason::Superseded,
+                note: None,
+            },
+            human_ctx.clone(),
+            11,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -107,21 +129,28 @@ mod invariant {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        assert_eq!(log.records().len(), 9);
+        assert_eq!(log.records().len(), 11);
         assert_eq!(
             log.world().tasks[0].state,
             TaskState::Done(Receipt("foo completed successfully".into())),
         );
         assert_eq!(
             log.world().tasks[1].state,
-            TaskState::Done(Receipt("bar fixed".into())),
+            TaskState::Dropped(AbandonReason::Superseded),
         );
-        assert_eq!(log.world().tasks[2].state, TaskState::Open);
+        assert_eq!(
+            log.world().tasks[2].state,
+            TaskState::Dropped(AbandonReason::Unwanted),
+        );
         assert_eq!(log.world().tasks[3].state, TaskState::Claimed);
 
         assert_eq!(log.records()[8].id.0, 8);
         assert_eq!(log.records()[8].timestamp, 9);
         assert_eq!(log.records()[8].context.actor, "saccade bot");
+
+        assert_eq!(log.records()[10].id.0, 10);
+        assert_eq!(log.records()[10].timestamp, 11);
+        assert_eq!(log.records()[10].context.actor, "human person");
     }
 
     #[test]
@@ -139,13 +168,39 @@ mod invariant {
             1,
         );
 
-        assert_eq!(log.records().len(), 9);
+        assert_eq!(log.records().len(), 11);
         assert!(matches!(err1, Err(Reject::InvalidStateTransition)));
 
         let err2 = log.execute(Command::ClaimTask { id: TaskId(3) }, agent_ctx.clone(), 2);
 
-        assert_eq!(log.records().len(), 9);
+        assert_eq!(log.records().len(), 11);
         assert!(matches!(err2, Err(Reject::InvalidStateTransition)));
+
+        let err3 = log.execute(
+            Command::AbandonTask {
+                id: TaskId(3),
+                reason: AbandonReason::Unwanted,
+                note: None,
+            },
+            agent_ctx.clone(),
+            3,
+        );
+
+        assert_eq!(log.records().len(), 11);
+        assert!(matches!(err3, Err(Reject::HumanOnly)));
+
+        let err4 = log.execute(
+            Command::AbandonTask {
+                id: TaskId(3),
+                reason: AbandonReason::Unwanted,
+                note: None,
+            },
+            human(),
+            4,
+        );
+
+        assert_eq!(log.records().len(), 11);
+        assert!(matches!(err4, Err(Reject::InvalidStateTransition)));
     }
 
     #[test]
@@ -163,7 +218,7 @@ mod invariant {
             3,
         );
 
-        assert_eq!(log.records().len(), 9);
+        assert_eq!(log.records().len(), 11);
         assert!(matches!(err, Err(Reject::InvalidTaskId)));
     }
 
@@ -182,7 +237,7 @@ mod invariant {
             1,
         );
 
-        assert_eq!(log.records().len(), 9);
+        assert_eq!(log.records().len(), 11);
         assert!(matches!(err, Err(Reject::InvalidParentTaskId)));
     }
 
