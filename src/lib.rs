@@ -1,6 +1,4 @@
-//! Saccade — an opinionated, agent-native issue tracker.
-//!
-//! Tier 1 core: event store, state machine, guards. See DESIGN.md.
+//! Saccade - issue tracker (idk what makes it special yet other than it's mine)
 
 pub mod decide;
 pub mod events;
@@ -13,7 +11,7 @@ pub use store::{Context, Log, Record, RecordId, Tier, World};
 pub use task::{AbandonReason, Receipt, Reject, Task, TaskId, TaskState};
 
 #[cfg(test)]
-mod invariants {
+mod invariant {
     use super::*;
 
     fn agent() -> Context {
