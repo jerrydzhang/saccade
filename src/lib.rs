@@ -33,90 +33,90 @@ mod invariant {
         let human_ctx = human();
 
         log.execute(
+            agent_ctx.clone(),
             Command::CreateTask {
                 task_name: "implement foo".into(),
                 parent_id: None,
             },
-            agent_ctx.clone(),
             1,
         )
         .unwrap();
 
-        log.execute(Command::ClaimTask { id: TaskId(0) }, agent_ctx.clone(), 2)
+        log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(0) }, 2)
             .unwrap();
 
         log.execute(
+            human_ctx.clone(),
             Command::CreateTask {
                 task_name: "fix bar".into(),
                 parent_id: None,
             },
-            human_ctx.clone(),
             3,
         )
         .unwrap();
 
-        log.execute(Command::ClaimTask { id: TaskId(1) }, agent_ctx.clone(), 4)
+        log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(1) }, 4)
             .unwrap();
 
         log.execute(
+            human_ctx.clone(),
             Command::CompleteTask {
                 id: TaskId(1),
                 receipt: Receipt("bar fixed".into()),
             },
-            human_ctx.clone(),
             5,
         )
         .unwrap();
 
         log.execute(
+            human_ctx.clone(),
             Command::CreateTask {
                 task_name: "improve baz".into(),
                 parent_id: Some(TaskId(0)),
             },
-            human_ctx.clone(),
             6,
         )
         .unwrap();
 
         log.execute(
+            human_ctx.clone(),
             Command::CompleteTask {
                 id: TaskId(0),
                 receipt: Receipt("foo completed successfully".into()),
             },
-            human_ctx.clone(),
             7,
         )
         .unwrap();
 
         log.execute(
+            human_ctx.clone(),
             Command::CreateTask {
                 task_name: "migrate floop".into(),
                 parent_id: None,
             },
-            human_ctx.clone(),
             8,
         )
         .unwrap();
 
-        log.execute(Command::ClaimTask { id: TaskId(3) }, agent_ctx.clone(), 9)
+        log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(3) }, 9)
             .unwrap();
 
         log.execute(
+            human_ctx.clone(),
             Command::AbandonTask {
                 id: TaskId(2),
                 note: Some("scope covered by fix bar".into()),
             },
-            human_ctx.clone(),
             10,
         )
         .unwrap();
 
         log.execute(
+            human_ctx.clone(),
             Command::AbandonTask {
                 id: TaskId(1),
                 note: None,
             },
-            human_ctx.clone(),
             11,
         )
         .unwrap();
@@ -152,28 +152,28 @@ mod invariant {
         populate_log(&mut log);
 
         let err1 = log.execute(
+            agent_ctx.clone(),
             Command::CompleteTask {
                 id: TaskId(2),
                 receipt: Receipt("foo completed successfully".into()),
             },
-            agent_ctx.clone(),
             1,
         );
 
         assert_eq!(log.records().len(), 11);
         assert!(matches!(err1, Err(Reject::InvalidStateTransition)));
 
-        let err2 = log.execute(Command::ClaimTask { id: TaskId(3) }, agent_ctx.clone(), 2);
+        let err2 = log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(3) }, 2);
 
         assert_eq!(log.records().len(), 11);
         assert!(matches!(err2, Err(Reject::InvalidStateTransition)));
 
         let err3 = log.execute(
+            agent_ctx.clone(),
             Command::AbandonTask {
                 id: TaskId(3),
                 note: None,
             },
-            agent_ctx.clone(),
             3,
         );
 
@@ -181,11 +181,11 @@ mod invariant {
         assert!(matches!(err3, Err(Reject::HumanOnly)));
 
         let err4 = log.execute(
+            human(),
             Command::AbandonTask {
                 id: TaskId(3),
                 note: None,
             },
-            human(),
             4,
         );
 
@@ -200,11 +200,11 @@ mod invariant {
         populate_log(&mut log);
 
         let err = log.execute(
+            agent_ctx.clone(),
             Command::CompleteTask {
                 id: TaskId(4),
                 receipt: Receipt("blip completed successfully".into()),
             },
-            agent_ctx.clone(),
             3,
         );
 
@@ -219,11 +219,11 @@ mod invariant {
         let agent_ctx = agent();
 
         let err = log.execute(
+            agent_ctx.clone(),
             Command::CreateTask {
                 task_name: "implement foo primatives".into(),
                 parent_id: Some(TaskId(4)),
             },
-            agent_ctx.clone(),
             1,
         );
 

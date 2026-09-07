@@ -117,8 +117,8 @@ impl Log {
 
     pub fn execute(
         &mut self,
-        command: Command,
         context: Context,
+        command: Command,
         now: u64,
     ) -> Result<Vec<Record>, Reject> {
         let events = decide(&self.world, &context, command)?;
