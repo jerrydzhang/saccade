@@ -64,8 +64,8 @@ pub fn decide(world: &World, command: Command, context: &Context) -> Result<Vec<
 
             vec![event]
         }
-        Command::AbandonTask { id, reason, note } => {
-            let event = Event::TaskDropped { id, reason, note };
+        Command::AbandonTask { id, note } => {
+            let event = Event::TaskDropped { id, note };
             enforce_tier(&event, context)?;
 
             let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
@@ -81,7 +81,7 @@ pub fn decide(world: &World, command: Command, context: &Context) -> Result<Vec<
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{AbandonReason, Receipt, TaskId};
+    use crate::{Receipt, TaskId};
 
     fn agent() -> Context {
         Context {
@@ -113,7 +113,6 @@ mod test {
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                reason: AbandonReason::Unwanted,
                 note: None,
             },
         ];
@@ -145,10 +144,8 @@ mod test {
 
         let cmd = || Command::AbandonTask {
             id: TaskId(0),
-            reason: AbandonReason::Unwanted,
             note: Some("invalid abandon".into()),
         };
-
         let err1 = decide(&world, cmd(), &agent_ctx);
         let err2 = decide(&world, cmd(), &human_ctx);
 

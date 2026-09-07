@@ -1,4 +1,4 @@
-use crate::task::{AbandonReason, Receipt, TaskId};
+use crate::task::{Receipt, TaskId};
 
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -17,7 +17,6 @@ pub enum Event {
     },
     TaskDropped {
         id: TaskId,
-        reason: AbandonReason,
         note: Option<String>,
     },
 }
@@ -37,7 +36,6 @@ pub enum Command {
     },
     AbandonTask {
         id: TaskId,
-        reason: AbandonReason,
         note: Option<String>,
     },
 }

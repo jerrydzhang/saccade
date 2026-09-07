@@ -101,17 +101,15 @@ Key semantics:
   never from `in_progress` — in-flight claims are protected (only lease expiry ends a
   claim non-consensually). Dropping from `done` is the void: the receipt survives in the
   log; the state marks the task a mistake. `dropped` is the sole terminal state.
-- **Judgment-act signature:** judgment events wear `{ classification: closed enum,
-  justification: optional prose }`. The enum is the counted column (pre-registered,
-  aggregates); the note is the audit sample that falsifies the taxonomy. Drop is the
-  first instance; reopen/verify/overturn/ratify inherit the shape.
-- **Drop taxonomy:** `{unwanted, superseded}` — reasons partition drop-*decisions*
-  (valuation vs. obsolescence), never task attributes. A wrong spec is fixed by editing
-  the task (edit-churn is the spec-quality metric), not filed as a drop reason.
+- **Judgment-act payload:** judgment events (drop, release, reopen, overturn) wear one
+  uniform shape: an optional prose note, nothing else. Classification is reserved for
+  verdict kinds, where it is constitutive of the act — a resolution without a kind is
+  undefined; a drop without a category is still a drop. Notes are prose at rest
+  (strings underneath; enums never enter the query layer).
 - **Behavioral acceptance:** completion judgment is revealed, not declared — done +
-  silence = accepted; done → dropped{unwanted} = rejected; dropped{superseded} =
-  obsoleted. Time-to-verdict comes free from the log. An explicit verified event is
-  added only when accepted and never-reviewed stop being distinguishable.
+  silence = accepted; done → dropped = voided (the note carries why). Time-to-verdict
+  comes free from the log. An explicit verified event is added only when accepted and
+  never-reviewed stop being distinguishable.
 - **Hypothesis resolution:** verdict kind (`confirmed`/`refuted`/`split`) is data on the
   resolution event, not states per kind. Resolution guard: a criteria version must exist
   and findings must satisfy it; without ratified criteria, only humans resolve.
@@ -445,10 +443,10 @@ Build order (each step independently usable):
 
 - `toc_served{session, anchor, ids}` — the intervention record (not a usefulness claim).
 - `search{query, results}`, `open{object}` — deliberate retrieval acts.
-- **Abandon-reason semantics:** the distribution is over `{unwanted, superseded}` —
-  pre-registered, decision-level categories. Segment by whether a `done` preceded the
-  drop (voids and pre-work drops share the enum). Drop notes are the audit sample that
-  falsifies the taxonomy; revisions land as enum edits, never ad-hoc string buckets.
+- **Abandon-reason distribution:** sourced from analysis-time tags on drop records,
+  not event payloads — the codebook is ratified at the retro (pre-registered before
+  reading the aggregate), and re-tagging appends. Segment by whether a `done` preceded
+  the drop: voids and pre-work drops are different populations.
 - **Re-derivation detector** (projection): new finding near-matches an existing valid
   finding → classify by served TOC: pull-discipline miss / coverage miss / attention
   miss / disagreement-as-evidence. Primary metric: re-derivation rate.

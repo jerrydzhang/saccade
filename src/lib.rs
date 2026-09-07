@@ -8,7 +8,7 @@ pub mod task;
 pub use decide::decide;
 pub use events::{Command, Event};
 pub use store::{Context, Log, Record, RecordId, Tier, World};
-pub use task::{AbandonReason, Receipt, Reject, Task, TaskId, TaskState};
+pub use task::{Receipt, Reject, Task, TaskId, TaskState};
 
 #[cfg(test)]
 mod invariant {
@@ -104,7 +104,6 @@ mod invariant {
         log.execute(
             Command::AbandonTask {
                 id: TaskId(2),
-                reason: AbandonReason::Unwanted,
                 note: Some("scope covered by fix bar".into()),
             },
             human_ctx.clone(),
@@ -115,7 +114,6 @@ mod invariant {
         log.execute(
             Command::AbandonTask {
                 id: TaskId(1),
-                reason: AbandonReason::Superseded,
                 note: None,
             },
             human_ctx.clone(),
@@ -134,14 +132,8 @@ mod invariant {
             log.world().tasks[0].state,
             TaskState::Done(Receipt("foo completed successfully".into())),
         );
-        assert_eq!(
-            log.world().tasks[1].state,
-            TaskState::Dropped(AbandonReason::Superseded),
-        );
-        assert_eq!(
-            log.world().tasks[2].state,
-            TaskState::Dropped(AbandonReason::Unwanted),
-        );
+        assert_eq!(log.world().tasks[1].state, TaskState::Dropped);
+        assert_eq!(log.world().tasks[2].state, TaskState::Dropped);
         assert_eq!(log.world().tasks[3].state, TaskState::Claimed);
 
         assert_eq!(log.records()[8].id.0, 8);
@@ -179,7 +171,6 @@ mod invariant {
         let err3 = log.execute(
             Command::AbandonTask {
                 id: TaskId(3),
-                reason: AbandonReason::Unwanted,
                 note: None,
             },
             agent_ctx.clone(),
@@ -192,7 +183,6 @@ mod invariant {
         let err4 = log.execute(
             Command::AbandonTask {
                 id: TaskId(3),
-                reason: AbandonReason::Unwanted,
                 note: None,
             },
             human(),

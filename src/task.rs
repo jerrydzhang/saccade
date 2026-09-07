@@ -14,22 +14,12 @@ pub struct Receipt(pub(crate) String);
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
 pub struct TaskId(pub(crate) usize);
 
-/// Why a task was dropped, pre-registered taxonomy
-#[derive(Clone, Debug, PartialEq)]
-pub enum AbandonReason {
-    /// Task we deemed unwanted this can happen either before or after implementation
-    Unwanted,
-    /// Task was superseded this is distinct from unwanted since it means something has taken
-    /// its place
-    Superseded,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskState {
     Open,
     Claimed,
     Done(Receipt),
-    Dropped(AbandonReason),
+    Dropped,
 }
 
 impl TaskState {
@@ -40,8 +30,8 @@ impl TaskState {
             (TaskState::Claimed, Event::TaskDone { receipt, .. }) => {
                 Ok(TaskState::Done(receipt.clone()))
             }
-            (TaskState::Open | TaskState::Done(_), Event::TaskDropped { reason, .. }) => {
-                Ok(TaskState::Dropped(reason.clone()))
+            (TaskState::Open | TaskState::Done(_), Event::TaskDropped { .. }) => {
+                Ok(TaskState::Dropped)
             }
             _ => Err(Reject::InvalidStateTransition),
         }
@@ -83,7 +73,7 @@ mod test {
             TaskState::Open,
             TaskState::Claimed,
             TaskState::Done(Receipt(String::new())),
-            TaskState::Dropped(AbandonReason::Unwanted),
+            TaskState::Dropped,
         ];
         let events = [
             Event::TaskCreated {
@@ -98,7 +88,6 @@ mod test {
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                reason: AbandonReason::Unwanted,
                 note: None,
             },
         ];
