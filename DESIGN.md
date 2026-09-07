@@ -84,7 +84,7 @@ configurability. The workflow is the product.
 
 | Object | The job | Lifecycle |
 |---|---|---|
-| **Task** | claimable work | `open → in_progress → done \| abandoned`; reopen (human, justified) |
+| **Task** | claimable work | `open → in_progress → done`; drop from `open` **or** `done` (human-only); reopen (human, justified) |
 | **Hypothesis** | a claim under test | `open → resolved(kind) → verified`; resolutions locked |
 | **Finding** | an observation | `valid → superseded \| invalidated` (tombstones, never deletion) |
 
@@ -97,6 +97,21 @@ Key semantics:
 - **Task done ≠ hypothesis resolved.** Tasks conclude work and deposit the outcome;
   hypotheses resolve when versioned criteria are satisfied. Concluding and succeeding are
   different events; if the goal survives the conclusion, a *new* task spawns.
+- **Drop path:** `dropped` is a human-only judgment. Legal from `open` and from `done`;
+  never from `in_progress` — in-flight claims are protected (only lease expiry ends a
+  claim non-consensually). Dropping from `done` is the void: the receipt survives in the
+  log; the state marks the task a mistake. `dropped` is the sole terminal state.
+- **Judgment-act signature:** judgment events wear `{ classification: closed enum,
+  justification: optional prose }`. The enum is the counted column (pre-registered,
+  aggregates); the note is the audit sample that falsifies the taxonomy. Drop is the
+  first instance; reopen/verify/overturn/ratify inherit the shape.
+- **Drop taxonomy:** `{unwanted, superseded}` — reasons partition drop-*decisions*
+  (valuation vs. obsolescence), never task attributes. A wrong spec is fixed by editing
+  the task (edit-churn is the spec-quality metric), not filed as a drop reason.
+- **Behavioral acceptance:** completion judgment is revealed, not declared — done +
+  silence = accepted; done → dropped{unwanted} = rejected; dropped{superseded} =
+  obsoleted. Time-to-verdict comes free from the log. An explicit verified event is
+  added only when accepted and never-reviewed stop being distinguishable.
 - **Hypothesis resolution:** verdict kind (`confirmed`/`refuted`/`split`) is data on the
   resolution event, not states per kind. Resolution guard: a criteria version must exist
   and findings must satisfy it; without ratified criteria, only humans resolve.
@@ -235,6 +250,17 @@ Two clocks, each defined by **triggers**, not calendars:
   resolution attempt 409s and becomes a **review flag** (disagreement = candidate
   evidence). The losing agent files its findings and moves on; it never renders two
   verdicts on one claim.
+- **Tiers:** `Tier {human, agent}` today; `system` arrives with lease expiry. Tier rides
+  the record provenance, so history is self-describing and retro queries
+  (overturn-rate-by-agent) work.
+- **Authority is an event-keyed table.** Each event kind names its requirement —
+  `AnyTier` or `Require(tier)` — in an exhaustive match with no wildcard: a new event
+  variant is a compile error until its requirement is named (silence is not a policy).
+  Event-keyed, not command-keyed: one row per effect, regardless of which command —
+  or system sweep — proposes it. Every decide arm routes through the gate (construct →
+  enforce → probe → validate → emit), making the table the single point of policy
+  mutation and firing authority before any world probing. Judgment acts (drop, verify,
+  overturn, ratify, reopen) are human-only; work acts (claim, done) are tier-blind.
 - **Agent identity:** per-agent tokens → per-agent actor names. Contention semantics and
   the ratification gate are blind without it.
 - **SSE event feed** off the event log for 409s, preemptions, expirations.
@@ -419,6 +445,10 @@ Build order (each step independently usable):
 
 - `toc_served{session, anchor, ids}` — the intervention record (not a usefulness claim).
 - `search{query, results}`, `open{object}` — deliberate retrieval acts.
+- **Abandon-reason semantics:** the distribution is over `{unwanted, superseded}` —
+  pre-registered, decision-level categories. Segment by whether a `done` preceded the
+  drop (voids and pre-work drops share the enum). Drop notes are the audit sample that
+  falsifies the taxonomy; revisions land as enum edits, never ad-hoc string buckets.
 - **Re-derivation detector** (projection): new finding near-matches an existing valid
   finding → classify by served TOC: pull-discipline miss / coverage miss / attention
   miss / disagreement-as-evidence. Primary metric: re-derivation rate.
