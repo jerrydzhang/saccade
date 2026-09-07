@@ -9,7 +9,7 @@ pub mod task;
 
 pub use decide::decide;
 pub use events::{Command, Event};
-pub use store::{Actor, Context, Log, Record, RecordId, World};
+pub use store::{Context, Log, Record, RecordId, Tier, World};
 pub use task::{AbandonReason, Receipt, Reject, Task, TaskId, TaskState};
 
 #[cfg(test)]
@@ -19,14 +19,14 @@ mod invariants {
     fn agent() -> Context {
         Context {
             actor: "saccade bot".into(),
-            actor_type: Actor::Agent,
+            tier: Tier::Agent,
         }
     }
 
     fn human() -> Context {
         Context {
             actor: "human person".into(),
-            actor_type: Actor::Human,
+            tier: Tier::Human,
         }
     }
 

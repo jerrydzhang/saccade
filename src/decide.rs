@@ -1,12 +1,12 @@
 use crate::events::{Command, Event};
-use crate::store::{Actor, Context, World};
+use crate::store::{Context, Tier, World};
 use crate::task::Reject;
 
 /// Authority requirements per event kind
 #[derive(Clone, Debug)]
-pub enum Authority {
+pub(crate) enum Authority {
     AnyTier,
-    Require(Actor),
+    Require(Tier),
 }
 
 fn required_tier(event: &Event) -> Authority {
@@ -14,7 +14,7 @@ fn required_tier(event: &Event) -> Authority {
         Event::TaskCreated { .. } | Event::TaskClaimed { .. } | Event::TaskDone { .. } => {
             Authority::AnyTier
         }
-        Event::TaskDropped { .. } => Authority::Require(Actor::Human),
+        Event::TaskDropped { .. } => Authority::Require(Tier::Human),
     }
 }
 
@@ -22,7 +22,7 @@ fn enforce_tier(event: &Event, context: &Context) -> Result<(), Reject> {
     // this will probably need to be changed when the system actor is added
     match required_tier(event) {
         Authority::AnyTier => Ok(()),
-        Authority::Require(tier) if context.actor_type == tier => Ok(()),
+        Authority::Require(tier) if context.tier == tier => Ok(()),
         Authority::Require(_) => Err(Reject::HumanOnly),
     }
 }
@@ -40,10 +40,8 @@ pub fn decide(world: &World, command: Command, context: &Context) -> Result<Vec<
             };
             enforce_tier(&event, context)?;
 
-            if let Some(id) = parent_id {
-                if world.tasks.len() <= id.0 {
-                    return Err(Reject::InvalidParentTaskId);
-                }
+            if parent_id.is_some_and(|id| world.tasks.len() <= id.0) {
+                return Err(Reject::InvalidParentTaskId);
             }
 
             vec![event]
@@ -89,13 +87,13 @@ mod test {
     fn agent() -> Context {
         Context {
             actor: "saccade bot".into(),
-            actor_type: Actor::Agent,
+            tier: Tier::Agent,
         }
     }
     fn human() -> Context {
         Context {
             actor: "human person".into(),
-            actor_type: Actor::Human,
+            tier: Tier::Human,
         }
     }
     /// Authority errors supercede state transition errors. This is logical since it if you get

@@ -3,7 +3,7 @@ use crate::events::{Command, Event};
 use crate::task::{Reject, Task, TaskId, TaskState};
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Actor {
+pub enum Tier {
     Human,
     Agent,
 }
@@ -11,7 +11,7 @@ pub enum Actor {
 #[derive(Clone, Debug)]
 pub struct Context {
     pub actor: String,
-    pub actor_type: Actor,
+    pub tier: Tier,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +82,18 @@ impl World {
     }
 }
 
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for Log {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Log {
     records: Vec<Record>,
     world: World,
@@ -134,14 +146,14 @@ impl Log {
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
     use crate::task::Receipt;
 
     fn agent() -> Context {
         Context {
             actor: "saccade bot".into(),
-            actor_type: Actor::Agent,
+            tier: Tier::Agent,
         }
     }
 
