@@ -1,6 +1,6 @@
 use crate::task::{Receipt, TaskId};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     // Task Events
     TaskCreated {
@@ -25,7 +25,7 @@ pub enum Event {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Command {
     CreateTask {
         task_name: String,

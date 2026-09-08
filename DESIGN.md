@@ -84,7 +84,7 @@ configurability. The workflow is the product.
 
 | Object | The job | Lifecycle |
 |---|---|---|
-| **Task** | claimable work | `open → in_progress → done`; drop from `open` **or** `done` (human-only); reopen (human, justified) |
+| **Task** | claimable work | `open → claimed → done`; drop from `open` **or** `done` (human-only); reopen (human, justified) |
 | **Hypothesis** | a claim under test | `open → resolved(kind) → verified`; resolutions locked |
 | **Finding** | an observation | `valid → superseded \| invalidated` (tombstones, never deletion) |
 
@@ -98,7 +98,7 @@ Key semantics:
   hypotheses resolve when versioned criteria are satisfied. Concluding and succeeding are
   different events; if the goal survives the conclusion, a *new* task spawns.
 - **Drop path:** `dropped` is a human-only judgment. Legal from `open` and from `done`;
-  never from `in_progress` — in-flight claims are protected (only lease expiry ends a
+  never from `claimed` — in-flight claims are protected (only lease expiry ends a
   claim non-consensually). Dropping from `done` is the void: the receipt survives in the
   log; the state marks the task a mistake. `dropped` is the sole terminal state.
 - **Judgment-act payload:** judgment events (drop, release, reopen, overturn) wear one
@@ -239,11 +239,11 @@ Two clocks, each defined by **triggers**, not calendars:
 - **Human claim parity:** claiming by hand is the same one command / same button as
   agent dispatch. No intent field, no learn semantics anywhere in the schema. Dispatch
   (launching agents) is the human's routing decision, made at launch time.
-- **Claims are CAS leases:** `open → in_progress` with `(claimed_by, lease_expiry)`
+- **Claims are CAS leases:** `open → claimed` with `(claimed_by, lease_expiry)`
   written atomically; 409 on contention → re-query ready → next item (deterministic
   ordering + jitter). Heartbeat renewal; expiry auto-reverts to `open` (system event).
-- **No agent preemption.** Priority reorders `ready`, never interrupts `in_progress`.
-  Human `abort` is the only interruption, and it notifies via the event stream.
+- **No agent preemption.** Priority reorders `ready`, never interrupts a `claimed`
+  task. Human `abort` is the only interruption, and it notifies via the event stream.
 - **Concurrent hypothesis resolution:** CAS on the hypothesis version. A second, divergent
   resolution attempt 409s and becomes a **review flag** (disagreement = candidate
   evidence). The losing agent files its findings and moves on; it never renders two

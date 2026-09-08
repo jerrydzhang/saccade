@@ -125,7 +125,10 @@ mod test {
         ];
 
         for event in &events {
-            let gated = matches!(event, Event::TaskDropped { .. } | Event::TaskReleased { .. });
+            let gated = matches!(
+                event,
+                Event::TaskDropped { .. } | Event::TaskReleased { .. }
+            );
 
             assert_eq!(
                 enforce_tier(event, &agent()).is_err(),

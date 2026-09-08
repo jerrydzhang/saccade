@@ -1,9 +1,11 @@
 //! Saccade - issue tracker (idk what makes it special yet other than it's mine)
 
+pub mod db;
 pub mod decide;
 pub mod events;
 pub mod store;
 pub mod task;
+pub mod wire;
 
 pub use decide::decide;
 pub use events::{Command, Event};

@@ -9,10 +9,10 @@ pub enum Reject {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Receipt(pub(crate) String);
+pub struct Receipt(pub String);
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
-pub struct TaskId(pub(crate) usize);
+pub struct TaskId(pub usize);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskState {
