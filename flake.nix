@@ -33,6 +33,11 @@
           packages = [
             rustToolchain
           ];
+
+          shellHook = ''
+            export SACCADDE_DB="$PWD/saccade.db"
+            export SACCADDE_ACTOR="jerry"
+          '';
         };
       }
     );

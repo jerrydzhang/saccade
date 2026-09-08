@@ -381,6 +381,50 @@ mod test {
         assert!(loadout.rows[0].logged_time >= 10);
     }
 
+    /// The memory suite cannot see disk-level failures: WAL pragmas, header
+    /// stamps, checkpoint-on-close, reopen. (The application_id decimal bug
+    /// passed every in-memory test and broke every second invocation.)
+    /// This test exercises the real file across connection lifetimes.
+    #[test]
+    fn file_backed_log_reopens_with_its_world() {
+        let path = std::env::temp_dir().join("saccade-reopen-test.db");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut conn = open(&path).expect("create the file-backed log");
+            execute(&mut conn, &agent(), create("implement foo"), 10).unwrap();
+            execute(&mut conn, &agent(), Command::ClaimTask { id: TaskId(0) }, 11).unwrap();
+            execute(
+                &mut conn,
+                &human(),
+                Command::CompleteTask {
+                    id: TaskId(0),
+                    receipt: Receipt("tests green".into()),
+                },
+                12,
+            )
+            .unwrap();
+        } // connection dropped: WAL checkpoints back into the main file
+
+        // reopen runs the full open path: pragmas, header-stamp verify
+        let conn = open(&path).expect("reopen the same file");
+        let loadout = load(&conn).unwrap();
+        let LoadState::Full(world) = loadout.state else {
+            panic!("expected a full load after reopen");
+        };
+        assert_eq!(loadout.rows.len(), 3);
+        assert_eq!(world.tasks.len(), 1);
+        assert!(matches!(world.tasks[0].state, TaskState::Done(_)));
+
+        // the read-only path sees the same file
+        let ro = open_read(&path).expect("read-only open of a real file");
+        assert_eq!(load(&ro).unwrap().rows.len(), 3);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
     #[test]
     fn seq_stays_dense_across_rejections() {
         let mut conn = memory_db();

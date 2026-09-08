@@ -84,6 +84,12 @@ enum ObjKind {
 }
 
 fn main() -> ExitCode {
+    // Piping a read into head/grep must end the process quietly; Rust ignores
+    // SIGPIPE by default and println! panics when the reader closes.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     let cli = Cli::parse();
 
     match run(&cli) {

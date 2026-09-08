@@ -73,6 +73,9 @@ as rules with the failure mode each prevents:
 9. **The system never judges**: no learning pedagogy, no theory storage, no productivity
    surfaces, no auto-synthesis of your notes. *Prevents: the system acquiring opinions
    about its owner.*
+10. **What happened is visible at a glance and answerable from the log.** Board and
+    log tell the story without archaeology; retrieval answers structurally, not by
+    prose-reading. *Prevents: history only participants can reconstruct.*
 
 Configurability was explicitly rejected: Trac/Redmine-style configurable workflows were
 assessed as mechanisms to steal — we steal the enforcement machinery, not the
@@ -97,6 +100,11 @@ Key semantics:
 - **Task done ≠ hypothesis resolved.** Tasks conclude work and deposit the outcome;
   hypotheses resolve when versioned criteria are satisfied. Concluding and succeeding are
   different events; if the goal survives the conclusion, a *new* task spawns.
+- **Supersession over silent re-scope:** a task's identity is its done-deposit — what
+  receipt would honestly close it. Deposit changed → open the successor first, then
+  void the old (release if claimed; drop naming the successor). Path changed → same
+  task; the receipt records the detour. Names are create-time intent: stale in the
+  how, never in the what.
 - **Drop path:** `dropped` is a human-only judgment. Legal from `open` and from `done`;
   never from `claimed` — in-flight claims are protected (only lease expiry ends a
   claim non-consensually). Dropping from `done` is the void: the receipt survives in the
@@ -380,10 +388,12 @@ pointers render via adapter, opaque otherwise), no productivity surfaces.
   sortable, collision-free on a single authority. Numbers never reused; tombstones burn
   IDs. Events are `(object_id, seq)` internally — not user-addressable. Hierarchy is
   edges, never ID syntax (no `h-42.1`).
-- **References are inert.** ID-shaped tokens in commits/chat/findings produce backlinks
-  (projection) and nothing else. No keyword-driven transitions, ever.
-- Beads imports carry `imported_from: bd-xxx` aliases so historical commit backlinks
-  resolve.
+- **References are inert.** ID-shaped tokens in any prose at rest — commits, chat,
+  findings, event notes — produce backlinks (projection) and nothing else. No
+  keyword-driven transitions, ever.
+- Beads imports carry `imported_from` aliases (arbitrary id strings — real beads ids
+  are `prefix-token`, not `bd-123`) so historical commit backlinks resolve; archive-only
+  aliases dangle — the unloved resolving to nothing is the correct answer.
 
 ## 11. Storage and deployment
 
@@ -408,14 +418,45 @@ pointers render via adapter, opaque otherwise), no productivity surfaces.
 
 ## 12. Migration from beads
 
-No built-in migration. **An agent executes a written runbook over the public API**
-(batch capture, aliases, flags) — this doubles as the v0 acceptance test: if an agent
-can't do it, the API is broken. Semantics as runbook guidance: closed issues → done
-tasks with receipts; open issues → flagged triage captures; per-project policy
-(`--policy closed-only | full | archive-only`) — research-light projects skip, software-
-heavy projects (jernerics) import fully with batch triage. Hard cutover: beads goes
-read-only; its last sync archived as a provenance snapshot. No LLM auto-classification
-at import — classification is triage work; batch operations make it cheap.
+No built-in migration — and no runbook-as-artifact: three one-shot migrations don't
+justify a procedure document. **Migration is an executed mapping over the public API.**
+The value is the mapping test — real issues finding honest homes saccade's model would
+have chosen — with API acceptance riding along for free. Mapping decisions live here;
+`tests/` pins the expression over a curated corpus; each real import executes once, in
+a sandbox first, producing a residue report (every gap becomes an amendment or a named
+door).
+
+- **Beads fields are detection heuristics, never the target ontology.** The bar for
+  log presence is "saccade wants it," never "beads had it." The source's own enums are
+  advisory (wild: `enhancement`, `chore`, `in_review`) — undocumented values are normal
+  input, not exceptions.
+- **The counterfactual-native test decides each item:** would this have been created,
+  in this shape, had saccade been the tracker that day? Committed work is checkable
+  evidence for yes; failures go archive-only — the mapping succeeding, not a gap.
+- **Times and actors:** create at `created_at` under `created_by`; claim + done at
+  `closed_at` under a synthetic importer actor (beads records no closer); receipt =
+  close_reason verbatim + provenance line. Imports are the sanctioned `--at` path.
+- **Judgment-shaped closures — duplicates, garbled creates, superseded-before-delivery,
+  human-decision closes — stop at the gate:** imported as open tasks with aliases, with
+  a drop-candidate report; humans perform the drops. Classification is agent reading
+  work, never keyword or LLM auto-classification (receipts say "deferred" mid-prose);
+  uncertain cases escalate.
+- **Ids and edges:** aliases are arbitrary strings (real beads ids are prefix + token,
+  e.g. `jernerics-cdf`); v0 carries them in the task name, constitutive payload is a
+  door. Dotted ids (`jyl.13`) are manual child-numbering — become parent edges.
+  `parent-child` deps migrate as `--parent` — ordering-is-grouping: plain children
+  hang as stars, ordered ones chain; cross-group ordering and diamond dependencies
+  are unexpressible under single-parent trees (door; recoverable from git history). Titles and aliases
+  migrate; bodies, comments, labels, priorities don't — git history of the source repo
+  is the archive, and nothing references it.
+- **Policy is evidence-driven:** the shape distribution argues per-project
+  `closed-only | full | archive-only` (jernerics is an archive at 213/214 closed; symlab
+  is the live one). Hard cutover: final sync commits, beads goes read-only, then
+  `.beads/` leaves the working tree. **Success is removal: receipts + log + git are
+  self-sufficient, and anything that would send you back to the corpse is a residue
+  item** — non-self-sufficient receipts ("per decision comments 45-48") are flagged and
+  folded at import; live-context tasks are re-captured at cutover or wait on the
+  task-context door.
 
 ## 13. Build order and ownership
 
