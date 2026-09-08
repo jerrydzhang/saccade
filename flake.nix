@@ -35,8 +35,8 @@
           ];
 
           shellHook = ''
-            export SACCADDE_DB="$PWD/saccade.db"
-            export SACCADDE_ACTOR="jerry"
+            export SACCADE_DB="$PWD/saccade.db"
+            export SACCADE_ACTOR="jerry"
           '';
         };
       }

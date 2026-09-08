@@ -10,15 +10,15 @@ use saccade::{Command, Context, Task, Tier};
 #[command(name = "sac", about = "Saccade: awesome issue tracker")]
 struct Cli {
     /// Path to the event database
-    #[arg(long, global = true, env = "SACCADDE_DB", default_value = "saccade.db")]
+    #[arg(long, global = true, env = "SACCADE_DB", default_value = "saccade.db")]
     db: PathBuf,
 
     /// Actor name recorded on events (Required for mutating commands)
-    #[arg(long, global = true, env = "SACCADDE_ACTOR")]
+    #[arg(long, global = true, env = "SACCADE_ACTOR")]
     actor: Option<String>,
 
     /// Tier controls the authority of the actor (Required for mutating commands)
-    #[arg(long, global = true, env = "SACCADDE_TIER", value_enum)]
+    #[arg(long, global = true, env = "SACCADE_TIER", value_enum)]
     tier: Option<TierArg>,
 
     /// Machine-readable output
