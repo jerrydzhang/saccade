@@ -390,7 +390,13 @@ pointers render via adapter, opaque otherwise), no productivity surfaces.
 - **Event-sourced core:** the append-only event log is the only truth; every projection
   (views, ready, triage, digests, pointer_index, retro queries) is a deterministic
   replay — rebuildable, property-testable.
-- **Bi-temporal stamps** (event time vs validity time) from day one.
+- **Bi-temporal stamps** (event time vs validity time) from day one — stamped
+  immediately, consumed by nothing in v0. Event time defaults to entry time when
+  unmeasured; backdating is for sourced data only (imports, adapters); human-cited
+  "when it really happened" lives in receipt prose. Clock divergence is a provenance
+  signal — equal stamps mean typed live. Carried because it cannot be backfilled and
+  speculative features (stale-memory forensics, adapter flushes, heard-time retro
+  metrics) will want a complete record.
 - **SQLite embedded, WAL** as the default runtime everywhere; Postgres only as a later
   adapter if evidence demands. Single-writer + serialized appends make the CAS machinery
   trivial.

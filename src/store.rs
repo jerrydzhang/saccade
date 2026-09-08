@@ -64,7 +64,8 @@ impl World {
             }
             ref event @ (Event::TaskClaimed { id }
             | Event::TaskDone { id, .. }
-            | Event::TaskDropped { id, .. }) => {
+            | Event::TaskDropped { id, .. }
+            | Event::TaskReleased { id, .. }) => {
                 let task = self
                     .tasks
                     .get_mut(id.0)

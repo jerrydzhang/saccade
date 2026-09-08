@@ -17,6 +17,8 @@ pub struct TaskId(pub(crate) usize);
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskState {
     Open,
+    // TODO: give claimed an identity so we can
+    // detect who claimed the task not just that was claimed
     Claimed,
     Done(Receipt),
     Dropped,
@@ -30,6 +32,7 @@ impl TaskState {
             (TaskState::Claimed, Event::TaskDone { receipt, .. }) => {
                 Ok(TaskState::Done(receipt.clone()))
             }
+            (TaskState::Claimed, Event::TaskReleased { .. }) => Ok(TaskState::Open),
             (TaskState::Open | TaskState::Done(_), Event::TaskDropped { .. }) => {
                 Ok(TaskState::Dropped)
             }
@@ -90,6 +93,10 @@ mod test {
                 id: TaskId(0),
                 note: None,
             },
+            Event::TaskReleased {
+                id: TaskId(0),
+                note: None,
+            },
         ];
 
         let legal = |state: &TaskState, event: &Event| {
@@ -97,6 +104,7 @@ mod test {
                 (state, event),
                 (TaskState::Open, Event::TaskClaimed { .. })
                     | (TaskState::Claimed, Event::TaskDone { .. })
+                    | (TaskState::Claimed, Event::TaskReleased { .. })
                     | (
                         TaskState::Open | TaskState::Done(_),
                         Event::TaskDropped { .. }

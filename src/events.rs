@@ -19,6 +19,10 @@ pub enum Event {
         id: TaskId,
         note: Option<String>,
     },
+    TaskReleased {
+        id: TaskId,
+        note: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -35,6 +39,10 @@ pub enum Command {
         receipt: Receipt,
     },
     AbandonTask {
+        id: TaskId,
+        note: Option<String>,
+    },
+    ReleaseTask {
         id: TaskId,
         note: Option<String>,
     },

@@ -14,7 +14,7 @@ fn required_tier(event: &Event) -> Authority {
         Event::TaskCreated { .. } | Event::TaskClaimed { .. } | Event::TaskDone { .. } => {
             Authority::AnyTier
         }
-        Event::TaskDropped { .. } => Authority::Require(Tier::Human),
+        Event::TaskDropped { .. } | Event::TaskReleased { .. } => Authority::Require(Tier::Human),
     }
 }
 
@@ -55,6 +55,7 @@ fn candidate(world: &World, command: Command) -> Vec<Event> {
         Command::ClaimTask { id } => vec![Event::TaskClaimed { id }],
         Command::CompleteTask { id, receipt } => vec![Event::TaskDone { id, receipt }],
         Command::AbandonTask { id, note } => vec![Event::TaskDropped { id, note }],
+        Command::ReleaseTask { id, note } => vec![Event::TaskReleased { id, note }],
     }
 }
 
@@ -69,7 +70,8 @@ fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
             }
             event @ (Event::TaskClaimed { id }
             | Event::TaskDone { id, .. }
-            | Event::TaskDropped { id, .. }) => {
+            | Event::TaskDropped { id, .. }
+            | Event::TaskReleased { id, .. }) => {
                 let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
                 task.state.validate(event)?;
             }
@@ -116,10 +118,14 @@ mod test {
                 id: TaskId(0),
                 note: None,
             },
+            Event::TaskReleased {
+                id: TaskId(0),
+                note: None,
+            },
         ];
 
         for event in &events {
-            let gated = matches!(event, Event::TaskDropped { .. });
+            let gated = matches!(event, Event::TaskDropped { .. } | Event::TaskReleased { .. });
 
             assert_eq!(
                 enforce_tier(event, &agent()).is_err(),

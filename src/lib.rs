@@ -28,6 +28,8 @@ mod invariant {
         }
     }
 
+    const RECORD_COUNT: usize = 13;
+
     fn populate_log(log: &mut Log) {
         let agent_ctx = agent();
         let human_ctx = human();
@@ -103,11 +105,24 @@ mod invariant {
 
         log.execute(
             human_ctx.clone(),
+            Command::ReleaseTask {
+                id: TaskId(3),
+                note: Some("run dead, reclaim".into()),
+            },
+            10,
+        )
+        .unwrap();
+
+        log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(3) }, 11)
+            .unwrap();
+
+        log.execute(
+            human_ctx.clone(),
             Command::AbandonTask {
                 id: TaskId(2),
                 note: Some("scope covered by fix bar".into()),
             },
-            10,
+            12,
         )
         .unwrap();
 
@@ -117,7 +132,7 @@ mod invariant {
                 id: TaskId(1),
                 note: None,
             },
-            11,
+            13,
         )
         .unwrap();
     }
@@ -127,7 +142,7 @@ mod invariant {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        assert_eq!(log.records().len(), 11);
+        assert_eq!(log.records().len(), RECORD_COUNT);
         assert_eq!(
             log.world().tasks[0].state,
             TaskState::Done(Receipt("foo completed successfully".into())),
@@ -140,9 +155,13 @@ mod invariant {
         assert_eq!(log.records()[8].timestamp, 9);
         assert_eq!(log.records()[8].context.actor, "saccade bot");
 
+        assert_eq!(log.records()[9].id.0, 9);
+        assert_eq!(log.records()[9].timestamp, 10);
+        assert_eq!(log.records()[9].context.actor, "human person");
+
         assert_eq!(log.records()[10].id.0, 10);
         assert_eq!(log.records()[10].timestamp, 11);
-        assert_eq!(log.records()[10].context.actor, "human person");
+        assert_eq!(log.records()[10].context.actor, "saccade bot");
     }
 
     #[test]
@@ -160,12 +179,12 @@ mod invariant {
             1,
         );
 
-        assert_eq!(log.records().len(), 11);
+        assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err1, Err(Reject::InvalidStateTransition)));
 
         let err2 = log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(3) }, 2);
 
-        assert_eq!(log.records().len(), 11);
+        assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err2, Err(Reject::InvalidStateTransition)));
 
         let err3 = log.execute(
@@ -177,7 +196,7 @@ mod invariant {
             3,
         );
 
-        assert_eq!(log.records().len(), 11);
+        assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err3, Err(Reject::HumanOnly)));
 
         let err4 = log.execute(
@@ -189,8 +208,32 @@ mod invariant {
             4,
         );
 
-        assert_eq!(log.records().len(), 11);
+        assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err4, Err(Reject::InvalidStateTransition)));
+
+        let err5 = log.execute(
+            agent_ctx.clone(),
+            Command::ReleaseTask {
+                id: TaskId(3),
+                note: None,
+            },
+            5,
+        );
+
+        assert_eq!(log.records().len(), RECORD_COUNT);
+        assert!(matches!(err5, Err(Reject::HumanOnly)));
+
+        let err6 = log.execute(
+            human(),
+            Command::ReleaseTask {
+                id: TaskId(0),
+                note: None,
+            },
+            6,
+        );
+
+        assert_eq!(log.records().len(), RECORD_COUNT);
+        assert!(matches!(err6, Err(Reject::InvalidStateTransition)));
     }
 
     #[test]
@@ -208,7 +251,7 @@ mod invariant {
             3,
         );
 
-        assert_eq!(log.records().len(), 11);
+        assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err, Err(Reject::InvalidTaskId)));
     }
 
@@ -227,7 +270,7 @@ mod invariant {
             1,
         );
 
-        assert_eq!(log.records().len(), 11);
+        assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err, Err(Reject::InvalidParentTaskId)));
     }
 
