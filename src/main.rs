@@ -63,13 +63,13 @@ enum Cmd {
     Drop {
         id: String,
         #[arg(long)]
-        note: Option<String>,
+        note: String,
     },
     /// Human-only: release a claimed task back to open
     Release {
         id: String,
         #[arg(long)]
-        note: Option<String>,
+        note: String,
     },
     /// Propose a gated act for human acceptance
     Propose {
@@ -182,6 +182,7 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::InvalidProposalId => "invalid_proposal_id",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
+        Reject::ReasonRequired => "reason_required",
     }
 }
 

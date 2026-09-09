@@ -99,10 +99,27 @@ Follow-on tasks: t-10 (notes-required), t-11 (annotation object), t-3/t-4.
 
 ## t-10 — notes-required amendment
 
-- Add the decide-layer backstop: `validate` rejects `TaskDropped`/`TaskReleased`
-  with empty notes. Strictly stronger than CLI enforcement (covers wire path and
-  future internal callers), and it retires the probe-leak concern from t-9's
-  helper entirely.
+EXECUTED (pending review): note `Option<String> → String` on TaskDropped/TaskReleased
+(+ commands); backstop `require_reason` in decide::validate — trim-empty refuses with
+`Reject::ReasonRequired`, checked AFTER existence/transition (ordering recorded in
+DESIGN §17); scope = six fields (drop, release, withdraw, reject, propose-name,
+receipt — receipt was previously unenforced, `done --receipt ""` passed); wire
+`NotedPayload.note → String`, null payloads hit the existing Corrupt path (verified
+live: a null record bricks list and log, naming seq+kind); CLI `--note` mandatory;
+fixtures rewritten with narrative notes; new contract test `empty_required_text_refuses`
+(six cells, records-unchanged). Dogfood #16 repaired deliberately (trigger dance, backfilled
+note). 31 unit + 7 corpus green.
+
+DEFERRED TO t-11: the text taxonomy — whether Receipt/notes/annotation bodies share a
+type, whether a note is an inline annotation, whether a finding is an attachment. Ruled
+in t-10 only: the RULE is uniform (require_reason), the TYPES stay distinct (receipt ≠
+note; merging is syntax-driven typing). No new newtype until t-11's design wants one.
+
+Ratified mid-execution: **null payloads refuse, no shim** (the `Corrupt` path —
+zero code). The boundary is recorded in DESIGN §10: format stability is not
+promised until external adoption or migration pain, whichever first. The one
+affected record (dogfood #16, `task_released` with `note: null`) got a
+deliberate owner-side repair: drop trigger, UPDATE, restore trigger.
 
 ---
 

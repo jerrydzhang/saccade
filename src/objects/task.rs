@@ -86,11 +86,11 @@ mod test {
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                note: None,
+                note: String::new(),
             },
             Event::TaskReleased {
                 id: TaskId(0),
-                note: None,
+                note: String::new(),
             },
         ];
 

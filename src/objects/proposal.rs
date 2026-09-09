@@ -48,11 +48,11 @@ impl ProposalAction {
         match self {
             ProposalAction::Drop { task_id } => Event::TaskDropped {
                 id: *task_id,
-                note: Some(note.into()),
+                note: note.into(),
             },
             ProposalAction::Release { task_id } => Event::TaskReleased {
                 id: *task_id,
-                note: Some(note.into()),
+                note: note.into(),
             },
         }
     }

@@ -397,6 +397,12 @@ pointers render via adapter, opaque otherwise), no productivity surfaces.
 - **Proposals are seq-addressed** — identity is the birth event's log position
   (`accept 614`); no counter, no `p-` syntax. Tasks keep allocated dense ids:
   human-referenced daily (§17).
+- **Format stability is not yet promised.** Breaking changes to recorded payload
+  shapes are allowed while the only consumer is this repo's own log and migrations
+  are hand-scale: a breaking change may refuse an old log (`Corrupt`), and the
+  owner repairs the data. The promise that old logs always load starts when
+  either an external project adopts saccade or this log's volume makes
+  hand-migration painful — whichever comes first.
 
 ## 11. Storage and deployment
 
@@ -606,7 +612,8 @@ if the residue offends.
 created/withdrawn `AnyTier`; accepted/rejected `Require(Human)`. Transition:
 `Proposal::transition`, total table, terminals admit nothing. World: seq resolves,
 embedded act re-validated through the task's own code path. Error ordering pinned:
-authority → existence → transition → embedded re-check.
+authority → existence → transition → embedded re-check → required text (an empty
+note, receipt, or name is the smallest mistake, so it is named last).
 
 **Surfacing.** `sac proposals` with `--json` (bare, like every CLI read — the
 version envelope is serve-surface only; CLI and binary share a process, so no

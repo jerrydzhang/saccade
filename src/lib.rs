@@ -24,6 +24,7 @@ pub enum Reject {
     HumanOnly,
     // Misc
     InvalidStateTransition,
+    ReasonRequired,
 }
 
 #[cfg(test)]
@@ -123,7 +124,7 @@ mod invariant {
             human_ctx.clone(),
             Command::ReleaseTask {
                 id: TaskId(3),
-                note: Some("run dead, reclaim".into()),
+                note: "run dead, reclaim".into(),
             },
             10,
         )
@@ -136,7 +137,7 @@ mod invariant {
             human_ctx.clone(),
             Command::DropTask {
                 id: TaskId(2),
-                note: Some("scope covered by fix bar".into()),
+                note: "scope covered by fix bar".into(),
             },
             12,
         )
@@ -146,7 +147,7 @@ mod invariant {
             human_ctx.clone(),
             Command::DropTask {
                 id: TaskId(1),
-                note: None,
+                note: "covered by fix bar; kept only as context".into(),
             },
             13,
         )
@@ -221,7 +222,7 @@ mod invariant {
             agent_ctx.clone(),
             Command::DropTask {
                 id: TaskId(3),
-                note: None,
+                note: "duplicate of t-3".into(),
             },
             3,
         );
@@ -234,7 +235,7 @@ mod invariant {
             human(),
             Command::DropTask {
                 id: TaskId(3),
-                note: None,
+                note: "duplicate of t-3".into(),
             },
             4,
         );
@@ -247,7 +248,7 @@ mod invariant {
             agent_ctx.clone(),
             Command::ReleaseTask {
                 id: TaskId(3),
-                note: None,
+                note: "run dead".into(),
             },
             5,
         );
@@ -260,7 +261,7 @@ mod invariant {
             human(),
             Command::ReleaseTask {
                 id: TaskId(0),
-                note: None,
+                note: "run dead".into(),
             },
             6,
         );
@@ -419,7 +420,7 @@ mod invariant {
         };
         assert_eq!(id.0, 0);
         // the proposal's name becomes the drop's note
-        assert_eq!(note.as_deref(), Some("this is a duplicated task"));
+        assert_eq!(note, "this is a duplicated task");
         assert_eq!(log.world().tasks[0].state, TaskState::Dropped);
         assert_eq!(
             log.world().proposals[&ProposalId(RecordId(1))].state,
@@ -558,5 +559,75 @@ mod invariant {
             ProposalState::Open
         );
         assert_eq!(log.world().tasks[0].state, TaskState::Open);
+    }
+
+    /// Requires that any text field (note, receipt, or name) is non-empty this includes
+    /// whitespace-only strings
+    #[test]
+    fn empty_required_text_refuses() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: "real work".into(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: "claimed work".into(),
+                parent_id: None,
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(human(), Command::ClaimTask { id: TaskId(1) }, 3)
+            .unwrap();
+        log.execute(
+            agent(),
+            Command::CreateProposal {
+                name: "duplicate of the sibling".into(),
+                action: ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            4,
+        )
+        .unwrap();
+
+        let empties = [
+            Command::DropTask {
+                id: TaskId(0),
+                note: String::new(),
+            },
+            Command::ReleaseTask {
+                id: TaskId(1),
+                note: "   ".into(),
+            },
+            Command::CompleteTask {
+                id: TaskId(1),
+                receipt: Receipt(String::new()),
+            },
+            Command::CreateProposal {
+                name: String::new(),
+                action: ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            Command::WithdrawProposal {
+                id: ProposalId(RecordId(3)),
+                note: String::new(),
+            },
+            Command::RejectProposal {
+                id: ProposalId(RecordId(3)),
+                note: String::new(),
+            },
+        ];
+
+        for command in empties {
+            let before = log.records().len();
+            let refused = log.execute(human(), command, 99);
+            assert!(matches!(refused, Err(Reject::ReasonRequired)));
+            assert_eq!(log.records().len(), before);
+        }
     }
 }

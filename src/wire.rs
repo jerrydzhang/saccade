@@ -48,7 +48,7 @@ struct DonePayload {
 #[derive(Serialize, Deserialize)]
 struct NotedPayload {
     id: usize,
-    note: Option<String>,
+    note: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -333,15 +333,15 @@ mod test {
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                note: None,
+                note: "scope covered elsewhere".into(),
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                note: Some("superseded by t-2".into()),
+                note: "superseded by t-2".into(),
             },
             Event::TaskReleased {
                 id: TaskId(0),
-                note: Some("run dead".into()),
+                note: "run dead".into(),
             },
         ];
 

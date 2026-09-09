@@ -86,22 +86,36 @@ fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
                     return Err(Reject::InvalidParentTaskId);
                 }
             }
-            event @ (Event::TaskClaimed { id }
-            | Event::TaskDone { id, .. }
-            | Event::TaskDropped { id, .. }
-            | Event::TaskReleased { id, .. }) => {
+            event @ Event::TaskClaimed { id } => {
                 let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
                 task.state.validate(event)?;
             }
-            Event::ProposalCreated { action, .. } => match action {
-                ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
-                    let task = world.tasks.get(task_id.0).ok_or(Reject::InvalidTaskId)?;
-                    task.state.validate(&action.target_event(""))?;
+            event @ Event::TaskDone { id, receipt } => {
+                let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+                task.state.validate(event)?;
+                gate_empty_text(&receipt.0)?;
+            }
+            event @ Event::TaskDropped { id, note } | event @ Event::TaskReleased { id, note } => {
+                let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+                task.state.validate(event)?;
+                gate_empty_text(note)?;
+            }
+            Event::ProposalCreated { name, action } => {
+                match action {
+                    ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
+                        let task = world.tasks.get(task_id.0).ok_or(Reject::InvalidTaskId)?;
+                        task.state.validate(&action.target_event(""))?;
+                    }
                 }
-            },
-            event @ (Event::ProposalWithdrawn { id, .. }
-            | Event::ProposalRejected { id, .. }
-            | Event::ProposalAccepted { id, .. }) => {
+                gate_empty_text(name)?;
+            }
+            event @ (Event::ProposalWithdrawn { id, note }
+            | Event::ProposalRejected { id, note }) => {
+                let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
+                proposal.state.validate(event)?;
+                gate_empty_text(note)?;
+            }
+            event @ Event::ProposalAccepted { id } => {
                 let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
                 proposal.state.validate(event)?;
             }
@@ -109,6 +123,14 @@ fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
     }
 
     Ok(())
+}
+
+fn gate_empty_text(text: &str) -> Result<(), Reject> {
+    if text.trim().is_empty() {
+        Err(Reject::ReasonRequired)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -147,11 +169,11 @@ mod test {
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                note: None,
+                note: String::new(),
             },
             Event::TaskReleased {
                 id: TaskId(0),
-                note: None,
+                note: String::new(),
             },
             Event::ProposalCreated {
                 name: String::new(),
@@ -202,7 +224,7 @@ mod test {
 
         let drop = || Command::DropTask {
             id: TaskId(0),
-            note: Some("invalid drop".into()),
+            note: "invalid drop".into(),
         };
         let err1 = decide(&world, &agent_ctx, drop());
         let err2 = decide(&world, &human_ctx, drop());

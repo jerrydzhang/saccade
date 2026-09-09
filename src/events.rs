@@ -18,11 +18,11 @@ pub enum Event {
     },
     TaskDropped {
         id: TaskId,
-        note: Option<String>,
+        note: String,
     },
     TaskReleased {
         id: TaskId,
-        note: Option<String>,
+        note: String,
     },
     // Proposal Events
     ProposalCreated {
@@ -62,11 +62,11 @@ pub enum Command {
     },
     DropTask {
         id: TaskId,
-        note: Option<String>,
+        note: String,
     },
     ReleaseTask {
         id: TaskId,
-        note: Option<String>,
+        note: String,
     },
     // Proposal commands
     CreateProposal {

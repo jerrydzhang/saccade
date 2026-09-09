@@ -188,7 +188,7 @@ fn duplicate_stops_at_the_gate() {
         &importer(),
         Command::DropTask {
             id: TaskId(0),
-            note: Some("duplicate of jernerics-gvs".into()),
+            note: "duplicate of jernerics-gvs".into(),
         },
         1787428213,
     );
