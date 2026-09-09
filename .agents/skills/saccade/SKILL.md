@@ -17,13 +17,14 @@ every line you append as something a human will read in a retro.
 
 **You are an agent. Every mutating command you run carries `--tier agent`.**
 
-- `drop` and `release` are human-only judgment acts. If you run one you get
+- `drop`, `release`, `accept`, and `reject` are human-only judgment acts. If you run one you get
   `rejected: human_only` and exit 1 — that is the system working as designed.
   Do not retry, do not hunt for a flag combination that works; none exists.
-- If a task deserves dropping or a claim deserves releasing: say so to the
-  human, or create a task for it (`sac create task "human: drop t-12 because …"`).
-  Escalate the judgment; never execute it.
-- Never set or export `SACCADDE_TIER`, never alias or wrap `sac` to change
+- Judgment-shaped facts (a duplicate, a supersession, a corpse) have a
+  first-class home: `sac propose drop t-12 --name "the evidence"`. The
+  proposal carries your evidence into the world; the human rules per act.
+  Never execute the judgment — propose it.
+- Never set or export `SACCADE_TIER`, never alias or wrap `sac` to change
   your tier. The devshell deliberately leaves it unset.
 - Always pass `--actor` explicitly with your own name, even when
   `SACCADDE_ACTOR` is set in the environment — attribution is provenance, and
@@ -36,8 +37,12 @@ every line you append as something a human will read in a retro.
 | `sac create task "name" [--parent t-N]` | any tier | noun-as-argument; only `task` exists today |
 | `sac claim t-N` | any tier | a claim is a **reservation**, not a progress report |
 | `sac done t-N --receipt "…"` | any tier | receipt required — see receipts below |
-| `sac drop t-N [--note "…"]` | **human only** | judgment act; agents escalate instead |
-| `sac release t-N [--note "…"]` | **human only** | judgment act; agents escalate instead |
+| `sac drop t-N [--note "…"]` | **human only** | judgment act; agents propose instead |
+| `sac release t-N [--note "…"]` | **human only** | judgment act; agents propose instead |
+| `sac propose <drop\|release> t-N --name "…"` | any tier | the gate queue: your evidence, the human's call |
+| `sac accept <seq>` / `sac reject <seq> --note "…"` | **human only** | ruling acts on proposals |
+| `sac withdraw <seq> --note "…"` | any tier | take your own proposal off the queue |
+| `sac proposals` | anonymous | the ruling queue; `stale` marks acts gone illegal |
 | `sac list` / `sac list --json` | anonymous | reads need no identity |
 | `sac log` / `sac log --json` | anonymous | raw events; always available |
 
@@ -51,8 +56,8 @@ Add `--json` for machine-readable output, including errors.
    Claims are reservations; do not stockpile them.
 3. Do the work.
 4. `sac done t-N --receipt "…"` when it lands.
-5. Blocked, or the task is wrong? Surface it to the human — they release or
-   drop. Never sit silently on a claim.
+5. Task wrong? Propose the judgment (`sac propose drop t-N --name "…"`)
+   and say so to the human. Never sit silently on a claim.
 
 ### Receipts
 
@@ -74,6 +79,8 @@ Failures exit 1 with a named variant on stderr (`--json` emits
 - `human_only` — you attempted a judgment act. Stop; escalate.
 - `invalid_task_id` / `invalid_parent_task_id` — no such task; ids are exact
   `t-N` tokens, not searches.
+- `invalid_proposal_id` — no proposal was born at that seq; proposal ids are
+  the bare log position of the `proposal_created` event.
 - `invalid_state_transition` — read the log; the task's state says otherwise
   (e.g. it is already claimed by someone else, or already done).
 - `degraded` — a newer binary wrote events this one can't understand. Writes
@@ -86,6 +93,10 @@ Failures exit 1 with a named variant on stderr (`--json` emits
   and human-only. A task can be dropped from `open` or from `done` (a void).
 - "Claimed" means reserved by someone — possibly a human claiming to prevent
   agents from taking it while they think. It does not mean work is happening.
+- Proposals are seq-addressed (`sac accept 614`): the id is the birth event's
+  log position. They are inert while open (never block their target), show
+  `stale` in the queue when the embedded act goes illegal, and re-propose
+  after a rejection is free — the rejection note names the missing evidence.
 - The log is append-only and ordered by seq; timestamps are claims, not order.
 - One database per repo (`saccade.db`, gitignored; the devshell exports
   `SACCADDE_DB`).

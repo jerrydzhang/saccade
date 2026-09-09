@@ -394,6 +394,9 @@ pointers render via adapter, opaque otherwise), no productivity surfaces.
 - Beads imports carry `imported_from` aliases (arbitrary id strings — real beads ids
   are `prefix-token`, not `bd-123`) so historical commit backlinks resolve; archive-only
   aliases dangle — the unloved resolving to nothing is the correct answer.
+- **Proposals are seq-addressed** — identity is the birth event's log position
+  (`accept 614`); no counter, no `p-` syntax. Tasks keep allocated dense ids:
+  human-referenced daily (§17).
 
 ## 11. Storage and deployment
 
@@ -547,7 +550,77 @@ projections × verdict-carrying edges — exists nowhere.
 - Distributed replicas (single authority is the honest homelab contract; IDs break first
   if that changes — accepted, documented)
 
-## 17. Glossary
+## 17. Proposals — agent-drafted judgment acts, human-accepted
+
+The gate conflated *authority* with *execution*: judgment verbs (drop, release) are
+human-only, so an agent that detects a judgment-shaped fact — a duplicate, a
+supersession, a move — had no legal residence for the evidence, and the gate queue
+rendered as live work. The fix separates the two: approval is one recorded act,
+execution another.
+
+**Object taxonomy.** The log stores events; commands append them; the fold derives the
+**world** — a set of **objects**, each an identity plus a state machine, born by one
+event and transitioned by others. Species: task (allocated dense ids), proposal
+(seq-addressed). Attributes (receipts, notes) ride on events and have no independent
+life. Accept is the first two-object transaction; `decide` returning `Vec<Event>` is
+what makes transactions representable.
+
+**A proposal is a persisted, non-effective command** — an act awaiting effectiveness.
+
+- **Embed, don't reference:** the payload carries the act self-contained (verb, task
+  id, name). Rulings never consult anything outside the log.
+- **Verb-set lockstep:** proposal-able verbs ≡ human-gated verbs (`drop`, `release`),
+  enforced in the grammar — ungated acts are unrepresentable as proposals.
+- **Propose-time validation:** the embedded command is validated like any command
+  (target exists, transition legal) minus authority — illegal acts refuse at
+  propose; the queue never admits a proposal that is already unacceptable.
+
+**Lifecycle.** `open → accepted | rejected | withdrawn`; all exits terminal; **no
+expiry, ever**.
+
+- **Accept** (human-only): executes the embedded act as a compound write
+  `[proposal_accepted, task_dropped | task_released]`. The act event keeps its own
+  human gate, satisfied by the acceptor — the gate is never bypassed, only discharged.
+  Actor = acceptor; the proposer is recovered by log join; receipts name both at read
+  time.
+- **Reject** (human-only): note required — the ruling is the evidence, and rejection
+  stays in the log forever.
+- **Withdraw** (agent): tier-gated only, no proposer restriction — validation depends on
+  tier, never identity, an invariant kept until token-bound actors land (serve auth is
+  the seed). Note required — same criterion as every event: the withdrawal's reason
+  dies with the event, and a proposal is a public object, so retracting it edits the
+  shared picture of pending judgments. Not a gate — no human input; the note is a
+  documentation duty on the actor.
+- **Re-propose:** always legal, no anti-repeat rule; the gate is per-act, and rejection
+  notes carry conditions.
+- **Inertness:** an open proposal has zero effect on its target's legality. No locks,
+  no implicit effects, no auto-invalidation — the log changes only via commands.
+
+**Derived staleness.** Effective status is computed, never stored: an open proposal
+whose embedded act is currently illegal renders `stale` (with reason) in views and
+fails accept loudly (`InvalidStateTransition`) — one check, two consumers. Stale
+proposals exit by explicit reject. Door: t-3's system-actor sweep may reconcile them
+if the residue offends.
+
+**Guard layering** — same three table-pinned layers as tasks. Authority:
+created/withdrawn `AnyTier`; accepted/rejected `Require(Human)`. Transition:
+`Proposal::transition`, total table, terminals admit nothing. World: seq resolves,
+embedded act re-validated through the task's own code path. Error ordering pinned:
+authority → existence → transition → embedded re-check.
+
+**Surfacing.** `sac proposals` with `--json` (bare, like every CLI read — the
+version envelope is serve-surface only; CLI and binary share a process, so no
+version skew is possible), the state column carrying derived staleness (`stale`
+when the embedded act would be refused today); `TaskView` gains `proposal:
+Option<{seq, verb}>` (open proposals only — the row is an attention cue and a
+pointer; the full story lives at the seq). `sac log` renders proposal events
+without special casing. A `--status open|stale` filter is a named door, not built.
+
+**Why no generic envelope.** "Acts awaiting effectiveness" is the concept; the
+authority-conditioned proposal is its only live member. Lease expiry (t-3) decomposes
+as derivation + sweep, not a pending act. Build the special case; the door is named.
+
+## 18. Glossary
 
 - **Task** — claimable work; closes on deposit (finding or receipt)
 - **Hypothesis** — a claim under test with versioned criteria; resolves to
@@ -564,3 +637,9 @@ projections × verdict-carrying edges — exists nowhere.
 - **Arc view** — the judgment surface (your answers): path + judgment queue
 - **Retro** — the report over the system's own event log consumed at review
 - **Deposit** — what every close requires: the record got richer, or it isn't done
+- **Proposal** — an agent-drafted judgment act (drop/release) awaiting acceptance;
+  inert while open; seq-addressed
+- **Accept** — human-only promotion: the proposal's embedded act executes as a
+  compound write; the receipt names proposer and acceptor
+- **Stale** — derived status of an open proposal whose embedded act is no longer
+  legal on its target; exits by explicit reject
