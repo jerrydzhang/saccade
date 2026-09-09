@@ -1,8 +1,8 @@
 use crate::events::Event;
 use crate::objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
 use crate::objects::task::{Receipt, TaskId, TaskState};
-use crate::store::World;
 use crate::store::Tier;
+use crate::store::World;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
@@ -77,7 +77,7 @@ pub fn disassemble(event: &Event) -> (&'static str, String) {
     match event {
         Event::TaskCreated {
             id,
-            task_name,
+            name: task_name,
             parent_id,
         } => (
             "task_created",
@@ -116,10 +116,9 @@ pub fn disassemble(event: &Event) -> (&'static str, String) {
                 action: *action,
             }),
         ),
-        Event::ProposalAccepted { id } => (
-            "proposal_accepted",
-            pack(&ProposalIdPayload { id: *id }),
-        ),
+        Event::ProposalAccepted { id } => {
+            ("proposal_accepted", pack(&ProposalIdPayload { id: *id }))
+        }
         Event::ProposalRejected { id, note } => (
             "proposal_rejected",
             pack(&ProposalNotedPayload {
@@ -151,7 +150,7 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
                 serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
             Ok(Event::TaskCreated {
                 id: TaskId(p.id),
-                task_name: p.task_name,
+                name: p.task_name,
                 parent_id: p.parent_id.map(TaskId),
             })
         }
@@ -189,7 +188,8 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
             })
         }
         "proposal_accepted" => {
-            let p: ProposalIdPayload = serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
+            let p: ProposalIdPayload =
+                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
             Ok(Event::ProposalAccepted { id: p.id })
         }
         "proposal_rejected" => {
@@ -289,7 +289,7 @@ pub fn view_of(task: &crate::objects::task::Task, world: &World) -> TaskView {
         id: format!("t-{}", task.id.0),
         state: state_of(&task.state),
         parent: task.parent_id.map(|p| format!("t-{}", p.0)),
-        name: task.task_name.clone(),
+        name: task.name.clone(),
         proposal: world
             .proposals
             .values()
@@ -318,12 +318,12 @@ mod test {
         let samples = [
             Event::TaskCreated {
                 id: TaskId(0),
-                task_name: "implement foo".into(),
+                name: "implement foo".into(),
                 parent_id: None,
             },
             Event::TaskCreated {
                 id: TaskId(1),
-                task_name: "child".into(),
+                name: "child".into(),
                 parent_id: Some(TaskId(0)),
             },
             Event::TaskClaimed { id: TaskId(0) },

@@ -61,7 +61,7 @@ impl World {
             // Task events
             Event::TaskCreated {
                 id,
-                task_name,
+                name: task_name,
                 parent_id,
             } => {
                 assert_eq!(id.0, self.tasks.len(), "non-dense TaskCreated id");
@@ -69,7 +69,7 @@ impl World {
                 self.tasks.push(Task {
                     id,
                     state: TaskState::Open,
-                    task_name,
+                    name: task_name,
                     parent_id,
                 });
             }
@@ -219,7 +219,7 @@ mod test {
             context: agent(),
             event: Event::TaskCreated {
                 id: TaskId(1),
-                task_name: "invalid task".into(),
+                name: "invalid task".into(),
                 parent_id: None,
             },
         };
@@ -236,7 +236,7 @@ mod test {
                 context: agent(),
                 event: Event::TaskCreated {
                     id: TaskId(0),
-                    task_name: "new task".into(),
+                    name: "new task".into(),
                     parent_id: None,
                 },
             },
@@ -246,7 +246,7 @@ mod test {
                 context: agent(),
                 event: Event::TaskCreated {
                     id: TaskId(0),
-                    task_name: "new task again".into(),
+                    name: "new task again".into(),
                     parent_id: None,
                 },
             },
@@ -264,7 +264,7 @@ mod test {
                 context: agent(),
                 event: Event::TaskCreated {
                     id: TaskId(0),
-                    task_name: "new task".into(),
+                    name: "new task".into(),
                     parent_id: None,
                 },
             },

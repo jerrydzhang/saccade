@@ -44,7 +44,7 @@ impl TaskState {
 pub struct Task {
     pub(crate) id: TaskId,
     pub(crate) state: TaskState,
-    pub(crate) task_name: String,
+    pub(crate) name: String,
     pub(crate) parent_id: Option<TaskId>,
 }
 
@@ -53,7 +53,7 @@ impl Task {
         let new_state = self.state.transition(event)?;
         Ok(Task {
             state: new_state,
-            task_name: self.task_name.clone(),
+            name: self.name.clone(),
             ..*self
         })
     }
@@ -76,7 +76,7 @@ mod test {
         let events = [
             Event::TaskCreated {
                 id: TaskId(0),
-                task_name: String::new(),
+                name: String::new(),
                 parent_id: None,
             },
             Event::TaskClaimed { id: TaskId(0) },

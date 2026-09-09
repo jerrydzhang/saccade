@@ -2,10 +2,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use saccade::World;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::{Receipt, TaskId};
 use saccade::wire::ProposalView;
-use saccade::World;
 use saccade::{Command, Context, ProposalAction, ProposalId, RecordId, Reject, Tier};
 
 #[derive(Parser)]
@@ -192,7 +192,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             name,
             parent,
         } => Command::CreateTask {
-            task_name: name.clone(),
+            name: name.clone(),
             parent_id: parent.as_deref().map(parse_task_id).transpose()?,
         },
         Cmd::Claim { id } => Command::ClaimTask {

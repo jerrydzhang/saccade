@@ -6,7 +6,7 @@ pub enum Event {
     // Task Events
     TaskCreated {
         id: TaskId,
-        task_name: String,
+        name: String,
         parent_id: Option<TaskId>,
     },
     TaskClaimed {
@@ -50,7 +50,7 @@ pub enum Event {
 pub enum Command {
     // Task commands
     CreateTask {
-        task_name: String,
+        name: String,
         parent_id: Option<TaskId>,
     },
     ClaimTask {

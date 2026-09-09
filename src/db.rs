@@ -342,7 +342,7 @@ mod test {
 
     fn create(name: &str) -> Command {
         Command::CreateTask {
-            task_name: name.into(),
+            name: name.into(),
             parent_id: None,
         }
     }

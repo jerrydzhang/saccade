@@ -51,12 +51,9 @@ pub fn decide(world: &World, context: &Context, command: Command) -> Result<Vec<
 fn candidate(world: &World, command: Command) -> Vec<Event> {
     match command {
         // Task commands
-        Command::CreateTask {
-            task_name,
-            parent_id,
-        } => vec![Event::TaskCreated {
+        Command::CreateTask { name, parent_id } => vec![Event::TaskCreated {
             id: world.next_task_id(),
-            task_name,
+            name,
             parent_id,
         }],
         Command::ClaimTask { id } => vec![Event::TaskClaimed { id }],
@@ -140,7 +137,7 @@ mod test {
         let events = [
             Event::TaskCreated {
                 id: TaskId(0),
-                task_name: String::new(),
+                name: String::new(),
                 parent_id: None,
             },
             Event::TaskClaimed { id: TaskId(0) },
@@ -222,5 +219,4 @@ mod test {
         assert!(matches!(err3, Err(Reject::HumanOnly)));
         assert!(matches!(err4, Err(Reject::InvalidProposalId)));
     }
-
 }

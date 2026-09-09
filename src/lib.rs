@@ -53,7 +53,7 @@ mod invariant {
         log.execute(
             agent_ctx.clone(),
             Command::CreateTask {
-                task_name: "implement foo".into(),
+                name: "implement foo".into(),
                 parent_id: None,
             },
             1,
@@ -66,7 +66,7 @@ mod invariant {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                task_name: "fix bar".into(),
+                name: "fix bar".into(),
                 parent_id: None,
             },
             3,
@@ -89,7 +89,7 @@ mod invariant {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                task_name: "improve baz".into(),
+                name: "improve baz".into(),
                 parent_id: Some(TaskId(0)),
             },
             6,
@@ -109,7 +109,7 @@ mod invariant {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                task_name: "migrate floop".into(),
+                name: "migrate floop".into(),
                 parent_id: None,
             },
             8,
@@ -155,7 +155,7 @@ mod invariant {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                task_name: "open work".into(),
+                name: "open work".into(),
                 parent_id: None,
             },
             14,
@@ -336,7 +336,7 @@ mod invariant {
         let err = log.execute(
             agent_ctx.clone(),
             Command::CreateTask {
-                task_name: "implement foo primatives".into(),
+                name: "implement foo primatives".into(),
                 parent_id: Some(TaskId(9)),
             },
             1,
@@ -377,7 +377,7 @@ mod invariant {
         log.execute(
             human(),
             Command::CreateTask {
-                task_name: "I am going to do floop again".into(),
+                name: "I am going to do floop again".into(),
                 parent_id: None,
             },
             1,
@@ -433,7 +433,7 @@ mod invariant {
         log.execute(
             human(),
             Command::CreateTask {
-                task_name: "duplicate corpse".into(),
+                name: "duplicate corpse".into(),
                 parent_id: None,
             },
             1,
@@ -471,7 +471,7 @@ mod invariant {
         log.execute(
             human(),
             Command::CreateTask {
-                task_name: "real work".into(),
+                name: "real work".into(),
                 parent_id: None,
             },
             1,
@@ -514,7 +514,7 @@ mod invariant {
         log.execute(
             human(),
             Command::CreateTask {
-                task_name: "real work".into(),
+                name: "real work".into(),
                 parent_id: None,
             },
             1,

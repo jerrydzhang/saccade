@@ -100,7 +100,7 @@ fn closed_with_receipt_folds_to_done() {
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
-            task_name: alias(
+            name: alias(
                 "Enforce streaming limits on ingest and artifact uploads",
                 "jernerics-0a0",
             ),
@@ -167,7 +167,7 @@ fn duplicate_stops_at_the_gate() {
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
-            task_name: alias(
+            name: alias(
                 "Slurm checker chain uses misspelled --kill-on-dep-invalid flag",
                 "jernerics-035",
             ),
@@ -211,7 +211,7 @@ fn dotted_child_becomes_a_parent_edge() {
         &mut conn,
         &beads_actor("jerry"),
         Command::CreateTask {
-            task_name: alias("Tracking data model and analysis redesign", "jernerics-jyl"),
+            name: alias("Tracking data model and analysis redesign", "jernerics-jyl"),
             parent_id: None,
         },
         1784860330,
@@ -221,7 +221,7 @@ fn dotted_child_becomes_a_parent_edge() {
         &mut conn,
         &importer(),
         Command::CreateTask {
-            task_name: alias(
+            name: alias(
                 "Implement jernerics trace command (raw step/value series, --json)",
                 "jernerics-jyl.13",
             ),
@@ -273,7 +273,7 @@ fn epic_and_child_import_with_wrap_receipts() {
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
-            task_name: alias("Pueue backend parity with Slurm", "jernerics-jtvv"),
+            name: alias("Pueue backend parity with Slurm", "jernerics-jtvv"),
             parent_id: None,
         },
         1788531487,
@@ -283,7 +283,7 @@ fn epic_and_child_import_with_wrap_receipts() {
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
-            task_name: alias(
+            name: alias(
                 "Resolve pueue checker worker-slot occupancy",
                 "jernerics-jtvv.7",
             ),
@@ -334,7 +334,7 @@ fn in_progress_lands_open_for_recapture() {
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
-            task_name: alias(
+            name: alias(
                 "Beam-search decode eval on confirm checkpoints (k x length-norm grid, eval-only)",
                 "symlab-gwb",
             ),
@@ -430,7 +430,7 @@ fn gate_queue_deposit_scenario() {
             &mut conn,
             &importer(),
             Command::CreateTask {
-                task_name: (*name).into(),
+                name: (*name).into(),
                 parent_id: None,
             },
             100 + i as u64,
