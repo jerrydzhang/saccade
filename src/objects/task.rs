@@ -1,17 +1,12 @@
-use crate::events::Event;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
-pub enum Reject {
-    InvalidTaskId,
-    InvalidParentTaskId,
-    InvalidStateTransition,
-    HumanOnly,
-}
+use crate::Reject;
+use crate::events::Event;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Receipt(pub String);
 
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub struct TaskId(pub usize);
 
 #[derive(Clone, Debug, PartialEq)]

@@ -3,10 +3,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, TransactionBehavior, params};
 
+use crate::Reject;
 use crate::decide::decide;
 use crate::events::Command;
 use crate::store::{Context, Record, RecordId, World};
-use crate::task::Reject;
 use crate::wire;
 
 /// file-header stamp identifying a Saccade database.
@@ -314,8 +314,9 @@ pub fn now_epoch() -> u64 {
 mod test {
     use super::*;
     use crate::events::Command;
+    use crate::objects::task::{Receipt, TaskId, TaskState};
     use crate::store::Tier;
-    use crate::task::{Receipt, TaskId, TaskState};
+    use crate::{ProposalAction, ProposalId, ProposalState, RecordId};
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().expect("open memory db");
@@ -368,23 +369,50 @@ mod test {
         )
         .unwrap();
 
+        execute(&mut conn, &agent(), create("duplicate corpse"), 13).unwrap();
+        execute(
+            &mut conn,
+            &agent(),
+            Command::CreateProposal {
+                name: "duplicate of t-0".into(),
+                action: ProposalAction::Drop { task_id: TaskId(1) },
+            },
+            14,
+        )
+        .unwrap();
+        let compound = execute(
+            &mut conn,
+            &human(),
+            Command::AcceptProposal {
+                id: ProposalId(RecordId(4)),
+            },
+            15,
+        )
+        .unwrap();
+        assert_eq!(compound.len(), 2);
+
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
-        assert_eq!(loadout.rows.len(), 3);
-        assert_eq!(world.tasks.len(), 1);
+        assert_eq!(loadout.rows.len(), 7);
+        assert_eq!(loadout.rows[4].kind, "proposal_created");
+        assert_eq!(loadout.rows[5].kind, "proposal_accepted");
+        assert_eq!(loadout.rows[6].kind, "task_dropped");
+        assert_eq!(world.tasks.len(), 2);
         assert!(matches!(world.tasks[0].state, TaskState::Done(_)));
+        assert!(matches!(world.tasks[1].state, TaskState::Dropped));
+        assert_eq!(
+            world.proposals[&ProposalId(RecordId(4))].state,
+            ProposalState::Accepted
+        );
 
         // bi-temporal: event time is caller-supplied, logged time is ours
         assert_eq!(loadout.rows[0].event_time, 10);
         assert!(loadout.rows[0].logged_time >= 10);
     }
 
-    /// The memory suite cannot see disk-level failures: WAL pragmas, header
-    /// stamps, checkpoint-on-close, reopen. (The application_id decimal bug
-    /// passed every in-memory test and broke every second invocation.)
-    /// This test exercises the real file across connection lifetimes.
+    /// test against a real file, not just an in-memory database
     #[test]
     fn file_backed_log_reopens_with_its_world() {
         let path = std::env::temp_dir().join("saccade-reopen-test.db");
@@ -393,7 +421,13 @@ mod test {
         {
             let mut conn = open(&path).expect("create the file-backed log");
             execute(&mut conn, &agent(), create("implement foo"), 10).unwrap();
-            execute(&mut conn, &agent(), Command::ClaimTask { id: TaskId(0) }, 11).unwrap();
+            execute(
+                &mut conn,
+                &agent(),
+                Command::ClaimTask { id: TaskId(0) },
+                11,
+            )
+            .unwrap();
             execute(
                 &mut conn,
                 &human(),

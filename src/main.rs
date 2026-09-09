@@ -3,8 +3,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
-use saccade::task::{Receipt, Reject, TaskId};
-use saccade::{Command, Context, Task, Tier};
+use saccade::objects::task::{Receipt, TaskId};
+use saccade::wire::ProposalView;
+use saccade::World;
+use saccade::{Command, Context, ProposalAction, ProposalId, RecordId, Reject, Tier};
 
 #[derive(Parser)]
 #[command(name = "sac", about = "Saccade: awesome issue tracker")]
@@ -69,6 +71,28 @@ enum Cmd {
         #[arg(long)]
         note: Option<String>,
     },
+    /// Propose a gated act for human acceptance
+    Propose {
+        #[arg(value_enum)]
+        action: ProposeVerb,
+        id: String,
+        #[arg(long)]
+        name: String,
+    },
+    /// Human-only: accept a proposal, executing its act
+    Accept { id: String },
+    /// Human-only: reject a proposal with a ruling note
+    Reject {
+        id: String,
+        #[arg(long)]
+        note: String,
+    },
+    /// Withdraw a proposal with a note
+    Withdraw {
+        id: String,
+        #[arg(long)]
+        note: String,
+    },
     /// List objects (world projection)
     List {
         #[arg(value_enum, default_value_t = ObjKind::Task)]
@@ -76,11 +100,19 @@ enum Cmd {
     },
     /// Print raw event records
     Log,
+    /// List proposals (the ruling queue)
+    Proposals,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
 enum ObjKind {
     Task,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ProposeVerb {
+    Drop,
+    Release,
 }
 
 fn main() -> ExitCode {
@@ -147,6 +179,7 @@ fn reject_code(reject: &Reject) -> &'static str {
     match reject {
         Reject::InvalidTaskId => "invalid_task_id",
         Reject::InvalidParentTaskId => "invalid_parent_task_id",
+        Reject::InvalidProposalId => "invalid_proposal_id",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
     }
@@ -177,7 +210,29 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             id: parse_task_id(id)?,
             note: note.clone(),
         },
-        Cmd::List { .. } | Cmd::Log => return read_only(cli),
+        Cmd::Propose { action, id, name } => Command::CreateProposal {
+            name: name.clone(),
+            action: match action {
+                ProposeVerb::Drop => ProposalAction::Drop {
+                    task_id: parse_task_id(id)?,
+                },
+                ProposeVerb::Release => ProposalAction::Release {
+                    task_id: parse_task_id(id)?,
+                },
+            },
+        },
+        Cmd::Accept { id } => Command::AcceptProposal {
+            id: parse_proposal_id(id)?,
+        },
+        Cmd::Reject { id, note } => Command::RejectProposal {
+            id: parse_proposal_id(id)?,
+            note: note.clone(),
+        },
+        Cmd::Withdraw { id, note } => Command::WithdrawProposal {
+            id: parse_proposal_id(id)?,
+            note: note.clone(),
+        },
+        Cmd::List { .. } | Cmd::Log | Cmd::Proposals => return read_only(cli),
     };
 
     // Identity is required only where it is recorded: mutating commands.
@@ -196,7 +251,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
 fn context_of(cli: &Cli) -> Result<Context, Fail> {
     let tier = cli.tier.ok_or_else(|| {
         Fail::Usage(
-            "--tier <human|agent> (or SACCADDE_TIER) is required by commands that record events"
+            "--tier <human|agent> (or SACCADE_TIER) is required by commands that record events"
                 .into(),
         )
     })?;
@@ -224,7 +279,11 @@ fn read_only(cli: &Cli) -> Result<String, Fail> {
             Ok(render_log(cli, &loadout.rows))
         }
         Cmd::List { .. } => match loadout.state {
-            LoadState::Full(world) => Ok(render_tasks(cli, &world.tasks)),
+            LoadState::Full(world) => Ok(render_tasks(cli, &world)),
+            LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+        },
+        Cmd::Proposals => match loadout.state {
+            LoadState::Full(world) => Ok(render_proposals(cli, &world)),
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
         _ => unreachable!("read_only reached from a mutating command"),
@@ -241,6 +300,15 @@ fn parse_task_id(token: &str) -> Result<TaskId, Fail> {
         .parse()
         .map_err(|_| Fail::Usage(format!("'{token}' is not a task id")))?;
     Ok(TaskId(n))
+}
+
+fn parse_proposal_id(token: &str) -> Result<ProposalId, Fail> {
+    let n: usize = token.parse().map_err(|_| {
+        Fail::Usage(format!(
+            "'{token}' is not a proposal id (expected a bare log position, e.g. 614)"
+        ))
+    })?;
+    Ok(ProposalId(RecordId(n)))
 }
 
 fn render_records(cli: &Cli, stored: &[StoredRecord]) -> String {
@@ -286,8 +354,12 @@ fn record_line(r: &StoredRecord) -> String {
     )
 }
 
-fn render_tasks(cli: &Cli, tasks: &[Task]) -> String {
-    let views: Vec<saccade::wire::TaskView> = tasks.iter().map(saccade::wire::view_of).collect();
+fn render_tasks(cli: &Cli, world: &World) -> String {
+    let views: Vec<saccade::wire::TaskView> = world
+        .tasks
+        .iter()
+        .map(|t| saccade::wire::view_of(t, world))
+        .collect();
 
     if cli.json {
         let rows: Vec<serde_json::Value> = views
@@ -298,6 +370,10 @@ fn render_tasks(cli: &Cli, tasks: &[Task]) -> String {
                     "state": v.state,
                     "parent": v.parent,
                     "name": v.name,
+                    "proposal": v.proposal.as_ref().map(|m| serde_json::json!({
+                        "seq": m.seq,
+                        "verb": m.verb,
+                    })),
                 })
             })
             .collect();
@@ -308,13 +384,47 @@ fn render_tasks(cli: &Cli, tasks: &[Task]) -> String {
         .iter()
         .map(|v| {
             format!(
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}",
                 v.id,
                 v.state,
                 v.parent.clone().unwrap_or_else(|| "-".into()),
-                v.name
+                v.name,
+                v.proposal
+                    .as_ref()
+                    .map(|m| format!("{}#{}", m.verb, m.seq))
+                    .unwrap_or_else(|| "-".into())
             )
         })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_proposals(cli: &Cli, world: &World) -> String {
+    let views: Vec<ProposalView> = world
+        .proposals
+        .values()
+        .map(|p| saccade::wire::view_of_proposal(p, world))
+        .collect();
+
+    if cli.json {
+        let rows: Vec<serde_json::Value> = views
+            .iter()
+            .map(|v| {
+                serde_json::json!({
+                    "id": v.id,
+                    "state": v.state,
+                    "action": v.action,
+                    "task": v.task,
+                    "name": v.name,
+                })
+            })
+            .collect();
+        return serde_json::to_string_pretty(&rows).expect("views are plain data");
+    }
+
+    views
+        .iter()
+        .map(|v| format!("{}\t{}\t{} {}\t{}", v.id, v.state, v.action, v.task, v.name))
         .collect::<Vec<_>>()
         .join("\n")
 }

@@ -3,14 +3,28 @@
 pub mod db;
 pub mod decide;
 pub mod events;
+pub mod objects;
 pub mod store;
-pub mod task;
 pub mod wire;
 
 pub use decide::decide;
 pub use events::{Command, Event};
+pub use objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
+pub use objects::task::{Receipt, Task, TaskId, TaskState};
 pub use store::{Context, Log, Record, RecordId, Tier, World};
-pub use task::{Receipt, Reject, Task, TaskId, TaskState};
+
+#[derive(Debug)]
+pub enum Reject {
+    // Task
+    InvalidTaskId,
+    InvalidParentTaskId,
+    // Proposal
+    InvalidProposalId,
+    // Permissions
+    HumanOnly,
+    // Misc
+    InvalidStateTransition,
+}
 
 #[cfg(test)]
 mod invariant {
@@ -30,7 +44,7 @@ mod invariant {
         }
     }
 
-    const RECORD_COUNT: usize = 13;
+    const RECORD_COUNT: usize = 14;
 
     fn populate_log(log: &mut Log) {
         let agent_ctx = agent();
@@ -137,6 +151,16 @@ mod invariant {
             13,
         )
         .unwrap();
+
+        log.execute(
+            human_ctx.clone(),
+            Command::CreateTask {
+                task_name: "open work".into(),
+                parent_id: None,
+            },
+            14,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -152,6 +176,7 @@ mod invariant {
         assert_eq!(log.world().tasks[1].state, TaskState::Dropped);
         assert_eq!(log.world().tasks[2].state, TaskState::Dropped);
         assert_eq!(log.world().tasks[3].state, TaskState::Claimed);
+        assert_eq!(log.world().tasks[4].state, TaskState::Open);
 
         assert_eq!(log.records()[8].id.0, 8);
         assert_eq!(log.records()[8].timestamp, 9);
@@ -172,6 +197,7 @@ mod invariant {
         let agent_ctx = agent();
         populate_log(&mut log);
 
+        // foo is already done, so completing it again is illegal
         let err1 = log.execute(
             agent_ctx.clone(),
             Command::CompleteTask {
@@ -184,11 +210,13 @@ mod invariant {
         assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err1, Err(Reject::InvalidStateTransition)));
 
+        // bar is already dropped, so claiming it is illegal
         let err2 = log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(3) }, 2);
 
         assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err2, Err(Reject::InvalidStateTransition)));
 
+        // an agent cannot drop a task, so this is illegal
         let err3 = log.execute(
             agent_ctx.clone(),
             Command::DropTask {
@@ -201,6 +229,7 @@ mod invariant {
         assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err3, Err(Reject::HumanOnly)));
 
+        // a human can drop a task, but this one is already claimed, so it's illegal
         let err4 = log.execute(
             human(),
             Command::DropTask {
@@ -213,6 +242,7 @@ mod invariant {
         assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err4, Err(Reject::InvalidStateTransition)));
 
+        // An agent cannot release a task, so this is illegal
         let err5 = log.execute(
             agent_ctx.clone(),
             Command::ReleaseTask {
@@ -225,6 +255,7 @@ mod invariant {
         assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err5, Err(Reject::HumanOnly)));
 
+        // This task is already done, so releasing it is illegal
         let err6 = log.execute(
             human(),
             Command::ReleaseTask {
@@ -236,6 +267,45 @@ mod invariant {
 
         assert_eq!(log.records().len(), RECORD_COUNT);
         assert!(matches!(err6, Err(Reject::InvalidStateTransition)));
+
+        // This task does not exist so proposing to drop it is illegal
+        let err7 = log.execute(
+            agent_ctx.clone(),
+            Command::CreateProposal {
+                name: "probe".into(),
+                action: ProposalAction::Drop { task_id: TaskId(9) },
+            },
+            7,
+        );
+
+        assert_eq!(log.records().len(), RECORD_COUNT);
+        assert!(matches!(err7, Err(Reject::InvalidTaskId)));
+
+        // This task has already been dropped, so proposing to drop it again is illegal
+        let err8 = log.execute(
+            agent_ctx.clone(),
+            Command::CreateProposal {
+                name: "probe".into(),
+                action: ProposalAction::Drop { task_id: TaskId(3) },
+            },
+            8,
+        );
+
+        assert_eq!(log.records().len(), RECORD_COUNT);
+        assert!(matches!(err8, Err(Reject::InvalidStateTransition)));
+
+        // This task is already open, so proposing to release it is illegal
+        let err9 = log.execute(
+            agent_ctx.clone(),
+            Command::CreateProposal {
+                name: "probe".into(),
+                action: ProposalAction::Release { task_id: TaskId(4) },
+            },
+            9,
+        );
+
+        assert_eq!(log.records().len(), RECORD_COUNT);
+        assert!(matches!(err9, Err(Reject::InvalidStateTransition)));
     }
 
     #[test]
@@ -247,7 +317,7 @@ mod invariant {
         let err = log.execute(
             agent_ctx.clone(),
             Command::CompleteTask {
-                id: TaskId(4),
+                id: TaskId(9),
                 receipt: Receipt("blip completed successfully".into()),
             },
             3,
@@ -267,7 +337,7 @@ mod invariant {
             agent_ctx.clone(),
             Command::CreateTask {
                 task_name: "implement foo primatives".into(),
-                parent_id: Some(TaskId(4)),
+                parent_id: Some(TaskId(9)),
             },
             1,
         );
@@ -299,5 +369,194 @@ mod invariant {
 
             assert_eq!(staged, *log.world());
         }
+    }
+
+    #[test]
+    fn accept_compound_write_two_records_in_order() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                task_name: "I am going to do floop again".into(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        let proposed = log
+            .execute(
+                agent(),
+                Command::CreateProposal {
+                    name: "this is a duplicated task".into(),
+                    action: ProposalAction::Drop { task_id: TaskId(0) },
+                },
+                2,
+            )
+            .unwrap();
+
+        // A proposal's identity is the record id of its creation act, so the proposal's id is 1
+        assert_eq!(proposed[0].id.0, 1);
+        assert!(log.world().proposals.contains_key(&ProposalId(RecordId(1))));
+
+        let accepted = log
+            .execute(
+                human(),
+                Command::AcceptProposal {
+                    id: ProposalId(RecordId(1)),
+                },
+                3,
+            )
+            .unwrap();
+
+        // accepting produces two records: the proposal acceptance and the act of dropping the task
+        assert_eq!(accepted.len(), 2);
+        assert!(matches!(
+            &accepted[0].event,
+            Event::ProposalAccepted { id } if id.0.0 == 1
+        ));
+        let Event::TaskDropped { id, note } = &accepted[1].event else {
+            panic!("the embedded act must ride the accept");
+        };
+        assert_eq!(id.0, 0);
+        // the proposal's name becomes the drop's note
+        assert_eq!(note.as_deref(), Some("this is a duplicated task"));
+        assert_eq!(log.world().tasks[0].state, TaskState::Dropped);
+        assert_eq!(
+            log.world().proposals[&ProposalId(RecordId(1))].state,
+            ProposalState::Accepted
+        );
+    }
+
+    #[test]
+    fn agent_accept_writes_nothing() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                task_name: "duplicate corpse".into(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::CreateProposal {
+                name: "duplicate of the sibling".into(),
+                action: ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            2,
+        )
+        .unwrap();
+
+        let refused = log.execute(
+            agent(),
+            Command::AcceptProposal {
+                id: ProposalId(RecordId(1)),
+            },
+            3,
+        );
+        assert!(matches!(refused, Err(Reject::HumanOnly)));
+        assert_eq!(log.records().len(), 2);
+        assert_eq!(log.world().tasks[0].state, TaskState::Open);
+        assert_eq!(
+            log.world().proposals[&ProposalId(RecordId(1))].state,
+            ProposalState::Open
+        );
+    }
+
+    #[test]
+    fn open_proposals_are_inert_and_stale_accept_fails_atomically() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                task_name: "real work".into(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::CreateProposal {
+                name: "not real work".into(),
+                action: ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            2,
+        )
+        .unwrap();
+
+        // claiming the task makes the proposal stale but it still valid
+        log.execute(agent(), Command::ClaimTask { id: TaskId(0) }, 3)
+            .unwrap();
+
+        // drop from claimed is illegal therefore the accept fails
+        let refused = log.execute(
+            human(),
+            Command::AcceptProposal {
+                id: ProposalId(RecordId(1)),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        assert_eq!(log.records().len(), 3);
+        assert_eq!(log.world().tasks[0].state, TaskState::Claimed);
+        assert_eq!(
+            log.world().proposals[&ProposalId(RecordId(1))].state,
+            ProposalState::Open
+        );
+    }
+
+    #[test]
+    fn re_propose_after_reject_is_free() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                task_name: "real work".into(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::CreateProposal {
+                name: "weak evidence".into(),
+                action: ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::RejectProposal {
+                id: ProposalId(RecordId(1)),
+                note: "ruled real work".into(),
+            },
+            3,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::CreateProposal {
+                name: "better evidence".into(),
+                action: ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            4,
+        )
+        .unwrap();
+
+        assert_eq!(log.world().proposals.len(), 2);
+        assert_eq!(
+            log.world().proposals[&ProposalId(RecordId(1))].state,
+            ProposalState::Rejected("ruled real work".into())
+        );
+        assert_eq!(
+            log.world().proposals[&ProposalId(RecordId(3))].state,
+            ProposalState::Open
+        );
+        assert_eq!(log.world().tasks[0].state, TaskState::Open);
     }
 }

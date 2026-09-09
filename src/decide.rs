@@ -1,6 +1,7 @@
+use crate::Reject;
 use crate::events::{Command, Event};
+use crate::objects::proposal::ProposalAction;
 use crate::store::{Context, Tier, World};
-use crate::task::Reject;
 
 /// Authority requirements per event kind
 #[derive(Clone, Debug)]
@@ -11,10 +12,15 @@ pub(crate) enum Authority {
 
 fn required_tier(event: &Event) -> Authority {
     match event {
-        Event::TaskCreated { .. } | Event::TaskClaimed { .. } | Event::TaskDone { .. } => {
-            Authority::AnyTier
-        }
-        Event::TaskDropped { .. } | Event::TaskReleased { .. } => Authority::Require(Tier::Human),
+        Event::TaskCreated { .. }
+        | Event::TaskClaimed { .. }
+        | Event::TaskDone { .. }
+        | Event::ProposalCreated { .. }
+        | Event::ProposalWithdrawn { .. } => Authority::AnyTier,
+        Event::TaskDropped { .. }
+        | Event::TaskReleased { .. }
+        | Event::ProposalRejected { .. }
+        | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
     }
 }
 
@@ -44,6 +50,7 @@ pub fn decide(world: &World, context: &Context, command: Command) -> Result<Vec<
 /// Takes the current world state and proposes a vec of events
 fn candidate(world: &World, command: Command) -> Vec<Event> {
     match command {
+        // Task commands
         Command::CreateTask {
             task_name,
             parent_id,
@@ -56,6 +63,20 @@ fn candidate(world: &World, command: Command) -> Vec<Event> {
         Command::CompleteTask { id, receipt } => vec![Event::TaskDone { id, receipt }],
         Command::DropTask { id, note } => vec![Event::TaskDropped { id, note }],
         Command::ReleaseTask { id, note } => vec![Event::TaskReleased { id, note }],
+        // Proposal commands
+        Command::CreateProposal { name, action } => vec![Event::ProposalCreated { name, action }],
+        Command::WithdrawProposal { id, note } => vec![Event::ProposalWithdrawn { id, note }],
+        Command::RejectProposal { id, note } => vec![Event::ProposalRejected { id, note }],
+        Command::AcceptProposal { id } => match world.proposals.get(&id) {
+            Some(proposal) => {
+                vec![
+                    Event::ProposalAccepted { id },
+                    proposal.action.target_event(&proposal.name),
+                ]
+            }
+            // This will be rejected in validate
+            None => vec![Event::ProposalAccepted { id }],
+        },
     }
 }
 
@@ -75,6 +96,18 @@ fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
                 let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
                 task.state.validate(event)?;
             }
+            Event::ProposalCreated { action, .. } => match action {
+                ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
+                    let task = world.tasks.get(task_id.0).ok_or(Reject::InvalidTaskId)?;
+                    task.state.validate(&action.target_event(""))?;
+                }
+            },
+            event @ (Event::ProposalWithdrawn { id, .. }
+            | Event::ProposalRejected { id, .. }
+            | Event::ProposalAccepted { id, .. }) => {
+                let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
+                proposal.state.validate(event)?;
+            }
         }
     }
 
@@ -84,7 +117,7 @@ fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{Receipt, TaskId};
+    use crate::{ProposalAction, ProposalId, Receipt, RecordId, TaskId};
 
     fn agent() -> Context {
         Context {
@@ -103,6 +136,7 @@ mod test {
     /// was written this is the expected behavior that shouldn't regress
     #[test]
     fn authority_table_gates_exactly_the_gated_events() {
+        let pid = ProposalId(RecordId(0));
         let events = [
             Event::TaskCreated {
                 id: TaskId(0),
@@ -122,12 +156,28 @@ mod test {
                 id: TaskId(0),
                 note: None,
             },
+            Event::ProposalCreated {
+                name: String::new(),
+                action: ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            Event::ProposalWithdrawn {
+                id: pid,
+                note: String::new(),
+            },
+            Event::ProposalRejected {
+                id: pid,
+                note: String::new(),
+            },
+            Event::ProposalAccepted { id: pid },
         ];
 
         for event in &events {
             let gated = matches!(
                 event,
-                Event::TaskDropped { .. } | Event::TaskReleased { .. }
+                Event::TaskDropped { .. }
+                    | Event::TaskReleased { .. }
+                    | Event::ProposalRejected { .. }
+                    | Event::ProposalAccepted { .. }
             );
 
             assert_eq!(
@@ -144,22 +194,33 @@ mod test {
 
     /// Authority errors supercede state transition errors. This is logical since it if you get
     /// a state transition error first you might suspect it is an issue with the command
-    /// arguments when in reality no matter what arguments you input the command itself is invalid
+    /// arguments when in reality no matter what arguments you input the command itself is
+    /// invalid.
     #[test]
-    fn agent_dropping_invalid_task_err_ordering() {
+    fn err_ordering_authority_supersedes_existence() {
         let agent_ctx = agent();
         let human_ctx = human();
 
         let world = World::new();
 
-        let cmd = || Command::DropTask {
+        let drop = || Command::DropTask {
             id: TaskId(0),
             note: Some("invalid drop".into()),
         };
-        let err1 = decide(&world, &agent_ctx, cmd());
-        let err2 = decide(&world, &human_ctx, cmd());
+        let err1 = decide(&world, &agent_ctx, drop());
+        let err2 = decide(&world, &human_ctx, drop());
 
         assert!(matches!(err1, Err(Reject::HumanOnly)));
         assert!(matches!(err2, Err(Reject::InvalidTaskId)));
+
+        let accept = || Command::AcceptProposal {
+            id: ProposalId(RecordId(99)),
+        };
+        let err3 = decide(&world, &agent_ctx, accept());
+        let err4 = decide(&world, &human_ctx, accept());
+
+        assert!(matches!(err3, Err(Reject::HumanOnly)));
+        assert!(matches!(err4, Err(Reject::InvalidProposalId)));
     }
+
 }

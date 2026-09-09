@@ -1,6 +1,12 @@
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::Reject;
 use crate::decide::decide;
 use crate::events::{Command, Event};
-use crate::task::{Reject, Task, TaskId, TaskState};
+use crate::objects::proposal::{Proposal, ProposalId, ProposalState};
+use crate::objects::task::{Task, TaskId, TaskState};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tier {
@@ -14,8 +20,8 @@ pub struct Context {
     pub tier: Tier,
 }
 
-#[derive(Clone, Debug)]
-pub struct RecordId(pub(crate) usize);
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RecordId(pub usize);
 
 #[derive(Clone, Debug)]
 pub struct Record {
@@ -28,15 +34,19 @@ pub struct Record {
 #[derive(Debug, PartialEq)]
 pub struct World {
     pub tasks: Vec<Task>,
+    pub proposals: BTreeMap<ProposalId, Proposal>,
 }
 
 impl World {
     pub fn new() -> Self {
-        World { tasks: Vec::new() }
+        World {
+            tasks: Vec::new(),
+            proposals: BTreeMap::new(),
+        }
     }
 
     pub fn replay(records: Vec<Record>) -> Self {
-        let mut world = World { tasks: Vec::new() };
+        let mut world = World::new();
 
         for record in &records {
             world.apply(record.clone());
@@ -48,6 +58,7 @@ impl World {
     /// Only valid path for world mutation
     pub fn apply(&mut self, record: Record) {
         match record.event {
+            // Task events
             Event::TaskCreated {
                 id,
                 task_name,
@@ -72,6 +83,35 @@ impl World {
                     .expect("apply received an invalid task id");
 
                 *task = task
+                    .apply(event)
+                    .expect("decide emitted an unfoldable event");
+            }
+            // Proposal events
+            Event::ProposalCreated {
+                name: proposal_name,
+                action,
+            } => {
+                let proposal_id = ProposalId(record.id);
+
+                self.proposals.insert(
+                    proposal_id,
+                    Proposal {
+                        id: proposal_id,
+                        state: ProposalState::Open,
+                        name: proposal_name,
+                        action,
+                    },
+                );
+            }
+            ref event @ (Event::ProposalWithdrawn { id, .. }
+            | Event::ProposalRejected { id, .. }
+            | Event::ProposalAccepted { id, .. }) => {
+                let proposal = self
+                    .proposals
+                    .get_mut(&id)
+                    .expect("apply received an invalid proposal id");
+
+                *proposal = proposal
                     .apply(event)
                     .expect("decide emitted an unfoldable event");
             }
@@ -149,7 +189,7 @@ impl Log {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::task::Receipt;
+    use crate::objects::task::Receipt;
 
     fn agent() -> Context {
         Context {

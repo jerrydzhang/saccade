@@ -1,6 +1,8 @@
 use crate::events::Event;
+use crate::objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
+use crate::objects::task::{Receipt, TaskId, TaskState};
+use crate::store::World;
 use crate::store::Tier;
-use crate::task::{Receipt, TaskId, TaskState};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
@@ -49,6 +51,23 @@ struct NotedPayload {
     note: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ProposalCreatedPayload {
+    name: String,
+    action: ProposalAction,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProposalIdPayload {
+    id: ProposalId,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProposalNotedPayload {
+    id: ProposalId,
+    note: String,
+}
+
 /// Serializing an in-memory event cannot fail
 fn pack<T: Serialize>(payload: &T) -> String {
     serde_json::to_string(payload).expect("in-memory events always serialize")
@@ -87,6 +106,31 @@ pub fn disassemble(event: &Event) -> (&'static str, String) {
             "task_released",
             pack(&NotedPayload {
                 id: id.0,
+                note: note.clone(),
+            }),
+        ),
+        Event::ProposalCreated { name, action } => (
+            "proposal_created",
+            pack(&ProposalCreatedPayload {
+                name: name.clone(),
+                action: *action,
+            }),
+        ),
+        Event::ProposalAccepted { id } => (
+            "proposal_accepted",
+            pack(&ProposalIdPayload { id: *id }),
+        ),
+        Event::ProposalRejected { id, note } => (
+            "proposal_rejected",
+            pack(&ProposalNotedPayload {
+                id: *id,
+                note: note.clone(),
+            }),
+        ),
+        Event::ProposalWithdrawn { id, note } => (
+            "proposal_withdrawn",
+            pack(&ProposalNotedPayload {
+                id: *id,
                 note: note.clone(),
             }),
         ),
@@ -136,6 +180,34 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
                 note: p.note,
             })
         }
+        "proposal_created" => {
+            let p: ProposalCreatedPayload =
+                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
+            Ok(Event::ProposalCreated {
+                name: p.name,
+                action: p.action,
+            })
+        }
+        "proposal_accepted" => {
+            let p: ProposalIdPayload = serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
+            Ok(Event::ProposalAccepted { id: p.id })
+        }
+        "proposal_rejected" => {
+            let p: ProposalNotedPayload =
+                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
+            Ok(Event::ProposalRejected {
+                id: p.id,
+                note: p.note,
+            })
+        }
+        "proposal_withdrawn" => {
+            let p: ProposalNotedPayload =
+                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
+            Ok(Event::ProposalWithdrawn {
+                id: p.id,
+                note: p.note,
+            })
+        }
         _ => Err(ParseFail::UnknownKind(kind.to_string())),
     }
 }
@@ -149,20 +221,91 @@ pub fn state_of(state: &TaskState) -> &'static str {
     }
 }
 
+/// Display proposal type
+pub struct ProposalView {
+    pub id: usize,
+    pub state: &'static str,
+    pub action: &'static str,
+    pub task: String,
+    pub name: String,
+}
+
+pub fn view_of_proposal(p: &Proposal, world: &World) -> ProposalView {
+    ProposalView {
+        id: p.id.0.0,
+        state: match &p.state {
+            ProposalState::Open if is_stale(p, world) => "stale",
+            ProposalState::Open => "open",
+            ProposalState::Accepted => "accepted",
+            ProposalState::Rejected(_) => "rejected",
+            ProposalState::Withdrawn(_) => "withdrawn",
+        },
+        action: match &p.action {
+            ProposalAction::Drop { .. } => "drop",
+            ProposalAction::Release { .. } => "release",
+        },
+        task: match &p.action {
+            ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
+                format!("t-{}", task_id.0)
+            }
+        },
+        name: p.name.clone(),
+    }
+}
+
+/// Derived staleness (§17): would the embedded act be refused today?
+/// The same probe decide uses at propose time — the quiet consumer to
+/// accept's loud one. A missing target counts as stale: the act would
+/// be refused.
+fn is_stale(p: &Proposal, world: &World) -> bool {
+    let task_id = match p.action {
+        ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => task_id,
+    };
+    world
+        .tasks
+        .get(task_id.0)
+        .map(|t| t.state.validate(&p.action.target_event("")).is_err())
+        .unwrap_or(true)
+}
+
 /// Display task type
 pub struct TaskView {
     pub id: String,
     pub state: &'static str,
     pub parent: Option<String>,
     pub name: String,
+    /// The pending-judgment mark, when an open proposal targets this task.
+    /// The row is an attention cue and a pointer; the full story lives at the seq.
+    pub proposal: Option<ProposalMark>,
 }
 
-pub fn view_of(task: &crate::task::Task) -> TaskView {
+pub struct ProposalMark {
+    pub seq: usize,
+    pub verb: &'static str,
+}
+
+pub fn view_of(task: &crate::objects::task::Task, world: &World) -> TaskView {
     TaskView {
         id: format!("t-{}", task.id.0),
         state: state_of(&task.state),
         parent: task.parent_id.map(|p| format!("t-{}", p.0)),
         name: task.task_name.clone(),
+        proposal: world
+            .proposals
+            .values()
+            .find(|p| {
+                p.state == ProposalState::Open
+                    && matches!(&p.action,
+                        ProposalAction::Drop { task_id } | ProposalAction::Release { task_id }
+                            if *task_id == task.id)
+            })
+            .map(|p| ProposalMark {
+                seq: p.id.0.0,
+                verb: match p.action {
+                    ProposalAction::Drop { .. } => "drop",
+                    ProposalAction::Release { .. } => "release",
+                },
+            }),
     }
 }
 

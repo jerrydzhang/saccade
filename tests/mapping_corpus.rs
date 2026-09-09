@@ -1,4 +1,4 @@
-//! Worked examples of the beads→saccade mapping (DESIGN.md §12). Each test
+//! Worked examples of the beads→saccade mapping. Each test
 //! carries a real beads record, trimmed to the fields the mapping consumes,
 //! and pins the event sequence that encodes it plus the world that sequence
 //! folds into. The in-process half drives `db::execute` — the real write
@@ -20,10 +20,11 @@
 
 use std::path::PathBuf;
 
+use saccade::Reject;
 use saccade::db::{self, LoadState};
+use saccade::objects::task::TaskId;
 use saccade::store::{Context, Tier, World};
-use saccade::task::{Reject, TaskId};
-use saccade::{wire, Command};
+use saccade::{Command, ProposalAction, ProposalId, RecordId, wire};
 
 fn importer() -> Context {
     Context {
@@ -53,7 +54,8 @@ fn receipt(reason: &str, id: &str) -> String {
 }
 
 fn db_path(name: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("saccade-mapping-{name}-{}.db", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("saccade-mapping-{name}-{}.db", std::process::id()));
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
     }
@@ -119,7 +121,7 @@ fn closed_with_receipt_folds_to_done() {
 
     let world = world_of(&conn);
     assert_eq!(world.tasks.len(), 1);
-    let view = wire::view_of(&world.tasks[0]);
+    let view = wire::view_of(&world.tasks[0], &world);
     assert_eq!(view.state, "done");
     assert_eq!(
         view.name,
@@ -132,11 +134,24 @@ fn closed_with_receipt_folds_to_done() {
     // bi-temporal split: event times are beads', logged times are ours
     let rows = db::load(&conn).unwrap().rows;
     assert_eq!(rows.len(), 3);
-    assert_eq!((rows[0].event_time, rows[0].actor.as_str()), (1787401555, "assistant"));
-    assert_eq!((rows[1].event_time, rows[1].actor.as_str()), (1787410018, "beads import"));
-    assert!(rows.iter().all(|r| r.tier == "agent" && r.logged_time >= r.event_time));
+    assert_eq!(
+        (rows[0].event_time, rows[0].actor.as_str()),
+        (1787401555, "assistant")
+    );
+    assert_eq!(
+        (rows[1].event_time, rows[1].actor.as_str()),
+        (1787410018, "beads import")
+    );
+    assert!(
+        rows.iter()
+            .all(|r| r.tier == "agent" && r.logged_time >= r.event_time)
+    );
     assert!(rows[2].payload.contains("cannot bypass 8 MiB"));
-    assert!(rows[2].payload.contains("[imported from beads jernerics-0a0]"));
+    assert!(
+        rows[2]
+            .payload
+            .contains("[imported from beads jernerics-0a0]")
+    );
 }
 
 /// jernerics-035 — judgment-shaped closure: a duplicate.
@@ -164,7 +179,7 @@ fn duplicate_stops_at_the_gate() {
 
     let world = world_of(&conn);
     assert_eq!(world.tasks.len(), 1);
-    assert_eq!(wire::view_of(&world.tasks[0]).state, "open");
+    assert_eq!(wire::view_of(&world.tasks[0], &world).state, "open");
     assert_eq!(db::load(&conn).unwrap().rows.len(), 1);
 
     // the void is human-only: the encoding could not have gone further
@@ -177,7 +192,10 @@ fn duplicate_stops_at_the_gate() {
         },
         1787428213,
     );
-    assert!(matches!(refused, Err(db::ExecuteFail::Reject(Reject::HumanOnly))));
+    assert!(matches!(
+        refused,
+        Err(db::ExecuteFail::Reject(Reject::HumanOnly))
+    ));
 }
 
 /// jernerics-jyl.13 — dotted manual child of jernerics-jyl, with no
@@ -212,17 +230,31 @@ fn dotted_child_becomes_a_parent_edge() {
         1785527640,
     )
     .unwrap();
-    done(&mut conn, TaskId(1), &receipt("", "jernerics-jyl.13"), 1785528203);
-    done(&mut conn, TaskId(0), &receipt("", "jernerics-jyl"), 1785534527);
+    done(
+        &mut conn,
+        TaskId(1),
+        &receipt("", "jernerics-jyl.13"),
+        1785528203,
+    );
+    done(
+        &mut conn,
+        TaskId(0),
+        &receipt("", "jernerics-jyl"),
+        1785534527,
+    );
 
     let world = world_of(&conn);
-    let view = wire::view_of(&world.tasks[1]);
+    let view = wire::view_of(&world.tasks[1], &world);
     assert_eq!(view.parent, Some("t-0".to_string()));
     assert_eq!(view.state, "done");
 
     let rows = db::load(&conn).unwrap().rows;
     // empty close_reason: the provenance line stands alone
-    assert!(rows[3].payload.contains("[imported from beads jernerics-jyl.13]"));
+    assert!(
+        rows[3]
+            .payload
+            .contains("[imported from beads jernerics-jyl.13]")
+    );
     // creatorless create is attributed to the importer, not fabricated
     assert_eq!(rows[1].actor, "beads import");
 }
@@ -251,7 +283,10 @@ fn epic_and_child_import_with_wrap_receipts() {
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
-            task_name: alias("Resolve pueue checker worker-slot occupancy", "jernerics-jtvv.7"),
+            task_name: alias(
+                "Resolve pueue checker worker-slot occupancy",
+                "jernerics-jtvv.7",
+            ),
             parent_id: Some(TaskId(0)),
         },
         1788531528,
@@ -277,9 +312,12 @@ fn epic_and_child_import_with_wrap_receipts() {
     );
 
     let world = world_of(&conn);
-    assert_eq!(wire::view_of(&world.tasks[1]).parent, Some("t-0".to_string()));
-    assert_eq!(wire::view_of(&world.tasks[0]).state, "done");
-    assert_eq!(wire::view_of(&world.tasks[1]).state, "done");
+    assert_eq!(
+        wire::view_of(&world.tasks[1], &world).parent,
+        Some("t-0".to_string())
+    );
+    assert_eq!(wire::view_of(&world.tasks[0], &world).state, "done");
+    assert_eq!(wire::view_of(&world.tasks[1], &world).state, "done");
 }
 
 /// symlab-gwb — in_progress, no closed_at, updated this week.
@@ -308,7 +346,7 @@ fn in_progress_lands_open_for_recapture() {
 
     let world = world_of(&conn);
     assert_eq!(world.tasks.len(), 1);
-    assert_eq!(wire::view_of(&world.tasks[0]).state, "open");
+    assert_eq!(wire::view_of(&world.tasks[0], &world).state, "open");
     assert_eq!(db::load(&conn).unwrap().rows.len(), 1);
 }
 
@@ -364,4 +402,120 @@ fn argv_carries_adversarial_titles_and_backdating() {
     assert_eq!(row["event_time"], 1788452437);
     let logged: u64 = row["logged_time"].as_u64().unwrap();
     assert!(logged > 1788452437);
+}
+
+/// The gate-queue deposit, executable: a scan finds corpses, the agent proposes the
+/// drops (evidence enters the world, not the chat), the human rules per act,
+/// and the log proves the gate held — no agent-tier drop exists anywhere.
+#[test]
+fn gate_queue_deposit_scenario() {
+    let ruler = Context {
+        actor: "jerry".into(),
+        tier: Tier::Human,
+    };
+    let path = db_path("gate-queue");
+    let mut conn = db::open(&path).unwrap();
+
+    let scan = [
+        "corpse: jernerics run dead",
+        "corpse: gate camouflage",
+        "corpse: superseded by newer sweep",
+        "corpse: wrong repo entirely",
+        "corpse: hypothesis retired",
+        "disputed corpse",
+        "real work",
+    ];
+    for (i, name) in scan.iter().enumerate() {
+        db::execute(
+            &mut conn,
+            &importer(),
+            Command::CreateTask {
+                task_name: (*name).into(),
+                parent_id: None,
+            },
+            100 + i as u64,
+        )
+        .unwrap();
+    }
+
+    // the agent proposes a drop for every corpse, evidence as the name
+    for id in 0..6u64 {
+        db::execute(
+            &mut conn,
+            &importer(),
+            Command::CreateProposal {
+                name: format!("evidence for corpse {id}"),
+                action: ProposalAction::Drop {
+                    task_id: TaskId(id as usize),
+                },
+            },
+            200 + id,
+        )
+        .unwrap();
+    }
+
+    // the human rules per act: accept the five obvious (proposals born at
+    // seq 7..=11), reject the disputed one (seq 12)
+    for seq in 7..12usize {
+        db::execute(
+            &mut conn,
+            &ruler,
+            Command::AcceptProposal {
+                id: ProposalId(RecordId(seq)),
+            },
+            300 + seq as u64,
+        )
+        .unwrap();
+    }
+    db::execute(
+        &mut conn,
+        &ruler,
+        Command::RejectProposal {
+            id: ProposalId(RecordId(12)),
+            note: "ruled real work; re-propose only with new evidence".into(),
+        },
+        400,
+    )
+    .unwrap();
+
+    let world = world_of(&conn);
+    for id in 0..5 {
+        assert_eq!(wire::view_of(&world.tasks[id], &world).state, "dropped");
+    }
+    // the disputed corpse and the real work are untouched
+    assert_eq!(wire::view_of(&world.tasks[5], &world).state, "open");
+    assert_eq!(wire::view_of(&world.tasks[6], &world).state, "open");
+    assert_eq!(world.proposals.len(), 6);
+    let states: Vec<&str> = world
+        .proposals
+        .values()
+        .map(|p| wire::view_of_proposal(p, &world).state)
+        .collect();
+    assert_eq!(states.iter().filter(|s| **s == "accepted").count(), 5);
+    assert_eq!(states.iter().filter(|s| **s == "rejected").count(), 1);
+
+    let loadout = db::load(&conn).unwrap();
+    // seven creates + six proposes + five compound accepts (two each) + one reject
+    assert_eq!(loadout.rows.len(), 7 + 6 + 10 + 1);
+    // evidence flow: each drop note is its proposal's name
+    let drops: Vec<&str> = loadout
+        .rows
+        .iter()
+        .filter(|r| r.kind == "task_dropped")
+        .map(|r| r.payload.as_str())
+        .collect();
+    assert_eq!(drops.len(), 5);
+    for (i, payload) in drops.iter().enumerate() {
+        assert!(
+            payload.contains(&format!("evidence for corpse {i}")),
+            "{payload}"
+        );
+    }
+    // the gate held: every drop in the log is human-tier
+    assert!(
+        loadout
+            .rows
+            .iter()
+            .all(|r| r.kind != "task_dropped" || r.tier == "human")
+    );
 }
