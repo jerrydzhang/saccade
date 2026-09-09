@@ -490,7 +490,7 @@ Build order (each step independently usable):
 
 - `toc_served{session, anchor, ids}` — the intervention record (not a usefulness claim).
 - `search{query, results}`, `open{object}` — deliberate retrieval acts.
-- **Abandon-reason distribution:** sourced from analysis-time tags on drop records,
+- **Drop-reason distribution:** sourced from analysis-time tags on drop records,
   not event payloads — the codebook is ratified at the retro (pre-registered before
   reading the aggregate), and re-tagging appends. Segment by whether a `done` preceded
   the drop: voids and pre-work drops are different populations.
@@ -499,7 +499,7 @@ Build order (each step independently usable):
   miss / disagreement-as-evidence. Primary metric: re-derivation rate.
 - **`retro` report** (saved SQL over existing projections, run on demand at review):
   misses by class, search gaps, orphan findings (valid, never opened — insurance vs
-  undiscoverable), verdict overturn rate by agent, abandon-reason distribution,
+  undiscoverable), verdict overturn rate by agent, drop-reason distribution,
   object-type ratio drift, lease health.
 - Improvement loop: recurring pattern → `cap -h` → pre-registered experiment → finding →
   adopt/reject. The tracker dogfoods its own epistemology for its own development.

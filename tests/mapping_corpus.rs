@@ -171,7 +171,7 @@ fn duplicate_stops_at_the_gate() {
     let refused = db::execute(
         &mut conn,
         &importer(),
-        Command::AbandonTask {
+        Command::DropTask {
             id: TaskId(0),
             note: Some("duplicate of jernerics-gvs".into()),
         },

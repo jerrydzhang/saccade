@@ -169,7 +169,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             id: parse_task_id(id)?,
             receipt: Receipt(receipt.clone()),
         },
-        Cmd::Drop { id, note } => Command::AbandonTask {
+        Cmd::Drop { id, note } => Command::DropTask {
             id: parse_task_id(id)?,
             note: note.clone(),
         },

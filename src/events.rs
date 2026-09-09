@@ -38,7 +38,7 @@ pub enum Command {
         id: TaskId,
         receipt: Receipt,
     },
-    AbandonTask {
+    DropTask {
         id: TaskId,
         note: Option<String>,
     },

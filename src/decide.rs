@@ -54,7 +54,7 @@ fn candidate(world: &World, command: Command) -> Vec<Event> {
         }],
         Command::ClaimTask { id } => vec![Event::TaskClaimed { id }],
         Command::CompleteTask { id, receipt } => vec![Event::TaskDone { id, receipt }],
-        Command::AbandonTask { id, note } => vec![Event::TaskDropped { id, note }],
+        Command::DropTask { id, note } => vec![Event::TaskDropped { id, note }],
         Command::ReleaseTask { id, note } => vec![Event::TaskReleased { id, note }],
     }
 }
@@ -146,15 +146,15 @@ mod test {
     /// a state transition error first you might suspect it is an issue with the command
     /// arguments when in reality no matter what arguments you input the command itself is invalid
     #[test]
-    fn agent_abandoning_invalid_task_err_ordering() {
+    fn agent_dropping_invalid_task_err_ordering() {
         let agent_ctx = agent();
         let human_ctx = human();
 
         let world = World::new();
 
-        let cmd = || Command::AbandonTask {
+        let cmd = || Command::DropTask {
             id: TaskId(0),
-            note: Some("invalid abandon".into()),
+            note: Some("invalid drop".into()),
         };
         let err1 = decide(&world, &agent_ctx, cmd());
         let err2 = decide(&world, &human_ctx, cmd());

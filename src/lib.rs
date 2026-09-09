@@ -120,7 +120,7 @@ mod invariant {
 
         log.execute(
             human_ctx.clone(),
-            Command::AbandonTask {
+            Command::DropTask {
                 id: TaskId(2),
                 note: Some("scope covered by fix bar".into()),
             },
@@ -130,7 +130,7 @@ mod invariant {
 
         log.execute(
             human_ctx.clone(),
-            Command::AbandonTask {
+            Command::DropTask {
                 id: TaskId(1),
                 note: None,
             },
@@ -191,7 +191,7 @@ mod invariant {
 
         let err3 = log.execute(
             agent_ctx.clone(),
-            Command::AbandonTask {
+            Command::DropTask {
                 id: TaskId(3),
                 note: None,
             },
@@ -203,7 +203,7 @@ mod invariant {
 
         let err4 = log.execute(
             human(),
-            Command::AbandonTask {
+            Command::DropTask {
                 id: TaskId(3),
                 note: None,
             },
