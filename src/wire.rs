@@ -372,6 +372,8 @@ pub struct TaskView {
     /// The pending-judgment mark, when an open proposal targets this task.
     /// The row is an attention cue and a pointer; the full story lives at the seq.
     pub proposal: Option<ProposalMark>,
+    /// Size of the attached comment thread; renders as a mere pointer (`#`).
+    pub comments: usize,
 }
 
 pub struct ProposalMark {
@@ -402,6 +404,7 @@ pub fn view_of(id: &TaskId, world: &World) -> Option<TaskView> {
                     ProposalAction::Release { .. } => "release",
                 },
             }),
+        comments: comment_thread(world, id).len(),
     })
 }
 

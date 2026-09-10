@@ -397,6 +397,11 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
         .map(|i| saccade::wire::view_of(&TaskId(i), world))
         .collect::<Option<_>>()
         .expect("indices come from the vec itself");
+    // the digest question is standing work; history lives in log and show
+    let views: Vec<_> = views
+        .into_iter()
+        .filter(|v| matches!(v.state, "open" | "claimed"))
+        .collect();
 
     if cli.json {
         let rows: Vec<serde_json::Value> = views
@@ -407,6 +412,7 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
                     "state": v.state,
                     "parent": v.parent,
                     "name": v.name,
+                    "comments": v.comments,
                     "proposal": v.proposal.as_ref().map(|m| serde_json::json!({
                         "seq": m.seq,
                         "verb": m.verb,
@@ -421,7 +427,7 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
         .iter()
         .map(|v| {
             format!(
-                "{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}",
                 v.id,
                 v.state,
                 v.parent.clone().unwrap_or_else(|| "-".into()),
@@ -429,7 +435,8 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
                 v.proposal
                     .as_ref()
                     .map(|m| format!("{}#{}", m.verb, m.seq))
-                    .unwrap_or_else(|| "-".into())
+                    .unwrap_or_else(|| "-".into()),
+                if v.comments > 0 { "#" } else { "-" }
             )
         })
         .collect::<Vec<_>>()
