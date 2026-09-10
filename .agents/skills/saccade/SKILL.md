@@ -42,6 +42,8 @@ every line you append as something a human will read in a retro.
 | `sac propose <drop\|release> t-N --name "…"` | any tier | the gate queue: your evidence, the human's call |
 | `sac accept <seq>` / `sac reject <seq> --note "…"` | **human only** | ruling acts on proposals |
 | `sac withdraw <seq> --note "…"` | any tier | take your own proposal off the queue |
+| `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | how-context on a task; `#<seq>` replies to a comment |
+| `sac show t-N` | anonymous | the dock: state, receipt, comment thread with voices |
 | `sac proposals` | anonymous | the ruling queue; `stale` marks acts gone illegal |
 | `sac list` / `sac list --json` | anonymous | reads need no identity |
 | `sac log` / `sac log --json` | anonymous | raw events; always available |
@@ -54,7 +56,10 @@ Add `--json` for machine-readable output, including errors.
 1. `sac list` at session start — that's the board.
 2. Claim what you will actually finish this session: `sac claim t-N …`.
    Claims are reservations; do not stockpile them.
-3. Do the work.
+3. Do the work. Park what you learn mid-flight (deferred wrangles, review
+   findings, working state) as `sac comment t-N "…"` — never a side file.
+   Titles say **what**; comments say **how**. If your observation changes the
+   what, that is supersession: propose the drop naming the successor.
 4. `sac done t-N --receipt "…"` when it lands.
 5. Task wrong? Propose the judgment (`sac propose drop t-N --name "…"`)
    and say so to the human. Never sit silently on a claim.

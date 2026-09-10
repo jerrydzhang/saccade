@@ -4,13 +4,16 @@ pub mod db;
 pub mod decide;
 pub mod events;
 pub mod objects;
+pub mod prose;
 pub mod store;
 pub mod wire;
 
 pub use decide::decide;
 pub use events::{Command, Event};
+pub use objects::comment::{Comment, CommentId, Target};
 pub use objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
-pub use objects::task::{Receipt, Task, TaskId, TaskState};
+pub use objects::task::{Task, TaskId, TaskState};
+pub use prose::Prose;
 pub use store::{Context, Log, Record, RecordId, Tier, World};
 
 #[derive(Debug)]
@@ -20,6 +23,7 @@ pub enum Reject {
     InvalidParentTaskId,
     // Proposal
     InvalidProposalId,
+    InvalidCommentId,
     // Permissions
     HumanOnly,
     // Misc
@@ -30,6 +34,7 @@ pub enum Reject {
 #[cfg(test)]
 mod invariant {
     use super::*;
+    use crate::prose::Prose;
 
     fn agent() -> Context {
         Context {
@@ -54,7 +59,7 @@ mod invariant {
         log.execute(
             agent_ctx.clone(),
             Command::CreateTask {
-                name: "implement foo".into(),
+                name: Prose::new("implement foo".into()).unwrap(),
                 parent_id: None,
             },
             1,
@@ -67,7 +72,7 @@ mod invariant {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                name: "fix bar".into(),
+                name: Prose::new("fix bar".into()).unwrap(),
                 parent_id: None,
             },
             3,
@@ -81,7 +86,7 @@ mod invariant {
             human_ctx.clone(),
             Command::CompleteTask {
                 id: TaskId(1),
-                receipt: Receipt("bar fixed".into()),
+                receipt: Prose::new("bar fixed".into()).unwrap(),
             },
             5,
         )
@@ -90,7 +95,7 @@ mod invariant {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                name: "improve baz".into(),
+                name: Prose::new("improve baz".into()).unwrap(),
                 parent_id: Some(TaskId(0)),
             },
             6,
@@ -101,7 +106,7 @@ mod invariant {
             human_ctx.clone(),
             Command::CompleteTask {
                 id: TaskId(0),
-                receipt: Receipt("foo completed successfully".into()),
+                receipt: Prose::new("foo completed successfully".into()).unwrap(),
             },
             7,
         )
@@ -110,7 +115,7 @@ mod invariant {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                name: "migrate floop".into(),
+                name: Prose::new("migrate floop".into()).unwrap(),
                 parent_id: None,
             },
             8,
@@ -124,7 +129,7 @@ mod invariant {
             human_ctx.clone(),
             Command::ReleaseTask {
                 id: TaskId(3),
-                note: "run dead, reclaim".into(),
+                note: Prose::new("run dead, reclaim".into()).unwrap(),
             },
             10,
         )
@@ -137,7 +142,7 @@ mod invariant {
             human_ctx.clone(),
             Command::DropTask {
                 id: TaskId(2),
-                note: "scope covered by fix bar".into(),
+                note: Prose::new("scope covered by fix bar".into()).unwrap(),
             },
             12,
         )
@@ -147,7 +152,7 @@ mod invariant {
             human_ctx.clone(),
             Command::DropTask {
                 id: TaskId(1),
-                note: "covered by fix bar; kept only as context".into(),
+                note: Prose::new("covered by fix bar; kept only as context".into()).unwrap(),
             },
             13,
         )
@@ -156,7 +161,7 @@ mod invariant {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                name: "open work".into(),
+                name: Prose::new("open work".into()).unwrap(),
                 parent_id: None,
             },
             14,
@@ -172,7 +177,7 @@ mod invariant {
         assert_eq!(log.records().len(), RECORD_COUNT);
         assert_eq!(
             log.world().tasks[0].state,
-            TaskState::Done(Receipt("foo completed successfully".into())),
+            TaskState::Done(Prose::new("foo completed successfully".into()).unwrap()),
         );
         assert_eq!(log.world().tasks[1].state, TaskState::Dropped);
         assert_eq!(log.world().tasks[2].state, TaskState::Dropped);
@@ -203,7 +208,7 @@ mod invariant {
             agent_ctx.clone(),
             Command::CompleteTask {
                 id: TaskId(2),
-                receipt: Receipt("foo completed successfully".into()),
+                receipt: Prose::new("foo completed successfully".into()).unwrap(),
             },
             1,
         );
@@ -222,7 +227,7 @@ mod invariant {
             agent_ctx.clone(),
             Command::DropTask {
                 id: TaskId(3),
-                note: "duplicate of t-3".into(),
+                note: Prose::new("duplicate of t-3".into()).unwrap(),
             },
             3,
         );
@@ -235,7 +240,7 @@ mod invariant {
             human(),
             Command::DropTask {
                 id: TaskId(3),
-                note: "duplicate of t-3".into(),
+                note: Prose::new("duplicate of t-3".into()).unwrap(),
             },
             4,
         );
@@ -248,7 +253,7 @@ mod invariant {
             agent_ctx.clone(),
             Command::ReleaseTask {
                 id: TaskId(3),
-                note: "run dead".into(),
+                note: Prose::new("run dead".into()).unwrap(),
             },
             5,
         );
@@ -261,7 +266,7 @@ mod invariant {
             human(),
             Command::ReleaseTask {
                 id: TaskId(0),
-                note: "run dead".into(),
+                note: Prose::new("run dead".into()).unwrap(),
             },
             6,
         );
@@ -273,7 +278,7 @@ mod invariant {
         let err7 = log.execute(
             agent_ctx.clone(),
             Command::CreateProposal {
-                name: "probe".into(),
+                name: Prose::new("probe".into()).unwrap(),
                 action: ProposalAction::Drop { task_id: TaskId(9) },
             },
             7,
@@ -286,7 +291,7 @@ mod invariant {
         let err8 = log.execute(
             agent_ctx.clone(),
             Command::CreateProposal {
-                name: "probe".into(),
+                name: Prose::new("probe".into()).unwrap(),
                 action: ProposalAction::Drop { task_id: TaskId(3) },
             },
             8,
@@ -299,7 +304,7 @@ mod invariant {
         let err9 = log.execute(
             agent_ctx.clone(),
             Command::CreateProposal {
-                name: "probe".into(),
+                name: Prose::new("probe".into()).unwrap(),
                 action: ProposalAction::Release { task_id: TaskId(4) },
             },
             9,
@@ -319,7 +324,7 @@ mod invariant {
             agent_ctx.clone(),
             Command::CompleteTask {
                 id: TaskId(9),
-                receipt: Receipt("blip completed successfully".into()),
+                receipt: Prose::new("blip completed successfully".into()).unwrap(),
             },
             3,
         );
@@ -337,7 +342,7 @@ mod invariant {
         let err = log.execute(
             agent_ctx.clone(),
             Command::CreateTask {
-                name: "implement foo primatives".into(),
+                name: Prose::new("implement foo primatives".into()).unwrap(),
                 parent_id: Some(TaskId(9)),
             },
             1,
@@ -378,7 +383,7 @@ mod invariant {
         log.execute(
             human(),
             Command::CreateTask {
-                name: "I am going to do floop again".into(),
+                name: Prose::new("I am going to do floop again".into()).unwrap(),
                 parent_id: None,
             },
             1,
@@ -388,7 +393,7 @@ mod invariant {
             .execute(
                 agent(),
                 Command::CreateProposal {
-                    name: "this is a duplicated task".into(),
+                    name: Prose::new("this is a duplicated task".into()).unwrap(),
                     action: ProposalAction::Drop { task_id: TaskId(0) },
                 },
                 2,
@@ -420,7 +425,7 @@ mod invariant {
         };
         assert_eq!(id.0, 0);
         // the proposal's name becomes the drop's note
-        assert_eq!(note, "this is a duplicated task");
+        assert_eq!(note.as_str(), "this is a duplicated task");
         assert_eq!(log.world().tasks[0].state, TaskState::Dropped);
         assert_eq!(
             log.world().proposals[&ProposalId(RecordId(1))].state,
@@ -434,7 +439,7 @@ mod invariant {
         log.execute(
             human(),
             Command::CreateTask {
-                name: "duplicate corpse".into(),
+                name: Prose::new("duplicate corpse".into()).unwrap(),
                 parent_id: None,
             },
             1,
@@ -443,7 +448,7 @@ mod invariant {
         log.execute(
             agent(),
             Command::CreateProposal {
-                name: "duplicate of the sibling".into(),
+                name: Prose::new("duplicate of the sibling".into()).unwrap(),
                 action: ProposalAction::Drop { task_id: TaskId(0) },
             },
             2,
@@ -472,7 +477,7 @@ mod invariant {
         log.execute(
             human(),
             Command::CreateTask {
-                name: "real work".into(),
+                name: Prose::new("real work".into()).unwrap(),
                 parent_id: None,
             },
             1,
@@ -481,7 +486,7 @@ mod invariant {
         log.execute(
             agent(),
             Command::CreateProposal {
-                name: "not real work".into(),
+                name: Prose::new("not real work".into()).unwrap(),
                 action: ProposalAction::Drop { task_id: TaskId(0) },
             },
             2,
@@ -509,13 +514,165 @@ mod invariant {
         );
     }
 
+    /// The thread is a walk: targets are stored, depth and membership are
+    /// derived, and each task owns exactly its own thread.
+    #[test]
+    fn comment_thread_is_derived_from_addresses() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: Prose::new("real work".into()).unwrap(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: Prose::new("other work".into()).unwrap(),
+                parent_id: None,
+            },
+            2,
+        )
+        .unwrap();
+
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("triage: how is sections, undecided".into()).unwrap(),
+            },
+            3,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Comment(CommentId(RecordId(2))),
+                body: Prose::new("no - pure tree, canvas verdict pending".into()).unwrap(),
+            },
+            4,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Comment(CommentId(RecordId(3))),
+                body: Prose::new("noted, parked with owner".into()).unwrap(),
+            },
+            5,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Task(TaskId(1)),
+                body: Prose::new("belongs to the other thread".into()).unwrap(),
+            },
+            6,
+        )
+        .unwrap();
+
+        let world = log.world();
+        assert_eq!(world.comments.len(), 4);
+        assert_eq!(
+            world.comments[&CommentId(RecordId(2))].target,
+            Target::Task(TaskId(0))
+        );
+        assert_eq!(
+            world.comments[&CommentId(RecordId(3))].target,
+            Target::Comment(CommentId(RecordId(2)))
+        );
+
+        let thread = crate::wire::comment_thread(world, &TaskId(0));
+        assert_eq!(
+            thread
+                .iter()
+                .map(|l| (l.seq, l.depth, l.actor.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (2, 1, "saccade bot"),
+                (3, 2, "human person"),
+                (4, 3, "saccade bot")
+            ]
+        );
+        assert_eq!(crate::wire::comment_thread(world, &TaskId(1)).len(), 1);
+    }
+
+    /// Comments have no state gate: terminal tasks take them, and only an
+    /// unknown comment id refuses.
+    #[test]
+    fn comments_have_no_state_gate() {
+        let mut log = Log::new();
+        for name in ["open work", "done work", "dropped work"] {
+            log.execute(
+                human(),
+                Command::CreateTask {
+                    name: Prose::new(name.into()).unwrap(),
+                    parent_id: None,
+                },
+                1,
+            )
+            .unwrap();
+        }
+        log.execute(human(), Command::ClaimTask { id: TaskId(1) }, 2)
+            .unwrap();
+        log.execute(
+            human(),
+            Command::CompleteTask {
+                id: TaskId(1),
+                receipt: Prose::new("shipped".into()).unwrap(),
+            },
+            3,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::DropTask {
+                id: TaskId(2),
+                note: Prose::new("run dead".into()).unwrap(),
+            },
+            4,
+        )
+        .unwrap();
+
+        let before = log.records().len();
+        for (id, state) in [(0, "open"), (1, "done"), (2, "dropped")] {
+            log.execute(
+                agent(),
+                Command::Comment {
+                    target: Target::Task(TaskId(id)),
+                    body: Prose::new(format!("for the record, on the {state} task").into())
+                        .unwrap(),
+                },
+                9,
+            )
+            .unwrap_or_else(|e| panic!("comment on {state} task refused: {e:?}"));
+        }
+        assert_eq!(log.records().len(), before + 3);
+
+        // only an unknown comment id refuses, writing nothing
+        let refused = log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Comment(CommentId(RecordId(99))),
+                body: Prose::new("addresses nothing".into()).unwrap(),
+            },
+            10,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
+        assert_eq!(log.records().len(), before + 3);
+    }
+
     #[test]
     fn re_propose_after_reject_is_free() {
         let mut log = Log::new();
         log.execute(
             human(),
             Command::CreateTask {
-                name: "real work".into(),
+                name: Prose::new("real work".into()).unwrap(),
                 parent_id: None,
             },
             1,
@@ -524,7 +681,7 @@ mod invariant {
         log.execute(
             agent(),
             Command::CreateProposal {
-                name: "weak evidence".into(),
+                name: Prose::new("weak evidence".into()).unwrap(),
                 action: ProposalAction::Drop { task_id: TaskId(0) },
             },
             2,
@@ -534,7 +691,7 @@ mod invariant {
             human(),
             Command::RejectProposal {
                 id: ProposalId(RecordId(1)),
-                note: "ruled real work".into(),
+                note: Prose::new("ruled real work".into()).unwrap(),
             },
             3,
         )
@@ -542,7 +699,7 @@ mod invariant {
         log.execute(
             agent(),
             Command::CreateProposal {
-                name: "better evidence".into(),
+                name: Prose::new("better evidence".into()).unwrap(),
                 action: ProposalAction::Drop { task_id: TaskId(0) },
             },
             4,
@@ -552,7 +709,7 @@ mod invariant {
         assert_eq!(log.world().proposals.len(), 2);
         assert_eq!(
             log.world().proposals[&ProposalId(RecordId(1))].state,
-            ProposalState::Rejected("ruled real work".into())
+            ProposalState::Rejected(Prose::new("ruled real work".into()).unwrap())
         );
         assert_eq!(
             log.world().proposals[&ProposalId(RecordId(3))].state,
@@ -561,73 +718,4 @@ mod invariant {
         assert_eq!(log.world().tasks[0].state, TaskState::Open);
     }
 
-    /// Requires that any text field (note, receipt, or name) is non-empty this includes
-    /// whitespace-only strings
-    #[test]
-    fn empty_required_text_refuses() {
-        let mut log = Log::new();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: "real work".into(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: "claimed work".into(),
-                parent_id: None,
-            },
-            2,
-        )
-        .unwrap();
-        log.execute(human(), Command::ClaimTask { id: TaskId(1) }, 3)
-            .unwrap();
-        log.execute(
-            agent(),
-            Command::CreateProposal {
-                name: "duplicate of the sibling".into(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-            4,
-        )
-        .unwrap();
-
-        let empties = [
-            Command::DropTask {
-                id: TaskId(0),
-                note: String::new(),
-            },
-            Command::ReleaseTask {
-                id: TaskId(1),
-                note: "   ".into(),
-            },
-            Command::CompleteTask {
-                id: TaskId(1),
-                receipt: Receipt(String::new()),
-            },
-            Command::CreateProposal {
-                name: String::new(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-            Command::WithdrawProposal {
-                id: ProposalId(RecordId(3)),
-                note: String::new(),
-            },
-            Command::RejectProposal {
-                id: ProposalId(RecordId(3)),
-                note: String::new(),
-            },
-        ];
-
-        for command in empties {
-            let before = log.records().len();
-            let refused = log.execute(human(), command, 99);
-            assert!(matches!(refused, Err(Reject::ReasonRequired)));
-            assert_eq!(log.records().len(), before);
-        }
-    }
 }

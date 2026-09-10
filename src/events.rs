@@ -1,12 +1,14 @@
+use crate::objects::comment::Target;
 use crate::objects::proposal::{ProposalAction, ProposalId};
-use crate::objects::task::{Receipt, TaskId};
+use crate::objects::task::TaskId;
+use crate::prose::Prose;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     // Task Events
     TaskCreated {
         id: TaskId,
-        name: String,
+        name: Prose,
         parent_id: Option<TaskId>,
     },
     TaskClaimed {
@@ -14,15 +16,15 @@ pub enum Event {
     },
     TaskDone {
         id: TaskId,
-        receipt: Receipt,
+        receipt: Prose,
     },
     TaskDropped {
         id: TaskId,
-        note: String,
+        note: Prose,
     },
     TaskReleased {
         id: TaskId,
-        note: String,
+        note: Prose,
     },
     // Proposal Events
     ProposalCreated {
@@ -30,19 +32,24 @@ pub enum Event {
         // id of the proposal, this means unlike a taskid the id is directly derivable from the
         // single record where as a task would require counting up all the TaskCreated events to
         // derive the id
-        name: String,
+        name: Prose,
         action: ProposalAction,
     },
     ProposalWithdrawn {
         id: ProposalId,
-        note: String,
+        note: Prose,
     },
     ProposalRejected {
         id: ProposalId,
-        note: String,
+        note: Prose,
     },
     ProposalAccepted {
         id: ProposalId,
+    },
+    // Comment Events
+    Commented {
+        target: Target,
+        body: Prose,
     },
 }
 
@@ -50,7 +57,7 @@ pub enum Event {
 pub enum Command {
     // Task commands
     CreateTask {
-        name: String,
+        name: Prose,
         parent_id: Option<TaskId>,
     },
     ClaimTask {
@@ -58,31 +65,36 @@ pub enum Command {
     },
     CompleteTask {
         id: TaskId,
-        receipt: Receipt,
+        receipt: Prose,
     },
     DropTask {
         id: TaskId,
-        note: String,
+        note: Prose,
     },
     ReleaseTask {
         id: TaskId,
-        note: String,
+        note: Prose,
     },
     // Proposal commands
     CreateProposal {
         // See note above about why proposals don't have an id at command time
-        name: String,
+        name: Prose,
         action: ProposalAction,
     },
     WithdrawProposal {
         id: ProposalId,
-        note: String,
+        note: Prose,
     },
     RejectProposal {
         id: ProposalId,
-        note: String,
+        note: Prose,
     },
     AcceptProposal {
         id: ProposalId,
+    },
+    // Comment commands
+    Comment {
+        target: Target,
+        body: Prose,
     },
 }

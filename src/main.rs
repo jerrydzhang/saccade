@@ -4,9 +4,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use saccade::World;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
-use saccade::objects::task::{Receipt, TaskId};
+use saccade::objects::task::TaskId;
 use saccade::wire::ProposalView;
-use saccade::{Command, Context, ProposalAction, ProposalId, RecordId, Reject, Tier};
+use saccade::{Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId, Reject, Target, Tier};
 
 #[derive(Parser)]
 #[command(name = "sac", about = "Saccade: awesome issue tracker")]
@@ -102,6 +102,15 @@ enum Cmd {
     Log,
     /// List proposals (the ruling queue)
     Proposals,
+    /// Attach a comment to a task (t-<n>) or reply to a comment (#<seq>)
+    Comment {
+        target: String,
+        body: String,
+    },
+    /// Everything about one task: state, receipt, comment thread
+    Show {
+        id: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -150,6 +159,12 @@ enum Fail {
     Usage(String),
 }
 
+impl From<Reject> for Fail {
+    fn from(r: Reject) -> Self {
+        Fail::Reject(r)
+    }
+}
+
 impl Fail {
     fn code(&self) -> &'static str {
         match self {
@@ -180,6 +195,7 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::InvalidTaskId => "invalid_task_id",
         Reject::InvalidParentTaskId => "invalid_parent_task_id",
         Reject::InvalidProposalId => "invalid_proposal_id",
+        Reject::InvalidCommentId => "invalid_comment_id",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
         Reject::ReasonRequired => "reason_required",
@@ -193,7 +209,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             name,
             parent,
         } => Command::CreateTask {
-            name: name.clone(),
+            name: Prose::new(name.clone())?,
             parent_id: parent.as_deref().map(parse_task_id).transpose()?,
         },
         Cmd::Claim { id } => Command::ClaimTask {
@@ -201,18 +217,18 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         },
         Cmd::Done { id, receipt } => Command::CompleteTask {
             id: parse_task_id(id)?,
-            receipt: Receipt(receipt.clone()),
+            receipt: Prose::new(receipt.clone())?,
         },
         Cmd::Drop { id, note } => Command::DropTask {
             id: parse_task_id(id)?,
-            note: note.clone(),
+            note: Prose::new(note.clone())?,
         },
         Cmd::Release { id, note } => Command::ReleaseTask {
             id: parse_task_id(id)?,
-            note: note.clone(),
+            note: Prose::new(note.clone())?,
         },
         Cmd::Propose { action, id, name } => Command::CreateProposal {
-            name: name.clone(),
+            name: Prose::new(name.clone())?,
             action: match action {
                 ProposeVerb::Drop => ProposalAction::Drop {
                     task_id: parse_task_id(id)?,
@@ -227,13 +243,17 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         },
         Cmd::Reject { id, note } => Command::RejectProposal {
             id: parse_proposal_id(id)?,
-            note: note.clone(),
+            note: Prose::new(note.clone())?,
         },
         Cmd::Withdraw { id, note } => Command::WithdrawProposal {
             id: parse_proposal_id(id)?,
-            note: note.clone(),
+            note: Prose::new(note.clone())?,
         },
-        Cmd::List { .. } | Cmd::Log | Cmd::Proposals => return read_only(cli),
+        Cmd::Comment { target, body } => Command::Comment {
+            target: parse_target(target)?,
+            body: Prose::new(body.clone())?,
+        },
+        Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => return read_only(cli),
     };
 
     // Identity is required only where it is recorded: mutating commands.
@@ -287,6 +307,13 @@ fn read_only(cli: &Cli) -> Result<String, Fail> {
             LoadState::Full(world) => Ok(render_proposals(cli, &world)),
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
+        Cmd::Show { id } => match loadout.state {
+            LoadState::Full(world) => {
+                let task_id = parse_task_id(id)?;
+                Ok(render_show(&world, task_id)?)
+            }
+            LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+        },
         _ => unreachable!("read_only reached from a mutating command"),
     }
 }
@@ -301,6 +328,16 @@ fn parse_task_id(token: &str) -> Result<TaskId, Fail> {
         .parse()
         .map_err(|_| Fail::Usage(format!("'{token}' is not a task id")))?;
     Ok(TaskId(n))
+}
+
+fn parse_target(token: &str) -> Result<Target, Fail> {
+    if let Some(n) = token.strip_prefix('#') {
+        let n: usize = n
+            .parse()
+            .map_err(|_| Fail::Usage(format!("'{token}' is not a comment id (expected #<seq>)")))?;
+        return Ok(Target::Comment(CommentId(RecordId(n))));
+    }
+    Ok(Target::Task(parse_task_id(token)?))
 }
 
 fn parse_proposal_id(token: &str) -> Result<ProposalId, Fail> {
@@ -400,11 +437,35 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
         .join("\n")
 }
 
+/// The inspector dock as text: everything about the one thing.
+fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
+    let view = saccade::wire::show_of(&task_id, world)
+        .ok_or_else(|| Fail::Usage(format!("no task t-{}", task_id.0)))?;
+
+    let mut out = vec![format!("{}\t{}\t{}", view.id, view.state, view.name)];
+    if let Some(parent) = &view.parent {
+        out.push(format!("parent\t{parent}"));
+    }
+    if let Some(receipt) = &view.receipt {
+        out.push(format!("receipt\t{receipt}"));
+    }
+    for line in saccade::wire::comment_thread(world, &task_id) {
+        out.push(format!(
+            "  {}#{}\t{}\t{}",
+            "  ".repeat(line.depth.saturating_sub(1)),
+            line.seq,
+            line.actor,
+            line.body
+        ));
+    }
+    Ok(out.join("\n"))
+}
+
 fn render_proposals(cli: &Cli, world: &World) -> String {
     let views: Vec<ProposalView> = world
         .proposals
-        .values()
-        .map(|p| saccade::wire::view_of_proposal(p, world))
+        .iter()
+        .map(|(id, p)| saccade::wire::view_of_proposal(id, p, world))
         .collect();
 
     if cli.json {

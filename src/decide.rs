@@ -1,6 +1,8 @@
 use crate::Reject;
 use crate::events::{Command, Event};
+use crate::objects::comment::Target;
 use crate::objects::proposal::ProposalAction;
+use crate::prose::Prose;
 use crate::store::{Context, Tier, World};
 
 /// Authority requirements per event kind
@@ -16,7 +18,8 @@ fn required_tier(event: &Event) -> Authority {
         | Event::TaskClaimed { .. }
         | Event::TaskDone { .. }
         | Event::ProposalCreated { .. }
-        | Event::ProposalWithdrawn { .. } => Authority::AnyTier,
+        | Event::ProposalWithdrawn { .. }
+        | Event::Commented { .. } => Authority::AnyTier,
         Event::TaskDropped { .. }
         | Event::TaskReleased { .. }
         | Event::ProposalRejected { .. }
@@ -74,6 +77,8 @@ fn candidate(world: &World, command: Command) -> Vec<Event> {
             // This will be rejected in validate
             None => vec![Event::ProposalAccepted { id }],
         },
+        // Comment commands
+        Command::Comment { target, body } => vec![Event::Commented { target, body }],
     }
 }
 
@@ -81,6 +86,7 @@ fn candidate(world: &World, command: Command) -> Vec<Event> {
 fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
     for event in events {
         match event {
+            // Task
             Event::TaskCreated { parent_id, .. } => {
                 if parent_id.is_some_and(|id| world.tasks.len() <= id.0) {
                     return Err(Reject::InvalidParentTaskId);
@@ -90,53 +96,49 @@ fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
                 let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
                 task.state.validate(event)?;
             }
-            event @ Event::TaskDone { id, receipt } => {
+            event @ Event::TaskDone { id, .. } => {
                 let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
                 task.state.validate(event)?;
-                gate_empty_text(&receipt.0)?;
             }
-            event @ Event::TaskDropped { id, note } | event @ Event::TaskReleased { id, note } => {
+            event @ Event::TaskDropped { id, .. } | event @ Event::TaskReleased { id, .. } => {
                 let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
                 task.state.validate(event)?;
-                gate_empty_text(note)?;
             }
-            Event::ProposalCreated { name, action } => {
-                match action {
-                    ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
-                        let task = world.tasks.get(task_id.0).ok_or(Reject::InvalidTaskId)?;
-                        task.state.validate(&action.target_event(""))?;
-                    }
+            // Proposal
+            Event::ProposalCreated { action, .. } => match action {
+                ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
+                    let task = world.tasks.get(task_id.0).ok_or(Reject::InvalidTaskId)?;
+                    task.state
+                        .validate(&action.target_event(&Prose::new("probe".into())?))?;
                 }
-                gate_empty_text(name)?;
-            }
-            event @ (Event::ProposalWithdrawn { id, note }
-            | Event::ProposalRejected { id, note }) => {
+            },
+            event @ (Event::ProposalWithdrawn { id, .. } | Event::ProposalRejected { id, .. }) => {
                 let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
                 proposal.state.validate(event)?;
-                gate_empty_text(note)?;
             }
             event @ Event::ProposalAccepted { id } => {
                 let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
                 proposal.state.validate(event)?;
             }
+            // Comment
+            Event::Commented { target, .. } => match target {
+                Target::Task(id) => {
+                    world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+                }
+                Target::Comment(id) => {
+                    world.comments.get(id).ok_or(Reject::InvalidCommentId)?;
+                }
+            },
         }
     }
 
     Ok(())
 }
 
-fn gate_empty_text(text: &str) -> Result<(), Reject> {
-    if text.trim().is_empty() {
-        Err(Reject::ReasonRequired)
-    } else {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{ProposalAction, ProposalId, Receipt, RecordId, TaskId};
+    use crate::{ProposalAction, ProposalId, Prose, RecordId, Target, TaskId};
 
     fn agent() -> Context {
         Context {
@@ -159,35 +161,39 @@ mod test {
         let events = [
             Event::TaskCreated {
                 id: TaskId(0),
-                name: String::new(),
+                name: Prose::new("filler".into()).unwrap(),
                 parent_id: None,
             },
             Event::TaskClaimed { id: TaskId(0) },
             Event::TaskDone {
                 id: TaskId(0),
-                receipt: Receipt(String::new()),
+                receipt: Prose::new("filler".into()).unwrap(),
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                note: String::new(),
+                note: Prose::new("filler".into()).unwrap(),
             },
             Event::TaskReleased {
                 id: TaskId(0),
-                note: String::new(),
+                note: Prose::new("filler".into()).unwrap(),
             },
             Event::ProposalCreated {
-                name: String::new(),
+                name: Prose::new("filler".into()).unwrap(),
                 action: ProposalAction::Drop { task_id: TaskId(0) },
             },
             Event::ProposalWithdrawn {
                 id: pid,
-                note: String::new(),
+                note: Prose::new("filler".into()).unwrap(),
             },
             Event::ProposalRejected {
                 id: pid,
-                note: String::new(),
+                note: Prose::new("filler".into()).unwrap(),
             },
             Event::ProposalAccepted { id: pid },
+            Event::Commented {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("filler".into()).unwrap(),
+            },
         ];
 
         for event in &events {
@@ -224,7 +230,7 @@ mod test {
 
         let drop = || Command::DropTask {
             id: TaskId(0),
-            note: "invalid drop".into(),
+            note: Prose::new("invalid drop".into()).unwrap(),
         };
         let err1 = decide(&world, &agent_ctx, drop());
         let err2 = decide(&world, &human_ctx, drop());

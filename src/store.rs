@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::Reject;
 use crate::decide::decide;
 use crate::events::{Command, Event};
+use crate::objects::comment::{Comment, CommentId};
 use crate::objects::proposal::{Proposal, ProposalId, ProposalState};
 use crate::objects::task::{Task, TaskId, TaskState};
 
@@ -35,6 +36,7 @@ pub struct Record {
 pub struct World {
     pub tasks: Vec<Task>,
     pub proposals: BTreeMap<ProposalId, Proposal>,
+    pub comments: BTreeMap<CommentId, Comment>,
 }
 
 impl World {
@@ -42,6 +44,7 @@ impl World {
         World {
             tasks: Vec::new(),
             proposals: BTreeMap::new(),
+            comments: BTreeMap::new(),
         }
     }
 
@@ -96,7 +99,6 @@ impl World {
                 self.proposals.insert(
                     proposal_id,
                     Proposal {
-                        id: proposal_id,
                         state: ProposalState::Open,
                         name: proposal_name,
                         action,
@@ -114,6 +116,17 @@ impl World {
                 *proposal = proposal
                     .apply(event)
                     .expect("decide emitted an unfoldable event");
+            }
+            // Comment events
+            Event::Commented { target, body } => {
+                self.comments.insert(
+                    CommentId(record.id),
+                    Comment {
+                        target,
+                        body,
+                        actor: record.context.actor.clone(),
+                    },
+                );
             }
         }
     }
@@ -189,8 +202,8 @@ impl Log {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::task::Receipt;
-
+    use crate::prose::Prose;
+    
     fn agent() -> Context {
         Context {
             actor: "saccade bot".into(),
@@ -219,7 +232,7 @@ mod test {
             context: agent(),
             event: Event::TaskCreated {
                 id: TaskId(1),
-                name: "invalid task".into(),
+                name: Prose::new("invalid task".into()).unwrap(),
                 parent_id: None,
             },
         };
@@ -236,7 +249,7 @@ mod test {
                 context: agent(),
                 event: Event::TaskCreated {
                     id: TaskId(0),
-                    name: "new task".into(),
+                    name: Prose::new("new task".into()).unwrap(),
                     parent_id: None,
                 },
             },
@@ -246,7 +259,7 @@ mod test {
                 context: agent(),
                 event: Event::TaskCreated {
                     id: TaskId(0),
-                    name: "new task again".into(),
+                    name: Prose::new("new task again".into()).unwrap(),
                     parent_id: None,
                 },
             },
@@ -264,7 +277,7 @@ mod test {
                 context: agent(),
                 event: Event::TaskCreated {
                     id: TaskId(0),
-                    name: "new task".into(),
+                    name: Prose::new("new task".into()).unwrap(),
                     parent_id: None,
                 },
             },
@@ -274,7 +287,7 @@ mod test {
                 context: agent(),
                 event: Event::TaskDone {
                     id: TaskId(0),
-                    receipt: Receipt("jumping straight to done".into()),
+                    receipt: Prose::new("jumping straight to done".into()).unwrap(),
                 },
             },
         ];

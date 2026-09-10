@@ -3,8 +3,9 @@
 Saccade is an opinionated, agent-native issue tracker: one Rust binary, an
 append-only SQLite event log, a world that is a fold of that log. Read
 `DESIGN.md` before proposing anything architectural — it is the ratified
-decision record, not a suggestion. `AMENDMENTS.md` is the working ledger for
-in-flight tasks. The dogfood tracker (`sac`, repo's own `saccade.db`) is where
+decision record, not a suggestion. Working context for in-flight tasks lives
+as comments on the tasks themselves (`sac comment t-N "…"`). The dogfood
+tracker (`sac`, repo's own `saccade.db`) is where
 work is claimed and closed; see `.agents/skills/saccade/SKILL.md` for the CLI
 discipline.
 
@@ -57,9 +58,13 @@ Rules:
 - Test comments: one line, plain, self-contained. Say what the assertion
   pins ("the proposal's id is 1"). No citations of other docs, no
   design-history narration, no vocabulary that isn't in the code.
+- Source comments: the repo is self-documenting, enforced by deletion.
+  A comment earns its bytes only by saying what the code cannot (a
+  non-obvious why, like ProposalCreated's missing id). Rationale lives in
+  DESIGN, not `///` blocks; narration of the next ten lines gets removed.
 - Fixture data reads as narrative: `implement foo`, `migrate floop`, not
   `test task 2`. The log is a story even in tests.
-- Keep the suite green (30 unit + 7 corpus at time of writing) and honest:
+- Keep the suite green (33 unit + 7 corpus at time of writing) and honest:
   a failing suite from a fixture change means the fixture changed a contract
   — find out which before editing assertions.
 

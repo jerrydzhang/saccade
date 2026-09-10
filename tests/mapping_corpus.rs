@@ -24,7 +24,7 @@ use saccade::Reject;
 use saccade::db::{self, LoadState};
 use saccade::objects::task::TaskId;
 use saccade::store::{Context, Tier, World};
-use saccade::{Command, ProposalAction, ProposalId, RecordId, wire};
+use saccade::{Command, ProposalAction, ProposalId, Prose, RecordId, wire};
 
 fn importer() -> Context {
     Context {
@@ -41,16 +41,18 @@ fn beads_actor(name: &str) -> Context {
     }
 }
 
-fn alias(title: &str, id: &str) -> String {
-    format!("{title} ({id})")
+fn alias(title: &str, id: &str) -> Prose {
+    Prose::new(format!("{title} ({id})")).unwrap()
 }
 
-fn receipt(reason: &str, id: &str) -> String {
+fn receipt(reason: &str, id: &str) -> Prose {
+    Prose::new(
     if reason.is_empty() {
-        format!("[imported from beads {id}]")
-    } else {
-        format!("{reason} [imported from beads {id}]")
-    }
+            format!("[imported from beads {id}]")
+        } else {
+            format!("{reason} [imported from beads {id}]")
+        }
+    ).unwrap()
 }
 
 fn db_path(name: &str) -> PathBuf {
@@ -77,7 +79,7 @@ fn done(conn: &mut rusqlite::Connection, id: TaskId, receipt: &str, at: u64) {
         &importer(),
         Command::CompleteTask {
             id,
-            receipt: saccade::Receipt(receipt.into()),
+            receipt: saccade::Prose::new(receipt.into()).unwrap(),
         },
         at,
     )
@@ -112,10 +114,11 @@ fn closed_with_receipt_folds_to_done() {
     done(
         &mut conn,
         TaskId(0),
-        &receipt(
+        receipt(
             "Completed: _IngestBodyLimit meters actual ASGI receive bytes (buffer+replay) so chunked bodies cannot bypass 8 MiB",
             "jernerics-0a0",
-        ),
+        )
+        .as_str(),
         1787410018,
     );
 
@@ -129,6 +132,7 @@ fn closed_with_receipt_folds_to_done() {
             "Enforce streaming limits on ingest and artifact uploads",
             "jernerics-0a0",
         )
+        .as_str()
     );
 
     // bi-temporal split: event times are beads', logged times are ours
@@ -188,7 +192,7 @@ fn duplicate_stops_at_the_gate() {
         &importer(),
         Command::DropTask {
             id: TaskId(0),
-            note: "duplicate of jernerics-gvs".into(),
+            note: Prose::new("duplicate of jernerics-gvs".into()).unwrap(),
         },
         1787428213,
     );
@@ -233,13 +237,13 @@ fn dotted_child_becomes_a_parent_edge() {
     done(
         &mut conn,
         TaskId(1),
-        &receipt("", "jernerics-jyl.13"),
+        receipt("", "jernerics-jyl.13").as_str(),
         1785528203,
     );
     done(
         &mut conn,
         TaskId(0),
-        &receipt("", "jernerics-jyl"),
+        receipt("", "jernerics-jyl").as_str(),
         1785534527,
     );
 
@@ -295,19 +299,21 @@ fn epic_and_child_import_with_wrap_receipts() {
     done(
         &mut conn,
         TaskId(1),
-        &receipt(
+        receipt(
             "Verified and merged: 955725b fast-forwarded to main + ty fix 0fe0abc",
             "jernerics-jtvv.7",
-        ),
+        )
+        .as_str(),
         1788541949,
     );
     done(
         &mut conn,
         TaskId(0),
-        &receipt(
+        receipt(
             "Epic complete: all children jtvv.1-jtvv.8 verified, merged to main, and closed",
             "jernerics-jtvv",
-        ),
+        )
+        .as_str(),
         1788543052,
     );
 
@@ -374,7 +380,7 @@ fn argv_carries_adversarial_titles_and_backdating() {
         .arg("1788452437")
         .arg("create")
         .arg("task")
-        .arg(&title)
+        .arg(title.as_str())
         .output()
         .expect("spawn saccade");
     assert!(
@@ -430,7 +436,7 @@ fn gate_queue_deposit_scenario() {
             &mut conn,
             &importer(),
             Command::CreateTask {
-                name: (*name).into(),
+                name: Prose::new((*name).into()).unwrap(),
                 parent_id: None,
             },
             100 + i as u64,
@@ -444,7 +450,7 @@ fn gate_queue_deposit_scenario() {
             &mut conn,
             &importer(),
             Command::CreateProposal {
-                name: format!("evidence for corpse {id}"),
+                name: Prose::new(format!("evidence for corpse {id}")).unwrap(),
                 action: ProposalAction::Drop {
                     task_id: TaskId(id as usize),
                 },
@@ -472,7 +478,7 @@ fn gate_queue_deposit_scenario() {
         &ruler,
         Command::RejectProposal {
             id: ProposalId(RecordId(12)),
-            note: "ruled real work; re-propose only with new evidence".into(),
+            note: Prose::new("ruled real work; re-propose only with new evidence".into()).unwrap(),
         },
         400,
     )
@@ -488,8 +494,8 @@ fn gate_queue_deposit_scenario() {
     assert_eq!(world.proposals.len(), 6);
     let states: Vec<&str> = world
         .proposals
-        .values()
-        .map(|p| wire::view_of_proposal(p, &world).state)
+        .iter()
+        .map(|(id, p)| wire::view_of_proposal(id, p, &world).state)
         .collect();
     assert_eq!(states.iter().filter(|s| **s == "accepted").count(), 5);
     assert_eq!(states.iter().filter(|s| **s == "rejected").count(), 1);

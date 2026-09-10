@@ -6,6 +6,12 @@ a human, their notes, and their agents. Homelab-hosted. Rust. Single artifact.
 Status: design complete, pre-implementation. This document consolidates every settled
 decision from the design phase and is the seed for build step 1.
 
+Epistemic status: sections describing built-and-dogfooded behavior are load-bearing
+— they are law. Sections describing unbuilt behavior are design intent at time of
+writing, revisable — including wholesale (the hypothesis/finding machinery of §3 is
+the first marked case). When intent and implementation disagree, the disagreement is
+a finding, not a bug in the code.
+
 ---
 
 ## 1. What Saccade is
@@ -81,13 +87,46 @@ Configurability was explicitly rejected: Trac/Redmine-style configurable workflo
 assessed as mechanisms to steal — we steal the enforcement machinery, not the
 configurability. The workflow is the product.
 
-## 3. Core model — three objects, four lifecycles' worth of difference
+## 3. Core model — four objects, four lifecycles' worth of difference
+
+*(Epistemic status: the task row and its semantics are built and load-bearing. The
+hypothesis/finding machinery below is speculative — design intent at time of writing,
+revisable wholesale, dogfooded nowhere.)*
+
+The **generative rules** — the ontology from which object shapes are inferred. A
+new object is an application of these; only a rule change is an ontology change,
+and rule changes get their own task:
+
+1. **Records are the only substance.** What happens is an appended record; the
+   envelope carries id/actor/tier/time; payloads point, never repeat envelope
+   facts.
+2. **Objects are folds that earn residency.** A thing is an object iff it is
+   addressed or mutated after birth; otherwise a field.
+3. **Identity follows reference** (§10): allocated for the daily-cited currency,
+   record-derived for the born-once-pointed-at. One thing, one address.
+4. **Lifecycle is earned by branching.** A state machine exists iff something
+   downstream branches on the state; having none is legal.
+5. **Acts gate by judgment, not actor.** Tier gates acts that rule on work;
+   work and observation acts are AnyTier.
+6. **Prose is forced where the carrier is the sole witness** — non-empty by
+   construction (a value property); embedded when act-carried, threaded when
+   object-carried.
+7. **Prescription lives in act grammar and discipline, never in restriction.**
+   Flexibility and prescriptiveness are orthogonal.
+8. **Surfaces: one canvas, trigger-licensed docks, slices never.**
+9. **Closed sets extend by ratification only** — carriers, target arms, panels.
+
+Comments (§18) are the first object derived by application rather than debate:
+addressed after birth (rule 2), pointed-at (rule 3), nothing branches on their
+state (rule 4), observation (rule 5), sole-witness bodies (rule 6), no gates
+(rule 7), dock-surfaced (rule 8), closed target set (rule 9).
 
 "Issue" was decomposed into the four incompatible jobs one object was silently doing.
 
 | Object | The job | Lifecycle |
 |---|---|---|
 | **Task** | claimable work | `open → claimed → done`; drop from `open` **or** `done` (human-only); reopen (human, justified) |
+| **Comment** | prose that addresses | none — exists, appended, forever (§18) |
 | **Hypothesis** | a claim under test | `open → resolved(kind) → verified`; resolutions locked |
 | **Finding** | an observation | `valid → superseded \| invalidated` (tombstones, never deletion) |
 
@@ -110,7 +149,7 @@ Key semantics:
   claim non-consensually). Dropping from `done` is the void: the receipt survives in the
   log; the state marks the task a mistake. `dropped` is the sole terminal state.
 - **Judgment-act payload:** judgment events (drop, release, reopen, overturn) wear one
-  uniform shape: an optional prose note, nothing else. Classification is reserved for
+  uniform shape: a required non-empty prose note, nothing else. Classification is reserved for
   verdict kinds, where it is constitutive of the act — a resolution without a kind is
   undefined; a drop without a category is still a drop. Notes are prose at rest
   (strings underneath; enums never enter the query layer).
@@ -396,7 +435,13 @@ pointers render via adapter, opaque otherwise), no productivity surfaces.
   aliases dangle — the unloved resolving to nothing is the correct answer.
 - **Proposals are seq-addressed** — identity is the birth event's log position
   (`accept 614`); no counter, no `p-` syntax. Tasks keep allocated dense ids:
-  human-referenced daily (§17).
+  human-referenced daily (§17). Comments follow the proposal precedent (`#34`).
+- **Identity follows reference.** Allocated dense ids are for the currency of
+  daily human speech — things cited by name in every conversation, commit, and
+  receipt (tasks, uniquely). Record-derived identity is for things born once
+  from a record and pointed at thereafter (proposals, comments). One thing, one
+  address: identity lives in keys and envelopes, never repeated on an object
+  unless a reader cannot see the key.
 - **Format stability is not yet promised.** Breaking changes to recorded payload
   shapes are allowed while the only consumer is this repo's own log and migrations
   are hand-scale: a breaking change may refuse an old log (`Corrupt`), and the
@@ -627,9 +672,53 @@ without special casing. A `--status open|stale` filter is a named door, not buil
 authority-conditioned proposal is its only live member. Lease expiry (t-3) decomposes
 as derivation + sweep, not a pending act. Build the special case; the door is named.
 
-## 18. Glossary
+## 18. Comments — attached prose, stateless
+
+The fourth object: prose that addresses. Where tasks have lifecycles and proposals
+gave judgment a queue, comments are the how-carrier — no state, no lifecycle, no
+guard. They simply exist, appended, forever. They are the working-memory home:
+triage hows, deferred wrangles, review findings, and mid-flight observations live
+as comments on their task, never in a side file (the AMENDMENTS.md ledger they
+replaced is gone).
+
+- **The object:** `CommentId(pub RecordId)` — identity is the birth record's log
+  position, the proposal precedent; identity is the map key, never repeated on
+  the object. The object holds its target, body, and actor (cached from the
+  envelope — the only provenance the world keeps).
+- **The act:** one event, `Commented { target, body }`, target = `Task(TaskId)` |
+  `Comment(CommentId)` — one act with a parameterized addressee (the `ProposalAction`
+  pattern); prescriptiveness lives in the arms' distinct questions. A comment
+  addressing the task — the tree's root — asks *what's the how for this task?*;
+  a reply asks *how does this respond to that?* Comments are never roots: the
+  task is the tree's terminal node, and unchained comments are siblings under
+  it. Thread shape — membership and depth — is `comment_thread`, a projection
+  walking the pointers; apply is a pure insert and stores no tree shape.
+- **Content is a value property, not a world property:** non-emptiness is enforced
+  at construction (a `Prose` type at CLI parse and wire assemble), never in
+  `validate` — `validate` keeps only world checks (target exists, parent is a
+  comment, same root). Empty text in a historical record fails wire assembly:
+  `Corrupt`, per the §10 format-stability boundary. `Prose` is code-level
+  vocabulary only; DESIGN speaks of prose, not `Prose`.
+- **No state gates:** comments are legal on any existing task, any state, forever.
+  Findings against a done task are the acceptance verdict (drop from done, note
+  naming the problem) *beside* the comment, not instead of it. What belongs in a
+  comment is skill discipline, not machinery.
+- **Keystone (discipline):** titles say what; comments say how. A comment that
+  changes the what is supersession (§3): spawn the successor, drop naming it.
+  Comments never mutate, never re-scope, never graduate; corrections are new
+  comments, later wins in the reader's eye.
+- **Surfacing:** the Object view (inspector dock / `show`) renders the tree,
+  indented and time-ordered — everything about the one thing. The canvas gains
+  nothing (no counts, no badges — the restraint invariant). `#seq` tokens inside
+  bodies are inert references (§10): backlinks, not structure.
+- **Licensing:** target arms extend by ratification only — the closed-set rule.
+  Gate-queue commentary is the named future candidate; it arrives as a `Proposal`
+  arm the day it earns one, never before.
+
+## 19. Glossary
 
 - **Task** — claimable work; closes on deposit (finding or receipt)
+- **Comment** — stateless attached prose; addresses a task (root) or another comment (reply); identity is its birth record
 - **Hypothesis** — a claim under test with versioned criteria; resolves to
   confirmed/refuted/split; agent verdicts provisional until human-verified
 - **Finding** — an immutable observation with provenance and relation

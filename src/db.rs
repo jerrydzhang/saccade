@@ -314,9 +314,9 @@ pub fn now_epoch() -> u64 {
 mod test {
     use super::*;
     use crate::events::Command;
-    use crate::objects::task::{Receipt, TaskId, TaskState};
+    use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
-    use crate::{ProposalAction, ProposalId, ProposalState, RecordId};
+    use crate::{CommentId, ProposalAction, ProposalId, ProposalState, Prose, RecordId, Target};
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().expect("open memory db");
@@ -342,7 +342,7 @@ mod test {
 
     fn create(name: &str) -> Command {
         Command::CreateTask {
-            name: name.into(),
+            name: Prose::new(name.into()).unwrap(),
             parent_id: None,
         }
     }
@@ -363,7 +363,7 @@ mod test {
             &human(),
             Command::CompleteTask {
                 id: TaskId(0),
-                receipt: Receipt("tests green".into()),
+                receipt: Prose::new("tests green".into()).unwrap(),
             },
             12,
         )
@@ -374,7 +374,7 @@ mod test {
             &mut conn,
             &agent(),
             Command::CreateProposal {
-                name: "duplicate of t-0".into(),
+                name: Prose::new("duplicate of t-0".into()).unwrap(),
                 action: ProposalAction::Drop { task_id: TaskId(1) },
             },
             14,
@@ -391,11 +391,34 @@ mod test {
         .unwrap();
         assert_eq!(compound.len(), 2);
 
+        // the thread round-trips: root on the task, reply to the record
+        execute(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("receipt verified against receipts test".into()).unwrap(),
+            },
+            30,
+        )
+        .unwrap();
+        execute(
+            &mut conn,
+            &human(),
+            Command::Comment {
+                target: Target::Comment(CommentId(RecordId(7))),
+                body: Prose::new("agreed, closing".into()).unwrap(),
+            },
+            31,
+        )
+        .unwrap();
+
+
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
-        assert_eq!(loadout.rows.len(), 7);
+        assert_eq!(loadout.rows.len(), 9);
         assert_eq!(loadout.rows[4].kind, "proposal_created");
         assert_eq!(loadout.rows[5].kind, "proposal_accepted");
         assert_eq!(loadout.rows[6].kind, "task_dropped");
@@ -406,6 +429,10 @@ mod test {
             world.proposals[&ProposalId(RecordId(4))].state,
             ProposalState::Accepted
         );
+        let reply = &world.comments[&CommentId(RecordId(8))];
+        let root = &world.comments[&CommentId(RecordId(7))];
+        assert_eq!(root.actor, "saccade bot");
+        assert_eq!(reply.actor, "human person");
 
         // bi-temporal: event time is caller-supplied, logged time is ours
         assert_eq!(loadout.rows[0].event_time, 10);
@@ -433,7 +460,7 @@ mod test {
                 &human(),
                 Command::CompleteTask {
                     id: TaskId(0),
-                    receipt: Receipt("tests green".into()),
+                    receipt: Prose::new("tests green".into()).unwrap(),
                 },
                 12,
             )

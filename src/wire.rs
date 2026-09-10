@@ -1,8 +1,9 @@
 use crate::events::Event;
+use crate::objects::comment::Target;
 use crate::objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
-use crate::objects::task::{Receipt, TaskId, TaskState};
-use crate::store::Tier;
-use crate::store::World;
+use crate::objects::task::{TaskId, TaskState};
+use crate::prose::Prose;
+use crate::store::{Tier, World};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
@@ -30,7 +31,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 #[derive(Serialize, Deserialize)]
 struct CreatedPayload {
     id: usize,
-    task_name: String,
+    task_name: Prose,
     parent_id: Option<usize>,
 }
 
@@ -42,18 +43,24 @@ struct IdPayload {
 #[derive(Serialize, Deserialize)]
 struct DonePayload {
     id: usize,
-    receipt: String,
+    receipt: Prose,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CommentedPayload {
+    target: Target,
+    body: Prose,
 }
 
 #[derive(Serialize, Deserialize)]
 struct NotedPayload {
     id: usize,
-    note: String,
+    note: Prose,
 }
 
 #[derive(Serialize, Deserialize)]
 struct ProposalCreatedPayload {
-    name: String,
+    name: Prose,
     action: ProposalAction,
 }
 
@@ -65,7 +72,7 @@ struct ProposalIdPayload {
 #[derive(Serialize, Deserialize)]
 struct ProposalNotedPayload {
     id: ProposalId,
-    note: String,
+    note: Prose,
 }
 
 /// Serializing an in-memory event cannot fail
@@ -92,7 +99,7 @@ pub fn disassemble(event: &Event) -> (&'static str, String) {
             "task_done",
             pack(&DonePayload {
                 id: id.0,
-                receipt: receipt.0.clone(),
+                receipt: receipt.clone(),
             }),
         ),
         Event::TaskDropped { id, note } => (
@@ -133,6 +140,13 @@ pub fn disassemble(event: &Event) -> (&'static str, String) {
                 note: note.clone(),
             }),
         ),
+        Event::Commented { target, body } => (
+            "commented",
+            pack(&CommentedPayload {
+                target: *target,
+                body: body.clone(),
+            }),
+        ),
     }
 }
 
@@ -162,7 +176,7 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
             let p: DonePayload = serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
             Ok(Event::TaskDone {
                 id: TaskId(p.id),
-                receipt: Receipt(p.receipt),
+                receipt: p.receipt,
             })
         }
         "task_dropped" => {
@@ -208,6 +222,14 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
                 note: p.note,
             })
         }
+        "commented" => {
+            let p: CommentedPayload =
+                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
+            Ok(Event::Commented {
+                target: p.target,
+                body: p.body,
+            })
+        }
         _ => Err(ParseFail::UnknownKind(kind.to_string())),
     }
 }
@@ -230,9 +252,9 @@ pub struct ProposalView {
     pub name: String,
 }
 
-pub fn view_of_proposal(p: &Proposal, world: &World) -> ProposalView {
+pub fn view_of_proposal(id: &ProposalId, p: &Proposal, world: &World) -> ProposalView {
     ProposalView {
-        id: p.id.0.0,
+        id: id.0 .0,
         state: match &p.state {
             ProposalState::Open if is_stale(p, world) => "stale",
             ProposalState::Open => "open",
@@ -249,7 +271,7 @@ pub fn view_of_proposal(p: &Proposal, world: &World) -> ProposalView {
                 format!("t-{}", task_id.0)
             }
         },
-        name: p.name.clone(),
+        name: p.name.as_str().to_string(),
     }
 }
 
@@ -264,11 +286,84 @@ fn is_stale(p: &Proposal, world: &World) -> bool {
     world
         .tasks
         .get(task_id.0)
-        .map(|t| t.state.validate(&p.action.target_event("")).is_err())
+        .map(|t| {
+            t.state
+                .validate(
+                    &p.action
+                        .target_event(&Prose::new("probe".into()).expect("probe is non-empty")),
+                )
+                .is_err()
+        })
         .unwrap_or(true)
 }
 
 /// Display task type
+pub struct CommentLine {
+    pub seq: usize,
+    pub depth: usize,
+    pub actor: String,
+    pub body: String,
+}
+
+pub struct ShowView {
+    pub id: String,
+    pub state: &'static str,
+    pub parent: Option<String>,
+    pub name: String,
+    pub receipt: Option<String>,
+}
+
+pub fn show_of(task_id: &TaskId, world: &World) -> Option<ShowView> {
+    let task = world.tasks.get(task_id.0)?;
+    let receipt = match &task.state {
+        TaskState::Done(r) => Some(r.as_str().to_string()),
+        _ => None,
+    };
+    Some(ShowView {
+        id: format!("t-{}", task_id.0),
+        state: state_of(&task.state),
+        parent: task.parent_id.map(|p| format!("t-{}", p.0)),
+        name: task.name.as_str().to_string(),
+        receipt,
+    })
+}
+
+
+/// The thread as a projection: the task is the root, so a comment
+/// addressing it sits at depth 1. A walk over the comment pointers.
+pub fn comment_thread(world: &World, task_id: &TaskId) -> Vec<CommentLine> {
+    let mut lines = Vec::new();
+    for (id, comment) in &world.comments {
+        let mut depth = 1;
+        let mut up = comment.target;
+        loop {
+            match up {
+                Target::Task(t) => {
+                    if t != *task_id {
+                        break;
+                    }
+                    lines.push(CommentLine {
+                        seq: id.0 .0,
+                        depth,
+                        actor: comment.actor.clone(),
+                        body: comment.body.as_str().to_string(),
+                    });
+                    break;
+                }
+                Target::Comment(addressed) => match world.comments.get(&addressed) {
+                    Some(parent) => {
+                        depth += 1;
+                        up = parent.target;
+                    }
+                    // unreachable: validate refuses unknown comment ids
+                    None => break,
+                },
+            }
+        }
+    }
+    lines
+}
+
 pub struct TaskView {
     pub id: String,
     pub state: &'static str,
@@ -289,18 +384,18 @@ pub fn view_of(task: &crate::objects::task::Task, world: &World) -> TaskView {
         id: format!("t-{}", task.id.0),
         state: state_of(&task.state),
         parent: task.parent_id.map(|p| format!("t-{}", p.0)),
-        name: task.name.clone(),
+        name: task.name.as_str().to_string(),
         proposal: world
             .proposals
-            .values()
-            .find(|p| {
+            .iter()
+            .find(|(_, p)| {
                 p.state == ProposalState::Open
                     && matches!(&p.action,
                         ProposalAction::Drop { task_id } | ProposalAction::Release { task_id }
                             if *task_id == task.id)
             })
-            .map(|p| ProposalMark {
-                seq: p.id.0.0,
+            .map(|(id, p)| ProposalMark {
+                seq: id.0 .0,
                 verb: match p.action {
                     ProposalAction::Drop { .. } => "drop",
                     ProposalAction::Release { .. } => "release",
@@ -312,36 +407,47 @@ pub fn view_of(task: &crate::objects::task::Task, world: &World) -> TaskView {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::objects::comment::CommentId;
+    use crate::prose::Prose;
+    use crate::store::RecordId;
 
     #[test]
     fn every_event_kind_round_trips() {
         let samples = [
             Event::TaskCreated {
                 id: TaskId(0),
-                name: "implement foo".into(),
+                name: Prose::new("implement foo".into()).unwrap(),
                 parent_id: None,
             },
             Event::TaskCreated {
                 id: TaskId(1),
-                name: "child".into(),
+                name: Prose::new("child".into()).unwrap(),
                 parent_id: Some(TaskId(0)),
             },
             Event::TaskClaimed { id: TaskId(0) },
             Event::TaskDone {
                 id: TaskId(0),
-                receipt: Receipt("tests green".into()),
+                receipt: Prose::new("tests green".into()).unwrap(),
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                note: "scope covered elsewhere".into(),
+                note: Prose::new("scope covered elsewhere".into()).unwrap(),
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                note: "superseded by t-2".into(),
+                note: Prose::new("superseded by t-2".into()).unwrap(),
             },
             Event::TaskReleased {
                 id: TaskId(0),
-                note: "run dead".into(),
+                note: Prose::new("run dead".into()).unwrap(),
+            },
+            Event::Commented {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("leaning sections, owner: jerry".into()).unwrap(),
+            },
+            Event::Commented {
+                target: Target::Comment(CommentId(RecordId(6))),
+                body: Prose::new("no - pure tree, here is why".into()).unwrap(),
             },
         ];
 
@@ -357,7 +463,10 @@ mod test {
     fn state_strings_are_the_identifier_vocabulary() {
         assert_eq!(state_of(&TaskState::Open), "open");
         assert_eq!(state_of(&TaskState::Claimed), "claimed");
-        assert_eq!(state_of(&TaskState::Done(Receipt(String::new()))), "done");
+        assert_eq!(
+            state_of(&TaskState::Done(Prose::new("filler".into()).unwrap())),
+            "done"
+        );
         assert_eq!(state_of(&TaskState::Dropped), "dropped");
     }
 
@@ -384,4 +493,5 @@ mod test {
             Err(ParseFail::Malformed { .. })
         ));
     }
+
 }

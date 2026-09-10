@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Reject;
+use crate::prose::Prose;
 use crate::events::Event;
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Receipt(pub String);
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub struct TaskId(pub usize);
@@ -15,7 +13,7 @@ pub enum TaskState {
     // TODO: give claimed an identity so we can
     // detect who claimed the task not just that was claimed
     Claimed,
-    Done(Receipt),
+    Done(Prose),
     Dropped,
 }
 
@@ -44,7 +42,7 @@ impl TaskState {
 pub struct Task {
     pub(crate) id: TaskId,
     pub(crate) state: TaskState,
-    pub(crate) name: String,
+    pub(crate) name: Prose,
     pub(crate) parent_id: Option<TaskId>,
 }
 
@@ -62,6 +60,7 @@ impl Task {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::prose::Prose;
 
     /// This test doesn't really test anything its more just a contract that at the time this test
     /// was written this is the expected behavior that shouldn't regress
@@ -70,27 +69,27 @@ mod test {
         let states = [
             TaskState::Open,
             TaskState::Claimed,
-            TaskState::Done(Receipt(String::new())),
+            TaskState::Done(Prose::new("filler".into()).unwrap()),
             TaskState::Dropped,
         ];
         let events = [
             Event::TaskCreated {
                 id: TaskId(0),
-                name: String::new(),
+                name: Prose::new("filler".into()).unwrap(),
                 parent_id: None,
             },
             Event::TaskClaimed { id: TaskId(0) },
             Event::TaskDone {
                 id: TaskId(0),
-                receipt: Receipt(String::new()),
+                receipt: Prose::new("filler".into()).unwrap(),
             },
             Event::TaskDropped {
                 id: TaskId(0),
-                note: String::new(),
+                note: Prose::new("filler".into()).unwrap(),
             },
             Event::TaskReleased {
                 id: TaskId(0),
-                note: String::new(),
+                note: Prose::new("filler".into()).unwrap(),
             },
         ];
 
