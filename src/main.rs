@@ -393,11 +393,10 @@ fn record_line(r: &StoredRecord) -> String {
 }
 
 fn render_tasks(cli: &Cli, world: &World) -> String {
-    let views: Vec<saccade::wire::TaskView> = world
-        .tasks
-        .iter()
-        .map(|t| saccade::wire::view_of(t, world))
-        .collect();
+    let views: Vec<saccade::wire::TaskView> = (0..world.tasks.len())
+        .map(|i| saccade::wire::view_of(&TaskId(i), world))
+        .collect::<Option<_>>()
+        .expect("indices come from the vec itself");
 
     if cli.json {
         let rows: Vec<serde_json::Value> = views

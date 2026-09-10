@@ -379,9 +379,10 @@ pub struct ProposalMark {
     pub verb: &'static str,
 }
 
-pub fn view_of(task: &crate::objects::task::Task, world: &World) -> TaskView {
-    TaskView {
-        id: format!("t-{}", task.id.0),
+pub fn view_of(id: &TaskId, world: &World) -> Option<TaskView> {
+    let task = world.tasks.get(id.0)?;
+    Some(TaskView {
+        id: format!("t-{}", id.0),
         state: state_of(&task.state),
         parent: task.parent_id.map(|p| format!("t-{}", p.0)),
         name: task.name.as_str().to_string(),
@@ -392,7 +393,7 @@ pub fn view_of(task: &crate::objects::task::Task, world: &World) -> TaskView {
                 p.state == ProposalState::Open
                     && matches!(&p.action,
                         ProposalAction::Drop { task_id } | ProposalAction::Release { task_id }
-                            if *task_id == task.id)
+                            if *task_id == *id)
             })
             .map(|(id, p)| ProposalMark {
                 seq: id.0 .0,
@@ -401,7 +402,7 @@ pub fn view_of(task: &crate::objects::task::Task, world: &World) -> TaskView {
                     ProposalAction::Release { .. } => "release",
                 },
             }),
-    }
+    })
 }
 
 #[cfg(test)]

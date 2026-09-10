@@ -40,7 +40,6 @@ impl TaskState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Task {
-    pub(crate) id: TaskId,
     pub(crate) state: TaskState,
     pub(crate) name: Prose,
     pub(crate) parent_id: Option<TaskId>,
@@ -52,7 +51,7 @@ impl Task {
         Ok(Task {
             state: new_state,
             name: self.name.clone(),
-            ..*self
+            parent_id: self.parent_id,
         })
     }
 }

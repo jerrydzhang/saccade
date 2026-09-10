@@ -70,7 +70,6 @@ impl World {
                 assert_eq!(id.0, self.tasks.len(), "non-dense TaskCreated id");
 
                 self.tasks.push(Task {
-                    id,
                     state: TaskState::Open,
                     name: task_name,
                     parent_id,
