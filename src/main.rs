@@ -458,28 +458,70 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
         .join("\n")
 }
 
+const WIDTH: usize = 80;
+
 /// The inspector dock as text: everything about the one thing.
 fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     let view = saccade::wire::show_of(&task_id, world)
         .ok_or_else(|| Fail::Usage(format!("no task t-{}", task_id.0)))?;
 
-    let mut out = vec![format!("{}\t{}\t{}", view.id, view.state, view.name)];
+    let mut out = vec![wrap(
+        &view.name,
+        WIDTH,
+        &format!("{}  {}  ", view.id, view.state),
+        "  ",
+    )];
     if let Some(parent) = &view.parent {
-        out.push(format!("parent\t{parent}"));
+        out.push(format!("parent  {parent}"));
     }
     if let Some(receipt) = &view.receipt {
-        out.push(format!("receipt\t{receipt}"));
+        out.push("receipt".to_string());
+        out.push(wrap(receipt, WIDTH, "  ", "  "));
     }
     for line in saccade::wire::comment_thread(world, &task_id) {
-        out.push(format!(
-            "  {}#{}\t{}\t{}",
-            "  ".repeat(line.depth.saturating_sub(1)),
-            line.seq,
-            line.actor,
-            line.body
+        let indent = "  ".repeat(line.depth.saturating_sub(1));
+        out.push(String::new());
+        out.push(format!("{indent}#{}  {}", line.seq, line.actor));
+        out.push(wrap(
+            &line.body,
+            WIDTH,
+            &format!("{indent}  "),
+            &format!("{indent}  "),
         ));
     }
     Ok(out.join("\n"))
+}
+
+/// Greedy word wrap; a word longer than a line is hard-broken so a single
+/// token cannot re-create the wall.
+fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
+    let body = width.saturating_sub(rest.chars().count()).max(1);
+    let mut pieces: Vec<Vec<char>> = Vec::new();
+    for word in text.split_whitespace() {
+        let chars: Vec<char> = word.chars().collect();
+        if chars.len() > body {
+            pieces.extend(chars.chunks(body).map(|c| c.to_vec()));
+        } else {
+            pieces.push(chars);
+        }
+    }
+    let mut out = String::new();
+    let mut budget = width.saturating_sub(first.chars().count());
+    for (i, piece) in pieces.into_iter().enumerate() {
+        if i == 0 {
+            out.push_str(first);
+        } else if piece.len() + 1 <= budget {
+            out.push(' ');
+            budget -= 1;
+        } else {
+            out.push('\n');
+            out.push_str(rest);
+            budget = body;
+        }
+        budget = budget.saturating_sub(piece.len());
+        out.extend(piece);
+    }
+    out
 }
 
 fn render_proposals(cli: &Cli, world: &World) -> String {
