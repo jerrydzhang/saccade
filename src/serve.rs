@@ -1,4 +1,5 @@
-//! The serve edge: canvas, dock, and stream over HTTP — §9's second rendering.
+//! The serve edge: canvas, dock, and stream over HTTP — the served
+//! rendering of the view model; the CLI is the first.
 //! Reads fold the world per request; WAL keeps that safe beside CLI writes.
 //! Writes are the human surface: the actor is claimed at the act, the tier is
 //! pinned human, and the wire never carries a tier.

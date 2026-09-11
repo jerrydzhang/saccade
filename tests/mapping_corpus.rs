@@ -91,7 +91,7 @@ fn done(conn: &mut rusqlite::Connection, id: TaskId, receipt: &str, at: u64) {
 ///  "created_at":1787401555,"closed_at":1787410018,
 ///  "title":"Enforce streaming limits on ingest and artifact uploads",
 ///  "close_reason":"Completed: _IngestBodyLimit meters actual ASGI receive bytes …"}
-/// §12: create@created_at under created_by; claim+done@closed_at under the
+/// create@created_at under created_by; claim+done@closed_at under the
 /// importer; receipt = close_reason + provenance.
 #[test]
 fn closed_with_receipt_folds_to_done() {
@@ -160,7 +160,7 @@ fn closed_with_receipt_folds_to_done() {
 
 /// jernerics-035 — judgment-shaped closure: a duplicate.
 /// close_reason: "Duplicate of jernerics-gvs (accidental bare create)"
-/// §12: import as an open task with its alias and stop; a human performs
+/// import as an open task with its alias and stop; a human performs
 /// the drop. The machine holds the gate, not the runbook's good behavior.
 #[test]
 fn duplicate_stops_at_the_gate() {
@@ -204,7 +204,7 @@ fn duplicate_stops_at_the_gate() {
 
 /// jernerics-jyl.13 — dotted manual child of jernerics-jyl, with no
 /// recorded creator and an empty close_reason.
-/// §12: dotted ids become parent edges; missing created_by falls back to
+/// dotted ids become parent edges; missing created_by falls back to
 /// the importer; an empty reason leaves the provenance line standing alone.
 #[test]
 fn dotted_child_becomes_a_parent_edge() {
@@ -266,7 +266,7 @@ fn dotted_child_becomes_a_parent_edge() {
 /// jernerics-jtvv + jtvv.7 — epic and child, both closed with receipts.
 /// close_reason (epic): "Epic complete: all children jtvv.1-jtvv.8 verified,
 /// merged to main, and closed …"
-/// §3 root convention: the epic is a task with children; the wrap receipt
+/// Root convention: the epic is a task with children; the wrap receipt
 /// is a done deposit like any other.
 #[test]
 fn epic_and_child_import_with_wrap_receipts() {
@@ -327,7 +327,7 @@ fn epic_and_child_import_with_wrap_receipts() {
 }
 
 /// symlab-gwb — in_progress, no closed_at, updated this week.
-/// §12 live-context door: "in progress" was beads' opinion that work was
+/// Live-context door: "in progress" was beads' opinion that work was
 /// occurring; at cutover the work is interrupted, and open is the honest
 /// state. Re-capture (claim + re-articulated context) happens as work
 /// resumes, not at import.

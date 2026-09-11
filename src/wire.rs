@@ -275,7 +275,7 @@ pub fn view_of_proposal(id: &ProposalId, p: &Proposal, world: &World) -> Proposa
     }
 }
 
-/// Derived staleness (§17): would the embedded act be refused today?
+/// Derived staleness: would the embedded act be refused today?
 /// The same probe decide uses at propose time — the quiet consumer to
 /// accept's loud one. A missing target counts as stale: the act would
 /// be refused.
