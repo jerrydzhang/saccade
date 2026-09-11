@@ -387,7 +387,9 @@ The law:
 - **Terminal mapping.** One view model, two renderings — terminal and served HTML; JSON
   stays machine-first. `list` renders the canvas's task projection; `proposals`, the
   gate; `log`, the stream; `show`, the dock. Slices are query-time operations in both:
-  flags and search here, URL parameters there.
+  flags and search here, URL parameters there. The two renderings are also two doors
+  for writing: the terminal claims actor and tier at each command; the served surface
+  claims the actor at the act and pins the human tier — the wire never carries a tier.
 - **Presentation.** The phone test is the forcing function: every rendering must survive
   a small screen — cut or collapse, never add navigation. Renderings are v1 and iterate
   against usage evidence; the contract above is the durable part, and the living v1 is
@@ -502,8 +504,8 @@ door).
 
 ## 13. Build order and ownership
 
-Stack: **Rust** (axum, tokio confined to the HTTP edge, rusqlite, server-rendered
-templates + htmx). Specific dependencies are chosen as they come up, not batch-decided.
+Stack: **Rust** (tiny_http at the edge, rusqlite, hand-rendered HTML). Specific
+dependencies are chosen as they come up, not batch-decided.
 Design was the hard part; implementation is transcription of settled invariants
 (~5–7k LOC). Rust earns its keep exactly where the invariants live: state machines as
 enums with exhaustive matching, newtype IDs (`TaskId`/`HypothesisId`/`FindingId`),
