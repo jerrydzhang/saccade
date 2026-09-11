@@ -1,5 +1,6 @@
 .direnv
 librust_out.rlib
+result
 
 # repo-local dogfood log (events db + WAL sidecars)
 saccade.db
