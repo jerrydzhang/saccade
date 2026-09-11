@@ -63,6 +63,8 @@ else in that file was derivable or outdated; git history holds the rest.
   painful volume, whichever comes first.
 - No counts, no badges — the restraint invariant, restated for every
   rendering.
+- Every capability that reduces contact must add record in the same change;
+  comprehension rides the record, never the conversation.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes — accepted).
 
