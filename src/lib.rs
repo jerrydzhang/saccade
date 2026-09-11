@@ -717,5 +717,4 @@ mod invariant {
         );
         assert_eq!(log.world().tasks[0].state, TaskState::Open);
     }
-
 }

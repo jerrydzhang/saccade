@@ -46,13 +46,12 @@ fn alias(title: &str, id: &str) -> Prose {
 }
 
 fn receipt(reason: &str, id: &str) -> Prose {
-    Prose::new(
-    if reason.is_empty() {
-            format!("[imported from beads {id}]")
-        } else {
-            format!("{reason} [imported from beads {id}]")
-        }
-    ).unwrap()
+    Prose::new(if reason.is_empty() {
+        format!("[imported from beads {id}]")
+    } else {
+        format!("{reason} [imported from beads {id}]")
+    })
+    .unwrap()
 }
 
 fn db_path(name: &str) -> PathBuf {

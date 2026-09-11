@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Reject;
-use crate::prose::Prose;
 use crate::events::Event;
+use crate::prose::Prose;
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub struct TaskId(pub usize);

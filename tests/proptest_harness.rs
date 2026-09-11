@@ -276,8 +276,7 @@ fn generator_reaches_deep_states() {
                         Action::Withdraw { .. } => *milestones.entry("withdraw").or_default() += 1,
                         _ => {}
                     }
-                    if let saccade::Event::Commented { target, .. } =
-                        &records.last().unwrap().event
+                    if let saccade::Event::Commented { target, .. } = &records.last().unwrap().event
                     {
                         let d = match target {
                             saccade::Target::Task(_) => 1,

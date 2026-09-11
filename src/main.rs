@@ -8,7 +8,9 @@ use saccade::World;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::wire::ProposalView;
-use saccade::{Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId, Reject, Target, Tier};
+use saccade::{
+    Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId, Reject, Target, Tier,
+};
 
 #[derive(Parser)]
 #[command(name = "sac", about = "Saccade: awesome issue tracker")]
@@ -105,14 +107,9 @@ enum Cmd {
     /// List proposals (the ruling queue)
     Proposals,
     /// Attach a comment to a task (t-<n>) or reply to a comment (#<seq>)
-    Comment {
-        target: String,
-        body: String,
-    },
+    Comment { target: String, body: String },
     /// Everything about one task: state, receipt, comment thread
-    Show {
-        id: String,
-    },
+    Show { id: String },
     /// Serve the read-only canvas over HTTP (127.0.0.1 by default)
     Serve {
         #[arg(long, default_value = "127.0.0.1")]

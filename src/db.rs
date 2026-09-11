@@ -413,7 +413,6 @@ mod test {
         )
         .unwrap();
 
-
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");

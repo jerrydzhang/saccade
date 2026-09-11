@@ -202,7 +202,7 @@ impl Log {
 mod test {
     use super::*;
     use crate::prose::Prose;
-    
+
     fn agent() -> Context {
         Context {
             actor: "saccade bot".into(),

@@ -254,7 +254,7 @@ pub struct ProposalView {
 
 pub fn view_of_proposal(id: &ProposalId, p: &Proposal, world: &World) -> ProposalView {
     ProposalView {
-        id: id.0 .0,
+        id: id.0.0,
         state: match &p.state {
             ProposalState::Open if is_stale(p, world) => "stale",
             ProposalState::Open => "open",
@@ -328,7 +328,6 @@ pub fn show_of(task_id: &TaskId, world: &World) -> Option<ShowView> {
     })
 }
 
-
 /// The thread as a projection: the task is the root, so a comment
 /// addressing it sits at depth 1. A walk over the comment pointers.
 pub fn comment_thread(world: &World, task_id: &TaskId) -> Vec<CommentLine> {
@@ -343,7 +342,7 @@ pub fn comment_thread(world: &World, task_id: &TaskId) -> Vec<CommentLine> {
                         break;
                     }
                     lines.push(CommentLine {
-                        seq: id.0 .0,
+                        seq: id.0.0,
                         depth,
                         actor: comment.actor.clone(),
                         body: comment.body.as_str().to_string(),
@@ -398,7 +397,7 @@ pub fn view_of(id: &TaskId, world: &World) -> Option<TaskView> {
                             if *task_id == *id)
             })
             .map(|(id, p)| ProposalMark {
-                seq: id.0 .0,
+                seq: id.0.0,
                 verb: match p.action {
                     ProposalAction::Drop { .. } => "drop",
                     ProposalAction::Release { .. } => "release",
@@ -497,5 +496,4 @@ mod test {
             Err(ParseFail::Malformed { .. })
         ));
     }
-
 }

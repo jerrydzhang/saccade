@@ -30,9 +30,11 @@
         };
       in {
         default = pkgs.mkShell {
-          packages = [
+          packages = with pkgs; [
             rustToolchain
             (pkgs.python3.withPackages (ps: [ps.playwright]))
+            prek
+            just
           ];
 
           shellHook = ''
