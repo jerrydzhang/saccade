@@ -82,7 +82,7 @@ fn respond_get(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Curs
         Route::Canvas(dock) => match loadout.state {
             LoadState::Full(world) => html(
                 200,
-                &render_canvas(&world, &closing_order(&loadout.rows), dock, &form),
+                &render_canvas(&world, &canvas(&world, &loadout.rows), dock, &form),
             ),
             LoadState::Degraded(reason) => {
                 page(503, &format!("world projection unavailable: {reason}"))
@@ -480,8 +480,18 @@ fn task_num(id: &str) -> Option<usize> {
     id.strip_prefix("t-").and_then(|n| n.parse().ok())
 }
 
-/// Per task, the seq of its latest closing act (done or drop): the history panel orders by these.
-fn closing_order(rows: &[db::StoredRecord]) -> HashMap<usize, usize> {
+/// The canvas panels in render order — render emits, never derives.
+struct Canvas {
+    ready: Vec<TaskView>,
+    inflight: Vec<TaskView>,
+    history: Vec<TaskView>,
+    gate: Vec<wire::ProposalView>,
+}
+
+/// View construction for the canvas, all of it: panels partitioned, history
+/// ordered most-recently-closed first by each task's latest closing act
+/// (done or drop). The rows supply that seq; the fold keeps none.
+fn canvas(world: &World, rows: &[db::StoredRecord]) -> Canvas {
     let mut closed = HashMap::new();
     for row in rows {
         if let Ok(Event::TaskDone { id, .. } | Event::TaskDropped { id, .. }) =
@@ -490,41 +500,19 @@ fn closing_order(rows: &[db::StoredRecord]) -> HashMap<usize, usize> {
             closed.insert(id.0, row.seq);
         }
     }
-    closed
-}
-
-fn task_rows(rows: &[&TaskView]) -> String {
-    rows.iter()
-        .map(|v| {
-            let mark = if v.comments > 0 { "#" } else { "" };
-            let href = task_num(&v.id).map(|n| format!("/?t={n}")).unwrap_or_default();
-            format!(
-                "<a class=\"row\" href=\"{href}\"><span class=\"id\">{}</span><span class=\"state\">{}</span><span class=\"name\">{}</span><span class=\"mark\">{mark}</span></a>\n",
-                esc(&v.id),
-                esc(v.state),
-                esc(&v.name),
-            )
-        })
-        .collect()
-}
-
-fn render_canvas(
-    world: &World,
-    closed: &HashMap<usize, usize>,
-    dock_id: Option<usize>,
-    form: &FormState,
-) -> String {
     let mut all: Vec<TaskView> = (0..world.tasks.len())
         .filter_map(|i| wire::view_of(&TaskId(i), world))
         .collect();
     all.sort_by_key(|v| task_num(&v.id).unwrap_or(0));
-    let (ready, inflight, mut history): (Vec<&TaskView>, Vec<&TaskView>, Vec<&TaskView>) = (
-        all.iter().filter(|v| v.state == "open").collect(),
-        all.iter().filter(|v| v.state == "claimed").collect(),
-        all.iter()
-            .filter(|v| v.state == "done" || v.state == "dropped")
-            .collect(),
-    );
+    let (mut ready, mut inflight, mut history): (Vec<TaskView>, Vec<TaskView>, Vec<TaskView>) =
+        (Vec::new(), Vec::new(), Vec::new());
+    for v in all {
+        match v.state {
+            "open" => ready.push(v),
+            "claimed" => inflight.push(v),
+            _ => history.push(v),
+        }
+    }
     history.sort_by_key(|v| {
         std::cmp::Reverse(
             closed
@@ -539,7 +527,32 @@ fn render_canvas(
         .map(|(id, p)| wire::view_of_proposal(id, p, world))
         .filter(|v| v.state == "open")
         .collect();
-    let gate_rows: String = gate
+    Canvas {
+        ready,
+        inflight,
+        history,
+        gate,
+    }
+}
+
+fn task_rows(rows: &[TaskView]) -> String {
+    rows.iter()
+        .map(|v| {
+            let mark = if v.comments > 0 { "#" } else { "" };
+            let href = task_num(&v.id).map(|n| format!("/?t={n}")).unwrap_or_default();
+            format!(
+                "<a class=\"row\" href=\"{href}\"><span class=\"id\">{}</span><span class=\"state\">{}</span><span class=\"name\">{}</span><span class=\"mark\">{mark}</span></a>\n",
+                esc(&v.id),
+                esc(v.state),
+                esc(&v.name),
+            )
+        })
+        .collect()
+}
+
+fn render_canvas(world: &World, c: &Canvas, dock_id: Option<usize>, form: &FormState) -> String {
+    let gate_rows: String = c
+        .gate
         .iter()
         .map(|p| {
             let href = task_num(&p.task).map(|n| format!("/t/{n}")).unwrap_or_default();
@@ -568,9 +581,9 @@ fn render_canvas(
 
     format!(
         "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade · canvas</title><style>{STYLE}</style></head>\n<body>\n<header><span>SACCADE · CANVAS</span><a href=\"/stream\">stream →</a></header>\n<div class=\"{main_class}\">\n<div id=\"panels\">\n<h2>Tasks</h2>\n<h2 class=\"sub\">Ready</h2>\n{}\n<h2 class=\"sub\">In-flight</h2>\n{}\n<details class=\"hist\"><summary><h2>History</h2></summary>\n{}\n</details>\n<h2>Gate queue · judgment</h2>\n{gate_rows}\n</div>\n{}\n</div>\n<div id=\"hint\">canvas · stream holds the history · dock summoned per object</div>\n</body></html>\n",
-        task_rows(&ready),
-        task_rows(&inflight),
-        task_rows(&history),
+        task_rows(&c.ready),
+        task_rows(&c.inflight),
+        task_rows(&c.history),
         dock_html.unwrap_or_default(),
     )
 }
@@ -832,12 +845,8 @@ mod tests {
 
     #[test]
     fn canvas_escapes_names_and_links_rows() {
-        let html = render_canvas(
-            &world_with("implement <foo>"),
-            &HashMap::new(),
-            None,
-            &FormState::default(),
-        );
+        let world = world_with("implement <foo>");
+        let html = render_canvas(&world, &canvas(&world, &[]), None, &FormState::default());
         assert!(html.contains("implement &lt;foo&gt;"));
         assert!(!html.contains("implement <foo>"));
         assert!(html.contains("href=\"/?t=0\""));
@@ -846,12 +855,8 @@ mod tests {
 
     #[test]
     fn unknown_dock_leaves_canvas_whole() {
-        let html = render_canvas(
-            &world_with("implement foo"),
-            &HashMap::new(),
-            Some(9),
-            &FormState::default(),
-        );
+        let world = world_with("implement foo");
+        let html = render_canvas(&world, &canvas(&world, &[]), Some(9), &FormState::default());
         assert!(!html.contains("id=\"dock\""));
     }
 
@@ -954,7 +959,7 @@ mod tests {
         ];
         let world = World::replay(events.clone());
         let rows: Vec<db::StoredRecord> = events.iter().map(|r| stored(r.id.0, &r.event)).collect();
-        let html = render_canvas(&world, &closing_order(&rows), None, &FormState::default());
+        let html = render_canvas(&world, &canvas(&world, &rows), None, &FormState::default());
         let hist = html.split("<details class=\"hist\">").nth(1).unwrap();
         assert!(hist.find("t-0").unwrap() < hist.find("t-1").unwrap());
     }
