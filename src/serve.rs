@@ -9,7 +9,8 @@ use saccade::objects::comment::{CommentId, Target};
 use saccade::objects::proposal::ProposalId;
 use saccade::objects::task::TaskId;
 use saccade::wire::{self, TaskView};
-use saccade::{Command, Context, Prose, RecordId, Reject, Tier, World};
+use saccade::{Command, Context, Event, Prose, RecordId, Reject, Tier, World};
+use std::collections::HashMap;
 use std::io::Cursor;
 
 pub fn run(
@@ -18,8 +19,7 @@ pub fn run(
     port: u16,
 ) -> Result<std::convert::Infallible, String> {
     let addr = format!("{bind}:{port}");
-    let server =
-        tiny_http::Server::http(&addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
+    let server = tiny_http::Server::http(&addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
     if !matches!(bind, "127.0.0.1" | "localhost" | "::1" | "[::1]") {
         eprintln!(
             "bound {bind}: any device that can reach port {port} can write events (human tier)"
@@ -80,7 +80,10 @@ fn respond_get(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Curs
     match parse_route(&req.url) {
         Route::Stream => html(200, &render_stream(&loadout.rows)),
         Route::Canvas(dock) => match loadout.state {
-            LoadState::Full(world) => html(200, &render_canvas(&world, dock, &form)),
+            LoadState::Full(world) => html(
+                200,
+                &render_canvas(&world, &closing_order(&loadout.rows), dock, &form),
+            ),
             LoadState::Degraded(reason) => {
                 page(503, &format!("world projection unavailable: {reason}"))
             }
@@ -154,18 +157,20 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
         },
         PostRoute::NotFound => return page(404, "nothing here — try / or /stream"),
     };
-    let who = req
-        .actor
-        .clone()
-        .filter(|a| !a.is_empty())
-        .or_else(|| {
-            let w = clean_actor(form_field(&fields, "who"));
-            (!w.is_empty()).then_some(w)
-        });
+    let who = req.actor.clone().filter(|a| !a.is_empty()).or_else(|| {
+        let w = clean_actor(form_field(&fields, "who"));
+        (!w.is_empty()).then_some(w)
+    });
     let (actor, first_claim) = match who {
         Some(w) => (w, req.actor.is_none()),
         None => {
-            return post_reject(req, db_path, n, &fields, "a name is required to record the act")
+            return post_reject(
+                req,
+                db_path,
+                n,
+                &fields,
+                "a name is required to record the act",
+            );
         }
     };
     let set_actor = first_claim.then(|| actor.clone());
@@ -189,9 +194,7 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
             };
             redirect(&format!("/t/{n}{fragment}"), set_actor.as_deref())
         }
-        Err(ExecuteFail::Reject(r)) => {
-            post_reject(req, db_path, n, &fields, &reject_text(&r))
-        }
+        Err(ExecuteFail::Reject(r)) => post_reject(req, db_path, n, &fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
             page(503, &format!("world projection unavailable: {reason}"))
         }
@@ -233,12 +236,10 @@ fn redirect(location: &str, set_actor: Option<&str>) -> tiny_http::Response<Curs
     let mut r = tiny_http::Response::from_string(String::new()).with_status_code(303);
     r = r.with_header(header("Location", location));
     if let Some(name) = set_actor {
-        r = r.with_header(
-            header(
-                "Set-Cookie",
-                &format!("actor={name}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"),
-            ),
-        );
+        r = r.with_header(header(
+            "Set-Cookie",
+            &format!("actor={name}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"),
+        ));
     }
     r
 }
@@ -347,7 +348,11 @@ fn proposal_task(db_path: &std::path::Path, seq: usize) -> Option<usize> {
         LoadState::Full(w) => w,
         LoadState::Degraded(_) => return None,
     };
-    let view = wire::view_of_proposal(&ProposalId(RecordId(seq)), world.proposals.get(&ProposalId(RecordId(seq)))?, &world);
+    let view = wire::view_of_proposal(
+        &ProposalId(RecordId(seq)),
+        world.proposals.get(&ProposalId(RecordId(seq)))?,
+        &world,
+    );
     if view.state != "open" {
         return None;
     }
@@ -450,8 +455,7 @@ fn response(status: u16, body: &str) -> tiny_http::Response<Cursor<Vec<u8>>> {
     let content_type =
         tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
             .unwrap();
-    let no_store =
-        tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap();
+    let no_store = tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap();
     tiny_http::Response::from_string(body.to_string())
         .with_status_code(status)
         .with_header(content_type)
@@ -476,6 +480,19 @@ fn task_num(id: &str) -> Option<usize> {
     id.strip_prefix("t-").and_then(|n| n.parse().ok())
 }
 
+/// Per task, the seq of its latest closing act (done or drop): the history panel orders by these.
+fn closing_order(rows: &[db::StoredRecord]) -> HashMap<usize, usize> {
+    let mut closed = HashMap::new();
+    for row in rows {
+        if let Ok(Event::TaskDone { id, .. } | Event::TaskDropped { id, .. }) =
+            wire::assemble(&row.kind, &row.payload)
+        {
+            closed.insert(id.0, row.seq);
+        }
+    }
+    closed
+}
+
 fn task_rows(rows: &[&TaskView]) -> String {
     rows.iter()
         .map(|v| {
@@ -491,18 +508,31 @@ fn task_rows(rows: &[&TaskView]) -> String {
         .collect()
 }
 
-fn render_canvas(world: &World, dock_id: Option<usize>, form: &FormState) -> String {
+fn render_canvas(
+    world: &World,
+    closed: &HashMap<usize, usize>,
+    dock_id: Option<usize>,
+    form: &FormState,
+) -> String {
     let mut all: Vec<TaskView> = (0..world.tasks.len())
         .filter_map(|i| wire::view_of(&TaskId(i), world))
         .collect();
     all.sort_by_key(|v| task_num(&v.id).unwrap_or(0));
-    let (ready, inflight, history): (Vec<&TaskView>, Vec<&TaskView>, Vec<&TaskView>) = (
+    let (ready, inflight, mut history): (Vec<&TaskView>, Vec<&TaskView>, Vec<&TaskView>) = (
         all.iter().filter(|v| v.state == "open").collect(),
         all.iter().filter(|v| v.state == "claimed").collect(),
         all.iter()
             .filter(|v| v.state == "done" || v.state == "dropped")
             .collect(),
     );
+    history.sort_by_key(|v| {
+        std::cmp::Reverse(
+            closed
+                .get(&task_num(&v.id).unwrap_or(0))
+                .copied()
+                .unwrap_or(0),
+        )
+    });
     let gate: Vec<wire::ProposalView> = world
         .proposals
         .iter()
@@ -530,7 +560,11 @@ fn render_canvas(world: &World, dock_id: Option<usize>, form: &FormState) -> Str
             dock_content(&view, world, form)
         ))
     });
-    let main_class = if dock_html.is_some() { "main" } else { "main nodock" };
+    let main_class = if dock_html.is_some() {
+        "main"
+    } else {
+        "main nodock"
+    };
 
     format!(
         "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade · canvas</title><style>{STYLE}</style></head>\n<body>\n<header><span>SACCADE · CANVAS</span><a href=\"/stream\">stream →</a></header>\n<div class=\"{main_class}\">\n<div id=\"panels\">\n<h2>Tasks</h2>\n<h2 class=\"sub\">Ready</h2>\n{}\n<h2 class=\"sub\">In-flight</h2>\n{}\n<details class=\"hist\"><summary><h2>History</h2></summary>\n{}\n</details>\n<h2>Gate queue · judgment</h2>\n{gate_rows}\n</div>\n{}\n</div>\n<div id=\"hint\">canvas · stream holds the history · dock summoned per object</div>\n</body></html>\n",
@@ -594,7 +628,9 @@ fn dock_content(view: &TaskView, world: &World, form: &FormState) -> String {
     let reply_banner = form
         .reply
         .map(|seq| {
-            format!("<div class=\"rbanner\">→ replying to #{seq} · <a href=\"/t/{n}\">clear</a></div>\n")
+            format!(
+                "<div class=\"rbanner\">→ replying to #{seq} · <a href=\"/t/{n}\">clear</a></div>\n"
+            )
         })
         .unwrap_or_default();
     let reply_hidden = form
@@ -759,7 +795,10 @@ mod tests {
         assert!(matches!(parse_route("/?t=x"), Route::Canvas(None)));
         assert!(matches!(parse_route("/stream"), Route::Stream));
         assert!(matches!(parse_route("/t/17"), Route::Task(17, None)));
-        assert!(matches!(parse_route("/t/17?reply=4"), Route::Task(17, Some(4))));
+        assert!(matches!(
+            parse_route("/t/17?reply=4"),
+            Route::Task(17, Some(4))
+        ));
         assert!(matches!(parse_route("/t-17"), Route::Task(17, None)));
         assert!(matches!(parse_route("/nope"), Route::NotFound));
         assert!(matches!(parse_route("/t/x"), Route::NotFound));
@@ -793,7 +832,12 @@ mod tests {
 
     #[test]
     fn canvas_escapes_names_and_links_rows() {
-        let html = render_canvas(&world_with("implement <foo>"), None, &FormState::default());
+        let html = render_canvas(
+            &world_with("implement <foo>"),
+            &HashMap::new(),
+            None,
+            &FormState::default(),
+        );
         assert!(html.contains("implement &lt;foo&gt;"));
         assert!(!html.contains("implement <foo>"));
         assert!(html.contains("href=\"/?t=0\""));
@@ -802,22 +846,33 @@ mod tests {
 
     #[test]
     fn unknown_dock_leaves_canvas_whole() {
-        let html = render_canvas(&world_with("implement foo"), Some(9), &FormState::default());
+        let html = render_canvas(
+            &world_with("implement foo"),
+            &HashMap::new(),
+            Some(9),
+            &FormState::default(),
+        );
         assert!(!html.contains("id=\"dock\""));
     }
 
     #[test]
     fn judgment_block_and_comment_form_render() {
         let world = World::replay(vec![
-            record(0, Event::TaskCreated {
-                id: TaskId(0),
-                name: Prose::new("implement foo".into()).unwrap(),
-                parent_id: None,
-            }),
-            record(1, Event::ProposalCreated {
-                name: Prose::new("stale by supersession".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            }),
+            record(
+                0,
+                Event::TaskCreated {
+                    id: TaskId(0),
+                    name: Prose::new("implement foo".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                Event::ProposalCreated {
+                    name: Prose::new("stale by supersession".into()).unwrap(),
+                    action: ProposalAction::Drop { task_id: TaskId(0) },
+                },
+            ),
         ]);
         let view = wire::view_of(&TaskId(0), &world).unwrap();
         let html = render_object(&view, &world, &FormState::default());
@@ -829,22 +884,79 @@ mod tests {
     #[test]
     fn reply_retargets_the_form() {
         let world = World::replay(vec![
-            record(0, Event::TaskCreated {
-                id: TaskId(0),
-                name: Prose::new("implement foo".into()).unwrap(),
-                parent_id: None,
-            }),
-            record(1, Event::Commented {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("receipt lands here".into()).unwrap(),
-            }),
+            record(
+                0,
+                Event::TaskCreated {
+                    id: TaskId(0),
+                    name: Prose::new("implement foo".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                Event::Commented {
+                    target: Target::Task(TaskId(0)),
+                    body: Prose::new("receipt lands here".into()).unwrap(),
+                },
+            ),
         ]);
         let view = wire::view_of(&TaskId(0), &world).unwrap();
-        let html = render_object(&view, &world, &FormState { reply: Some(1), ..Default::default() });
+        let html = render_object(
+            &view,
+            &world,
+            &FormState {
+                reply: Some(1),
+                ..Default::default()
+            },
+        );
         assert!(html.contains("id=\"c-1\""));
         assert!(html.contains("replying to #1"));
         assert!(html.contains("name=\"reply\" value=\"1\""));
         assert!(html.contains("?reply=1\""));
+    }
+
+    /// t-0 closed last, so it leads history despite its lower id.
+    #[test]
+    fn history_reads_most_recently_closed_first() {
+        let events = vec![
+            record(
+                0,
+                Event::TaskCreated {
+                    id: TaskId(0),
+                    name: Prose::new("migrate floop".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                Event::TaskCreated {
+                    id: TaskId(1),
+                    name: Prose::new("implement foo".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(2, Event::TaskClaimed { id: TaskId(1) }),
+            record(
+                3,
+                Event::TaskDone {
+                    id: TaskId(1),
+                    receipt: Prose::new("suite green".into()).unwrap(),
+                },
+            ),
+            record(4, Event::TaskClaimed { id: TaskId(0) }),
+            record(
+                5,
+                Event::TaskDone {
+                    id: TaskId(0),
+                    receipt: Prose::new("smoke clean".into()).unwrap(),
+                },
+            ),
+        ];
+        let world = World::replay(events.clone());
+        let rows: Vec<db::StoredRecord> = events.iter().map(|r| stored(r.id.0, &r.event)).collect();
+        let html = render_canvas(&world, &closing_order(&rows), None, &FormState::default());
+        let hist = html.split("<details class=\"hist\">").nth(1).unwrap();
+        assert!(hist.find("t-0").unwrap() < hist.find("t-1").unwrap());
     }
 
     #[test]
@@ -854,6 +966,19 @@ mod tests {
         let html = render_object(&view, &world, &FormState::default());
         assert!(html.contains("DOCK · t-0"));
         assert!(html.contains("href=\"/\""));
+    }
+
+    fn stored(seq: usize, event: &Event) -> db::StoredRecord {
+        let (kind, payload) = wire::disassemble(event);
+        db::StoredRecord {
+            seq,
+            event_time: 0,
+            logged_time: 0,
+            actor: "jerry".into(),
+            tier: "human".into(),
+            kind: kind.into(),
+            payload,
+        }
     }
 
     fn record(seq: usize, event: Event) -> Record {
