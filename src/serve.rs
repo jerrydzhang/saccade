@@ -566,21 +566,26 @@ fn render_canvas(world: &World, c: &Canvas, dock_id: Option<usize>, form: &FormS
         })
         .collect();
 
-    let dock_html = dock_id.and_then(|n| {
-        let view = wire::view_of(&TaskId(n), world)?;
-        Some(format!(
-            "<div id=\"dock\">\n{}\n</div>\n",
-            dock_content(&view, world, form)
-        ))
-    });
-    let main_class = if dock_html.is_some() {
+    let docked = dock_id.and_then(|n| wire::view_of(&TaskId(n), world));
+    let main_class = if docked.is_some() {
         "main"
     } else {
         "main nodock"
     };
+    // details state dies at every navigation; a docked history entry re-opens the panel
+    let hist_open = match &docked {
+        Some(v) if v.state == "done" || v.state == "dropped" => " open",
+        _ => "",
+    };
+    let dock_html = docked.map(|view| {
+        format!(
+            "<div id=\"dock\">\n{}\n</div>\n",
+            dock_content(&view, world, form)
+        )
+    });
 
     format!(
-        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade · canvas</title><style>{STYLE}</style></head>\n<body>\n<header><span>SACCADE · CANVAS</span><a href=\"/stream\">stream →</a></header>\n<div class=\"{main_class}\">\n<div id=\"panels\">\n<h2>Tasks</h2>\n<h2 class=\"sub\">Ready</h2>\n{}\n<h2 class=\"sub\">In-flight</h2>\n{}\n<details class=\"hist\"><summary><h2>History</h2></summary>\n{}\n</details>\n<h2>Gate queue · judgment</h2>\n{gate_rows}\n</div>\n{}\n</div>\n<div id=\"hint\">canvas · stream holds the history · dock summoned per object</div>\n</body></html>\n",
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade · canvas</title><style>{STYLE}</style></head>\n<body>\n<header><span>SACCADE · CANVAS</span><a href=\"/stream\">stream →</a></header>\n<div class=\"{main_class}\">\n<div id=\"panels\">\n<h2>Tasks</h2>\n<h2 class=\"sub\">Ready</h2>\n{}\n<h2 class=\"sub\">In-flight</h2>\n{}\n<details class=\"hist\"{hist_open}><summary><h2>History</h2></summary>\n{}\n</details>\n<h2>Gate queue · judgment</h2>\n{gate_rows}\n</div>\n{}\n</div>\n<div id=\"hint\">canvas · stream holds the history · dock summoned per object</div>\n</body></html>\n",
         task_rows(&c.ready),
         task_rows(&c.inflight),
         task_rows(&c.history),
@@ -962,6 +967,45 @@ mod tests {
         let html = render_canvas(&world, &canvas(&world, &rows), None, &FormState::default());
         let hist = html.split("<details class=\"hist\">").nth(1).unwrap();
         assert!(hist.find("t-0").unwrap() < hist.find("t-1").unwrap());
+    }
+
+    /// The history panel renders open when the dock holds a closed task, so clicking
+    /// between history entries never collapses it.
+    #[test]
+    fn history_panel_opens_when_the_dock_is_history() {
+        let events = vec![
+            record(
+                0,
+                Event::TaskCreated {
+                    id: TaskId(0),
+                    name: Prose::new("implement foo".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                Event::TaskCreated {
+                    id: TaskId(1),
+                    name: Prose::new("migrate floop".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(2, Event::TaskClaimed { id: TaskId(1) }),
+            record(
+                3,
+                Event::TaskDone {
+                    id: TaskId(1),
+                    receipt: Prose::new("suite green".into()).unwrap(),
+                },
+            ),
+        ];
+        let world = World::replay(events.clone());
+        let rows: Vec<db::StoredRecord> = events.iter().map(|r| stored(r.id.0, &r.event)).collect();
+        let c = canvas(&world, &rows);
+        let docked_history = render_canvas(&world, &c, Some(1), &FormState::default());
+        assert!(docked_history.contains("<details class=\"hist\" open>"));
+        let docked_open = render_canvas(&world, &c, Some(0), &FormState::default());
+        assert!(docked_open.contains("<details class=\"hist\">"));
     }
 
     #[test]
