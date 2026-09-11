@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod serve;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use saccade::World;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
@@ -110,6 +112,13 @@ enum Cmd {
     /// Everything about one task: state, receipt, comment thread
     Show {
         id: String,
+    },
+    /// Serve the read-only canvas over HTTP (127.0.0.1 by default)
+    Serve {
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        #[arg(long, default_value_t = 8811)]
+        port: u16,
     },
 }
 
@@ -254,6 +263,12 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             body: Prose::new(body.clone())?,
         },
         Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => return read_only(cli),
+        Cmd::Serve { bind, port } => {
+            return match serve::run(&cli.db, &bind, *port) {
+                Err(e) => Err(Fail::Usage(e)),
+                Ok(infallible) => match infallible {},
+            };
+        }
     };
 
     // Identity is required only where it is recorded: mutating commands.

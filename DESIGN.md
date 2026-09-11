@@ -114,7 +114,7 @@ and rule changes get their own task:
 7. **Prescription lives in act grammar and discipline, never in restriction.**
    Flexibility and prescriptiveness are orthogonal.
 8. **Surfaces: one canvas, trigger-licensed docks, slices never.**
-9. **Closed sets extend by ratification only** — carriers, target arms, panels.
+9. **Closed sets extend by ratification only** — carriers, target arms, panels, modes.
 
 Comments (§18) are the first object derived by application rather than debate:
 addressed after birth (rule 2), pointed-at (rule 3), nothing branches on their
@@ -341,85 +341,73 @@ explainable, zero LLM — plus FTS5 for the unanchored case. Embeddings are admi
 via a pre-registered experiment ("misses ≥15%, FTS-irrelevant, over N weeks"). Session
 digests are precomputed at write time; session start is one indexed read, zero LLM calls.
 
-## 9. Views — five, trigger-shaped
+## 9. The view model
 
-Derivation rule: *a view exists iff it answers one recurring question, at one trigger,
-from one projection.* Tests: the **trigger test** (one trigger per view; two triggers →
-split) and the **leave-test** (a view does too little if its question can't be answered
-inside it). Presentations are v1 and iterate against usage evidence; the questions are
-the contract.
+The plain version, ratified — each sentence a constraint on the law below:
 
-| View | Trigger | Question |
-|---|---|---|
-| **Digest** | session start | where do I stand? |
-| **Triage** | queue contents | what's mechanically broken that I can fix? |
-| **Object** | click | everything about this one thing |
-| **Arc** | direction needed | where is this going, what needs judgment? |
-| **Timeline** | surprise or distrust | what actually happened? |
+> Two ways to look at everything: what's the state of things right now, and what happened over time — one at a time. The main screen has regions, and each region is one kind of thing — tasks, or pending decisions; nothing else gets a region. Inside a region, things are grouped by facts the tracker already tracks; the groups are sorting, not places. Each row is one actual thing. Any single thing can be opened up beside the still-whole screen, but that view is summoned by pointing — it is not one of the standing places, and it goes away when you look away. Narrow questions can be asked whenever; an answer is throwaway — a question you ran, not a place you go. New groups inside a region show up free when the tracker learns a new fact. A new region is a big deal: the tracker gains a new kind of thing, or you decide the tool should answer a new question — once, on purpose, in writing. A narrow question never becomes a region by being used a lot; if it keeps proving useful, the tracker learns to track that fact, and only then may a region follow. A region can't exist before the facts it shows exist. Every region is one kind of thing arranged by a tracked fact — if you can't say which kind, it isn't a region. Whole-screen switches exist only for questions about everything, never a subset. If it doesn't fit a small screen it's too complicated — cut or collapse, never add navigation. Regions show pointers, never statistics — quiet, one accent, reserved for things waiting on judgment. The terminal commands and the screen are the same information, shaped for where you are. Nobody ever proves a region helped — not to create it, not to keep it; regions are added and cut as decisions about what the screen should answer, and the one automatic argument against a region is loudness.
 
-Wireframes (v1, real items):
+The law:
+
+- **Surfaces.** The canvas and the stream are *modes*: exclusive stances toward the whole
+  world — standing state, and history. A mode exists iff its question is a stance toward
+  the whole world, never a region of it (the mode test). The *dock* is the inspector: one
+  object, summoned by pointing (`show`; a click in a served rendering), rendered beside
+  the still-whole canvas. The pointing act is its license — the dock is never contracted,
+  never standing.
+- **Regions.** A region is a standing projection of one object family, arranged by that
+  family's ratified machinery — noun × projection. Regions are counted in kinds of
+  things, never in questions: question phrasings are zoom levels, not carvings. A
+  *section* is a value of the projected machinery (a lifecycle state); sections arrive
+  free with machinery and are sorting, not places. A row is an *instance*.
+- **Slices.** A slice is a predicate over a noun: an operation at query time — a flag, a
+  URL parameter, the canvas search box. Free, composable, never standing. The only bridge
+  from predicate to standing runs through machinery: the predicate becomes a tracked fact
+  (object-model amendment), and only then may a projection over it be contracted. Slices
+  never graduate by use; accumulated use is not law.
+- **Admission.** A region enters by contract amendment: the record names the question and
+  its trigger — trigger and leave are the required fields of the amendment, not its
+  criterion — and the machinery it projects must already exist. Regions derive by
+  application from the object inventory, as comments did (§18); they are never debated
+  into existence one filter at a time.
+- **Retention.** The mirror of admission. Nobody proves a region helped, and nobody
+  proves it ignored — the best regions are the most glanced. A region is cut as a scope
+  decision at review; the one automatic argument against a region is loudness, visible to
+  everyone and priced by restraint.
+- **The v1 contract.** Four questions, each citing its incumbent verb: *where does my
+  work stand* — task lifecycle, `list`; *what needs my judgment* — open proposals,
+  `proposals`; *what actually happened* — the event stream, `log`; *everything about this
+  one thing* — the dock, `show`. Triage and Arc were questions in the old contract whose
+  nouns never arrived; they stay speculative until §3's objects exist — a region cannot
+  precede its facts. Comments carry no region: they surface in docks and threads (§18).
+- **Restraint, restated for every rendering.** Rows carry pointers, never ornaments:
+  presence marks (`#`), state words, one accent reserved for judgment-pending. No counts,
+  no badges, no decoration. The information lives in what is present, not in how much is
+  displayed about it.
+- **Terminal mapping.** One view model, two renderings — terminal and served HTML; JSON
+  stays machine-first. `list` renders the canvas's task projection; `proposals`, the
+  gate; `log`, the stream; `show`, the dock. Slices are query-time operations in both:
+  flags and search here, URL parameters there.
+- **Presentation.** The phone test is the forcing function: every rendering must survive
+  a small screen — cut or collapse, never add navigation. Renderings are v1 and iterate
+  against usage evidence; the contract above is the durable part, and the living v1 is
+  the served prototype — this section carries the contract, not the pixels.
+
+Wireframe (v1 illustration, not contract):
 
 ```
-┌ DIGEST ─────────────────────────── search: [____________] ┐
-│ READY · claimable now                                     │
-│   t-14 bump postgres, verify restore            [claim]   │
-│   t-3  make unicode test fail on demand         [claim]   │
-│ OPEN HYPOTHESES                                           │
-│   h-2 throughput decay has a named cause        [open]    │
-│     ├ f-31 allocator refuted (microbench flat)[refutes]   │
-│     └ t-9  instrument allocator at hour 4    [claimed]    │
-│   h-10 vector 3x memory expected post-rebuild [agent✓]    │
-│ ARCS                                                      │
-│   t-20 perf push · alive · f-31 2d ago                    │
-│   t-27 flaky nodes · STALE · no findings 6d               │
-└───────────────────────────────────────────────────────────┘
-
-┌ TRIAGE · card 2/4 ──────────────── remaining: 3 ──────────┐
-│ UNANCHORED  f-41 "loss spike at 41k — epoch boundary?"    │
-│ CONTEXT · candidate hypotheses:                           │
-│   h-5  loss spikes are epoch-boundary artifacts  [match?] │
-│   h-2  throughput decay has a named cause        [match?] │
-│ ACTION  [anchor→h-5] [new hypothesis] [discard]           │
-│ (1=first candidate, 2=second, n=new, d=discard, s=skip)   │
-└───────────────────────────────────────────────────────────┘
-
-┌ OBJECT · h-12: node drops caused by DNS timeouts ─────────┐
-│ STATE: resolved(refuted) → verified(human)     [overturn] │
-│ CRITERIA v1: "coredns logs show timeouts during drops"    │
-│ FINDINGS                                                  │
-│   f-33 [refutes]  coredns logs clean in 6 drop events     │
-│         src: agent/see#88 · logs query                    │
-│   f-37 [supports] LB TLS evictions correlate with drops   │
-│         src: session#91 · replay: [copy command]          │
-│ LINKS: vault → "flaky-node-shutdowns"                     │
-│ HISTORY: created → resolved(refuted, agent) → verified    │
-└───────────────────────────────────────────────────────────┘
-
-┌ ARC · t-20 perf push ─────────── alive · started Aug 28 ──┐
-│ THE PATH                                                  │
-│  Aug 28  arc opened · goal: ingest p99 back to ~40ms      │
-│  Sep 01  h-7 opened: regression is tail-scheduling        │
-│  Sep 02  t-12 claimed → harness comparison run            │
-│  Sep 03  f-22 filed: 200-loop, no unicode repro [inconc.] │
-│  Sep 04  f-28 filed: p99 doubles on 1.38→1.47  [supports] │
-│  Sep 05  h-13 opened: harness may mis-measure (TAINTS f-28)│
-│  today   t-9 running: allocator instrumentation hour-4    │
-│ JUDGMENT QUEUE                                            │
-│  ◇ f-22 thin provenance · h-10 verified, undistilled      │
-│  ◇ direction call: harness question blocks trusting f-28  │
-└───────────────────────────────────────────────────────────┘
-
-┌ TIMELINE ─────────────────────────────────────────────────┐
-│ 14:02  f-37 filed (agent/see#91) supports h-12            │
-│ 13:58  h-12 verified by you                               │
-│ 09:12  t-14 claimed by agent/orion (lease 30m)            │
-│ 09-05  f-33 filed, refutes h-12                           │
-└───────────────────────────────────────────────────────────┘
+┌ SACCADE · CANVAS ───────────────────── stream → ┐
+│ TASKS                      │ DOCK · t-17        │
+│  READY                     │ claimed            │
+│   t-1  open   …            │ rewrite §9 …       │
+│   t-4  open   …        #   │  #44 bot  spec (…  │
+│  IN-FLIGHT                 │  #45 bot  ratified…│
+│   t-17 claimed rewrite… #  │  #46 bot  parked…  │
+│  ▸ HISTORY                 │                    │
+│ GATE QUEUE · JUDGMENT      │                    │
+│  #49 drop t-12 …           │                    │
+└────────────────────────────────────────────────┘
 ```
-
-Conceptual split: **Triage = right answers; Arc = your answers.** No dashboards, no
-search-as-view (search box lives in the Digest header), no notes management (vault
-pointers render via adapter, opaque otherwise), no productivity surfaces.
 
 ## 10. IDs and references
 
@@ -707,7 +695,7 @@ replaced is gone).
   changes the what is supersession (§3): spawn the successor, drop naming it.
   Comments never mutate, never re-scope, never graduate; corrections are new
   comments, later wins in the reader's eye.
-- **Surfacing:** the Object view (inspector dock / `show`) renders the tree,
+- **Surfacing:** the dock (`show`) renders the tree,
   indented and time-ordered — everything about the one thing. The canvas gains
   nothing (no counts, no badges — the restraint invariant). `#seq` tokens inside
   bodies are inert references (§10): backlinks, not structure.
@@ -728,9 +716,8 @@ replaced is gone).
 - **Pointer set** — executor-agnostic provenance receipt; adapter-validated; indexed at
   write
 - **Verdict tiers** — agent-provisional vs human-verified resolution
-- **Digest** — session-start projection: TOC for agents, landing view for humans
+- **Digest** — session-start TOC for agents (§8); the human landing view is the canvas (§9)
 - **Triage** — the mechanical-integrity queue (right answers)
-- **Arc view** — the judgment surface (your answers): path + judgment queue
 - **Retro** — the report over the system's own event log consumed at review
 - **Deposit** — what every close requires: the record got richer, or it isn't done
 - **Proposal** — an agent-drafted judgment act (drop/release) awaiting acceptance;
