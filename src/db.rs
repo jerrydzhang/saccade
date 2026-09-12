@@ -422,10 +422,10 @@ mod test {
         assert_eq!(loadout.rows[5].kind, "proposal_accepted");
         assert_eq!(loadout.rows[6].kind, "task_dropped");
         assert_eq!(world.tasks.len(), 2);
-        assert!(matches!(world.tasks[0].state, TaskState::Done(_)));
-        assert!(matches!(world.tasks[1].state, TaskState::Dropped));
+        assert!(matches!(world.tasks[0].task.state, TaskState::Done(_)));
+        assert!(matches!(world.tasks[1].task.state, TaskState::Dropped));
         assert_eq!(
-            world.proposals[&ProposalId(RecordId(4))].state,
+            world.proposals[&ProposalId(RecordId(4))].proposal.state,
             ProposalState::Accepted
         );
         let reply = &world.comments[&CommentId(RecordId(8))];
@@ -474,7 +474,7 @@ mod test {
         };
         assert_eq!(loadout.rows.len(), 3);
         assert_eq!(world.tasks.len(), 1);
-        assert!(matches!(world.tasks[0].state, TaskState::Done(_)));
+        assert!(matches!(world.tasks[0].task.state, TaskState::Done(_)));
 
         // the read-only path sees the same file
         let ro = open_read(&path).expect("read-only open of a real file");

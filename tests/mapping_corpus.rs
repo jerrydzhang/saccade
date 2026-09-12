@@ -24,7 +24,8 @@ use saccade::Reject;
 use saccade::db::{self, LoadState};
 use saccade::objects::task::TaskId;
 use saccade::store::{Context, Tier, World};
-use saccade::{Command, ProposalAction, ProposalId, Prose, RecordId, wire};
+use saccade::views;
+use saccade::{Command, ProposalAction, ProposalId, Prose, RecordId};
 
 fn importer() -> Context {
     Context {
@@ -123,7 +124,7 @@ fn closed_with_receipt_folds_to_done() {
 
     let world = world_of(&conn);
     assert_eq!(world.tasks.len(), 1);
-    let view = wire::view_of(&TaskId(0), &world).unwrap();
+    let view = views::task_view(&world, TaskId(0)).unwrap();
     assert_eq!(view.state, "done");
     assert_eq!(
         view.name,
@@ -182,7 +183,7 @@ fn duplicate_stops_at_the_gate() {
 
     let world = world_of(&conn);
     assert_eq!(world.tasks.len(), 1);
-    assert_eq!(wire::view_of(&TaskId(0), &world).unwrap().state, "open");
+    assert_eq!(views::task_view(&world, TaskId(0)).unwrap().state, "open");
     assert_eq!(db::load(&conn).unwrap().rows.len(), 1);
 
     // the void is human-only: the encoding could not have gone further
@@ -247,7 +248,7 @@ fn dotted_child_becomes_a_parent_edge() {
     );
 
     let world = world_of(&conn);
-    let view = wire::view_of(&TaskId(1), &world).unwrap();
+    let view = views::task_view(&world, TaskId(1)).unwrap();
     assert_eq!(view.parent, Some("t-0".to_string()));
     assert_eq!(view.state, "done");
 
@@ -318,11 +319,11 @@ fn epic_and_child_import_with_wrap_receipts() {
 
     let world = world_of(&conn);
     assert_eq!(
-        wire::view_of(&TaskId(1), &world).unwrap().parent,
+        views::task_view(&world, TaskId(1)).unwrap().parent,
         Some("t-0".to_string())
     );
-    assert_eq!(wire::view_of(&TaskId(0), &world).unwrap().state, "done");
-    assert_eq!(wire::view_of(&TaskId(1), &world).unwrap().state, "done");
+    assert_eq!(views::task_view(&world, TaskId(0)).unwrap().state, "done");
+    assert_eq!(views::task_view(&world, TaskId(1)).unwrap().state, "done");
 }
 
 /// symlab-gwb — in_progress, no closed_at, updated this week.
@@ -351,7 +352,7 @@ fn in_progress_lands_open_for_recapture() {
 
     let world = world_of(&conn);
     assert_eq!(world.tasks.len(), 1);
-    assert_eq!(wire::view_of(&TaskId(0), &world).unwrap().state, "open");
+    assert_eq!(views::task_view(&world, TaskId(0)).unwrap().state, "open");
     assert_eq!(db::load(&conn).unwrap().rows.len(), 1);
 }
 
@@ -485,16 +486,19 @@ fn gate_queue_deposit_scenario() {
 
     let world = world_of(&conn);
     for id in 0..5 {
-        assert_eq!(wire::view_of(&TaskId(id), &world).unwrap().state, "dropped");
+        assert_eq!(
+            views::task_view(&world, TaskId(id)).unwrap().state,
+            "dropped"
+        );
     }
     // the disputed corpse and the real work are untouched
-    assert_eq!(wire::view_of(&TaskId(5), &world).unwrap().state, "open");
-    assert_eq!(wire::view_of(&TaskId(6), &world).unwrap().state, "open");
+    assert_eq!(views::task_view(&world, TaskId(5)).unwrap().state, "open");
+    assert_eq!(views::task_view(&world, TaskId(6)).unwrap().state, "open");
     assert_eq!(world.proposals.len(), 6);
     let states: Vec<&str> = world
         .proposals
         .iter()
-        .map(|(id, p)| wire::view_of_proposal(id, p, &world).state)
+        .map(|(id, _)| views::proposal_view(&world, *id).unwrap().state)
         .collect();
     assert_eq!(states.iter().filter(|s| **s == "accepted").count(), 5);
     assert_eq!(states.iter().filter(|s| **s == "rejected").count(), 1);

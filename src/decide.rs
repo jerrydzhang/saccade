@@ -287,8 +287,9 @@ mod test {
     /// target is refused, and the gate reopens once the first resolves.
     #[test]
     fn a_second_open_proposal_on_one_task_is_refused() {
+        let floop = |seq, event| record(seq, event);
         let world = World::replay(vec![
-            record(
+            floop(
                 0,
                 Event::TaskCreated {
                     id: TaskId(0),
@@ -296,8 +297,7 @@ mod test {
                     parent_id: None,
                 },
             ),
-            record(1, Event::TaskClaimed { id: TaskId(0) }),
-            record(
+            floop(
                 2,
                 Event::ProposalCreated {
                     name: Prose::new("drop floop instead".into()).unwrap(),
@@ -316,7 +316,7 @@ mod test {
         ));
 
         let resolved = World::replay(vec![
-            record(
+            floop(
                 0,
                 Event::TaskCreated {
                     id: TaskId(0),
@@ -324,19 +324,18 @@ mod test {
                     parent_id: None,
                 },
             ),
-            record(1, Event::TaskClaimed { id: TaskId(0) }),
-            record(
+            floop(
                 2,
                 Event::ProposalCreated {
                     name: Prose::new("drop floop instead".into()).unwrap(),
                     action: ProposalAction::Drop { task_id: TaskId(0) },
                 },
             ),
-            record(
+            floop(
                 3,
                 Event::ProposalRejected {
                     id: ProposalId(RecordId(2)),
-                    note: Prose::new("flop stays".into()).unwrap(),
+                    note: Prose::new("floop stays".into()).unwrap(),
                 },
             ),
         ]);

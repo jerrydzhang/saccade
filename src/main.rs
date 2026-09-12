@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use saccade::World;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
-use saccade::wire::ProposalView;
+use saccade::views::ProposalView;
 use saccade::{
     Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId, Reject, Target, Tier,
 };
@@ -406,8 +406,8 @@ fn record_line(r: &StoredRecord) -> String {
 }
 
 fn render_tasks(cli: &Cli, world: &World) -> String {
-    let views: Vec<saccade::wire::TaskView> = (0..world.tasks.len())
-        .map(|i| saccade::wire::view_of(&TaskId(i), world))
+    let views: Vec<saccade::views::TaskView> = (0..world.tasks.len())
+        .map(|i| saccade::views::task_view(world, TaskId(i)))
         .collect::<Option<_>>()
         .expect("indices come from the vec itself");
     // the digest question is standing work; history lives in log and show
@@ -425,7 +425,7 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
                     "state": v.state,
                     "parent": v.parent,
                     "name": v.name,
-                    "comments": v.comments,
+                    "comments": v.n_comments,
                     "proposal": v.proposal.as_ref().map(|m| serde_json::json!({
                         "seq": m.seq,
                         "verb": m.verb,
@@ -449,7 +449,7 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
                     .as_ref()
                     .map(|m| format!("{}#{}", m.verb, m.seq))
                     .unwrap_or_else(|| "-".into()),
-                if v.comments > 0 { "#" } else { "-" }
+                if v.n_comments > 0 { "#" } else { "-" }
             )
         })
         .collect::<Vec<_>>()
@@ -460,7 +460,7 @@ const WIDTH: usize = 80;
 
 /// The inspector dock as text: everything about the one thing.
 fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
-    let view = saccade::wire::show_of(&task_id, world)
+    let view = saccade::views::show_view(world, task_id)
         .ok_or_else(|| Fail::Usage(format!("no task t-{}", task_id.0)))?;
 
     let mut out = vec![wrap(
@@ -476,7 +476,8 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
         out.push("receipt".to_string());
         out.push(wrap(receipt, WIDTH, "  ", "  "));
     }
-    for line in saccade::wire::comment_thread(world, &task_id) {
+    let ctx = &world.tasks[task_id.0];
+    for line in saccade::views::comment_thread(&world.comments, ctx) {
         let indent = "  ".repeat(line.depth.saturating_sub(1));
         out.push(String::new());
         out.push(format!("{indent}#{}  {}", line.seq, line.actor));
@@ -526,7 +527,8 @@ fn render_proposals(cli: &Cli, world: &World) -> String {
     let views: Vec<ProposalView> = world
         .proposals
         .iter()
-        .map(|(id, p)| saccade::wire::view_of_proposal(id, p, world))
+        .map(|(id, _)| saccade::views::proposal_view(world, *id))
+        .map(|v| v.expect("ids come from the map itself"))
         .collect();
 
     if cli.json {

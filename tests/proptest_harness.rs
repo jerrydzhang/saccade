@@ -294,6 +294,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidTaskId => "InvalidTaskId",
                         saccade::Reject::InvalidParentTaskId => "InvalidParentTaskId",
                         saccade::Reject::InvalidProposalId => "InvalidProposalId",
+                        saccade::Reject::ProposalAlreadyOpen => "ProposalAlreadyOpen",
                         saccade::Reject::InvalidCommentId => "InvalidCommentId",
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
@@ -305,7 +306,7 @@ fn generator_reaches_deep_states() {
 
         let world = log.world();
         let states: Vec<&str> = (0..world.tasks.len())
-            .map(|i| saccade::wire::view_of(&TaskId(i), world).unwrap().state)
+            .map(|i| saccade::views::task_view(world, TaskId(i)).unwrap().state)
             .collect();
         if states.iter().any(|&s| s == "done") {
             *milestones.entry("done task").or_default() += 1;

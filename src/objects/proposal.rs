@@ -76,41 +76,9 @@ impl Proposal {
     }
 }
 
-pub struct ProposalView {
-    pub id: usize,
-    pub state: &'static str,
-    pub action: &'static str,
-    pub task: String,
-    pub name: String,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProposalContext {
     pub proposal: Proposal,
-}
-
-impl ProposalContext {
-    pub fn view(&self, id: ProposalId) -> ProposalView {
-        ProposalView {
-            id: id.0.0,
-            state: match self.proposal.state {
-                ProposalState::Open => "open",
-                ProposalState::Withdrawn(_) => "withdrawn",
-                ProposalState::Rejected(_) => "rejected",
-                ProposalState::Accepted => "accepted",
-            },
-            action: match self.proposal.action {
-                ProposalAction::Drop { .. } => "drop",
-                ProposalAction::Release { .. } => "release",
-            },
-            task: match self.proposal.action {
-                ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
-                    format!("task-{}", task_id.0)
-                }
-            },
-            name: self.proposal.name.as_str().to_string(),
-        }
-    }
 }
 
 #[cfg(test)]

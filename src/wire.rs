@@ -1,9 +1,10 @@
 use crate::events::Event;
 use crate::objects::comment::Target;
-use crate::objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
-use crate::objects::task::{TaskId, TaskState};
+use crate::objects::proposal::{ProposalAction, ProposalId};
+
+use crate::objects::task::TaskId;
 use crate::prose::Prose;
-use crate::store::{Tier, World};
+use crate::store::Tier;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
@@ -234,162 +235,6 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
     }
 }
 
-pub fn state_of(state: &TaskState) -> &'static str {
-    match state {
-        TaskState::Open => "open",
-        TaskState::Claimed => "claimed",
-        TaskState::Done(_) => "done",
-        TaskState::Dropped => "dropped",
-    }
-}
-
-/// Display proposal type
-pub struct ProposalView {
-    pub id: usize,
-    pub state: &'static str,
-    pub action: &'static str,
-    pub task: String,
-    pub name: String,
-}
-
-pub fn view_of_proposal(id: &ProposalId, p: &Proposal, world: &World) -> ProposalView {
-    ProposalView {
-        id: id.0.0,
-        state: match &p.state {
-            ProposalState::Open if is_stale(p, world) => "stale",
-            ProposalState::Open => "open",
-            ProposalState::Accepted => "accepted",
-            ProposalState::Rejected(_) => "rejected",
-            ProposalState::Withdrawn(_) => "withdrawn",
-        },
-        action: match &p.action {
-            ProposalAction::Drop { .. } => "drop",
-            ProposalAction::Release { .. } => "release",
-        },
-        task: match &p.action {
-            ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
-                format!("t-{}", task_id.0)
-            }
-        },
-        name: p.name.as_str().to_string(),
-    }
-}
-
-/// Derived staleness: would the embedded act be refused today?
-/// The same probe decide uses at propose time — the quiet consumer to
-/// accept's loud one. A missing target counts as stale: the act would
-/// be refused.
-fn is_stale(p: &Proposal, world: &World) -> bool {
-    let task_id = match p.action {
-        ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => task_id,
-    };
-    world
-        .tasks
-        .get(task_id.0)
-        .map(|t| {
-            t.state
-                .validate(
-                    &p.action
-                        .target_event(&Prose::new("probe".into()).expect("probe is non-empty")),
-                )
-                .is_err()
-        })
-        .unwrap_or(true)
-}
-
-/// Display task type
-pub struct CommentLine {
-    pub seq: usize,
-    pub depth: usize,
-    pub actor: String,
-    pub body: String,
-}
-
-pub struct ShowView {
-    pub id: String,
-    pub state: &'static str,
-    pub parent: Option<String>,
-    pub name: String,
-    pub receipt: Option<String>,
-}
-
-pub fn show_of(task_id: &TaskId, world: &World) -> Option<ShowView> {
-    let task = world.tasks.get(task_id.0)?;
-    let receipt = match &task.state {
-        TaskState::Done(r) => Some(r.as_str().to_string()),
-        _ => None,
-    };
-    Some(ShowView {
-        id: format!("t-{}", task_id.0),
-        state: state_of(&task.state),
-        parent: task.parent_id.map(|p| format!("t-{}", p.0)),
-        name: task.name.as_str().to_string(),
-        receipt,
-    })
-}
-
-/// The thread as a projection: the task is the root, so a comment
-/// addressing it sits at depth 1. A walk over the comment pointers.
-pub fn comment_thread(world: &World, task_id: &TaskId) -> Vec<CommentLine> {
-    let mut lines = Vec::new();
-    for (id, comment) in &world.comments {
-        let mut depth = 1;
-        let mut up = comment.target;
-        loop {
-            match up {
-                Target::Task(t) => {
-                    if t != *task_id {
-                        break;
-                    }
-                    lines.push(CommentLine {
-                        seq: id.0.0,
-                        depth,
-                        actor: comment.actor.clone(),
-                        body: comment.body.as_str().to_string(),
-                    });
-                    break;
-                }
-                Target::Comment(addressed) => match world.comments.get(&addressed) {
-                    Some(parent) => {
-                        depth += 1;
-                        up = parent.target;
-                    }
-                    // unreachable: validate refuses unknown comment ids
-                    None => break,
-                },
-            }
-        }
-    }
-    lines
-}
-
-pub fn view_of(id: &TaskId, world: &World) -> Option<TaskView> {
-    let task = world.tasks.get(id.0)?;
-    Some(TaskView {
-        id: format!("t-{}", id.0),
-        state: state_of(&task.state),
-        parent: task.parent_id.map(|p| format!("t-{}", p.0)),
-        name: task.name.as_str().to_string(),
-        proposal: world
-            .proposals
-            .iter()
-            .find(|(_, p)| {
-                p.state == ProposalState::Open
-                    && matches!(&p.action,
-                        ProposalAction::Drop { task_id } | ProposalAction::Release { task_id }
-                            if *task_id == *id)
-            })
-            .map(|(id, p)| ProposalMark {
-                seq: id.0.0,
-                verb: match p.action {
-                    ProposalAction::Drop { .. } => "drop",
-                    ProposalAction::Release { .. } => "release",
-                },
-            }),
-        comments: comment_thread(world, id).len(),
-    })
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -442,18 +287,6 @@ mod test {
             let back = assemble(kind, &payload).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
             assert_eq!(&back, event, "different: {kind}");
         }
-    }
-
-    /// This exists to prevent accidental changes to the string representation of task states
-    #[test]
-    fn state_strings_are_the_identifier_vocabulary() {
-        assert_eq!(state_of(&TaskState::Open), "open");
-        assert_eq!(state_of(&TaskState::Claimed), "claimed");
-        assert_eq!(
-            state_of(&TaskState::Done(Prose::new("filler".into()).unwrap())),
-            "done"
-        );
-        assert_eq!(state_of(&TaskState::Dropped), "dropped");
     }
 
     #[test]

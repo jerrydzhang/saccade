@@ -6,6 +6,7 @@ pub mod events;
 pub mod objects;
 pub mod prose;
 pub mod store;
+pub mod views;
 pub mod wire;
 
 pub use decide::decide;
@@ -177,13 +178,13 @@ mod invariant {
 
         assert_eq!(log.records().len(), RECORD_COUNT);
         assert_eq!(
-            log.world().tasks[0].state,
+            log.world().tasks[0].task.state,
             TaskState::Done(Prose::new("foo completed successfully".into()).unwrap()),
         );
-        assert_eq!(log.world().tasks[1].state, TaskState::Dropped);
-        assert_eq!(log.world().tasks[2].state, TaskState::Dropped);
-        assert_eq!(log.world().tasks[3].state, TaskState::Claimed);
-        assert_eq!(log.world().tasks[4].state, TaskState::Open);
+        assert_eq!(log.world().tasks[1].task.state, TaskState::Dropped);
+        assert_eq!(log.world().tasks[2].task.state, TaskState::Dropped);
+        assert_eq!(log.world().tasks[3].task.state, TaskState::Claimed);
+        assert_eq!(log.world().tasks[4].task.state, TaskState::Open);
 
         assert_eq!(log.records()[8].id.0, 8);
         assert_eq!(log.records()[8].timestamp, 9);
@@ -427,9 +428,11 @@ mod invariant {
         assert_eq!(id.0, 0);
         // the proposal's name becomes the drop's note
         assert_eq!(note.as_str(), "this is a duplicated task");
-        assert_eq!(log.world().tasks[0].state, TaskState::Dropped);
+        assert_eq!(log.world().tasks[0].task.state, TaskState::Dropped);
         assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))].state,
+            log.world().proposals[&ProposalId(RecordId(1))]
+                .proposal
+                .state,
             ProposalState::Accepted
         );
     }
@@ -465,9 +468,11 @@ mod invariant {
         );
         assert!(matches!(refused, Err(Reject::HumanOnly)));
         assert_eq!(log.records().len(), 2);
-        assert_eq!(log.world().tasks[0].state, TaskState::Open);
+        assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
         assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))].state,
+            log.world().proposals[&ProposalId(RecordId(1))]
+                .proposal
+                .state,
             ProposalState::Open
         );
     }
@@ -508,9 +513,11 @@ mod invariant {
         );
         assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
         assert_eq!(log.records().len(), 3);
-        assert_eq!(log.world().tasks[0].state, TaskState::Claimed);
+        assert_eq!(log.world().tasks[0].task.state, TaskState::Claimed);
         assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))].state,
+            log.world().proposals[&ProposalId(RecordId(1))]
+                .proposal
+                .state,
             ProposalState::Open
         );
     }
@@ -579,15 +586,15 @@ mod invariant {
         let world = log.world();
         assert_eq!(world.comments.len(), 4);
         assert_eq!(
-            world.comments[&CommentId(RecordId(2))].target,
+            world.comments[&CommentId(RecordId(2))].comment.target,
             Target::Task(TaskId(0))
         );
         assert_eq!(
-            world.comments[&CommentId(RecordId(3))].target,
+            world.comments[&CommentId(RecordId(3))].comment.target,
             Target::Comment(CommentId(RecordId(2)))
         );
 
-        let thread = crate::wire::comment_thread(world, &TaskId(0));
+        let thread = crate::views::comment_thread(&world.comments, &world.tasks[0]);
         assert_eq!(
             thread
                 .iter()
@@ -599,7 +606,10 @@ mod invariant {
                 (4, 3, "saccade bot")
             ]
         );
-        assert_eq!(crate::wire::comment_thread(world, &TaskId(1)).len(), 1);
+        assert_eq!(
+            crate::views::comment_thread(&world.comments, &world.tasks[1]).len(),
+            1
+        );
     }
 
     /// Comments have no state gate: terminal tasks take them, and only an
@@ -709,13 +719,17 @@ mod invariant {
 
         assert_eq!(log.world().proposals.len(), 2);
         assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))].state,
+            log.world().proposals[&ProposalId(RecordId(1))]
+                .proposal
+                .state,
             ProposalState::Rejected(Prose::new("ruled real work".into()).unwrap())
         );
         assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(3))].state,
+            log.world().proposals[&ProposalId(RecordId(3))]
+                .proposal
+                .state,
             ProposalState::Open
         );
-        assert_eq!(log.world().tasks[0].state, TaskState::Open);
+        assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
     }
 }

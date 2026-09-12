@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Event;
-use crate::objects::proposal::ProposalContext;
 use crate::prose::Prose;
-use crate::{CommentId, ProposalAction, ProposalId, ProposalState, RecordId, Reject, World};
+use crate::{CommentId, ProposalId, RecordId, Reject};
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub struct TaskId(pub usize);
@@ -56,23 +55,6 @@ impl Task {
         })
     }
 }
-pub struct TaskView {
-    pub id: String,
-    pub state: &'static str,
-    pub parent: Option<String>,
-    pub name: String,
-    /// The pending-judgment mark, when an open proposal targets this task.
-    /// The row is an attention cue and a pointer; the full story lives at the seq.
-    pub proposal: Option<ProposalMark>,
-    /// Size of the attached comment thread; renders as a mere pointer (`#`).
-    pub n_comments: usize,
-}
-
-pub struct ProposalMark {
-    pub seq: usize,
-    pub verb: &'static str,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskContext {
     pub task: Task,
@@ -80,33 +62,6 @@ pub struct TaskContext {
     pub last_updated: RecordId,
     pub proposal: Option<ProposalId>,
     pub thread: Vec<CommentId>,
-}
-
-impl TaskContext {
-    pub fn view(&self, id: TaskId, proposal_ctx: Option<&ProposalContext>) -> TaskView {
-        TaskView {
-            id: format!("t-{}", id.0),
-            state: match self.task.state {
-                TaskState::Open => "open",
-                TaskState::Claimed => "claimed",
-                TaskState::Done(_) => "done",
-                TaskState::Dropped => "dropped",
-            },
-            parent: self.task.parent_id.map(|p| format!("t-{}", p.0)),
-            name: self.task.name.as_str().to_string(),
-            proposal: match proposal_ctx {
-                Some(proposal_ctx) => Some(ProposalMark {
-                    seq: self.proposal.unwrap().0.0,
-                    verb: match proposal_ctx.proposal.action {
-                        ProposalAction::Drop { .. } => "drop",
-                        ProposalAction::Release { .. } => "release",
-                    },
-                }),
-                None => None,
-            },
-            n_comments: self.thread.len(),
-        }
-    }
 }
 
 #[cfg(test)]

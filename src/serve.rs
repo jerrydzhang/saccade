@@ -8,9 +8,8 @@ use saccade::db::{self, ExecuteFail, LoadState};
 use saccade::objects::comment::{CommentId, Target};
 use saccade::objects::proposal::ProposalId;
 use saccade::objects::task::TaskId;
-use saccade::wire::{self, TaskView};
-use saccade::{Command, Context, Event, Prose, RecordId, Reject, Tier, World};
-use std::collections::HashMap;
+use saccade::views::{self, ProposalView, TaskView};
+use saccade::{Command, Context, Prose, RecordId, Reject, Tier, World};
 use std::io::Cursor;
 
 pub fn run(
@@ -80,16 +79,15 @@ fn respond_get(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Curs
     match parse_route(&req.url) {
         Route::Stream => html(200, &render_stream(&loadout.rows)),
         Route::Canvas(dock) => match loadout.state {
-            LoadState::Full(world) => html(
-                200,
-                &render_canvas(&world, &canvas(&world, &loadout.rows), dock, &form),
-            ),
+            LoadState::Full(world) => {
+                html(200, &render_canvas(&world, &canvas(&world), dock, &form))
+            }
             LoadState::Degraded(reason) => {
                 page(503, &format!("world projection unavailable: {reason}"))
             }
         },
         Route::Task(n, reply) => match loadout.state {
-            LoadState::Full(world) => match wire::view_of(&TaskId(n), &world) {
+            LoadState::Full(world) => match views::task_view(&world, TaskId(n)) {
                 Some(view) => {
                     form.reply = reply;
                     html(200, &render_object(&view, &world, &form))
@@ -219,7 +217,7 @@ fn post_reject(
     let LoadState::Full(world) = loadout.state else {
         return page(503, "world projection unavailable");
     };
-    let Some(view) = wire::view_of(&TaskId(n), &world) else {
+    let Some(view) = views::task_view(&world, TaskId(n)) else {
         return page(404, &format!("no task t-{n}"));
     };
     let form = FormState {
@@ -349,11 +347,7 @@ fn proposal_task(db_path: &std::path::Path, seq: usize) -> Option<usize> {
         LoadState::Full(w) => w,
         LoadState::Degraded(_) => return None,
     };
-    let view = wire::view_of_proposal(
-        &ProposalId(RecordId(seq)),
-        world.proposals.get(&ProposalId(RecordId(seq)))?,
-        &world,
-    );
+    let view = views::proposal_view(&world, ProposalId(RecordId(seq)))?;
     if view.state != "open" {
         return None;
     }
@@ -486,52 +480,39 @@ struct Canvas {
     ready: Vec<TaskView>,
     inflight: Vec<TaskView>,
     history: Vec<TaskView>,
-    gate: Vec<wire::ProposalView>,
+    gate: Vec<ProposalView>,
 }
 
 /// View construction for the canvas, all of it: panels partitioned, history
-/// ordered most-recently-closed first by each task's latest closing act
-/// (done or drop). The rows supply that seq; the fold keeps none.
-fn canvas(world: &World, rows: &[db::StoredRecord]) -> Canvas {
-    let mut closed = HashMap::new();
-    for row in rows {
-        if let Ok(Event::TaskDone { id, .. } | Event::TaskDropped { id, .. }) =
-            wire::assemble(&row.kind, &row.payload)
-        {
-            closed.insert(id.0, row.seq);
+/// ordered most-recently-closed first: for a closed task the last state
+/// change is the closing act, so `last_updated` is the panel's key.
+fn canvas(world: &World) -> Canvas {
+    let mut ready: Vec<TaskView> = Vec::new();
+    let mut inflight: Vec<TaskView> = Vec::new();
+    let mut history: Vec<(RecordId, TaskView)> = Vec::new();
+    for (i, ctx) in world.tasks.iter().enumerate() {
+        let view = TaskView::of(
+            TaskId(i),
+            ctx,
+            ctx.proposal.and_then(|p| world.proposals.get(&p)),
+        );
+        match view.state {
+            "open" => ready.push(view),
+            "claimed" => inflight.push(view),
+            _ => history.push((ctx.last_updated, view)),
         }
     }
-    let mut all: Vec<TaskView> = (0..world.tasks.len())
-        .filter_map(|i| wire::view_of(&TaskId(i), world))
-        .collect();
-    all.sort_by_key(|v| task_num(&v.id).unwrap_or(0));
-    let (mut ready, mut inflight, mut history): (Vec<TaskView>, Vec<TaskView>, Vec<TaskView>) =
-        (Vec::new(), Vec::new(), Vec::new());
-    for v in all {
-        match v.state {
-            "open" => ready.push(v),
-            "claimed" => inflight.push(v),
-            _ => history.push(v),
-        }
-    }
-    history.sort_by_key(|v| {
-        std::cmp::Reverse(
-            closed
-                .get(&task_num(&v.id).unwrap_or(0))
-                .copied()
-                .unwrap_or(0),
-        )
-    });
-    let gate: Vec<wire::ProposalView> = world
+    history.sort_by_key(|(seq, _)| std::cmp::Reverse(*seq));
+    let gate: Vec<ProposalView> = world
         .proposals
-        .iter()
-        .map(|(id, p)| wire::view_of_proposal(id, p, world))
+        .keys()
+        .filter_map(|id| views::proposal_view(world, *id))
         .filter(|v| v.state == "open")
         .collect();
     Canvas {
         ready,
         inflight,
-        history,
+        history: history.into_iter().map(|(_, v)| v).collect(),
         gate,
     }
 }
@@ -539,7 +520,7 @@ fn canvas(world: &World, rows: &[db::StoredRecord]) -> Canvas {
 fn task_rows(rows: &[TaskView]) -> String {
     rows.iter()
         .map(|v| {
-            let mark = if v.comments > 0 { "#" } else { "" };
+            let mark = if v.n_comments > 0 { "#" } else { "" };
             let href = task_num(&v.id).map(|n| format!("/?t={n}")).unwrap_or_default();
             format!(
                 "<a class=\"row\" href=\"{href}\"><span class=\"id\">{}</span><span class=\"state\">{}</span><span class=\"name\">{}</span><span class=\"mark\">{mark}</span></a>\n",
@@ -567,7 +548,7 @@ fn render_canvas(world: &World, c: &Canvas, dock_id: Option<usize>, form: &FormS
         })
         .collect();
 
-    let docked = dock_id.and_then(|n| wire::view_of(&TaskId(n), world));
+    let docked = dock_id.and_then(|n| views::task_view(world, TaskId(n)));
     let main_class = if docked.is_some() {
         "main"
     } else {
@@ -594,7 +575,7 @@ fn render_canvas(world: &World, c: &Canvas, dock_id: Option<usize>, form: &FormS
     )
 }
 
-fn thread_html(thread: &[wire::CommentLine], n: usize) -> String {
+fn thread_html(thread: &[views::CommentLine], n: usize) -> String {
     thread
         .iter()
         .map(|c| {
@@ -620,8 +601,8 @@ fn dock_content(view: &TaskView, world: &World, form: &FormState) -> String {
         esc(view.state),
         esc(&view.name)
     );
-    for (pid, p) in &world.proposals {
-        let pv = wire::view_of_proposal(pid, p, world);
+    for pid in world.proposals.keys() {
+        let pv = views::proposal_view(world, *pid).expect("ids come from the map itself");
         if pv.state != "open" || task_num(&pv.task) != Some(n) {
             continue;
         }
@@ -636,7 +617,7 @@ fn dock_content(view: &TaskView, world: &World, form: &FormState) -> String {
             esc(&form.note),
         ));
     }
-    let thread = wire::comment_thread(world, &TaskId(n));
+    let thread = views::comment_thread(&world.comments, &world.tasks[n]);
     s.push_str(&format!(
         "<div class=\"thread\">{}</div>\n",
         thread_html(&thread, n)
@@ -852,7 +833,7 @@ mod tests {
     #[test]
     fn canvas_escapes_names_and_links_rows() {
         let world = world_with("implement <foo>");
-        let html = render_canvas(&world, &canvas(&world, &[]), None, &FormState::default());
+        let html = render_canvas(&world, &canvas(&world), None, &FormState::default());
         assert!(html.contains("implement &lt;foo&gt;"));
         assert!(!html.contains("implement <foo>"));
         assert!(html.contains("href=\"/?t=0\""));
@@ -862,7 +843,7 @@ mod tests {
     #[test]
     fn unknown_dock_leaves_canvas_whole() {
         let world = world_with("implement foo");
-        let html = render_canvas(&world, &canvas(&world, &[]), Some(9), &FormState::default());
+        let html = render_canvas(&world, &canvas(&world), Some(9), &FormState::default());
         assert!(!html.contains("id=\"dock\""));
     }
 
@@ -885,7 +866,7 @@ mod tests {
                 },
             ),
         ]);
-        let view = wire::view_of(&TaskId(0), &world).unwrap();
+        let view = views::task_view(&world, TaskId(0)).unwrap();
         let html = render_object(&view, &world, &FormState::default());
         assert!(html.contains("action=\"/p/1/accept\""));
         assert!(html.contains("action=\"/p/1/reject\""));
@@ -911,7 +892,7 @@ mod tests {
                 },
             ),
         ]);
-        let view = wire::view_of(&TaskId(0), &world).unwrap();
+        let view = views::task_view(&world, TaskId(0)).unwrap();
         let html = render_object(
             &view,
             &world,
@@ -964,8 +945,7 @@ mod tests {
             ),
         ];
         let world = World::replay(events.clone());
-        let rows: Vec<db::StoredRecord> = events.iter().map(|r| stored(r.id.0, &r.event)).collect();
-        let html = render_canvas(&world, &canvas(&world, &rows), None, &FormState::default());
+        let html = render_canvas(&world, &canvas(&world), None, &FormState::default());
         let hist = html.split("<details class=\"hist\">").nth(1).unwrap();
         assert!(hist.find("t-0").unwrap() < hist.find("t-1").unwrap());
     }
@@ -1001,8 +981,7 @@ mod tests {
             ),
         ];
         let world = World::replay(events.clone());
-        let rows: Vec<db::StoredRecord> = events.iter().map(|r| stored(r.id.0, &r.event)).collect();
-        let c = canvas(&world, &rows);
+        let c = canvas(&world);
         let docked_history = render_canvas(&world, &c, Some(1), &FormState::default());
         assert!(docked_history.contains("<details class=\"hist\" open>"));
         let docked_open = render_canvas(&world, &c, Some(0), &FormState::default());
@@ -1012,23 +991,10 @@ mod tests {
     #[test]
     fn object_page_carries_the_back_link() {
         let world = world_with("implement foo");
-        let view = wire::view_of(&TaskId(0), &world).unwrap();
+        let view = views::task_view(&world, TaskId(0)).unwrap();
         let html = render_object(&view, &world, &FormState::default());
         assert!(html.contains("DOCK · t-0"));
         assert!(html.contains("href=\"/\""));
-    }
-
-    fn stored(seq: usize, event: &Event) -> db::StoredRecord {
-        let (kind, payload) = wire::disassemble(event);
-        db::StoredRecord {
-            seq,
-            event_time: 0,
-            logged_time: 0,
-            actor: "jerry".into(),
-            tier: "human".into(),
-            kind: kind.into(),
-            payload,
-        }
     }
 
     fn record(seq: usize, event: Event) -> Record {
