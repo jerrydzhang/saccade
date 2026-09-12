@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use saccade::World;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
-use saccade::views::ProposalView;
+use saccade::views::{ProposalView, TaskView, comment_thread, proposal_view, show_view, task_view};
 use saccade::{
     Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId, Reject, Target, Tier,
 };
@@ -406,8 +406,8 @@ fn record_line(r: &StoredRecord) -> String {
 }
 
 fn render_tasks(cli: &Cli, world: &World) -> String {
-    let views: Vec<saccade::views::TaskView> = (0..world.tasks.len())
-        .map(|i| saccade::views::task_view(world, TaskId(i)))
+    let views: Vec<TaskView> = (0..world.tasks.len())
+        .map(|i| task_view(world, TaskId(i)))
         .collect::<Option<_>>()
         .expect("indices come from the vec itself");
     // the digest question is standing work; history lives in log and show
@@ -460,8 +460,8 @@ const WIDTH: usize = 80;
 
 /// The inspector dock as text: everything about the one thing.
 fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
-    let view = saccade::views::show_view(world, task_id)
-        .ok_or_else(|| Fail::Usage(format!("no task t-{}", task_id.0)))?;
+    let view =
+        show_view(world, task_id).ok_or_else(|| Fail::Usage(format!("no task t-{}", task_id.0)))?;
 
     let mut out = vec![wrap(
         &view.name,
@@ -477,7 +477,7 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
         out.push(wrap(receipt, WIDTH, "  ", "  "));
     }
     let ctx = &world.tasks[task_id.0];
-    for line in saccade::views::comment_thread(&world.comments, ctx) {
+    for line in comment_thread(&world.comments, ctx) {
         let indent = "  ".repeat(line.depth.saturating_sub(1));
         out.push(String::new());
         out.push(format!("{indent}#{}  {}", line.seq, line.actor));
@@ -526,8 +526,8 @@ fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
 fn render_proposals(cli: &Cli, world: &World) -> String {
     let views: Vec<ProposalView> = world
         .proposals
-        .iter()
-        .map(|(id, _)| saccade::views::proposal_view(world, *id))
+        .keys()
+        .map(|id| proposal_view(world, *id))
         .map(|v| v.expect("ids come from the map itself"))
         .collect();
 

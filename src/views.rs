@@ -206,6 +206,14 @@ pub fn show_view(world: &World, id: TaskId) -> Option<ShowView> {
     world.tasks.get(id.0).map(|ctx| ShowView::of(id, ctx))
 }
 
+/// Follow the world's pointers to one task's thread.
+pub fn thread_view(world: &World, id: TaskId) -> Option<Vec<CommentLine>> {
+    world
+        .tasks
+        .get(id.0)
+        .map(|ctx| comment_thread(&world.comments, ctx))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

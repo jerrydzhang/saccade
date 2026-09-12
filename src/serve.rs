@@ -8,7 +8,7 @@ use saccade::db::{self, ExecuteFail, LoadState};
 use saccade::objects::comment::{CommentId, Target};
 use saccade::objects::proposal::ProposalId;
 use saccade::objects::task::TaskId;
-use saccade::views::{self, ProposalView, TaskView};
+use saccade::views::{CommentLine, ProposalView, TaskView, proposal_view, task_view, thread_view};
 use saccade::{Command, Context, Prose, RecordId, Reject, Tier, World};
 use std::io::Cursor;
 
@@ -87,7 +87,7 @@ fn respond_get(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Curs
             }
         },
         Route::Task(n, reply) => match loadout.state {
-            LoadState::Full(world) => match views::task_view(&world, TaskId(n)) {
+            LoadState::Full(world) => match task_view(&world, TaskId(n)) {
                 Some(view) => {
                     form.reply = reply;
                     html(200, &render_object(&view, &world, &form))
@@ -217,7 +217,7 @@ fn post_reject(
     let LoadState::Full(world) = loadout.state else {
         return page(503, "world projection unavailable");
     };
-    let Some(view) = views::task_view(&world, TaskId(n)) else {
+    let Some(view) = task_view(&world, TaskId(n)) else {
         return page(404, &format!("no task t-{n}"));
     };
     let form = FormState {
@@ -347,7 +347,7 @@ fn proposal_task(db_path: &std::path::Path, seq: usize) -> Option<usize> {
         LoadState::Full(w) => w,
         LoadState::Degraded(_) => return None,
     };
-    let view = views::proposal_view(&world, ProposalId(RecordId(seq)))?;
+    let view = proposal_view(&world, ProposalId(RecordId(seq)))?;
     if view.state != "open" {
         return None;
     }
@@ -506,7 +506,7 @@ fn canvas(world: &World) -> Canvas {
     let gate: Vec<ProposalView> = world
         .proposals
         .keys()
-        .filter_map(|id| views::proposal_view(world, *id))
+        .filter_map(|id| proposal_view(world, *id))
         .filter(|v| v.state == "open")
         .collect();
     Canvas {
@@ -548,7 +548,7 @@ fn render_canvas(world: &World, c: &Canvas, dock_id: Option<usize>, form: &FormS
         })
         .collect();
 
-    let docked = dock_id.and_then(|n| views::task_view(world, TaskId(n)));
+    let docked = dock_id.and_then(|n| task_view(world, TaskId(n)));
     let main_class = if docked.is_some() {
         "main"
     } else {
@@ -575,7 +575,7 @@ fn render_canvas(world: &World, c: &Canvas, dock_id: Option<usize>, form: &FormS
     )
 }
 
-fn thread_html(thread: &[views::CommentLine], n: usize) -> String {
+fn thread_html(thread: &[CommentLine], n: usize) -> String {
     thread
         .iter()
         .map(|c| {
@@ -602,7 +602,7 @@ fn dock_content(view: &TaskView, world: &World, form: &FormState) -> String {
         esc(&view.name)
     );
     for pid in world.proposals.keys() {
-        let pv = views::proposal_view(world, *pid).expect("ids come from the map itself");
+        let pv = proposal_view(world, *pid).expect("ids come from the map itself");
         if pv.state != "open" || task_num(&pv.task) != Some(n) {
             continue;
         }
@@ -617,7 +617,7 @@ fn dock_content(view: &TaskView, world: &World, form: &FormState) -> String {
             esc(&form.note),
         ));
     }
-    let thread = views::comment_thread(&world.comments, &world.tasks[n]);
+    let thread = thread_view(world, TaskId(n)).expect("dock id validated upstream");
     s.push_str(&format!(
         "<div class=\"thread\">{}</div>\n",
         thread_html(&thread, n)
@@ -866,7 +866,7 @@ mod tests {
                 },
             ),
         ]);
-        let view = views::task_view(&world, TaskId(0)).unwrap();
+        let view = task_view(&world, TaskId(0)).unwrap();
         let html = render_object(&view, &world, &FormState::default());
         assert!(html.contains("action=\"/p/1/accept\""));
         assert!(html.contains("action=\"/p/1/reject\""));
@@ -892,7 +892,7 @@ mod tests {
                 },
             ),
         ]);
-        let view = views::task_view(&world, TaskId(0)).unwrap();
+        let view = task_view(&world, TaskId(0)).unwrap();
         let html = render_object(
             &view,
             &world,
@@ -991,7 +991,7 @@ mod tests {
     #[test]
     fn object_page_carries_the_back_link() {
         let world = world_with("implement foo");
-        let view = views::task_view(&world, TaskId(0)).unwrap();
+        let view = task_view(&world, TaskId(0)).unwrap();
         let html = render_object(&view, &world, &FormState::default());
         assert!(html.contains("DOCK · t-0"));
         assert!(html.contains("href=\"/\""));

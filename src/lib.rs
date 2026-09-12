@@ -36,7 +36,7 @@ pub enum Reject {
 #[cfg(test)]
 mod invariant {
     use super::*;
-    use crate::prose::Prose;
+    use crate::{prose::Prose, views::comment_thread};
 
     fn agent() -> Context {
         Context {
@@ -594,7 +594,7 @@ mod invariant {
             Target::Comment(CommentId(RecordId(2)))
         );
 
-        let thread = crate::views::comment_thread(&world.comments, &world.tasks[0]);
+        let thread = comment_thread(&world.comments, &world.tasks[0]);
         assert_eq!(
             thread
                 .iter()
@@ -606,10 +606,7 @@ mod invariant {
                 (4, 3, "saccade bot")
             ]
         );
-        assert_eq!(
-            crate::views::comment_thread(&world.comments, &world.tasks[1]).len(),
-            1
-        );
+        assert_eq!(comment_thread(&world.comments, &world.tasks[1]).len(), 1);
     }
 
     /// Comments have no state gate: terminal tasks take them, and only an
