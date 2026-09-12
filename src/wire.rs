@@ -1,11 +1,6 @@
 use crate::events::Event;
-use crate::objects::comment::Target;
-use crate::objects::proposal::{ProposalAction, ProposalId};
 
-use crate::objects::task::TaskId;
-use crate::prose::Prose;
 use crate::store::Tier;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq)]
 pub enum ParseFail {
@@ -29,216 +24,56 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct CreatedPayload {
-    id: usize,
-    task_name: Prose,
-    parent_id: Option<usize>,
-}
+/// The kinds the codec knows; anything else in a row is version skew,
+/// not corruption — the log loads to the skew point and says so.
+const KINDS: [&str; 10] = [
+    "task_created",
+    "task_claimed",
+    "task_done",
+    "task_dropped",
+    "task_released",
+    "proposal_created",
+    "proposal_accepted",
+    "proposal_rejected",
+    "proposal_withdrawn",
+    "commented",
+];
 
-#[derive(Serialize, Deserialize)]
-struct IdPayload {
-    id: usize,
-}
-
-#[derive(Serialize, Deserialize)]
-struct DonePayload {
-    id: usize,
-    receipt: Prose,
-}
-
-#[derive(Serialize, Deserialize)]
-struct CommentedPayload {
-    target: Target,
-    body: Prose,
-}
-
-#[derive(Serialize, Deserialize)]
-struct NotedPayload {
-    id: usize,
-    note: Prose,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ProposalCreatedPayload {
-    name: Prose,
-    action: ProposalAction,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ProposalIdPayload {
-    id: ProposalId,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ProposalNotedPayload {
-    id: ProposalId,
-    note: Prose,
-}
-
-/// Serializing an in-memory event cannot fail
-fn pack<T: Serialize>(payload: &T) -> String {
-    serde_json::to_string(payload).expect("in-memory events always serialize")
-}
-
-pub fn disassemble(event: &Event) -> (&'static str, String) {
-    match event {
-        Event::TaskCreated {
-            id,
-            name: task_name,
-            parent_id,
-        } => (
-            "task_created",
-            pack(&CreatedPayload {
-                id: id.0,
-                task_name: task_name.clone(),
-                parent_id: parent_id.map(|p| p.0),
-            }),
-        ),
-        Event::TaskClaimed { id } => ("task_claimed", pack(&IdPayload { id: id.0 })),
-        Event::TaskDone { id, receipt } => (
-            "task_done",
-            pack(&DonePayload {
-                id: id.0,
-                receipt: receipt.clone(),
-            }),
-        ),
-        Event::TaskDropped { id, note } => (
-            "task_dropped",
-            pack(&NotedPayload {
-                id: id.0,
-                note: note.clone(),
-            }),
-        ),
-        Event::TaskReleased { id, note } => (
-            "task_released",
-            pack(&NotedPayload {
-                id: id.0,
-                note: note.clone(),
-            }),
-        ),
-        Event::ProposalCreated { name, action } => (
-            "proposal_created",
-            pack(&ProposalCreatedPayload {
-                name: name.clone(),
-                action: *action,
-            }),
-        ),
-        Event::ProposalAccepted { id } => {
-            ("proposal_accepted", pack(&ProposalIdPayload { id: *id }))
-        }
-        Event::ProposalRejected { id, note } => (
-            "proposal_rejected",
-            pack(&ProposalNotedPayload {
-                id: *id,
-                note: note.clone(),
-            }),
-        ),
-        Event::ProposalWithdrawn { id, note } => (
-            "proposal_withdrawn",
-            pack(&ProposalNotedPayload {
-                id: *id,
-                note: note.clone(),
-            }),
-        ),
-        Event::Commented { target, body } => (
-            "commented",
-            pack(&CommentedPayload {
-                target: *target,
-                body: body.clone(),
-            }),
-        ),
-    }
+/// Split an event into its db columns. The on-disk shape is serde's
+/// externally-tagged enum; the split happens at the tag.
+pub fn disassemble(event: &Event) -> (String, String) {
+    let tagged = serde_json::to_value(event).expect("in-memory events always serialize");
+    let Some(mut entry) = tagged.as_object().map(|m| m.into_iter()) else {
+        unreachable!("an event serializes to exactly one keyed object")
+    };
+    let (kind, payload) = entry
+        .next()
+        .expect("an event serializes to exactly one keyed object");
+    (kind.to_owned(), payload.to_string())
 }
 
 pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
-    fn malformed<T>(kind: &str, err: serde_json::Error) -> Result<T, ParseFail> {
-        Err(ParseFail::Malformed {
-            kind: kind.to_string(),
-            detail: err.to_string(),
-        })
+    if !KINDS.contains(&kind) {
+        return Err(ParseFail::UnknownKind(kind.to_string()));
     }
+    let inner: serde_json::Value = serde_json::from_str(payload).map_err(|e| malformed(kind, e))?;
+    let mut tagged = serde_json::Map::new();
+    tagged.insert(kind.to_string(), inner);
+    serde_json::from_value(serde_json::Value::Object(tagged)).map_err(|e| malformed(kind, e))
+}
 
-    match kind {
-        "task_created" => {
-            let p: CreatedPayload =
-                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::TaskCreated {
-                id: TaskId(p.id),
-                name: p.task_name,
-                parent_id: p.parent_id.map(TaskId),
-            })
-        }
-        "task_claimed" => {
-            let p: IdPayload = serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::TaskClaimed { id: TaskId(p.id) })
-        }
-        "task_done" => {
-            let p: DonePayload = serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::TaskDone {
-                id: TaskId(p.id),
-                receipt: p.receipt,
-            })
-        }
-        "task_dropped" => {
-            let p: NotedPayload = serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::TaskDropped {
-                id: TaskId(p.id),
-                note: p.note,
-            })
-        }
-        "task_released" => {
-            let p: NotedPayload = serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::TaskReleased {
-                id: TaskId(p.id),
-                note: p.note,
-            })
-        }
-        "proposal_created" => {
-            let p: ProposalCreatedPayload =
-                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::ProposalCreated {
-                name: p.name,
-                action: p.action,
-            })
-        }
-        "proposal_accepted" => {
-            let p: ProposalIdPayload =
-                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::ProposalAccepted { id: p.id })
-        }
-        "proposal_rejected" => {
-            let p: ProposalNotedPayload =
-                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::ProposalRejected {
-                id: p.id,
-                note: p.note,
-            })
-        }
-        "proposal_withdrawn" => {
-            let p: ProposalNotedPayload =
-                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::ProposalWithdrawn {
-                id: p.id,
-                note: p.note,
-            })
-        }
-        "commented" => {
-            let p: CommentedPayload =
-                serde_json::from_str(payload).or_else(|e| malformed(kind, e))?;
-            Ok(Event::Commented {
-                target: p.target,
-                body: p.body,
-            })
-        }
-        _ => Err(ParseFail::UnknownKind(kind.to_string())),
+fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
+    ParseFail::Malformed {
+        kind: kind.to_string(),
+        detail: err.to_string(),
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::CommentId;
+    use crate::objects::comment::{CommentId, Target};
+    use crate::objects::task::TaskId;
     use crate::prose::Prose;
     use crate::store::RecordId;
 
@@ -284,7 +119,7 @@ mod test {
 
         for event in &samples {
             let (kind, payload) = disassemble(event);
-            let back = assemble(kind, &payload).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+            let back = assemble(&kind, &payload).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
             assert_eq!(&back, event, "different: {kind}");
         }
     }

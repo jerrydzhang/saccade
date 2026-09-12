@@ -2,8 +2,10 @@ use crate::objects::comment::Target;
 use crate::objects::proposal::{ProposalAction, ProposalId};
 use crate::objects::task::TaskId;
 use crate::prose::Prose;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Event {
     // Task Events
     TaskCreated {

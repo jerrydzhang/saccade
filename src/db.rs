@@ -282,7 +282,7 @@ pub fn execute(
             logged_time,
             actor: context.actor.clone(),
             tier: tier.to_string(),
-            kind: kind.to_string(),
+            kind: kind.clone(),
             payload: payload.clone(),
         });
         txn.execute(
