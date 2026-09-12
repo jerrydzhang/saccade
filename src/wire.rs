@@ -24,8 +24,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
     }
 }
 
-/// The kinds the codec knows; anything else in a row is version skew,
-/// not corruption — the log loads to the skew point and says so.
+/// Known kinds, anything else in a row is version skew, not corruption
 const KINDS: [&str; 10] = [
     "task_created",
     "task_claimed",
