@@ -8,7 +8,9 @@ use saccade::db::{self, ExecuteFail, LoadState};
 use saccade::objects::comment::{CommentId, Target};
 use saccade::objects::proposal::ProposalId;
 use saccade::objects::task::TaskId;
-use saccade::views::{CommentLine, ProposalView, TaskView, proposal_view, task_view, thread_view};
+use saccade::views::{
+    CommentLine, ProposalView, TaskView, proposal_view, show_view, task_view, thread_view,
+};
 use saccade::{Command, Context, Prose, RecordId, Reject, Tier, World};
 use std::io::Cursor;
 
@@ -592,7 +594,7 @@ fn thread_html(thread: &[CommentLine], n: usize) -> String {
         .collect()
 }
 
-/// The dock's body: identity, judgment blocks, thread, and the comment form.
+/// The dock's body: identity, judgment blocks, receipt, thread, and the comment form.
 fn dock_content(view: &TaskView, world: &World, form: &FormState) -> String {
     let n = task_num(&view.id).unwrap_or(0);
     let mut s = format!(
@@ -615,6 +617,13 @@ fn dock_content(view: &TaskView, world: &World, form: &FormState) -> String {
             pv.id,
             pv.id,
             esc(&form.note),
+        ));
+    }
+    let show = show_view(world, TaskId(n)).expect("dock id validated upstream");
+    if let Some(receipt) = &show.receipt {
+        s.push_str(&format!(
+            "<div class=\"cmt\"><span class=\"meta\">receipt</span>\n<div class=\"body\">{}</div>\n</div>\n",
+            esc(receipt)
         ));
     }
     let thread = thread_view(world, TaskId(n)).expect("dock id validated upstream");
@@ -871,6 +880,36 @@ mod tests {
         assert!(html.contains("action=\"/p/1/accept\""));
         assert!(html.contains("action=\"/p/1/reject\""));
         assert!(html.contains("action=\"/t/0/comment\""));
+    }
+
+    /// Only a done task's dock carries the receipt
+    #[test]
+    fn dock_gates_the_receipt_on_done() {
+        let done = World::replay(vec![
+            record(
+                0,
+                Event::TaskCreated {
+                    id: TaskId(0),
+                    name: Prose::new("implement foo".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(1, Event::TaskClaimed { id: TaskId(0) }),
+            record(
+                2,
+                Event::TaskDone {
+                    id: TaskId(0),
+                    receipt: Prose::new("suite green <34 unit>".into()).unwrap(),
+                },
+            ),
+        ]);
+        let html = render_canvas(&done, &canvas(&done), Some(0), &FormState::default());
+        assert!(html.contains("suite green &lt;34 unit&gt;"));
+        assert!(!html.contains("<34 unit>"));
+
+        let open = world_with("implement foo");
+        let html = render_canvas(&open, &canvas(&open), Some(0), &FormState::default());
+        assert!(!html.contains("receipt"));
     }
 
     #[test]
