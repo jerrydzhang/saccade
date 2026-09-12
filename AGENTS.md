@@ -43,6 +43,8 @@ Law that binds the not-yet-built. These survived the DESIGN.md deletion
 (2026-09-10) because nothing else carries them: code enforces only what
 exists, and `AXIOMS.md` carries world belief, not tracker law. Everything
 else in that file was derivable or outdated; git history holds the rest.
+Admission bar: rules name kinds, never task ids — instance facts belong to
+the tracker, which ages with them.
 
 - Prescriptions live in code, never configuration; there is no plugin surface.
 - Objects earn residency by being addressed after birth; only a rule change
@@ -67,6 +69,10 @@ else in that file was derivable or outdated; git history holds the rest.
   comprehension rides the record, never the conversation.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes — accepted).
+- Comments land at the tier they describe: work facts on the work thread,
+  episode facts on the episode's container, direction facts on the direction
+  home; session-shaped work writes no thread receipts unless it changed law —
+  the commit is the record.
 
 ## Test philosophy
 
