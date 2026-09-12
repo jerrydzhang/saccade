@@ -363,23 +363,6 @@ pub fn comment_thread(world: &World, task_id: &TaskId) -> Vec<CommentLine> {
     lines
 }
 
-pub struct TaskView {
-    pub id: String,
-    pub state: &'static str,
-    pub parent: Option<String>,
-    pub name: String,
-    /// The pending-judgment mark, when an open proposal targets this task.
-    /// The row is an attention cue and a pointer; the full story lives at the seq.
-    pub proposal: Option<ProposalMark>,
-    /// Size of the attached comment thread; renders as a mere pointer (`#`).
-    pub comments: usize,
-}
-
-pub struct ProposalMark {
-    pub seq: usize,
-    pub verb: &'static str,
-}
-
 pub fn view_of(id: &TaskId, world: &World) -> Option<TaskView> {
     let task = world.tasks.get(id.0)?;
     Some(TaskView {

@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Reject;
 use crate::decide::decide;
 use crate::events::{Command, Event};
-use crate::objects::comment::{Comment, CommentId};
-use crate::objects::proposal::{Proposal, ProposalId, ProposalState};
-use crate::objects::task::{Task, TaskId, TaskState};
+use crate::objects::comment::{Comment, CommentContext, CommentId};
+use crate::objects::proposal::{Proposal, ProposalContext, ProposalId, ProposalState};
+use crate::objects::task::{Task, TaskContext, TaskId, TaskState};
+use crate::{ProposalAction, Reject, Target};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tier {
@@ -34,9 +34,9 @@ pub struct Record {
 
 #[derive(Debug, PartialEq)]
 pub struct World {
-    pub tasks: Vec<Task>,
-    pub proposals: BTreeMap<ProposalId, Proposal>,
-    pub comments: BTreeMap<CommentId, Comment>,
+    pub tasks: Vec<TaskContext>,
+    pub proposals: BTreeMap<ProposalId, ProposalContext>,
+    pub comments: BTreeMap<CommentId, CommentContext>,
 }
 
 impl World {
@@ -69,22 +69,29 @@ impl World {
             } => {
                 assert_eq!(id.0, self.tasks.len(), "non-dense TaskCreated id");
 
-                self.tasks.push(Task {
-                    state: TaskState::Open,
-                    name: task_name,
-                    parent_id,
+                self.tasks.push(TaskContext {
+                    task: Task {
+                        state: TaskState::Open,
+                        name: task_name,
+                        parent_id,
+                    },
+                    last_updated: record.id,
+                    proposal: None,
+                    thread: Vec::new(),
                 });
             }
             ref event @ (Event::TaskClaimed { id }
             | Event::TaskDone { id, .. }
             | Event::TaskDropped { id, .. }
             | Event::TaskReleased { id, .. }) => {
-                let task = self
+                let task_ctx = self
                     .tasks
                     .get_mut(id.0)
                     .expect("apply received an invalid task id");
 
-                *task = task
+                task_ctx.last_updated = record.id;
+                task_ctx.task = task_ctx
+                    .task
                     .apply(event)
                     .expect("decide emitted an unfoldable event");
             }
@@ -97,35 +104,76 @@ impl World {
 
                 self.proposals.insert(
                     proposal_id,
-                    Proposal {
-                        state: ProposalState::Open,
-                        name: proposal_name,
-                        action,
+                    ProposalContext {
+                        proposal: Proposal {
+                            state: ProposalState::Open,
+                            name: proposal_name,
+                            action,
+                        },
                     },
                 );
+
+                match action {
+                    ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
+                        let task_ctx = self
+                            .tasks
+                            .get_mut(task_id.0)
+                            .expect("apply received an invalid task id");
+                        task_ctx.proposal = Some(proposal_id);
+                    }
+                }
             }
             ref event @ (Event::ProposalWithdrawn { id, .. }
             | Event::ProposalRejected { id, .. }
             | Event::ProposalAccepted { id, .. }) => {
-                let proposal = self
+                let proposal_ctx = self
                     .proposals
                     .get_mut(&id)
                     .expect("apply received an invalid proposal id");
 
-                *proposal = proposal
+                proposal_ctx.proposal = proposal_ctx
+                    .proposal
                     .apply(event)
                     .expect("decide emitted an unfoldable event");
+
+                match &proposal_ctx.proposal.action {
+                    ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
+                        let task_ctx = self
+                            .tasks
+                            .get_mut(task_id.0)
+                            .expect("apply received an invalid task id");
+                        task_ctx.proposal = None;
+                    }
+                };
             }
             // Comment events
             Event::Commented { target, body } => {
                 self.comments.insert(
                     CommentId(record.id),
-                    Comment {
-                        target,
-                        body,
+                    CommentContext {
+                        comment: Comment { target, body },
                         actor: record.context.actor.clone(),
                     },
                 );
+                let mut up = target;
+                let root_task_id = loop {
+                    match up {
+                        Target::Task(t) => break t,
+                        Target::Comment(parent) => {
+                            up = self
+                                .comments
+                                .get(&parent)
+                                .expect("apply received a dangling comment target")
+                                .comment
+                                .target;
+                        }
+                    }
+                };
+                self.tasks
+                    .get_mut(root_task_id.0)
+                    .expect("task id should exist for comment target")
+                    .thread
+                    .push(CommentId(record.id));
             }
         }
     }

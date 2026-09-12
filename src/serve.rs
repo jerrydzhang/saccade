@@ -334,6 +334,7 @@ fn reject_text(r: &Reject) -> String {
         HumanOnly => "human-only act".into(),
         InvalidTaskId => "no such task".into(),
         InvalidProposalId => "no open proposal with that id".into(),
+        ProposalAlreadyOpen => "that task already has an open proposal".into(),
         InvalidCommentId => "no comment with that id".into(),
         InvalidParentTaskId => "no such parent task".into(),
         other => format!("{other:?}"),
@@ -559,7 +560,7 @@ fn render_canvas(world: &World, c: &Canvas, dock_id: Option<usize>, form: &FormS
             format!(
                 "<a class=\"row gate\" href=\"{href}\"><span class=\"id\">#{}</span><span class=\"verb\">{} {}</span><span class=\"name\">{}</span></a>\n",
                 p.id,
-                esc(&p.action),
+                esc(p.action),
                 esc(&p.task),
                 esc(&p.name),
             )
@@ -627,7 +628,7 @@ fn dock_content(view: &TaskView, world: &World, form: &FormState) -> String {
         s.push_str(&format!(
             "<div class=\"pblock\">\n<div class=\"pmeta\">#{}</div>\n<div class=\"pname\">{} {} · {}</div>\n<form method=\"post\" action=\"/p/{}/accept\"><button class=\"judge\" type=\"submit\">accept</button></form>\n<form class=\"cform\" method=\"post\" action=\"/p/{}/reject\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<button class=\"judge\" type=\"submit\">reject</button>\n</form>\n</div>\n",
             pv.id,
-            esc(&pv.action),
+            esc(pv.action),
             esc(&pv.task),
             esc(&pv.name),
             pv.id,

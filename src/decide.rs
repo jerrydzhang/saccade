@@ -1,7 +1,7 @@
 use crate::Reject;
 use crate::events::{Command, Event};
 use crate::objects::comment::Target;
-use crate::objects::proposal::ProposalAction;
+use crate::objects::proposal::{ProposalAction, ProposalState};
 use crate::prose::Prose;
 use crate::store::{Context, Tier, World};
 
@@ -68,10 +68,13 @@ fn candidate(world: &World, command: Command) -> Vec<Event> {
         Command::WithdrawProposal { id, note } => vec![Event::ProposalWithdrawn { id, note }],
         Command::RejectProposal { id, note } => vec![Event::ProposalRejected { id, note }],
         Command::AcceptProposal { id } => match world.proposals.get(&id) {
-            Some(proposal) => {
+            Some(proposal_ctx) => {
                 vec![
                     Event::ProposalAccepted { id },
-                    proposal.action.target_event(&proposal.name),
+                    proposal_ctx
+                        .proposal
+                        .action
+                        .target_event(&proposal_ctx.proposal.name),
                 ]
             }
             // This will be rejected in validate
@@ -93,31 +96,54 @@ fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
                 }
             }
             event @ Event::TaskClaimed { id } => {
-                let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+                let task = &world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?.task;
                 task.state.validate(event)?;
             }
             event @ Event::TaskDone { id, .. } => {
-                let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+                let task = &world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?.task;
                 task.state.validate(event)?;
             }
             event @ Event::TaskDropped { id, .. } | event @ Event::TaskReleased { id, .. } => {
-                let task = world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
+                let task = &world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?.task;
                 task.state.validate(event)?;
             }
             // Proposal
             Event::ProposalCreated { action, .. } => match action {
                 ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
-                    let task = world.tasks.get(task_id.0).ok_or(Reject::InvalidTaskId)?;
+                    let task = &world
+                        .tasks
+                        .get(task_id.0)
+                        .ok_or(Reject::InvalidTaskId)?
+                        .task;
                     task.state
                         .validate(&action.target_event(&Prose::new("probe".into())?))?;
+                    // one judgment at a time per task: validate may walk, it is not a render path
+                    let pending = world.proposals.values().any(|ctx| {
+                        ctx.proposal.state == ProposalState::Open
+                            && match &ctx.proposal.action {
+                                ProposalAction::Drop { task_id: t }
+                                | ProposalAction::Release { task_id: t } => t == task_id,
+                            }
+                    });
+                    if pending {
+                        return Err(Reject::ProposalAlreadyOpen);
+                    }
                 }
             },
             event @ (Event::ProposalWithdrawn { id, .. } | Event::ProposalRejected { id, .. }) => {
-                let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
+                let proposal = &world
+                    .proposals
+                    .get(id)
+                    .ok_or(Reject::InvalidProposalId)?
+                    .proposal;
                 proposal.state.validate(event)?;
             }
             event @ Event::ProposalAccepted { id } => {
-                let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
+                let proposal = &world
+                    .proposals
+                    .get(id)
+                    .ok_or(Reject::InvalidProposalId)?
+                    .proposal;
                 proposal.state.validate(event)?;
             }
             // Comment
@@ -138,7 +164,7 @@ fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{ProposalAction, ProposalId, Prose, RecordId, Target, TaskId};
+    use crate::{ProposalAction, ProposalId, Prose, Record, RecordId, Target, TaskId};
 
     fn agent() -> Context {
         Context {
@@ -246,5 +272,78 @@ mod test {
 
         assert!(matches!(err3, Err(Reject::HumanOnly)));
         assert!(matches!(err4, Err(Reject::InvalidProposalId)));
+    }
+
+    fn record(seq: usize, event: Event) -> Record {
+        Record {
+            id: RecordId(seq),
+            timestamp: 0,
+            context: human(),
+            event,
+        }
+    }
+
+    /// One judgment at a time per task: a second open proposal on the same
+    /// target is refused, and the gate reopens once the first resolves.
+    #[test]
+    fn a_second_open_proposal_on_one_task_is_refused() {
+        let world = World::replay(vec![
+            record(
+                0,
+                Event::TaskCreated {
+                    id: TaskId(0),
+                    name: Prose::new("migrate floop".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(1, Event::TaskClaimed { id: TaskId(0) }),
+            record(
+                2,
+                Event::ProposalCreated {
+                    name: Prose::new("drop floop instead".into()).unwrap(),
+                    action: ProposalAction::Drop { task_id: TaskId(0) },
+                },
+            ),
+        ]);
+
+        let second = Command::CreateProposal {
+            name: Prose::new("drop floop again".into()).unwrap(),
+            action: ProposalAction::Drop { task_id: TaskId(0) },
+        };
+        assert!(matches!(
+            decide(&world, &human(), second),
+            Err(Reject::ProposalAlreadyOpen)
+        ));
+
+        let resolved = World::replay(vec![
+            record(
+                0,
+                Event::TaskCreated {
+                    id: TaskId(0),
+                    name: Prose::new("migrate floop".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(1, Event::TaskClaimed { id: TaskId(0) }),
+            record(
+                2,
+                Event::ProposalCreated {
+                    name: Prose::new("drop floop instead".into()).unwrap(),
+                    action: ProposalAction::Drop { task_id: TaskId(0) },
+                },
+            ),
+            record(
+                3,
+                Event::ProposalRejected {
+                    id: ProposalId(RecordId(2)),
+                    note: Prose::new("flop stays".into()).unwrap(),
+                },
+            ),
+        ]);
+        let third = Command::CreateProposal {
+            name: Prose::new("drop floop for real".into()).unwrap(),
+            action: ProposalAction::Drop { task_id: TaskId(0) },
+        };
+        assert!(decide(&resolved, &human(), third).is_ok());
     }
 }

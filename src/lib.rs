@@ -23,6 +23,7 @@ pub enum Reject {
     InvalidParentTaskId,
     // Proposal
     InvalidProposalId,
+    ProposalAlreadyOpen,
     InvalidCommentId,
     // Permissions
     HumanOnly,

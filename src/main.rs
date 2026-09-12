@@ -201,6 +201,7 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::InvalidTaskId => "invalid_task_id",
         Reject::InvalidParentTaskId => "invalid_parent_task_id",
         Reject::InvalidProposalId => "invalid_proposal_id",
+        Reject::ProposalAlreadyOpen => "proposal_already_open",
         Reject::InvalidCommentId => "invalid_comment_id",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
@@ -261,7 +262,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         },
         Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => return read_only(cli),
         Cmd::Serve { bind, port } => {
-            return match serve::run(&cli.db, &bind, *port) {
+            return match serve::run(&cli.db, bind, *port) {
                 Err(e) => Err(Fail::Usage(e)),
                 Ok(infallible) => match infallible {},
             };
@@ -507,7 +508,7 @@ fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
     for (i, piece) in pieces.into_iter().enumerate() {
         if i == 0 {
             out.push_str(first);
-        } else if piece.len() + 1 <= budget {
+        } else if piece.len() < budget {
             out.push(' ');
             budget -= 1;
         } else {
