@@ -1,8 +1,5 @@
 use crate::Reject;
 use crate::events::{Command, Event};
-use crate::objects::comment::Target;
-use crate::objects::proposal::{ProposalAction, ProposalState};
-use crate::prose::Prose;
 use crate::store::{Context, Tier, World};
 
 /// Authority requirements per event kind
@@ -27,38 +24,43 @@ fn required_tier(event: &Event) -> Authority {
     }
 }
 
-fn enforce_tier(event: &Event, context: &Context) -> Result<(), Reject> {
-    // this will probably need to be changed when the system actor is added
-    match required_tier(event) {
-        Authority::AnyTier => Ok(()),
-        Authority::Require(tier) if context.tier == tier => Ok(()),
-        Authority::Require(_) => Err(Reject::HumanOnly),
+/// Authority gate over a command's events: the table is law, tier never identity
+pub(crate) fn enforce_tier(context: &Context, events: &[Event]) -> Result<(), Reject> {
+    for event in events {
+        match required_tier(event) {
+            Authority::AnyTier => {}
+            Authority::Require(tier) if context.tier == tier => {}
+            Authority::Require(_) => return Err(Reject::HumanOnly),
+        }
     }
+    Ok(())
 }
 
-/// This function takes in its arguments and the either returns a vec of validated events or rejects
-/// the command
-pub fn decide(world: &World, context: &Context, command: Command) -> Result<Vec<Event>, Reject> {
-    let events = candidate(world, command);
-
-    for event in &events {
-        enforce_tier(event, context)?;
+/// Stateful expansion between decide and the fold, some events need to be expanded into multiple
+/// events based on the current world state.
+pub(crate) fn expand(world: &World, events: &[Event]) -> Result<Vec<Event>, Reject> {
+    let mut expanded = Vec::with_capacity(events.len() + 1);
+    for event in events {
+        expanded.push(event.clone());
+        // NOTE: switch this to a match statement if we add more events that need expansion
+        if let Event::ProposalAccepted { id } = event {
+            let proposal_ctx = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
+            expanded.push(
+                proposal_ctx
+                    .proposal
+                    .action
+                    .target_event(&proposal_ctx.proposal.name),
+            );
+        }
     }
-
-    validate(world, &events)?;
-
-    Ok(events)
+    Ok(expanded)
 }
 
-/// Takes the current world state and proposes a vec of events
-fn candidate(world: &World, command: Command) -> Vec<Event> {
+/// Stateless command syntax: a command is its events, nothing else
+pub fn decide(command: Command) -> Vec<Event> {
     match command {
         // Task commands
-        Command::CreateTask { name, parent_id } => vec![Event::TaskCreated {
-            id: world.next_task_id(),
-            name,
-            parent_id,
-        }],
+        Command::CreateTask { name, parent_id } => vec![Event::TaskCreated { name, parent_id }],
         Command::ClaimTask { id } => vec![Event::TaskClaimed { id }],
         Command::CompleteTask { id, receipt } => vec![Event::TaskDone { id, receipt }],
         Command::DropTask { id, note } => vec![Event::TaskDropped { id, note }],
@@ -67,115 +69,28 @@ fn candidate(world: &World, command: Command) -> Vec<Event> {
         Command::CreateProposal { name, action } => vec![Event::ProposalCreated { name, action }],
         Command::WithdrawProposal { id, note } => vec![Event::ProposalWithdrawn { id, note }],
         Command::RejectProposal { id, note } => vec![Event::ProposalRejected { id, note }],
-        Command::AcceptProposal { id } => match world.proposals.get(&id) {
-            Some(proposal_ctx) => {
-                vec![
-                    Event::ProposalAccepted { id },
-                    proposal_ctx
-                        .proposal
-                        .action
-                        .target_event(&proposal_ctx.proposal.name),
-                ]
-            }
-            // This will be rejected in validate
-            None => vec![Event::ProposalAccepted { id }],
-        },
+        Command::AcceptProposal { id } => vec![Event::ProposalAccepted { id }],
         // Comment commands
         Command::Comment { target, body } => vec![Event::Commented { target, body }],
     }
 }
 
-/// Validates an array of events against the current world state
-fn validate(world: &World, events: &[Event]) -> Result<(), Reject> {
-    for event in events {
-        match event {
-            // Task
-            Event::TaskCreated { parent_id, .. } => {
-                if parent_id.is_some_and(|id| world.tasks.len() <= id.0) {
-                    return Err(Reject::InvalidParentTaskId);
-                }
-            }
-            event @ Event::TaskClaimed { id } => {
-                let task = &world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?.task;
-                task.state.validate(event)?;
-            }
-            event @ Event::TaskDone { id, .. } => {
-                let task = &world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?.task;
-                task.state.validate(event)?;
-            }
-            event @ Event::TaskDropped { id, .. } | event @ Event::TaskReleased { id, .. } => {
-                let task = &world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?.task;
-                task.state.validate(event)?;
-            }
-            // Proposal
-            Event::ProposalCreated { action, .. } => match action {
-                ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
-                    let task = &world
-                        .tasks
-                        .get(task_id.0)
-                        .ok_or(Reject::InvalidTaskId)?
-                        .task;
-                    task.state
-                        .validate(&action.target_event(&Prose::new("probe".into())?))?;
-                    // one judgment at a time per task: validate may walk, it is not a render path
-                    let pending = world.proposals.values().any(|ctx| {
-                        ctx.proposal.state == ProposalState::Open
-                            && match &ctx.proposal.action {
-                                ProposalAction::Drop { task_id: t }
-                                | ProposalAction::Release { task_id: t } => t == task_id,
-                            }
-                    });
-                    if pending {
-                        return Err(Reject::ProposalAlreadyOpen);
-                    }
-                }
-            },
-            event @ (Event::ProposalWithdrawn { id, .. } | Event::ProposalRejected { id, .. }) => {
-                let proposal = &world
-                    .proposals
-                    .get(id)
-                    .ok_or(Reject::InvalidProposalId)?
-                    .proposal;
-                proposal.state.validate(event)?;
-            }
-            event @ Event::ProposalAccepted { id } => {
-                let proposal = &world
-                    .proposals
-                    .get(id)
-                    .ok_or(Reject::InvalidProposalId)?
-                    .proposal;
-                proposal.state.validate(event)?;
-            }
-            // Comment
-            Event::Commented { target, .. } => match target {
-                Target::Task(id) => {
-                    world.tasks.get(id.0).ok_or(Reject::InvalidTaskId)?;
-                }
-                Target::Comment(id) => {
-                    world.comments.get(id).ok_or(Reject::InvalidCommentId)?;
-                }
-            },
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{ProposalAction, ProposalId, Prose, Record, RecordId, Target, TaskId};
+    use crate::types::actor::ActorName;
+    use crate::{ProposalAction, ProposalId, Prose, RecordId, Target, TaskId};
 
     fn agent() -> Context {
         Context {
-            actor: "saccade bot".into(),
+            actor: ActorName::new("saccade bot".into()).unwrap(),
             tier: Tier::Agent,
         }
     }
 
     fn human() -> Context {
         Context {
-            actor: "human person".into(),
+            actor: ActorName::new("human person".into()).unwrap(),
             tier: Tier::Human,
         }
     }
@@ -186,7 +101,6 @@ mod test {
         let pid = ProposalId(RecordId(0));
         let events = [
             Event::TaskCreated {
-                id: TaskId(0),
                 name: Prose::new("filler".into()).unwrap(),
                 parent_id: None,
             },
@@ -232,117 +146,14 @@ mod test {
             );
 
             assert_eq!(
-                enforce_tier(event, &agent()).is_err(),
+                enforce_tier(&agent(), std::slice::from_ref(event)).is_err(),
                 gated,
                 "agent rejected at the wrong cells: {event:?}"
             );
             assert!(
-                enforce_tier(event, &human()).is_ok(),
+                enforce_tier(&human(), std::slice::from_ref(event)).is_ok(),
                 "human must pass every event kind: {event:?}"
             );
         }
-    }
-
-    /// Authority errors supercede state transition errors. This is logical since it if you get
-    /// a state transition error first you might suspect it is an issue with the command
-    /// arguments when in reality no matter what arguments you input the command itself is
-    /// invalid.
-    #[test]
-    fn err_ordering_authority_supersedes_existence() {
-        let agent_ctx = agent();
-        let human_ctx = human();
-
-        let world = World::new();
-
-        let drop = || Command::DropTask {
-            id: TaskId(0),
-            note: Prose::new("invalid drop".into()).unwrap(),
-        };
-        let err1 = decide(&world, &agent_ctx, drop());
-        let err2 = decide(&world, &human_ctx, drop());
-
-        assert!(matches!(err1, Err(Reject::HumanOnly)));
-        assert!(matches!(err2, Err(Reject::InvalidTaskId)));
-
-        let accept = || Command::AcceptProposal {
-            id: ProposalId(RecordId(99)),
-        };
-        let err3 = decide(&world, &agent_ctx, accept());
-        let err4 = decide(&world, &human_ctx, accept());
-
-        assert!(matches!(err3, Err(Reject::HumanOnly)));
-        assert!(matches!(err4, Err(Reject::InvalidProposalId)));
-    }
-
-    fn record(seq: usize, event: Event) -> Record {
-        Record {
-            id: RecordId(seq),
-            timestamp: 0,
-            context: human(),
-            event,
-        }
-    }
-
-    /// One judgment at a time per task: a second open proposal on the same
-    /// target is refused, and the gate reopens once the first resolves.
-    #[test]
-    fn a_second_open_proposal_on_one_task_is_refused() {
-        let floop = |seq, event| record(seq, event);
-        let world = World::replay(vec![
-            floop(
-                0,
-                Event::TaskCreated {
-                    id: TaskId(0),
-                    name: Prose::new("migrate floop".into()).unwrap(),
-                    parent_id: None,
-                },
-            ),
-            floop(
-                2,
-                Event::ProposalCreated {
-                    name: Prose::new("drop floop instead".into()).unwrap(),
-                    action: ProposalAction::Drop { task_id: TaskId(0) },
-                },
-            ),
-        ]);
-
-        let second = Command::CreateProposal {
-            name: Prose::new("drop floop again".into()).unwrap(),
-            action: ProposalAction::Drop { task_id: TaskId(0) },
-        };
-        assert!(matches!(
-            decide(&world, &human(), second),
-            Err(Reject::ProposalAlreadyOpen)
-        ));
-
-        let resolved = World::replay(vec![
-            floop(
-                0,
-                Event::TaskCreated {
-                    id: TaskId(0),
-                    name: Prose::new("migrate floop".into()).unwrap(),
-                    parent_id: None,
-                },
-            ),
-            floop(
-                2,
-                Event::ProposalCreated {
-                    name: Prose::new("drop floop instead".into()).unwrap(),
-                    action: ProposalAction::Drop { task_id: TaskId(0) },
-                },
-            ),
-            floop(
-                3,
-                Event::ProposalRejected {
-                    id: ProposalId(RecordId(2)),
-                    note: Prose::new("floop stays".into()).unwrap(),
-                },
-            ),
-        ]);
-        let third = Command::CreateProposal {
-            name: Prose::new("drop floop for real".into()).unwrap(),
-            action: ProposalAction::Drop { task_id: TaskId(0) },
-        };
-        assert!(decide(&resolved, &human(), third).is_ok());
     }
 }

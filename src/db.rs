@@ -1,12 +1,13 @@
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use crate::Reject;
-use crate::decide::decide;
-use crate::events::Command;
-use crate::store::{Context, Record, RecordId, World};
+use crate::decide::{decide, enforce_tier, expand};
+use crate::events::{Command, Event};
+use crate::store::{Context, Record, RecordId, World, to_reject};
+use crate::types::actor::ActorName;
 use crate::wire;
 
 /// file-header stamp identifying a Saccade database.
@@ -71,7 +72,8 @@ pub struct StoredRecord {
 pub enum LoadState {
     /// Every row understood: the world folds.
     Full(World),
-    /// Version skew: rows retained raw; world projection and writes refused.
+    /// Rows retained raw; world projection and writes refused: version skew
+    /// or a record that does not fold.
     Degraded(String),
 }
 
@@ -241,7 +243,11 @@ pub fn load(conn: &Connection) -> Result<Loadout, DbError> {
             id: RecordId(row.seq),
             timestamp: row.event_time,
             context: Context {
-                actor: row.actor.clone(),
+                actor: ActorName::new(row.actor.clone()).map_err(|_| DbError::Corrupt {
+                    seq: row.seq,
+                    kind: row.kind.clone(),
+                    detail: "invalid actor name".into(),
+                })?,
                 tier,
             },
             event,
@@ -250,9 +256,26 @@ pub fn load(conn: &Connection) -> Result<Loadout, DbError> {
 
     let state = match degraded {
         Some(reason) => LoadState::Degraded(reason),
-        None => LoadState::Full(World::replay(records)),
+        None => match World::replay(records) {
+            Ok(world) => LoadState::Full(world),
+            Err(err) => LoadState::Degraded(format!(
+                "record at seq {} does not fold: {:?}",
+                err.at.0, err.reason
+            )),
+        },
     };
     Ok(Loadout { rows, state })
+}
+
+/// An event plus the context claiming it, before it is a record
+pub struct RecordDraft {
+    pub context: Context,
+    pub event: Event,
+}
+
+/// A mixed-context append: every draft folds or none of them lands
+pub struct AtomicBatch {
+    pub drafts: Vec<RecordDraft>,
 }
 
 pub fn execute(
@@ -268,19 +291,76 @@ pub fn execute(
         LoadState::Degraded(reason) => return Err(ExecuteFail::Degraded(reason)),
     };
 
-    let events = decide(&world, context, command)?;
-    let logged_time = now_epoch();
-    let tier = wire::tier_of(&context.tier);
+    let events = decide(command);
+    enforce_tier(context, &events)?;
+    let events = expand(&world, &events)?;
+    let drafts = events
+        .into_iter()
+        .map(|event| RecordDraft {
+            context: context.clone(),
+            event,
+        })
+        .collect();
 
-    let mut stored = Vec::with_capacity(events.len());
-    for (i, event) in events.into_iter().enumerate() {
-        let seq = loadout.rows.len() + i;
-        let (kind, payload) = wire::disassemble(&event);
+    let stored = append(&txn, &world, loadout.rows.len(), drafts, event_time)?;
+    txn.commit()?;
+    Ok(stored)
+}
+
+/// Fold-validated all-or-none append of a mixed-context batch; positional ids
+/// are assigned inside the transaction. No authority here: batches are
+/// programmatic, tier gates live in the command path.
+pub fn execute_batch(
+    conn: &mut Connection,
+    batch: AtomicBatch,
+    event_time: u64,
+) -> Result<Vec<StoredRecord>, ExecuteFail> {
+    let txn = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let loadout = load(&txn)?;
+    let world = match loadout.state {
+        LoadState::Full(world) => world,
+        LoadState::Degraded(reason) => return Err(ExecuteFail::Degraded(reason)),
+    };
+
+    let stored = append(&txn, &world, loadout.rows.len(), batch.drafts, event_time)?;
+    txn.commit()?;
+    Ok(stored)
+}
+
+fn append(
+    txn: &Transaction,
+    world: &World,
+    base: usize,
+    drafts: Vec<RecordDraft>,
+    event_time: u64,
+) -> Result<Vec<StoredRecord>, ExecuteFail> {
+    let records: Vec<Record> = drafts
+        .into_iter()
+        .enumerate()
+        .map(|(i, draft)| Record {
+            id: RecordId(base + i),
+            timestamp: event_time,
+            context: draft.context,
+            event: draft.event,
+        })
+        .collect();
+
+    // every record folds before any row is written
+    world
+        .clone()
+        .fold(records.clone())
+        .map_err(|err| ExecuteFail::Reject(to_reject(err.reason)))?;
+
+    let logged_time = now_epoch();
+    let mut stored = Vec::with_capacity(records.len());
+    for record in &records {
+        let tier = wire::tier_of(&record.context.tier);
+        let (kind, payload) = wire::disassemble(&record.event);
         stored.push(StoredRecord {
-            seq,
+            seq: record.id.0,
             event_time,
             logged_time,
-            actor: context.actor.clone(),
+            actor: record.context.actor.as_str().to_string(),
             tier: tier.to_string(),
             kind: kind.clone(),
             payload: payload.clone(),
@@ -289,17 +369,16 @@ pub fn execute(
             "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                seq as i64,
+                record.id.0 as i64,
                 event_time as i64,
                 logged_time as i64,
-                context.actor,
+                record.context.actor.as_str(),
                 tier,
                 kind,
                 payload
             ],
         )?;
     }
-    txn.commit()?;
     Ok(stored)
 }
 
@@ -313,7 +392,7 @@ pub fn now_epoch() -> u64 {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::events::Command;
+    use crate::events::{Command, Event};
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
     use crate::{CommentId, ProposalAction, ProposalId, ProposalState, Prose, RecordId, Target};
@@ -328,14 +407,14 @@ mod test {
 
     fn agent() -> Context {
         Context {
-            actor: "saccade bot".into(),
+            actor: ActorName::new("saccade bot".into()).unwrap(),
             tier: Tier::Agent,
         }
     }
 
     fn human() -> Context {
         Context {
-            actor: "human person".into(),
+            actor: ActorName::new("human person".into()).unwrap(),
             tier: Tier::Human,
         }
     }
@@ -413,25 +492,56 @@ mod test {
         )
         .unwrap();
 
+        // a mixed-context batch appends atomically with per-draft tiers
+        let batch = AtomicBatch {
+            drafts: vec![
+                RecordDraft {
+                    context: agent(),
+                    event: Event::TaskCreated {
+                        name: Prose::new("batchwork".into()).unwrap(),
+                        parent_id: None,
+                    },
+                },
+                RecordDraft {
+                    context: agent(),
+                    event: Event::TaskClaimed { id: TaskId(2) },
+                },
+                RecordDraft {
+                    context: human(),
+                    event: Event::TaskDone {
+                        id: TaskId(2),
+                        receipt: Prose::new("batched receipt".into()).unwrap(),
+                    },
+                },
+            ],
+        };
+        let batched = execute_batch(&mut conn, batch, 32).unwrap();
+        assert_eq!(batched.len(), 3);
+
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
-        assert_eq!(loadout.rows.len(), 9);
+        assert_eq!(loadout.rows.len(), 12);
         assert_eq!(loadout.rows[4].kind, "proposal_created");
         assert_eq!(loadout.rows[5].kind, "proposal_accepted");
         assert_eq!(loadout.rows[6].kind, "task_dropped");
-        assert_eq!(world.tasks.len(), 2);
+        assert_eq!(loadout.rows[9].actor.as_str(), "saccade bot");
+        assert_eq!(loadout.rows[9].tier, "agent");
+        assert_eq!(loadout.rows[11].actor.as_str(), "human person");
+        assert_eq!(loadout.rows[11].tier, "human");
+        assert_eq!(world.tasks.len(), 3);
         assert!(matches!(world.tasks[0].task.state, TaskState::Done(_)));
         assert!(matches!(world.tasks[1].task.state, TaskState::Dropped));
+        assert!(matches!(world.tasks[2].task.state, TaskState::Done(_)));
         assert_eq!(
             world.proposals[&ProposalId(RecordId(4))].proposal.state,
             ProposalState::Accepted
         );
         let reply = &world.comments[&CommentId(RecordId(8))];
         let root = &world.comments[&CommentId(RecordId(7))];
-        assert_eq!(root.actor, "saccade bot");
-        assert_eq!(reply.actor, "human person");
+        assert_eq!(root.actor.as_str(), "saccade bot");
+        assert_eq!(reply.actor.as_str(), "human person");
 
         // bi-temporal: event time is caller-supplied, logged time is ours
         assert_eq!(loadout.rows[0].event_time, 10);
@@ -486,6 +596,42 @@ mod test {
     }
 
     #[test]
+    fn batch_failure_appends_none() {
+        let mut conn = memory_db();
+        execute(&mut conn, &agent(), create("survivor"), 1).unwrap();
+
+        // the second draft does not fold, so nothing may land
+        let batch = AtomicBatch {
+            drafts: vec![
+                RecordDraft {
+                    context: agent(),
+                    event: Event::TaskCreated {
+                        name: Prose::new("doomed sibling".into()).unwrap(),
+                        parent_id: None,
+                    },
+                },
+                RecordDraft {
+                    context: agent(),
+                    event: Event::TaskClaimed { id: TaskId(99) },
+                },
+            ],
+        };
+        let refused = execute_batch(&mut conn, batch, 2);
+        assert!(matches!(
+            refused,
+            Err(ExecuteFail::Reject(Reject::InvalidTaskId))
+        ));
+
+        let loadout = load(&conn).unwrap();
+        assert_eq!(loadout.rows.len(), 1);
+        assert_eq!(loadout.rows[0].kind, "task_created");
+
+        // seq stayed dense: the refused batch consumed no positions
+        execute(&mut conn, &agent(), create("next"), 3).unwrap();
+        assert_eq!(load(&conn).unwrap().rows[1].seq, 1);
+    }
+
+    #[test]
     fn seq_stays_dense_across_rejections() {
         let mut conn = memory_db();
         execute(&mut conn, &agent(), create("a"), 1).unwrap();
@@ -536,7 +682,7 @@ mod test {
         let conn = memory_db();
         conn.execute(
             "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
-             VALUES (0, 1, 1, 'future binary', 'system', 'task_created', '{}')",
+             VALUES (0, 1, 1, 'future binary', 'daemon', 'task_created', '{}')",
             [],
         )
         .unwrap();
@@ -544,7 +690,7 @@ mod test {
         let LoadState::Degraded(reason) = &loadout.state else {
             panic!("expected degraded mode");
         };
-        assert!(reason.contains("system"), "{reason}");
+        assert!(reason.contains("daemon"), "{reason}");
     }
 
     #[test]

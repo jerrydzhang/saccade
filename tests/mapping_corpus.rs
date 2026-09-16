@@ -24,12 +24,13 @@ use saccade::Reject;
 use saccade::db::{self, LoadState};
 use saccade::objects::task::TaskId;
 use saccade::store::{Context, Tier, World};
+use saccade::types::actor::ActorName;
 use saccade::views;
 use saccade::{Command, ProposalAction, ProposalId, Prose, RecordId};
 
 fn importer() -> Context {
     Context {
-        actor: "beads import".into(),
+        actor: ActorName::new("beads import".into()).unwrap(),
         tier: Tier::Agent,
     }
 }
@@ -37,7 +38,7 @@ fn importer() -> Context {
 /// Historical actor attribution; the authority is still the importing agent.
 fn beads_actor(name: &str) -> Context {
     Context {
-        actor: name.into(),
+        actor: ActorName::new(name.into()).unwrap(),
         tier: Tier::Agent,
     }
 }
@@ -416,7 +417,7 @@ fn argv_carries_adversarial_titles_and_backdating() {
 #[test]
 fn gate_queue_deposit_scenario() {
     let ruler = Context {
-        actor: "jerry".into(),
+        actor: ActorName::new("jerry".into()).unwrap(),
         tier: Tier::Human,
     };
     let path = db_path("gate-queue");
@@ -497,8 +498,8 @@ fn gate_queue_deposit_scenario() {
     assert_eq!(world.proposals.len(), 6);
     let states: Vec<&str> = world
         .proposals
-        .iter()
-        .map(|(id, _)| views::proposal_view(&world, *id).unwrap().state)
+        .keys()
+        .map(|id| views::proposal_view(&world, *id).unwrap().state)
         .collect();
     assert_eq!(states.iter().filter(|s| **s == "accepted").count(), 5);
     assert_eq!(states.iter().filter(|s| **s == "rejected").count(), 1);

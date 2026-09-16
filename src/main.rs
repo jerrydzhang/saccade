@@ -9,7 +9,8 @@ use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{ProposalView, TaskView, comment_thread, proposal_view, show_view, task_view};
 use saccade::{
-    Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId, Reject, Target, Tier,
+    ActorName, Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId, Reject,
+    Target, Tier,
 };
 
 #[derive(Parser)]
@@ -188,7 +189,7 @@ impl std::fmt::Display for Fail {
             Fail::Db(e) => write!(f, "database: {e}"),
             Fail::Degraded(r) => write!(
                 f,
-                "world projection unavailable: {r}\nraw records via 'sac log'; upgrade this binary to resume"
+                "world projection unavailable: {r}\nraw records via 'sac log'; repair the record or upgrade this binary to resume"
             ),
             Fail::Reject(r) => write!(f, "rejected: {}", reject_code(r)),
             Fail::Usage(m) => write!(f, "{m}"),
@@ -205,6 +206,7 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::InvalidCommentId => "invalid_comment_id",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
+        Reject::InvalidActor => "invalid_actor",
         Reject::ReasonRequired => "reason_required",
     }
 }
@@ -294,6 +296,7 @@ fn context_of(cli: &Cli) -> Result<Context, Fail> {
             "--actor <name> (or SACCADDE_ACTOR) is required by commands that record events".into(),
         )
     })?;
+    let actor = ActorName::new(actor)?;
     Ok(Context {
         actor,
         tier: match tier {

@@ -1,7 +1,7 @@
 use crate::objects::comment::Target;
 use crate::objects::proposal::{ProposalAction, ProposalId};
 use crate::objects::task::TaskId;
-use crate::prose::Prose;
+use crate::types::prose::Prose;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 pub enum Event {
     // Task Events
     TaskCreated {
-        id: TaskId,
         name: Prose,
         parent_id: Option<TaskId>,
     },
@@ -30,10 +29,8 @@ pub enum Event {
     },
     // Proposal Events
     ProposalCreated {
-        // Proposal's are not created with an id at event time since the id is directly the record
-        // id of the proposal, this means unlike a taskid the id is directly derivable from the
-        // single record where as a task would require counting up all the TaskCreated events to
-        // derive the id
+        // No birth event carries its id: a task's id is its push position in
+        // the fold, a proposal's id is the record position of its birth
         name: Prose,
         action: ProposalAction,
     },

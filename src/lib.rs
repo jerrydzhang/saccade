@@ -4,8 +4,8 @@ pub mod db;
 pub mod decide;
 pub mod events;
 pub mod objects;
-pub mod prose;
 pub mod store;
+pub mod types;
 pub mod views;
 pub mod wire;
 
@@ -14,8 +14,11 @@ pub use events::{Command, Event};
 pub use objects::comment::{Comment, CommentId, Target};
 pub use objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
 pub use objects::task::{Task, TaskId, TaskState};
-pub use prose::Prose;
 pub use store::{Context, Log, Record, RecordId, Tier, World};
+pub use types::actor::ActorName;
+pub use types::failure::{FailureCode, FailureEvidence};
+pub use types::pointers::{GitCommit, GitRef, SessionPointer, WorktreePath};
+pub use types::prose::Prose;
 
 #[derive(Debug)]
 pub enum Reject {
@@ -29,25 +32,27 @@ pub enum Reject {
     // Permissions
     HumanOnly,
     // Misc
+    InvalidActor,
     InvalidStateTransition,
     ReasonRequired,
 }
 
 #[cfg(test)]
-mod invariant {
+mod pipeline {
     use super::*;
-    use crate::{prose::Prose, views::comment_thread};
+    use crate::types::prose::Prose;
+    use crate::views::comment_thread;
 
     fn agent() -> Context {
         Context {
-            actor: "saccade bot".into(),
+            actor: ActorName::new("saccade bot".into()).unwrap(),
             tier: Tier::Agent,
         }
     }
 
     fn human() -> Context {
         Context {
-            actor: "human person".into(),
+            actor: ActorName::new("human person".into()).unwrap(),
             tier: Tier::Human,
         }
     }
@@ -188,179 +193,26 @@ mod invariant {
 
         assert_eq!(log.records()[8].id.0, 8);
         assert_eq!(log.records()[8].timestamp, 9);
-        assert_eq!(log.records()[8].context.actor, "saccade bot");
+        assert_eq!(log.records()[8].context.actor.as_str(), "saccade bot");
 
         assert_eq!(log.records()[9].id.0, 9);
         assert_eq!(log.records()[9].timestamp, 10);
-        assert_eq!(log.records()[9].context.actor, "human person");
+        assert_eq!(log.records()[9].context.actor.as_str(), "human person");
 
         assert_eq!(log.records()[10].id.0, 10);
         assert_eq!(log.records()[10].timestamp, 11);
-        assert_eq!(log.records()[10].context.actor, "saccade bot");
+        assert_eq!(log.records()[10].context.actor.as_str(), "saccade bot");
     }
 
     #[test]
-    fn block_invalid_taskstate_transitions() {
-        let mut log = Log::new();
-        let agent_ctx = agent();
-        populate_log(&mut log);
-
-        // foo is already done, so completing it again is illegal
-        let err1 = log.execute(
-            agent_ctx.clone(),
-            Command::CompleteTask {
-                id: TaskId(2),
-                receipt: Prose::new("foo completed successfully".into()).unwrap(),
-            },
-            1,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err1, Err(Reject::InvalidStateTransition)));
-
-        // bar is already dropped, so claiming it is illegal
-        let err2 = log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(3) }, 2);
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err2, Err(Reject::InvalidStateTransition)));
-
-        // an agent cannot drop a task, so this is illegal
-        let err3 = log.execute(
-            agent_ctx.clone(),
-            Command::DropTask {
-                id: TaskId(3),
-                note: Prose::new("duplicate of t-3".into()).unwrap(),
-            },
-            3,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err3, Err(Reject::HumanOnly)));
-
-        // a human can drop a task, but this one is already claimed, so it's illegal
-        let err4 = log.execute(
-            human(),
-            Command::DropTask {
-                id: TaskId(3),
-                note: Prose::new("duplicate of t-3".into()).unwrap(),
-            },
-            4,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err4, Err(Reject::InvalidStateTransition)));
-
-        // An agent cannot release a task, so this is illegal
-        let err5 = log.execute(
-            agent_ctx.clone(),
-            Command::ReleaseTask {
-                id: TaskId(3),
-                note: Prose::new("run dead".into()).unwrap(),
-            },
-            5,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err5, Err(Reject::HumanOnly)));
-
-        // This task is already done, so releasing it is illegal
-        let err6 = log.execute(
-            human(),
-            Command::ReleaseTask {
-                id: TaskId(0),
-                note: Prose::new("run dead".into()).unwrap(),
-            },
-            6,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err6, Err(Reject::InvalidStateTransition)));
-
-        // This task does not exist so proposing to drop it is illegal
-        let err7 = log.execute(
-            agent_ctx.clone(),
-            Command::CreateProposal {
-                name: Prose::new("probe".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(9) },
-            },
-            7,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err7, Err(Reject::InvalidTaskId)));
-
-        // This task has already been dropped, so proposing to drop it again is illegal
-        let err8 = log.execute(
-            agent_ctx.clone(),
-            Command::CreateProposal {
-                name: Prose::new("probe".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(3) },
-            },
-            8,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err8, Err(Reject::InvalidStateTransition)));
-
-        // This task is already open, so proposing to release it is illegal
-        let err9 = log.execute(
-            agent_ctx.clone(),
-            Command::CreateProposal {
-                name: Prose::new("probe".into()).unwrap(),
-                action: ProposalAction::Release { task_id: TaskId(4) },
-            },
-            9,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err9, Err(Reject::InvalidStateTransition)));
-    }
-
-    #[test]
-    fn block_invalid_task_id() {
-        let mut log = Log::new();
-        let agent_ctx = agent();
-        populate_log(&mut log);
-
-        let err = log.execute(
-            agent_ctx.clone(),
-            Command::CompleteTask {
-                id: TaskId(9),
-                receipt: Prose::new("blip completed successfully".into()).unwrap(),
-            },
-            3,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err, Err(Reject::InvalidTaskId)));
-    }
-
-    #[test]
-    fn block_invalid_parent_task_id() {
-        let mut log = Log::new();
-        populate_log(&mut log);
-        let agent_ctx = agent();
-
-        let err = log.execute(
-            agent_ctx.clone(),
-            Command::CreateTask {
-                name: Prose::new("implement foo primatives".into()).unwrap(),
-                parent_id: Some(TaskId(9)),
-            },
-            1,
-        );
-
-        assert_eq!(log.records().len(), RECORD_COUNT);
-        assert!(matches!(err, Err(Reject::InvalidParentTaskId)));
-    }
-
-    #[test]
-    fn replay_produces_identical_world() {
+    fn rejected_command_appends_nothing() {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        let recreated_world = World::replay(log.records().to_vec());
-        assert_eq!(recreated_world, *log.world());
+        // t-3 is dropped: the fold refuses the claim and nothing lands
+        let refused = log.execute(agent(), Command::ClaimTask { id: TaskId(3) }, 99);
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        assert_eq!(log.records().len(), RECORD_COUNT);
     }
 
     #[test]
@@ -370,13 +222,90 @@ mod invariant {
 
         for i in 0..log.records().len() {
             let (head, tail) = log.records().split_at(i);
-            let mut staged = World::replay(head.to_vec());
+            let mut staged = World::replay(head.to_vec()).unwrap();
             for record in tail {
-                staged.apply(record.clone());
+                staged = staged
+                    .apply(record.clone())
+                    .expect("decide emitted an unfoldable event");
             }
 
             assert_eq!(staged, *log.world());
         }
+    }
+
+    #[test]
+    fn authority_supersedes_existence_in_rejections() {
+        let mut log = Log::new();
+        let drop = || Command::DropTask {
+            id: TaskId(0),
+            note: Prose::new("invalid drop".into()).unwrap(),
+        };
+        let accept = || Command::AcceptProposal {
+            id: ProposalId(RecordId(99)),
+        };
+        assert!(matches!(
+            log.execute(agent(), drop(), 1),
+            Err(Reject::HumanOnly)
+        ));
+        assert!(matches!(
+            log.execute(human(), drop(), 1),
+            Err(Reject::InvalidTaskId)
+        ));
+        assert!(matches!(
+            log.execute(agent(), accept(), 1),
+            Err(Reject::HumanOnly)
+        ));
+        assert!(matches!(
+            log.execute(human(), accept(), 1),
+            Err(Reject::InvalidProposalId)
+        ));
+    }
+
+    #[test]
+    fn second_open_proposal_on_one_task_is_refused() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: Prose::new("migrate floop".into()).unwrap(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::CreateProposal {
+                name: Prose::new("drop floop instead".into()).unwrap(),
+                action: ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            2,
+        )
+        .unwrap();
+
+        let second = Command::CreateProposal {
+            name: Prose::new("drop floop again".into()).unwrap(),
+            action: ProposalAction::Drop { task_id: TaskId(0) },
+        };
+        assert!(matches!(
+            log.execute(human(), second, 3),
+            Err(Reject::ProposalAlreadyOpen)
+        ));
+
+        log.execute(
+            human(),
+            Command::RejectProposal {
+                id: ProposalId(RecordId(1)),
+                note: Prose::new("floop stays".into()).unwrap(),
+            },
+            4,
+        )
+        .unwrap();
+        let third = Command::CreateProposal {
+            name: Prose::new("drop floop for real".into()).unwrap(),
+            action: ProposalAction::Drop { task_id: TaskId(0) },
+        };
+        assert!(log.execute(human(), third, 5).is_ok());
     }
 
     #[test]
@@ -652,8 +581,7 @@ mod invariant {
                 agent(),
                 Command::Comment {
                     target: Target::Task(TaskId(id)),
-                    body: Prose::new(format!("for the record, on the {state} task").into())
-                        .unwrap(),
+                    body: Prose::new(format!("for the record, on the {state} task")).unwrap(),
                 },
                 9,
             )
@@ -672,61 +600,5 @@ mod invariant {
         );
         assert!(matches!(refused, Err(Reject::InvalidCommentId)));
         assert_eq!(log.records().len(), before + 3);
-    }
-
-    #[test]
-    fn re_propose_after_reject_is_free() {
-        let mut log = Log::new();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: Prose::new("real work".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::CreateProposal {
-                name: Prose::new("weak evidence".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-            2,
-        )
-        .unwrap();
-        log.execute(
-            human(),
-            Command::RejectProposal {
-                id: ProposalId(RecordId(1)),
-                note: Prose::new("ruled real work".into()).unwrap(),
-            },
-            3,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::CreateProposal {
-                name: Prose::new("better evidence".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-            4,
-        )
-        .unwrap();
-
-        assert_eq!(log.world().proposals.len(), 2);
-        assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))]
-                .proposal
-                .state,
-            ProposalState::Rejected(Prose::new("ruled real work".into()).unwrap())
-        );
-        assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(3))]
-                .proposal
-                .state,
-            ProposalState::Open
-        );
-        assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
     }
 }

@@ -20,11 +20,18 @@ discipline.
 - The problem is never silently modified. Deviations get announced before
   enactment. Success claims name their evidence (tests run and counts, files
   touched, commands exercised).
-- Tiered ownership: `src/objects/`, `src/events.rs`, `src/decide.rs`, and
-  `src/store.rs` core semantics are human-authored. `src/wire.rs`,
-  `src/main.rs`, `src/db.rs`, and test scaffolding are agent-drafted and
-  reviewed line-by-line. Mechanical moves into human-owned files happen only
-  when explicitly delegated.
+- Ownership is conceptual, never file-based. The human authors ontology and
+  type distinctions, event payload meaning, authority and transitions,
+  cross-object invariants, what effects may claim, view statements, and
+  behavioral acceptance assertions. Agents draft codecs and DB plumbing,
+  HTTP/CLI adapters, process/Git/Telegram mechanics, formatting and CSS,
+  fake-process harnesses, and repetitive registration of already-ratified
+  variants. A file may mix both: task briefs name the ratified semantic
+  interface and the exact delegated mechanics; ambiguity returns to the
+  human, never resolved by path. Mechanical edits in decision-heavy files
+  need explicit scope; policy in an effect file stays human-owned.
+  Decomposition follows conceptual seams and review responsibility; file
+  lists plan collisions and never assign authority.
 
 ## Vocabulary discipline
 
@@ -63,8 +70,13 @@ the tracker, which ages with them.
 - Breaking payload changes are allowed while this repo is the sole consumer;
   the promise that old logs always load begins at external adoption or
   painful volume, whichever comes first.
-- No counts, no badges — the restraint invariant, restated for every
-  rendering.
+- Rendering is descriptive, never persuasive: deterministic grouping,
+  ordering, staleness, and demand projection present record facts — neutral
+  local cardinality included. No unread or aggregate counts of demands,
+  tasks, states, incarnations, or records; no detached badges, urgency
+  emphasis, inferred priority/progress/success/correctness, or narrative
+  annotations. The push signal summons attention; the pull UI never
+  competes or coerces.
 - Every capability that reduces contact must add record in the same change;
   comprehension rides the record, never the conversation.
 - Single authority is the honest homelab contract; distributed replicas are a
@@ -78,15 +90,28 @@ the tracker, which ages with them.
 
 Placement is a contract:
 
-- `src/decide.rs` tests: pure units over decide's own functions. Fixtures are
+- Unit tests also encode invariants — the authority and transition tables
+  are invariants, pinned where they live. Placement is by entry point, not
+  by invariant-hood.
+
+- `src/objects/*.rs` tests: pure exhaustive transition inventory for the
+  object the module defines.
+- `src/decide.rs` tests: pure command expansion and authority; fixtures are
   constructed events and `World::new()` — never a `Log`.
-- `src/lib.rs` `invariant` tests: drive through `Log::execute` against the
-  shared `populate_log` fixture.
-- `src/db.rs` tests: the persistence layer. One round-trip test per layer;
-  new event families ride the existing round-trip, they don't get their own.
-- `tests/mapping_corpus.rs`: worked examples of the executed beads mapping.
-  (Known wart: the gate-queue deposit scenario lives there until a second
-  non-mapping integration test justifies a file.)
+- `src/store.rs` tests: the fold's failure contracts — every `Reason` pinned,
+  plus the command translation table.
+- `src/demands.rs` tests: the exhaustive shared Human-demand candidate and
+  staleness projection that signal and views both consume.
+- `src/lib.rs` `pipeline` tests: what only the composed path can show —
+  cross-object contracts driven through `Log::execute` against the shared
+  `populate_log` fixture.
+- `src/db.rs` tests: the persistence layer — one all-event round-trip; new
+  event families ride the existing round-trip, they don't get their own.
+- `tests/mapping_corpus.rs`: worked examples of the executed beads mapping,
+  mapping only. (Known wart: the gate-queue deposit scenario lives there
+  until `tests/executor.rs` takes it.)
+- `tests/executor.rs`: real process/Git/server effect and crash contracts,
+  with fake Pi and Telegram.
 
 Rules:
 
@@ -110,12 +135,12 @@ Rules:
 
 ## Semantic trip-wires (look wrong, are right)
 
-- `candidate`'s `None` arms emit the unresolvable event anyway — authority
-  supersedes existence, and agents must not gain an existence oracle. Do not
-  "fix" this to fail early.
-- Task ids live in event payloads (dense, world-allocated). Proposal ids are
-  log positions of their birth records — `ProposalCreated` carries no id and
-  there is no counter. Don't add one "for consistency."
+- decide is structurally stateless: it has no world and cannot see existence,
+  so authority always precedes it. expand reads the record only after the tier
+  gate. Do not give decide a world "for convenience."
+- No birth event carries its id; references do. Task ids are fold-derived push
+  positions, dense by construction; proposal ids are the record positions of
+  their births, with no counter.
 - Open proposals are inert: they never block their target. Rejecting locks
   was deliberate.
 - Validation depends on tier, never actor identity. Agents never pass

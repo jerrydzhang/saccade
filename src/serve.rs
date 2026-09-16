@@ -11,7 +11,7 @@ use saccade::objects::task::TaskId;
 use saccade::views::{
     CommentLine, ProposalView, TaskView, proposal_view, show_view, task_view, thread_view,
 };
-use saccade::{Command, Context, Prose, RecordId, Reject, Tier, World};
+use saccade::{ActorName, Command, Context, Prose, RecordId, Reject, Tier, World};
 use std::io::Cursor;
 
 pub fn run(
@@ -76,8 +76,10 @@ fn respond_get(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Curs
         Ok(l) => l,
         Err(e) => return page(500, &format!("database: {e}")),
     };
-    let mut form = FormState::default();
-    form.need_who = req.actor.is_none();
+    let mut form = FormState {
+        need_who: req.actor.is_none(),
+        ..Default::default()
+    };
     match parse_route(&req.url) {
         Route::Stream => html(200, &render_stream(&loadout.rows)),
         Route::Canvas(dock) => match loadout.state {
@@ -174,6 +176,18 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
         }
     };
     let set_actor = first_claim.then(|| actor.clone());
+    let actor = match ActorName::new(actor) {
+        Ok(name) => name,
+        Err(_) => {
+            return post_reject(
+                req,
+                db_path,
+                n,
+                &fields,
+                "that name is not a valid actor name",
+            );
+        }
+    };
     let mut conn = match db::open(db_path) {
         Ok(c) => c,
         Err(e) => return page(500, &format!("database: {e}")),
@@ -786,15 +800,15 @@ mod tests {
             id: RecordId(0),
             timestamp: 0,
             context: Context {
-                actor: "jerry".into(),
+                actor: ActorName::new("jerry".into()).unwrap(),
                 tier: Tier::Human,
             },
             event: Event::TaskCreated {
-                id: TaskId(0),
                 name: Prose::new(name.into()).unwrap(),
                 parent_id: None,
             },
         }])
+        .unwrap()
     }
 
     #[test]
@@ -862,7 +876,6 @@ mod tests {
             record(
                 0,
                 Event::TaskCreated {
-                    id: TaskId(0),
                     name: Prose::new("implement foo".into()).unwrap(),
                     parent_id: None,
                 },
@@ -874,7 +887,8 @@ mod tests {
                     action: ProposalAction::Drop { task_id: TaskId(0) },
                 },
             ),
-        ]);
+        ])
+        .unwrap();
         let view = task_view(&world, TaskId(0)).unwrap();
         let html = render_object(&view, &world, &FormState::default());
         assert!(html.contains("action=\"/p/1/accept\""));
@@ -889,7 +903,6 @@ mod tests {
             record(
                 0,
                 Event::TaskCreated {
-                    id: TaskId(0),
                     name: Prose::new("implement foo".into()).unwrap(),
                     parent_id: None,
                 },
@@ -902,7 +915,8 @@ mod tests {
                     receipt: Prose::new("suite green <34 unit>".into()).unwrap(),
                 },
             ),
-        ]);
+        ])
+        .unwrap();
         let html = render_canvas(&done, &canvas(&done), Some(0), &FormState::default());
         assert!(html.contains("suite green &lt;34 unit&gt;"));
         assert!(!html.contains("<34 unit>"));
@@ -918,7 +932,6 @@ mod tests {
             record(
                 0,
                 Event::TaskCreated {
-                    id: TaskId(0),
                     name: Prose::new("implement foo".into()).unwrap(),
                     parent_id: None,
                 },
@@ -930,7 +943,8 @@ mod tests {
                     body: Prose::new("receipt lands here".into()).unwrap(),
                 },
             ),
-        ]);
+        ])
+        .unwrap();
         let view = task_view(&world, TaskId(0)).unwrap();
         let html = render_object(
             &view,
@@ -953,7 +967,6 @@ mod tests {
             record(
                 0,
                 Event::TaskCreated {
-                    id: TaskId(0),
                     name: Prose::new("migrate floop".into()).unwrap(),
                     parent_id: None,
                 },
@@ -961,7 +974,6 @@ mod tests {
             record(
                 1,
                 Event::TaskCreated {
-                    id: TaskId(1),
                     name: Prose::new("implement foo".into()).unwrap(),
                     parent_id: None,
                 },
@@ -983,7 +995,7 @@ mod tests {
                 },
             ),
         ];
-        let world = World::replay(events.clone());
+        let world = World::replay(events.clone()).unwrap();
         let html = render_canvas(&world, &canvas(&world), None, &FormState::default());
         let hist = html.split("<details class=\"hist\">").nth(1).unwrap();
         assert!(hist.find("t-0").unwrap() < hist.find("t-1").unwrap());
@@ -997,7 +1009,6 @@ mod tests {
             record(
                 0,
                 Event::TaskCreated {
-                    id: TaskId(0),
                     name: Prose::new("implement foo".into()).unwrap(),
                     parent_id: None,
                 },
@@ -1005,7 +1016,6 @@ mod tests {
             record(
                 1,
                 Event::TaskCreated {
-                    id: TaskId(1),
                     name: Prose::new("migrate floop".into()).unwrap(),
                     parent_id: None,
                 },
@@ -1019,7 +1029,7 @@ mod tests {
                 },
             ),
         ];
-        let world = World::replay(events.clone());
+        let world = World::replay(events.clone()).unwrap();
         let c = canvas(&world);
         let docked_history = render_canvas(&world, &c, Some(1), &FormState::default());
         assert!(docked_history.contains("<details class=\"hist\" open>"));
@@ -1041,7 +1051,7 @@ mod tests {
             id: RecordId(seq),
             timestamp: 0,
             context: Context {
-                actor: "jerry".into(),
+                actor: ActorName::new("jerry".into()).unwrap(),
                 tier: Tier::Human,
             },
             event,

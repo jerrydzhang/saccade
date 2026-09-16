@@ -8,6 +8,7 @@
 use proptest::prelude::*;
 use saccade::db::{self, LoadState};
 use saccade::store::Log;
+use saccade::types::actor::ActorName;
 use saccade::{
     Command, Context, ProposalAction, ProposalId, Prose, RecordId, Target, TaskId, Tier, World,
 };
@@ -157,7 +158,11 @@ fn command_of(action: &Action, world: &World) -> Command {
 
 fn context(human: bool) -> Context {
     Context {
-        actor: if human { "jerry" } else { "saccade bot" }.into(),
+        actor: if human {
+            ActorName::new("jerry".into()).unwrap()
+        } else {
+            ActorName::new("saccade bot".into()).unwrap()
+        },
         tier: if human { Tier::Human } else { Tier::Agent },
     }
 }
@@ -229,7 +234,7 @@ proptest! {
         }
 
         // road two: the pure fold over the recorded events
-        let replayed = World::replay(log.records().to_vec());
+        let replayed = World::replay(log.records().to_vec()).unwrap();
         prop_assert_eq!(&replayed, log.world());
 
         // road three: the persisted log reloaded through the wire layer
@@ -298,6 +303,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidCommentId => "InvalidCommentId",
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
+                        saccade::Reject::InvalidActor => "InvalidActor",
                     };
                     *reject_kinds.entry(kind).or_default() += 1;
                 }
@@ -308,10 +314,10 @@ fn generator_reaches_deep_states() {
         let states: Vec<&str> = (0..world.tasks.len())
             .map(|i| saccade::views::task_view(world, TaskId(i)).unwrap().state)
             .collect();
-        if states.iter().any(|&s| s == "done") {
+        if states.contains(&"done") {
             *milestones.entry("done task").or_default() += 1;
         }
-        if states.iter().any(|&s| s == "dropped") {
+        if states.contains(&"dropped") {
             *milestones.entry("dropped task").or_default() += 1;
         }
         if max_depth >= 2 {

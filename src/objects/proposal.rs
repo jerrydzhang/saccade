@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::Event;
 use crate::objects::task::TaskId;
-use crate::{Prose, RecordId, Reject};
+use crate::{Prose, RecordId};
 
 #[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub struct ProposalId(pub RecordId);
@@ -17,21 +17,17 @@ pub enum ProposalState {
 
 impl ProposalState {
     /// The state machine table, all state transitions must go through this
-    pub fn transition(&self, event: &Event) -> Result<ProposalState, Reject> {
+    pub fn transition(&self, event: &Event) -> Option<ProposalState> {
         match (self, event) {
             (ProposalState::Open, Event::ProposalWithdrawn { note, .. }) => {
-                Ok(ProposalState::Withdrawn(note.clone()))
+                Some(ProposalState::Withdrawn(note.clone()))
             }
             (ProposalState::Open, Event::ProposalRejected { note, .. }) => {
-                Ok(ProposalState::Rejected(note.clone()))
+                Some(ProposalState::Rejected(note.clone()))
             }
-            (ProposalState::Open, Event::ProposalAccepted { .. }) => Ok(ProposalState::Accepted),
-            _ => Err(Reject::InvalidStateTransition),
+            (ProposalState::Open, Event::ProposalAccepted { .. }) => Some(ProposalState::Accepted),
+            _ => None,
         }
-    }
-
-    pub fn validate(&self, event: &Event) -> Result<(), Reject> {
-        self.transition(event).map(|_| ())
     }
 }
 
@@ -66,9 +62,9 @@ pub struct Proposal {
 }
 
 impl Proposal {
-    pub fn apply(&self, event: &Event) -> Result<Proposal, Reject> {
+    pub fn apply(&self, event: &Event) -> Option<Proposal> {
         let new_state = self.state.transition(event)?;
-        Ok(Proposal {
+        Some(Proposal {
             state: new_state.clone(),
             name: self.name.clone(),
             ..*self
@@ -84,7 +80,7 @@ pub struct ProposalContext {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::prose::Prose;
+    use crate::types::prose::Prose;
 
     /// This test doesn't really test anything its more just a contract that at the time this test
     /// was written this is the expected behavior that shouldn't regress
@@ -126,7 +122,7 @@ mod test {
         for state in &states {
             for event in &events {
                 assert_eq!(
-                    state.validate(event).is_ok(),
+                    state.transition(event).is_some(),
                     legal(state, event),
                     "table disagrees at ({state:?}, {event:?})"
                 );

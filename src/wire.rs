@@ -13,6 +13,7 @@ pub fn tier_of(tier: &Tier) -> &'static str {
     match tier {
         Tier::Human => "human",
         Tier::Agent => "agent",
+        Tier::System => "system",
     }
 }
 
@@ -20,6 +21,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
     match s {
         "human" => Ok(Tier::Human),
         "agent" => Ok(Tier::Agent),
+        "system" => Ok(Tier::System),
         _ => Err(ParseFail::UnknownTier(s.to_string())),
     }
 }
@@ -73,19 +75,24 @@ mod test {
     use super::*;
     use crate::objects::comment::{CommentId, Target};
     use crate::objects::task::TaskId;
-    use crate::prose::Prose;
+    use crate::types::prose::Prose;
+
+    #[test]
+    fn tier_tokens_round_trip_all_variants() {
+        for tier in [Tier::Human, Tier::Agent, Tier::System] {
+            assert_eq!(tier_from(tier_of(&tier)).unwrap(), tier);
+        }
+    }
     use crate::store::RecordId;
 
     #[test]
     fn every_event_kind_round_trips() {
         let samples = [
             Event::TaskCreated {
-                id: TaskId(0),
                 name: Prose::new("implement foo".into()).unwrap(),
                 parent_id: None,
             },
             Event::TaskCreated {
-                id: TaskId(1),
                 name: Prose::new("child".into()).unwrap(),
                 parent_id: Some(TaskId(0)),
             },

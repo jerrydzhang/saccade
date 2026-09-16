@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Event;
-use crate::prose::Prose;
-use crate::{CommentId, ProposalId, RecordId, Reject};
+use crate::types::prose::Prose;
+use crate::{CommentId, ProposalId, RecordId};
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub struct TaskId(pub usize);
@@ -19,22 +19,18 @@ pub enum TaskState {
 
 impl TaskState {
     /// The state machine table, all state transitions must go through this
-    pub fn transition(&self, event: &Event) -> Result<TaskState, Reject> {
+    pub fn transition(&self, event: &Event) -> Option<TaskState> {
         match (self, event) {
-            (TaskState::Open, Event::TaskClaimed { .. }) => Ok(TaskState::Claimed),
+            (TaskState::Open, Event::TaskClaimed { .. }) => Some(TaskState::Claimed),
             (TaskState::Claimed, Event::TaskDone { receipt, .. }) => {
-                Ok(TaskState::Done(receipt.clone()))
+                Some(TaskState::Done(receipt.clone()))
             }
-            (TaskState::Claimed, Event::TaskReleased { .. }) => Ok(TaskState::Open),
+            (TaskState::Claimed, Event::TaskReleased { .. }) => Some(TaskState::Open),
             (TaskState::Open | TaskState::Done(_), Event::TaskDropped { .. }) => {
-                Ok(TaskState::Dropped)
+                Some(TaskState::Dropped)
             }
-            _ => Err(Reject::InvalidStateTransition),
+            _ => None,
         }
-    }
-
-    pub fn validate(&self, event: &Event) -> Result<(), Reject> {
-        self.transition(event).map(|_| ())
     }
 }
 
@@ -46,9 +42,9 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn apply(&self, event: &Event) -> Result<Task, Reject> {
+    pub fn apply(&self, event: &Event) -> Option<Task> {
         let new_state = self.state.transition(event)?;
-        Ok(Task {
+        Some(Task {
             state: new_state,
             name: self.name.clone(),
             parent_id: self.parent_id,
@@ -67,7 +63,7 @@ pub struct TaskContext {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::prose::Prose;
+    use crate::types::prose::Prose;
 
     /// This test doesn't really test anything its more just a contract that at the time this test
     /// was written this is the expected behavior that shouldn't regress
@@ -81,7 +77,6 @@ mod test {
         ];
         let events = [
             Event::TaskCreated {
-                id: TaskId(0),
                 name: Prose::new("filler".into()).unwrap(),
                 parent_id: None,
             },
@@ -116,7 +111,7 @@ mod test {
         for state in &states {
             for event in &events {
                 assert_eq!(
-                    state.validate(event).is_ok(),
+                    state.transition(event).is_some(),
                     legal(state, event),
                     "table disagrees at ({state:?}, {event:?})"
                 );

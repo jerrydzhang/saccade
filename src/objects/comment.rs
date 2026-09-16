@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::objects::task::TaskId;
-use crate::prose::Prose;
 use crate::store::RecordId;
+use crate::types::prose::Prose;
 
 #[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub struct CommentId(pub RecordId);

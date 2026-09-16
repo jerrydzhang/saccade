@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use crate::objects::comment::{CommentContext, CommentId, Target};
 use crate::objects::proposal::{ProposalAction, ProposalContext, ProposalId, ProposalState};
 use crate::objects::task::{TaskContext, TaskId, TaskState};
-use crate::prose::Prose;
 use crate::store::World;
+use crate::types::prose::Prose;
 
 pub struct TaskView {
     pub id: String,
@@ -108,8 +108,8 @@ fn is_stale(ctx: &ProposalContext, target_state: Option<&TaskState>) -> bool {
     match target_state {
         None => true,
         Some(state) => state
-            .validate(&ctx.proposal.action.target_event(&probe))
-            .is_err(),
+            .transition(&ctx.proposal.action.target_event(&probe))
+            .is_none(),
     }
 }
 
