@@ -312,7 +312,19 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             return read_only(cli, &db_path);
         }
         Cmd::Serve { bind, port } => {
-            return match serve::run(&db_path, bind, *port) {
+            let _ = tracing_subscriber::fmt()
+                .json()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info".into()),
+                )
+                .with_writer(std::io::stderr)
+                .try_init();
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
+            return match runtime.block_on(serve::run(&db_path, bind, *port)) {
                 Err(e) => Err(Fail::Usage(e)),
                 Ok(infallible) => match infallible {},
             };

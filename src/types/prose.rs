@@ -3,8 +3,23 @@ use serde::{Deserialize, Serialize};
 use crate::Reject;
 
 /// A non-empty string
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Prose(String);
+
+impl TryFrom<String> for Prose {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        Prose::new(text).map_err(|_| "prose cannot be empty or whitespace".into())
+    }
+}
+
+impl From<Prose> for String {
+    fn from(p: Prose) -> String {
+        p.0
+    }
+}
 
 impl Prose {
     pub fn new(text: String) -> Result<Self, Reject> {
@@ -17,22 +32,6 @@ impl Prose {
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-impl<'de> Deserialize<'de> for Prose {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let text = String::deserialize(deserializer)?;
-        if text.trim().is_empty() {
-            Err(serde::de::Error::custom(
-                "prose cannot be empty or whitespace",
-            ))
-        } else {
-            Ok(Prose(text))
-        }
     }
 }
 

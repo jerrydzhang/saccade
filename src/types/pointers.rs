@@ -10,9 +10,10 @@ pub enum PointerError {
 }
 
 macro_rules! pointer {
-    ($name:ident, $inner:ty, $doc:literal) => {
+    ($name:ident, $inner:ty, $wire:literal, $doc:literal) => {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(try_from = $wire, into = $wire)]
         pub struct $name($inner);
     };
 }
@@ -20,19 +21,83 @@ macro_rules! pointer {
 pointer!(
     SessionPointer,
     PathBuf,
+    "PathBuf",
     "Absolute path to a live session's backing store."
 );
-pointer!(WorktreePath, PathBuf, "Absolute path to a task's worktree.");
+pointer!(
+    WorktreePath,
+    PathBuf,
+    "PathBuf",
+    "Absolute path to a task's worktree."
+);
 pointer!(
     GitCommit,
     String,
+    "String",
     "Commit hash; canonicalized by Git before append."
 );
 pointer!(
     GitBranch,
     String,
+    "String",
     "Branch name; canonicalized by Git before append."
 );
+
+impl TryFrom<PathBuf> for SessionPointer {
+    type Error = String;
+
+    fn try_from(path: PathBuf) -> Result<Self, String> {
+        SessionPointer::new(path).map_err(|e| format!("{e:?}"))
+    }
+}
+
+impl From<SessionPointer> for PathBuf {
+    fn from(p: SessionPointer) -> PathBuf {
+        p.0
+    }
+}
+
+impl TryFrom<PathBuf> for WorktreePath {
+    type Error = String;
+
+    fn try_from(path: PathBuf) -> Result<Self, String> {
+        WorktreePath::new(path).map_err(|e| format!("{e:?}"))
+    }
+}
+
+impl From<WorktreePath> for PathBuf {
+    fn from(p: WorktreePath) -> PathBuf {
+        p.0
+    }
+}
+
+impl TryFrom<String> for GitCommit {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, String> {
+        GitCommit::new(value).map_err(|e| format!("{e:?}"))
+    }
+}
+
+impl From<GitCommit> for String {
+    fn from(p: GitCommit) -> String {
+        p.0
+    }
+}
+
+impl TryFrom<String> for GitBranch {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, String> {
+        GitBranch::new(value).map_err(|e| format!("{e:?}"))
+    }
+}
+
+impl From<GitBranch> for String {
+    fn from(p: GitBranch) -> String {
+        p.0
+    }
+}
 
 impl SessionPointer {
     pub fn new(path: PathBuf) -> Result<Self, PointerError> {

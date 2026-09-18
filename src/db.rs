@@ -86,23 +86,16 @@ pub struct Loadout {
     pub state: LoadState,
 }
 
-#[derive(Debug)]
+impl std::error::Error for DbError {}
+
+#[derive(Debug, thiserror::Error)]
 pub enum ExecuteFail {
-    Db(DbError),
+    #[error("storage: {0}")]
+    Db(#[from] DbError),
+    #[error("world projection unavailable: {0}")]
     Degraded(String),
-    Reject(Reject),
-}
-
-impl From<DbError> for ExecuteFail {
-    fn from(e: DbError) -> Self {
-        ExecuteFail::Db(e)
-    }
-}
-
-impl From<Reject> for ExecuteFail {
-    fn from(r: Reject) -> Self {
-        ExecuteFail::Reject(r)
-    }
+    #[error("{0}")]
+    Reject(#[from] Reject),
 }
 
 impl From<rusqlite::Error> for ExecuteFail {

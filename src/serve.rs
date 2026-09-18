@@ -1,10 +1,16 @@
-//! The serve edge: canvas, dock, and stream over HTTP — the served
-//! rendering of the view model; the CLI is the first.
-//! Reads fold the world per request; WAL keeps that safe beside CLI writes.
-//! Writes are the human surface: the actor is claimed at the act, the tier is
-//! pinned human, and the wire never carries a tier.
+//! The serve edge: canvas, dock, stream, and the /api/v1 command surface,
+//! one sole-writer process. The webui renders the view model off the
+//! cached world; every accepted write refolds it under the writer lock.
+//! Webui writes stay the human surface: the actor is claimed at the act,
+//! the tier is pinned human, and the wire never carries a tier.
 
-use saccade::db::{self, ExecuteFail, LoadState};
+use axum::body::Bytes;
+use axum::extract::{OriginalUri, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use saccade::api::AppState;
+use saccade::db::{self, ExecuteFail};
 use saccade::objects::comment::{CommentId, Target};
 use saccade::objects::proposal::ProposalId;
 use saccade::objects::task::TaskId;
@@ -12,101 +18,117 @@ use saccade::views::{
     CommentLine, ProposalView, TaskView, proposal_view, show_view, task_view, thread_view,
 };
 use saccade::{ActorName, Command, Context, Prose, RecordId, Reject, Tier, World};
-use std::io::Cursor;
+use tracing::info;
 
-pub fn run(
+pub async fn run(
     db_path: &std::path::Path,
     bind: &str,
     port: u16,
 ) -> Result<std::convert::Infallible, String> {
     let addr = format!("{bind}:{port}");
-    let server = tiny_http::Server::http(&addr).map_err(|e| format!("cannot bind {addr}: {e}"))?;
+    let state = AppState::open(db_path)?;
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("cannot bind {addr}: {e}"))?;
     if !matches!(bind, "127.0.0.1" | "localhost" | "::1" | "[::1]") {
         eprintln!(
             "bound {bind}: any device that can reach port {port} can write events (human tier)"
         );
     }
-    eprintln!("serving http://{addr}");
-    for request in server.incoming_requests() {
-        let mut req = Req {
-            method: request.method().to_string(),
-            url: request.url().to_string(),
-            sec_fetch: None,
-            actor: None,
-            body: String::new(),
-        };
-        for h in request.headers() {
-            if h.field.equiv("Sec-Fetch-Site") {
-                req.sec_fetch = Some(h.value.as_str().to_string());
-            } else if h.field.equiv("Cookie") {
-                req.actor = cookie_actor(h.value.as_str());
-            }
-        }
-        let mut request = request;
-        if req.method == "POST" {
-            let _ = request.as_reader().read_to_string(&mut req.body);
-        }
-        let _ = request.respond(respond(&req, db_path));
-    }
-    unreachable!("the incoming-requests iterator never ends")
+    info!(%addr, "serving http");
+    let router = axum::Router::new()
+        .merge(saccade::api::routes())
+        .fallback(get(web_get).post(web_post))
+        .with_state(state);
+    axum::serve(listener, router)
+        .await
+        .expect("axum serves until killed");
+    unreachable!("axum::serve returns only on shutdown")
 }
 
 struct Req {
-    method: String,
     url: String,
     sec_fetch: Option<String>,
     actor: Option<String>,
     body: String,
 }
 
-fn respond(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cursor<Vec<u8>>> {
-    match req.method.as_str() {
-        "GET" => respond_get(req, db_path),
-        "POST" => respond_post(req, db_path),
-        _ => page(405, "GET and POST only."),
-    }
+fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .map(|v| v.to_str().unwrap_or_default().to_string())
 }
 
-fn respond_get(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cursor<Vec<u8>>> {
-    let conn = match db::open_read(db_path) {
-        Ok(c) => c,
-        Err(e) => return page(500, &format!("database: {e}")),
+async fn web_get(
+    State(app): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    let req = Req {
+        url: uri.to_string(),
+        sec_fetch: header_value(&headers, "sec-fetch-site"),
+        actor: header_value(&headers, "cookie").and_then(|c| cookie_actor(&c)),
+        body: String::new(),
     };
-    let loadout = match db::load(&conn) {
-        Ok(l) => l,
-        Err(e) => return page(500, &format!("database: {e}")),
+    respond_get(&req, &app)
+}
+
+async fn web_post(
+    State(app): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let req = Req {
+        url: uri.to_string(),
+        sec_fetch: header_value(&headers, "sec-fetch-site"),
+        actor: header_value(&headers, "cookie").and_then(|c| cookie_actor(&c)),
+        body: String::from_utf8_lossy(&body).into_owned(),
     };
+    respond_post(&req, &app)
+}
+
+fn respond_get(req: &Req, app: &AppState) -> Response {
     let mut form = FormState {
         need_who: req.actor.is_none(),
         ..Default::default()
     };
     match parse_route(&req.url) {
-        Route::Stream => html(200, &render_stream(&loadout.rows)),
-        Route::Canvas(dock) => match loadout.state {
-            LoadState::Full(world) => {
-                html(200, &render_canvas(&world, &canvas(&world), dock, &form))
-            }
-            LoadState::Degraded(reason) => {
-                page(503, &format!("world projection unavailable: {reason}"))
-            }
+        Route::Stream => {
+            let rows = match app.snapshot() {
+                Ok(s) => s.rows,
+                Err(degraded) => degraded.rows,
+            };
+            html(200, &render_stream(&rows))
+        }
+        Route::Canvas(dock) => match app.snapshot() {
+            Ok(s) => html(
+                200,
+                &render_canvas(&s.world, &canvas(&s.world), dock, &form),
+            ),
+            Err(degraded) => page(
+                503,
+                &format!("world projection unavailable: {}", degraded.reason),
+            ),
         },
-        Route::Task(n, reply) => match loadout.state {
-            LoadState::Full(world) => match task_view(&world, TaskId(n)) {
+        Route::Task(n, reply) => match app.snapshot() {
+            Ok(s) => match task_view(&s.world, TaskId(n)) {
                 Some(view) => {
                     form.reply = reply;
-                    html(200, &render_object(&view, &world, &form))
+                    html(200, &render_object(&view, &s.world, &form))
                 }
                 None => page(404, &format!("no task t-{n}")),
             },
-            LoadState::Degraded(reason) => {
-                page(503, &format!("world projection unavailable: {reason}"))
-            }
+            Err(degraded) => page(
+                503,
+                &format!("world projection unavailable: {}", degraded.reason),
+            ),
         },
         Route::NotFound => page(404, "nothing here — try / or /stream"),
     }
 }
 
-fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cursor<Vec<u8>>> {
+fn respond_post(req: &Req, app: &AppState) -> Response {
     if cross_site(req.sec_fetch.as_deref()) {
         return page(403, "cross-site POST refused");
     }
@@ -115,7 +137,7 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
         PostRoute::Comment(n) => {
             let body = form_field(&fields, "body");
             if Prose::new(body.to_string()).is_err() {
-                return post_reject(req, db_path, n, &fields, "a comment needs words");
+                return post_reject(req, app, n, &fields, "a comment needs words");
             }
             let target = match form_field(&fields, "reply").parse::<usize>() {
                 Ok(seq) => Target::Comment(CommentId(RecordId(seq))),
@@ -131,7 +153,7 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
                 true,
             )
         }
-        PostRoute::Accept(seq) => match proposal_task(db_path, seq) {
+        PostRoute::Accept(seq) => match proposal_task(app, seq) {
             Some(n) => (
                 n,
                 Command::AcceptProposal {
@@ -141,12 +163,12 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
             ),
             None => return page(404, &format!("no open proposal #{seq}")),
         },
-        PostRoute::Reject(seq) => match proposal_task(db_path, seq) {
+        PostRoute::Reject(seq) => match proposal_task(app, seq) {
             None => return page(404, &format!("no open proposal #{seq}")),
             Some(n) => {
                 let note = form_field(&fields, "note");
                 if Prose::new(note.to_string()).is_err() {
-                    return post_reject(req, db_path, n, &fields, "a ruling needs a note");
+                    return post_reject(req, app, n, &fields, "a ruling needs a note");
                 }
                 (
                     n,
@@ -167,37 +189,21 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
     let (actor, first_claim) = match who {
         Some(w) => (w, req.actor.is_none()),
         None => {
-            return post_reject(
-                req,
-                db_path,
-                n,
-                &fields,
-                "a name is required to record the act",
-            );
+            return post_reject(req, app, n, &fields, "a name is required to record the act");
         }
     };
     let set_actor = first_claim.then(|| actor.clone());
     let actor = match ActorName::new(actor) {
         Ok(name) => name,
         Err(_) => {
-            return post_reject(
-                req,
-                db_path,
-                n,
-                &fields,
-                "that name is not a valid actor name",
-            );
+            return post_reject(req, app, n, &fields, "that name is not a valid actor name");
         }
-    };
-    let mut conn = match db::open(db_path) {
-        Ok(c) => c,
-        Err(e) => return page(500, &format!("database: {e}")),
     };
     let context = Context {
         actor,
         tier: Tier::Human,
     };
-    match db::execute(&mut conn, &context, command, db::now_epoch()) {
+    match app.execute(&context, command) {
         Ok(stored) => {
             let fragment = if anchor {
                 stored
@@ -209,7 +215,7 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
             };
             redirect(&format!("/t/{n}{fragment}"), set_actor.as_deref())
         }
-        Err(ExecuteFail::Reject(r)) => post_reject(req, db_path, n, &fields, &reject_text(&r)),
+        Err(ExecuteFail::Reject(r)) => post_reject(req, app, n, &fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
             page(503, &format!("world projection unavailable: {reason}"))
         }
@@ -220,21 +226,15 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
 /// Re-render the object page with the reason inline and the drafts preserved.
 fn post_reject(
     req: &Req,
-    db_path: &std::path::Path,
+    app: &AppState,
     n: usize,
     fields: &[(String, String)],
     msg: &str,
-) -> tiny_http::Response<Cursor<Vec<u8>>> {
-    let Ok(conn) = db::open_read(db_path) else {
-        return page(500, "database unavailable");
-    };
-    let Ok(loadout) = db::load(&conn) else {
-        return page(500, "database unavailable");
-    };
-    let LoadState::Full(world) = loadout.state else {
+) -> Response {
+    let Ok(snapshot) = app.snapshot() else {
         return page(503, "world projection unavailable");
     };
-    let Some(view) = task_view(&world, TaskId(n)) else {
+    let Some(view) = task_view(&snapshot.world, TaskId(n)) else {
         return page(404, &format!("no task t-{n}"));
     };
     let form = FormState {
@@ -244,23 +244,22 @@ fn post_reject(
         reply: form_field(fields, "reply").parse().ok(),
         need_who: req.actor.is_none(),
     };
-    html(400, &render_object(&view, &world, &form))
+    html(400, &render_object(&view, &snapshot.world, &form))
 }
 
-fn redirect(location: &str, set_actor: Option<&str>) -> tiny_http::Response<Cursor<Vec<u8>>> {
-    let mut r = tiny_http::Response::from_string(String::new()).with_status_code(303);
-    r = r.with_header(header("Location", location));
-    if let Some(name) = set_actor {
-        r = r.with_header(header(
-            "Set-Cookie",
-            &format!("actor={name}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"),
-        ));
+fn redirect(location: &str, set_actor: Option<&str>) -> Response {
+    let mut response = (StatusCode::SEE_OTHER, String::new()).into_response();
+    if let Ok(loc) = header::HeaderValue::from_str(location) {
+        response.headers_mut().insert(header::LOCATION, loc);
     }
-    r
-}
-
-fn header(k: &str, v: &str) -> tiny_http::Header {
-    tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap()
+    if let Some(name) = set_actor
+        && let Ok(cookie) = header::HeaderValue::from_str(&format!(
+            "actor={name}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"
+        ))
+    {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
+    }
+    response
 }
 
 fn cross_site(sec_fetch: Option<&str>) -> bool {
@@ -357,14 +356,9 @@ fn reject_text(r: &Reject) -> String {
 }
 
 /// The task an open proposal targets, for routing judgment acts back to the dock.
-fn proposal_task(db_path: &std::path::Path, seq: usize) -> Option<usize> {
-    let conn = db::open_read(db_path).ok()?;
-    let loadout = db::load(&conn).ok()?;
-    let world = match loadout.state {
-        LoadState::Full(w) => w,
-        LoadState::Degraded(_) => return None,
-    };
-    let view = proposal_view(&world, ProposalId(RecordId(seq)))?;
+fn proposal_task(app: &AppState, seq: usize) -> Option<usize> {
+    let snapshot = app.snapshot().ok()?;
+    let view = proposal_view(&snapshot.world, ProposalId(RecordId(seq)))?;
     if view.state != "open" {
         return None;
     }
@@ -449,11 +443,11 @@ fn parse_post(url: &str) -> PostRoute {
     PostRoute::NotFound
 }
 
-fn html(status: u16, body: &str) -> tiny_http::Response<Cursor<Vec<u8>>> {
+fn html(status: u16, body: &str) -> Response {
     response(status, body)
 }
 
-fn page(status: u16, msg: &str) -> tiny_http::Response<Cursor<Vec<u8>>> {
+fn page(status: u16, msg: &str) -> Response {
     response(
         status,
         &format!(
@@ -463,15 +457,16 @@ fn page(status: u16, msg: &str) -> tiny_http::Response<Cursor<Vec<u8>>> {
     )
 }
 
-fn response(status: u16, body: &str) -> tiny_http::Response<Cursor<Vec<u8>>> {
-    let content_type =
-        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
-            .unwrap();
-    let no_store = tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap();
-    tiny_http::Response::from_string(body.to_string())
-        .with_status_code(status)
-        .with_header(content_type)
-        .with_header(no_store)
+fn response(status: u16, body: &str) -> Response {
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body.to_string(),
+    )
+        .into_response()
 }
 
 fn esc(s: &str) -> String {

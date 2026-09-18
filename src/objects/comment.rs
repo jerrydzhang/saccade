@@ -11,6 +11,7 @@ use crate::types::prose::Prose;
 pub struct CommentId(pub RecordId);
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Target {
     Task(TaskId),
     Comment(CommentId),

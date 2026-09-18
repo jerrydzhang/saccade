@@ -16,17 +16,14 @@ use crate::types::actor::ActorName;
 use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
 use crate::{Command, Context, RecordId, World};
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RunnerFail {
+    #[error("{0}")]
     Usage(String),
+    #[error("git: {0}")]
     Git(String),
-    Db(ExecuteFail),
-}
-
-impl From<ExecuteFail> for RunnerFail {
-    fn from(e: ExecuteFail) -> Self {
-        RunnerFail::Db(e)
-    }
+    #[error(transparent)]
+    Db(#[from] ExecuteFail),
 }
 
 fn git(cwd: &Path, args: &[&str]) -> Result<String, RunnerFail> {
