@@ -1,8 +1,6 @@
-//! The versioned command surface: one route, one envelope. The wire body
-//! carries who is asking and what they are asking for; the server answers
-//! with the stored records or a typed error envelope. System authorship is
-//! unrepresentable here — the API tier admits only human and agent, and
-//! machinery verbs fail validation under both, exactly as the law requires.
+//! The versioned command surface. System authorship is unrepresentable
+//! here: the wire tier admits only human and agent, so no request can
+//! present the machinery's author.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -33,18 +31,18 @@ struct Inner {
     rows: Vec<StoredRecord>,
 }
 
-/// The sole writer's state: one connection, one world cache refreshed by
-/// refolding after every accepted write.
+/// The sole writer's state: writes refold rather than apply incrementally,
+/// so one definition of truth serves readers and writers alike.
 #[derive(Clone)]
 pub struct AppState(Arc<Mutex<ServerState>>);
 
-/// A read-only copy of everything the render paths need.
 pub struct Snapshot {
     pub world: World,
     pub rows: Vec<StoredRecord>,
 }
 
-/// Why the world will not fold, with the raw rows the stream still serves.
+/// Degraded still serves the raw rows: the stream is the log's face when
+/// the world will not fold.
 pub struct Degraded {
     pub reason: String,
     pub rows: Vec<StoredRecord>,
@@ -65,8 +63,6 @@ impl AppState {
         Ok(AppState(Arc::new(Mutex::new(state))))
     }
 
-    /// Execute a command through the sole writer; on success the world
-    /// cache refolds so every reader sees the write.
     pub fn execute(
         &self,
         context: &Context,
@@ -79,7 +75,7 @@ impl AppState {
                 let stored = db::execute(&mut inner.conn, context, command, db::now_epoch())?;
                 let loadout = db::load(&inner.conn)?;
                 let db::LoadState::Full(world) = loadout.state else {
-                    // a write we just accepted cannot fold back: refuse further writes
+                    // the accepted write no longer folds back: everything after refuses
                     *guard = ServerState::Degraded(
                         "the world stopped folding after a write".into(),
                         std::mem::replace(
@@ -96,7 +92,6 @@ impl AppState {
         }
     }
 
-    /// The current world and raw rows for read paths.
     pub fn snapshot(&self) -> Result<Snapshot, Degraded> {
         let guard = self.0.lock().expect("the writer lock is not poisoned");
         match &*guard {
@@ -125,7 +120,6 @@ enum WireTier {
     Agent,
 }
 
-/// The request envelope: one route, context plus command.
 #[derive(Deserialize)]
 pub struct Envelope {
     context: WireContext,
@@ -234,7 +228,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     }
 }
 
-/// The /api/v1 routes, mountable behind the shared writer state.
 pub fn routes() -> Router<AppState> {
     Router::new().route("/api/v1/command", post(command))
 }

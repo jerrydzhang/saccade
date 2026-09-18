@@ -27,7 +27,6 @@ async fn spawn_server(db_path: &std::path::Path) -> String {
     format!("http://{addr}")
 }
 
-/// Post one envelope, get status and body back.
 fn post_command(base: &str, envelope: &Value) -> (u16, String) {
     let mut r = ureq::post(&format!("{base}/api/v1/command"))
         .config()

@@ -1,8 +1,6 @@
-//! Workspace effects and run orchestration: provision a task's workspace,
-//! bind a run serving one of its demands, drive the session, and settle
-//! with a real checkpoint. `prepare` and `close` are the server's
-//! supervisor calls; `execute_session` is the driver the server replaces
-//! with its own.
+//! Workspace effects and run orchestration. The lifecycle splits into
+//! prepare / execute_session / close so a supervisor can compose the
+//! stages with its own session driver.
 
 use std::path::{Path, PathBuf};
 
@@ -43,7 +41,6 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, RunnerFail> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The world as the runner needs it: loaded fully or not at all.
 fn load_world(conn: &rusqlite::Connection) -> Result<World, RunnerFail> {
     let loadout = db::load(conn).map_err(ExecuteFail::Db)?;
     match loadout.state {
@@ -65,7 +62,6 @@ fn commit(hash: String) -> Result<GitCommit, RunnerFail> {
     GitCommit::new(hash).map_err(|e| RunnerFail::Usage(format!("git gave no commit: {e:?}")))
 }
 
-/// A run opened for a demand: everything the session and the close need.
 pub struct PreparedRun {
     pub task: TaskId,
     pub demand: CommentId,
@@ -75,9 +71,8 @@ pub struct PreparedRun {
     pub actor: ActorName,
 }
 
-/// Provision a workspace and bind a run serving the demand: validated
-/// against the world first, git effects before their records, a refused
-/// record leaves a worktree to remove by hand.
+/// Validation completes before any git effect, so a refused run never
+/// orphans a worktree.
 pub fn prepare(
     db_path: &Path,
     repo_root: &Path,
@@ -194,8 +189,8 @@ pub fn prepare(
     })
 }
 
-/// The minimal pointer prompt: where the work lives and which door the
-/// answer goes through. The spawned session's own skill carries the rest.
+/// Pointers only: the worktree is the cwd, the demand and reply door are
+/// named; the repo's own skill teaches the verbs.
 pub fn pointer_prompt(run: &PreparedRun, sac: &str) -> String {
     let actor = run.actor.as_str();
     format!(
@@ -209,10 +204,8 @@ The .agents/skills/saccade skill in this repo documents the tracker.",
     )
 }
 
-/// Drive the session: spawn the executor on the prompt in the worktree,
-/// named session file, project files trusted, and block until it exits.
-/// Returns whether the executor exited cleanly; a clean exit is not a
-/// success claim — the reply's presence is.
+/// Spawn the executor on the prompt and block until it exits. A clean
+/// exit is not a success claim; the reply's presence is.
 pub fn execute_session(run: &PreparedRun, prompt: &str) -> Result<bool, RunnerFail> {
     let status = std::process::Command::new("pi")
         .arg("-p")
@@ -227,8 +220,6 @@ pub fn execute_session(run: &PreparedRun, prompt: &str) -> Result<bool, RunnerFa
     Ok(status.success())
 }
 
-/// Close the task's active run: checkpoint the worktree head, mark the
-/// demand's reply as the run's production, settle.
 pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
     let mut conn = db::open(db_path).map_err(ExecuteFail::Db)?;
 
@@ -301,9 +292,7 @@ pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
     })
 }
 
-/// The whole lifecycle in one call: prepare, drive the session to
-/// completion, close. This is the slice the server's supervisor takes
-/// over, replacing only the session driver.
+/// The whole lifecycle in one call.
 pub fn run(
     db_path: &Path,
     repo_root: &Path,

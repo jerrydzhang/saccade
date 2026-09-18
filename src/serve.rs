@@ -1,8 +1,7 @@
-//! The serve edge: canvas, dock, stream, and the /api/v1 command surface,
-//! one sole-writer process. The webui renders the view model off the
-//! cached world; every accepted write refolds it under the writer lock.
-//! Webui writes stay the human surface: the actor is claimed at the act,
-//! the tier is pinned human, and the wire never carries a tier.
+//! The serve edge: one sole-writer process behind the webui and the
+//! /api/v1 surface alike. Form posts stay the human surface: the actor is
+//! claimed at the act, the tier is pinned human, and that wire never
+//! carries a tier.
 
 use axum::body::Bytes;
 use axum::extract::{OriginalUri, State};
