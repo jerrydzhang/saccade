@@ -3,7 +3,6 @@ librust_out.rlib
 result
 
 # repo-local dogfood log (events db + WAL sidecars)
-saccade.db
 saccade.db-wal
 saccade.db-shm
 

@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Event;
+use crate::objects::incarnation::IncarnationId;
+use crate::objects::workspace::WorkspaceContext;
+use crate::types::actor::ActorName;
 use crate::types::prose::Prose;
 use crate::{CommentId, ProposalId, RecordId};
 
@@ -10,8 +13,6 @@ pub struct TaskId(pub usize);
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskState {
     Open,
-    // TODO: give claimed an identity so we can
-    // detect who claimed the task not just that was claimed
     Claimed,
     Done(Prose),
     Dropped,
@@ -40,17 +41,6 @@ pub struct Task {
     pub(crate) name: Prose,
     pub(crate) parent_id: Option<TaskId>,
 }
-
-impl Task {
-    pub fn apply(&self, event: &Event) -> Option<Task> {
-        let new_state = self.state.transition(event)?;
-        Some(Task {
-            state: new_state,
-            name: self.name.clone(),
-            parent_id: self.parent_id,
-        })
-    }
-}
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskContext {
     pub task: Task,
@@ -58,6 +48,12 @@ pub struct TaskContext {
     pub last_updated: RecordId,
     pub proposal: Option<ProposalId>,
     pub thread: Vec<CommentId>,
+    /// Holder of the current claim, present only while the task is claimed
+    pub holder: Option<ActorName>,
+    /// The one live run on this task, None while unbound or terminal
+    pub active_incarnation: Option<IncarnationId>,
+    /// The task's workspace lineage, present once provisioned
+    pub workspace: Option<WorkspaceContext>,
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -29,9 +29,9 @@ pointer!(
     "Commit hash; canonicalized by Git before append."
 );
 pointer!(
-    GitRef,
+    GitBranch,
     String,
-    "Ref name; canonicalized by Git before append."
+    "Branch name; canonicalized by Git before append."
 );
 
 impl SessionPointer {
@@ -50,6 +50,11 @@ impl WorktreePath {
         }
         Ok(Self(path))
     }
+
+    /// The runner executes git here; executors read their session pointer.
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
 }
 
 impl GitCommit {
@@ -59,9 +64,14 @@ impl GitCommit {
         }
         Ok(Self(value))
     }
+
+    /// Views and tests state the hash a checkpoint recorded.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
-impl GitRef {
+impl GitBranch {
     pub fn new(value: String) -> Result<Self, PointerError> {
         if value.is_empty() {
             return Err(PointerError::Empty);
@@ -91,9 +101,9 @@ mod test {
             GitCommit::new(String::new()),
             Err(PointerError::Empty)
         ));
-        assert!(GitRef::new("refs/heads/main".into()).is_ok());
+        assert!(GitBranch::new("refs/heads/main".into()).is_ok());
         assert!(matches!(
-            GitRef::new(String::new()),
+            GitBranch::new(String::new()),
             Err(PointerError::Empty)
         ));
     }

@@ -14,13 +14,21 @@ fn required_tier(event: &Event) -> Authority {
         Event::TaskCreated { .. }
         | Event::TaskClaimed { .. }
         | Event::TaskDone { .. }
+        | Event::TaskReleased { .. }
         | Event::ProposalCreated { .. }
         | Event::ProposalWithdrawn { .. }
         | Event::Commented { .. } => Authority::AnyTier,
         Event::TaskDropped { .. }
-        | Event::TaskReleased { .. }
         | Event::ProposalRejected { .. }
         | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
+        Event::IncarnationBound { .. }
+        | Event::IncarnationPromptAccepted { .. }
+        | Event::IncarnationPromptRejected { .. }
+        | Event::IncarnationSettled { .. }
+        | Event::RecordProducedBy { .. }
+        | Event::TaskWorkspaceCreated { .. }
+        | Event::TaskWorktreeCreated { .. }
+        | Event::TaskWorkspaceCheckpointed { .. } => Authority::Require(Tier::System),
     }
 }
 
@@ -71,14 +79,71 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::RejectProposal { id, note } => vec![Event::ProposalRejected { id, note }],
         Command::AcceptProposal { id } => vec![Event::ProposalAccepted { id }],
         // Comment commands
-        Command::Comment { target, body } => vec![Event::Commented { target, body }],
+        Command::Comment {
+            target,
+            body,
+            addressee,
+        } => vec![Event::Commented {
+            target,
+            body,
+            addressee,
+        }],
+        // Machinery verbs: System authorship comes from the role, never input
+        Command::BindIncarnation {
+            task_id,
+            response_target,
+            trigger,
+            actor,
+            session,
+        } => vec![Event::IncarnationBound {
+            task_id,
+            response_target,
+            trigger,
+            actor,
+            session,
+        }],
+        Command::AcceptPrompt { id } => vec![Event::IncarnationPromptAccepted { id }],
+        Command::RejectPrompt { id, evidence } => {
+            vec![Event::IncarnationPromptRejected { id, evidence }]
+        }
+        Command::SettleIncarnation { id } => vec![Event::IncarnationSettled { id }],
+        Command::MarkRecord {
+            incarnation_id,
+            record_id,
+        } => vec![Event::RecordProducedBy {
+            record_id,
+            incarnation_id,
+        }],
+        Command::CreateWorkspace {
+            task_id,
+            base,
+            branch,
+        } => vec![Event::TaskWorkspaceCreated {
+            task_id,
+            base,
+            branch,
+        }],
+        Command::CreateWorktree { task_id, worktree } => {
+            vec![Event::TaskWorktreeCreated { task_id, worktree }]
+        }
+        Command::CheckpointWorkspace {
+            task_id,
+            checkpoint,
+        } => vec![Event::TaskWorkspaceCheckpointed {
+            task_id,
+            checkpoint,
+        }],
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::objects::comment::CommentId;
+    use crate::objects::incarnation::IncarnationId;
     use crate::types::actor::ActorName;
+    use crate::types::failure::{FailureCode, FailureEvidence};
+    use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
     use crate::{ProposalAction, ProposalId, Prose, RecordId, Target, TaskId};
 
     fn agent() -> Context {
@@ -133,26 +198,63 @@ mod test {
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
+                addressee: None,
+            },
+            Event::IncarnationBound {
+                task_id: TaskId(0),
+                response_target: CommentId(RecordId(0)),
+                trigger: RecordId(0),
+                actor: ActorName::new("pi".into()).unwrap(),
+                session: SessionPointer::new("/tmp/session".into()).unwrap(),
+            },
+            Event::IncarnationPromptAccepted {
+                id: IncarnationId(RecordId(0)),
+            },
+            Event::IncarnationPromptRejected {
+                id: IncarnationId(RecordId(0)),
+                evidence: FailureEvidence::new(FailureCode::PromptRejected, None),
+            },
+            Event::IncarnationSettled {
+                id: IncarnationId(RecordId(0)),
+            },
+            Event::RecordProducedBy {
+                incarnation_id: IncarnationId(RecordId(0)),
+                record_id: RecordId(0),
+            },
+            Event::TaskWorkspaceCreated {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+            },
+            Event::TaskWorktreeCreated {
+                task_id: TaskId(0),
+                worktree: WorktreePath::new("/wt".into()).unwrap(),
+            },
+            Event::TaskWorkspaceCheckpointed {
+                task_id: TaskId(0),
+                checkpoint: GitCommit::new("abc123".into()).unwrap(),
             },
         ];
 
         for event in &events {
-            let gated = matches!(
-                event,
-                Event::TaskDropped { .. }
-                    | Event::TaskReleased { .. }
-                    | Event::ProposalRejected { .. }
-                    | Event::ProposalAccepted { .. }
-            );
-
+            let expectation = |ctx: &Context| match required_tier(event) {
+                Authority::AnyTier => true,
+                Authority::Require(tier) => ctx.tier == tier,
+            };
+            for (name, ctx) in [("agent", agent()), ("human", human())] {
+                let passed = enforce_tier(&ctx, std::slice::from_ref(event)).is_ok();
+                assert_eq!(
+                    passed,
+                    expectation(&ctx),
+                    "{name} wrong at the authority table: {event:?}"
+                );
+            }
+            let ctx = Context::system();
+            let passed = enforce_tier(&ctx, std::slice::from_ref(event)).is_ok();
             assert_eq!(
-                enforce_tier(&agent(), std::slice::from_ref(event)).is_err(),
-                gated,
-                "agent rejected at the wrong cells: {event:?}"
-            );
-            assert!(
-                enforce_tier(&human(), std::slice::from_ref(event)).is_ok(),
-                "human must pass every event kind: {event:?}"
+                passed,
+                expectation(&ctx),
+                "system wrong at the authority table: {event:?}"
             );
         }
     }

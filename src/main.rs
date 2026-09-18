@@ -9,16 +9,16 @@ use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{ProposalView, TaskView, comment_thread, proposal_view, show_view, task_view};
 use saccade::{
-    ActorName, Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId, Reject,
-    Target, Tier,
+    ActorName, Addressee, Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId,
+    Reject, Target, Tier,
 };
 
 #[derive(Parser)]
 #[command(name = "sac", about = "Saccade: awesome issue tracker")]
 struct Cli {
-    /// Path to the event database
-    #[arg(long, global = true, env = "SACCADE_DB", default_value = "saccade.db")]
-    db: PathBuf,
+    /// Path to the event database (defaults to the repo's state root)
+    #[arg(long, global = true, env = "SACCADE_DB")]
+    db: Option<PathBuf>,
 
     /// Actor name recorded on events (Required for mutating commands)
     #[arg(long, global = true, env = "SACCADE_ACTOR")]
@@ -108,7 +108,12 @@ enum Cmd {
     /// List proposals (the ruling queue)
     Proposals,
     /// Attach a comment to a task (t-<n>) or reply to a comment (#<seq>)
-    Comment { target: String, body: String },
+    Comment {
+        target: String,
+        body: String,
+        #[arg(long, value_enum)]
+        to: Option<TierArg>,
+    },
     /// Everything about one task: state, receipt, comment thread
     Show { id: String },
     /// Serve the read-only canvas over HTTP (127.0.0.1 by default)
@@ -117,6 +122,24 @@ enum Cmd {
         bind: String,
         #[arg(long, default_value_t = 8811)]
         port: u16,
+    },
+    /// Provision a workspace and bind a run serving a demand
+    Run {
+        /// The demand to serve (c-<n>)
+        id: String,
+        /// The agent that will run the session (recorded on the bind)
+        #[arg(long, default_value = "pi")]
+        actor: String,
+    },
+    /// Checkpoint the worktree, mark the reply, settle the task's run
+    Settle { id: String },
+    /// Block until a demand's reply lands, then print it
+    Wait {
+        /// The demand to watch (c-<n>)
+        id: String,
+        /// Give up after this many seconds (default: wait forever)
+        #[arg(long)]
+        timeout: Option<u64>,
     },
 }
 
@@ -172,6 +195,16 @@ impl From<Reject> for Fail {
     }
 }
 
+impl From<ExecuteFail> for Fail {
+    fn from(e: ExecuteFail) -> Self {
+        match e {
+            ExecuteFail::Db(e) => Fail::Db(e),
+            ExecuteFail::Degraded(r) => Fail::Degraded(r),
+            ExecuteFail::Reject(r) => Fail::Reject(r),
+        }
+    }
+}
+
 impl Fail {
     fn code(&self) -> &'static str {
         match self {
@@ -204,14 +237,23 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::InvalidProposalId => "invalid_proposal_id",
         Reject::ProposalAlreadyOpen => "proposal_already_open",
         Reject::InvalidCommentId => "invalid_comment_id",
+        Reject::InvalidIncarnationId => "invalid_incarnation_id",
+        Reject::IncarnationAlreadyActive => "incarnation_already_active",
+        Reject::DemandNotOnTask => "demand_not_on_task",
+        Reject::WorkspaceAlreadyExists => "workspace_already_exists",
+        Reject::WorkspaceMissing => "workspace_missing",
+        Reject::WorktreeAlreadyPresent => "worktree_already_present",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
+        Reject::NotClaimHolder => "not_claim_holder",
         Reject::InvalidActor => "invalid_actor",
         Reject::ReasonRequired => "reason_required",
     }
 }
 
 fn run(cli: &Cli) -> Result<String, Fail> {
+    // the db default is the repo's state root, not the working tree
+    let db_path = resolve_db(cli)?;
     let command = match &cli.command {
         Cmd::Create {
             kind: ObjKind::Task,
@@ -258,29 +300,74 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             id: parse_proposal_id(id)?,
             note: Prose::new(note.clone())?,
         },
-        Cmd::Comment { target, body } => Command::Comment {
+        Cmd::Comment { target, body, to } => Command::Comment {
             target: parse_target(target)?,
             body: Prose::new(body.clone())?,
+            addressee: to.map(|t| match t {
+                TierArg::Human => Addressee::Human,
+                TierArg::Agent => Addressee::Agent,
+            }),
         },
-        Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => return read_only(cli),
+        Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => {
+            return read_only(cli, &db_path);
+        }
         Cmd::Serve { bind, port } => {
-            return match serve::run(&cli.db, bind, *port) {
+            return match serve::run(&db_path, bind, *port) {
                 Err(e) => Err(Fail::Usage(e)),
                 Ok(infallible) => match infallible {},
             };
+        }
+        Cmd::Run { id, actor } => {
+            let demand = parse_comment_id(id)?;
+            let actor = saccade::ActorName::new(actor.clone())
+                .map_err(|_| Fail::Usage(format!("'{actor}' is not a valid actor name")))?;
+            let root = saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage)?;
+            return saccade::runner::run(&db_path, &root, demand, actor).map_err(runner_fail);
+        }
+        Cmd::Settle { id } => {
+            let task = parse_task_id(id)?;
+            return saccade::runner::close(&db_path, task).map_err(runner_fail);
+        }
+        Cmd::Wait { id, timeout } => {
+            let comment = parse_comment_id(id)?;
+            return saccade::runner::wait(&db_path, comment, *timeout).map_err(runner_fail);
         }
     };
 
     // Identity is required only where it is recorded: mutating commands.
     let context = context_of(cli)?;
     let now = cli.at.unwrap_or_else(db::now_epoch);
-    let mut conn = db::open(&cli.db).map_err(Fail::Db)?;
-    let stored = db::execute(&mut conn, &context, command, now).map_err(|e| match e {
-        ExecuteFail::Db(e) => Fail::Db(e),
-        ExecuteFail::Degraded(r) => Fail::Degraded(r),
-        ExecuteFail::Reject(r) => Fail::Reject(r),
-    })?;
+    let mut conn = db::open(&db_path).map_err(Fail::Db)?;
+    let stored = db::execute(&mut conn, &context, command, now).map_err(Fail::from)?;
     Ok(render_records(cli, &stored))
+}
+
+fn runner_fail(e: saccade::runner::RunnerFail) -> Fail {
+    match e {
+        saccade::runner::RunnerFail::Db(e) => Fail::from(e),
+        saccade::runner::RunnerFail::Usage(m) | saccade::runner::RunnerFail::Git(m) => {
+            Fail::Usage(m)
+        }
+    }
+}
+
+/// The db default: explicit flag or env, else the repo's state root.
+fn resolve_db(cli: &Cli) -> Result<PathBuf, Fail> {
+    if let Some(path) = &cli.db {
+        return Ok(path.clone());
+    }
+    let root = saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage)?;
+    Ok(saccade::paths::db_at(&root))
+}
+
+fn parse_comment_id(token: &str) -> Result<CommentId, Fail> {
+    let n = token
+        .strip_prefix("c-")
+        .ok_or_else(|| Fail::Usage(format!("'{token}' is not a comment id (expected c-<n>)")))?;
+    let n: usize = n
+        .parse()
+        .map_err(|_| Fail::Usage(format!("'{token}' is not a comment id")))?;
+    Ok(CommentId(RecordId(n)))
 }
 
 /// clap forbids required+global, so presence is enforced here for commands that record events.
@@ -305,8 +392,8 @@ fn context_of(cli: &Cli) -> Result<Context, Fail> {
         },
     })
 }
-fn read_only(cli: &Cli) -> Result<String, Fail> {
-    let conn = db::open_read(&cli.db).map_err(Fail::Db)?;
+fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
+    let conn = db::open_read(db_path).map_err(Fail::Db)?;
     let loadout = db::load(&conn).map_err(Fail::Db)?;
     match &cli.command {
         Cmd::Log => {
@@ -483,7 +570,8 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     for line in comment_thread(&world.comments, ctx) {
         let indent = "  ".repeat(line.depth.saturating_sub(1));
         out.push(String::new());
-        out.push(format!("{indent}#{}  {}", line.seq, line.actor));
+        let state = line.state.map(|s| format!("  ({s})")).unwrap_or_default();
+        out.push(format!("{indent}#{}  {}{state}", line.seq, line.actor));
         out.push(wrap(
             &line.body,
             WIDTH,

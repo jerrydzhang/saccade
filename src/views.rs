@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::objects::comment::{CommentContext, CommentId, Target};
+use crate::objects::comment::{
+    AgentAttemptState, CommentContext, CommentId, CommentState, ResponseState, Target,
+};
 use crate::objects::proposal::{ProposalAction, ProposalContext, ProposalId, ProposalState};
 use crate::objects::task::{TaskContext, TaskId, TaskState};
 use crate::store::World;
@@ -26,16 +28,21 @@ pub struct ProposalMark {
     pub verb: &'static str,
 }
 
+/// The task state's identifier vocabulary, shared by every view that names it.
+fn state_str(state: &TaskState) -> &'static str {
+    match state {
+        TaskState::Open => "open",
+        TaskState::Claimed => "claimed",
+        TaskState::Done(_) => "done",
+        TaskState::Dropped => "dropped",
+    }
+}
+
 impl TaskView {
     pub fn of(id: TaskId, ctx: &TaskContext, proposal: Option<&ProposalContext>) -> TaskView {
         TaskView {
             id: format!("t-{}", id.0),
-            state: match ctx.task.state {
-                TaskState::Open => "open",
-                TaskState::Claimed => "claimed",
-                TaskState::Done(_) => "done",
-                TaskState::Dropped => "dropped",
-            },
+            state: state_str(&ctx.task.state),
             parent: ctx.task.parent_id.map(|p| format!("t-{}", p.0)),
             name: ctx.task.name.as_str().to_string(),
             proposal: proposal.map(|p| {
@@ -120,10 +127,13 @@ pub struct CommentLine {
     pub depth: usize,
     pub actor: String,
     pub body: String,
+    pub state: Option<String>,
 }
 
 /// The task's thread as a view: the context's pointer index, followed.
 /// Membership is fixed at birth, so this walks pointers, never scans.
+// TODO: this walks the parent chain for depth while the Commented fold
+// walks the same chain for root; maybe stamp depth at birth instead
 pub fn comment_thread(
     comments: &BTreeMap<CommentId, CommentContext>,
     ctx: &TaskContext,
@@ -147,8 +157,9 @@ pub fn comment_thread(
             CommentLine {
                 seq: cid.0.0,
                 depth,
-                actor: cctx.actor.clone(),
+                actor: cctx.actor.as_str().to_string(),
                 body: cctx.comment.body.as_str().to_string(),
+                state: demand_tag(&cctx.state),
             }
         })
         .collect()
@@ -166,12 +177,7 @@ impl ShowView {
     pub fn of(id: TaskId, ctx: &TaskContext) -> ShowView {
         ShowView {
             id: format!("t-{}", id.0),
-            state: match ctx.task.state {
-                TaskState::Open => "open",
-                TaskState::Claimed => "claimed",
-                TaskState::Done(_) => "done",
-                TaskState::Dropped => "dropped",
-            },
+            state: state_str(&ctx.task.state),
             parent: ctx.task.parent_id.map(|p| format!("t-{}", p.0)),
             name: ctx.task.name.as_str().to_string(),
             receipt: match &ctx.task.state {
@@ -206,6 +212,30 @@ pub fn show_view(world: &World, id: TaskId) -> Option<ShowView> {
     world.tasks.get(id.0).map(|ctx| ShowView::of(id, ctx))
 }
 
+/// The demand tag a thread row carries: who it addresses and where the
+/// response stands. Unaddressed rows carry nothing.
+fn demand_tag(state: &CommentState) -> Option<String> {
+    match state {
+        CommentState::Unaddressed => None,
+        CommentState::AddressedToHuman { response } => match response {
+            ResponseState::Awaiting => Some("to human, awaiting".into()),
+            ResponseState::Responded { .. } => Some("to human, responded".into()),
+        },
+        CommentState::AddressedToAgent { response, attempt } => {
+            let response = match response {
+                ResponseState::Awaiting => "awaiting",
+                ResponseState::Responded { .. } => "responded",
+            };
+            let attempt = match attempt {
+                AgentAttemptState::Authorized { .. } => "",
+                AgentAttemptState::InFlight { .. } => ", in flight",
+                AgentAttemptState::Spent => "",
+            };
+            Some(format!("to agent, {response}{attempt}"))
+        }
+    }
+}
+
 /// Follow the world's pointers to one task's thread.
 pub fn thread_view(world: &World, id: TaskId) -> Option<Vec<CommentLine>> {
     world
@@ -230,6 +260,9 @@ mod test {
             last_updated: RecordId(0),
             proposal: None,
             thread: Vec::new(),
+            holder: None,
+            active_incarnation: None,
+            workspace: None,
         }
     }
 

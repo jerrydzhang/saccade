@@ -1,6 +1,11 @@
-use crate::objects::comment::Target;
+use crate::objects::comment::{Addressee, CommentId, Target};
+use crate::objects::incarnation::IncarnationId;
 use crate::objects::proposal::{ProposalAction, ProposalId};
 use crate::objects::task::TaskId;
+use crate::store::RecordId;
+use crate::types::actor::ActorName;
+use crate::types::failure::FailureEvidence;
+use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
 use crate::types::prose::Prose;
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +54,44 @@ pub enum Event {
     Commented {
         target: Target,
         body: Prose,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        addressee: Option<Addressee>,
+    },
+    // Incarnation events: machinery verbs, System-authored by role
+    IncarnationBound {
+        task_id: TaskId,
+        response_target: CommentId,
+        trigger: RecordId,
+        actor: ActorName,
+        session: SessionPointer,
+    },
+    IncarnationPromptAccepted {
+        id: IncarnationId,
+    },
+    IncarnationPromptRejected {
+        id: IncarnationId,
+        evidence: FailureEvidence,
+    },
+    IncarnationSettled {
+        id: IncarnationId,
+    },
+    RecordProducedBy {
+        record_id: RecordId,
+        incarnation_id: IncarnationId,
+    },
+    // Workspace events: machinery verbs, System-authored by role
+    TaskWorkspaceCreated {
+        task_id: TaskId,
+        base: GitCommit,
+        branch: GitBranch,
+    },
+    TaskWorktreeCreated {
+        task_id: TaskId,
+        worktree: WorktreePath,
+    },
+    TaskWorkspaceCheckpointed {
+        task_id: TaskId,
+        checkpoint: GitCommit,
     },
 }
 
@@ -95,5 +138,42 @@ pub enum Command {
     Comment {
         target: Target,
         body: Prose,
+        addressee: Option<Addressee>,
+    },
+    // Machinery verbs: the executor side acts through the same pipeline
+    BindIncarnation {
+        task_id: TaskId,
+        response_target: CommentId,
+        trigger: RecordId,
+        actor: ActorName,
+        session: SessionPointer,
+    },
+    AcceptPrompt {
+        id: IncarnationId,
+    },
+    RejectPrompt {
+        id: IncarnationId,
+        evidence: FailureEvidence,
+    },
+    SettleIncarnation {
+        id: IncarnationId,
+    },
+    MarkRecord {
+        record_id: RecordId,
+        incarnation_id: IncarnationId,
+    },
+    // Machinery verbs: workspace records follow provisioning and checkpoints
+    CreateWorkspace {
+        task_id: TaskId,
+        base: GitCommit,
+        branch: GitBranch,
+    },
+    CreateWorktree {
+        task_id: TaskId,
+        worktree: WorktreePath,
+    },
+    CheckpointWorkspace {
+        task_id: TaskId,
+        checkpoint: GitCommit,
     },
 }

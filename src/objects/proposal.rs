@@ -61,17 +61,6 @@ pub struct Proposal {
     pub(crate) action: ProposalAction,
 }
 
-impl Proposal {
-    pub fn apply(&self, event: &Event) -> Option<Proposal> {
-        let new_state = self.state.transition(event)?;
-        Some(Proposal {
-            state: new_state.clone(),
-            name: self.name.clone(),
-            ..*self
-        })
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProposalContext {
     pub proposal: Proposal,

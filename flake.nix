@@ -38,7 +38,6 @@
           ];
 
           shellHook = ''
-            export SACCADE_DB="$PWD/saccade.db"
             export SACCADE_ACTOR="jerry"
             export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
           '';

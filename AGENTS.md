@@ -110,6 +110,8 @@ Placement is a contract:
 - `tests/mapping_corpus.rs`: worked examples of the executed beads mapping,
   mapping only. (Known wart: the gate-queue deposit scenario lives there
   until `tests/executor.rs` takes it.)
+- `tests/runner.rs`: the slice-1 runner end to end — real temp Git, real db,
+  machinery verbs driven as the server will drive them.
 - `tests/executor.rs`: real process/Git/server effect and crash contracts,
   with fake Pi and Telegram.
 

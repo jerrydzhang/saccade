@@ -126,6 +126,7 @@ fn respond_post(req: &Req, db_path: &std::path::Path) -> tiny_http::Response<Cur
                 Command::Comment {
                     target,
                     body: Prose::new(body.to_string()).unwrap(),
+                    addressee: None,
                 },
                 true,
             )
@@ -596,11 +597,12 @@ fn thread_html(thread: &[CommentLine], n: usize) -> String {
         .iter()
         .map(|c| {
             format!(
-                "<div class=\"cmt\" id=\"c-{}\" style=\"margin-left:{}px\"><span class=\"meta\">#{}</span> <span class=\"meta\">{}</span>\n<div class=\"body\">{}</div>\n<a class=\"reply\" href=\"/t/{n}?reply={}\">reply</a></div>\n",
+                "<div class=\"cmt\" id=\"c-{}\" style=\"margin-left:{}px\"><span class=\"meta\">#{}</span> <span class=\"meta\">{}</span><span class=\"meta\">{}</span>\n<div class=\"body\">{}</div>\n<a class=\"reply\" href=\"/t/{n}?reply={}\">reply</a></div>\n",
                 c.seq,
                 c.depth * 18,
                 c.seq,
                 esc(&c.actor),
+                c.state.as_deref().map(|s| format!(" ({s})")).unwrap_or_default(),
                 esc(&c.body),
                 c.seq,
             )
@@ -941,6 +943,7 @@ mod tests {
                 Event::Commented {
                     target: Target::Task(TaskId(0)),
                     body: Prose::new("receipt lands here".into()).unwrap(),
+                    addressee: None,
                 },
             ),
         ])

@@ -4,9 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::decide::{decide, enforce_tier, expand};
 use crate::events::{Command, Event};
-use crate::objects::comment::{Comment, CommentContext, CommentId};
+use crate::objects::comment::{
+    Addressee, AgentAttemptState, Comment, CommentContext, CommentId, CommentState, ResponseState,
+};
+use crate::objects::incarnation::{IncarnationContext, IncarnationId, IncarnationState};
 use crate::objects::proposal::{Proposal, ProposalContext, ProposalId, ProposalState};
 use crate::objects::task::{Task, TaskContext, TaskState};
+use crate::objects::workspace::{WorkspaceContext, WorktreeState};
 use crate::types::actor::ActorName;
 use crate::{ProposalAction, Prose, Reject, Target};
 
@@ -20,6 +24,19 @@ pub struct FoldError {
 pub enum Reason {
     /// The parent task of a TaskCreated event does not exist.
     InvalidParentTaskId,
+    /// The record's author is not the current claim holder.
+    NotClaimHolder,
+    InvalidIncarnationId,
+    /// The task's run slot is taken: one live incarnation per task.
+    IncarnationAlreadyActive,
+    /// A binding names a demand that lives on another task.
+    DemandNotOnTask,
+    /// The task already holds a workspace: one lineage per task.
+    WorkspaceAlreadyExists,
+    /// The event names a task whose workspace was never created.
+    WorkspaceMissing,
+    /// A second physical creation while the worktree is present.
+    WorktreeAlreadyPresent,
     InvalidTaskId,
     InvalidProposalId,
     InvalidCommentId,
@@ -30,18 +47,28 @@ pub enum Reason {
 
 /// Command-path translation of fold failures into refusals; total over Reason
 /// since every fold failure is command-reachable.
-pub(crate) fn to_reject(reason: Reason) -> Reject {
-    match reason {
-        Reason::InvalidTaskId => Reject::InvalidTaskId,
-        Reason::InvalidProposalId => Reject::InvalidProposalId,
-        Reason::InvalidCommentId => Reject::InvalidCommentId,
-        Reason::InvalidParentTaskId => Reject::InvalidParentTaskId,
-        Reason::InvalidStateTransition => Reject::InvalidStateTransition,
-        Reason::ProposalAlreadyOpen => Reject::ProposalAlreadyOpen,
+impl From<Reason> for Reject {
+    fn from(reason: Reason) -> Reject {
+        match reason {
+            Reason::InvalidTaskId => Reject::InvalidTaskId,
+            Reason::InvalidProposalId => Reject::InvalidProposalId,
+            Reason::InvalidCommentId => Reject::InvalidCommentId,
+            Reason::InvalidParentTaskId => Reject::InvalidParentTaskId,
+            Reason::InvalidStateTransition => Reject::InvalidStateTransition,
+            Reason::NotClaimHolder => Reject::NotClaimHolder,
+            Reason::InvalidIncarnationId => Reject::InvalidIncarnationId,
+            Reason::IncarnationAlreadyActive => Reject::IncarnationAlreadyActive,
+            Reason::DemandNotOnTask => Reject::DemandNotOnTask,
+            Reason::WorkspaceAlreadyExists => Reject::WorkspaceAlreadyExists,
+            Reason::WorkspaceMissing => Reject::WorkspaceMissing,
+            Reason::WorktreeAlreadyPresent => Reject::WorktreeAlreadyPresent,
+            Reason::ProposalAlreadyOpen => Reject::ProposalAlreadyOpen,
+        }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Tier {
     Human,
     Agent,
@@ -52,6 +79,16 @@ pub enum Tier {
 pub struct Context {
     pub actor: ActorName,
     pub tier: Tier,
+}
+
+impl Context {
+    /// The fixed author machinery records under; no caller presents this.
+    pub fn system() -> Self {
+        Context {
+            actor: ActorName::new("saccade".into()).expect("the fixed system actor name is valid"),
+            tier: Tier::System,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -70,6 +107,7 @@ pub struct World {
     pub tasks: Vec<TaskContext>,
     pub proposals: BTreeMap<ProposalId, ProposalContext>,
     pub comments: BTreeMap<CommentId, CommentContext>,
+    pub incarnations: BTreeMap<IncarnationId, IncarnationContext>,
 }
 
 impl World {
@@ -78,6 +116,7 @@ impl World {
             tasks: Vec::new(),
             proposals: BTreeMap::new(),
             comments: BTreeMap::new(),
+            incarnations: BTreeMap::new(),
         }
     }
 
@@ -101,6 +140,23 @@ impl World {
         Ok(self)
     }
 
+    /// A run ending: the task's slot frees and the demand's attempt spends
+    fn terminalize(&mut self, id: IncarnationId, record: &Record) {
+        if let Some(run) = self.incarnations.get(&id) {
+            if let Some(task_ctx) = self.tasks.get_mut(run.task_id.0)
+                && task_ctx.active_incarnation == Some(id)
+            {
+                task_ctx.active_incarnation = None;
+                task_ctx.last_updated = record.id;
+            }
+            if let Some(demand) = self.comments.get_mut(&run.response_target)
+                && let Some(next) = demand.state.transition(&record.event, record)
+            {
+                demand.state = next;
+            }
+        }
+    }
+
     fn apply_record(&mut self, record: Record) -> Result<(), Reason> {
         match record.event {
             // Task events
@@ -121,19 +177,194 @@ impl World {
                     last_updated: record.id,
                     proposal: None,
                     thread: Vec::new(),
+                    holder: None,
+                    active_incarnation: None,
+                    workspace: None,
                 });
             }
-            ref event @ (Event::TaskClaimed { id }
-            | Event::TaskDone { id, .. }
-            | Event::TaskDropped { id, .. }
-            | Event::TaskReleased { id, .. }) => {
+            ref event @ Event::TaskClaimed { id } => {
                 let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_updated = record.id;
-                task_ctx.task = task_ctx
+                task_ctx.task.state = task_ctx
                     .task
-                    .apply(event)
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                task_ctx.holder = Some(record.context.actor.clone());
+            }
+            ref event @ Event::TaskDone { id, .. } => {
+                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.task.state = task_ctx
+                    .task
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                // only the holder completes the claim
+                if task_ctx.holder.as_ref() != Some(&record.context.actor) {
+                    return Err(Reason::NotClaimHolder);
+                }
+                task_ctx.last_updated = record.id;
+                task_ctx.holder = None;
+            }
+            ref event @ Event::TaskReleased { id, .. } => {
+                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.task.state = task_ctx
+                    .task
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                // humans may release any claim, agents only their own
+                if record.context.tier != Tier::Human
+                    && task_ctx.holder.as_ref() != Some(&record.context.actor)
+                {
+                    return Err(Reason::NotClaimHolder);
+                }
+                task_ctx.last_updated = record.id;
+                task_ctx.holder = None;
+            }
+            ref event @ Event::TaskDropped { id, .. } => {
+                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.last_updated = record.id;
+                task_ctx.task.state = task_ctx
+                    .task
+                    .state
+                    .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
             }
+            // Incarnation events
+            ref event @ Event::IncarnationBound {
+                ref task_id,
+                ref response_target,
+                ref trigger,
+                // ref required since actor and session are not Copy, but we don't want to move them out of the record
+                ref actor,
+                ref session,
+            } => {
+                let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
+                if task_ctx.active_incarnation.is_some() {
+                    return Err(Reason::IncarnationAlreadyActive);
+                }
+                let demand = self
+                    .comments
+                    .get_mut(response_target)
+                    .ok_or(Reason::InvalidCommentId)?;
+                // the run binds a demand on its own task
+                if demand.comment.root != *task_id {
+                    return Err(Reason::DemandNotOnTask);
+                }
+                demand.state = demand
+                    .state
+                    .transition(event, &record)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                self.incarnations.insert(
+                    IncarnationId(record.id),
+                    IncarnationContext {
+                        task_id: *task_id,
+                        response_target: *response_target,
+                        trigger: *trigger,
+                        actor: actor.clone(),
+                        session: session.clone(),
+                        state: IncarnationState::Bound,
+                        produced: Vec::new(),
+                    },
+                );
+                task_ctx.active_incarnation = Some(IncarnationId(record.id));
+                task_ctx.last_updated = record.id;
+            }
+            ref event @ Event::IncarnationPromptAccepted { id } => {
+                let run = self
+                    .incarnations
+                    .get_mut(&id)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                run.state = run
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+            }
+            ref event @ Event::IncarnationPromptRejected { id, .. } => {
+                let run = self
+                    .incarnations
+                    .get_mut(&id)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                run.state = run
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                self.terminalize(id, &record);
+            }
+            ref event @ Event::IncarnationSettled { id } => {
+                let run = self
+                    .incarnations
+                    .get_mut(&id)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                run.state = run
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                self.terminalize(id, &record);
+            }
+            ref event @ Event::RecordProducedBy {
+                record_id,
+                incarnation_id,
+            } => {
+                let run = self
+                    .incarnations
+                    .get_mut(&incarnation_id)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                run.state = run
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                // produced pointers point backward, at records already born
+                if record_id.0 >= record.id.0 {
+                    return Err(Reason::InvalidStateTransition);
+                }
+                run.produced.push(record_id);
+            }
+            // Workspace events
+            Event::TaskWorkspaceCreated {
+                task_id,
+                ref base,
+                ref branch,
+            } => {
+                let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
+                if task_ctx.workspace.is_some() {
+                    return Err(Reason::WorkspaceAlreadyExists);
+                }
+                task_ctx.workspace = Some(WorkspaceContext {
+                    base: base.clone(),
+                    branch: branch.clone(),
+                    // the checkpoint starts at the base the workspace was cut from
+                    checkpoint: base.clone(),
+                    worktree: WorktreeState::Absent,
+                });
+                task_ctx.last_updated = record.id;
+            }
+            ref event @ Event::TaskWorktreeCreated { task_id, .. } => {
+                let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
+                let workspace = task_ctx
+                    .workspace
+                    .as_mut()
+                    .ok_or(Reason::WorkspaceMissing)?;
+                workspace.worktree = workspace
+                    .worktree
+                    .transition(event)
+                    .ok_or(Reason::WorktreeAlreadyPresent)?;
+                task_ctx.last_updated = record.id;
+            }
+            Event::TaskWorkspaceCheckpointed {
+                task_id,
+                ref checkpoint,
+            } => {
+                let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
+                let workspace = task_ctx
+                    .workspace
+                    .as_mut()
+                    .ok_or(Reason::WorkspaceMissing)?;
+                workspace.checkpoint = checkpoint.clone();
+                task_ctx.last_updated = record.id;
+            }
+
             // Proposal events
             Event::ProposalCreated {
                 name: proposal_name,
@@ -141,8 +372,7 @@ impl World {
             } => {
                 let proposal_id = ProposalId(record.id);
 
-                // one judgment at a time: the task's proposal pointer is its open judgment;
-                // the act must be legal at birth — staleness acquired later is designed state
+                // one judgment at a time
                 match action {
                     ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
                         let task_ctx =
@@ -181,9 +411,10 @@ impl World {
                     .proposals
                     .get_mut(&id)
                     .ok_or(Reason::InvalidProposalId)?;
-                proposal_ctx.proposal = proposal_ctx
+                proposal_ctx.proposal.state = proposal_ctx
                     .proposal
-                    .apply(event)
+                    .state
+                    .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
 
                 match &proposal_ctx.proposal.action {
@@ -196,8 +427,12 @@ impl World {
                 }
             }
             // Comment events
-            Event::Commented { target, body } => {
-                let mut up = target;
+            Event::Commented {
+                ref target,
+                ref body,
+                addressee,
+            } => {
+                let mut up = *target;
                 let root_task_id = loop {
                     match up {
                         Target::Task(t) => break t,
@@ -212,13 +447,41 @@ impl World {
                     }
                 };
 
+                let state = match addressee {
+                    None => CommentState::Unaddressed,
+                    Some(Addressee::Human) => CommentState::AddressedToHuman {
+                        response: ResponseState::Awaiting,
+                    },
+                    Some(Addressee::Agent) => CommentState::AddressedToAgent {
+                        response: ResponseState::Awaiting,
+                        attempt: AgentAttemptState::Authorized { trigger: record.id },
+                    },
+                };
+
                 self.comments.insert(
                     CommentId(record.id),
                     CommentContext {
-                        comment: Comment { target, body },
-                        actor: record.context.actor.as_str().into(),
+                        comment: Comment {
+                            target: *target,
+                            body: body.clone(),
+                            root: root_task_id,
+                        },
+                        actor: record.context.actor.clone(),
+                        state,
                     },
                 );
+
+                if let Target::Comment(parent) = target {
+                    let parent_ctx = self
+                        .comments
+                        .get_mut(parent)
+                        .expect("apply validated the parent above");
+
+                    if let Some(next) = parent_ctx.state.transition(&record.event, &record) {
+                        parent_ctx.state = next;
+                    }
+                }
+
                 self.tasks
                     .get_mut(root_task_id.0)
                     .ok_or(Reason::InvalidTaskId)?
@@ -253,7 +516,7 @@ impl World {
         let folded = self
             .clone()
             .fold(records.clone())
-            .map_err(|err| to_reject(err.reason))?;
+            .map_err(|err| Reject::from(err.reason))?;
         Ok((folded, records))
     }
 }
@@ -281,6 +544,12 @@ impl Log {
             records: Vec::new(),
             world: World::new(),
         }
+    }
+
+    /// Machinery verbs enter through the same pipeline under the fixed
+    /// system authorship: the tier comes from the role, never from input.
+    pub fn execute_system(&mut self, command: Command, now: u64) -> Result<Vec<Record>, Reject> {
+        self.execute(Context::system(), command, now)
     }
 
     pub fn records(&self) -> &[Record] {
@@ -327,28 +596,56 @@ mod test {
     #[test]
     fn command_translation_maps_every_reachable_reason() {
         assert!(matches!(
-            to_reject(Reason::InvalidTaskId),
+            Reject::from(Reason::InvalidTaskId),
             Reject::InvalidTaskId
         ));
         assert!(matches!(
-            to_reject(Reason::InvalidProposalId),
+            Reject::from(Reason::InvalidProposalId),
             Reject::InvalidProposalId
         ));
         assert!(matches!(
-            to_reject(Reason::InvalidCommentId),
+            Reject::from(Reason::InvalidCommentId),
             Reject::InvalidCommentId
         ));
         assert!(matches!(
-            to_reject(Reason::InvalidParentTaskId),
+            Reject::from(Reason::InvalidParentTaskId),
             Reject::InvalidParentTaskId
         ));
         assert!(matches!(
-            to_reject(Reason::InvalidStateTransition),
+            Reject::from(Reason::InvalidStateTransition),
             Reject::InvalidStateTransition
         ));
         assert!(matches!(
-            to_reject(Reason::ProposalAlreadyOpen),
+            Reject::from(Reason::NotClaimHolder),
+            Reject::NotClaimHolder
+        ));
+        assert!(matches!(
+            Reject::from(Reason::InvalidIncarnationId),
+            Reject::InvalidIncarnationId
+        ));
+        assert!(matches!(
+            Reject::from(Reason::IncarnationAlreadyActive),
+            Reject::IncarnationAlreadyActive
+        ));
+        assert!(matches!(
+            Reject::from(Reason::ProposalAlreadyOpen),
             Reject::ProposalAlreadyOpen
+        ));
+        assert!(matches!(
+            Reject::from(Reason::DemandNotOnTask),
+            Reject::DemandNotOnTask
+        ));
+        assert!(matches!(
+            Reject::from(Reason::WorkspaceAlreadyExists),
+            Reject::WorkspaceAlreadyExists
+        ));
+        assert!(matches!(
+            Reject::from(Reason::WorkspaceMissing),
+            Reject::WorkspaceMissing
+        ));
+        assert!(matches!(
+            Reject::from(Reason::WorktreeAlreadyPresent),
+            Reject::WorktreeAlreadyPresent
         ));
     }
 

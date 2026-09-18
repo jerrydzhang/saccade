@@ -6,7 +6,7 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use crate::Reject;
 use crate::decide::{decide, enforce_tier, expand};
 use crate::events::{Command, Event};
-use crate::store::{Context, Record, RecordId, World, to_reject};
+use crate::store::{Context, Record, RecordId, World};
 use crate::types::actor::ActorName;
 use crate::wire;
 
@@ -17,6 +17,8 @@ const SCHEMA_VERSION: i32 = 1;
 #[derive(Debug)]
 pub enum DbError {
     Sqlite(rusqlite::Error),
+    /// creating the tracker's parent directories failed
+    Io(String),
     /// application_id mismatch: not a Saccade database.
     NotSaccade,
     /// user_version ahead of this binary: written by a newer Saccade.
@@ -41,6 +43,7 @@ impl std::fmt::Display for DbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DbError::Sqlite(e) => write!(f, "sqlite: {e}"),
+            DbError::Io(e) => write!(f, "filesystem: {e}"),
             DbError::NotSaccade => write!(f, "file is not a saccade database"),
             DbError::NewerSchema(v) => {
                 write!(f, "database schema v{v} is newer than this binary; upgrade")
@@ -109,6 +112,11 @@ impl From<rusqlite::Error> for ExecuteFail {
 }
 
 pub fn open(path: &Path) -> Result<Connection, DbError> {
+    // a tracker's state root may not exist yet; creating it is part of
+    // creating the tracker
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| DbError::Io(e.to_string()))?;
+    }
     let conn = Connection::open(path)?;
     configure(&conn)?;
     // journal_mode returns the resulting mode as a row; read and discard.
@@ -349,7 +357,7 @@ fn append(
     world
         .clone()
         .fold(records.clone())
-        .map_err(|err| ExecuteFail::Reject(to_reject(err.reason)))?;
+        .map_err(|err| ExecuteFail::Reject(err.reason.into()))?;
 
     let logged_time = now_epoch();
     let mut stored = Vec::with_capacity(records.len());
@@ -393,8 +401,12 @@ pub fn now_epoch() -> u64 {
 mod test {
     use super::*;
     use crate::events::{Command, Event};
+    use crate::objects::comment::Addressee;
+    use crate::objects::comment::{AgentAttemptState, CommentState, ResponseState};
+    use crate::objects::incarnation::{IncarnationId, IncarnationState};
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
+    use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
     use crate::{CommentId, ProposalAction, ProposalId, ProposalState, Prose, RecordId, Target};
 
     fn memory_db() -> Connection {
@@ -432,7 +444,7 @@ mod test {
         execute(&mut conn, &agent(), create("implement foo"), 10).unwrap();
         execute(
             &mut conn,
-            &agent(),
+            &human(),
             Command::ClaimTask { id: TaskId(0) },
             11,
         )
@@ -477,6 +489,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("receipt verified against receipts test".into()).unwrap(),
+                addressee: None,
             },
             30,
         )
@@ -487,11 +500,11 @@ mod test {
             Command::Comment {
                 target: Target::Comment(CommentId(RecordId(7))),
                 body: Prose::new("agreed, closing".into()).unwrap(),
+                addressee: None,
             },
             31,
         )
         .unwrap();
-
         // a mixed-context batch appends atomically with per-draft tiers
         let batch = AtomicBatch {
             drafts: vec![
@@ -503,7 +516,7 @@ mod test {
                     },
                 },
                 RecordDraft {
-                    context: agent(),
+                    context: human(),
                     event: Event::TaskClaimed { id: TaskId(2) },
                 },
                 RecordDraft {
@@ -518,11 +531,110 @@ mod test {
         let batched = execute_batch(&mut conn, batch, 32).unwrap();
         assert_eq!(batched.len(), 3);
 
+        // an agent demand runs its course: bind, accept, reply, produce, settle
+        execute(
+            &mut conn,
+            &human(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("who folded the receipt?".into()).unwrap(),
+                addressee: Some(Addressee::Agent),
+            },
+            31,
+        )
+        .unwrap();
+        let system = Context::system();
+        execute(
+            &mut conn,
+            &system,
+            Command::BindIncarnation {
+                task_id: TaskId(0),
+                response_target: CommentId(RecordId(12)),
+                trigger: RecordId(12),
+                actor: ActorName::new("pi".into()).unwrap(),
+                session: SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap(),
+            },
+            31,
+        )
+        .unwrap();
+        execute(
+            &mut conn,
+            &system,
+            Command::AcceptPrompt {
+                id: IncarnationId(RecordId(13)),
+            },
+            31,
+        )
+        .unwrap();
+        execute(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                target: Target::Comment(CommentId(RecordId(12))),
+                body: Prose::new("the fold did, at seq 9".into()).unwrap(),
+                addressee: None,
+            },
+            31,
+        )
+        .unwrap();
+        execute(
+            &mut conn,
+            &system,
+            Command::MarkRecord {
+                record_id: RecordId(15),
+                incarnation_id: IncarnationId(RecordId(13)),
+            },
+            31,
+        )
+        .unwrap();
+        execute(
+            &mut conn,
+            &system,
+            Command::SettleIncarnation {
+                id: IncarnationId(RecordId(13)),
+            },
+            31,
+        )
+        .unwrap();
+
+        // the workspace records its lineage, worktree, and checkpoints
+        execute(
+            &mut conn,
+            &system,
+            Command::CreateWorkspace {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+            },
+            33,
+        )
+        .unwrap();
+        execute(
+            &mut conn,
+            &system,
+            Command::CreateWorktree {
+                task_id: TaskId(0),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            33,
+        )
+        .unwrap();
+        execute(
+            &mut conn,
+            &system,
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: GitCommit::new("def456".into()).unwrap(),
+            },
+            33,
+        )
+        .unwrap();
+
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
-        assert_eq!(loadout.rows.len(), 12);
+        assert_eq!(loadout.rows.len(), 21);
         assert_eq!(loadout.rows[4].kind, "proposal_created");
         assert_eq!(loadout.rows[5].kind, "proposal_accepted");
         assert_eq!(loadout.rows[6].kind, "task_dropped");
@@ -530,6 +642,15 @@ mod test {
         assert_eq!(loadout.rows[9].tier, "agent");
         assert_eq!(loadout.rows[11].actor.as_str(), "human person");
         assert_eq!(loadout.rows[11].tier, "human");
+        // the workspace rows round-trip through the wire columns
+        assert_eq!(loadout.rows[18].kind, "task_workspace_created");
+        assert_eq!(loadout.rows[19].kind, "task_worktree_created");
+        assert_eq!(loadout.rows[20].kind, "task_workspace_checkpointed");
+        assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
+        assert!(matches!(
+            world.tasks[0].workspace.as_ref().map(|w| &w.checkpoint),
+            Some(checkpoint) if *checkpoint == GitCommit::new("def456".into()).unwrap()
+        ));
         assert_eq!(world.tasks.len(), 3);
         assert!(matches!(world.tasks[0].task.state, TaskState::Done(_)));
         assert!(matches!(world.tasks[1].task.state, TaskState::Dropped));
@@ -542,6 +663,20 @@ mod test {
         let root = &world.comments[&CommentId(RecordId(7))];
         assert_eq!(root.actor.as_str(), "saccade bot");
         assert_eq!(reply.actor.as_str(), "human person");
+        let demand = &world.comments[&CommentId(RecordId(12))];
+        assert_eq!(
+            demand.state,
+            CommentState::AddressedToAgent {
+                response: ResponseState::Responded {
+                    reply: CommentId(RecordId(15))
+                },
+                attempt: AgentAttemptState::Spent,
+            }
+        );
+        let run = &world.incarnations[&IncarnationId(RecordId(13))];
+        assert_eq!(run.state, IncarnationState::Settled);
+        assert_eq!(run.produced, vec![RecordId(15)]);
+        assert_eq!(world.tasks[0].active_incarnation, None);
 
         // bi-temporal: event time is caller-supplied, logged time is ours
         assert_eq!(loadout.rows[0].event_time, 10);
@@ -559,7 +694,7 @@ mod test {
             execute(&mut conn, &agent(), create("implement foo"), 10).unwrap();
             execute(
                 &mut conn,
-                &agent(),
+                &human(),
                 Command::ClaimTask { id: TaskId(0) },
                 11,
             )

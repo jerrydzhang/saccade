@@ -135,6 +135,7 @@ fn command_of(action: &Action, world: &World) -> Command {
                 Target::Comment(comment_at(world, *reply))
             },
             body: Prose::new("generated comment".into()).unwrap(),
+            addressee: None,
         },
         Action::ProposeDrop { .. } => Command::CreateProposal {
             name: Prose::new("generated proposal".into()).unwrap(),
@@ -296,6 +297,13 @@ fn generator_reaches_deep_states() {
                 Err(ref r) => {
                     let kind = match r {
                         saccade::Reject::HumanOnly => "HumanOnly",
+                        saccade::Reject::NotClaimHolder => "NotClaimHolder",
+                        saccade::Reject::InvalidIncarnationId => "InvalidIncarnationId",
+                        saccade::Reject::IncarnationAlreadyActive => "IncarnationAlreadyActive",
+                        saccade::Reject::DemandNotOnTask => "DemandNotOnTask",
+                        saccade::Reject::WorkspaceAlreadyExists => "WorkspaceAlreadyExists",
+                        saccade::Reject::WorkspaceMissing => "WorkspaceMissing",
+                        saccade::Reject::WorktreeAlreadyPresent => "WorktreeAlreadyPresent",
                         saccade::Reject::InvalidTaskId => "InvalidTaskId",
                         saccade::Reject::InvalidParentTaskId => "InvalidParentTaskId",
                         saccade::Reject::InvalidProposalId => "InvalidProposalId",

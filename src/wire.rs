@@ -27,7 +27,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 10] = [
+const KINDS: [&str; 18] = [
     "task_created",
     "task_claimed",
     "task_done",
@@ -38,6 +38,14 @@ const KINDS: [&str; 10] = [
     "proposal_rejected",
     "proposal_withdrawn",
     "commented",
+    "incarnation_bound",
+    "incarnation_prompt_accepted",
+    "incarnation_prompt_rejected",
+    "incarnation_settled",
+    "record_produced_by",
+    "task_workspace_created",
+    "task_worktree_created",
+    "task_workspace_checkpointed",
 ];
 
 /// Split an event into its db columns. The on-disk shape is serde's
@@ -84,6 +92,7 @@ mod test {
         }
     }
     use crate::store::RecordId;
+    use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
     #[test]
     fn every_event_kind_round_trips() {
@@ -116,10 +125,25 @@ mod test {
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("leaning sections, owner: jerry".into()).unwrap(),
+                addressee: None,
             },
             Event::Commented {
                 target: Target::Comment(CommentId(RecordId(6))),
                 body: Prose::new("no - pure tree, here is why".into()).unwrap(),
+                addressee: None,
+            },
+            Event::TaskWorkspaceCreated {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+            },
+            Event::TaskWorktreeCreated {
+                task_id: TaskId(0),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            Event::TaskWorkspaceCheckpointed {
+                task_id: TaskId(0),
+                checkpoint: GitCommit::new("def456".into()).unwrap(),
             },
         ];
 
