@@ -5,10 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
+use saccade::api::AppState;
 use saccade::db::{self, LoadState};
+use saccade::objects::comment::AgentAttemptState;
 use saccade::objects::comment::CommentState;
 use saccade::objects::incarnation::IncarnationState;
-use saccade::runner::{RunnerFail, close, pointer_prompt, prepare, wait};
+use saccade::runner::{PreparedRun, RunnerFail, close, pointer_prompt, prepare, wait};
+use saccade::supervisor::{self, RunnerConfig, SessionDriver};
 use saccade::types::actor::ActorName;
 use saccade::{Addressee, Command, CommentId, Context, Prose, Target, TaskId, Tier, World};
 
@@ -98,7 +101,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     let (repo, db_path, demand) = scaffold("course");
 
     let prepared = prepare(
-        &db_path,
+        &mut db::open(&db_path).unwrap(),
         &repo,
         demand,
         ActorName::new("pi".into()).unwrap(),
@@ -145,7 +148,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     sh(&worktree, &["add", "."]);
     sh(&worktree, &["commit", "-m", "receipt"]);
 
-    let note = close(&db_path, TaskId(0)).unwrap();
+    let note = close(&mut db::open(&db_path).unwrap(), TaskId(0)).unwrap();
     assert!(note.contains("settled i-"), "{note}");
 
     let world = world_of(&db_path);
@@ -200,7 +203,7 @@ fn prepare_refuses_what_the_fold_would_refuse() {
     )
     .unwrap();
     let refused = prepare(
-        &db_path,
+        &mut db::open(&db_path).unwrap(),
         &repo,
         CommentId(saccade::RecordId(2)),
         ActorName::new("pi".into()).unwrap(),
@@ -211,14 +214,14 @@ fn prepare_refuses_what_the_fold_would_refuse() {
 
     // a second run on the same task has no free slot
     prepare(
-        &db_path,
+        &mut db::open(&db_path).unwrap(),
         &repo,
         CommentId(saccade::RecordId(1)),
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
     let refused = prepare(
-        &db_path,
+        &mut db::open(&db_path).unwrap(),
         &repo,
         CommentId(saccade::RecordId(1)),
         ActorName::new("pi".into()).unwrap(),
@@ -238,7 +241,7 @@ fn prepare_refuses_what_the_fold_would_refuse() {
     )
     .unwrap();
     assert!(matches!(
-        close(&db_path, TaskId(1)),
+        close(&mut db::open(&db_path).unwrap(), TaskId(1)),
         Err(RunnerFail::Usage(_))
     ));
 
@@ -249,7 +252,7 @@ fn prepare_refuses_what_the_fold_would_refuse() {
 fn the_pointer_prompt_names_the_work_and_the_reply_door() {
     let (repo, db_path, demand) = scaffold("prompt");
     let prepared = prepare(
-        &db_path,
+        &mut db::open(&db_path).unwrap(),
         &repo,
         demand,
         ActorName::new("pi".into()).unwrap(),
@@ -270,4 +273,121 @@ fn wait_reports_an_unanswered_demand_at_its_deadline() {
     let refused = wait(&db_path, demand, Some(0));
     assert!(matches!(refused, Err(RunnerFail::Usage(_))));
     std::fs::remove_dir_all(db_path.parent().unwrap()).unwrap();
+}
+
+/// The session body the supervision tests use: a fixed reply at agent
+/// tier, as a real executor would leave through the CLI. Each test's
+/// driver owns its db, so parallel tests never share a body.
+fn fake_session_for(db: PathBuf) -> SessionDriver {
+    std::sync::Arc::new(move |_run: &PreparedRun, _prompt: &str| {
+        let mut conn = db::open(&db).unwrap();
+        let world = world_of(&db);
+        let demand = world
+            .comments
+            .iter()
+            .find(|(_, c)| {
+                matches!(
+                    &c.state,
+                    CommentState::AddressedToAgent {
+                        attempt: AgentAttemptState::InFlight { .. },
+                        ..
+                    }
+                )
+            })
+            .map(|(id, _)| *id)
+            .expect("the bound demand is in flight");
+        db::record(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                target: Target::Comment(demand),
+                body: Prose::new("the fake session answered".into()).unwrap(),
+                addressee: None,
+            },
+            9,
+        )
+        .unwrap();
+        Ok(true)
+    })
+}
+
+#[test]
+fn a_write_that_lands_a_demand_fires_a_run_that_answers_it() {
+    let (repo, db_path, demand) = scaffold("supervise");
+    let runner = RunnerConfig {
+        repo_root: repo.clone(),
+        actor: ActorName::new("pi".into()).unwrap(),
+        driver: fake_session_for(db_path.clone()),
+    };
+    let app = AppState::with_runner(&db_path, runner).unwrap();
+
+    // the write that lands the demand is the trigger
+    supervisor::after_write(&app);
+
+    let seen = wait(&db_path, demand, Some(10)).unwrap();
+    assert!(seen.contains("the fake session answered"), "{seen}");
+    let world = world_of(&db_path);
+    assert_eq!(world.tasks[0].active_incarnation, None);
+    match &world.comments[&demand].state {
+        CommentState::AddressedToAgent { attempt, .. } => {
+            assert!(matches!(attempt, AgentAttemptState::Spent));
+        }
+        other => panic!("demand spent: {other:?}"),
+    }
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
+    let (repo, db_path, first) = scaffold("queue");
+    // a second demand on the same task, arriving behind the first
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            body: Prose::new("and then this one".into()).unwrap(),
+            addressee: Some(Addressee::Agent),
+        },
+        3,
+    )
+    .unwrap();
+    let second = CommentId(saccade::RecordId(2));
+
+    let runner = RunnerConfig {
+        repo_root: repo.clone(),
+        actor: ActorName::new("pi".into()).unwrap(),
+        driver: fake_session_for(db_path.clone()),
+    };
+    let app = AppState::with_runner(&db_path, runner).unwrap();
+
+    supervisor::after_write(&app);
+    let seen = wait(&db_path, second, Some(10)).unwrap();
+    assert!(seen.contains("the fake session answered"), "{seen}");
+    // both demands spent, in order
+    let world = world_of(&db_path);
+    for demand in [first, second] {
+        match &world.comments[&demand].state {
+            CommentState::AddressedToAgent { attempt, .. } => {
+                assert!(
+                    matches!(attempt, AgentAttemptState::Spent),
+                    "c-{} spent",
+                    demand.0.0
+                );
+            }
+            other => panic!("demand spent: {other:?}"),
+        }
+    }
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_server_without_a_runner_writes_but_never_fires() {
+    let (repo, db_path, demand) = scaffold("quiet");
+    let app = AppState::open(&db_path).unwrap();
+    supervisor::after_write(&app);
+    let world = world_of(&db_path);
+    assert_eq!(world.tasks[0].active_incarnation, None);
+    let _ = demand;
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }

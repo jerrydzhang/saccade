@@ -17,6 +17,7 @@ use tracing::{error, info};
 
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::store::{Context, Tier, World};
+use crate::supervisor;
 use crate::{ActorName, wire};
 use crate::{Command, Reject};
 
@@ -32,9 +33,14 @@ struct Inner {
 }
 
 /// The sole writer's state: writes refold rather than apply incrementally,
-/// so one definition of truth serves readers and writers alike.
+/// so one definition of truth serves readers and writers alike. The runner
+/// config rides outside the lock: immutable, and absent when this server
+/// only writes.
 #[derive(Clone)]
-pub struct AppState(Arc<Mutex<ServerState>>);
+pub struct AppState {
+    inner: Arc<Mutex<ServerState>>,
+    runner: Option<supervisor::RunnerConfig>,
+}
 
 pub struct Snapshot {
     pub world: World,
@@ -60,7 +66,48 @@ impl AppState {
             }),
             db::LoadState::Degraded(reason) => ServerState::Degraded(reason, conn),
         };
-        Ok(AppState(Arc::new(Mutex::new(state))))
+        Ok(AppState {
+            inner: Arc::new(Mutex::new(state)),
+            runner: None,
+        })
+    }
+
+    /// A server that runs what it is asked: demands fire sessions.
+    pub fn with_runner(db_path: &Path, runner: supervisor::RunnerConfig) -> Result<Self, String> {
+        let app = Self::open(db_path)?;
+        Ok(AppState {
+            runner: Some(runner),
+            ..app
+        })
+    }
+
+    pub fn runner_config(&self) -> Option<&supervisor::RunnerConfig> {
+        self.runner.as_ref()
+    }
+
+    /// Run against the sole writer's connection under the lock; blocking
+    /// work inside is the caller's discipline. Whatever the closure wrote
+    /// becomes the cache: readers never see a world the log contradicts.
+    pub fn with_conn<T>(
+        &self,
+        f: impl FnOnce(&mut rusqlite::Connection) -> T,
+    ) -> Result<T, String> {
+        let mut guard = self.inner.lock().expect("the writer lock is not poisoned");
+        match &mut *guard {
+            ServerState::Ready(inner) => {
+                let out = f(&mut inner.conn);
+                let loadout = db::load(&inner.conn).map_err(|e| e.to_string())?;
+                match loadout.state {
+                    db::LoadState::Full(world) => {
+                        inner.world = world;
+                        inner.rows = loadout.rows;
+                    }
+                    db::LoadState::Degraded(reason) => return Err(reason),
+                }
+                Ok(out)
+            }
+            ServerState::Degraded(reason, _) => Err(reason.clone()),
+        }
     }
 
     pub fn execute(
@@ -69,7 +116,7 @@ impl AppState {
         command: Command,
         at: Option<u64>,
     ) -> Result<Vec<StoredRecord>, ExecuteFail> {
-        let mut guard = self.0.lock().expect("the writer lock is not poisoned");
+        let mut guard = self.inner.lock().expect("the writer lock is not poisoned");
         match &mut *guard {
             ServerState::Degraded(reason, _) => Err(ExecuteFail::Degraded(reason.clone())),
             ServerState::Ready(inner) => {
@@ -87,7 +134,7 @@ impl AppState {
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, Degraded> {
-        let guard = self.0.lock().expect("the writer lock is not poisoned");
+        let guard = self.inner.lock().expect("the writer lock is not poisoned");
         match &*guard {
             ServerState::Ready(inner) => Ok(Snapshot {
                 world: inner.world.clone(),
@@ -186,6 +233,8 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     };
     match app.execute(&context, envelope.command, envelope.at) {
         Ok(stored) => {
+            let fired = app.clone();
+            tokio::task::spawn_blocking(move || supervisor::after_write(&fired));
             info!(
                 actor = %context.actor.as_str(),
                 tier = wire::tier_of(&context.tier),

@@ -114,8 +114,9 @@ Placement is a contract:
   `tests/executor.rs` takes it.)
 - `tests/proptest_harness.rs`: random legal sequences never panic the fold,
   and the world `db::record` returns equals replay and reload.
-- `tests/runner.rs`: the slice-1 runner end to end — real temp Git, real db,
-  machinery verbs driven as the server will drive them.
+- `tests/runner.rs`: the runner end to end — real temp Git, real db,
+  and the supervision contract: a landed demand fires a run, a queued
+  demand fires when the task frees, no runner means no firing.
 - `tests/executor.rs`: real process/Git/server effect and crash contracts,
   with fake Pi and Telegram.
 

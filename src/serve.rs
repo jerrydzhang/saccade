@@ -23,9 +23,16 @@ pub async fn run(
     db_path: &std::path::Path,
     bind: &str,
     port: u16,
+    executor: &str,
 ) -> Result<std::convert::Infallible, String> {
     let addr = format!("{bind}:{port}");
-    let state = AppState::open(db_path)?;
+    let repo_root = saccade::paths::repo_root(std::path::Path::new("."))
+        .map_err(|e| format!("the serving repo: {e}"))?;
+    let actor = saccade::ActorName::new(executor.to_string())
+        .map_err(|e| format!("'{executor}' is not a valid actor name: {e:?}"))?;
+    let runner = saccade::supervisor::RunnerConfig::serving(repo_root, actor);
+    let state = AppState::with_runner(db_path, runner)?;
+    info!("demands will fire runs; boot scan next");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("cannot bind {addr}: {e}"))?;
@@ -38,7 +45,9 @@ pub async fn run(
     let router = axum::Router::new()
         .merge(saccade::api::routes())
         .fallback(get(web_get).post(web_post))
-        .with_state(state);
+        .with_state(state.clone());
+    // the boot scan: demands that arrived while no server was watching
+    tokio::task::spawn_blocking(move || saccade::supervisor::after_write(&state));
     axum::serve(listener, router)
         .await
         .expect("axum serves until killed");
@@ -204,6 +213,8 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
     };
     match app.execute(&context, command, None) {
         Ok(stored) => {
+            let fired = app.clone();
+            tokio::task::spawn_blocking(move || saccade::supervisor::after_write(&fired));
             let fragment = if anchor {
                 stored
                     .first()

@@ -136,17 +136,10 @@ enum Cmd {
         bind: String,
         #[arg(long, default_value_t = 8811)]
         port: u16,
-    },
-    /// Provision a workspace and bind a run serving a demand
-    Run {
-        /// The demand to serve (c-<n>)
-        id: String,
-        /// The agent that will run the session (recorded on the bind)
+        /// The actor sessions run as (recorded on the bind, named in the reply door)
         #[arg(long, default_value = "pi")]
         actor: String,
     },
-    /// Checkpoint the worktree, mark the reply, settle the task's run
-    Settle { id: String },
     /// Block until a demand's reply lands, then print it
     Wait {
         /// The demand to watch (c-<n>)
@@ -328,7 +321,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => {
             return read_only(cli, &db_path);
         }
-        Cmd::Serve { bind, port } => {
+        Cmd::Serve { bind, port, actor } => {
             let _ = tracing_subscriber::fmt()
                 .json()
                 .with_env_filter(
@@ -341,21 +334,10 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 .enable_all()
                 .build()
                 .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
-            return match runtime.block_on(serve::run(&db_path, bind, *port)) {
+            return match runtime.block_on(serve::run(&db_path, bind, *port, actor)) {
                 Err(e) => Err(Fail::Usage(e)),
                 Ok(infallible) => match infallible {},
             };
-        }
-        Cmd::Run { id, actor } => {
-            let demand = parse_comment_id(id)?;
-            let actor = saccade::ActorName::new(actor.clone())
-                .map_err(|_| Fail::Usage(format!("'{actor}' is not a valid actor name")))?;
-            let root = saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage)?;
-            return saccade::runner::run(&db_path, &root, demand, actor).map_err(runner_fail);
-        }
-        Cmd::Settle { id } => {
-            let task = parse_task_id(id)?;
-            return saccade::runner::close(&db_path, task).map_err(runner_fail);
         }
         Cmd::Wait { id, timeout } => {
             let comment = parse_comment_id(id)?;

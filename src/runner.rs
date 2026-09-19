@@ -13,6 +13,7 @@ use crate::paths;
 use crate::types::actor::ActorName;
 use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
 use crate::{Command, Context, RecordId, World};
+use rusqlite::Connection;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunnerFail {
@@ -74,14 +75,12 @@ pub struct PreparedRun {
 /// Validation completes before any git effect, so a refused run never
 /// orphans a worktree.
 pub fn prepare(
-    db_path: &Path,
+    conn: &mut Connection,
     repo_root: &Path,
     demand: CommentId,
     actor: ActorName,
 ) -> Result<PreparedRun, RunnerFail> {
-    let mut conn = db::open(db_path).map_err(ExecuteFail::Db)?;
-
-    let world = load_world(&conn)?;
+    let world = load_world(conn)?;
     let demand_ctx = world
         .comments
         .get(&demand)
@@ -104,62 +103,73 @@ pub fn prepare(
             task.0
         )));
     }
-    if let Some(workspace) = &ctx.workspace
-        && !matches!(workspace.worktree, WorktreeState::Absent)
-    {
-        return Err(RunnerFail::Usage(format!(
-            "t-{} already has a worktree recorded",
-            task.0
-        )));
-    }
-
     let worktree = paths::worktree_at(repo_root, task.0);
     let session = paths::session_at(repo_root, task.0);
     let branch = format!("saccade/t-{}", task.0);
-    let base = git(repo_root, &["rev-parse", "HEAD"])?;
-    if worktree.exists() {
-        return Err(RunnerFail::Usage(format!(
-            "{} already exists; remove it before provisioning",
-            worktree.display()
-        )));
-    }
-    git(
-        repo_root,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            &branch,
-            &worktree.to_string_lossy(),
-            &base,
-        ],
-    )?;
-
     let system = Context::system();
     let now = db::now_epoch();
-    db::record(
-        &mut conn,
-        &system,
-        Command::CreateWorkspace {
-            task_id: task,
-            base: commit(base)?,
-            branch: GitBranch::new(branch)
-                .map_err(|e| RunnerFail::Usage(format!("bad branch: {e:?}")))?,
-        },
-        now,
-    )?;
-    db::record(
-        &mut conn,
-        &system,
-        Command::CreateWorktree {
-            task_id: task,
-            worktree: WorktreePath::new(worktree.clone())
-                .map_err(|e| RunnerFail::Usage(format!("worktree path: {e:?}")))?,
-        },
-        now,
-    )?;
+
+    match &ctx.workspace {
+        // a task's workspace persists across runs: the branch carries
+        // advancement between checkpoints, so the second run continues
+        // from the last one instead of refusing.
+        Some(workspace) => {
+            let checkpoint = workspace.checkpoint.as_str().to_string();
+            let branch: String = workspace.branch.clone().into();
+            if worktree.exists() {
+                git(&worktree, &["reset", "--hard", &checkpoint])?;
+                git(&worktree, &["clean", "-fd"])?;
+            } else {
+                git(
+                    repo_root,
+                    &["worktree", "add", &worktree.to_string_lossy(), &branch],
+                )?;
+            }
+        }
+        None => {
+            let base = git(repo_root, &["rev-parse", "HEAD"])?;
+            if worktree.exists() {
+                return Err(RunnerFail::Usage(format!(
+                    "{} already exists; remove it before provisioning",
+                    worktree.display()
+                )));
+            }
+            git(
+                repo_root,
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    &branch,
+                    &worktree.to_string_lossy(),
+                    &base,
+                ],
+            )?;
+            db::record(
+                conn,
+                &system,
+                Command::CreateWorkspace {
+                    task_id: task,
+                    base: commit(base)?,
+                    branch: GitBranch::new(branch)
+                        .map_err(|e| RunnerFail::Usage(format!("bad branch: {e:?}")))?,
+                },
+                now,
+            )?;
+            db::record(
+                conn,
+                &system,
+                Command::CreateWorktree {
+                    task_id: task,
+                    worktree: WorktreePath::new(worktree.clone())
+                        .map_err(|e| RunnerFail::Usage(format!("worktree path: {e:?}")))?,
+                },
+                now,
+            )?;
+        }
+    };
     let (bound, _) = db::record(
-        &mut conn,
+        conn,
         &system,
         Command::BindIncarnation {
             task_id: task,
@@ -173,7 +183,7 @@ pub fn prepare(
     )?;
     let incarnation = IncarnationId(RecordId(bound[0].seq));
     db::record(
-        &mut conn,
+        conn,
         &system,
         Command::AcceptPrompt { id: incarnation },
         now,
@@ -220,10 +230,8 @@ pub fn execute_session(run: &PreparedRun, prompt: &str) -> Result<bool, RunnerFa
     Ok(status.success())
 }
 
-pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
-    let mut conn = db::open(db_path).map_err(ExecuteFail::Db)?;
-
-    let world = load_world(&conn)?;
+pub fn close(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> {
+    let world = load_world(conn)?;
     let ctx = task_ctx(&world, task)?;
     let incarnation = ctx
         .active_incarnation
@@ -254,7 +262,7 @@ pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
     let system = Context::system();
     let now = db::now_epoch();
     db::record(
-        &mut conn,
+        conn,
         &system,
         Command::CheckpointWorkspace {
             task_id: task,
@@ -264,7 +272,7 @@ pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
     )?;
     if let Some(reply) = reply {
         db::record(
-            &mut conn,
+            conn,
             &system,
             Command::MarkRecord {
                 record_id: reply.0,
@@ -274,7 +282,7 @@ pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
         )?;
     }
     db::record(
-        &mut conn,
+        conn,
         &system,
         Command::SettleIncarnation { id: incarnation },
         now,
@@ -290,34 +298,6 @@ pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
             incarnation.0.0
         ),
     })
-}
-
-/// The whole lifecycle in one call.
-pub fn run(
-    db_path: &Path,
-    repo_root: &Path,
-    demand: CommentId,
-    actor: ActorName,
-) -> Result<String, RunnerFail> {
-    let prepared = prepare(db_path, repo_root, demand, actor)?;
-    let bound = format!(
-        "run i-{} bound, serving c-{}\nworktree: {}\nsession: {}",
-        prepared.incarnation.0.0,
-        prepared.demand.0.0,
-        prepared.worktree.display(),
-        prepared.session.display(),
-    );
-    let sac = std::env::current_exe()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "sac".into());
-    let clean = execute_session(&prepared, &pointer_prompt(&prepared, &sac))?;
-    let settled = close(db_path, prepared.task)?;
-    let exit = if clean {
-        String::new()
-    } else {
-        "the executor exited uncleanly; the reply's presence is the outcome\n".to_string()
-    };
-    Ok(format!("{bound}\n{exit}{settled}"))
 }
 
 /// Block until the demand's reply lands; `deadline` bounds the wait in

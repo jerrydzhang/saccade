@@ -9,6 +9,7 @@ pub mod objects;
 pub mod paths;
 pub mod runner;
 pub mod store;
+pub mod supervisor;
 pub mod types;
 pub mod views;
 pub mod wire;
