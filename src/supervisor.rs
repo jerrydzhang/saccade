@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::api::AppState;
 use crate::objects::comment::{CommentId, CommentState, ResponseState};
@@ -101,11 +101,6 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
             }
             Err(_) => return,
         };
-        info!(
-            incarnation = prepared.incarnation.0.0,
-            demand = prepared.demand.0.0,
-            "run bound"
-        );
 
         let sac = env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
@@ -129,13 +124,7 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
         }
 
         let settled = match app.with_conn(|conn| runner::close(conn, prepared.task)) {
-            Ok(Ok(note)) => {
-                info!(
-                    incarnation = prepared.incarnation.0.0,
-                    "run settled: {note}"
-                );
-                true
-            }
+            Ok(Ok(_)) => true,
             Ok(Err(e)) => {
                 warn!(
                     incarnation = prepared.incarnation.0.0,

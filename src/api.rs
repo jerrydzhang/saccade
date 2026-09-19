@@ -13,12 +13,12 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::{error, info};
+use tracing::error;
 
+use crate::ActorName;
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::store::{Context, Tier, World};
 use crate::supervisor;
-use crate::{ActorName, wire};
 use crate::{Command, Reject};
 
 enum ServerState {
@@ -235,12 +235,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         Ok(stored) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || supervisor::sweep(&fired));
-            info!(
-                actor = %context.actor.as_str(),
-                tier = wire::tier_of(&context.tier),
-                last = stored.last().map(|r| r.seq).unwrap_or(0),
-                "command accepted"
-            );
             (StatusCode::OK, Json(json!({"records": &stored}))).into_response()
         }
         Err(e) => {

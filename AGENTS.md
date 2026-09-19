@@ -79,6 +79,11 @@ the tracker, which ages with them.
   competes or coerces.
 - Every capability that reduces contact must add record in the same change;
   comprehension rides the record, never the conversation.
+- Every telemetry emit names its reader and the moment they read it, the
+  way comments earn bytes; lines duplicating the record or outliving
+  their consumer are cut in the same change that notices them. The
+  destination story (and any spans) waits for the consumer — serve as a
+  service, rung 5 — not before.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes — accepted).
 - Comments land at the tier they describe: work facts on the work thread,
