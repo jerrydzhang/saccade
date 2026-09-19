@@ -98,18 +98,22 @@ Placement is a contract:
   object the module defines.
 - `src/decide.rs` tests: pure command expansion and authority; fixtures are
   constructed events and `World::new()` — never a `Log`.
-- `src/store.rs` tests: the fold's failure contracts — every `Reason` pinned,
-  plus the command translation table.
+- `src/store.rs` tests: the law's contracts over `store::execute` — cross-object
+  invariants, authority ordering, demand and run lifecycles — driven through
+  the in-memory `Log` fixture (test-private, no storage layer) against the
+  shared `populate_log` story; plus every `Reason` pinned and the command
+  translation table.
+- `src/views.rs` tests: view derivations over folded worlds.
 - `src/demands.rs` tests: the exhaustive shared Human-demand candidate and
   staleness projection that signal and views both consume.
-- `src/lib.rs` `pipeline` tests: what only the composed path can show —
-  cross-object contracts driven through `Log::execute` against the shared
-  `populate_log` fixture.
 - `src/db.rs` tests: the persistence layer — one all-event round-trip; new
   event families ride the existing round-trip, they don't get their own.
-- `tests/mapping_corpus.rs`: worked examples of the executed beads mapping,
-  mapping only. (Known wart: the gate-queue deposit scenario lives there
-  until `tests/executor.rs` takes it.)
+- `tests/mapping_corpus.rs`: worked examples through the write path — the
+  beads mapping, and law-level stories whose assertions are world-shaped.
+  (Known wart: the gate-queue deposit scenario lives there until
+  `tests/executor.rs` takes it.)
+- `tests/proptest_harness.rs`: random legal sequences never panic the fold,
+  and the world `db::record` returns equals replay and reload.
 - `tests/runner.rs`: the slice-1 runner end to end — real temp Git, real db,
   machinery verbs driven as the server will drive them.
 - `tests/executor.rs`: real process/Git/server effect and crash contracts,

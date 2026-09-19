@@ -1,14 +1,16 @@
 //! The proptest harness: two properties over random legal sequences.
-//! no valid-grammar command sequence panics the fold and
-//! replay equals live, asserted across all three storage points: the in-memory `Log`,
-//! `World::replay` over its records, and the persisted db reloaded through
-//! the wire layer. Rejections are part of the contract and always allowed;
-//! only panics and divergence fail.
+//! no valid-grammar command sequence panics the fold, and the world the
+//! write path returns is the one a full reload produces, asserted across
+//! three roads: the world `db::record` returns, `World::replay` over the
+//! stored records, and the db reloaded through the wire layer. Rejections
+//! are part of the contract and always allowed; only panics and divergence
+//! fail.
 
 use proptest::prelude::*;
-use saccade::db::{self, LoadState};
-use saccade::store::Log;
+use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
+use saccade::store::Record;
 use saccade::types::actor::ActorName;
+use saccade::wire;
 use saccade::{
     Command, Context, ProposalAction, ProposalId, Prose, RecordId, Target, TaskId, Tier, World,
 };
@@ -220,28 +222,29 @@ proptest! {
 
     #[test]
     fn random_sequences_never_panic_and_replay_equals_live(actions in sequence_strategy()) {
-        let mut log = Log::new();
         let mut conn = db::open(std::path::Path::new(":memory:")).expect(":memory: opens");
+        let mut live = World::new();
 
         for action in &actions {
             let ctx = context(action.human());
-            // both storage points get identical commands resolved against the same pre-execute world
-            let cmd_for_log = command_of(action, log.world());
-            let cmd_for_db = command_of(action, log.world());
-            // try to apply the command rejections naturally get gatekept by the pipeline and errors
-            // are simply ignored; the property is that no valid-grammar command sequence panics the fold
-            let _ = log.execute(ctx.clone(), cmd_for_log, 1);
-            let _ = db::record(&mut conn, &ctx, cmd_for_db, 1);
+            let cmd = command_of(action, &live);
+            // rejections are gatekept by the pipeline and simply ignored; the property
+            // is that no valid-grammar command sequence panics the fold
+            if let Ok((_, world)) = db::record(&mut conn, &ctx, cmd, 1) {
+                live = world;
+            }
         }
 
-        // road two: the pure fold over the recorded events
-        let replayed = World::replay(log.records().to_vec()).unwrap();
-        prop_assert_eq!(&replayed, log.world());
+        // road two: the pure fold over the stored records
+        let loadout = db::load(&conn).expect("load after generated sequence");
+        let rows = loadout.rows.clone();
+        let records = stored_to_records(&rows);
+        let replayed = World::replay(records).unwrap();
+        prop_assert_eq!(&replayed, &live);
 
         // road three: the persisted log reloaded through the wire layer
-        let loadout = db::load(&conn).expect("load after generated sequence");
         match loadout.state {
-            LoadState::Full(world) => prop_assert_eq!(&world, log.world()),
+            LoadState::Full(world) => prop_assert_eq!(&world, &live),
             LoadState::Degraded(reason) => panic!("wire round-trip degraded the log: {reason}"),
         }
     }
@@ -265,15 +268,17 @@ fn generator_reaches_deep_states() {
             .new_tree(&mut runner)
             .expect("strategy infallible")
             .current();
-        let mut log = Log::new();
+        let mut conn = db::open(std::path::Path::new(":memory:")).unwrap();
+        let mut live = World::new();
         let mut depth: BTreeMap<saccade::CommentId, usize> = BTreeMap::new();
         let mut max_depth = 0;
 
         for action in &actions {
             let ctx = context(action.human());
-            let cmd = command_of(action, log.world());
-            match log.execute(ctx, cmd, 1) {
-                Ok(records) => {
+            let cmd = command_of(action, &live);
+            match db::record(&mut conn, &ctx, cmd, 1) {
+                Ok((stored, world)) => {
+                    live = world;
                     match action {
                         Action::Accept { .. } => *milestones.entry("accept").or_default() += 1,
                         Action::Reject { human: true, .. } => {
@@ -282,19 +287,24 @@ fn generator_reaches_deep_states() {
                         Action::Withdraw { .. } => *milestones.entry("withdraw").or_default() += 1,
                         _ => {}
                     }
-                    if let saccade::Event::Commented { target, .. } = &records.last().unwrap().event
-                    {
-                        let d = match target {
-                            saccade::Target::Task(_) => 1,
-                            saccade::Target::Comment(parent) => {
-                                depth.get(parent).copied().unwrap_or(1) + 1
-                            }
+                    let last = stored.last().unwrap();
+                    if last.kind == "commented" {
+                        let record = stored_to_records(std::slice::from_ref(last)).remove(0);
+                        let d = match record.event {
+                            saccade::Event::Commented { target, .. } => match target {
+                                saccade::Target::Task(_) => 1,
+                                saccade::Target::Comment(parent) => {
+                                    depth.get(&parent).copied().unwrap_or(1) + 1
+                                }
+                            },
+                            _ => unreachable!("kind checked before decoding"),
                         };
-                        depth.insert(saccade::CommentId(records.last().unwrap().id), d);
+                        depth.insert(saccade::CommentId(record.id), d);
                         max_depth = max_depth.max(d);
                     }
                 }
-                Err(ref r) => {
+                Err(ref fail) => {
+                    let r = reject_of(fail);
                     let kind = match r {
                         saccade::Reject::HumanOnly => "HumanOnly",
                         saccade::Reject::NotClaimHolder => "NotClaimHolder",
@@ -318,7 +328,7 @@ fn generator_reaches_deep_states() {
             }
         }
 
-        let world = log.world();
+        let world = &live;
         let states: Vec<&str> = (0..world.tasks.len())
             .map(|i| saccade::views::task_view(world, TaskId(i)).unwrap().state)
             .collect();
@@ -362,4 +372,25 @@ fn generator_reaches_deep_states() {
             "generator never produced {kind}"
         );
     }
+}
+
+fn reject_of(fail: &ExecuteFail) -> saccade::Reject {
+    match fail {
+        ExecuteFail::Reject(r) => r.clone(),
+        other => panic!("the generated sequence never hits storage failures: {other}"),
+    }
+}
+
+fn stored_to_records(rows: &[StoredRecord]) -> Vec<Record> {
+    rows.iter()
+        .map(|row| Record {
+            id: saccade::RecordId(row.seq),
+            timestamp: row.event_time,
+            context: saccade::Context {
+                actor: ActorName::new(row.actor.clone()).unwrap(),
+                tier: wire::tier_from(&row.tier).unwrap(),
+            },
+            event: wire::assemble(&row.kind, &row.payload).unwrap(),
+        })
+        .collect()
 }

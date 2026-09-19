@@ -1,11 +1,11 @@
 //! Worked examples of the beads→saccade mapping. Each test
 //! carries a real beads record, trimmed to the fields the mapping consumes,
 //! and pins the event sequence that encodes it plus the world that sequence
-//! folds into. The in-process half drives `db::execute` — the real write
+//! folds into. The in-process half drives `db::record` — the real write
 //! path — where the fold is the point; the binary half covers argv hostility
 //! and `--at`, where the CLI is the point.
 //!
-//! The in-process half targets `db::execute`, the layer beneath every consumer
+//! The in-process half targets `db::record`, the layer beneath every consumer
 //! (clap today, the serve/webui edge later). When a second consumer lands and
 //! the shared logic is extracted, re-point these at that surface.
 //!
@@ -528,4 +528,116 @@ fn gate_queue_deposit_scenario() {
             .iter()
             .all(|r| r.kind != "task_dropped" || r.tier == "human")
     );
+}
+
+/// The law's own story, end to end through the write path: five tasks born,
+/// claimed, completed, released, and dropped, with ids, times, and actors
+/// landing as stored.
+#[test]
+fn a_task_lifecycle_folds_through_the_write_path() {
+    let path = db_path("lifecycle");
+    let mut conn = db::open(&path).unwrap();
+    let agent = Context {
+        actor: ActorName::new("saccade bot".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    let human = Context {
+        actor: ActorName::new("human person".into()).unwrap(),
+        tier: Tier::Human,
+    };
+
+    let create = |name: &str| Command::CreateTask {
+        name: Prose::new(name.into()).unwrap(),
+        parent_id: None,
+    };
+
+    db::record(&mut conn, &agent, create("implement foo"), 1).unwrap();
+    db::record(&mut conn, &agent, Command::ClaimTask { id: TaskId(0) }, 2).unwrap();
+    db::record(&mut conn, &human, create("fix bar"), 3).unwrap();
+    db::record(&mut conn, &agent, Command::ClaimTask { id: TaskId(1) }, 4).unwrap();
+    db::record(
+        &mut conn,
+        &agent,
+        Command::CompleteTask {
+            id: TaskId(1),
+            receipt: Prose::new("bar fixed".into()).unwrap(),
+        },
+        5,
+    )
+    .unwrap();
+    db::record(
+        &mut conn,
+        &human,
+        Command::CreateTask {
+            name: Prose::new("improve baz".into()).unwrap(),
+            parent_id: Some(TaskId(0)),
+        },
+        6,
+    )
+    .unwrap();
+    db::record(
+        &mut conn,
+        &agent,
+        Command::CompleteTask {
+            id: TaskId(0),
+            receipt: Prose::new("foo completed successfully".into()).unwrap(),
+        },
+        7,
+    )
+    .unwrap();
+    db::record(&mut conn, &human, create("migrate floop"), 8).unwrap();
+    db::record(&mut conn, &agent, Command::ClaimTask { id: TaskId(3) }, 9).unwrap();
+    db::record(
+        &mut conn,
+        &human,
+        Command::ReleaseTask {
+            id: TaskId(3),
+            note: Prose::new("run dead, reclaim".into()).unwrap(),
+        },
+        10,
+    )
+    .unwrap();
+    db::record(&mut conn, &agent, Command::ClaimTask { id: TaskId(3) }, 11).unwrap();
+    db::record(
+        &mut conn,
+        &human,
+        Command::DropTask {
+            id: TaskId(2),
+            note: Prose::new("scope covered by fix bar".into()).unwrap(),
+        },
+        12,
+    )
+    .unwrap();
+    db::record(
+        &mut conn,
+        &human,
+        Command::DropTask {
+            id: TaskId(1),
+            note: Prose::new("covered by fix bar; kept only as context".into()).unwrap(),
+        },
+        13,
+    )
+    .unwrap();
+    db::record(&mut conn, &human, create("open work"), 14).unwrap();
+
+    let loadout = db::load(&conn).unwrap();
+    assert_eq!(loadout.rows.len(), 14);
+    let world = world_of(&conn);
+    let state_of = |n: usize| views::TaskView::of(TaskId(n), &world.tasks[n], None).state;
+    assert_eq!(state_of(0), "done");
+    assert_eq!(state_of(1), "dropped");
+    assert_eq!(state_of(2), "dropped");
+    assert_eq!(state_of(3), "claimed");
+    assert_eq!(state_of(4), "open");
+
+    // identity, time, and authorship land as stored
+    assert_eq!(loadout.rows[8].seq, 8);
+    assert_eq!(loadout.rows[8].event_time, 9);
+    assert_eq!(loadout.rows[8].actor, "saccade bot");
+    assert_eq!(loadout.rows[9].seq, 9);
+    assert_eq!(loadout.rows[9].event_time, 10);
+    assert_eq!(loadout.rows[9].actor, "human person");
+    assert_eq!(loadout.rows[10].seq, 10);
+    assert_eq!(loadout.rows[10].event_time, 11);
+    assert_eq!(loadout.rows[10].actor, "saccade bot");
 }

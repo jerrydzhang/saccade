@@ -247,8 +247,11 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<Vec<CommentLine>> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::events::Event;
+    use crate::objects::comment::{CommentId, Target};
     use crate::objects::task::Task;
-    use crate::store::RecordId;
+    use crate::store::{Context, Record, RecordId, Tier, World};
+    use crate::types::actor::ActorName;
 
     fn ctx_of(state: TaskState) -> TaskContext {
         TaskContext {
@@ -289,5 +292,99 @@ mod test {
             TaskView::of(TaskId(0), &ctx_of(TaskState::Dropped), None).state,
             "dropped"
         );
+    }
+
+    fn human() -> Context {
+        Context {
+            actor: ActorName::new("human person".into()).unwrap(),
+            tier: Tier::Human,
+        }
+    }
+
+    fn agent() -> Context {
+        Context {
+            actor: ActorName::new("saccade bot".into()).unwrap(),
+            tier: Tier::Agent,
+        }
+    }
+
+    /// The thread is a walk: targets are stored, depth and membership are
+    /// derived, and each task owns exactly its own thread.
+    #[test]
+    fn comment_thread_is_derived_from_addresses() {
+        let human = human();
+        let agent = agent();
+        let record = |id: usize, ctx: &Context, target: Target, body: &str| Record {
+            id: RecordId(id),
+            timestamp: id as u64,
+            context: ctx.clone(),
+            event: Event::Commented {
+                target,
+                body: Prose::new(body.into()).unwrap(),
+                addressee: None,
+            },
+        };
+        let birth = |id: usize, ctx: &Context, name: &str| Record {
+            id: RecordId(id),
+            timestamp: id as u64,
+            context: ctx.clone(),
+            event: Event::TaskCreated {
+                name: Prose::new(name.into()).unwrap(),
+                parent_id: None,
+            },
+        };
+        let world = World::replay(vec![
+            birth(0, &human, "real work"),
+            birth(1, &human, "other work"),
+            record(
+                2,
+                &agent,
+                Target::Task(TaskId(0)),
+                "triage: how is sections, undecided",
+            ),
+            record(
+                3,
+                &human,
+                Target::Comment(CommentId(RecordId(2))),
+                "no - pure tree, canvas verdict pending",
+            ),
+            record(
+                4,
+                &agent,
+                Target::Comment(CommentId(RecordId(3))),
+                "noted, parked with owner",
+            ),
+            record(
+                5,
+                &human,
+                Target::Task(TaskId(1)),
+                "belongs to the other thread",
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(world.comments.len(), 4);
+        assert_eq!(
+            world.comments[&CommentId(RecordId(2))].comment.target,
+            Target::Task(TaskId(0))
+        );
+        assert_eq!(
+            world.comments[&CommentId(RecordId(3))].comment.target,
+            Target::Comment(CommentId(RecordId(2)))
+        );
+
+        let thread = comment_thread(&world.comments, &world.tasks[0]);
+        assert_eq!(
+            thread
+                .iter()
+                .map(|l| (l.seq, l.depth, l.actor.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (2, 1, "saccade bot"),
+                (3, 2, "human person"),
+                (4, 3, "saccade bot")
+            ]
+        );
+        assert_eq!(comment_thread(&world.comments, &world.tasks[1]).len(), 1);
     }
 }
