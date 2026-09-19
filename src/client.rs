@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 #[derive(Debug)]
 pub enum ClientFail {
-    /// Nothing answered at the URL — the typed form of "no server".
+    /// Nothing answered at the URL
     ServerUnreachable { url: String },
     /// The server answered and refused; `code` is its error code.
     Refused { code: String, detail: String },
@@ -43,18 +43,17 @@ struct RecordsBody {
 }
 
 #[derive(Deserialize)]
-struct ErrorBody {
-    error: ErrorDetail,
-}
-
-#[derive(Deserialize)]
 struct ErrorDetail {
     code: String,
     detail: serde_json::Value,
 }
 
-/// Sends one command and returns the records it landed. Never falls back
-/// to direct storage — reaching the db is the caller's decision.
+#[derive(Deserialize)]
+struct ErrorBody {
+    error: ErrorDetail,
+}
+
+/// Sends one command and returns the records it landed
 pub fn send(
     url: &str,
     context: &Context,

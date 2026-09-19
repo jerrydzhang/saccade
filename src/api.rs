@@ -114,8 +114,6 @@ pub(crate) struct WireContext {
     pub tier: WireTier,
 }
 
-/// The one request shape: who is acting, what they command, and optionally
-/// when it happened — absent means now.
 #[derive(Serialize, Deserialize)]
 pub struct Envelope {
     pub(crate) context: WireContext,
