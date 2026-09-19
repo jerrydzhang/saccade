@@ -136,9 +136,9 @@ enum Cmd {
         bind: String,
         #[arg(long, default_value_t = 8811)]
         port: u16,
-        /// The actor sessions run as (recorded on the bind, named in the reply door)
+        /// The executor sessions run as (recorded on the bind, named in the reply door)
         #[arg(long, default_value = "pi")]
-        actor: String,
+        executor: String,
     },
     /// Block until a demand's reply lands, then print it
     Wait {
@@ -321,7 +321,11 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => {
             return read_only(cli, &db_path);
         }
-        Cmd::Serve { bind, port, actor } => {
+        Cmd::Serve {
+            bind,
+            port,
+            executor,
+        } => {
             let _ = tracing_subscriber::fmt()
                 .json()
                 .with_env_filter(
@@ -334,7 +338,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 .enable_all()
                 .build()
                 .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
-            return match runtime.block_on(serve::run(&db_path, bind, *port, actor)) {
+            return match runtime.block_on(serve::run(&db_path, bind, *port, executor)) {
                 Err(e) => Err(Fail::Usage(e)),
                 Ok(infallible) => match infallible {},
             };

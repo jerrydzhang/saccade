@@ -218,6 +218,11 @@ The .agents/skills/saccade skill in this repo documents the tracker.",
 /// exit is not a success claim; the reply's presence is.
 pub fn execute_session(run: &PreparedRun, prompt: &str) -> Result<bool, RunnerFail> {
     let status = std::process::Command::new("pi")
+        // the prompt names the session's actor explicitly; an inherited
+        // SACCADE_ACTOR would silently re-attribute the reply
+        .env_remove("SACCADE_ACTOR")
+        .env_remove("SACCADE_TIER")
+        .env_remove("SACCADE_SERVER")
         .arg("-p")
         .arg("--session")
         .arg(&run.session)
