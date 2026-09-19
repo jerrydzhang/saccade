@@ -488,8 +488,7 @@ fn parse_proposal_id(token: &str) -> Result<ProposalId, Fail> {
 
 fn render_records(cli: &Cli, stored: &[StoredRecord]) -> String {
     if cli.json {
-        return serde_json::to_string_pretty(&records_json(stored))
-            .expect("records are plain data");
+        return serde_json::to_string_pretty(stored).expect("records are plain data");
     }
     stored
         .iter()
@@ -500,26 +499,9 @@ fn render_records(cli: &Cli, stored: &[StoredRecord]) -> String {
 
 fn render_log(cli: &Cli, rows: &[StoredRecord]) -> String {
     if cli.json {
-        return serde_json::to_string_pretty(&records_json(rows)).expect("records are plain data");
+        return serde_json::to_string_pretty(rows).expect("records are plain data");
     }
     rows.iter().map(record_line).collect::<Vec<_>>().join("\n")
-}
-
-fn records_json(rows: &[StoredRecord]) -> serde_json::Value {
-    serde_json::Value::Array(rows.iter().map(record_json).collect())
-}
-
-fn record_json(r: &StoredRecord) -> serde_json::Value {
-    serde_json::json!({
-        "seq": r.seq,
-        "event_time": r.event_time,
-        "logged_time": r.logged_time,
-        "actor": r.actor,
-        "tier": r.tier,
-        "kind": r.kind,
-        "payload": serde_json::from_str::<serde_json::Value>(&r.payload)
-            .unwrap_or_else(|_| serde_json::Value::String(r.payload.clone())),
-    })
 }
 
 fn record_line(r: &StoredRecord) -> String {

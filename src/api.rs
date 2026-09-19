@@ -167,19 +167,6 @@ impl ApiFail {
     }
 }
 
-fn record_json(row: &StoredRecord) -> Value {
-    json!({
-        "seq": row.seq,
-        "et": row.event_time,
-        "lt": row.logged_time,
-        "actor": row.actor,
-        "tier": row.tier,
-        "kind": row.kind,
-        "payload": serde_json::from_str::<Value>(&row.payload)
-            .unwrap_or(Value::String(row.payload.clone())),
-    })
-}
-
 pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     let envelope: Envelope = match serde_json::from_slice(&body) {
         Ok(e) => e,
@@ -207,11 +194,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                 last = stored.last().map(|r| r.seq).unwrap_or(0),
                 "command accepted"
             );
-            (
-                StatusCode::OK,
-                Json(json!({"records": stored.iter().map(record_json).collect::<Vec<_>>()})),
-            )
-                .into_response()
+            (StatusCode::OK, Json(json!({"records": &stored}))).into_response()
         }
         Err(e) => {
             let (status, code, detail) = ApiFail::from(e).parts();

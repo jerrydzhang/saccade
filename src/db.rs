@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
+use serde::{Deserialize, Serialize};
 
 use crate::Reject;
 use crate::events::{Command, Event};
@@ -59,8 +60,9 @@ impl std::fmt::Display for DbError {
     }
 }
 
-/// A single row of the records table
-#[derive(Debug, Clone)]
+/// A single row of the records table, and the serde shape of a record on
+/// every surface: the wire, the API response, and `--json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredRecord {
     pub seq: usize,
     pub event_time: u64,
@@ -68,7 +70,25 @@ pub struct StoredRecord {
     pub actor: String,
     pub tier: String,
     pub kind: String,
+    #[serde(with = "payload_json")]
     pub payload: String,
+}
+
+/// Payloads are stored as JSON text and travel as the JSON itself.
+mod payload_json {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(payload: &str, ser: S) -> Result<S::Ok, S::Error> {
+        match serde_json::from_str::<serde_json::Value>(payload) {
+            Ok(value) => value.serialize(ser),
+            Err(_) => payload.serialize(ser),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<String, D::Error> {
+        let value = serde_json::Value::deserialize(de)?;
+        Ok(value.to_string())
+    }
 }
 
 pub enum LoadState {

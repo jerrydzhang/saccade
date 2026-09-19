@@ -37,36 +37,9 @@ impl std::fmt::Display for ClientFail {
     }
 }
 
-/// One row as the API returns it; `payload` arrives as JSON, storage keeps
-/// the string form.
-#[derive(Deserialize)]
-struct WireRecord {
-    seq: usize,
-    et: u64,
-    lt: u64,
-    actor: String,
-    tier: String,
-    kind: String,
-    payload: serde_json::Value,
-}
-
-impl From<WireRecord> for StoredRecord {
-    fn from(r: WireRecord) -> Self {
-        StoredRecord {
-            seq: r.seq,
-            event_time: r.et,
-            logged_time: r.lt,
-            actor: r.actor,
-            tier: r.tier,
-            kind: r.kind,
-            payload: r.payload.to_string(),
-        }
-    }
-}
-
 #[derive(Deserialize)]
 struct RecordsBody {
-    records: Vec<WireRecord>,
+    records: Vec<StoredRecord>,
 }
 
 #[derive(Deserialize)]
@@ -121,7 +94,7 @@ pub fn send(
             code: "malformed_response".into(),
             detail: e.to_string(),
         })?;
-        Ok(body.records.into_iter().map(StoredRecord::from).collect())
+        Ok(body.records)
     } else {
         let body: ErrorBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
             code: "malformed_response".into(),
