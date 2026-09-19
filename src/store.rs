@@ -91,7 +91,7 @@ impl Context {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RecordId(pub usize);
 
 #[derive(Clone, Debug)]
@@ -293,6 +293,17 @@ impl World {
                 self.terminalize(id, &record);
             }
             ref event @ Event::IncarnationSettled { id } => {
+                let run = self
+                    .incarnations
+                    .get_mut(&id)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                run.state = run
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                self.terminalize(id, &record);
+            }
+            ref event @ Event::IncarnationCancelled { id } => {
                 let run = self
                     .incarnations
                     .get_mut(&id)
@@ -1277,6 +1288,58 @@ mod test {
 
         // a second prompt outcome never lands on the same run
         let refused = log.execute_system(Command::AcceptPrompt { id: run }, 23);
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+    }
+
+    #[test]
+    fn cancel_terminalizes_and_frees_at_any_tier() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("run the flaky one".into()).unwrap(),
+                addressee: Some(Addressee::Agent),
+            },
+            20,
+        )
+        .unwrap();
+        let demand = CommentId(RecordId(14));
+        log.execute_system(
+            Command::BindIncarnation {
+                task_id: TaskId(0),
+                response_target: demand,
+                trigger: RecordId(14),
+                actor: ActorName::new("pi".into()).unwrap(),
+                session: SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap(),
+            },
+            21,
+        )
+        .unwrap();
+        let run = IncarnationId(RecordId(15));
+
+        // cancel is a wish any principal may hold: agent tier lands it
+        log.execute(agent(), Command::CancelIncarnation { id: run }, 22)
+            .unwrap();
+        assert_eq!(
+            log.world().incarnations[&run].state,
+            IncarnationState::Cancelled
+        );
+        assert_eq!(log.world().tasks[0].active_incarnation, None);
+        assert_eq!(
+            log.world().comments[&demand].state,
+            CommentState::AddressedToAgent {
+                response: ResponseState::Awaiting,
+                attempt: AgentAttemptState::Spent
+            }
+        );
+
+        // the terminal run answers to nothing further
+        let refused = log.execute_system(Command::SettleIncarnation { id: run }, 23);
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        // and a second cancel is refused, not absorbed
+        let refused = log.execute(human(), Command::CancelIncarnation { id: run }, 24);
         assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
     }
 

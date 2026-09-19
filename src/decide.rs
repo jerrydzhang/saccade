@@ -17,7 +17,8 @@ fn required_tier(event: &Event) -> Authority {
         | Event::TaskReleased { .. }
         | Event::ProposalCreated { .. }
         | Event::ProposalWithdrawn { .. }
-        | Event::Commented { .. } => Authority::AnyTier,
+        | Event::Commented { .. }
+        | Event::IncarnationCancelled { .. } => Authority::AnyTier,
         Event::TaskDropped { .. }
         | Event::ProposalRejected { .. }
         | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
@@ -107,6 +108,7 @@ pub fn decide(command: Command) -> Vec<Event> {
             vec![Event::IncarnationPromptRejected { id, evidence }]
         }
         Command::SettleIncarnation { id } => vec![Event::IncarnationSettled { id }],
+        Command::CancelIncarnation { id } => vec![Event::IncarnationCancelled { id }],
         Command::MarkRecord {
             incarnation_id,
             record_id,
@@ -215,6 +217,9 @@ mod test {
                 evidence: FailureEvidence::new(FailureCode::PromptRejected, None),
             },
             Event::IncarnationSettled {
+                id: IncarnationId(RecordId(0)),
+            },
+            Event::IncarnationCancelled {
                 id: IncarnationId(RecordId(0)),
             },
             Event::RecordProducedBy {

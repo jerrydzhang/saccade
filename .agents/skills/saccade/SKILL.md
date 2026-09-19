@@ -43,6 +43,8 @@ every line you append as something a human will read in a retro.
 | `sac accept <seq>` / `sac reject <seq> --note "…"` | **human only** | ruling acts on proposals |
 | `sac withdraw <seq> --note "…"` | any tier | take your own proposal off the queue |
 | `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | how-context on a task; `#<seq>` replies to a comment |
+| `sac cancel t-N` | any tier | stops the task's active run; cancel only what you started |
+| `sac wait c-N [--timeout S]` | anonymous | block until a demand's reply lands |
 | `sac show t-N` | anonymous | the dock: state, receipt, comment thread with voices |
 | `sac proposals` | anonymous | the ruling queue; `stale` marks acts gone illegal |
 | `sac list` / `sac list --json` | anonymous | reads need no identity |

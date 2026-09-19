@@ -75,6 +75,12 @@ pub enum Event {
     IncarnationSettled {
         id: IncarnationId,
     },
+    /// A wish any principal may hold: stop this run. The only
+    /// incarnation event with no System gate — the event is the kill
+    /// request, the server reacts to it.
+    IncarnationCancelled {
+        id: IncarnationId,
+    },
     RecordProducedBy {
         record_id: RecordId,
         incarnation_id: IncarnationId,
@@ -157,6 +163,9 @@ pub enum Command {
         evidence: FailureEvidence,
     },
     SettleIncarnation {
+        id: IncarnationId,
+    },
+    CancelIncarnation {
         id: IncarnationId,
     },
     MarkRecord {

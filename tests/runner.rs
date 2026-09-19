@@ -12,7 +12,7 @@ use saccade::objects::comment::AgentAttemptState;
 use saccade::objects::comment::CommentState;
 use saccade::objects::incarnation::IncarnationState;
 use saccade::runner::{PreparedRun, RunnerFail, close, pointer_prompt, prepare, wait};
-use saccade::supervisor::{self, RunnerConfig, SessionDriver};
+use saccade::supervisor::{self, LiveRuns, RunnerConfig, SessionDriver};
 use saccade::types::actor::ActorName;
 use saccade::{Addressee, Command, CommentId, Context, Prose, Target, TaskId, Tier, World};
 
@@ -280,7 +280,7 @@ fn wait_reports_an_unanswered_demand_at_its_deadline() {
 /// tier, as a real executor would leave through the CLI. Each test's
 /// driver owns its db, so parallel tests never share a body.
 fn fake_session_for(db: PathBuf) -> SessionDriver {
-    Arc::new(move |_run: &PreparedRun, _prompt: &str| {
+    Arc::new(move |_run: &PreparedRun, _prompt: &str, _runs: &LiveRuns| {
         let mut conn = db::open(&db).unwrap();
         let world = world_of(&db);
         let demand = world
@@ -390,5 +390,107 @@ fn a_server_without_a_runner_writes_but_never_fires() {
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
     let _ = demand;
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+/// The session body that really sleeps: a child process this server
+/// owns, so cancel has something to kill.
+fn sleeping_session() -> SessionDriver {
+    Arc::new(move |run: &PreparedRun, _prompt: &str, runs: &LiveRuns| {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .current_dir(&run.worktree)
+            .spawn()
+            .expect("the sleeper spawns");
+        runs.register(run.incarnation, child.id());
+        let clean = child.wait().map(|s| s.success()).unwrap_or(false);
+        runs.unregister(run.incarnation);
+        Ok(clean)
+    })
+}
+
+#[test]
+fn a_cancel_kills_the_run_and_frees_the_task() {
+    let (repo, db_path, demand) = scaffold("cancel");
+    let runner = RunnerConfig {
+        repo_root: repo.clone(),
+        actor: ActorName::new("pi".into()).unwrap(),
+        driver: sleeping_session(),
+    };
+    let app = AppState::with_runner(&db_path, runner).unwrap();
+
+    supervisor::sweep(&app);
+    // wait for the run to bind and its child to register
+    let mut incarnation = None;
+    for _ in 0..100 {
+        if let Some(id) = world_of(&db_path).tasks[0].active_incarnation
+            && !app.runs().ids().is_empty()
+        {
+            incarnation = Some(id);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let incarnation = incarnation.expect("the run bound and registered");
+
+    // the cancel is an ordinary write; react is the server's reply to it
+    let stored = app
+        .execute(
+            &agent(),
+            Command::CancelIncarnation { id: incarnation },
+            None,
+        )
+        .unwrap();
+    supervisor::react(&app, &stored);
+
+    // the fold is terminal and the child died
+    let mut cancelled = false;
+    for _ in 0..100 {
+        let world = world_of(&db_path);
+        if world.tasks[0].active_incarnation.is_none() {
+            cancelled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(cancelled, "the cancel terminalized the run");
+    let world = world_of(&db_path);
+    assert_eq!(
+        world.incarnations[&incarnation].state,
+        IncarnationState::Cancelled
+    );
+    match &world.comments[&demand].state {
+        CommentState::AddressedToAgent { attempt, .. } => {
+            assert!(matches!(attempt, AgentAttemptState::Spent));
+        }
+        other => panic!("demand spent: {other:?}"),
+    }
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn boot_recovery_settles_an_orphaned_run() {
+    let (repo, db_path, demand) = scaffold("recover");
+    // an orphan: prepare bound and accepted, then the server died
+    let app = AppState::open(&db_path).unwrap();
+    let actor = ActorName::new("pi".into()).unwrap();
+    app.with_conn(|conn| prepare(conn, &repo, demand, actor))
+        .unwrap()
+        .unwrap();
+    assert!(world_of(&db_path).tasks[0].active_incarnation.is_some());
+
+    supervisor::recover(&app);
+
+    let world = world_of(&db_path);
+    assert_eq!(world.tasks[0].active_incarnation, None);
+    match &world.comments[&demand].state {
+        CommentState::AddressedToAgent { attempt, .. } => {
+            assert!(matches!(attempt, AgentAttemptState::Spent));
+        }
+        other => panic!("demand spent: {other:?}"),
+    }
+    // the settled orphan leaves its workspace for the next run's reuse
+    assert!(world.tasks[0].workspace.is_some());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }

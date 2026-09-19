@@ -27,7 +27,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 18] = [
+const KINDS: [&str; 19] = [
     "task_created",
     "task_claimed",
     "task_done",
@@ -42,6 +42,7 @@ const KINDS: [&str; 18] = [
     "incarnation_prompt_accepted",
     "incarnation_prompt_rejected",
     "incarnation_settled",
+    "incarnation_cancelled",
     "record_produced_by",
     "task_workspace_created",
     "task_worktree_created",
@@ -82,6 +83,7 @@ fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
 mod test {
     use super::*;
     use crate::objects::comment::{CommentId, Target};
+    use crate::objects::incarnation::IncarnationId;
     use crate::objects::task::TaskId;
     use crate::types::prose::Prose;
 
@@ -136,6 +138,9 @@ mod test {
                 task_id: TaskId(0),
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+            },
+            Event::IncarnationCancelled {
+                id: IncarnationId(RecordId(0)),
             },
             Event::TaskWorktreeCreated {
                 task_id: TaskId(0),

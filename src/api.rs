@@ -40,6 +40,7 @@ struct Inner {
 pub struct AppState {
     inner: Arc<Mutex<ServerState>>,
     runner: Option<supervisor::RunnerConfig>,
+    runs: supervisor::LiveRuns,
 }
 
 pub struct Snapshot {
@@ -69,6 +70,7 @@ impl AppState {
         Ok(AppState {
             inner: Arc::new(Mutex::new(state)),
             runner: None,
+            runs: supervisor::LiveRuns::default(),
         })
     }
 
@@ -83,6 +85,12 @@ impl AppState {
 
     pub fn runner_config(&self) -> Option<&supervisor::RunnerConfig> {
         self.runner.as_ref()
+    }
+
+    /// The live sessions this server owns; empty for a server that
+    /// never runs.
+    pub fn runs(&self) -> supervisor::LiveRuns {
+        self.runs.clone()
     }
 
     /// Run against the sole writer's connection under the lock; blocking
@@ -234,7 +242,8 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     match app.execute(&context, envelope.command, envelope.at) {
         Ok(stored) => {
             let fired = app.clone();
-            tokio::task::spawn_blocking(move || supervisor::sweep(&fired));
+            let landed = stored.clone();
+            tokio::task::spawn_blocking(move || supervisor::react(&fired, &landed));
             (StatusCode::OK, Json(json!({"records": &stored}))).into_response()
         }
         Err(e) => {

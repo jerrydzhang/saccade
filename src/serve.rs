@@ -17,7 +17,7 @@ use saccade::views::{
     CommentLine, ProposalView, TaskView, proposal_view, show_view, task_view, thread_view,
 };
 use saccade::{ActorName, Command, Context, Prose, RecordId, Reject, Tier, World};
-use tracing::info;
+use tracing::{info, warn};
 
 pub async fn run(
     db_path: &std::path::Path,
@@ -46,12 +46,59 @@ pub async fn run(
         .merge(saccade::api::routes())
         .fallback(get(web_get).post(web_post))
         .with_state(state.clone());
-    // the boot scan: demands that arrived while no server was watching
-    tokio::task::spawn_blocking(move || saccade::supervisor::sweep(&state));
+    // boot reconciliation before the scan: orphans close, then the
+    // demands that queued behind them fire
+    tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            saccade::supervisor::recover(&state);
+            saccade::supervisor::sweep(&state);
+        }
+    });
+    watch_signals(state.clone());
     axum::serve(listener, router)
         .await
         .expect("axum serves until killed");
     unreachable!("axum::serve returns only on shutdown")
+}
+
+/// Two-strike interrupt: the first Ctrl-C with live runs warns and
+/// keeps serving (restart-safety means abandonment is recoverable, but
+/// the operator should know what they are about to orphan); the second
+/// kills the children and exits. SIGTERM skips the courtesy.
+fn watch_signals(state: AppState) {
+    tokio::spawn(async move {
+        let runs = state.runs();
+        let mut interrupt =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .expect("SIGINT is watchable");
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM is watchable");
+        let mut armed = false;
+        loop {
+            tokio::select! {
+                _ = interrupt.recv() => {
+                    if armed || runs.is_empty() {
+                        runs.kill_all();
+                        std::process::exit(130);
+                    }
+                    let live = runs
+                        .ids()
+                        .iter()
+                        .map(|id| format!("i-{}", id.0 .0))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    warn!("active runs: {live}; interrupt again to abandon them");
+                    armed = true;
+                }
+                _ = terminate.recv() => {
+                    runs.kill_all();
+                    std::process::exit(143);
+                }
+            }
+        }
+    });
 }
 
 struct Req {
@@ -214,7 +261,8 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
     match app.execute(&context, command, None) {
         Ok(stored) => {
             let fired = app.clone();
-            tokio::task::spawn_blocking(move || saccade::supervisor::sweep(&fired));
+            let landed = stored.clone();
+            tokio::task::spawn_blocking(move || saccade::supervisor::react(&fired, &landed));
             let fragment = if anchor {
                 stored
                     .first()

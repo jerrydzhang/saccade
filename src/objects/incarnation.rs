@@ -8,7 +8,7 @@ use crate::types::actor::ActorName;
 use crate::types::pointers::SessionPointer;
 
 /// The record id of IncarnationBound is the incarnation's identity.
-#[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
 pub struct IncarnationId(pub RecordId);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -18,6 +18,7 @@ pub enum IncarnationState {
     Settled,
     /// A rejected prompt terminalizes the run: nothing accepted the work.
     Interrupted,
+    Cancelled,
 }
 
 impl IncarnationState {
@@ -35,6 +36,12 @@ impl IncarnationState {
             (IncarnationState::PromptAccepted, Event::IncarnationSettled { .. }) => {
                 Some(IncarnationState::Settled)
             }
+            // a cancel may reach a run before or after acceptance: any
+            // active run is stoppable
+            (
+                IncarnationState::Bound | IncarnationState::PromptAccepted,
+                Event::IncarnationCancelled { .. },
+            ) => Some(IncarnationState::Cancelled),
             // producing a record is legal only while accepted; the state
             // itself does not move
             (accepted @ IncarnationState::PromptAccepted, Event::RecordProducedBy { .. }) => {
@@ -61,7 +68,7 @@ impl IncarnationContext {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.state,
-            IncarnationState::Settled | IncarnationState::Interrupted
+            IncarnationState::Settled | IncarnationState::Interrupted | IncarnationState::Cancelled
         )
     }
 }
@@ -84,6 +91,7 @@ mod test {
             IncarnationState::PromptAccepted,
             IncarnationState::Settled,
             IncarnationState::Interrupted,
+            IncarnationState::Cancelled,
         ];
         let events = [
             Event::IncarnationPromptAccepted {
@@ -94,6 +102,9 @@ mod test {
                 evidence: FailureEvidence::new(FailureCode::PromptRejected, None),
             },
             Event::IncarnationSettled {
+                id: IncarnationId(RecordId(0)),
+            },
+            Event::IncarnationCancelled {
                 id: IncarnationId(RecordId(0)),
             },
             // present to show the table refuses non-lifecycle events outright
@@ -122,7 +133,11 @@ mod test {
                     ) | (
                         IncarnationState::PromptAccepted,
                         Event::RecordProducedBy { .. }
-                    )
+                    ) | (IncarnationState::Bound, Event::IncarnationCancelled { .. })
+                        | (
+                            IncarnationState::PromptAccepted,
+                            Event::IncarnationCancelled { .. }
+                        )
                 );
                 assert_eq!(
                     state.transition(event).is_some(),

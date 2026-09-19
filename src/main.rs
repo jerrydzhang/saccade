@@ -140,6 +140,8 @@ enum Cmd {
         #[arg(long, default_value = "pi")]
         executor: String,
     },
+    /// Stop a task's active run: the event is the kill request
+    Cancel { id: String },
     /// Block until a demand's reply lands, then print it
     Wait {
         /// The demand to watch (c-<n>)
@@ -346,6 +348,24 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::Wait { id, timeout } => {
             let comment = parse_comment_id(id)?;
             return saccade::runner::wait(&db_path, comment, *timeout).map_err(runner_fail);
+        }
+        Cmd::Cancel { id } => {
+            let task = parse_task_id(id)?;
+            let conn = db::open_read(&db_path).map_err(Fail::Db)?;
+            let loadout = db::load(&conn).map_err(Fail::Db)?;
+            let LoadState::Full(world) = loadout.state else {
+                return Err(Fail::Degraded(
+                    "cancel needs the world; the log will not fold".into(),
+                ));
+            };
+            let Some(incarnation) = world.tasks.get(task.0).and_then(|c| c.active_incarnation)
+            else {
+                return Err(Fail::Usage(format!(
+                    "t-{} has no active run to cancel",
+                    task.0
+                )));
+            };
+            Command::CancelIncarnation { id: incarnation }
         }
     };
 

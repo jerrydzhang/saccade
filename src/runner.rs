@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 
 use crate::db::{self, ExecuteFail};
 use crate::objects::comment::{CommentId, CommentState, ResponseState};
-use crate::objects::incarnation::IncarnationId;
+use crate::objects::incarnation::{IncarnationId, IncarnationState};
 use crate::objects::task::{TaskContext, TaskId};
 use crate::objects::workspace::WorktreeState;
 use crate::paths;
 use crate::types::actor::ActorName;
+use crate::types::failure::{FailureCode, FailureEvidence};
 use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
 use crate::{Command, Context, RecordId, World};
 use rusqlite::Connection;
@@ -129,8 +130,13 @@ pub fn prepare(
         None => {
             let base = git(repo_root, &["rev-parse", "HEAD"])?;
             if worktree.exists() {
+                let fix = format!(
+                    "git worktree remove --force {p} && git branch -D {b}",
+                    p = worktree.display(),
+                    b = branch.as_str()
+                );
                 return Err(RunnerFail::Usage(format!(
-                    "{} already exists; remove it before provisioning",
+                    "{} already exists; the record has no workspace for this task, so it is disk-only leftover. Remove it ({fix}) or reconcile the record",
                     worktree.display()
                 )));
             }
@@ -208,6 +214,8 @@ pub fn pointer_prompt(run: &PreparedRun, sac: &str) -> String {
 Read it: {sac} show t-{task}. Do the work in this directory. \
 Reply when done, at agent tier as '{actor}': \
 {sac} comment '#{demand}' '<your answer>' --actor {actor} --tier agent. \
+Let other tasks' runs settle on their own; cancel only what you started \
+({sac} cancel t-<task> stops a runaway). \
 The .agents/skills/saccade skill in this repo documents the tracker.",
         demand = run.demand.0.0,
         task = run.task.0,
@@ -215,9 +223,14 @@ The .agents/skills/saccade skill in this repo documents the tracker.",
 }
 
 /// Spawn the executor on the prompt and block until it exits. A clean
-/// exit is not a success claim; the reply's presence is.
-pub fn execute_session(run: &PreparedRun, prompt: &str) -> Result<bool, RunnerFail> {
-    let status = std::process::Command::new("pi")
+/// exit is not a success claim; the reply's presence is. The pid is
+/// registered for the run's life so cancel and shutdown can reach it.
+pub fn execute_session(
+    run: &PreparedRun,
+    prompt: &str,
+    runs: &crate::supervisor::LiveRuns,
+) -> Result<bool, RunnerFail> {
+    let mut child = std::process::Command::new("pi")
         // the prompt names the session's actor explicitly; an inherited
         // SACCADE_ACTOR would silently re-attribute the reply
         .env_remove("SACCADE_ACTOR")
@@ -230,9 +243,12 @@ pub fn execute_session(run: &PreparedRun, prompt: &str) -> Result<bool, RunnerFa
         .arg("--")
         .arg(prompt)
         .current_dir(&run.worktree)
-        .status()
+        .spawn()
         .map_err(|e| RunnerFail::Git(format!("spawning the executor failed: {e}")))?;
-    Ok(status.success())
+    runs.register(run.incarnation, child.id());
+    let clean = child.wait().map(|s| s.success());
+    runs.unregister(run.incarnation);
+    clean.map_err(|e| RunnerFail::Git(format!("waiting on the executor failed: {e}")))
 }
 
 pub fn close(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> {
@@ -354,5 +370,43 @@ pub fn wait(
             )));
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+/// Close a run the server no longer owns, against disk truth: the
+/// incarnation the world says is active is made terminal whatever its
+/// state. An accepted run settles through close's honest path; a bound
+/// run that never accepted is interrupted — the lifecycle table forbids
+/// settling it, and nothing was accepted to settle.
+pub fn close_as_found(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> {
+    let world = load_world(conn)?;
+    let Some(incarnation) = task_ctx(&world, task)?.active_incarnation else {
+        return Err(RunnerFail::Usage(format!(
+            "t-{} has no incarnation to recover",
+            task.0
+        )));
+    };
+    match world.incarnations[&incarnation].state.clone() {
+        IncarnationState::PromptAccepted => close(conn, task),
+        IncarnationState::Bound => {
+            let system = Context::system();
+            db::record(
+                conn,
+                &system,
+                Command::RejectPrompt {
+                    id: incarnation,
+                    evidence: FailureEvidence::new(
+                        FailureCode::PromptRejected,
+                        Some("recovered at boot: the run never accepted".into()),
+                    ),
+                },
+                db::now_epoch(),
+            )?;
+            Ok(format!("recovered i-{} as interrupted", incarnation.0.0))
+        }
+        terminal => Err(RunnerFail::Usage(format!(
+            "i-{} is already {terminal:?}; nothing to recover",
+            incarnation.0.0
+        ))),
     }
 }

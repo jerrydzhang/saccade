@@ -71,7 +71,9 @@ impl AgentAttemptState {
             // a terminal run frees the slot; only a rejected prompt is run-ending
             (
                 AgentAttemptState::InFlight { .. },
-                Event::IncarnationSettled { .. } | Event::IncarnationPromptRejected { .. },
+                Event::IncarnationSettled { .. }
+                | Event::IncarnationPromptRejected { .. }
+                | Event::IncarnationCancelled { .. },
             ) => Some(AgentAttemptState::Spent),
             // an answered demand's run may still be settling, and a late
             // reply answers an ended run's demand
@@ -79,7 +81,8 @@ impl AgentAttemptState {
                 spent @ AgentAttemptState::Spent,
                 Event::Commented { .. }
                 | Event::IncarnationSettled { .. }
-                | Event::IncarnationPromptRejected { .. },
+                | Event::IncarnationPromptRejected { .. }
+                | Event::IncarnationCancelled { .. },
             ) => Some(spent.clone()),
             _ => None,
         }
@@ -130,9 +133,10 @@ impl CommentState {
                 CommentState::AddressedToAgent { response, attempt },
                 Event::IncarnationBound { .. }
                 | Event::IncarnationSettled { .. }
-                // only a rejected prompt is run-ending; acceptance
-                // changes the run, never the demand
-                | Event::IncarnationPromptRejected { .. },
+                // only a rejected prompt or a cancel is run-ending;
+                // acceptance changes the run, never the demand
+                | Event::IncarnationPromptRejected { .. }
+                | Event::IncarnationCancelled { .. },
             ) => Some(CommentState::AddressedToAgent {
                 response: response.clone(),
                 attempt: attempt.transition(event, record)?,
@@ -220,6 +224,15 @@ mod tables {
         )
     }
 
+    fn cancelled() -> Record {
+        at(
+            Tier::Human,
+            Event::IncarnationCancelled {
+                id: IncarnationId(RecordId(3)),
+            },
+        )
+    }
+
     /// This test doesn't really test anything its more just a contract that at the time this test
     /// was written this is the expected behavior that shouldn't regress
     #[test]
@@ -241,6 +254,7 @@ mod tables {
             settled(),
             prompt_accepted(),
             prompt_rejected(),
+            cancelled(),
         ];
 
         for state in &states {
@@ -258,11 +272,15 @@ mod tables {
                         AgentAttemptState::InFlight { .. },
                         Event::IncarnationSettled { .. } | Event::IncarnationPromptRejected { .. },
                     ) => true,
+                    (AgentAttemptState::InFlight { .. }, Event::IncarnationCancelled { .. }) => {
+                        true
+                    }
                     (
                         AgentAttemptState::Spent,
                         Event::Commented { .. }
                         | Event::IncarnationSettled { .. }
-                        | Event::IncarnationPromptRejected { .. },
+                        | Event::IncarnationPromptRejected { .. }
+                        | Event::IncarnationCancelled { .. },
                     ) => true,
                     _ => false,
                 };
@@ -316,6 +334,7 @@ mod tables {
             settled(),
             prompt_accepted(),
             prompt_rejected(),
+            cancelled(),
         ];
 
         for state in &states {
@@ -338,7 +357,8 @@ mod tables {
                         CommentState::AddressedToAgent { attempt, .. },
                         Event::IncarnationBound { .. }
                         | Event::IncarnationSettled { .. }
-                        | Event::IncarnationPromptRejected { .. },
+                        | Event::IncarnationPromptRejected { .. }
+                        | Event::IncarnationCancelled { .. },
                     ) => attempt.transition(&record.event, record).is_some(),
                     _ => false,
                 };
