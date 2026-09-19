@@ -373,6 +373,7 @@ fn argv_carries_adversarial_titles_and_backdating() {
     let out = std::process::Command::new(bin)
         .arg("--db")
         .arg(&path)
+        .arg("--offline")
         .arg("--actor")
         .arg("assistant")
         .arg("--tier")

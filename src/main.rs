@@ -5,6 +5,7 @@ mod serve;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use saccade::World;
+use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{ProposalView, TaskView, comment_thread, proposal_view, show_view, task_view};
@@ -35,6 +36,19 @@ struct Cli {
     /// Event time override
     #[arg(long, global = true)]
     at: Option<u64>,
+
+    /// Write directly to the db, bypassing the server (break-glass)
+    #[arg(long, global = true)]
+    offline: bool,
+
+    /// Base URL of the running server for writes
+    #[arg(
+        long,
+        global = true,
+        env = "SACCADE_SERVER",
+        default_value = "http://127.0.0.1:8811"
+    )]
+    server: String,
 
     #[command(subcommand)]
     command: Cmd,
@@ -187,6 +201,7 @@ enum Fail {
     Degraded(String),
     Reject(Reject),
     Usage(String),
+    Client(client::ClientFail),
 }
 
 impl From<Reject> for Fail {
@@ -212,6 +227,7 @@ impl Fail {
             Fail::Degraded(_) => "degraded",
             Fail::Reject(r) => reject_code(r),
             Fail::Usage(_) => "usage",
+            Fail::Client(c) => c.code(),
         }
     }
 }
@@ -226,6 +242,7 @@ impl std::fmt::Display for Fail {
             ),
             Fail::Reject(r) => write!(f, "rejected: {}", reject_code(r)),
             Fail::Usage(m) => write!(f, "{m}"),
+            Fail::Client(c) => write!(f, "{c}"),
         }
     }
 }
@@ -348,9 +365,14 @@ fn run(cli: &Cli) -> Result<String, Fail> {
 
     // Identity is required only where it is recorded: mutating commands.
     let context = context_of(cli)?;
-    let now = cli.at.unwrap_or_else(db::now_epoch);
-    let mut conn = db::open(&db_path).map_err(Fail::Db)?;
-    let (stored, _) = db::record(&mut conn, &context, command, now).map_err(Fail::from)?;
+    let stored = if cli.offline {
+        let now = cli.at.unwrap_or_else(db::now_epoch);
+        let mut conn = db::open(&db_path).map_err(Fail::Db)?;
+        let (stored, _) = db::record(&mut conn, &context, command, now).map_err(Fail::from)?;
+        stored
+    } else {
+        client::send(&cli.server, &context, command, cli.at).map_err(Fail::Client)?
+    };
     Ok(render_records(cli, &stored))
 }
 

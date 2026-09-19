@@ -1,6 +1,7 @@
 //! Saccade - issue tracker (idk what makes it special yet other than it's mine)
 
 pub mod api;
+pub mod client;
 pub mod db;
 pub mod decide;
 pub mod events;

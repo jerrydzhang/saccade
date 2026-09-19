@@ -202,7 +202,7 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
         actor,
         tier: Tier::Human,
     };
-    match app.execute(&context, command) {
+    match app.execute(&context, command, None) {
         Ok(stored) => {
             let fragment = if anchor {
                 stored

@@ -216,3 +216,66 @@ async fn malformed_bodies_get_typed_envelopes() {
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
+
+/// The client is the CLI's write path: the envelope it builds lands, the
+/// records come back, and refusals arrive as their typed failure.
+#[tokio::test(flavor = "multi_thread")]
+async fn client_send_lands_and_refuses_through_the_wire() {
+    use saccade::Command;
+    use saccade::client::{self, ClientFail};
+    use saccade::store::{Context, Tier};
+    use saccade::types::actor::ActorName;
+
+    let db = scratch_db("client");
+    let base = spawn_server(&db).await;
+    let agent = Context {
+        actor: ActorName::new("saccade bot".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+
+    let stored = client::send(
+        &base,
+        &agent,
+        Command::CreateTask {
+            name: saccade::Prose::new("client smoke".into()).unwrap(),
+            parent_id: None,
+        },
+        Some(7),
+    )
+    .expect("the server accepts the envelope");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].kind, "task_created");
+    assert_eq!(stored[0].seq, 0);
+    assert_eq!(stored[0].event_time, 7);
+
+    // a refusal arrives as the typed failure, not a transport error
+    let fail = client::send(
+        &base,
+        &agent,
+        Command::AcceptProposal {
+            id: saccade::ProposalId(saccade::RecordId(0)),
+        },
+        None,
+    )
+    .unwrap_err();
+    match &fail {
+        ClientFail::Refused { code, .. } => assert_eq!(code, "human_only"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
+    // nothing answering at the url is the typed server_required failure
+    let dead = client::send(
+        "http://127.0.0.1:1",
+        &agent,
+        Command::CreateTask {
+            name: saccade::Prose::new("never lands".into()).unwrap(),
+            parent_id: None,
+        },
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(dead, ClientFail::ServerUnreachable { .. }));
+    assert_eq!(dead.code(), "server_required");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}

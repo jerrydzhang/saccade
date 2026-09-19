@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::{error, info};
 
@@ -67,13 +67,18 @@ impl AppState {
         &self,
         context: &Context,
         command: Command,
+        at: Option<u64>,
     ) -> Result<Vec<StoredRecord>, ExecuteFail> {
         let mut guard = self.0.lock().expect("the writer lock is not poisoned");
         match &mut *guard {
             ServerState::Degraded(reason, _) => Err(ExecuteFail::Degraded(reason.clone())),
             ServerState::Ready(inner) => {
-                let (stored, world) =
-                    db::record(&mut inner.conn, context, command, db::now_epoch())?;
+                let (stored, world) = db::record(
+                    &mut inner.conn,
+                    context,
+                    command,
+                    at.unwrap_or_else(db::now_epoch),
+                )?;
                 inner.world = world;
                 inner.rows.extend(stored.iter().cloned());
                 Ok(stored)
@@ -96,23 +101,26 @@ impl AppState {
     }
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum WireTier {
+pub(crate) enum WireTier {
     Human,
     Agent,
 }
 
-#[derive(Deserialize)]
-struct WireContext {
-    actor: ActorName,
-    tier: WireTier,
+#[derive(Serialize, Deserialize)]
+pub(crate) struct WireContext {
+    pub actor: ActorName,
+    pub tier: WireTier,
 }
 
-#[derive(Deserialize)]
+/// The one request shape: who is acting, what they command, and optionally
+/// when it happened — absent means now.
+#[derive(Serialize, Deserialize)]
 pub struct Envelope {
-    context: WireContext,
-    command: Command,
+    pub(crate) context: WireContext,
+    pub(crate) command: Command,
+    pub(crate) at: Option<u64>,
 }
 
 enum ApiFail {
@@ -191,7 +199,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
             WireTier::Agent => Tier::Agent,
         },
     };
-    match app.execute(&context, envelope.command) {
+    match app.execute(&context, envelope.command, envelope.at) {
         Ok(stored) => {
             info!(
                 actor = %context.actor.as_str(),
