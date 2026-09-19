@@ -60,7 +60,7 @@ fn scaffold(tag: &str) -> (PathBuf, PathBuf, CommentId) {
     let db_path = state.join("saccade.db");
     std::fs::create_dir_all(&state).unwrap();
     let mut conn = db::open(&db_path).unwrap();
-    db::execute(
+    db::record(
         &mut conn,
         &human(),
         Command::CreateTask {
@@ -70,7 +70,7 @@ fn scaffold(tag: &str) -> (PathBuf, PathBuf, CommentId) {
         1,
     )
     .unwrap();
-    db::execute(
+    db::record(
         &mut conn,
         &human(),
         Command::Comment {
@@ -124,7 +124,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
 
     // the session's reply: the agent answers from the worktree
     let mut conn = db::open(&db_path).unwrap();
-    db::execute(
+    db::record(
         &mut conn,
         &agent(),
         Command::Comment {
@@ -188,7 +188,7 @@ fn prepare_refuses_what_the_fold_would_refuse() {
 
     // a human-addressed comment is not a demand
     let mut conn = db::open(&db_path).unwrap();
-    db::execute(
+    db::record(
         &mut conn,
         &human(),
         Command::Comment {
@@ -227,7 +227,7 @@ fn prepare_refuses_what_the_fold_would_refuse() {
 
     // closing a task with no run refuses
     let mut conn = db::open(&db_path).unwrap();
-    db::execute(
+    db::record(
         &mut conn,
         &human(),
         Command::CreateTask {

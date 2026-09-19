@@ -27,8 +27,8 @@ async fn spawn_server(db_path: &std::path::Path) -> String {
     format!("http://{addr}")
 }
 
-fn post_command(base: &str, envelope: &Value) -> (u16, String) {
-    let mut r = ureq::post(&format!("{base}/api/v1/command"))
+fn post_command(base_url: &str, envelope: &Value) -> (u16, String) {
+    let mut r = ureq::post(&format!("{base_url}/api/v1/command"))
         .config()
         .http_status_as_error(false)
         .build()
@@ -37,8 +37,8 @@ fn post_command(base: &str, envelope: &Value) -> (u16, String) {
     (r.status().as_u16(), r.body_mut().read_to_string().unwrap())
 }
 
-fn post_raw(base: &str, body: &str) -> (u16, String) {
-    let mut r = ureq::post(&format!("{base}/api/v1/command"))
+fn post_raw(base_url: &str, body: &str) -> (u16, String) {
+    let mut r = ureq::post(&format!("{base_url}/api/v1/command"))
         .config()
         .http_status_as_error(false)
         .build()
@@ -59,10 +59,10 @@ fn envelope(actor: &str, tier: &str, command: Value) -> Value {
 #[tokio::test(flavor = "multi_thread")]
 async fn commands_round_trip_over_the_wire() {
     let db = scratch_db("roundtrip");
-    let base = spawn_server(&db).await;
+    let base_url = spawn_server(&db).await;
 
     let (status, body) = post_command(
-        &base,
+        &base_url,
         &envelope(
             "human person",
             "human",
@@ -79,7 +79,7 @@ async fn commands_round_trip_over_the_wire() {
 
     // the second write sees the first: the world cache refolded
     let (status, _) = post_command(
-        &base,
+        &base_url,
         &envelope("pi", "agent", json!({"claim_task": {"id": 0}})),
     );
     assert_eq!(status, 200);
@@ -90,10 +90,10 @@ async fn commands_round_trip_over_the_wire() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_tier_law_holds_through_http() {
     let db = scratch_db("tierlaw");
-    let base = spawn_server(&db).await;
+    let base_url = spawn_server(&db).await;
 
     post_command(
-        &base,
+        &base_url,
         &envelope(
             "human person",
             "human",
@@ -103,7 +103,7 @@ async fn the_tier_law_holds_through_http() {
 
     // an unclaimed task cannot be completed: the transition fires first
     let (status, body) = post_command(
-        &base,
+        &base_url,
         &envelope(
             "pi",
             "agent",
@@ -115,11 +115,11 @@ async fn the_tier_law_holds_through_http() {
 
     // the holder completes at agent tier; another agent cannot
     post_command(
-        &base,
+        &base_url,
         &envelope("pi", "agent", json!({"claim_task": {"id": 0}})),
     );
     let (status, _) = post_command(
-        &base,
+        &base_url,
         &envelope(
             "pi",
             "agent",
@@ -130,7 +130,7 @@ async fn the_tier_law_holds_through_http() {
 
     // human-only acts refuse at agent tier
     post_command(
-        &base,
+        &base_url,
         &envelope(
             "human person",
             "human",
@@ -138,11 +138,11 @@ async fn the_tier_law_holds_through_http() {
         ),
     );
     post_command(
-        &base,
+        &base_url,
         &envelope("pi", "agent", json!({"claim_task": {"id": 1}})),
     );
     let (status, body) = post_command(
-        &base,
+        &base_url,
         &envelope(
             "pi",
             "agent",
@@ -154,7 +154,7 @@ async fn the_tier_law_holds_through_http() {
 
     // another agent's claim is not yours to complete
     let (status, body) = post_command(
-        &base,
+        &base_url,
         &envelope(
             "other agent",
             "agent",
@@ -166,7 +166,7 @@ async fn the_tier_law_holds_through_http() {
 
     // system authorship is unrepresentable on the wire
     let (status, body) = post_command(
-        &base,
+        &base_url,
         &envelope("saccade", "system", json!({"claim_task": {"id": 0}})),
     );
     assert_eq!(status, 400);
@@ -174,11 +174,11 @@ async fn the_tier_law_holds_through_http() {
 
     // machinery verbs fail validation under every presentable tier
     let (status, _) = post_command(
-        &base,
+        &base_url,
         &envelope(
             "pi",
             "agent",
-            json!({"create_workspace": {"task_id": 0, "base": "abc123", "branch": "saccade/t-0"}}),
+            json!({"create_workspace": {"task_id": 0, "base_url": "abc123", "branch": "saccade/t-0"}}),
         ),
     );
     assert_eq!(status, 400);
@@ -189,15 +189,15 @@ async fn the_tier_law_holds_through_http() {
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_bodies_get_typed_envelopes() {
     let db = scratch_db("malformed");
-    let base = spawn_server(&db).await;
+    let base_url = spawn_server(&db).await;
 
-    let (status, body) = post_raw(&base, "not json at all");
+    let (status, body) = post_raw(&base_url, "not json at all");
     assert_eq!(status, 400);
     assert_eq!(json_of(&body)["error"]["code"], "malformed_request");
 
     // empty prose refuses at the boundary, not inside the fold
     let (status, body) = post_command(
-        &base,
+        &base_url,
         &envelope(
             "human person",
             "human",
@@ -209,7 +209,7 @@ async fn malformed_bodies_get_typed_envelopes() {
 
     // unknown commands are versioned vocabulary, not crashes
     let (status, _) = post_command(
-        &base,
+        &base_url,
         &envelope("pi", "agent", json!({"explode_everything": {}})),
     );
     assert_eq!(status, 400);

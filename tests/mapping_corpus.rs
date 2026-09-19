@@ -74,8 +74,8 @@ fn world_of(conn: &rusqlite::Connection) -> World {
 }
 
 fn done(conn: &mut rusqlite::Connection, id: TaskId, receipt: &str, at: u64) {
-    db::execute(conn, &importer(), Command::ClaimTask { id }, at).unwrap();
-    db::execute(
+    db::record(conn, &importer(), Command::ClaimTask { id }, at).unwrap();
+    db::record(
         conn,
         &importer(),
         Command::CompleteTask {
@@ -99,7 +99,7 @@ fn closed_with_receipt_folds_to_done() {
     let path = db_path("closed");
     let mut conn = db::open(&path).unwrap();
 
-    db::execute(
+    db::record(
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
@@ -168,7 +168,7 @@ fn duplicate_stops_at_the_gate() {
     let path = db_path("duplicate");
     let mut conn = db::open(&path).unwrap();
 
-    db::execute(
+    db::record(
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
@@ -188,7 +188,7 @@ fn duplicate_stops_at_the_gate() {
     assert_eq!(db::load(&conn).unwrap().rows.len(), 1);
 
     // the void is human-only: the encoding could not have gone further
-    let refused = db::execute(
+    let refused = db::record(
         &mut conn,
         &importer(),
         Command::DropTask {
@@ -212,7 +212,7 @@ fn dotted_child_becomes_a_parent_edge() {
     let path = db_path("dotted");
     let mut conn = db::open(&path).unwrap();
 
-    db::execute(
+    db::record(
         &mut conn,
         &beads_actor("jerry"),
         Command::CreateTask {
@@ -222,7 +222,7 @@ fn dotted_child_becomes_a_parent_edge() {
         1784860330,
     )
     .unwrap();
-    db::execute(
+    db::record(
         &mut conn,
         &importer(),
         Command::CreateTask {
@@ -274,7 +274,7 @@ fn epic_and_child_import_with_wrap_receipts() {
     let path = db_path("epic");
     let mut conn = db::open(&path).unwrap();
 
-    db::execute(
+    db::record(
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
@@ -284,7 +284,7 @@ fn epic_and_child_import_with_wrap_receipts() {
         1788531487,
     )
     .unwrap();
-    db::execute(
+    db::record(
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
@@ -337,7 +337,7 @@ fn in_progress_lands_open_for_recapture() {
     let path = db_path("live");
     let mut conn = db::open(&path).unwrap();
 
-    db::execute(
+    db::record(
         &mut conn,
         &beads_actor("assistant"),
         Command::CreateTask {
@@ -433,7 +433,7 @@ fn gate_queue_deposit_scenario() {
         "real work",
     ];
     for (i, name) in scan.iter().enumerate() {
-        db::execute(
+        db::record(
             &mut conn,
             &importer(),
             Command::CreateTask {
@@ -447,7 +447,7 @@ fn gate_queue_deposit_scenario() {
 
     // the agent proposes a drop for every corpse, evidence as the name
     for id in 0..6u64 {
-        db::execute(
+        db::record(
             &mut conn,
             &importer(),
             Command::CreateProposal {
@@ -464,7 +464,7 @@ fn gate_queue_deposit_scenario() {
     // the human rules per act: accept the five obvious (proposals born at
     // seq 7..=11), reject the disputed one (seq 12)
     for seq in 7..12usize {
-        db::execute(
+        db::record(
             &mut conn,
             &ruler,
             Command::AcceptProposal {
@@ -474,7 +474,7 @@ fn gate_queue_deposit_scenario() {
         )
         .unwrap();
     }
-    db::execute(
+    db::record(
         &mut conn,
         &ruler,
         Command::RejectProposal {

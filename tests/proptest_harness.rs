@@ -231,7 +231,7 @@ proptest! {
             // try to apply the command rejections naturally get gatekept by the pipeline and errors
             // are simply ignored; the property is that no valid-grammar command sequence panics the fold
             let _ = log.execute(ctx.clone(), cmd_for_log, 1);
-            let _ = db::execute(&mut conn, &ctx, cmd_for_db, 1);
+            let _ = db::record(&mut conn, &ctx, cmd_for_db, 1);
         }
 
         // road two: the pure fold over the recorded events

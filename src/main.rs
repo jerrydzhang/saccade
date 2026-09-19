@@ -350,7 +350,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     let context = context_of(cli)?;
     let now = cli.at.unwrap_or_else(db::now_epoch);
     let mut conn = db::open(&db_path).map_err(Fail::Db)?;
-    let stored = db::execute(&mut conn, &context, command, now).map_err(Fail::from)?;
+    let (stored, _) = db::record(&mut conn, &context, command, now).map_err(Fail::from)?;
     Ok(render_records(cli, &stored))
 }
 

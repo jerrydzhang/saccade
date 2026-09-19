@@ -17,7 +17,7 @@ use tracing::{error, info};
 
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::store::{Context, Tier, World};
-use crate::wire;
+use crate::{ActorName, wire};
 use crate::{Command, Reject};
 
 enum ServerState {
@@ -72,21 +72,10 @@ impl AppState {
         match &mut *guard {
             ServerState::Degraded(reason, _) => Err(ExecuteFail::Degraded(reason.clone())),
             ServerState::Ready(inner) => {
-                let stored = db::execute(&mut inner.conn, context, command, db::now_epoch())?;
-                let loadout = db::load(&inner.conn)?;
-                let db::LoadState::Full(world) = loadout.state else {
-                    // the accepted write no longer folds back: everything after refuses
-                    *guard = ServerState::Degraded(
-                        "the world stopped folding after a write".into(),
-                        std::mem::replace(
-                            &mut inner.conn,
-                            rusqlite::Connection::open_in_memory().expect("scratch connection"),
-                        ),
-                    );
-                    return Ok(stored);
-                };
+                let (stored, world) =
+                    db::record(&mut inner.conn, context, command, db::now_epoch())?;
                 inner.world = world;
-                inner.rows = loadout.rows;
+                inner.rows.extend(stored.iter().cloned());
                 Ok(stored)
             }
         }
@@ -109,7 +98,7 @@ impl AppState {
 
 #[derive(Deserialize)]
 struct WireContext {
-    actor: crate::ActorName,
+    actor: ActorName,
     tier: WireTier,
 }
 

@@ -533,6 +533,22 @@ impl Default for Log {
     }
 }
 
+/// Steps the world by a command, returning the new world and the records that were produced
+pub fn execute(
+    world: &World,
+    base: usize,
+    context: &Context,
+    command: Command,
+    now: u64,
+) -> Result<(World, Vec<Record>), Reject> {
+    let events = decide(command);
+    enforce_tier(context, &events)?;
+    let events = expand(world, &events)?;
+    world.stage(base, context, now, &events)
+}
+
+/// Test fixture over `execute`: the in-memory records+world pair, for
+/// contract tests that run the law with no storage layer present.
 pub struct Log {
     records: Vec<Record>,
     world: World,
@@ -546,8 +562,6 @@ impl Log {
         }
     }
 
-    /// Machinery verbs enter through the same pipeline under the fixed
-    /// system authorship: the tier comes from the role, never from input.
     pub fn execute_system(&mut self, command: Command, now: u64) -> Result<Vec<Record>, Reject> {
         self.execute(Context::system(), command, now)
     }
@@ -566,13 +580,7 @@ impl Log {
         command: Command,
         now: u64,
     ) -> Result<Vec<Record>, Reject> {
-        let events = decide(command);
-        enforce_tier(&context, &events)?;
-        let events = expand(&self.world, &events)?;
-
-        let (folded, records) = self
-            .world
-            .stage(self.records.len(), &context, now, &events)?;
+        let (folded, records) = execute(&self.world, self.records.len(), &context, command, now)?;
         self.records.extend(records.iter().cloned());
         self.world = folded;
 

@@ -4,9 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use crate::Reject;
-use crate::decide::{decide, enforce_tier, expand};
 use crate::events::{Command, Event};
-use crate::store::{Context, Record, RecordId, World};
+use crate::store::{Context, Record, RecordId, World, execute};
 use crate::types::actor::ActorName;
 use crate::wire;
 
@@ -279,12 +278,12 @@ pub struct AtomicBatch {
     pub drafts: Vec<RecordDraft>,
 }
 
-pub fn execute(
+pub fn record(
     conn: &mut Connection,
     context: &Context,
     command: Command,
     event_time: u64,
-) -> Result<Vec<StoredRecord>, ExecuteFail> {
+) -> Result<(Vec<StoredRecord>, World), ExecuteFail> {
     let txn = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let loadout = load(&txn)?;
     let world = match loadout.state {
@@ -292,20 +291,10 @@ pub fn execute(
         LoadState::Degraded(reason) => return Err(ExecuteFail::Degraded(reason)),
     };
 
-    let events = decide(command);
-    enforce_tier(context, &events)?;
-    let events = expand(&world, &events)?;
-    let drafts = events
-        .into_iter()
-        .map(|event| RecordDraft {
-            context: context.clone(),
-            event,
-        })
-        .collect();
-
-    let stored = append(&txn, &world, loadout.rows.len(), drafts, event_time)?;
+    let (world, records) = execute(&world, loadout.rows.len(), context, command, event_time)?;
+    let stored = persist(&txn, &records, event_time)?;
     txn.commit()?;
-    Ok(stored)
+    Ok((stored, world))
 }
 
 /// Fold-validated all-or-none append of a mixed-context batch; positional ids
@@ -323,38 +312,34 @@ pub fn execute_batch(
         LoadState::Degraded(reason) => return Err(ExecuteFail::Degraded(reason)),
     };
 
-    let stored = append(&txn, &world, loadout.rows.len(), batch.drafts, event_time)?;
-    txn.commit()?;
-    Ok(stored)
-}
-
-fn append(
-    txn: &Transaction,
-    world: &World,
-    base: usize,
-    drafts: Vec<RecordDraft>,
-    event_time: u64,
-) -> Result<Vec<StoredRecord>, ExecuteFail> {
-    let records: Vec<Record> = drafts
+    let records: Vec<Record> = batch
+        .drafts
         .into_iter()
         .enumerate()
         .map(|(i, draft)| Record {
-            id: RecordId(base + i),
+            id: RecordId(loadout.rows.len() + i),
             timestamp: event_time,
             context: draft.context,
             event: draft.event,
         })
         .collect();
-
-    // every record folds before any row is written
     world
         .clone()
         .fold(records.clone())
         .map_err(|err| ExecuteFail::Reject(err.reason.into()))?;
+    let stored = persist(&txn, &records, event_time)?;
+    txn.commit()?;
+    Ok(stored)
+}
 
+fn persist(
+    txn: &Transaction,
+    records: &[Record],
+    event_time: u64,
+) -> Result<Vec<StoredRecord>, ExecuteFail> {
     let logged_time = now_epoch();
     let mut stored = Vec::with_capacity(records.len());
-    for record in &records {
+    for record in records {
         let tier = wire::tier_of(&record.context.tier);
         let (kind, payload) = wire::disassemble(&record.event);
         stored.push(StoredRecord {
@@ -434,15 +419,15 @@ mod test {
     #[test]
     fn execute_then_load_round_trips_the_world() {
         let mut conn = memory_db();
-        execute(&mut conn, &agent(), create("implement foo"), 10).unwrap();
-        execute(
+        record(&mut conn, &agent(), create("implement foo"), 10).unwrap();
+        record(
             &mut conn,
             &human(),
             Command::ClaimTask { id: TaskId(0) },
             11,
         )
         .unwrap();
-        execute(
+        record(
             &mut conn,
             &human(),
             Command::CompleteTask {
@@ -453,8 +438,8 @@ mod test {
         )
         .unwrap();
 
-        execute(&mut conn, &agent(), create("duplicate corpse"), 13).unwrap();
-        execute(
+        record(&mut conn, &agent(), create("duplicate corpse"), 13).unwrap();
+        record(
             &mut conn,
             &agent(),
             Command::CreateProposal {
@@ -464,7 +449,7 @@ mod test {
             14,
         )
         .unwrap();
-        let compound = execute(
+        let (compound, _) = record(
             &mut conn,
             &human(),
             Command::AcceptProposal {
@@ -476,7 +461,7 @@ mod test {
         assert_eq!(compound.len(), 2);
 
         // the thread round-trips: root on the task, reply to the record
-        execute(
+        record(
             &mut conn,
             &agent(),
             Command::Comment {
@@ -487,7 +472,7 @@ mod test {
             30,
         )
         .unwrap();
-        execute(
+        record(
             &mut conn,
             &human(),
             Command::Comment {
@@ -525,7 +510,7 @@ mod test {
         assert_eq!(batched.len(), 3);
 
         // an agent demand runs its course: bind, accept, reply, produce, settle
-        execute(
+        record(
             &mut conn,
             &human(),
             Command::Comment {
@@ -537,7 +522,7 @@ mod test {
         )
         .unwrap();
         let system = Context::system();
-        execute(
+        record(
             &mut conn,
             &system,
             Command::BindIncarnation {
@@ -550,7 +535,7 @@ mod test {
             31,
         )
         .unwrap();
-        execute(
+        record(
             &mut conn,
             &system,
             Command::AcceptPrompt {
@@ -559,7 +544,7 @@ mod test {
             31,
         )
         .unwrap();
-        execute(
+        record(
             &mut conn,
             &agent(),
             Command::Comment {
@@ -570,7 +555,7 @@ mod test {
             31,
         )
         .unwrap();
-        execute(
+        record(
             &mut conn,
             &system,
             Command::MarkRecord {
@@ -580,7 +565,7 @@ mod test {
             31,
         )
         .unwrap();
-        execute(
+        record(
             &mut conn,
             &system,
             Command::SettleIncarnation {
@@ -591,7 +576,7 @@ mod test {
         .unwrap();
 
         // the workspace records its lineage, worktree, and checkpoints
-        execute(
+        record(
             &mut conn,
             &system,
             Command::CreateWorkspace {
@@ -602,7 +587,7 @@ mod test {
             33,
         )
         .unwrap();
-        execute(
+        record(
             &mut conn,
             &system,
             Command::CreateWorktree {
@@ -612,7 +597,7 @@ mod test {
             33,
         )
         .unwrap();
-        execute(
+        record(
             &mut conn,
             &system,
             Command::CheckpointWorkspace {
@@ -623,11 +608,25 @@ mod test {
         )
         .unwrap();
 
+        // the returned world is the one a full reload produces
+        let (_, returned) = record(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("post-fold receipt".into()).unwrap(),
+                addressee: None,
+            },
+            34,
+        )
+        .unwrap();
+
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
-        assert_eq!(loadout.rows.len(), 21);
+        assert_eq!(returned, world);
+        assert_eq!(loadout.rows.len(), 22);
         assert_eq!(loadout.rows[4].kind, "proposal_created");
         assert_eq!(loadout.rows[5].kind, "proposal_accepted");
         assert_eq!(loadout.rows[6].kind, "task_dropped");
@@ -684,15 +683,15 @@ mod test {
 
         {
             let mut conn = open(&path).expect("create the file-backed log");
-            execute(&mut conn, &agent(), create("implement foo"), 10).unwrap();
-            execute(
+            record(&mut conn, &agent(), create("implement foo"), 10).unwrap();
+            record(
                 &mut conn,
                 &human(),
                 Command::ClaimTask { id: TaskId(0) },
                 11,
             )
             .unwrap();
-            execute(
+            record(
                 &mut conn,
                 &human(),
                 Command::CompleteTask {
@@ -726,7 +725,7 @@ mod test {
     #[test]
     fn batch_failure_appends_none() {
         let mut conn = memory_db();
-        execute(&mut conn, &agent(), create("survivor"), 1).unwrap();
+        record(&mut conn, &agent(), create("survivor"), 1).unwrap();
 
         // the second draft does not fold, so nothing may land
         let batch = AtomicBatch {
@@ -755,22 +754,22 @@ mod test {
         assert_eq!(loadout.rows[0].kind, "task_created");
 
         // seq stayed dense: the refused batch consumed no positions
-        execute(&mut conn, &agent(), create("next"), 3).unwrap();
+        record(&mut conn, &agent(), create("next"), 3).unwrap();
         assert_eq!(load(&conn).unwrap().rows[1].seq, 1);
     }
 
     #[test]
     fn seq_stays_dense_across_rejections() {
         let mut conn = memory_db();
-        execute(&mut conn, &agent(), create("a"), 1).unwrap();
+        record(&mut conn, &agent(), create("a"), 1).unwrap();
 
-        let rejected = execute(&mut conn, &agent(), Command::ClaimTask { id: TaskId(9) }, 2);
+        let rejected = record(&mut conn, &agent(), Command::ClaimTask { id: TaskId(9) }, 2);
         assert!(matches!(
             rejected,
             Err(ExecuteFail::Reject(Reject::InvalidTaskId))
         ));
 
-        execute(&mut conn, &agent(), create("b"), 3).unwrap();
+        record(&mut conn, &agent(), create("b"), 3).unwrap();
         let loadout = load(&conn).unwrap();
         assert_eq!(
             loadout.rows.iter().map(|r| r.seq).collect::<Vec<_>>(),
@@ -781,7 +780,7 @@ mod test {
     #[test]
     fn unknown_kind_degrades_reads_and_blocks_writes() {
         let mut conn = memory_db();
-        execute(&mut conn, &agent(), create("a"), 1).unwrap();
+        record(&mut conn, &agent(), create("a"), 1).unwrap();
         conn.execute(
             "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
              VALUES (1, 1, 1, 'future binary', 'agent', 'task_zapped', '{}')",
@@ -801,7 +800,7 @@ mod test {
         assert_eq!(loadout.rows.len(), 2);
 
         // writes refuse
-        let refused = execute(&mut conn, &agent(), create("b"), 2);
+        let refused = record(&mut conn, &agent(), create("b"), 2);
         assert!(matches!(refused, Err(ExecuteFail::Degraded(_))));
     }
 
@@ -845,7 +844,7 @@ mod test {
     #[test]
     fn append_only_triggers_block_mutation() {
         let mut conn = memory_db();
-        execute(&mut conn, &agent(), create("a"), 1).unwrap();
+        record(&mut conn, &agent(), create("a"), 1).unwrap();
 
         assert!(
             conn.execute("UPDATE events SET actor = 'vandal'", [])

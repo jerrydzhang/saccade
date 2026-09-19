@@ -137,7 +137,7 @@ pub fn prepare(
 
     let system = Context::system();
     let now = db::now_epoch();
-    db::execute(
+    db::record(
         &mut conn,
         &system,
         Command::CreateWorkspace {
@@ -148,7 +148,7 @@ pub fn prepare(
         },
         now,
     )?;
-    db::execute(
+    db::record(
         &mut conn,
         &system,
         Command::CreateWorktree {
@@ -158,7 +158,7 @@ pub fn prepare(
         },
         now,
     )?;
-    let bound = db::execute(
+    let (bound, _) = db::record(
         &mut conn,
         &system,
         Command::BindIncarnation {
@@ -172,7 +172,7 @@ pub fn prepare(
         now,
     )?;
     let incarnation = IncarnationId(RecordId(bound[0].seq));
-    db::execute(
+    db::record(
         &mut conn,
         &system,
         Command::AcceptPrompt { id: incarnation },
@@ -253,7 +253,7 @@ pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
 
     let system = Context::system();
     let now = db::now_epoch();
-    db::execute(
+    db::record(
         &mut conn,
         &system,
         Command::CheckpointWorkspace {
@@ -263,7 +263,7 @@ pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
         now,
     )?;
     if let Some(reply) = reply {
-        db::execute(
+        db::record(
             &mut conn,
             &system,
             Command::MarkRecord {
@@ -273,7 +273,7 @@ pub fn close(db_path: &Path, task: TaskId) -> Result<String, RunnerFail> {
             now,
         )?;
     }
-    db::execute(
+    db::record(
         &mut conn,
         &system,
         Command::SettleIncarnation { id: incarnation },
