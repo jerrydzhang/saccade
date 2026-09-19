@@ -332,6 +332,8 @@ pub fn execute_batch(
     Ok(stored)
 }
 
+/// Writes records into the database, It implicitly trusts that the records fold validly, the
+/// validation check must be done before calling this function
 fn persist(
     txn: &Transaction,
     records: &[Record],

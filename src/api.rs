@@ -96,17 +96,17 @@ impl AppState {
     }
 }
 
-#[derive(Deserialize)]
-struct WireContext {
-    actor: ActorName,
-    tier: WireTier,
-}
-
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum WireTier {
     Human,
     Agent,
+}
+
+#[derive(Deserialize)]
+struct WireContext {
+    actor: ActorName,
+    tier: WireTier,
 }
 
 #[derive(Deserialize)]
