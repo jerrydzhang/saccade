@@ -492,5 +492,8 @@ fn boot_recovery_settles_an_orphaned_run() {
     }
     // the settled orphan leaves its workspace for the next run's reuse
     assert!(world.tasks[0].workspace.is_some());
+    // the spent unanswered demand is dead: no live authorization, the
+    // sweep must not see it
+    assert!(supervisor::runnable_demands(&world).is_empty());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
