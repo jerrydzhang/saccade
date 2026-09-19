@@ -4,6 +4,7 @@
 //! sit at the seam on either side of it.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use saccade::api::AppState;
 use saccade::db::{self, LoadState};
@@ -279,7 +280,7 @@ fn wait_reports_an_unanswered_demand_at_its_deadline() {
 /// tier, as a real executor would leave through the CLI. Each test's
 /// driver owns its db, so parallel tests never share a body.
 fn fake_session_for(db: PathBuf) -> SessionDriver {
-    std::sync::Arc::new(move |_run: &PreparedRun, _prompt: &str| {
+    Arc::new(move |_run: &PreparedRun, _prompt: &str| {
         let mut conn = db::open(&db).unwrap();
         let world = world_of(&db);
         let demand = world

@@ -3,7 +3,10 @@
 //! write (and at boot), every pending agent demand on a task with no
 //! active incarnation gets a session.
 
+use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::thread;
 
 use tracing::{info, warn};
 
@@ -17,12 +20,10 @@ use crate::types::actor::ActorName;
 /// What the session body is: run to completion, clean exit or not. The
 /// reply's presence is the outcome, not the exit status. Production
 /// spawns pi; tests bring their own body.
-pub type SessionDriver =
-    std::sync::Arc<dyn Fn(&PreparedRun, &str) -> Result<bool, RunnerFail> + Send + Sync>;
+pub type SessionDriver = Arc<dyn Fn(&PreparedRun, &str) -> Result<bool, RunnerFail> + Send + Sync>;
 
-/// Construction-time identity of the server's runner: where the repo is,
-/// who sessions run as, and what a session is. Absent means the server
-/// writes but never runs — the tests' shape, and the brake nobody needed.
+/// Where the repo is, who sessions run as, and what a session is. Absent
+/// means this server writes but never runs.
 #[derive(Clone)]
 pub struct RunnerConfig {
     pub repo_root: PathBuf,
@@ -35,7 +36,7 @@ impl RunnerConfig {
         RunnerConfig {
             repo_root,
             actor,
-            driver: std::sync::Arc::new(runner::execute_session),
+            driver: Arc::new(runner::execute_session),
         }
     }
 }
@@ -69,10 +70,8 @@ pub fn runnable_demands(world: &World) -> Vec<CommentId> {
     demands
 }
 
-/// Fire every runnable demand found in the server's current world. Called
-/// after each landed write and once at boot; each spawned run sweeps
-/// again when it settles, so a demand queued behind an incarnation is
-/// picked up the moment the task frees.
+/// Fire every runnable demand in the server's world — after each landed
+/// write, and once at boot.
 pub fn after_write(app: &AppState) {
     let Some(config) = app.runner_config() else {
         return;
@@ -87,7 +86,7 @@ pub fn after_write(app: &AppState) {
 }
 
 fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
-    std::thread::spawn(move || {
+    thread::spawn(move || {
         let prepared = match app.with_conn(|conn| {
             runner::prepare(conn, &config.repo_root, demand, config.actor.clone())
         }) {
@@ -104,7 +103,7 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
             "run bound"
         );
 
-        let sac = std::env::current_exe()
+        let sac = env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "sac".into());
         let prompt = runner::pointer_prompt(&prepared, &sac);
@@ -118,7 +117,12 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
                 false
             }
         };
-        let _ = clean;
+        if !clean {
+            warn!(
+                incarnation = prepared.incarnation.0.0,
+                "executor exited uncleanly; the reply's presence is the outcome"
+            );
+        }
 
         let settled = match app.with_conn(|conn| runner::close(conn, prepared.task)) {
             Ok(Ok(note)) => {
@@ -138,6 +142,7 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
             Err(_) => false,
         };
 
+        // the settle freed the task; whatever queued behind it fires now
         if settled {
             after_write(&app);
         }
