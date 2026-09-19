@@ -12,15 +12,12 @@ use std::thread;
 use tracing::{info, warn};
 
 use crate::api::AppState;
-use crate::db::StoredRecord;
-use crate::events::Event;
 use crate::objects::comment::{AgentAttemptState, CommentId, CommentState, ResponseState};
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::TaskId;
 use crate::runner::{self, PreparedRun, RunnerFail};
 use crate::store::World;
 use crate::types::actor::ActorName;
-use crate::wire;
 
 /// What the session body is: run to completion, clean exit or not. The
 /// reply's presence is the outcome, not the exit status. Production
@@ -173,32 +170,10 @@ pub fn recover(app: &AppState) {
     }
 }
 
-/// The server's reaction to records it just wrote: cancelled runs die,
-/// then the sweep fires what the new world allows.
-pub fn react(app: &AppState, records: &[StoredRecord]) {
-    for stored in records {
-        if stored.kind != "incarnation_cancelled" {
-            continue;
-        }
-        if let Ok(Event::IncarnationCancelled { id }) =
-            wire::assemble(&stored.kind, &stored.payload)
-        {
-            match app.runs().kill(id) {
-                Some(true) => info!(incarnation = id.0.0, "cancelled run killed"),
-                Some(false) => warn!(
-                    incarnation = id.0.0,
-                    "cancel landed but the kill failed; the fold is terminal, the process is not"
-                ),
-                None => {}
-            }
-        }
-    }
-    sweep(app);
-}
-
-/// Start a run for every demand the world says should be running —
-/// called after each landed write, at boot, and when a run settles. The
-/// runs are fire-and-forget threads; a write never waits on a session.
+/// The sweep reconciles reality with the record: what the record ended
+/// dies, what the record demands fires. Called after each landed write,
+/// at boot, and when a run settles. The runs are fire-and-forget
+/// threads; a write never waits on a session.
 pub fn sweep(app: &AppState) {
     let Some(config) = app.runner_config() else {
         return;
@@ -210,6 +185,27 @@ pub fn sweep(app: &AppState) {
             return;
         }
     };
+    // a live process whose incarnation the record already ended (a
+    // cancel that landed mid-session): the process dies
+    for id in app.runs().ids() {
+        if world
+            .incarnations
+            .get(&id)
+            .is_some_and(|run| run.is_terminal())
+        {
+            match app.runs().kill(id) {
+                Some(true) => info!(
+                    incarnation = id.0.0,
+                    "the record already ended this run; killed"
+                ),
+                Some(false) => warn!(
+                    incarnation = id.0.0,
+                    "the record ended this run but the kill failed; the fold is terminal, the process is not"
+                ),
+                None => {}
+            }
+        }
+    }
     for demand in runnable_demands(&world) {
         spawn_run(app.clone(), config.clone(), demand);
     }

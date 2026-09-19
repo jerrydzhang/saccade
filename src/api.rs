@@ -242,8 +242,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     match app.execute(&context, envelope.command, envelope.at) {
         Ok(stored) => {
             let fired = app.clone();
-            let landed = stored.clone();
-            tokio::task::spawn_blocking(move || supervisor::react(&fired, &landed));
+            tokio::task::spawn_blocking(move || supervisor::sweep(&fired));
             (StatusCode::OK, Json(json!({"records": &stored}))).into_response()
         }
         Err(e) => {

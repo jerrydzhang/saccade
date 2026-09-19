@@ -434,15 +434,14 @@ fn a_cancel_kills_the_run_and_frees_the_task() {
     }
     let incarnation = incarnation.expect("the run bound and registered");
 
-    // the cancel is an ordinary write; react is the server's reply to it
-    let stored = app
-        .execute(
-            &agent(),
-            Command::CancelIncarnation { id: incarnation },
-            None,
-        )
-        .unwrap();
-    supervisor::react(&app, &stored);
+    // the cancel is an ordinary write; the sweep it triggers does the kill
+    app.execute(
+        &agent(),
+        Command::CancelIncarnation { id: incarnation },
+        None,
+    )
+    .unwrap();
+    supervisor::sweep(&app);
 
     // the fold is terminal and the child died
     let mut cancelled = false;

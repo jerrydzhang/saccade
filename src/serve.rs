@@ -262,8 +262,7 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
     match app.execute(&context, command, None) {
         Ok(stored) => {
             let fired = app.clone();
-            let landed = stored.clone();
-            tokio::task::spawn_blocking(move || saccade::supervisor::react(&fired, &landed));
+            tokio::task::spawn_blocking(move || saccade::supervisor::sweep(&fired));
             let fragment = if anchor {
                 stored
                     .first()
