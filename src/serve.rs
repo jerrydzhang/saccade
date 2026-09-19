@@ -17,6 +17,7 @@ use saccade::views::{
     CommentLine, ProposalView, TaskView, proposal_view, show_view, task_view, thread_view,
 };
 use saccade::{ActorName, Command, Context, Prose, RecordId, Reject, Tier, World};
+use std::process::exit;
 use tracing::{info, warn};
 
 pub async fn run(
@@ -81,7 +82,7 @@ fn watch_signals(state: AppState) {
                 _ = interrupt.recv() => {
                     if armed || runs.is_empty() {
                         runs.kill_all();
-                        std::process::exit(130);
+                        exit(130);
                     }
                     let live = runs
                         .ids()
@@ -94,7 +95,7 @@ fn watch_signals(state: AppState) {
                 }
                 _ = terminate.recv() => {
                     runs.kill_all();
-                    std::process::exit(143);
+                    exit(143);
                 }
             }
         }

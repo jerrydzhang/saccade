@@ -28,6 +28,7 @@ enum Action {
     Accept { proposal: u8, human: bool },
     Reject { proposal: u8, human: bool },
     Withdraw { proposal: u8, human: bool },
+    Cancel { incarnation: u8, human: bool },
 }
 
 impl Action {
@@ -43,6 +44,7 @@ impl Action {
             | Action::Accept { human, .. }
             | Action::Reject { human, .. }
             | Action::Withdraw { human, .. } => *human,
+            Action::Cancel { human, .. } => *human,
             Action::Comment { human, .. } => *human,
         }
     }
@@ -68,6 +70,7 @@ impl Action {
             {
                 *proposal
             }
+            Action::Cancel { incarnation, .. } if role == "incarnation" => *incarnation,
             _ => 0,
         }
     }
@@ -88,6 +91,17 @@ fn proposal_at(world: &World, n: u8) -> ProposalId {
     let slot = n as usize % (ids.len() + 1);
     if slot == ids.len() {
         ProposalId(RecordId(usize::MAX))
+    } else {
+        *ids[slot]
+    }
+}
+
+fn incarnation_at(world: &World, n: u8) -> saccade::objects::incarnation::IncarnationId {
+    let ids: Vec<&saccade::objects::incarnation::IncarnationId> =
+        world.incarnations.keys().collect();
+    let slot = n as usize % (ids.len() + 1);
+    if slot == ids.len() {
+        saccade::objects::incarnation::IncarnationId(RecordId(usize::MAX))
     } else {
         *ids[slot]
     }
@@ -156,6 +170,9 @@ fn command_of(action: &Action, world: &World) -> Command {
             id: proposal,
             note: Prose::new("generated note".into()).unwrap(),
         },
+        Action::Cancel { .. } => Command::CancelIncarnation {
+            id: incarnation_at(world, action.number("incarnation")),
+        },
     }
 }
 
@@ -199,6 +216,7 @@ fn action_strategy() -> BoxedStrategy<Action> {
         3 => id(|proposal, human| Action::Accept { proposal, human }),
         3 => id(|proposal, human| Action::Reject { proposal, human }),
         2 => id(|proposal, human| Action::Withdraw { proposal, human }),
+        1 => id(|incarnation, human| Action::Cancel { incarnation, human }),
     ]
     .boxed()
 }

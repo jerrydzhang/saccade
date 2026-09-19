@@ -20,6 +20,7 @@ use crate::objects::task::TaskId;
 use crate::runner::{self, PreparedRun, RunnerFail};
 use crate::store::World;
 use crate::types::actor::ActorName;
+use crate::wire;
 
 /// What the session body is: run to completion, clean exit or not. The
 /// reply's presence is the outcome, not the exit status. Production
@@ -180,7 +181,7 @@ pub fn react(app: &AppState, records: &[StoredRecord]) {
             continue;
         }
         if let Ok(Event::IncarnationCancelled { id }) =
-            crate::wire::assemble(&stored.kind, &stored.payload)
+            wire::assemble(&stored.kind, &stored.payload)
         {
             match app.runs().kill(id) {
                 Some(true) => info!(incarnation = id.0.0, "cancelled run killed"),
