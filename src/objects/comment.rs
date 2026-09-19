@@ -68,7 +68,7 @@ impl AgentAttemptState {
             }
             // a reply on an in-flight demand: the slot holds until the run ends
             (AgentAttemptState::InFlight { .. }, Event::Commented { .. }) => Some(self.clone()),
-            // a terminal run frees the slot; only a rejected prompt is run-ending
+            // a terminal run frees the slot
             (
                 AgentAttemptState::InFlight { .. },
                 Event::IncarnationSettled { .. }

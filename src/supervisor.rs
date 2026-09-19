@@ -1,7 +1,5 @@
-//! The server's runner: demands fire runs, runs answer demands. The
-//! trigger is a pure function of the world a write produced — after any
-//! write (and at boot), every pending agent demand on a task with no
-//! active incarnation gets a session.
+//! The server's side of a run's whole life: when it starts, what it
+//! is, what is alive, how it ends — settle, cancel, or crash.
 
 use std::collections::HashMap;
 use std::env;
@@ -20,9 +18,7 @@ use crate::store::World;
 use crate::types::actor::ActorName;
 
 /// What the session body is: run to completion, clean exit or not. The
-/// reply's presence is the outcome, not the exit status. Production
-/// spawns pi and registers its pid; tests bring their own body and
-/// usually ignore the registry.
+/// reply's presence is the outcome, not the exit status.
 pub type SessionDriver =
     Arc<dyn Fn(&PreparedRun, &str, &LiveRuns) -> Result<bool, RunnerFail> + Send + Sync>;
 
@@ -145,8 +141,6 @@ pub fn runnable_demands(world: &World) -> Vec<CommentId> {
 /// Close every run the world says is active but this server does not
 /// own: the boot reconciliation. Settle-as-found — the worktree's
 /// actual HEAD is the truth, never a guess about a dead process.
-/// Called once at serve start, before the boot scan, so freed tasks
-/// can fire their queued demands.
 pub fn recover(app: &AppState) {
     let orphans = match app.snapshot() {
         Ok(s) => s
@@ -185,8 +179,6 @@ pub fn sweep(app: &AppState) {
             return;
         }
     };
-    // a live process whose incarnation the record already ended (a
-    // cancel that landed mid-session): the process dies
     for id in app.runs().ids() {
         if world
             .incarnations

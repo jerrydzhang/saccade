@@ -373,11 +373,10 @@ pub fn wait(
     }
 }
 
-/// Close a run the server no longer owns, against disk truth: the
-/// incarnation the world says is active is made terminal whatever its
-/// state. An accepted run settles through close's honest path; a bound
-/// run that never accepted is interrupted — the lifecycle table forbids
-/// settling it, and nothing was accepted to settle.
+/// Close a run the server no longer owns, against disk truth: an
+/// accepted run settles through close's honest path; a bound run is
+/// interrupted, because the lifecycle table forbids settling a run
+/// that never accepted.
 pub fn close_as_found(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> {
     let world = load_world(conn)?;
     let Some(incarnation) = task_ctx(&world, task)?.active_incarnation else {

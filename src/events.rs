@@ -75,9 +75,8 @@ pub enum Event {
     IncarnationSettled {
         id: IncarnationId,
     },
-    /// A wish any principal may hold: stop this run. The only
-    /// incarnation event with no System gate — the event is the kill
-    /// request, the server reacts to it.
+    /// A wish any principal may hold: stop this run. Ungated because it
+    /// asserts no machine-established fact, unlike its System siblings.
     IncarnationCancelled {
         id: IncarnationId,
     },

@@ -64,9 +64,9 @@ pub async fn run(
 }
 
 /// Two-strike interrupt: the first Ctrl-C with live runs warns and
-/// keeps serving (restart-safety means abandonment is recoverable, but
-/// the operator should know what they are about to orphan); the second
-/// kills the children and exits. SIGTERM skips the courtesy.
+/// keeps serving — the operator should know what they are about to
+/// orphan; the second kills the children and exits. SIGTERM skips the
+/// courtesy.
 fn watch_signals(state: AppState) {
     tokio::spawn(async move {
         let runs = state.runs();
