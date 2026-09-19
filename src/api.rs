@@ -234,7 +234,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     match app.execute(&context, envelope.command, envelope.at) {
         Ok(stored) => {
             let fired = app.clone();
-            tokio::task::spawn_blocking(move || supervisor::after_write(&fired));
+            tokio::task::spawn_blocking(move || supervisor::sweep(&fired));
             info!(
                 actor = %context.actor.as_str(),
                 tier = wire::tier_of(&context.tier),

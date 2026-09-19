@@ -47,7 +47,7 @@ pub async fn run(
         .fallback(get(web_get).post(web_post))
         .with_state(state.clone());
     // the boot scan: demands that arrived while no server was watching
-    tokio::task::spawn_blocking(move || saccade::supervisor::after_write(&state));
+    tokio::task::spawn_blocking(move || saccade::supervisor::sweep(&state));
     axum::serve(listener, router)
         .await
         .expect("axum serves until killed");
@@ -214,7 +214,7 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
     match app.execute(&context, command, None) {
         Ok(stored) => {
             let fired = app.clone();
-            tokio::task::spawn_blocking(move || saccade::supervisor::after_write(&fired));
+            tokio::task::spawn_blocking(move || saccade::supervisor::sweep(&fired));
             let fragment = if anchor {
                 stored
                     .first()

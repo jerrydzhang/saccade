@@ -323,7 +323,7 @@ fn a_write_that_lands_a_demand_fires_a_run_that_answers_it() {
     let app = AppState::with_runner(&db_path, runner).unwrap();
 
     // the write that lands the demand is the trigger
-    supervisor::after_write(&app);
+    supervisor::sweep(&app);
 
     let seen = wait(&db_path, demand, Some(10)).unwrap();
     assert!(seen.contains("the fake session answered"), "{seen}");
@@ -362,7 +362,7 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
     };
     let app = AppState::with_runner(&db_path, runner).unwrap();
 
-    supervisor::after_write(&app);
+    supervisor::sweep(&app);
     let seen = wait(&db_path, second, Some(10)).unwrap();
     assert!(seen.contains("the fake session answered"), "{seen}");
     // both demands spent, in order
@@ -386,7 +386,7 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
 fn a_server_without_a_runner_writes_but_never_fires() {
     let (repo, db_path, demand) = scaffold("quiet");
     let app = AppState::open(&db_path).unwrap();
-    supervisor::after_write(&app);
+    supervisor::sweep(&app);
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
     let _ = demand;

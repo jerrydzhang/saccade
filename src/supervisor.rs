@@ -70,15 +70,19 @@ pub fn runnable_demands(world: &World) -> Vec<CommentId> {
     demands
 }
 
-/// Fire every runnable demand in the server's world — after each landed
-/// write, and once at boot.
-pub fn after_write(app: &AppState) {
+/// Start a run for every demand the world says should be running —
+/// called after each landed write, at boot, and when a run settles. The
+/// runs are fire-and-forget threads; a write never waits on a session.
+pub fn sweep(app: &AppState) {
     let Some(config) = app.runner_config() else {
         return;
     };
     let world = match app.snapshot() {
         Ok(s) => s.world,
-        Err(_) => return,
+        Err(degraded) => {
+            warn!("the trigger is quiet: {}", degraded.reason);
+            return;
+        }
     };
     for demand in runnable_demands(&world) {
         spawn_run(app.clone(), config.clone(), demand);
@@ -144,7 +148,7 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
 
         // the settle freed the task; whatever queued behind it fires now
         if settled {
-            after_write(&app);
+            sweep(&app);
         }
     });
 }
