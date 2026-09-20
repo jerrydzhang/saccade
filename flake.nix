@@ -54,8 +54,12 @@
           name = "saccade";
           src = ./.;
           buildInputs = [];
-          # the suite's runner tests exercise git worktrees in the sandbox
+          # the suite's runner tests exercise git worktrees and the
+          # state root under a writable home
           nativeBuildInputs = [pkgs.git];
+          preCheck = ''
+            export HOME=$(mktemp -d)
+          '';
           cargoLock.lockFile = ./Cargo.lock;
         };
       }
