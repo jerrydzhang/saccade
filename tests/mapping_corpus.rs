@@ -363,7 +363,7 @@ fn in_progress_lands_open_for_recapture() {
 /// `--at` must reach the log as event time while logged time stays ours.
 #[test]
 fn argv_carries_adversarial_titles_and_backdating() {
-    let bin = env!("CARGO_BIN_EXE_saccade");
+    let bin = env!("CARGO_BIN_EXE_sac");
     let path = db_path("argv");
     let title = alias(
         "Project Overview page still renders the old Browse-scope chrome — cut over to the approved prototype layout",
@@ -374,17 +374,14 @@ fn argv_carries_adversarial_titles_and_backdating() {
         .arg("--db")
         .arg(&path)
         .arg("--offline")
-        .arg("--actor")
-        .arg("assistant")
-        .arg("--tier")
-        .arg("agent")
+        .env("SACCADE_ACTOR", "assistant")
         .arg("--at")
         .arg("1788452437")
         .arg("create")
         .arg("task")
         .arg(title.as_str())
         .output()
-        .expect("spawn saccade");
+        .expect("spawn sac");
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -641,4 +638,41 @@ fn a_task_lifecycle_folds_through_the_write_path() {
     assert_eq!(loadout.rows[10].seq, 10);
     assert_eq!(loadout.rows[10].event_time, 11);
     assert_eq!(loadout.rows[10].actor, "saccade bot");
+}
+
+/// Possession fixes the tier: SACCADE_ACTOR present records agent, its
+/// absence records human under the account name — the CLI has no tier
+/// argument for either side to claim with.
+#[test]
+fn tier_derives_from_possession_not_argument() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+
+    let agent_db = db_path("tier-possession-agent");
+    std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&agent_db)
+        .arg("--offline")
+        .env("SACCADE_ACTOR", "assistant")
+        .arg("create")
+        .arg("task")
+        .arg("possession agent")
+        .output()
+        .expect("spawn sac");
+    let human_db = db_path("tier-possession-human");
+    std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&human_db)
+        .arg("--offline")
+        .env_remove("SACCADE_ACTOR")
+        .arg("create")
+        .arg("task")
+        .arg("possession human")
+        .output()
+        .expect("spawn sac");
+
+    for (path, want) in [(agent_db, "agent"), (human_db, "human")] {
+        let conn = saccade::db::open_read(&path).unwrap();
+        let rows = saccade::db::load(&conn).unwrap().rows;
+        assert_eq!(rows[0].tier, want, "the tier is possessed, not asserted");
+    }
 }

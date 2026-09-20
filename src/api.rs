@@ -9,7 +9,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -258,5 +258,12 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
 }
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/v1/command", post(command))
+    Router::new()
+        .route("/api/v1/command", post(command))
+        .route("/api/v1/version", get(version))
+}
+
+/// The handshake surface: which build is serving, nothing more
+async fn version() -> Json<serde_json::Value> {
+    Json(json!({"version": env!("CARGO_PKG_VERSION")}))
 }

@@ -105,3 +105,33 @@ pub fn send(
         })
     }
 }
+
+/// The handshake's client half: warn once when this binary and the
+/// server disagree. A fetch that fails stays quiet — the send that
+/// follows reports an unreachable server without our duplication.
+pub fn handshake(url: &str) {
+    let Ok(mut response) = ureq::get(&format!("{url}/api/v1/version"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+    else {
+        return;
+    };
+    let Ok(text) = response.body_mut().read_to_string() else {
+        return;
+    };
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    let mine = env!("CARGO_PKG_VERSION");
+    if body["version"]
+        .as_str()
+        .is_some_and(|theirs| theirs != mine)
+    {
+        eprintln!(
+            "warning: server runs sac {theirs}, this binary is sac {mine}; a mismatch may refuse",
+            theirs = body["version"].as_str().unwrap_or_default()
+        );
+    }
+}

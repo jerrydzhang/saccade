@@ -155,9 +155,9 @@ Rules:
   their births, with no counter.
 - Open proposals are inert: they never block their target. Rejecting locks
   was deliberate.
-- Validation depends on tier, never actor identity. Agents never pass
-  `--tier human`; judgment acts are proposed (`sac propose drop t-N --name`),
-  not executed.
+- Validation depends on tier, never actor identity. The CLI has no tier
+  argument: `SACCADE_ACTOR` presence is agent tier, its absence human.
+  Judgment acts are proposed (`sac propose drop t-N --name`), not executed.
 
 ## Edit mechanics (scar tissue)
 

@@ -212,8 +212,8 @@ pub fn pointer_prompt(run: &PreparedRun, sac: &str) -> String {
     format!(
         "Serve tracked demand c-{demand} on task t-{task} of this repository; you are working in its prepared worktree. \
 Read it: {sac} show t-{task}. Do the work in this directory. \
-Reply when done, at agent tier as '{actor}': \
-{sac} comment '#{demand}' '<your answer>' --actor {actor} --tier agent. \
+Reply when done, as '{actor}': \
+{sac} comment '#{demand}' '<your answer>'. \
 Let other tasks' runs settle on their own; cancel only what you started \
 ({sac} cancel t-<task> stops a runaway). \
 The .agents/skills/saccade skill in this repo documents the tracker.",
@@ -231,9 +231,10 @@ pub fn execute_session(
     runs: &crate::supervisor::LiveRuns,
 ) -> Result<bool, RunnerFail> {
     let mut child = std::process::Command::new("pi")
-        // the prompt names the session's actor explicitly; an inherited
-        // SACCADE_ACTOR would silently re-attribute the reply
+        // the run's actor is machine-established: the parent's env does
+        // not pass through, only the actor the bind named
         .env_remove("SACCADE_ACTOR")
+        .env("SACCADE_ACTOR", run.actor.as_str())
         .env_remove("SACCADE_TIER")
         .env_remove("SACCADE_SERVER")
         .arg("-p")

@@ -263,7 +263,6 @@ fn the_pointer_prompt_names_the_work_and_the_reply_door() {
     assert!(prompt.contains("c-1"), "{prompt}");
     assert!(prompt.contains("t-0"), "{prompt}");
     assert!(prompt.contains("/bin/sac comment '#1'"), "{prompt}");
-    assert!(prompt.contains("--tier agent"), "{prompt}");
     assert!(prompt.contains("'pi'"), "{prompt}");
     std::fs::remove_dir_all(db_path.parent().unwrap()).unwrap();
 }

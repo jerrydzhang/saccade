@@ -1,6 +1,6 @@
 ---
 name: saccade
-description: Use when running the `sac` CLI in this repo — claiming or completing tracker tasks, reading `sac list` / `sac log`, writing receipts, or any question about Saccade's event log, task states, or tiers. Carries the agent tier discipline (agents never pass --tier human; drop and release are human-only).
+description: Use when running the `sac` CLI in this repo — claiming or completing tracker tasks, reading `sac list` / `sac log`, writing receipts, or any question about Saccade's event log, task states, or tiers. Carries the identity discipline (tier is possessed via SACCADE_ACTOR, never passed; drop and release are human-only).
 globs:
   - "saccade.db*"
   - ".agents/**"
@@ -9,14 +9,20 @@ globs:
 # Saccade (`sac`) — how agents use this repo's tracker
 
 Saccade is this repo's event-sourced issue tracker. One binary, `sac`
-(`target/debug/saccade` or `cargo run --`). Every mutation appends an event
-recording who acted, at which tier, and when — the log is shared memory; treat
-every line you append as something a human will read in a retro.
+(`target/debug/sac` in a dev checkout, `sac` from PATH when installed). Every
+mutation appends an event recording who acted, at which tier, and when — the
+log is shared memory; treat every line you append as something a human will
+read in a retro.
 
 ## The rule that cannot break
 
-**You are an agent. Every mutating command you run carries `--tier agent`.**
+**Your tier is possessed, not passed: the CLI has no tier argument.**
 
+- Your harness sets `SACCADE_ACTOR`; its presence *is* agent tier. Never set,
+  unset, or override it — identity comes from the session, not from you.
+- `--actor` names at either tier and never re-tiers. Your name is what
+  `SACCADE_ACTOR` says it is; never override it — attribution is provenance,
+  and retro queries count on it being true.
 - `drop`, `release`, `accept`, and `reject` are human-only judgment acts. If you run one you get
   `rejected: human_only` and exit 1 — that is the system working as designed.
   Do not retry, do not hunt for a flag combination that works; none exists.
@@ -24,11 +30,6 @@ every line you append as something a human will read in a retro.
   first-class home: `sac propose drop t-12 --name "the evidence"`. The
   proposal carries your evidence into the world; the human rules per act.
   Never execute the judgment — propose it.
-- Never set or export `SACCADE_TIER`, never alias or wrap `sac` to change
-  your tier. The devshell deliberately leaves it unset.
-- Always pass `--actor` explicitly with your own name, even when
-  `SACCADDE_ACTOR` is set in the environment — attribution is provenance, and
-  retro queries count on it being true.
 
 ## Commands
 
@@ -50,8 +51,8 @@ every line you append as something a human will read in a retro.
 | `sac list` / `sac list --json` | anonymous | reads need no identity |
 | `sac log` / `sac log --json` | anonymous | raw events; always available |
 
-Every mutating command needs `--actor <name> --tier agent`. Reads don't.
-Add `--json` for machine-readable output, including errors.
+Mutating commands record your identity automatically (see the rule above);
+reads need none. Add `--json` for machine-readable output, including errors.
 
 ## The working loop
 
@@ -105,5 +106,6 @@ Failures exit 1 with a named variant on stderr (`--json` emits
   `stale` in the queue when the embedded act goes illegal, and re-propose
   after a rejection is free — the rejection note names the missing evidence.
 - The log is append-only and ordered by seq; timestamps are claims, not order.
-- One database per repo (`saccade.db`, gitignored; the devshell exports
-  `SACCADDE_DB`).
+- One database per repo (`saccade.db`, gitignored), resolved from the repo
+  containing the working directory; `--repo` or `SACCADE_REPO` names it when
+  working from elsewhere.

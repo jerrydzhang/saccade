@@ -15,19 +15,19 @@ use saccade::{
 };
 
 #[derive(Parser)]
-#[command(name = "sac", about = "Saccade: awesome issue tracker")]
+#[command(name = "sac", version, about = "Saccade: awesome issue tracker")]
 struct Cli {
     /// Path to the event database (defaults to the repo's state root)
     #[arg(long, global = true, env = "SACCADE_DB")]
     db: Option<PathBuf>,
 
-    /// Actor name recorded on events (Required for mutating commands)
+    /// The tracker's repo, when the working directory is not inside it
+    #[arg(long, global = true, env = "SACCADE_REPO")]
+    repo: Option<PathBuf>,
+
+    /// Actor name recorded on events (default: SACCADE_ACTOR, or the account name)
     #[arg(long, global = true, env = "SACCADE_ACTOR")]
     actor: Option<String>,
-
-    /// Tier controls the authority of the actor (Required for mutating commands)
-    #[arg(long, global = true, env = "SACCADE_TIER", value_enum)]
-    tier: Option<TierArg>,
 
     /// Machine-readable output
     #[arg(long, global = true)]
@@ -377,6 +377,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         let (stored, _) = db::record(&mut conn, &context, command, now).map_err(Fail::from)?;
         stored
     } else {
+        client::handshake(&cli.server);
         client::send(&cli.server, &context, command, cli.at).map_err(Fail::Client)?
     };
     Ok(render_records(cli, &stored))
@@ -391,12 +392,18 @@ fn runner_fail(e: saccade::runner::RunnerFail) -> Fail {
     }
 }
 
-/// The db default: explicit flag or env, else the repo's state root.
+/// The db default: explicit path, else the named repo's state root,
+/// else the repo containing the working directory.
 fn resolve_db(cli: &Cli) -> Result<PathBuf, Fail> {
     if let Some(path) = &cli.db {
         return Ok(path.clone());
     }
-    let root = saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage)?;
+    let root = match &cli.repo {
+        Some(repo) => repo
+            .canonicalize()
+            .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display())))?,
+        None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage)?,
+    };
     Ok(saccade::paths::db_at(&root))
 }
 
@@ -410,26 +417,24 @@ fn parse_comment_id(token: &str) -> Result<CommentId, Fail> {
     Ok(CommentId(RecordId(n)))
 }
 
-/// clap forbids required+global, so presence is enforced here for commands that record events.
+/// Possession fixes the tier: an agent harness sets SACCADE_ACTOR, and
+/// that presence is agent tier, unclaimable-away; its absence is human
+/// tier. --actor names at either tier and never re-tiers.
 fn context_of(cli: &Cli) -> Result<Context, Fail> {
-    let tier = cli.tier.ok_or_else(|| {
-        Fail::Usage(
-            "--tier <human|agent> (or SACCADE_TIER) is required by commands that record events"
-                .into(),
-        )
-    })?;
-    let actor = cli.actor.clone().filter(|a| !a.is_empty()).ok_or_else(|| {
-        Fail::Usage(
-            "--actor <name> (or SACCADDE_ACTOR) is required by commands that record events".into(),
-        )
-    })?;
-    let actor = ActorName::new(actor)?;
+    let tier = if std::env::var_os("SACCADE_ACTOR").is_some() {
+        Tier::Agent
+    } else {
+        Tier::Human
+    };
+    let actor = cli
+        .actor
+        .clone()
+        .filter(|a| !a.is_empty())
+        .or_else(|| std::env::var("USER").ok())
+        .unwrap_or_else(|| "human".into());
     Ok(Context {
-        actor,
-        tier: match tier {
-            TierArg::Human => Tier::Human,
-            TierArg::Agent => Tier::Agent,
-        },
+        actor: ActorName::new(actor)?,
+        tier,
     })
 }
 fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
