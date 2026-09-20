@@ -70,6 +70,11 @@ the tracker, which ages with them.
 - Breaking payload changes are allowed while this repo is the sole consumer;
   the promise that old logs always load begins at external adoption or
   painful volume, whichever comes first.
+- Versioning is 0.x semver: the minor position is breaking. A MINOR bump
+  may break log loading, the `/api/v1` wire, or CLI verbs, and demands
+  binaries move in step. PATCH covers everything else; UI surfaces and
+  internal modules are never breaking alone. 1.0.0 is the external-adoption
+  line above.
 - Rendering is descriptive, never persuasive: deterministic grouping,
   ordering, staleness, and demand projection present record facts — neutral
   local cardinality included. No unread or aggregate counts of demands,
