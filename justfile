@@ -9,11 +9,11 @@ test:
     cargo test -q
 
 # the release the dogfood serves; bump deliberately, this is the deployment pin
-SACCADE_RELEASE ?= "v0.1.0"
+SACCADE_RELEASE := env_var_or_default("SACCADE_RELEASE", "v0.1.0")
 
 # restart the dogfood server on the pinned release; the deployment lags HEAD by design
 serve:
-    @nix run "git+file://$PWD?ref=$(SACCADE_RELEASE)" -- serve \
+    @nix run "git+file://$PWD?ref={{SACCADE_RELEASE}}" -- serve \
         --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811 \
         </dev/null >>/tmp/sac-serve.log 2>&1 &
     @sleep 2

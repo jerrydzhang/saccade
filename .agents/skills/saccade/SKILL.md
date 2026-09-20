@@ -54,6 +54,18 @@ read in a retro.
 Mutating commands record your identity automatically (see the rule above);
 reads need none. Add `--json` for machine-readable output, including errors.
 
+## Read before you derive
+
+**Before you derive, read; after you settle, record.**
+
+- Search the task thread and `sac log` before deriving design, rationale,
+  or a past verdict — derive only what the record doesn't answer.
+- Current state comes from the world, never from recollection: read
+  paths and code over memory of either.
+- When the record and the code disagree, stop and name the conflict on
+  the thread — never resolve it silently.
+- A decision that lives only in your session is a decision lost.
+
 ## The working loop
 
 1. `sac list` at session start — that's the board.
