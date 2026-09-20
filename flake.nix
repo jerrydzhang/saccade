@@ -61,6 +61,7 @@
             export HOME=$(mktemp -d)
           '';
           cargoLock.lockFile = ./Cargo.lock;
+          meta.mainProgram = "sac";
         };
       }
     );
