@@ -304,7 +304,10 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
                     .map(|root| root.0)
                     .unwrap_or(n),
             };
-            if is_fetch(req) {
+            // a rehome (or a reply landing on another task's thread) must
+            // not swap the new home's section into the old page: the fetch
+            // follows the same 303 a plain form post would take
+            if is_fetch(req) && root == n {
                 match thread_fragment(app, root) {
                     Some(body) => {
                         let mut response = html(200, &body);

@@ -574,3 +574,27 @@ async fn the_console_renders_forest_and_focused_thread() {
     assert_eq!(status, 404);
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
+
+/// A rehoming compose answers a fetch with the same 303 a form post
+/// takes: swapping the new task's section into the old page would leave
+/// url, ribbon, and composer stale, so the client navigates instead.
+#[tokio::test(flavor = "multi_thread")]
+async fn compose_fetch_rehome_redirects_instead_of_swapping() {
+    let db = scratch_db("console-rehome-fetch");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "migrate floop");
+    seed_task(&state, "other work");
+
+    let (status, body, loc) = post_form(
+        &format!("{base}/compose"),
+        &[
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+        ],
+        "task=0&body=%40t-1+belongs+there&who=jerry",
+    );
+    assert_eq!(status, 303);
+    assert_eq!(loc.as_deref(), Some("/t/1#c-2"));
+    assert!(!body.contains("<section"), "no fragment rides the redirect");
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}

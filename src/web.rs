@@ -43,6 +43,11 @@ pub struct Address {
     pub target: Target,
 }
 
+/// Ribbon layout: percent kept clear at each edge, and the minimum
+/// percent between two mark chips so crowded marks stay readable.
+const PAD_PCT: f64 = 4.0;
+const MARK_GAP_PCT: f64 = 3.5;
+
 enum Tok {
     Agent,
     Target(Target),
@@ -333,16 +338,31 @@ fn ribbon_section(task: &str, marks: &[RibbonMark], now: u64) -> String {
     }
     let start = now.saturating_sub(RIBBON_WINDOW_SECS);
     let span = RIBBON_WINDOW_SECS.max(1);
+    // positions sit inside a small inset so the newest mark is not the
+    // literal edge, then packed right-to-left so no two marks overlap:
+    // a mark keeps its true position unless the newer mark's chip would
+    // cover it
+    let mut lefts = vec![0.0; marks.len()];
+    let mut next: Option<f64> = None;
+    for (i, m) in marks.iter().enumerate().rev() {
+        let raw =
+            PAD_PCT + (m.at.saturating_sub(start)) as f64 / span as f64 * (100.0 - 2.0 * PAD_PCT);
+        let left = match next {
+            Some(n) => raw.min(n - MARK_GAP_PCT),
+            None => raw.min(100.0 - PAD_PCT),
+        };
+        lefts[i] = left;
+        next = Some(left);
+    }
     s.push_str("<div class=\"rline\">");
-    for m in marks {
-        let pct = (m.at.saturating_sub(start)) as f64 / span as f64 * 100.0;
+    for (m, left) in marks.iter().zip(&lefts) {
         let kind = match m.kind {
             MarkKind::Comment => "comment",
             MarkKind::Demand => "demand",
             MarkKind::Run => "run",
         };
         s.push_str(&format!(
-            "<a class=\"mark k-{kind}\" style=\"left:{pct:.1}%\" href=\"#c-{}\" title=\"c-{} · {kind}\">c-{}</a>\n",
+            "<a class=\"mark k-{kind}\" style=\"left:{left:.1}%\" href=\"#c-{}\" title=\"c-{} · {kind}\">c-{}</a>\n",
             m.seq, m.seq, m.seq,
         ));
     }
@@ -362,7 +382,7 @@ pub fn compose_section(task: usize, form: &FormState) -> String {
         .map(|e| format!("<div class=\"formerr\">{}</div>\n", esc(e)))
         .unwrap_or_default();
     format!(
-        "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<textarea id=\"body\" name=\"body\" rows=\"3\" placeholder=\"one idea per comment\">{}</textarea>\n<div id=\"address\" class=\"address\"></div>\n{who}{error}<button type=\"submit\">post</button>\n</form>\n</section>\n",
+        "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<textarea id=\"body\" name=\"body\" rows=\"3\" placeholder=\"write\">{}</textarea>\n<div id=\"address\" class=\"address\"></div>\n{who}{error}<button type=\"submit\">post</button>\n</form>\n</section>\n",
         esc(&form.draft),
     )
 }
@@ -401,12 +421,19 @@ document.addEventListener('submit', (e) => {
   if (f.id !== 'cform') return;
   e.preventDefault();
   fetch('/compose', { method: 'POST', body: new URLSearchParams(new FormData(f)) })
-    .then(async (r) => {
-      const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    .then((r) => {
+      // a rehome answers with the 303 to the comment's new home:
+      // the section would land on a stale page, so navigate instead
+      if (r.redirected) { location.assign(r.url); return null; }
+      return r.text().then((html) => ({ r, html }));
+    })
+    .then((swap) => {
+      if (!swap) return;
+      const doc = new DOMParser().parseFromString(swap.html, 'text/html');
       const sec = doc.body.firstElementChild;
       const cur = sec && document.getElementById(sec.id);
       if (cur) cur.replaceWith(sec);
-      if (r.ok) {
+      if (swap.r.ok) {
         f.elements.body.value = '';
         document.getElementById('address').textContent = '';
       }
@@ -525,13 +552,15 @@ button.judge { border-color: #5a4a33; color: #b3905f; }
   padding: 4px 8px; margin-top: 8px;
 }
 .rline {
-  position: relative; height: 22px; margin: 10px 0 2px;
+  position: relative; height: 30px; margin: 10px 0 2px;
   border-bottom: 1px solid #211e1b;
 }
 .mark {
   position: absolute; bottom: 0; transform: translateX(-50%);
   font: 10px ui-monospace, "SF Mono", Menlo, monospace;
-  padding: 0 2px; border-radius: 2px 2px 0 0;
+  min-width: 34px; text-align: center;
+  padding: 2px 4px; background: #141210;
+  border: 1px solid #211e1b; border-radius: 3px 3px 0 0;
 }
 .k-comment { color: #57504a; }
 .k-demand { color: #b3905f; }
@@ -827,14 +856,15 @@ mod tests {
         let now = 3_210 * 3600u64;
         let f = focus_of(&world, 1, now);
         // c-5 demand at 3140h, c-6 reply at 3160h, c-7 note at 3200h;
-        // window [3138h, 3210h] holds all three, positioned by time
+        // window [3138h, 3210h] holds all three, inset from the edges
         let html = ribbon_section("t-1", &f.marks, now);
         assert!(html.contains("href=\"#c-5\""));
         assert!(html.contains("href=\"#c-7\""));
         assert!(html.contains("k-demand"));
         assert!(html.contains("k-comment"));
-        assert!(html.contains("left:2.8%"));
-        assert!(html.contains("left:86.1%"));
+        assert!(html.contains("left:6.6%"));
+        assert!(html.contains("left:32.1%"));
+        assert!(html.contains("left:83.2%"));
         assert!(!html.contains("k-run"), "no run bound in this fixture");
         // outside the window: nothing renders at all
         let late = ribbon_section(
@@ -843,6 +873,74 @@ mod tests {
             4_000 * 3600,
         );
         assert!(late.contains("no movement in 72h"));
+    }
+
+    /// Minutes-old marks all sit near the window's right edge; the inset
+    /// keeps them off it and the packing keeps each chip readable.
+    #[test]
+    fn recent_marks_stay_individually_visible() {
+        let now = 3_210 * 3600u64;
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("ship it".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                now - 300,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("three minutes ago".into()).unwrap(),
+                    addressee: None,
+                },
+            ),
+            record(
+                2,
+                now - 240,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("two minutes ago".into()).unwrap(),
+                    addressee: None,
+                },
+            ),
+            record(
+                3,
+                now - 180,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("a minute ago".into()).unwrap(),
+                    addressee: None,
+                },
+            ),
+        ])
+        .unwrap();
+        let f = focus_of(&world, 0, now);
+        let html = ribbon_section("t-0", &f.marks, now);
+        let mut lefts: Vec<f64> = html
+            .split("left:")
+            .skip(1)
+            .map(|seg| seg.split('%').next().unwrap().parse::<f64>().unwrap())
+            .collect();
+        assert_eq!(lefts.len(), 3);
+        lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for left in &lefts {
+            assert!(*left >= PAD_PCT - 0.1, "off the left edge: {left}");
+            assert!(*left <= 100.0 - PAD_PCT + 0.1, "off the right edge: {left}");
+        }
+        for pair in lefts.windows(2) {
+            assert!(
+                pair[1] - pair[0] >= MARK_GAP_PCT - 0.1,
+                "chips overlap: {lefts:?}"
+            );
+        }
     }
 
     #[test]
@@ -857,6 +955,6 @@ mod tests {
         assert!(html.contains("name=\"task\" value=\"9\""));
         assert!(html.contains("action=\"/compose\""));
         assert!(html.contains("name=\"who\""));
-        assert!(html.contains("placeholder=\"one idea per comment\""));
+        assert!(html.contains("placeholder=\"write\""));
     }
 }
