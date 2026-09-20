@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-mod serve;
-
 use clap::{Parser, Subcommand, ValueEnum};
 use saccade::World;
 use saccade::client;
@@ -340,7 +338,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 .enable_all()
                 .build()
                 .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
-            return match runtime.block_on(serve::run(&db_path, bind, *port, executor)) {
+            return match runtime.block_on(saccade::serve::run(&db_path, bind, *port, executor)) {
                 Err(e) => Err(Fail::Usage(e)),
                 Ok(infallible) => match infallible {},
             };

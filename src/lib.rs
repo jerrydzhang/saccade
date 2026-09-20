@@ -8,10 +8,12 @@ pub mod events;
 pub mod objects;
 pub mod paths;
 pub mod runner;
+pub mod serve;
 pub mod store;
 pub mod supervisor;
 pub mod types;
 pub mod views;
+pub mod web;
 pub mod wire;
 
 use serde::{Deserialize, Serialize};

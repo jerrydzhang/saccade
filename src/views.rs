@@ -11,6 +11,11 @@ use crate::objects::task::{TaskContext, TaskId, TaskState};
 use crate::store::World;
 use crate::types::prose::Prose;
 
+/// A claimed task with no record movement for this long renders adrift.
+pub const ADRIFT_AFTER_SECS: u64 = 24 * 3600;
+/// The movement ribbon carries this much history, nothing older.
+pub const RIBBON_WINDOW_SECS: u64 = 72 * 3600;
+
 pub struct TaskView {
     pub id: String,
     pub state: &'static str,
@@ -126,8 +131,47 @@ pub struct CommentLine {
     pub seq: usize,
     pub depth: usize,
     pub actor: String,
+    pub tier: String,
     pub body: String,
     pub state: Option<String>,
+}
+
+/// One conversation: a comment plus every reply hanging off it, in
+/// record order. Bounded by the reply links, never by the renderer.
+pub struct Conversation {
+    pub root: CommentLine,
+    pub replies: Vec<CommentLine>,
+}
+
+/// The focused task's thread: conversations with replies, and the
+/// unlinked annotations between them, also in record order.
+pub struct ThreadView {
+    pub conversations: Vec<Conversation>,
+    pub stream: Vec<CommentLine>,
+}
+
+fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> CommentLine {
+    let cctx = comments
+        .get(&cid)
+        .expect("apply guarantees thread members are resident");
+    let mut depth = 1;
+    let mut up = cctx.comment.target;
+    while let Target::Comment(parent) = up {
+        depth += 1;
+        up = comments
+            .get(&parent)
+            .expect("apply received a dangling comment target")
+            .comment
+            .target;
+    }
+    CommentLine {
+        seq: cid.0.0,
+        depth,
+        actor: cctx.actor.as_str().to_string(),
+        tier: format!("{:?}", cctx.tier).to_lowercase(),
+        body: cctx.comment.body.as_str().to_string(),
+        state: demand_tag(&cctx.state),
+    }
 }
 
 /// The task's thread as a view: the context's pointer index, followed.
@@ -140,28 +184,7 @@ pub fn comment_thread(
 ) -> Vec<CommentLine> {
     ctx.thread
         .iter()
-        .map(|cid| {
-            let cctx = comments
-                .get(cid)
-                .expect("apply guarantees thread members are resident");
-            let mut depth = 1;
-            let mut up = cctx.comment.target;
-            while let Target::Comment(parent) = up {
-                depth += 1;
-                up = comments
-                    .get(&parent)
-                    .expect("apply received a dangling comment target")
-                    .comment
-                    .target;
-            }
-            CommentLine {
-                seq: cid.0.0,
-                depth,
-                actor: cctx.actor.as_str().to_string(),
-                body: cctx.comment.body.as_str().to_string(),
-                state: demand_tag(&cctx.state),
-            }
-        })
+        .map(|cid| line_of(comments, *cid))
         .collect()
 }
 
@@ -236,12 +259,230 @@ fn demand_tag(state: &CommentState) -> Option<String> {
     }
 }
 
-/// Follow the world's pointers to one task's thread.
-pub fn thread_view(world: &World, id: TaskId) -> Option<Vec<CommentLine>> {
+/// Every open proposal, oldest first — the gate queue as rows.
+pub fn open_proposals(world: &World) -> Vec<ProposalView> {
+    world
+        .proposals
+        .keys()
+        .filter_map(|id| proposal_view(world, *id))
+        .filter(|v| v.state == "open")
+        .collect()
+}
+
+/// Follow the world's pointers to one task's thread: the conversation
+/// each root opened, and the annotations no one replied to.
+pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
+    let ctx = world.tasks.get(id.0)?;
+    // groups: (root line, replies) in record order; replies always come
+    // after their root, so one pass suffices
+    let mut groups: Vec<(CommentLine, Vec<CommentLine>)> = Vec::new();
+    let mut root_index: BTreeMap<CommentId, usize> = BTreeMap::new();
+    for cid in &ctx.thread {
+        let root = root_of(&world.comments, *cid);
+        if root == *cid {
+            root_index.insert(*cid, groups.len());
+            groups.push((line_of(&world.comments, *cid), Vec::new()));
+        } else {
+            let g = root_index
+                .get(&root)
+                .copied()
+                .expect("a reply's root is resident and earlier");
+            groups[g].1.push(line_of(&world.comments, *cid));
+        }
+    }
+    let mut conversations = Vec::new();
+    let mut stream = Vec::new();
+    for (root, replies) in groups {
+        if replies.is_empty() {
+            stream.push(root);
+        } else {
+            conversations.push(Conversation { root, replies });
+        }
+    }
+    Some(ThreadView {
+        conversations,
+        stream,
+    })
+}
+
+/// The chain member whose target is the task — cid itself when it is a
+/// root. Chains end at the task; the fold guarantees residency.
+fn root_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> CommentId {
+    let mut current = cid;
+    while let Target::Comment(parent) = comments[&current].comment.target {
+        current = parent;
+    }
+    current
+}
+
+/// One row of the forest: a live task and its depth in the parent tree.
+pub struct ForestRow {
+    pub task: TaskView,
+    pub depth: usize,
+}
+
+/// The live tree as navigation: open and claimed tasks, parents before
+/// children, each row carrying the open-proposal mark it already has.
+pub fn forest(world: &World) -> Vec<ForestRow> {
     world
         .tasks
-        .get(id.0)
-        .map(|ctx| comment_thread(&world.comments, ctx))
+        .iter()
+        .enumerate()
+        .filter(|(_, ctx)| matches!(ctx.task.state, TaskState::Open | TaskState::Claimed))
+        .map(|(i, ctx)| {
+            let mut depth = 0;
+            let mut up = ctx.task.parent_id;
+            while let Some(parent) = up {
+                depth += 1;
+                up = world.tasks[parent.0].task.parent_id;
+            }
+            ForestRow {
+                task: TaskView::of(
+                    TaskId(i),
+                    ctx,
+                    ctx.proposal.and_then(|p| world.proposals.get(&p)),
+                ),
+                depth,
+            }
+        })
+        .collect()
+}
+
+/// A human-addressed demand awaiting an answer.
+pub struct AskedOfYou {
+    pub comment: usize,
+    pub task: usize,
+    pub actor: String,
+}
+
+/// Every AddressedToHuman demand still awaiting, oldest first — the
+/// mirror of the supervisor's runnable-demand scan.
+pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
+    world
+        .comments
+        .iter()
+        .filter(|(_, c)| {
+            matches!(
+                c.state,
+                CommentState::AddressedToHuman {
+                    response: ResponseState::Awaiting,
+                }
+            )
+        })
+        .map(|(id, c)| AskedOfYou {
+            comment: id.0.0,
+            task: c.comment.root.0,
+            actor: c.actor.as_str().to_string(),
+        })
+        .collect()
+}
+
+/// A run in flight, as the next panel names it.
+pub struct RunView {
+    pub incarnation: usize,
+    pub task: usize,
+    pub actor: String,
+}
+
+/// A claimed task and its two ages. Adrift is the t-53 tint: no record
+/// movement for ADRIFT_AFTER_SECS.
+pub struct Candidate {
+    pub task: String,
+    pub name: String,
+    pub claim_age: u64,
+    pub last_record_age: u64,
+    pub adrift: bool,
+}
+
+/// The next panel: supervision facts only — runs in flight, demands
+/// awaiting a human, claimed tasks with their ages.
+pub fn next_panel(world: &World, now: u64) -> NextPanel {
+    let mut runs = Vec::new();
+    let mut candidates = Vec::new();
+    for (i, ctx) in world.tasks.iter().enumerate() {
+        if let Some(id) = ctx.active_incarnation {
+            let run = &world.incarnations[&id];
+            runs.push(RunView {
+                incarnation: id.0.0,
+                task: run.task_id.0,
+                actor: run.actor.as_str().to_string(),
+            });
+        }
+        if let (TaskState::Claimed, Some(claimed_at)) = (&ctx.task.state, ctx.claimed_at) {
+            let last_record_age = now.saturating_sub(ctx.last_record_at);
+            candidates.push(Candidate {
+                task: format!("t-{i}"),
+                name: ctx.task.name.as_str().to_string(),
+                claim_age: now.saturating_sub(claimed_at),
+                last_record_age,
+                adrift: last_record_age >= ADRIFT_AFTER_SECS,
+            });
+        }
+    }
+    NextPanel {
+        runs,
+        asked_of_you: asked_of_you(world),
+        candidates,
+    }
+}
+
+pub struct NextPanel {
+    pub runs: Vec<RunView>,
+    pub asked_of_you: Vec<AskedOfYou>,
+    pub candidates: Vec<Candidate>,
+}
+
+/// The kind a ribbon mark carries: a plain comment, an addressed demand
+/// (either way), or a run's birth.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MarkKind {
+    Comment,
+    Demand,
+    Run,
+}
+
+/// One position on the movement ribbon; seq is the record the mark
+/// clicks through to (a run marks the demand comment it answered).
+pub struct RibbonMark {
+    pub kind: MarkKind,
+    pub at: u64,
+    pub seq: usize,
+}
+
+/// The focused task's comment, demand, and run positions inside the
+/// 72h window ending now, oldest first.
+pub fn ribbon_marks(world: &World, id: TaskId, now: u64) -> Vec<RibbonMark> {
+    let Some(ctx) = world.tasks.get(id.0) else {
+        return Vec::new();
+    };
+    let from = now.saturating_sub(RIBBON_WINDOW_SECS);
+    let mut marks: Vec<RibbonMark> = Vec::new();
+    for cid in &ctx.thread {
+        let c = &world.comments[cid];
+        if c.born_at < from || c.born_at > now {
+            continue;
+        }
+        let kind = match c.state {
+            CommentState::Unaddressed => MarkKind::Comment,
+            _ => MarkKind::Demand,
+        };
+        marks.push(RibbonMark {
+            kind,
+            at: c.born_at,
+            seq: cid.0.0,
+        });
+    }
+    for run in world.incarnations.values() {
+        if run.task_id == id && run.born_at >= from && run.born_at <= now {
+            marks.push(RibbonMark {
+                kind: MarkKind::Run,
+                at: run.born_at,
+                seq: run.response_target.0.0,
+            });
+        }
+    }
+    marks.sort_by_key(|m| m.at);
+    marks
 }
 
 #[cfg(test)]
@@ -261,6 +502,8 @@ mod test {
                 parent_id: None,
             },
             last_updated: RecordId(0),
+            claimed_at: None,
+            last_record_at: 0,
             proposal: None,
             thread: Vec::new(),
             holder: None,
@@ -386,5 +629,255 @@ mod test {
             ]
         );
         assert_eq!(comment_thread(&world.comments, &world.tasks[1]).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod panels {
+    use super::*;
+    use crate::Addressee;
+    use crate::events::Event;
+    use crate::objects::comment::Target;
+    use crate::store::{Context, Record, RecordId, Tier, World};
+    use crate::types::actor::ActorName;
+    use crate::types::pointers::SessionPointer;
+
+    const HOUR: u64 = 3600;
+
+    fn ctx(tier: Tier) -> Context {
+        Context {
+            actor: ActorName::new(match tier {
+                Tier::Human => "jerry".into(),
+                _ => "pi".into(),
+            })
+            .unwrap(),
+            tier,
+        }
+    }
+
+    fn record(seq: usize, at: u64, tier: Tier, event: Event) -> Record {
+        Record {
+            id: RecordId(seq),
+            timestamp: at,
+            context: ctx(tier),
+            event,
+        }
+    }
+
+    fn task_at(seq: usize, at: u64, name: &str) -> Record {
+        record(
+            seq,
+            at,
+            Tier::Human,
+            Event::TaskCreated {
+                name: Prose::new(name.into()).unwrap(),
+                parent_id: None,
+            },
+        )
+    }
+
+    fn comment_at(
+        seq: usize,
+        at: u64,
+        tier: Tier,
+        target: Target,
+        to: Option<Addressee>,
+    ) -> Record {
+        record(
+            seq,
+            at,
+            tier,
+            Event::Commented {
+                target,
+                body: Prose::new("a body worth keeping".into()).unwrap(),
+                addressee: to,
+            },
+        )
+    }
+
+    /// t-0 holds: c-2 (root, the demand) <- c-3 (its reply), c-4 (an
+    /// orphan note), c-5 (a second root) <- c-6 (its reply), with c-4
+    /// born between the two conversations.
+    fn clustered() -> World {
+        World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                2,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                Some(Addressee::Agent),
+            ),
+            comment_at(
+                3,
+                3,
+                Tier::Agent,
+                Target::Comment(CommentId(RecordId(2))),
+                None,
+            ),
+            comment_at(4, 4, Tier::Human, Target::Task(TaskId(0)), None),
+            comment_at(5, 5, Tier::Human, Target::Task(TaskId(0)), None),
+            comment_at(
+                6,
+                6,
+                Tier::Agent,
+                Target::Comment(CommentId(RecordId(5))),
+                None,
+            ),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn the_thread_clusters_by_reply_links() {
+        let world = clustered();
+        let v = thread_view(&world, TaskId(0)).unwrap();
+        assert_eq!(v.conversations.len(), 2);
+        assert_eq!(v.stream.len(), 1);
+        let first = &v.conversations[0];
+        assert_eq!(first.root.seq, 2);
+        assert_eq!(first.replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [3]);
+        assert_eq!(v.stream[0].seq, 4);
+        let second = &v.conversations[1];
+        assert_eq!(second.root.seq, 5);
+        assert_eq!(
+            second.replies.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            [6]
+        );
+    }
+
+    #[test]
+    fn asked_of_you_scans_awaiting_human_demands() {
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            // agent asks the human: it shows up
+            comment_at(
+                1,
+                1,
+                Tier::Agent,
+                Target::Task(TaskId(0)),
+                Some(Addressee::Human),
+            ),
+            // an unaddressed note never asks
+            comment_at(2, 2, Tier::Human, Target::Task(TaskId(0)), None),
+        ])
+        .unwrap();
+        let asked = asked_of_you(&world);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].comment, 1);
+        assert_eq!(asked[0].task, 0);
+        assert_eq!(asked[0].actor, "pi");
+
+        // the human's reply answers it and the scan empties
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                1,
+                1,
+                Tier::Agent,
+                Target::Task(TaskId(0)),
+                Some(Addressee::Human),
+            ),
+            comment_at(2, 2, Tier::Human, Target::Task(TaskId(0)), None),
+            comment_at(
+                3,
+                3,
+                Tier::Human,
+                Target::Comment(CommentId(RecordId(1))),
+                None,
+            ),
+        ])
+        .unwrap();
+        assert!(asked_of_you(&world).is_empty());
+    }
+
+    #[test]
+    fn claimed_tasks_carry_ages_and_drift_after_a_day() {
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            record(1, 100, Tier::Human, Event::TaskClaimed { id: TaskId(0) }),
+            task_at(2, 200, "quiet work"),
+        ])
+        .unwrap();
+        let now = 100 + ADRIFT_AFTER_SECS - 1;
+        let next = next_panel(&world, now);
+        assert_eq!(next.candidates.len(), 1);
+        let c = &next.candidates[0];
+        assert_eq!(c.task, "t-0");
+        assert_eq!(c.claim_age, ADRIFT_AFTER_SECS - 1);
+        assert_eq!(c.last_record_age, ADRIFT_AFTER_SECS - 1);
+        assert!(!c.adrift);
+        // one more second of silence is adrift
+        let next = next_panel(&world, now + 1);
+        assert!(next.candidates[0].adrift);
+        // the untouched open task never becomes a candidate
+        assert_eq!(next.runs.len(), 0);
+    }
+
+    #[test]
+    fn ribbon_marks_kinds_and_window() {
+        let bind = |seq: usize, at: u64, trigger: RecordId| {
+            record(
+                seq,
+                at,
+                Tier::System,
+                Event::IncarnationBound {
+                    task_id: TaskId(0),
+                    response_target: CommentId(RecordId(2)),
+                    trigger,
+                    actor: ActorName::new("pi".into()).unwrap(),
+                    session: SessionPointer::new("/tmp/s".into()).unwrap(),
+                },
+            )
+        };
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                10 * HOUR,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                Some(Addressee::Agent),
+            ),
+            bind(3, 11 * HOUR, RecordId(2)),
+            comment_at(4, 80 * HOUR, Tier::Human, Target::Task(TaskId(0)), None),
+            comment_at(5, 90 * HOUR, Tier::Human, Target::Task(TaskId(0)), None),
+        ])
+        .unwrap();
+        let now = 100 * HOUR;
+        let marks = ribbon_marks(&world, TaskId(0), now);
+        // the 10h comment is older than 72h; 80h and 90h stay
+        assert_eq!(marks.iter().map(|m| m.seq).collect::<Vec<_>>(), [4, 5]);
+        assert!(marks.iter().all(|m| m.kind == MarkKind::Comment));
+
+        let fresh = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                10 * HOUR,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                Some(Addressee::Agent),
+            ),
+            bind(3, 11 * HOUR, RecordId(2)),
+            comment_at(
+                4,
+                12 * HOUR,
+                Tier::Agent,
+                Target::Comment(CommentId(RecordId(2))),
+                None,
+            ),
+        ])
+        .unwrap();
+        let marks = ribbon_marks(&fresh, TaskId(0), 13 * HOUR);
+        // the run marks the demand it answered, at the bind's birth time
+        assert_eq!(
+            marks.iter().map(|m| (m.seq, m.kind)).collect::<Vec<_>>(),
+            [
+                (2, MarkKind::Demand),
+                (2, MarkKind::Run),
+                (4, MarkKind::Comment),
+            ]
+        );
     }
 }

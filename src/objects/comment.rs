@@ -150,7 +150,10 @@ impl CommentState {
 pub struct CommentContext {
     pub comment: Comment,
     pub actor: ActorName,
+    pub tier: Tier,
     pub state: CommentState,
+    /// Event time of the comment's birth record
+    pub born_at: u64,
 }
 
 #[cfg(test)]

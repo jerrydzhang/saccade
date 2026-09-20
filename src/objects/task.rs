@@ -46,6 +46,10 @@ pub struct TaskContext {
     pub task: Task,
     /// Last updated record id
     pub last_updated: RecordId,
+    /// Event time of the claim now held, present only while claimed
+    pub claimed_at: Option<u64>,
+    /// Event time of the most recent record that moved this task
+    pub last_record_at: u64,
     pub proposal: Option<ProposalId>,
     pub thread: Vec<CommentId>,
     /// Holder of the current claim, present only while the task is claimed

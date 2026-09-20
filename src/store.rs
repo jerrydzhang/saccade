@@ -67,7 +67,7 @@ impl From<Reason> for Reject {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
     Human,
@@ -148,6 +148,7 @@ impl World {
             {
                 task_ctx.active_incarnation = None;
                 task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
             }
             if let Some(demand) = self.comments.get_mut(&run.response_target)
                 && let Some(next) = demand.state.transition(&record.event, record)
@@ -175,6 +176,8 @@ impl World {
                         parent_id,
                     },
                     last_updated: record.id,
+                    claimed_at: None,
+                    last_record_at: record.timestamp,
                     proposal: None,
                     thread: Vec::new(),
                     holder: None,
@@ -185,6 +188,8 @@ impl World {
             ref event @ Event::TaskClaimed { id } => {
                 let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_updated = record.id;
+                task_ctx.claimed_at = Some(record.timestamp);
+                task_ctx.last_record_at = record.timestamp;
                 task_ctx.task.state = task_ctx
                     .task
                     .state
@@ -204,6 +209,8 @@ impl World {
                     return Err(Reason::NotClaimHolder);
                 }
                 task_ctx.last_updated = record.id;
+                task_ctx.claimed_at = None;
+                task_ctx.last_record_at = record.timestamp;
                 task_ctx.holder = None;
             }
             ref event @ Event::TaskReleased { id, .. } => {
@@ -220,11 +227,14 @@ impl World {
                     return Err(Reason::NotClaimHolder);
                 }
                 task_ctx.last_updated = record.id;
+                task_ctx.claimed_at = None;
+                task_ctx.last_record_at = record.timestamp;
                 task_ctx.holder = None;
             }
             ref event @ Event::TaskDropped { id, .. } => {
                 let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
                 task_ctx.task.state = task_ctx
                     .task
                     .state
@@ -266,10 +276,12 @@ impl World {
                         session: session.clone(),
                         state: IncarnationState::Bound,
                         produced: Vec::new(),
+                        born_at: record.timestamp,
                     },
                 );
                 task_ctx.active_incarnation = Some(IncarnationId(record.id));
                 task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
             }
             ref event @ Event::IncarnationPromptAccepted { id } => {
                 let run = self
@@ -350,6 +362,7 @@ impl World {
                     worktree: WorktreeState::Absent,
                 });
                 task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
             }
             ref event @ Event::TaskWorktreeCreated { task_id, .. } => {
                 let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
@@ -362,6 +375,7 @@ impl World {
                     .transition(event)
                     .ok_or(Reason::WorktreeAlreadyPresent)?;
                 task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
             }
             Event::TaskWorkspaceCheckpointed {
                 task_id,
@@ -374,6 +388,7 @@ impl World {
                     .ok_or(Reason::WorkspaceMissing)?;
                 workspace.checkpoint = checkpoint.clone();
                 task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
             }
 
             // Proposal events
@@ -478,7 +493,9 @@ impl World {
                             root: root_task_id,
                         },
                         actor: record.context.actor.clone(),
+                        tier: record.context.tier,
                         state,
+                        born_at: record.timestamp,
                     },
                 );
 
@@ -493,11 +510,12 @@ impl World {
                     }
                 }
 
-                self.tasks
+                let task_ctx = self
+                    .tasks
                     .get_mut(root_task_id.0)
-                    .ok_or(Reason::InvalidTaskId)?
-                    .thread
-                    .push(CommentId(record.id));
+                    .ok_or(Reason::InvalidTaskId)?;
+                task_ctx.thread.push(CommentId(record.id));
+                task_ctx.last_record_at = record.timestamp;
             }
         }
 

@@ -62,6 +62,8 @@ pub struct IncarnationContext {
     pub state: IncarnationState,
     /// Agent records this run produced, in birth order.
     pub produced: Vec<RecordId>,
+    /// Event time of the bind record
+    pub born_at: u64,
 }
 
 impl IncarnationContext {
