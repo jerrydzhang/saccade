@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
-    saccade.url = "github:jerrydzhang/saccade/v0.1.0";
+    saccade.url = "github:jerrydzhang/saccade/v0.1.1";
   };
 
   outputs = {
