@@ -4,12 +4,14 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
+    saccade.url = "github:jerrydzhang/saccade/v0.1.0";
   };
 
   outputs = {
     self,
     nixpkgs,
     rust-overlay,
+    saccade,
     ...
   }: let
     inherit (nixpkgs) lib;
@@ -35,6 +37,7 @@
             (pkgs.python3.withPackages (ps: [ps.playwright]))
             prek
             just
+            saccade.packages.${system}.default
           ];
 
           shellHook = ''
