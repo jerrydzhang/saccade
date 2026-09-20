@@ -68,7 +68,7 @@
       "inputs": {
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay",
-        "saccade-release": "saccade-release"
+        "saccade": "saccade"
       }
     },
     "rust-overlay": {
@@ -107,7 +107,7 @@
         "type": "github"
       }
     },
-    "saccade-release": {
+    "saccade": {
       "inputs": {
         "nixpkgs": "nixpkgs_3",
         "rust-overlay": "rust-overlay_2"
@@ -115,16 +115,16 @@
       "locked": {
         "lastModified": 1789865803,
         "narHash": "sha256-v5THKqqHgZQ2pQYl4XnkzsoNWKKDifWFWKMu0H1FIxY=",
-        "ref": "v0.1.0",
+        "owner": "jerrydzhang",
+        "repo": "saccade",
         "rev": "2e233e78de345335548aeac90a16d5e2811a958b",
-        "revCount": 72,
-        "type": "git",
-        "url": "file:./."
+        "type": "github"
       },
       "original": {
+        "owner": "jerrydzhang",
         "ref": "v0.1.0",
-        "type": "git",
-        "url": "file:./."
+        "repo": "saccade",
+        "type": "github"
       }
     }
   },
