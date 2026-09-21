@@ -551,7 +551,10 @@ async fn compose_fetch_swaps_the_thread_section() {
         loc.is_none(),
         "a fetch takes the fragment, never a redirect"
     );
-    assert!(body.starts_with("<section id=\"thread\">"));
+    assert!(
+        body.starts_with("<section id=\"thread\""),
+        "the fragment is the thread section, attributes may follow"
+    );
     assert!(body.contains("build it"));
     // the comment landed once
     assert_eq!(world_of(&state).comments.len(), 1);

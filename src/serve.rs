@@ -271,7 +271,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
             // not swap the new home's section into the old page: the fetch
             // follows the same 303 a plain form post would take
             if is_fetch(req) && root == n {
-                match thread_fragment(app, root) {
+                match thread_fragment(app, root, seq) {
                     Some(body) => {
                         let mut response = html(200, &body);
                         if let Some(name) = first_claim
@@ -333,11 +333,12 @@ fn rule(req: &Req, app: &AppState, n: usize, fields: &[(String, String)], seq: u
     }
 }
 
-/// The thread section alone, for the fetch swap.
-fn thread_fragment(app: &AppState, n: usize) -> Option<String> {
+/// The thread section alone, for the fetch swap, naming the comment
+/// the swap should land on.
+fn thread_fragment(app: &AppState, n: usize, landed: usize) -> Option<String> {
     let snapshot = app.snapshot().ok()?;
     let f = focus(&snapshot.world, n)?;
-    Some(web::thread_section(&f, &Default::default()))
+    Some(web::thread_section(&f, &Default::default(), Some(landed)))
 }
 
 /// The actor's identity is claimed at the act: cookie first, then the

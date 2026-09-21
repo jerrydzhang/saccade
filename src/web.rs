@@ -218,7 +218,7 @@ pub fn page(c: &Console) -> String {
             state = f.show.state.to_uppercase(),
             title = esc(&f.show.name),
             meta = esc(&head_meta(&f.show)),
-            thread = thread_section(f, &c.form),
+            thread = thread_section(f, &c.form, None),
             compose = compose_section(task_num(&f.show.id).unwrap_or(0), &c.form),
         ),
         None => "<div class=\"thead\"></div>\n<section id=\"thread\"><div class=\"nempty\">no task focused</div></section>\n".to_string(),
@@ -408,8 +408,13 @@ fn forest_section(
 
 // ---- the thread panel ----
 
-pub fn thread_section(f: &Focus, form: &FormState) -> String {
-    let mut s = String::from("<section id=\"thread\">\n");
+/// `landed` names the comment a just-accepted compose created, so the
+/// swap can meet the reader's eyes with it.
+pub fn thread_section(f: &Focus, form: &FormState, landed: Option<usize>) -> String {
+    let mut s = match landed {
+        Some(seq) => format!("<section id=\"thread\" data-focus=\"c-{seq}\">\n"),
+        None => String::from("<section id=\"thread\">\n"),
+    };
     for p in &f.proposals {
         s.push_str(&format!(
             "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<form method=\"post\" action=\"/p/{}/ruling\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"ruling\" value=\"accept\" type=\"submit\">accept</button>\n<button class=\"sendbtn\" name=\"ruling\" value=\"reject\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
@@ -562,7 +567,7 @@ pub fn compose_section(task: usize, form: &FormState) -> String {
         .map(|e| format!("<div class=\"formerr\">{}</div>\n", esc(e)))
         .unwrap_or_default();
     format!(
-        "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<div id=\"address\" class=\"addrline mono\"></div>\n<textarea id=\"body\" name=\"body\" rows=\"2\" placeholder=\"write\">{}</textarea>\n<div class=\"sendrow\">{who}{error}<button class=\"sendbtn\" type=\"submit\">send</button></div>\n</form>\n</section>\n",
+        "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<div id=\"address\" class=\"addrline mono\"></div>\n<textarea id=\"body\" name=\"body\" rows=\"2\" placeholder=\"write\">{}</textarea>\n{error}<div class=\"sendrow\">{who}<button class=\"sendbtn\" type=\"submit\">send</button></div>\n</form>\n</section>\n",
         esc(&form.draft),
         who = who_input(&form.who),
     )
@@ -627,6 +632,12 @@ document.addEventListener('submit', (e) => {
       if (swap.r.ok) {
         f.elements.body.value = '';
         document.getElementById('address').textContent = '';
+        const landed = sec && sec.dataset.focus;
+        if (landed) document.getElementById(landed)
+          ?.scrollIntoView({ block: 'center' });
+      } else {
+        document.querySelector('.formerr')
+          ?.scrollIntoView({ block: 'center' });
       }
     });
 });
@@ -804,8 +815,11 @@ input.who:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
   font: 500 12.5px "Noto Sans", system-ui, sans-serif; padding: 6px 9px; resize: vertical;
 }
 .formerr {
-  color: #c4a6a8; align-self: center;
-  font: 500 11px "JetBrains Mono", ui-monospace, monospace;
+  color: #c4a6a8; background: rgba(196,166,168,.08);
+  border-left: 2px solid #c4a6a8; border-radius: 0 3px 3px 0;
+  padding: 7px 10px; margin-top: 8px;
+  font: 500 12px "JetBrains Mono", ui-monospace, monospace;
+  overflow-wrap: anywhere;
 }
 
 /* narrow: the rail collapses behind the mode-line toggle */
@@ -1114,16 +1128,16 @@ mod tests {
     #[test]
     fn the_receipt_renders_only_when_done() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 0), &Default::default());
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), None);
         assert!(html.contains("suite green &lt;34&gt;"));
-        let open = thread_section(&focus_of(&world, 1), &Default::default());
+        let open = thread_section(&focus_of(&world, 1), &Default::default(), None);
         assert!(!open.contains("receipt"));
     }
 
     #[test]
     fn judgment_forms_render_on_the_focused_task() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1), &Default::default());
+        let html = thread_section(&focus_of(&world, 1), &Default::default(), None);
         // one form, one route, two rulings
         assert!(html.contains("action=\"/p/4/ruling\""));
         assert!(html.contains("name=\"note\""));
@@ -1142,7 +1156,7 @@ mod tests {
     #[test]
     fn the_exchange_is_a_settled_card() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1), &Default::default());
+        let html = thread_section(&focus_of(&world, 1), &Default::default(), None);
         assert!(html.contains("EXCHANGE"));
         assert!(html.contains("#5"));
         assert!(html.contains("settled"), "the run's window closed");
@@ -1378,6 +1392,37 @@ mod tests {
     }
 
     #[test]
+    fn the_swap_knows_where_the_thread_landed() {
+        let world = fixture();
+        let html = thread_section(&focus_of(&world, 1), &Default::default(), Some(8));
+        assert!(
+            html.contains("data-focus=\"c-8\""),
+            "no landed anchor: {}",
+            &html[..html.len().min(200)]
+        );
+        // a page load names nothing
+        let plain = thread_section(&focus_of(&world, 1), &Default::default(), None);
+        assert!(!plain.contains("data-focus"));
+    }
+
+    #[test]
+    fn the_compose_error_renders_legible_in_its_dock() {
+        let html = compose_section(
+            9,
+            &FormState {
+                error: Some("a comment needs words".into()),
+                ..Default::default()
+            },
+        );
+        assert!(html.contains("<div class=\"formerr\">a comment needs words</div>"));
+        // the error stands as its own block above the send row, not inside it
+        let err = html.find("formerr").unwrap();
+        let send = html.find("sendrow").unwrap();
+        assert!(err < send, "the error leads the send row");
+        assert!(!html[err..send].contains("sendbtn"));
+    }
+
+    #[test]
     fn the_compose_dock_holds_the_grammar() {
         let html = compose_section(9, &FormState::default());
         assert!(html.contains("<section id=\"compose\">"));
@@ -1404,7 +1449,7 @@ mod tests {
     #[test]
     fn the_judgment_form_carries_one_name() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1), &Default::default());
+        let html = thread_section(&focus_of(&world, 1), &Default::default(), None);
         assert_eq!(
             html.matches("name=\"who\"").count(),
             1,
@@ -1416,6 +1461,7 @@ mod tests {
                 who: "jerry".into(),
                 ..Default::default()
             },
+            None,
         );
         assert_eq!(prefilled.matches("value=\"jerry\"").count(), 1);
     }
