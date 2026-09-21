@@ -35,9 +35,10 @@ that skips it burns its reasoning on re-derivation or acts on guesses.
    entry is semantic content that survives rewording: the verdict, the why,
    the dead end, the deviation. Narration of the next ten lines is not a
    conclusion; a write that cannot name its next reader doesn't earn bytes.
-3. **Disagreement is a finding.** When the record and the code disagree,
-   stop and name the conflict on the thread — never resolve it silently.
-   Hidden staleness poisons the cache for every later reader.
+3. **Disagreement is a finding.** When the record, the skill, and the
+   code disagree — with each other or with what you observe — stop and
+   name the conflict on the thread; never resolve it silently. Hidden
+   staleness poisons the cache for every later reader.
 
 ## Workflow
 
@@ -67,15 +68,16 @@ outcome, not the goal.
 3. **Deviate openly.** If the spec cannot be followed as written, say so
    on the thread with evidence — a narrowed scope silently executed is a
    failure; a deviation announced is a finding.
-4. **Deliver**: `sac done t-N --receipt "…"`. Delivery is not closure.
-   The receipt deposits this round's honest account — outcome, evidence,
-   omissions — and the asker either accepts it as done or answers with
-   findings; iteration continues: findings on a delivered task fire
-   in-thread rounds, and a fresh demand reopens a done task. Failure
-   honestly reported is success.
-
-Do not claim a task you are executing a demand on — the demand carries
-in-flight. Claiming is for manual pickup.
+4. **Deliver**: commit your work to the task branch, `sac checkpoint
+   t-N`, claim, then `sac done t-N --receipt "…"`. The claim is the door
+   key `done` requires — it is not an in-flight signal (the demand
+   carries in-flight); take it at delivery, never before. Delivery is not
+   closure. The receipt deposits this round's honest account — outcome,
+   evidence, omissions, deviations — and the asker either accepts it as
+   done or answers with findings; iteration continues: findings on a
+   delivered task fire in-thread rounds, and a fresh demand reopens a
+   done task. Park dead ends and deviations on the thread before you
+   deliver. Failure honestly reported is success.
 
 ### Supervising (the asker)
 
