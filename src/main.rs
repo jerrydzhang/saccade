@@ -663,14 +663,13 @@ fn born_of(stored: &[StoredRecord], world: &World) -> Option<String> {
 
 fn render_records(cli: &Cli, stored: &[StoredRecord], born: Option<&str>) -> String {
     if cli.json {
+        // the wire's reply shape: records always, the born task's token
+        // only on a create
+        let mut reply = serde_json::json!({"records": stored});
         if let Some(id) = born {
-            return serde_json::to_string_pretty(&serde_json::json!({
-                "id": id,
-                "records": stored
-            }))
-            .expect("records are plain data");
+            reply["id"] = serde_json::json!(id);
         }
-        return serde_json::to_string_pretty(stored).expect("records are plain data");
+        return serde_json::to_string_pretty(&reply).expect("records are plain data");
     }
     let mut lines = Vec::with_capacity(stored.len() + 1);
     if let Some(id) = born {
