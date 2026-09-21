@@ -10,7 +10,7 @@ use crate::objects::comment::{
 };
 use crate::objects::incarnation::{IncarnationContext, IncarnationId, IncarnationState};
 use crate::objects::proposal::{Proposal, ProposalContext, ProposalId, ProposalState};
-use crate::objects::task::{Task, TaskContext, TaskState};
+use crate::objects::task::{Task, TaskContext, TaskId, TaskState};
 use crate::objects::workspace::{WorkspaceContext, WorktreeState};
 use crate::types::actor::ActorName;
 use crate::{ProposalAction, Prose, Reject, Target};
@@ -139,6 +139,12 @@ impl World {
             world = world.apply(record)?;
         }
         Ok(world)
+    }
+
+    /// The task whose birth record landed at this seq: a create reply's
+    /// reference, resolved against the post-write fold.
+    pub fn task_born_at(&self, birth: RecordId) -> Option<TaskId> {
+        self.tasks.iter().position(|t| t.birth == birth).map(TaskId)
     }
 
     /// Only valid path for world mutation
@@ -1023,6 +1029,9 @@ mod test {
         )
         .unwrap();
         assert_eq!(log.world().tasks[0].birth_actor, asker.actor);
+        // the create-reply query: births resolve, non-birth records don't
+        assert_eq!(log.world().task_born_at(RecordId(0)), Some(TaskId(0)));
+        assert_eq!(log.world().task_born_at(RecordId(2)), None);
 
         // the delivered deposit: only the holder delivers
         log.execute(worker.clone(), Command::ClaimTask { id: TaskId(0) }, 2)

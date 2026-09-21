@@ -76,13 +76,16 @@ async fn commands_round_trip_over_the_wire() {
     assert_eq!(records[0]["seq"], 0);
     assert_eq!(records[0]["actor"], "human person");
     assert_eq!(records[0]["tier"], "human");
+    // the create reply names what was born
+    assert_eq!(reply["id"], "t-0");
 
     // the second write sees the first: the world cache refolded
-    let (status, _) = post_command(
+    let (status, body) = post_command(
         &base_url,
         &envelope("pi", "agent", json!({"claim_task": {"id": 0}})),
     );
     assert_eq!(status, 200);
+    assert_eq!(json_of(&body)["id"], Value::Null);
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -233,7 +236,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         tier: Tier::Agent,
     };
 
-    let stored = client::send(
+    let reply = client::send(
         &base,
         &agent,
         Command::CreateTask {
@@ -243,10 +246,11 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         Some(7),
     )
     .expect("the server accepts the envelope");
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].kind, "task_created");
-    assert_eq!(stored[0].seq, 0);
-    assert_eq!(stored[0].event_time, 7);
+    assert_eq!(reply.records.len(), 1);
+    assert_eq!(reply.records[0].kind, "task_created");
+    assert_eq!(reply.records[0].seq, 0);
+    assert_eq!(reply.records[0].event_time, 7);
+    assert_eq!(reply.id.as_deref(), Some("t-0"));
 
     // a refusal arrives as the typed failure, not a transport error
     let fail = client::send(

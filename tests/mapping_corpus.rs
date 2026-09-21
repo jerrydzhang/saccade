@@ -418,6 +418,70 @@ fn argv_carries_adversarial_titles_and_backdating() {
     assert!(logged > 1788452437);
 }
 
+/// The create reply names what was born: the human line leads with the
+/// t-N token above the birth record, and --json carries the id field
+/// beside the records. Other verbs' replies stay the bare records.
+#[test]
+fn create_reply_names_the_born_task() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = db_path("create-reply");
+
+    let out = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&path)
+        .arg("--offline")
+        .env("SACCADE_ACTOR", "assistant")
+        .arg("create")
+        .arg("task")
+        .arg("migrate floop")
+        .output()
+        .expect("spawn sac");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut lines = stdout.lines();
+    assert_eq!(lines.next(), Some("t-0"));
+    assert!(
+        lines.next().unwrap().contains("task_created"),
+        "the birth record rides under the reference: {stdout}"
+    );
+
+    let out = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&path)
+        .arg("--offline")
+        .arg("--json")
+        .env("SACCADE_ACTOR", "assistant")
+        .arg("claim")
+        .arg("t-0")
+        .output()
+        .expect("spawn sac claim");
+    let claim: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        claim.is_array(),
+        "only create replies carry the id; claim stays the bare records"
+    );
+
+    let out = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&path)
+        .arg("--offline")
+        .arg("--json")
+        .env("SACCADE_ACTOR", "assistant")
+        .arg("create")
+        .arg("task")
+        .arg("second scratch task")
+        .output()
+        .expect("spawn sac create --json");
+    assert!(out.status.success());
+    let created: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(created["id"], "t-1");
+    assert_eq!(created["records"][0]["kind"], "task_created");
+}
+
 /// The gate-queue deposit, executable: a scan finds corpses, the agent proposes the
 /// drops (evidence enters the world, not the chat), the human rules per act,
 /// and the log proves the gate held — no agent-tier drop exists anywhere.
