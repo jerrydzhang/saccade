@@ -124,7 +124,8 @@ Placement is a contract:
   and the supervision contract: a landed demand fires a run, a queued
   demand fires when the task frees, no runner means no firing.
 - `tests/api.rs`: server, wire, and console contracts over HTTP — command
-  round-trips, the tier law through the wire, malformed bodies, client send.
+  round-trips, the tier law through the wire, malformed bodies, client send,
+  and the CLI face through a real subprocess.
 
 Rules:
 

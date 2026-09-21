@@ -1006,3 +1006,59 @@ async fn the_accept_door_carries_the_actor_name() {
     );
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn create_reply_names_the_born_task() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = scratch_db("create-reply");
+
+    let out = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&path)
+        .arg("--offline")
+        .env("SACCADE_ACTOR", "assistant")
+        .args(["create", "task", "migrate floop"])
+        .output()
+        .expect("spawn sac");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut lines = stdout.lines();
+    assert_eq!(lines.next(), Some("t-0"));
+    assert!(
+        lines.next().unwrap().contains("task_created"),
+        "the birth record rides under the reference: {stdout}"
+    );
+
+    let out = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&path)
+        .arg("--offline")
+        .arg("--json")
+        .env("SACCADE_ACTOR", "assistant")
+        .args(["claim", "t-0"])
+        .output()
+        .expect("spawn sac claim");
+    let claim: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        claim.is_array(),
+        "only create replies carry the id; claim stays the bare records"
+    );
+
+    let out = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&path)
+        .arg("--offline")
+        .arg("--json")
+        .env("SACCADE_ACTOR", "assistant")
+        .args(["create", "task", "second scratch task"])
+        .output()
+        .expect("spawn sac create --json");
+    assert!(out.status.success());
+    let created: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(created["id"], "t-1");
+    assert_eq!(created["records"][0]["kind"], "task_created");
+}
