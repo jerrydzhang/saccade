@@ -13,6 +13,18 @@ use crate::{Addressee, CommentId, RecordId, Target, TaskId};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
+/// The task state's chip color, one per state out of the #522 palette:
+/// open whispers, claimed is gold like the work it holds, done is green
+/// like a settled run, dropped is rose like the human act it was.
+fn state_color(state: &str) -> &'static str {
+    match state {
+        "claimed" => "#dac09a",
+        "done" => "#a2c4a3",
+        "dropped" => "#c4a6a8",
+        _ => "#6d6562",
+    }
+}
+
 /// Ribbon layout: percent kept clear at each edge; a chip's footprint
 /// in percent — a chip landing on a covered row drops a row down, the
 /// only deviation from time-truth the bar allows.
@@ -23,6 +35,7 @@ const ROW_HEIGHT_PX: f64 = 13.0;
 
 pub struct Console {
     pub forest: Vec<ForestRow>,
+    pub closed: Vec<ForestRow>,
     pub gate: Vec<ProposalView>,
     pub next: NextPanel,
     /// The supervision strip's movement marks: every task's window.
@@ -197,11 +210,11 @@ fn ago(secs: u64) -> String {
 
 pub fn page(c: &Console) -> String {
     let strip = strip_section(c);
-    let forest = forest_section(&c.forest, &c.gate, focus_num(c).as_deref());
+    let forest = forest_section(&c.forest, &c.closed, &c.gate, focus_num(c).as_deref());
     let panel = match &c.focus {
         Some(f) => format!(
             "<div class=\"thead\"><span class=\"tstate\" style=\"color:{state_color}\">● {state}</span>\n<div class=\"ttitle\">{title}</div>\n<div class=\"tmeta mono\">{meta}</div>\n</div>\n{thread}{compose}",
-            state_color = if f.show.state == "claimed" { "#dac09a" } else { "#6d6562" },
+            state_color = state_color(f.show.state),
             state = f.show.state.to_uppercase(),
             title = esc(&f.show.name),
             meta = esc(&head_meta(&f.show)),
@@ -248,15 +261,16 @@ fn strip_section(c: &Console) -> String {
             r.task, r.demand, r.incarnation, r.task, esc(&r.actor), r.demand, ago(c.now.saturating_sub(r.born_at)),
         ));
     }
-    s.push_str("<div class=\"nsec\">ASKED OF YOU</div>\n");
-    if c.next.asked_of_you.is_empty() {
-        s.push_str("<div class=\"nempty\">nothing asked of you</div>\n");
-    }
-    for a in &c.next.asked_of_you {
-        s.push_str(&format!(
-            "<a class=\"nxrow\" href=\"/t/{}#c-{}\"><span class=\"nid mono\">c-{}</span><span class=\"nname\">t-{} · {}</span><span class=\"nfact mono\">awaiting</span></a>\n",
-            a.task, a.comment, a.comment, a.task, esc(&a.actor),
-        ));
+    // asked-of-you is silent when the world is silent: no section, no
+    // empty fact — its rows appear only while an answer is awaited
+    if !c.next.asked_of_you.is_empty() {
+        s.push_str("<div class=\"nsec\">ASKED OF YOU</div>\n");
+        for a in &c.next.asked_of_you {
+            s.push_str(&format!(
+                "<a class=\"nxrow ask\" href=\"/t/{}#c-{}\"><span class=\"nid mono\">c-{}</span><span class=\"nname\">{}</span><span class=\"nfact mono\">{} · t-{}</span></a>\n",
+                a.task, a.comment, a.comment, esc(&a.body), esc(&a.actor), a.task,
+            ));
+        }
     }
     s.push_str("<div class=\"nsec\">CLAIMED · LAST RECORD</div>\n");
     if c.next.candidates.is_empty() {
@@ -337,21 +351,23 @@ fn ribbon_section(c: &Console) -> String {
 
 // ---- the forest rail ----
 
-fn forest_section(rows: &[ForestRow], gate: &[ProposalView], focus: Option<&str>) -> String {
+fn forest_section(
+    rows: &[ForestRow],
+    closed: &[ForestRow],
+    gate: &[ProposalView],
+    focus: Option<&str>,
+) -> String {
     let mut s = String::from("<aside class=\"forest\">\n");
     for row in rows {
         let sel = focus == Some(row.task.id.as_str());
-        let (chip, color) = if row.task.state == "claimed" {
-            ("CLAIMED", "#dac09a")
-        } else {
-            ("OPEN", "#6d6562")
-        };
         let pad = row.depth * 14;
         s.push_str(&format!(
-            "<a class=\"frow{}\" style=\"margin-left:{pad}px\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{color}\">{chip}</span><span class=\"fname\">{}</span></a>\n",
+            "<a class=\"frow{}\" style=\"margin-left:{pad}px\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{}\">{}</span><span class=\"fname\">{}</span></a>\n",
             if sel { " sel" } else { "" },
             task_num(&row.task.id).unwrap_or(0),
             esc(&row.task.id),
+            state_color(row.task.state),
+            esc(row.task.state.to_uppercase().as_str()),
             esc(&row.task.name),
         ));
     }
@@ -371,6 +387,20 @@ fn forest_section(rows: &[ForestRow], gate: &[ProposalView], focus: Option<&str>
     }
     if gate.is_empty() {
         s.push_str("<div class=\"fgate-empty\">nothing awaiting judgment</div>\n");
+    }
+    if !closed.is_empty() {
+        s.push_str("<div class=\"fsect\">CLOSED</div>\n");
+        for row in closed {
+            let pad = row.depth * 14;
+            s.push_str(&format!(
+                "<a class=\"frow closed\" style=\"margin-left:{pad}px\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{}\">{}</span><span class=\"fname\">{}</span></a>\n",
+                task_num(&row.task.id).unwrap_or(0),
+                esc(&row.task.id),
+                state_color(row.task.state),
+                esc(row.task.state.to_uppercase().as_str()),
+                esc(&row.task.name),
+            ));
+        }
     }
     s.push_str("</aside>\n");
     s
@@ -691,6 +721,8 @@ header .brand {
 .fname { flex: 1; min-width: 0; font-size: 12.5px; color: #d4ceca; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fsect { font: 600 9.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .16em; color: #6d6562; margin: 16px 8px 4px; }
 .fgate-empty { padding: 4px 8px; font-size: 11.5px; color: #4a4543; }
+.frow.closed .fname { color: #6d6562; }
+.frow.closed:hover .fname { color: #b3aca6; }
 
 /* thread panel: head / scroll / compose */
 .tpanel { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; min-width: 0; }
@@ -738,11 +770,13 @@ header .brand {
 .judge { margin: 4px 18px 8px 16px; background: #1e1c1a; border-radius: 6px; padding: 8px 12px; }
 .jhead { color: #6d6562; font-size: 11px; }
 .jname { color: #dac09a; overflow-wrap: anywhere; }
-.jrow { display: flex; gap: 14px; align-items: flex-start; margin-top: 6px; flex-wrap: wrap; }
-.jrow form { margin: 0; display: flex; gap: 8px; align-items: center; }
+.jrow {
+  display: flex; gap: 14px; align-items: flex-end; margin-top: 6px; flex-wrap: wrap;
+}
+.jrow form { margin: 0; display: flex; gap: 8px; align-items: flex-end; }
 .jform { flex: 1; min-width: 220px; }
 .jform textarea { width: 100%; }
-.jreject { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.jreject { display: flex; gap: 8px; align-items: flex-end; }
 input.who {
   background: #100f0e; color: #d4ceca; border: 1px solid #100f0e; border-radius: 4px;
   font: 500 11px "JetBrains Mono", ui-monospace, monospace;
@@ -804,7 +838,9 @@ mod tests {
     use crate::store::{Context, Record, Tier, World};
     use crate::types::actor::ActorName;
     use crate::types::pointers::SessionPointer;
-    use crate::views::{forest, next_panel, open_proposals, ribbon_marks, show_view, thread_view};
+    use crate::views::{
+        closed_tasks, forest, next_panel, open_proposals, ribbon_marks, show_view, thread_view,
+    };
     use std::sync::OnceLock;
 
     fn human() -> &'static Context {
@@ -1070,6 +1106,7 @@ mod tests {
     fn console_of(world: &World, focus: Option<Focus>) -> Console {
         Console {
             forest: forest(world),
+            closed: closed_tasks(world),
             gate: open_proposals(world),
             next: next_panel(world, NOW),
             marks: ribbon_marks(world, NOW),
@@ -1145,13 +1182,116 @@ mod tests {
         let page = page(&console_of(&world, None));
         assert!(page.contains("SUPERVISION"));
         assert!(page.contains("RUNS IN FLIGHT"));
-        assert!(page.contains("ASKED OF YOU"));
         assert!(page.contains("CLAIMED · LAST RECORD"));
         // the adrift claim tints its ages gold
         assert!(page.contains("adrift work"));
         assert!(page.contains("nfact mono stale"));
-        assert!(page.contains("nothing asked of you"));
-        assert!(!page.contains("nothing claimed") || page.contains("adrift work"));
+        // nothing awaits the human, so the section stays silent
+        assert!(!page.contains("ASKED OF YOU"));
+    }
+
+    #[test]
+    fn asked_of_you_renders_its_items_and_hides_when_empty() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("ship it".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                10,
+                agent(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("need a ruling on the checkpoint rule".into()).unwrap(),
+                    addressee: Some(Addressee::Human),
+                },
+            ),
+        ])
+        .unwrap();
+        let pending = page(&console_of(&world, None));
+        assert!(pending.contains("ASKED OF YOU"));
+        assert!(pending.contains("need a ruling on the checkpoint rule"));
+        assert!(pending.contains("href=\"/t/0#c-1\""));
+        assert!(pending.contains("pi"));
+
+        // answered: the section vanishes entirely
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("ship it".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                10,
+                agent(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("need a ruling".into()).unwrap(),
+                    addressee: Some(Addressee::Human),
+                },
+            ),
+            record(
+                2,
+                20,
+                human(),
+                Event::Commented {
+                    target: Target::Comment(CommentId(RecordId(1))),
+                    body: Prose::new("ruled".into()).unwrap(),
+                    addressee: None,
+                },
+            ),
+        ])
+        .unwrap();
+        let answered = page(&console_of(&world, None));
+        assert!(!answered.contains("ASKED OF YOU"));
+    }
+
+    #[test]
+    fn closed_tasks_render_in_the_rail_with_state_colors() {
+        let world = fixture();
+        let html = page(&console_of(&world, Some(focus_of(&world, 1))));
+        // the done task browses from the rail, dimmed, chip green
+        assert!(html.contains("CLOSED"));
+        assert!(html.contains("class=\"frow closed\""));
+        assert!(html.contains("style=\"color:#a2c4a3\">DONE<"));
+        // the live tree and the head keep the deterministic mapping
+        assert!(html.contains("style=\"color:#6d6562\">OPEN<"));
+        assert!(html.contains("● OPEN"));
+        // a dropped chip is rose
+        let dropped = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("void work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                10,
+                human(),
+                Event::TaskDropped {
+                    id: TaskId(0),
+                    note: Prose::new("void".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        let dropped_html = page(&console_of(&dropped, None));
+        assert!(dropped_html.contains("style=\"color:#c4a6a8\">DROPPED<"));
     }
 
     /// The chip positions the ribbon rendered, in render order.

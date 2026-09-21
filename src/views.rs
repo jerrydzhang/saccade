@@ -416,11 +416,38 @@ pub fn forest(world: &World) -> Vec<ForestRow> {
         .collect()
 }
 
+/// The rail's archive: done and dropped tasks, parents before children.
+pub fn closed_tasks(world: &World) -> Vec<ForestRow> {
+    world
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, ctx)| matches!(ctx.task.state, TaskState::Done(_) | TaskState::Dropped))
+        .map(|(i, ctx)| {
+            let mut depth = 0;
+            let mut up = ctx.task.parent_id;
+            while let Some(parent) = up {
+                depth += 1;
+                up = world.tasks[parent.0].task.parent_id;
+            }
+            ForestRow {
+                task: TaskView::of(
+                    TaskId(i),
+                    ctx,
+                    ctx.proposal.and_then(|p| world.proposals.get(&p)),
+                ),
+                depth,
+            }
+        })
+        .collect()
+}
+
 /// A human-addressed demand awaiting an answer.
 pub struct AskedOfYou {
     pub comment: usize,
     pub task: usize,
     pub actor: String,
+    pub body: String,
 }
 
 /// Every AddressedToHuman demand still awaiting, oldest first — the
@@ -441,6 +468,7 @@ pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
             comment: id.0.0,
             task: c.comment.root.0,
             actor: c.actor.as_str().to_string(),
+            body: c.comment.body.as_str().to_string(),
         })
         .collect()
 }
@@ -908,6 +936,43 @@ mod panels {
             }
             other => panic!("expected an exchange, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_rail_archive_holds_done_and_dropped_only() {
+        let world = World::replay(vec![
+            task_at(0, 0, "finished work"),
+            record(1, 10, Tier::Human, Event::TaskClaimed { id: TaskId(0) }),
+            record(
+                2,
+                20,
+                Tier::Human,
+                Event::TaskDone {
+                    id: TaskId(0),
+                    receipt: Prose::new("suite green".into()).unwrap(),
+                },
+            ),
+            task_at(3, 30, "live work"),
+            task_at(4, 40, "void work"),
+            record(
+                5,
+                50,
+                Tier::Human,
+                Event::TaskDropped {
+                    id: TaskId(1),
+                    note: Prose::new("void".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        let closed = closed_tasks(&world);
+        assert_eq!(closed.len(), 2);
+        assert_eq!(closed[0].task.id, "t-0");
+        assert_eq!(closed[0].task.state, "done");
+        assert_eq!(closed[1].task.id, "t-1");
+        assert_eq!(closed[1].task.state, "dropped");
+        // the live tree holds only what is still open or claimed
+        assert_eq!(forest(&world).len(), 1);
     }
 
     #[test]

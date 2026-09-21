@@ -595,9 +595,12 @@ async fn the_console_renders_forest_and_focused_thread() {
         "the forest browses live work"
     );
     assert!(home.contains("no task focused"));
+    // the asked-of-you row names its asking comment and its author
     assert!(
-        home.contains("asked-of-you") || home.contains("asked of you") || home.contains("t-0 · pi")
+        home.contains("ASKED OF YOU") && home.contains("need a ruling on floop"),
+        "the row renders the asking comment"
     );
+    assert!(home.contains(">pi · t-0<"));
     assert!(home.contains("nothing claimed"));
 
     let (status, focused) = get_html(&format!("{base}/t/0"));

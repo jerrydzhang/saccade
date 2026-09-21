@@ -18,7 +18,8 @@ use crate::objects::comment::Target;
 use crate::objects::proposal::ProposalId;
 use crate::objects::task::TaskId;
 use crate::views::{
-    forest, next_panel, open_proposals, proposal_view, ribbon_marks, show_view, thread_view,
+    closed_tasks, forest, next_panel, open_proposals, proposal_view, ribbon_marks, show_view,
+    thread_view,
 };
 use crate::web;
 use crate::{ActorName, Command, Context, Prose, RecordId, Reject, Tier};
@@ -187,6 +188,7 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
     };
     let c = web::Console {
         forest: forest(&snapshot.world),
+        closed: closed_tasks(&snapshot.world),
         gate: open_proposals(&snapshot.world),
         next: next_panel(&snapshot.world, now),
         marks: ribbon_marks(&snapshot.world, now),
@@ -411,6 +413,7 @@ fn console_reject(
     let now = db::now_epoch();
     let c = web::Console {
         forest: forest(&snapshot.world),
+        closed: closed_tasks(&snapshot.world),
         gate: open_proposals(&snapshot.world),
         next: next_panel(&snapshot.world, now),
         marks: ribbon_marks(&snapshot.world, now),
