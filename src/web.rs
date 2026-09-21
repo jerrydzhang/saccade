@@ -343,7 +343,7 @@ fn forest_section(rows: &[ForestRow], gate: &[ProposalView], focus: Option<&str>
         s.push_str(&format!(
             "<a class=\"frow{}\" style=\"margin-left:{pad}px\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{color}\">{chip}</span><span class=\"fname\">{}</span></a>\n",
             if sel { " sel" } else { "" },
-            row.task.id,
+            task_num(&row.task.id).unwrap_or(0),
             esc(&row.task.id),
             esc(&row.task.name),
         ));
@@ -355,7 +355,7 @@ fn forest_section(rows: &[ForestRow], gate: &[ProposalView], focus: Option<&str>
     for p in gate {
         s.push_str(&format!(
             "<a class=\"frow\" href=\"/t/{}\"><span class=\"fid mono\">#{}</span><span class=\"fname\">{} {} · {}</span></a>\n",
-            p.task,
+            task_num(&p.task).unwrap_or(0),
             p.id,
             esc(p.action),
             esc(&p.task),

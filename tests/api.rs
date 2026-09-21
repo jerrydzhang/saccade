@@ -605,3 +605,92 @@ async fn compose_fetch_rehome_redirects_instead_of_swapping() {
     assert!(!body.contains("<section"), "no fragment rides the redirect");
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
+
+/// Every /t/… href the console page emits resolves: the rail is the
+/// frame's navigation, so a dead link there is a dead frame. This pins
+/// the forest's token-vs-number contract (c-585) across every link
+/// form the page carries.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_task_href_the_console_emits_resolves() {
+    let db = scratch_db("console-hrefs");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "migrate floop");
+    seed_task(&state, "other work");
+    // a claim feeds the strip's candidates, an agent demand awaiting a
+    // human feeds asked-of-you, a proposal feeds the rail's gate
+    state
+        .execute(&human_ctx(), Command::ClaimTask { id: TaskId(0) }, None)
+        .unwrap();
+    state
+        .execute(
+            &Context {
+                actor: ActorName::new("pi".into()).unwrap(),
+                tier: Tier::Agent,
+            },
+            Command::Comment {
+                target: Target::Task(TaskId(1)),
+                body: Prose::new("need a ruling on floop".into()).unwrap(),
+                addressee: Some(saccade::Addressee::Human),
+            },
+            None,
+        )
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::CreateProposal {
+                name: Prose::new("void the stray".into()).unwrap(),
+                action: saccade::ProposalAction::Drop { task_id: TaskId(1) },
+            },
+            None,
+        )
+        .unwrap();
+    // a comment so the focused thread and its anchors exist
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("a note worth keeping".into()).unwrap(),
+                addressee: None,
+            },
+            None,
+        )
+        .unwrap();
+
+    // harvest every /t/… href from the unfocused and focused pages
+    let mut hrefs: Vec<String> = Vec::new();
+    for path in ["/", "/t/0"] {
+        let (_, html) = get_html(&format!("{base}{path}"));
+        let mut rest = html.as_str();
+        while let Some(i) = rest.find("href=\"/t/") {
+            rest = &rest[i + 6..];
+            let end = rest.find('"').expect("the href closes");
+            let href = &rest[..end];
+            hrefs.push(href.to_string());
+            rest = &rest[end..];
+        }
+    }
+    hrefs.sort();
+    hrefs.dedup();
+    // both link forms light up: bare task links (rail, strip, gate) and
+    // record anchors (asked-of-you rows, ribbon marks)
+    assert!(
+        hrefs.len() >= 4 && hrefs.iter().any(|h| h.contains("#c-")),
+        "the fixture should light up every link form, got {hrefs:?}"
+    );
+    assert!(
+        !hrefs.iter().any(|h| h.starts_with("/t/t-")),
+        "no token-in-href may survive: {hrefs:?}"
+    );
+    for href in &hrefs {
+        let path = href.split('#').next().unwrap();
+        let (status, _) = get_html(&format!("{base}{path}"));
+        assert_eq!(status, 200, "{href} does not resolve");
+    }
+
+    // the visible labels stay the token form
+    let (_, focused) = get_html(&format!("{base}/t/0"));
+    assert!(focused.contains(">t-0<"));
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
