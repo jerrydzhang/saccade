@@ -25,6 +25,7 @@ use saccade::db::{self, LoadState};
 use saccade::objects::task::TaskId;
 use saccade::store::{Context, Tier, World};
 use saccade::types::actor::ActorName;
+use saccade::types::pointers::{GitBranch, GitCommit};
 use saccade::views;
 use saccade::{Command, ProposalAction, ProposalId, Prose, RecordId};
 
@@ -638,6 +639,124 @@ fn a_task_lifecycle_folds_through_the_write_path() {
     assert_eq!(loadout.rows[10].seq, 10);
     assert_eq!(loadout.rows[10].event_time, 11);
     assert_eq!(loadout.rows[10].actor, "saccade bot");
+}
+
+/// The merge-then-checkpoint law, through the write path: a run closes on
+/// its receipt commit, the merged head enters through the verb's door at
+/// the invoking actor's tier, and the record never returns to a head it
+/// left — rewinds refuse, the restated head lands as a no-op.
+#[test]
+fn a_merged_head_records_through_the_verb_and_never_rewinds() {
+    let path = db_path("checkpoint");
+    let mut conn = db::open(&path).unwrap();
+    let ruler = Context {
+        actor: ActorName::new("jerry".into()).unwrap(),
+        tier: Tier::Human,
+    };
+    let agent = Context {
+        actor: ActorName::new("pi".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    let system = Context::system();
+
+    db::record(
+        &mut conn,
+        &ruler,
+        Command::CreateTask {
+            name: Prose::new("carry the merge in the worktree".into()).unwrap(),
+            parent_id: None,
+        },
+        1,
+    )
+    .unwrap();
+    db::record(
+        &mut conn,
+        &system,
+        Command::CreateWorkspace {
+            task_id: TaskId(0),
+            base: GitCommit::new("abc123".into()).unwrap(),
+            branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+        },
+        2,
+    )
+    .unwrap();
+    // the run closes on its receipt commit
+    db::record(
+        &mut conn,
+        &system,
+        Command::CheckpointWorkspace {
+            task_id: TaskId(0),
+            checkpoint: GitCommit::new("def456".into()).unwrap(),
+        },
+        3,
+    )
+    .unwrap();
+
+    // the merge advances the branch; the verb records the merged head
+    db::record(
+        &mut conn,
+        &agent,
+        Command::CheckpointWorkspace {
+            task_id: TaskId(0),
+            checkpoint: GitCommit::new("789abc".into()).unwrap(),
+        },
+        4,
+    )
+    .unwrap();
+
+    // the verb never rewinds: the base and the closed head are heads it left
+    for rewind in ["abc123", "def456"] {
+        let refused = db::record(
+            &mut conn,
+            &agent,
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: GitCommit::new(rewind.into()).unwrap(),
+            },
+            5,
+        );
+        assert!(matches!(
+            refused,
+            Err(db::ExecuteFail::Reject(Reject::CheckpointRewind))
+        ));
+    }
+
+    // restating the recorded head succeeds as a no-op
+    db::record(
+        &mut conn,
+        &agent,
+        Command::CheckpointWorkspace {
+            task_id: TaskId(0),
+            checkpoint: GitCommit::new("789abc".into()).unwrap(),
+        },
+        6,
+    )
+    .unwrap();
+
+    let world = world_of(&conn);
+    assert_eq!(
+        world.tasks[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .checkpoint
+            .as_str(),
+        "789abc"
+    );
+    let rows = db::load(&conn).unwrap().rows;
+    // create, workspace, close, merge, no-op: the two refusals wrote nothing
+    assert_eq!(rows.len(), 5);
+    // the verb's records carry agent tier under the invoking actor
+    let verb_rows: Vec<_> = rows
+        .iter()
+        .filter(|r| r.kind == "task_workspace_checkpointed" && r.payload.contains("789abc"))
+        .collect();
+    assert_eq!(verb_rows.len(), 2);
+    assert!(
+        verb_rows
+            .iter()
+            .all(|r| r.actor == "pi" && r.tier == "agent")
+    );
 }
 
 /// Possession fixes the tier: SACCADE_ACTOR present records agent, its

@@ -61,6 +61,8 @@ pub enum Reject {
     WorkspaceMissing,
     #[error("the worktree is already present")]
     WorktreeAlreadyPresent,
+    #[error("the tip rewinds the recorded checkpoint")]
+    CheckpointRewind,
     // Misc
     #[error("invalid actor name")]
     InvalidActor,

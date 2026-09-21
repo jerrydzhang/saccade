@@ -103,8 +103,9 @@ pub enum CommentState {
 
 impl CommentState {
     /// The demand state machine table, all transitions must go through
-    /// this. The replying tier is a cell guard, so the exact-tier law is a
-    /// table fact; unaddressed comments never transition.
+    /// this. The replying tier is a cell guard, so who may answer is a
+    /// table fact — the human's word ends any demand; unaddressed
+    /// comments never transition.
     pub fn transition(&self, event: &Event, record: &Record) -> Option<CommentState> {
         match (self, event) {
             (
@@ -123,12 +124,14 @@ impl CommentState {
                     attempt,
                 },
                 Event::Commented { .. },
-            ) if record.context.tier == Tier::Agent => Some(CommentState::AddressedToAgent {
-                response: ResponseState::Responded {
-                    reply: CommentId(record.id),
-                },
-                attempt: attempt.transition(event, record)?,
-            }),
+            ) if matches!(record.context.tier, Tier::Agent | Tier::Human) => {
+                Some(CommentState::AddressedToAgent {
+                    response: ResponseState::Responded {
+                        reply: CommentId(record.id),
+                    },
+                    attempt: attempt.transition(event, record)?,
+                })
+            }
             (
                 CommentState::AddressedToAgent { response, attempt },
                 Event::IncarnationBound { .. }
@@ -353,7 +356,7 @@ mod tables {
                         Event::Commented { .. },
                     ) => {
                         *response == ResponseState::Awaiting
-                            && record.context.tier == Tier::Agent
+                            && matches!(record.context.tier, Tier::Agent | Tier::Human)
                             && attempt.transition(&record.event, record).is_some()
                     }
                     (

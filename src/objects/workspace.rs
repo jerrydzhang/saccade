@@ -28,6 +28,9 @@ pub struct WorkspaceContext {
     pub branch: GitBranch,
     /// The latest recorded clean head; born at base
     pub checkpoint: GitCommit,
+    /// Every head the record has named, base first; the explicit
+    /// checkpoint door returns to none of them
+    pub heads: Vec<GitCommit>,
     pub worktree: WorktreeState,
 }
 

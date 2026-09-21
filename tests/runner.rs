@@ -731,6 +731,192 @@ fn prepare_births_the_task_branch_from_main_even_when_head_elsewhere() {
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
+/// One full course: prepare, reply, a commit in the worktree, close. The
+/// checkpoint lands on the receipt commit and the task's slot frees.
+fn run_one_course(repo: &Path, db_path: &Path, demand: CommentId) -> String {
+    prepare(
+        &mut db::open(db_path).unwrap(),
+        repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    db::record(
+        &mut db::open(db_path).unwrap(),
+        &agent(),
+        Command::Comment {
+            target: Target::Comment(demand),
+            body: Prose::new("receipt written, tests green".into()).unwrap(),
+            addressee: None,
+        },
+        3,
+    )
+    .unwrap();
+    let worktree = saccade::paths::worktree_at(repo, 0);
+    std::fs::write(worktree.join("receipt"), "done\n").unwrap();
+    sh(&worktree, &["add", "."]);
+    sh(&worktree, &["commit", "-m", "receipt"]);
+    close(&mut db::open(db_path).unwrap(), TaskId(0)).unwrap();
+    sh(repo, &["rev-parse", "saccade/t-0"])
+}
+
+/// A follow-up demand on the settled task, returning its id.
+fn follow_up_demand(db_path: &Path) -> CommentId {
+    db::record(
+        &mut db::open(db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            body: Prose::new("one more round".into()).unwrap(),
+            addressee: Some(Addressee::Agent),
+        },
+        4,
+    )
+    .unwrap();
+    latest_demand(db_path)
+}
+
+#[test]
+fn a_merged_branch_refuses_until_the_verb_records_the_new_head() {
+    let (repo, db_path, demand) = scaffold("merge-door");
+    let checkpoint = run_one_course(&repo, &db_path, demand);
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+
+    // main advances and merges in: the branch tip descends past the checkpoint
+    std::fs::write(repo.join("readme"), "main moved on\n").unwrap();
+    sh(&repo, &["add", "."]);
+    sh(&repo, &["commit", "-m", "advance main"]);
+    sh(&worktree, &["merge", "main"]);
+    let merged = sh(&repo, &["rev-parse", "saccade/t-0"]);
+    assert_ne!(merged, checkpoint);
+
+    // the next demand refuses: the tip is unrecorded advancement
+    let second = follow_up_demand(&db_path);
+    let refusal = match prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        second,
+        ActorName::new("pi".into()).unwrap(),
+    ) {
+        Err(RunnerFail::Usage(message)) => message,
+        Err(other) => panic!("expected a Usage refusal, got {other:?}"),
+        Ok(_) => panic!("the advanced tip refused prepare"),
+    };
+    assert!(
+        refusal.contains("branch tip has advanced past the recorded checkpoint"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("run: sac checkpoint t-0"), "{refusal}");
+    assert!(refusal.contains("saccade/t-0"), "{refusal}");
+    assert!(world_of(&db_path).tasks[0].active_incarnation.is_none());
+    // the refusal moved nothing
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), merged);
+
+    // the verb records the merged head with the invoking actor
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sac"))
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--repo")
+        .arg(&repo)
+        .arg("--offline")
+        .env("SACCADE_ACTOR", "pi")
+        .arg("checkpoint")
+        .arg("t-0")
+        .output()
+        .expect("spawn sac");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&merged),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // the run proceeds from the recorded head
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        second,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    assert!(world_of(&db_path).tasks[0].active_incarnation.is_some());
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), merged);
+
+    // the verb's records carry agent tier under the invoking actor
+    let rows = db::load(&db::open_read(&db_path).unwrap()).unwrap().rows;
+    let verb_rows: Vec<_> = rows
+        .iter()
+        .filter(|r| r.kind == "task_workspace_checkpointed" && r.payload.contains(&merged))
+        .collect();
+    assert_eq!(verb_rows.len(), 1);
+    assert_eq!(verb_rows[0].actor, "pi");
+    assert_eq!(verb_rows[0].tier, "agent");
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_rewound_branch_restores_its_recorded_work() {
+    let (repo, db_path, demand) = scaffold("rewind");
+    let checkpoint = run_one_course(&repo, &db_path, demand);
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+    let base = sh(&repo, &["rev-parse", "main"]);
+
+    // review hygiene rewinds the branch and leaves junk behind
+    sh(&worktree, &["reset", "--hard", &base]);
+    std::fs::write(worktree.join("scratch"), "junk\n").unwrap();
+
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        follow_up_demand(&db_path),
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+
+    // the recorded head is restored and the junk is gone
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), checkpoint);
+    assert!(!worktree.join("scratch").exists());
+    assert!(world_of(&db_path).tasks[0].active_incarnation.is_some());
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_diverged_branch_refuses_naming_both_doors() {
+    let (repo, db_path, demand) = scaffold("diverge");
+    let _checkpoint = run_one_course(&repo, &db_path, demand);
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+    let base = sh(&repo, &["rev-parse", "main"]);
+
+    // a rewritten lineage: the branch leaves its recorded history
+    sh(&worktree, &["reset", "--hard", &base]);
+    std::fs::write(worktree.join("other"), "a different lineage\n").unwrap();
+    sh(&worktree, &["add", "."]);
+    sh(&worktree, &["commit", "-m", "different lineage"]);
+    let diverged = sh(&repo, &["rev-parse", "saccade/t-0"]);
+
+    let refusal = match prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        follow_up_demand(&db_path),
+        ActorName::new("pi".into()).unwrap(),
+    ) {
+        Err(RunnerFail::Usage(message)) => message,
+        Err(other) => panic!("expected a Usage refusal, got {other:?}"),
+        Ok(_) => panic!("the diverged tip refused prepare"),
+    };
+    assert!(refusal.contains("diverged"), "{refusal}");
+    assert!(refusal.contains("sac checkpoint t-0"), "{refusal}");
+    assert!(refusal.contains("reset the branch back"), "{refusal}");
+    assert!(world_of(&db_path).tasks[0].active_incarnation.is_none());
+    // the refusal moved nothing
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), diverged);
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
 #[test]
 fn prepare_refuses_a_disk_only_leftover_without_prescribing_git() {
     let (repo, db_path, _demand) = scaffold("leftover");
