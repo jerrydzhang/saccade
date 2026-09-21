@@ -14,6 +14,7 @@ use saccade::objects::incarnation::IncarnationState;
 use saccade::runner::{PreparedRun, RunnerFail, close, pointer_prompt, prepare, wait};
 use saccade::supervisor::{self, LiveRuns, RunnerConfig, SessionDriver};
 use saccade::types::actor::ActorName;
+use saccade::types::pointers::SessionPointer;
 use saccade::{Addressee, Command, CommentId, Context, Prose, Target, TaskId, Tier, World};
 
 fn sh(dir: &Path, args: &[&str]) -> String {
@@ -142,9 +143,11 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     )
     .unwrap();
 
-    // wait sees the answer as soon as it lands
-    let seen = wait(&db_path, demand, Some(5)).unwrap();
-    assert!(seen.contains("receipt written, tests green"), "{seen}");
+    // the reply alone releases nothing while the run still works
+    assert!(matches!(
+        wait(&db_path, demand, Some(0)),
+        Err(RunnerFail::Usage(_))
+    ));
 
     // a commit in the worktree becomes the checkpoint
     std::fs::write(worktree.join("receipt"), "done\n").unwrap();
@@ -278,6 +281,154 @@ fn wait_reports_an_unanswered_demand_at_its_deadline() {
     std::fs::remove_dir_all(db_path.parent().unwrap()).unwrap();
 }
 
+#[test]
+fn wait_releases_on_settlement_naming_the_receipt() {
+    let (repo, db_path, demand) = scaffold("wait-settle");
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    let worker = Context {
+        actor: ActorName::new("pi/t-0-1".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    let mut conn = db::open(&db_path).unwrap();
+    db::record(&mut conn, &worker, Command::ClaimTask { id: TaskId(0) }, 3).unwrap();
+    db::record(
+        &mut conn,
+        &worker,
+        Command::CompleteTask {
+            id: TaskId(0),
+            receipt: Prose::new("suite green, 91 tests".into()).unwrap(),
+        },
+        4,
+    )
+    .unwrap();
+    db::record(
+        &mut conn,
+        &worker,
+        Command::Comment {
+            target: Target::Comment(demand),
+            body: Prose::new("the deposit stands".into()).unwrap(),
+            addressee: None,
+        },
+        5,
+    )
+    .unwrap();
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+    std::fs::write(worktree.join("receipt"), "done\n").unwrap();
+    sh(&worktree, &["add", "."]);
+    sh(&worktree, &["commit", "-m", "receipt"]);
+    close(&mut db::open(&db_path).unwrap(), TaskId(0)).unwrap();
+
+    let seen = wait(&db_path, demand, Some(5)).unwrap();
+    assert!(seen.contains("settled"), "{seen}");
+    assert!(seen.contains("receipt: suite green, 91 tests"), "{seen}");
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn wait_releases_on_cancellation() {
+    let (repo, db_path, demand) = scaffold("wait-cancel");
+    let prepared = prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &agent(),
+        Command::CancelIncarnation {
+            id: prepared.incarnation,
+        },
+        3,
+    )
+    .unwrap();
+
+    let seen = wait(&db_path, demand, Some(5)).unwrap();
+    assert!(seen.contains("cancelled"), "{seen}");
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn wait_releases_on_refusal_carrying_the_reason() {
+    let (repo, db_path, demand) = scaffold("wait-refuse");
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &Context::system(),
+        Command::RefuseDemand {
+            demand,
+            reason: Prose::new("t-0 is dropped; dropped tasks never run".into()).unwrap(),
+        },
+        3,
+    )
+    .unwrap();
+
+    let seen = wait(&db_path, demand, Some(5)).unwrap();
+    assert!(seen.contains("refused"), "{seen}");
+    assert!(seen.contains("dropped tasks never run"), "{seen}");
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn wait_releases_on_an_answer_with_no_run_behind_it() {
+    let (repo, db_path, demand) = scaffold("wait-answer");
+    // the human's word ends the demand before any run fires
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Comment(demand),
+            body: Prose::new("never mind, handled it myself".into()).unwrap(),
+            addressee: None,
+        },
+        3,
+    )
+    .unwrap();
+
+    let seen = wait(&db_path, demand, Some(5)).unwrap();
+    assert!(seen.contains("no work is coming"), "{seen}");
+    assert!(seen.contains("answered by c-2 (human person)"), "{seen}");
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+/// The path that has never fired in anger: a run bound whose prompt was
+/// neither accepted nor rejected, constructed through the prompt
+/// machinery's own verbs.
+#[test]
+fn wait_releases_on_a_prompt_awaiting_its_answer() {
+    let (repo, db_path, demand) = scaffold("wait-prompt");
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &Context::system(),
+        Command::BindIncarnation {
+            task_id: TaskId(0),
+            response_target: demand,
+            trigger: demand.0,
+            actor: ActorName::new("pi/t-0-1".into()).unwrap(),
+            session: SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap(),
+        },
+        3,
+    )
+    .unwrap();
+
+    let seen = wait(&db_path, demand, Some(5)).unwrap();
+    assert!(
+        seen.contains("i-2 raised a prompt that awaits an answer"),
+        "{seen}"
+    );
+    assert!(seen.contains("re-arm sac wait c-1"), "{seen}");
+    // the release carries the prompt itself
+    assert!(seen.contains("Serve tracked demand c-1"), "{seen}");
+    assert!(seen.contains("Reply when done, as 'pi/t-0-1'"), "{seen}");
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
 /// The session body the supervision tests use: a fixed reply at agent
 /// tier under the run's derived attribution, as a real executor would
 /// leave through the CLI. Each test's driver owns its db, so parallel
@@ -332,7 +483,7 @@ fn a_write_that_lands_a_demand_fires_a_run_that_answers_it() {
     supervisor::sweep(&app);
 
     let seen = wait(&db_path, demand, Some(10)).unwrap();
-    assert!(seen.contains("the fake session answered"), "{seen}");
+    assert!(seen.contains("settled"), "{seen}");
     // the session's write carries the derived attribution
     let world = world_of(&db_path);
     match &world.comments[&demand].state {
@@ -380,7 +531,7 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
 
     supervisor::sweep(&app);
     let seen = wait(&db_path, second, Some(10)).unwrap();
-    assert!(seen.contains("the fake session answered"), "{seen}");
+    assert!(seen.contains("settled"), "{seen}");
     // both demands spent, in order
     let world = world_of(&db_path);
     for demand in [first, second] {
@@ -452,7 +603,7 @@ fn a_demand_on_a_delivered_task_fires_its_round() {
     // the sweep fires the round; the session answers under its derived name
     supervisor::sweep(&app);
     let seen = wait(&db_path, finding, Some(10)).unwrap();
-    assert!(seen.contains("the fake session answered"), "{seen}");
+    assert!(seen.contains("settled"), "{seen}");
 
     let world = world_of(&db_path);
     // delivered survived the round: no reopen, the deposit stands

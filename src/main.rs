@@ -143,7 +143,9 @@ enum Cmd {
     Cancel { id: String },
     /// Record a task's current branch tip as its checkpoint
     Checkpoint { id: String },
-    /// Block until a demand's reply lands, then print it
+    /// Block until the demand's run asks something of the waiter: settle,
+    /// cancel, refusal, an answer with no run behind it, or a prompt
+    /// awaiting an answer — never replies
     Wait {
         /// The demand to watch (c-<n>)
         id: String,

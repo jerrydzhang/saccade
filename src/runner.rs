@@ -367,7 +367,12 @@ pub fn prepare(
 /// Pointers only: the worktree is the cwd, the demand and reply door are
 /// named; the repo's own skill teaches the verbs.
 pub fn pointer_prompt(run: &PreparedRun, sac: &str) -> String {
-    let actor = run.actor.as_str();
+    prompt_text(run.task, run.demand, &run.actor, sac)
+}
+
+/// The one prompt text: the executor is spawned on it, and a wait
+/// released on an awaiting prompt carries it to the waiter.
+fn prompt_text(task: TaskId, demand: CommentId, actor: &ActorName, sac: &str) -> String {
     format!(
         "Serve tracked demand c-{demand} on task t-{task} of this repository; you are working in its prepared worktree. \
 Read it: {sac} show t-{task}. Do the work in this directory. \
@@ -376,8 +381,9 @@ Reply when done, as '{actor}': \
 Let other tasks' runs settle on their own; cancel only what you started \
 ({sac} cancel t-<task> stops a runaway). \
 The .agents/skills/saccade skill in this repo documents the tracker.",
-        demand = run.demand.0.0,
-        task = run.task.0,
+        demand = demand.0.0,
+        task = task.0,
+        actor = actor.as_str(),
     )
 }
 
@@ -481,8 +487,9 @@ pub fn close(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> 
     })
 }
 
-/// Block until the demand's reply lands; `deadline` bounds the wait in
-/// seconds (None waits forever). Read-only: abandonment costs nothing.
+/// Block until the demand's run asks something of the waiter, never on
+/// replies; `deadline` bounds the wait in seconds (None waits forever).
+/// Read-only: abandonment costs nothing.
 pub fn wait(
     db_path: &Path,
     comment: CommentId,
@@ -492,44 +499,100 @@ pub fn wait(
     loop {
         let conn = db::open_read(db_path).map_err(ExecuteFail::Db)?;
         let world = load_world(&conn)?;
-        let ctx = world.comments.get(&comment).ok_or_else(|| {
-            RunnerFail::Usage(format!("no comment c-{} in this tracker", comment.0.0))
-        })?;
-        let reply = match &ctx.state {
-            CommentState::Unaddressed => {
-                return Err(RunnerFail::Usage(format!(
-                    "c-{} addresses nobody; it will never respond",
-                    comment.0.0
-                )));
-            }
-            CommentState::AddressedToHuman { response } => match response {
-                ResponseState::Responded { reply } => Some(*reply),
-                ResponseState::Awaiting => None,
-            },
-            CommentState::AddressedToAgent { response, .. } => match response {
-                ResponseState::Responded { reply } => Some(*reply),
-                ResponseState::Awaiting => None,
-            },
-        };
-        if let Some(reply) = reply {
-            let reply_ctx = &world.comments[&reply];
-            return Ok(format!(
-                "c-{} answered by c-{} ({}):\n{}",
-                comment.0.0,
-                reply.0.0,
-                reply_ctx.actor.as_str(),
-                reply_ctx.comment.body.as_str(),
-            ));
+        if let Some(release) = release_of(&world, comment)? {
+            return Ok(release);
         }
         if let Some(seconds) = deadline
             && start.elapsed().as_secs() >= seconds
         {
             return Err(RunnerFail::Usage(format!(
-                "c-{} still awaiting after {seconds}s",
+                "c-{} saw no release after {seconds}s",
                 comment.0.0
             )));
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+/// The demand's release, when a fold fact fires one: the run settled,
+/// cancelled, or raised a prompt awaiting an answer; the demand refused;
+/// or the demand was answered with no run behind the answer. A reply
+/// alone never releases — a run still working holds the wait.
+fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, RunnerFail> {
+    let ctx = world.comments.get(&comment).ok_or_else(|| {
+        RunnerFail::Usage(format!("no comment c-{} in this tracker", comment.0.0))
+    })?;
+    if matches!(ctx.state, CommentState::Unaddressed) {
+        return Err(RunnerFail::Usage(format!(
+            "c-{} addresses nobody; it will never respond",
+            comment.0.0
+        )));
+    }
+    if let Some(refusal) = &ctx.refusal {
+        return Ok(Some(format!(
+            "c-{}: refused; {}",
+            comment.0.0,
+            refusal.reason.as_str()
+        )));
+    }
+    // binding consumes the authorization, so a demand names at most one
+    // run; the last bound is the run in question
+    let bound = world
+        .incarnations
+        .iter()
+        .rfind(|(_, run)| run.response_target == comment);
+    if let Some((id, run)) = bound {
+        match run.state {
+            IncarnationState::Settled => {
+                let receipt = match &world.tasks[run.task_id.0].task.state {
+                    TaskState::Delivered(receipt) | TaskState::Done(receipt) => {
+                        format!("; receipt: {}", receipt.as_str())
+                    }
+                    _ => format!("; t-{} holds no receipt", run.task_id.0),
+                };
+                return Ok(Some(format!(
+                    "c-{}: i-{} settled{receipt}",
+                    comment.0.0, id.0.0
+                )));
+            }
+            IncarnationState::Cancelled => {
+                return Ok(Some(format!("c-{}: i-{} cancelled", comment.0.0, id.0.0)));
+            }
+            IncarnationState::Bound => {
+                let sac = std::env::current_exe()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| "sac".into());
+                return Ok(Some(format!(
+                    "c-{}: i-{} raised a prompt that awaits an answer; act, then re-arm sac wait c-{}\n\n{}",
+                    comment.0.0,
+                    id.0.0,
+                    comment.0.0,
+                    prompt_text(run.task_id, run.response_target, &run.actor, &sac)
+                )));
+            }
+            // accepted work has not ended, and an interrupted run never
+            // accepted it: neither asks anything of the waiter yet
+            IncarnationState::PromptAccepted | IncarnationState::Interrupted => {
+                return Ok(None);
+            }
+        }
+    }
+    let response = match &ctx.state {
+        CommentState::AddressedToHuman { response }
+        | CommentState::AddressedToAgent { response, .. } => response,
+        CommentState::Unaddressed => unreachable!("the unaddressed door returned above"),
+    };
+    match response {
+        ResponseState::Responded { reply } => {
+            let reply_ctx = &world.comments[reply];
+            Ok(Some(format!(
+                "c-{}: answered by c-{} ({}); no work is coming",
+                comment.0.0,
+                reply.0.0,
+                reply_ctx.actor.as_str()
+            )))
+        }
+        ResponseState::Awaiting => Ok(None),
     }
 }
 

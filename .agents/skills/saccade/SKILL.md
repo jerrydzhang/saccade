@@ -52,7 +52,7 @@ read in a retro.
 | `sac withdraw <seq> --note "…"` | any tier | take your own proposal off the queue |
 | `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | how-context on a task; `#<seq>` replies to a comment |
 | `sac cancel t-N` | any tier | stops the task's active run; cancel only what you started |
-| `sac wait c-N [--timeout S]` | anonymous | block until a demand's reply lands |
+| `sac wait c-N [--timeout S]` | anonymous | block until the run asks something of the waiter: settled, cancelled, refused, answered with no run behind it, or a prompt awaiting an answer (never replies) |
 | `sac show t-N` | anonymous | the dock: state, receipt, comment thread with voices |
 | `sac proposals` | anonymous | the ruling queue; `stale` marks acts gone illegal |
 | `sac list` / `sac list --json` | anonymous | reads need no identity |
