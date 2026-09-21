@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use crate::api::AppState;
 use crate::objects::comment::{AgentAttemptState, CommentId, CommentState, ResponseState};
 use crate::objects::incarnation::IncarnationId;
-use crate::objects::task::TaskId;
+use crate::objects::task::{TaskId, TaskState};
 use crate::runner::{self, PreparedRun, RunnerFail};
 use crate::store::World;
 use crate::types::actor::ActorName;
@@ -111,6 +111,10 @@ pub fn runnable_demands(world: &World) -> Vec<CommentId> {
     let mut demands = Vec::new();
     for (i, ctx) in world.tasks.iter().enumerate() {
         if ctx.active_incarnation.is_some() {
+            continue;
+        }
+        // dropped stays terminal: a demand on a dropped task never fires
+        if matches!(ctx.task.state, TaskState::Dropped) {
             continue;
         }
         let task = TaskId(i);

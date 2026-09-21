@@ -597,6 +597,25 @@ mod test {
         )
         .unwrap();
 
+        // the demand reopened done t-0; the fired session claims and finishes again
+        record(
+            &mut conn,
+            &agent(),
+            Command::ClaimTask { id: TaskId(0) },
+            32,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::CompleteTask {
+                id: TaskId(0),
+                receipt: Prose::new("refolded the receipt".into()).unwrap(),
+            },
+            32,
+        )
+        .unwrap();
+
         // the workspace records its lineage, worktree, and checkpoints
         record(
             &mut conn,
@@ -648,7 +667,7 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 22);
+        assert_eq!(loadout.rows.len(), 24);
         assert_eq!(loadout.rows[4].kind, "proposal_created");
         assert_eq!(loadout.rows[5].kind, "proposal_accepted");
         assert_eq!(loadout.rows[6].kind, "task_dropped");
@@ -657,10 +676,10 @@ mod test {
         assert_eq!(loadout.rows[11].actor.as_str(), "human person");
         assert_eq!(loadout.rows[11].tier, "human");
         // the workspace rows round-trip through the wire columns
-        assert_eq!(loadout.rows[18].kind, "task_workspace_created");
-        assert_eq!(loadout.rows[19].kind, "task_worktree_created");
-        assert_eq!(loadout.rows[20].kind, "task_workspace_checkpointed");
-        assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[20].kind, "task_workspace_created");
+        assert_eq!(loadout.rows[21].kind, "task_worktree_created");
+        assert_eq!(loadout.rows[22].kind, "task_workspace_checkpointed");
+        assert_eq!(loadout.rows[20].actor.as_str(), "saccade");
         assert!(matches!(
             world.tasks[0].workspace.as_ref().map(|w| &w.checkpoint),
             Some(checkpoint) if *checkpoint == GitCommit::new("def456".into()).unwrap()
