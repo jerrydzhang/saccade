@@ -665,6 +665,59 @@ mod test {
         )
         .unwrap();
 
+        // a second demand the machinery refuses: the fact lands on the
+        // thread, the authorization spends
+        record(
+            &mut conn,
+            &human(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("one more round".into()).unwrap(),
+                addressee: Some(Addressee::Agent),
+            },
+            33,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::RefuseDemand {
+                demand: CommentId(RecordId(25)),
+                reason: Prose::new(
+                    "t-0 branch saccade/t-0 diverged from the recorded checkpoint".into(),
+                )
+                .unwrap(),
+            },
+            33,
+        )
+        .unwrap();
+
+        // the refused demand reopened done t-0; the re-ask cycle closes it
+        record(
+            &mut conn,
+            &agent(),
+            Command::ClaimTask { id: TaskId(0) },
+            33,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::CompleteTask {
+                id: TaskId(0),
+                receipt: Prose::new("reconciled the branch by hand".into()).unwrap(),
+            },
+            33,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::AcceptTask { id: TaskId(0) },
+            34,
+        )
+        .unwrap();
+
         // the returned world is the one a full reload produces
         let (_, returned) = record(
             &mut conn,
@@ -674,7 +727,7 @@ mod test {
                 body: Prose::new("post-fold receipt".into()).unwrap(),
                 addressee: None,
             },
-            34,
+            35,
         )
         .unwrap();
 
@@ -683,17 +736,21 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 26);
+        assert_eq!(loadout.rows.len(), 31);
         assert_eq!(loadout.rows[2].kind, "task_delivered");
         assert_eq!(loadout.rows[3].kind, "task_accepted");
         assert_eq!(loadout.rows[5].kind, "proposal_created");
         assert_eq!(loadout.rows[6].kind, "proposal_accepted");
         assert_eq!(loadout.rows[7].kind, "task_dropped");
-        assert_eq!(loadout.rows[10].actor.as_str(), "saccade bot");
-        assert_eq!(loadout.rows[10].tier, "agent");
-        assert_eq!(loadout.rows[12].actor.as_str(), "human person");
-        assert_eq!(loadout.rows[12].tier, "human");
-        // the workspace rows round-trip through the wire columns
+        assert_eq!(loadout.rows[8].actor.as_str(), "saccade bot");
+        assert_eq!(loadout.rows[8].tier, "agent");
+        assert_eq!(loadout.rows[9].actor.as_str(), "human person");
+        assert_eq!(loadout.rows[9].tier, "human");
+        assert_eq!(loadout.rows[12].kind, "task_done");
+        assert_eq!(loadout.rows[26].kind, "demand_refused");
+        assert_eq!(loadout.rows[26].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[28].kind, "task_delivered");
+        assert_eq!(loadout.rows[29].kind, "task_accepted");
         assert_eq!(loadout.rows[22].kind, "task_workspace_created");
         assert_eq!(loadout.rows[23].kind, "task_worktree_created");
         assert_eq!(loadout.rows[24].kind, "task_workspace_checkpointed");
@@ -728,6 +785,20 @@ mod test {
         assert_eq!(run.state, IncarnationState::Settled);
         assert_eq!(run.produced, vec![RecordId(16)]);
         assert_eq!(world.tasks[0].active_incarnation, None);
+        // the refusal round-trips through the wire columns
+        assert_eq!(loadout.rows[26].kind, "demand_refused");
+        assert_eq!(loadout.rows[26].actor.as_str(), "saccade");
+        let refused = &world.comments[&CommentId(RecordId(25))];
+        assert_eq!(
+            refused.state,
+            CommentState::AddressedToAgent {
+                response: ResponseState::Awaiting,
+                attempt: AgentAttemptState::Spent,
+            }
+        );
+        let refusal = refused.refusal.as_ref().expect("the refusal fact folded");
+        assert!(refusal.reason.as_str().contains("diverged"));
+        assert_eq!(refusal.at, 33);
 
         // bi-temporal: event time is caller-supplied, logged time is ours
         assert_eq!(loadout.rows[0].event_time, 10);

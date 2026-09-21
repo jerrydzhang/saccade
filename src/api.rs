@@ -177,7 +177,7 @@ pub struct Envelope {
 }
 
 enum ApiFail {
-    Reject(Reject),
+    Reject(Reject, Option<String>),
     Degraded(String),
     Db(String),
     Malformed(String),
@@ -186,7 +186,7 @@ enum ApiFail {
 impl From<ExecuteFail> for ApiFail {
     fn from(e: ExecuteFail) -> Self {
         match e {
-            ExecuteFail::Reject(r) => ApiFail::Reject(r),
+            ExecuteFail::Reject(r) => ApiFail::Reject(r, None),
             ExecuteFail::Degraded(reason) => ApiFail::Degraded(reason),
             ExecuteFail::Db(e) => ApiFail::Db(e.to_string()),
         }
@@ -196,10 +196,13 @@ impl From<ExecuteFail> for ApiFail {
 impl ApiFail {
     fn parts(self) -> (StatusCode, String, Value) {
         match self {
-            ApiFail::Reject(reject) => {
+            ApiFail::Reject(reject, taught) => {
                 let detail = serde_json::to_value(&reject).unwrap_or(Value::Null);
                 let code = detail.as_str().unwrap_or("rejected").to_string();
-                (StatusCode::BAD_REQUEST, code, detail)
+                match taught {
+                    Some(text) => (StatusCode::BAD_REQUEST, code, Value::String(text)),
+                    None => (StatusCode::BAD_REQUEST, code, detail),
+                }
             }
             ApiFail::Degraded(reason) => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -239,14 +242,26 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
             WireTier::Agent => Tier::Agent,
         },
     };
-    match app.execute(&context, envelope.command, envelope.at) {
+    let command = envelope.command;
+    match app.execute(&context, command.clone(), envelope.at) {
         Ok(stored) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || supervisor::sweep(&fired));
             (StatusCode::OK, Json(json!({"records": &stored}))).into_response()
         }
         Err(e) => {
-            let (status, code, detail) = ApiFail::from(e).parts();
+            let (status, code, detail) = match e {
+                // the refusal teaches: the expected format and, where the
+                // world knows it, the likely intended target
+                ExecuteFail::Reject(reject) => {
+                    let taught = app
+                        .snapshot()
+                        .ok()
+                        .and_then(|s| crate::refusals::teach(&s.world, &command, &reject));
+                    ApiFail::Reject(reject, taught).parts()
+                }
+                other => ApiFail::from(other).parts(),
+            };
             error!(%code, "command refused");
             (
                 status,

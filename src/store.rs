@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::decide::{decide, enforce_tier, expand};
 use crate::events::{Command, Event};
 use crate::objects::comment::{
-    Addressee, AgentAttemptState, Comment, CommentContext, CommentId, CommentState, ResponseState,
+    Addressee, AgentAttemptState, Comment, CommentContext, CommentId, CommentState, Refusal,
+    ResponseState,
 };
 use crate::objects::incarnation::{IncarnationContext, IncarnationId, IncarnationState};
 use crate::objects::proposal::{Proposal, ProposalContext, ProposalId, ProposalState};
@@ -184,6 +185,7 @@ impl World {
                         name: task_name,
                         parent_id,
                     },
+                    birth: record.id,
                     last_updated: record.id,
                     claimed_at: None,
                     last_record_at: record.timestamp,
@@ -559,6 +561,7 @@ impl World {
                         tier: record.context.tier,
                         state,
                         born_at: record.timestamp,
+                        refusal: None,
                     },
                 );
 
@@ -583,6 +586,26 @@ impl World {
                     task_ctx.last_updated = record.id;
                 }
                 task_ctx.thread.push(CommentId(record.id));
+                task_ctx.last_record_at = record.timestamp;
+            }
+            // The refusal fact: a demand the machinery would not run,
+            // recorded where the asker reads
+            ref event @ Event::DemandRefused { demand, ref reason } => {
+                let demand_ctx = self
+                    .comments
+                    .get_mut(&demand)
+                    .ok_or(Reason::InvalidCommentId)?;
+                demand_ctx.state = demand_ctx
+                    .state
+                    .transition(event, &record)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                demand_ctx.refusal = Some(Refusal {
+                    reason: reason.clone(),
+                    at: record.timestamp,
+                });
+                let root = demand_ctx.comment.root;
+                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
         }
@@ -1963,6 +1986,85 @@ mod test {
             }
         }
         assert_eq!(log.records().len(), before + 1);
+    }
+
+    #[test]
+    fn a_refusal_spends_the_demand_and_lands_as_a_fact() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Task(TaskId(4)),
+                body: Prose::new("run the sweep once more".into()).unwrap(),
+                addressee: Some(Addressee::Agent),
+            },
+            20,
+        )
+        .unwrap();
+        let demand = CommentId(RecordId(RECORD_COUNT));
+
+        // the machinery's role is the only door: judgment tiers refuse
+        let refused = log.execute(
+            agent(),
+            Command::RefuseDemand {
+                demand,
+                reason: Prose::new("the worktree is a disk-only leftover".into()).unwrap(),
+            },
+            21,
+        );
+        assert!(matches!(refused, Err(Reject::HumanOnly)));
+
+        log.execute_system(
+            Command::RefuseDemand {
+                demand,
+                reason: Prose::new("the worktree is a disk-only leftover".into()).unwrap(),
+            },
+            21,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&demand];
+        assert_eq!(
+            ctx.state,
+            CommentState::AddressedToAgent {
+                response: ResponseState::Awaiting,
+                attempt: AgentAttemptState::Spent,
+            }
+        );
+        let refusal = ctx.refusal.as_ref().expect("the refusal landed");
+        assert_eq!(refusal.at, 21);
+        assert!(refusal.reason.as_str().contains("disk-only leftover"));
+
+        // one refusal per authorization: a second never lands
+        let refused = log.execute_system(
+            Command::RefuseDemand {
+                demand,
+                reason: Prose::new("a different cause".into()).unwrap(),
+            },
+            22,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+
+        // the asker's reply still answers the refused demand, fact intact
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Comment(demand),
+                body: Prose::new("never mind, reconciled by hand".into()).unwrap(),
+                addressee: None,
+            },
+            23,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&demand];
+        assert!(matches!(
+            &ctx.state,
+            CommentState::AddressedToAgent {
+                response: ResponseState::Responded { .. },
+                attempt: AgentAttemptState::Spent,
+            }
+        ));
+        assert!(ctx.refusal.is_some());
     }
 
     #[test]

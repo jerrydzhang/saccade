@@ -66,6 +66,11 @@ impl AgentAttemptState {
             (AgentAttemptState::Authorized { .. }, Event::Commented { .. }) => {
                 Some(AgentAttemptState::Spent)
             }
+            // a prepare refusal consumes the demand's live authorization:
+            // re-asking is a new comment
+            (AgentAttemptState::Authorized { .. }, Event::DemandRefused { .. }) => {
+                Some(AgentAttemptState::Spent)
+            }
             // a reply on an in-flight demand: the slot holds until the run ends
             (AgentAttemptState::InFlight { .. }, Event::Commented { .. }) => Some(self.clone()),
             // a terminal run frees the slot
@@ -136,10 +141,11 @@ impl CommentState {
                 CommentState::AddressedToAgent { response, attempt },
                 Event::IncarnationBound { .. }
                 | Event::IncarnationSettled { .. }
-                // only a rejected prompt or a cancel is run-ending;
-                // acceptance changes the run, never the demand
+                // only a rejected prompt, a cancel, or a refusal is
+                // demand-ending; acceptance changes the run, never the demand
                 | Event::IncarnationPromptRejected { .. }
-                | Event::IncarnationCancelled { .. },
+                | Event::IncarnationCancelled { .. }
+                | Event::DemandRefused { .. },
             ) => Some(CommentState::AddressedToAgent {
                 response: response.clone(),
                 attempt: attempt.transition(event, record)?,
@@ -157,6 +163,17 @@ pub struct CommentContext {
     pub state: CommentState,
     /// Event time of the comment's birth record
     pub born_at: u64,
+    /// The machinery's refusal to run this demand, when it refused
+    pub refusal: Option<Refusal>,
+}
+
+/// Why the machinery refused to run a demand, and when: the asker's
+/// fact, rendered on the thread the demand lives on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refusal {
+    pub reason: Prose,
+    /// Event time of the refusal record
+    pub at: u64,
 }
 
 #[cfg(test)]
@@ -239,6 +256,16 @@ mod tables {
         )
     }
 
+    fn refused() -> Record {
+        at(
+            Tier::System,
+            Event::DemandRefused {
+                demand: CommentId(RecordId(1)),
+                reason: Prose::new("the worktree is a disk-only leftover".into()).unwrap(),
+            },
+        )
+    }
+
     /// This test doesn't really test anything its more just a contract that at the time this test
     /// was written this is the expected behavior that shouldn't regress
     #[test]
@@ -261,6 +288,7 @@ mod tables {
             prompt_accepted(),
             prompt_rejected(),
             cancelled(),
+            refused(),
         ];
 
         for state in &states {
@@ -273,6 +301,7 @@ mod tables {
                         },
                     ) => trigger == binding,
                     (AgentAttemptState::Authorized { .. }, Event::Commented { .. }) => true,
+                    (AgentAttemptState::Authorized { .. }, Event::DemandRefused { .. }) => true,
                     (AgentAttemptState::InFlight { .. }, Event::Commented { .. }) => true,
                     (
                         AgentAttemptState::InFlight { .. },
@@ -341,6 +370,7 @@ mod tables {
             prompt_accepted(),
             prompt_rejected(),
             cancelled(),
+            refused(),
         ];
 
         for state in &states {
@@ -364,7 +394,8 @@ mod tables {
                         Event::IncarnationBound { .. }
                         | Event::IncarnationSettled { .. }
                         | Event::IncarnationPromptRejected { .. }
-                        | Event::IncarnationCancelled { .. },
+                        | Event::IncarnationCancelled { .. }
+                        | Event::DemandRefused { .. },
                     ) => attempt.transition(&record.event, record).is_some(),
                     _ => false,
                 };

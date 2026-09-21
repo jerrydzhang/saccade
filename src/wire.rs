@@ -27,7 +27,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 21] = [
+const KINDS: [&str; 22] = [
     "task_created",
     "task_claimed",
     "task_done",
@@ -40,6 +40,7 @@ const KINDS: [&str; 21] = [
     "proposal_rejected",
     "proposal_withdrawn",
     "commented",
+    "demand_refused",
     "incarnation_bound",
     "incarnation_prompt_accepted",
     "incarnation_prompt_rejected",
@@ -140,6 +141,10 @@ mod test {
                 target: Target::Comment(CommentId(RecordId(6))),
                 body: Prose::new("no - pure tree, here is why".into()).unwrap(),
                 addressee: None,
+            },
+            Event::DemandRefused {
+                demand: CommentId(RecordId(6)),
+                reason: Prose::new("the worktree is a disk-only leftover".into()).unwrap(),
             },
             Event::TaskWorkspaceCreated {
                 task_id: TaskId(0),

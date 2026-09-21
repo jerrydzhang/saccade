@@ -67,6 +67,8 @@ pub struct Task {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskContext {
     pub task: Task,
+    /// The log position of this task's birth record
+    pub birth: RecordId,
     /// Last updated record id
     pub last_updated: RecordId,
     /// Event time of the claim now held, present only while claimed

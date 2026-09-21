@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use crate::objects::comment::{
-    AgentAttemptState, CommentContext, CommentId, CommentState, ResponseState, Target,
+    AgentAttemptState, CommentContext, CommentId, CommentState, Refusal, ResponseState, Target,
 };
 use crate::objects::proposal::{ProposalAction, ProposalContext, ProposalId, ProposalState};
 use crate::objects::task::{TaskContext, TaskId, TaskState};
@@ -137,6 +137,15 @@ pub struct CommentLine {
     pub body: String,
     pub state: Option<String>,
     pub born_at: u64,
+    /// The machinery's refusal to run this demand, when it refused
+    pub refusal: Option<RefusalView>,
+}
+
+/// The refusal as the thread renders it: the reason and the moment.
+#[derive(Debug, PartialEq)]
+pub struct RefusalView {
+    pub reason: String,
+    pub at: u64,
 }
 
 /// One conversation: a comment plus every reply hanging off it, in
@@ -189,8 +198,12 @@ fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
         actor: cctx.actor.as_str().to_string(),
         tier: format!("{:?}", cctx.tier).to_lowercase(),
         body: cctx.comment.body.as_str().to_string(),
-        state: demand_tag(&cctx.state),
+        state: demand_tag(&cctx.state, cctx.refusal.as_ref()),
         born_at: cctx.born_at,
+        refusal: cctx.refusal.as_ref().map(|r| RefusalView {
+            reason: r.reason.as_str().to_string(),
+            at: r.at,
+        }),
     }
 }
 
@@ -257,7 +270,7 @@ pub fn show_view(world: &World, id: TaskId) -> Option<ShowView> {
 
 /// The demand tag a thread row carries: who it addresses and where the
 /// response stands. Unaddressed rows carry nothing.
-fn demand_tag(state: &CommentState) -> Option<String> {
+fn demand_tag(state: &CommentState, refusal: Option<&Refusal>) -> Option<String> {
     match state {
         CommentState::Unaddressed => None,
         CommentState::AddressedToHuman { response } => match response {
@@ -265,6 +278,9 @@ fn demand_tag(state: &CommentState) -> Option<String> {
             ResponseState::Responded { .. } => Some("to human, responded".into()),
         },
         CommentState::AddressedToAgent { response, attempt } => {
+            if refusal.is_some() {
+                return Some("to agent, refused".into());
+            }
             let response = match response {
                 ResponseState::Awaiting => "awaiting",
                 ResponseState::Responded { .. } => "responded",
@@ -643,6 +659,7 @@ mod test {
                 parent_id: None,
             },
             last_updated: RecordId(0),
+            birth: RecordId(0),
             claimed_at: None,
             last_record_at: 0,
             delivered_at: None,
@@ -1078,6 +1095,47 @@ mod panels {
         assert_eq!(r.demand, 2);
         assert_eq!(r.actor, "pi");
         assert!(r.in_flight());
+    }
+
+    #[test]
+    fn a_refused_demand_carries_its_refusal_on_the_thread() {
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                2 * HOUR,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                Some(Addressee::Agent),
+            ),
+            record(
+                3,
+                3 * HOUR,
+                Tier::System,
+                Event::DemandRefused {
+                    demand: CommentId(RecordId(2)),
+                    reason: Prose::new(
+                        "the worktree is a disk-only leftover; reconcile it through the human"
+                            .into(),
+                    )
+                    .unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        let v = thread_view(&world, TaskId(0)).unwrap();
+        match &v.items[0] {
+            ThreadItem::Exchange { root, run, replies } => {
+                assert_eq!(root.seq, 2);
+                assert!(run.is_none(), "a refused demand never bound a run");
+                assert!(replies.is_empty());
+                assert_eq!(root.state.as_deref(), Some("to agent, refused"));
+                let refusal = root.refusal.as_ref().expect("the refusal rides the line");
+                assert_eq!(refusal.at, 3 * HOUR);
+                assert!(refusal.reason.contains("disk-only leftover"));
+            }
+            other => panic!("expected an exchange, got {other:?}"),
+        }
     }
 
     #[test]

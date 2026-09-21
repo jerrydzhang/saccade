@@ -196,6 +196,11 @@ enum Fail {
     Db(db::DbError),
     Degraded(String),
     Reject(Reject),
+    /// A refusal the world taught: the code plus what was probably meant.
+    Taught {
+        code: &'static str,
+        text: String,
+    },
     Usage(String),
     Client(client::ClientFail),
 }
@@ -222,6 +227,7 @@ impl Fail {
             Fail::Db(_) => "database_error",
             Fail::Degraded(_) => "degraded",
             Fail::Reject(r) => reject_code(r),
+            Fail::Taught { code, .. } => code,
             Fail::Usage(_) => "usage",
             Fail::Client(c) => c.code(),
         }
@@ -237,6 +243,7 @@ impl std::fmt::Display for Fail {
                 "world projection unavailable: {r}\nraw records via 'sac log'; repair the record or upgrade this binary to resume"
             ),
             Fail::Reject(r) => write!(f, "rejected: {}", reject_code(r)),
+            Fail::Taught { code, text } => write!(f, "rejected: {code} — {text}"),
             Fail::Usage(m) => write!(f, "{m}"),
             Fail::Client(c) => write!(f, "{c}"),
         }
@@ -428,8 +435,11 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     let stored = if cli.offline {
         let now = cli.at.unwrap_or_else(db::now_epoch);
         let mut conn = db::open(&db_path).map_err(Fail::Db)?;
-        let (stored, _) = db::record(&mut conn, &context, command, now).map_err(Fail::from)?;
-        stored
+        match db::record(&mut conn, &context, command.clone(), now) {
+            Ok((stored, _)) => stored,
+            Err(ExecuteFail::Reject(reject)) => return Err(refused(&conn, &command, reject)),
+            Err(other) => return Err(Fail::from(other)),
+        }
     } else {
         client::handshake(&cli.server);
         client::send(&cli.server, &context, command, cli.at).map_err(Fail::Client)?
@@ -437,12 +447,28 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     Ok(render_records(cli, &stored))
 }
 
+/// A refusal the world can teach: the expected format and, where the
+/// world knows it, the likely intended target.
+fn refused(conn: &rusqlite::Connection, command: &Command, reject: Reject) -> Fail {
+    let taught = db::load(conn).ok().and_then(|loadout| match loadout.state {
+        db::LoadState::Full(world) => saccade::refusals::teach(&world, command, &reject),
+        db::LoadState::Degraded(_) => None,
+    });
+    match taught {
+        Some(text) => Fail::Taught {
+            code: reject_code(&reject),
+            text,
+        },
+        None => Fail::Reject(reject),
+    }
+}
+
 fn runner_fail(e: saccade::runner::RunnerFail) -> Fail {
     match e {
         saccade::runner::RunnerFail::Db(e) => Fail::from(e),
-        saccade::runner::RunnerFail::Usage(m) | saccade::runner::RunnerFail::Git(m) => {
-            Fail::Usage(m)
-        }
+        saccade::runner::RunnerFail::Usage(m)
+        | saccade::runner::RunnerFail::Git(m)
+        | saccade::runner::RunnerFail::Refused { reason: m } => Fail::Usage(m),
     }
 }
 
@@ -490,9 +516,16 @@ fn resolve_db(cli: &Cli) -> Result<PathBuf, Fail> {
 }
 
 fn parse_comment_id(token: &str) -> Result<CommentId, Fail> {
-    let n = token
-        .strip_prefix("c-")
-        .ok_or_else(|| Fail::Usage(format!("'{token}' is not a comment id (expected c-<n>)")))?;
+    let n = token.strip_prefix("c-").ok_or_else(|| {
+        let note = token
+            .strip_prefix('#')
+            .filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+            .map(|d| format!("; drop the '#': the demand is c-{d}"))
+            .unwrap_or_default();
+        Fail::Usage(format!(
+            "'{token}' is not a comment id (expected c-<n>){note}"
+        ))
+    })?;
     let n: usize = n
         .parse()
         .map_err(|_| Fail::Usage(format!("'{token}' is not a comment id")))?;
@@ -551,7 +584,8 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
 fn parse_task_id(token: &str) -> Result<TaskId, Fail> {
     let n = token.strip_prefix("t-").ok_or_else(|| {
         Fail::Usage(format!(
-            "'{token}' is not a task id (expected t-<n>; only tasks exist)"
+            "'{token}' is not a task id (expected t-<n>; only tasks exist){}",
+            hashed_task_note(token)
         ))
     })?;
     let n: usize = n
@@ -560,14 +594,42 @@ fn parse_task_id(token: &str) -> Result<TaskId, Fail> {
     Ok(TaskId(n))
 }
 
+/// The '#t-N' face taught at the parse door: '#' addresses records, a
+/// task is addressed bare.
+fn hashed_task_note(token: &str) -> String {
+    match token
+        .strip_prefix("#t-")
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    {
+        Some(n) => format!("; drop the '#': the task is addressed as t-{n}"),
+        None => String::new(),
+    }
+}
+
 fn parse_target(token: &str) -> Result<Target, Fail> {
-    if let Some(n) = token.strip_prefix('#') {
-        let n: usize = n
-            .parse()
-            .map_err(|_| Fail::Usage(format!("'{token}' is not a comment id (expected #<seq>)")))?;
+    if let Some(rest) = token.strip_prefix('#') {
+        let n: usize = rest.parse().map_err(|_| {
+            Fail::Usage(format!(
+                "'{token}' is not a comment id (expected #<seq>){}",
+                hashed_record_note(rest)
+            ))
+        })?;
         return Ok(Target::Comment(CommentId(RecordId(n))));
     }
     Ok(Target::Task(parse_task_id(token)?))
+}
+
+/// The hashed-token faces taught at the comment door: a hashed task id
+/// wants the bare thread, a hashed c-N wants the bare record.
+fn hashed_record_note(rest: &str) -> String {
+    let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    if let Some(n) = rest.strip_prefix("t-").filter(|n| numeric(n)) {
+        return format!("; drop the '#': the thread is addressed as t-{n}");
+    }
+    if let Some(n) = rest.strip_prefix("c-").filter(|n| numeric(n)) {
+        return format!("; drop the 'c-': the comment is addressed as #{n}");
+    }
+    String::new()
 }
 
 fn parse_proposal_id(token: &str) -> Result<ProposalId, Fail> {
@@ -687,8 +749,27 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
             &format!("{indent}  "),
             &format!("{indent}  "),
         ));
+        if let Some(refusal) = &line.refusal {
+            out.push(wrap(
+                &format!("refused {}: {}", fmt_when(refusal.at), refusal.reason),
+                WIDTH,
+                &format!("{indent}  "),
+                &format!("{indent}  "),
+            ));
+        }
     }
     Ok(out.join("\n"))
+}
+
+/// The refusal's moment, as the thread renders it.
+fn fmt_when(ts: u64) -> String {
+    let dt = time::OffsetDateTime::from_unix_timestamp(ts as i64)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
+        .to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC));
+    dt.format(&time::macros::format_description!(
+        "[year]-[month repr:numerical]-[day] [hour repr:24]:[minute]"
+    ))
+    .unwrap_or_default()
 }
 
 /// Greedy word wrap; a word longer than a line is hard-broken so a single

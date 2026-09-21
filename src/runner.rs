@@ -13,7 +13,7 @@ use crate::paths;
 use crate::types::actor::ActorName;
 use crate::types::failure::{FailureCode, FailureEvidence};
 use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
-use crate::{Command, Context, RecordId, World};
+use crate::{Command, Context, Prose, RecordId, World};
 use rusqlite::Connection;
 use tracing::warn;
 
@@ -23,6 +23,8 @@ pub enum RunnerFail {
     Usage(String),
     #[error("git: {0}")]
     Git(String),
+    #[error("{reason}")]
+    Refused { reason: String },
     #[error(transparent)]
     Db(#[from] ExecuteFail),
 }
@@ -112,6 +114,29 @@ fn heal_base(world: &World, repo_root: &Path, task: TaskId) -> Result<String, Ru
     git(repo_root, &["rev-parse", "main"])
 }
 
+/// A refusal the asker must read: the fact lands on the demand's
+/// thread before the error rides out. The operator warn stays as the
+/// second home; a fold refusal here means a racing sweep already
+/// wrote it.
+fn refuse(conn: &mut Connection, demand: CommentId, reason: String) -> RunnerFail {
+    let reason = Prose::new(reason).expect("refusal reasons are non-empty");
+    let said = db::record(
+        conn,
+        &Context::system(),
+        Command::RefuseDemand {
+            demand,
+            reason: reason.clone(),
+        },
+        db::now_epoch(),
+    );
+    if let Err(e) = said {
+        warn!(demand = demand.0.0, "the refusal fact did not land: {e}");
+    }
+    RunnerFail::Refused {
+        reason: reason.into(),
+    }
+}
+
 pub struct PreparedRun {
     pub task: TaskId,
     pub demand: CommentId,
@@ -154,10 +179,11 @@ pub fn prepare(
     }
     // dropped stays terminal: the trigger's snapshot can race a drop
     if matches!(ctx.task.state, TaskState::Dropped) {
-        return Err(RunnerFail::Usage(format!(
-            "t-{} is dropped; dropped tasks never run",
-            task.0
-        )));
+        return Err(refuse(
+            conn,
+            demand,
+            format!("t-{} is dropped; dropped tasks never run", task.0),
+        ));
     }
     let worktree = paths::worktree_at(repo_root, task.0);
     let session = paths::session_at(repo_root, task.0);
@@ -181,10 +207,14 @@ pub fn prepare(
                 } else if is_ancestor(repo_root, &checkpoint, &tip) {
                     // the refusal text names task, branch, and the door; it
                     // rides the error into the sweep's own log line
-                    return Err(RunnerFail::Usage(format!(
-                        "t-{} branch {}: branch tip has advanced past the recorded checkpoint; run: sac checkpoint t-{} to record the current head",
-                        task.0, branch, task.0
-                    )));
+                    return Err(refuse(
+                        conn,
+                        demand,
+                        format!(
+                            "t-{} branch {}: branch tip has advanced past the recorded checkpoint; run: sac checkpoint t-{} to record the current head",
+                            task.0, branch, task.0
+                        ),
+                    ));
                 } else if is_ancestor(repo_root, &tip, &checkpoint) {
                     warn!(
                         task = task.0,
@@ -195,10 +225,14 @@ pub fn prepare(
                     );
                     checkpoint.clone()
                 } else {
-                    return Err(RunnerFail::Usage(format!(
-                        "t-{} branch {} diverged from the recorded checkpoint; record the new lineage with sac checkpoint t-{}, or reset the branch back",
-                        task.0, branch, task.0
-                    )));
+                    return Err(refuse(
+                        conn,
+                        demand,
+                        format!(
+                            "t-{} branch {} diverged from the recorded checkpoint; record the new lineage with sac checkpoint t-{}, or reset the branch back",
+                            task.0, branch, task.0
+                        ),
+                    ));
                 };
                 if worktree.exists() {
                     git(&worktree, &["reset", "--hard", &target])?;
@@ -246,10 +280,14 @@ pub fn prepare(
         None => {
             let base = git(repo_root, &["rev-parse", "main"])?;
             if worktree.exists() {
-                return Err(RunnerFail::Usage(format!(
-                    "{} already exists; the record has no workspace for this task, so it is disk-only leftover. Reconcile it through the human against the record.",
-                    worktree.display()
-                )));
+                return Err(refuse(
+                    conn,
+                    demand,
+                    format!(
+                        "{} already exists; the record has no workspace for this task, so it is disk-only leftover. Reconcile it through the human against the record.",
+                        worktree.display()
+                    ),
+                ));
             }
             git(
                 repo_root,

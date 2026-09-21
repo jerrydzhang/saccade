@@ -526,12 +526,20 @@ fn item_html(item: &ThreadItem) -> String {
             }
             None => {
                 // the demand awaits its run: a plain row, not a card
-                let mut s = node_html(
-                    root,
-                    0,
-                    Some(("DEMAND", "#dac09a")),
-                    Some("awaiting incarnation"),
-                );
+                let tag = if root.refusal.is_some() {
+                    "refused"
+                } else {
+                    "awaiting incarnation"
+                };
+                let mut s = node_html(root, 0, Some(("DEMAND", "#dac09a")), Some(tag));
+                // the refusal fact, where the run row would sit: reason and time
+                if let Some(r) = &root.refusal {
+                    s.push_str(&format!(
+                        "<div class=\"nrow2 runrow\"><div class=\"nmeta\"><span class=\"xk\" style=\"color:#c4a6a8\">REFUSED</span><span class=\"nseq mono\">{}</span></div>\n<div class=\"nbody\">{}</div>\n</div>\n",
+                        esc(&fmt_t(r.at)),
+                        esc(&r.reason),
+                    ));
+                }
                 for r in replies {
                     s.push_str(&node_html(
                         r,
@@ -1325,6 +1333,54 @@ mod tests {
         assert!(page.contains("nfact mono stale"));
         // nothing awaits the human, so the section stays silent
         assert!(!page.contains("ASKED OF YOU"));
+    }
+
+    #[test]
+    fn a_refused_demand_renders_its_refusal_on_the_thread() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                3_140 * 3600,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("run it again".into()).unwrap(),
+                    addressee: Some(Addressee::Agent),
+                },
+            ),
+            record(
+                2,
+                3_150 * 3600,
+                &Context {
+                    actor: ActorName::new("system".into()).unwrap(),
+                    tier: Tier::System,
+                },
+                Event::DemandRefused {
+                    demand: CommentId(RecordId(1)),
+                    reason: Prose::new(
+                        "t-0 branch saccade/t-0 diverged from the recorded checkpoint".into(),
+                    )
+                    .unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), None);
+        // the demand names its refusal, and the fact carries reason and time
+        assert!(html.contains(">refused<"), "{html}");
+        assert!(html.contains("REFUSED"));
+        assert!(html.contains("diverged from the recorded checkpoint"));
+        assert!(!html.contains("awaiting incarnation"));
+        assert!(!html.contains("RUN"), "no run ever bound");
     }
 
     #[test]
