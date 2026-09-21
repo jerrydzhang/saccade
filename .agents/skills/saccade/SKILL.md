@@ -175,13 +175,26 @@ eyeball a time; omit `--at` and the event stamps honestly as "now".
 
 Task worktrees (`<state dir>/worktrees/t-N`), task branches (`saccade/t-N`),
 and session files belong to the runner — system property, not yours to
-manage by hand. The lifecycle:
+manage by hand. Canvases are best-effort and ephemeral: the record
+governs, the canvas is a cache. The lifecycle:
 
-- **A branch is a demand door.** While a task lives — open, claimed,
-  delivered, or done (done is reopenable) — its recorded workspace points
-  at its branch and checkpoint; severing the branch makes the next demand
-  refuse at prepare. Merging a task branch into your mainline is normal
-  review flow; the branch itself stays.
+- **Prepare rebuilds what is missing.** A canvas expected but missing is
+  re-cut at the recorded checkpoint — or the task's base when no
+  checkpoint exists — so absence never refuses. Recreation covers
+  absence only, never divergence: a branch that disagrees with the
+  recorded checkpoint still refuses, and a checkpoint nothing retains is
+  lost work; prepare refuses, naming it. That state is human-made —
+  deletion stays manual, there is no collector, no sweep.
+- **The record is the demand door.** While a task lives — open, claimed,
+  delivered, or done (done is reopenable) — its recorded workspace names
+  the branch and checkpoint the next demand rebuilds from. Merging a
+  task branch into your mainline is normal review flow; the branch
+  itself stays.
+- **Deletion is manual hygiene**, under one rule: never delete the sole
+  holder of recorded work. The record names the checkpoint, so
+  sole-holder is checkable before deleting — a branch merged into the
+  mainline is not sole holder, an unmerged branch usually is, and a
+  worktree's uncommitted files are never recorded work.
 - **A dropped task has no door.** Its worktree and branch are residue —
   collectable, but still not by your hand: cleanup is a proposal to the
   human (the tracker has no collection verb yet), naming the canvases and
