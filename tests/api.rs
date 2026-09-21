@@ -841,7 +841,7 @@ async fn judgment_forms_carry_the_actor_name() {
     );
 
     // the rendered judgment form carries the one who input, prefilled
-    // from the actor cookie when one exists
+    // from the actor cookie when one exists, themed by its class
     state
         .execute(&pi, Command::ClaimTask { id: TaskId(0) }, None)
         .unwrap();
@@ -876,6 +876,12 @@ async fn judgment_forms_carry_the_actor_name() {
     assert!(
         blank.matches("value=\"\"").count() >= 2,
         "blank for a fresh browser, never absent"
+    );
+    // the ruling form is the one the CSS themes
+    assert!(
+        blank.contains("<form class=\"jform\" method=\"post\" action=\"/p/"),
+        "the ruling form lacks its themed class: {}",
+        &blank[..blank.len().min(400)]
     );
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }

@@ -417,7 +417,7 @@ pub fn thread_section(f: &Focus, form: &FormState, landed: Option<usize>) -> Str
     };
     for p in &f.proposals {
         s.push_str(&format!(
-            "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<form method=\"post\" action=\"/p/{}/ruling\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"ruling\" value=\"accept\" type=\"submit\">accept</button>\n<button class=\"sendbtn\" name=\"ruling\" value=\"reject\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
+            "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<form class=\"jform\" method=\"post\" action=\"/p/{}/ruling\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"ruling\" value=\"accept\" type=\"submit\">accept</button>\n<button class=\"sendbtn\" name=\"ruling\" value=\"reject\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
             p.id,
             esc(p.action),
             esc(&p.task),
@@ -704,7 +704,7 @@ header .brand {
 }
 .rv { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #292624; }
 .rv.now { border-left: 2px solid #d4ceca; }
-.mrk { position: absolute; width: 2px; }
+.mrk { position: absolute; width: 2px; height: 11px; }
 .mrk.human { background: #c4a6a8; }
 .mrk.agent { background: #6d6562; }
 .mrk.demand { background: #dac09a; }
@@ -1138,8 +1138,8 @@ mod tests {
     fn judgment_forms_render_on_the_focused_task() {
         let world = fixture();
         let html = thread_section(&focus_of(&world, 1), &Default::default(), None);
-        // one form, one route, two rulings
-        assert!(html.contains("action=\"/p/4/ruling\""));
+        // one form, one route, two rulings — and the themed class on it
+        assert!(html.contains("<form class=\"jform\" method=\"post\" action=\"/p/4/ruling\">"));
         assert!(html.contains("name=\"note\""));
         assert!(html.contains("name=\"ruling\" value=\"accept\""));
         assert!(html.contains("name=\"ruling\" value=\"reject\""));
