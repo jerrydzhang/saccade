@@ -1044,8 +1044,8 @@ fn create_reply_names_the_born_task() {
         .expect("spawn sac claim");
     let claim: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(
-        claim.is_array(),
-        "only create replies carry the id; claim stays the bare records"
+        claim["records"].is_array(),
+        "claim answers the wire's shape: its records under the reply object"
     );
 
     let out = std::process::Command::new(bin)
@@ -1061,4 +1061,174 @@ fn create_reply_names_the_born_task() {
     let created: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(created["id"], "t-1");
     assert_eq!(created["records"][0]["kind"], "task_created");
+}
+
+/// One CLI verb run offline against a scratch db, --json on, agent tier.
+fn sac_offline(db: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sac"))
+        .arg("--db")
+        .arg(db)
+        .arg("--offline")
+        .arg("--json")
+        .env("SACCADE_ACTOR", "pi")
+        .args(args)
+        .output()
+        .expect("spawn sac");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A reply's canonical bytes with the clock zeroed, so the two faces of
+/// one command compare equal.
+fn reply_shape(text: &str) -> String {
+    let mut reply: Value = serde_json::from_str(text).expect("the reply is json");
+    for record in reply["records"]
+        .as_array_mut()
+        .expect("every reply carries its records")
+    {
+        record["event_time"] = json!(0);
+        record["logged_time"] = json!(0);
+    }
+    serde_json::to_string(&reply).expect("the reply is plain data")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offline_create_reply_matches_the_wire() {
+    let wire_db = scratch_db("face-create-wire");
+    let base_url = spawn_server(&wire_db).await;
+    let (status, wire_body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+        ),
+    );
+    assert_eq!(status, 200);
+
+    let offline_db = scratch_db("face-create-offline");
+    let offline_body = sac_offline(&offline_db, &["create", "task", "migrate floop"]);
+
+    assert_eq!(reply_shape(&offline_body), reply_shape(&wire_body));
+    // the born task's token rides both faces
+    assert_eq!(json_of(&wire_body)["id"], "t-0");
+    assert_eq!(json_of(&offline_body)["id"], "t-0");
+
+    std::fs::remove_dir_all(wire_db.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(offline_db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offline_comment_reply_matches_the_wire() {
+    let wire_db = scratch_db("face-comment-wire");
+    let base_url = spawn_server(&wire_db).await;
+    let (status, _) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let (status, wire_body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 0}, "body": "implement foo", "addressee": null}}),
+        ),
+    );
+    assert_eq!(status, 200);
+
+    let offline_db = scratch_db("face-comment-offline");
+    sac_offline(&offline_db, &["create", "task", "migrate floop"]);
+    let offline_body = sac_offline(&offline_db, &["comment", "t-0", "implement foo"]);
+
+    assert_eq!(reply_shape(&offline_body), reply_shape(&wire_body));
+    // only create names a birth
+    assert_eq!(json_of(&wire_body)["id"], Value::Null);
+    assert_eq!(json_of(&offline_body)["id"], Value::Null);
+
+    std::fs::remove_dir_all(wire_db.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(offline_db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offline_claim_reply_matches_the_wire() {
+    let wire_db = scratch_db("face-claim-wire");
+    let base_url = spawn_server(&wire_db).await;
+    let (status, _) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let (status, wire_body) = post_command(
+        &base_url,
+        &envelope("pi", "agent", json!({"claim_task": {"id": 0}})),
+    );
+    assert_eq!(status, 200);
+
+    let offline_db = scratch_db("face-claim-offline");
+    sac_offline(&offline_db, &["create", "task", "migrate floop"]);
+    let offline_body = sac_offline(&offline_db, &["claim", "t-0"]);
+
+    assert_eq!(reply_shape(&offline_body), reply_shape(&wire_body));
+    assert_eq!(json_of(&wire_body)["id"], Value::Null);
+    assert_eq!(json_of(&offline_body)["id"], Value::Null);
+
+    std::fs::remove_dir_all(wire_db.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(offline_db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offline_done_reply_matches_the_wire() {
+    let wire_db = scratch_db("face-done-wire");
+    let base_url = spawn_server(&wire_db).await;
+    let (status, _) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = post_command(
+        &base_url,
+        &envelope("pi", "agent", json!({"claim_task": {"id": 0}})),
+    );
+    assert_eq!(status, 200);
+    let (status, wire_body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"complete_task": {"id": 0, "receipt": "the work landed"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+
+    let offline_db = scratch_db("face-done-offline");
+    sac_offline(&offline_db, &["create", "task", "migrate floop"]);
+    sac_offline(&offline_db, &["claim", "t-0"]);
+    let offline_body = sac_offline(
+        &offline_db,
+        &["done", "t-0", "--receipt", "the work landed"],
+    );
+
+    assert_eq!(reply_shape(&offline_body), reply_shape(&wire_body));
+    assert_eq!(json_of(&wire_body)["id"], Value::Null);
+    assert_eq!(json_of(&offline_body)["id"], Value::Null);
+
+    std::fs::remove_dir_all(wire_db.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(offline_db.parent().unwrap()).unwrap();
 }
