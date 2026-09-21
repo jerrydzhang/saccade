@@ -285,6 +285,16 @@ pub fn prepare(
             )?;
         }
     };
+    // the run's derived name, executor/task-incarnation: the worker is
+    // always a distinct recorded attribution, so self-approval is dead
+    let ordinal = world
+        .incarnations
+        .values()
+        .filter(|run| run.task_id == task)
+        .count()
+        + 1;
+    let session_actor = ActorName::new(format!("{}/t-{}-{}", actor.as_str(), task.0, ordinal))
+        .map_err(|e| RunnerFail::Usage(format!("session attribution: {e:?}")))?;
     let (bound, _) = db::record(
         conn,
         &system,
@@ -292,7 +302,7 @@ pub fn prepare(
             task_id: task,
             response_target: demand,
             trigger: demand.0,
-            actor: actor.clone(),
+            actor: session_actor.clone(),
             session: SessionPointer::new(session.clone())
                 .map_err(|e| RunnerFail::Usage(format!("session path: {e:?}")))?,
         },
@@ -312,7 +322,7 @@ pub fn prepare(
         incarnation,
         worktree,
         session,
-        actor,
+        actor: session_actor,
     })
 }
 

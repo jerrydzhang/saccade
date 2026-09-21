@@ -15,6 +15,8 @@ pub struct TaskId(pub usize);
 pub enum TaskState {
     Open,
     Claimed,
+    /// A delivered run's deposit; accept is the only door to done
+    Delivered(Prose),
     Done(Prose),
     Dropped,
 }
@@ -24,7 +26,19 @@ impl TaskState {
     pub fn transition(&self, event: &Event) -> Option<TaskState> {
         match (self, event) {
             (TaskState::Open, Event::TaskClaimed { .. }) => Some(TaskState::Claimed),
+            // an in-thread round claims a delivered task afresh; the
+            // demand never reopens it
+            (TaskState::Delivered(_), Event::TaskClaimed { .. }) => Some(TaskState::Claimed),
+            // the old law's close, reachable only in logs written before
+            // the receipts law
             (TaskState::Claimed, Event::TaskDone { receipt, .. }) => {
+                Some(TaskState::Done(receipt.clone()))
+            }
+            (TaskState::Claimed, Event::TaskDelivered { receipt, .. }) => {
+                Some(TaskState::Delivered(receipt.clone()))
+            }
+            // the receipt rides through the accept door
+            (TaskState::Delivered(receipt), Event::TaskAccepted { .. }) => {
                 Some(TaskState::Done(receipt.clone()))
             }
             (TaskState::Claimed, Event::TaskReleased { .. }) => Some(TaskState::Open),
@@ -59,10 +73,14 @@ pub struct TaskContext {
     pub claimed_at: Option<u64>,
     /// Event time of the most recent record that moved this task
     pub last_record_at: u64,
+    /// Event time of the delivery now held, present only while delivered
+    pub delivered_at: Option<u64>,
     pub proposal: Option<ProposalId>,
     pub thread: Vec<CommentId>,
     /// Holder of the current claim, present only while the task is claimed
     pub holder: Option<ActorName>,
+    /// The attribution that birthed the task, from the birth record
+    pub birth_actor: ActorName,
     /// The one live run on this task, None while unbound or terminal
     pub active_incarnation: Option<IncarnationId>,
     /// The task's workspace lineage, present once provisioned
@@ -82,6 +100,7 @@ mod test {
         let states = [
             TaskState::Open,
             TaskState::Claimed,
+            TaskState::Delivered(Prose::new("filler".into()).unwrap()),
             TaskState::Done(Prose::new("filler".into()).unwrap()),
             TaskState::Dropped,
         ];
@@ -95,6 +114,11 @@ mod test {
                 id: TaskId(0),
                 receipt: Prose::new("filler".into()).unwrap(),
             },
+            Event::TaskDelivered {
+                id: TaskId(0),
+                receipt: Prose::new("filler".into()).unwrap(),
+            },
+            Event::TaskAccepted { id: TaskId(0) },
             Event::TaskDropped {
                 id: TaskId(0),
                 note: Prose::new("filler".into()).unwrap(),
@@ -124,7 +148,10 @@ mod test {
             matches!(
                 (state, event),
                 (TaskState::Open, Event::TaskClaimed { .. })
+                    | (TaskState::Delivered(_), Event::TaskClaimed { .. })
                     | (TaskState::Claimed, Event::TaskDone { .. })
+                    | (TaskState::Claimed, Event::TaskDelivered { .. })
+                    | (TaskState::Delivered(_), Event::TaskAccepted { .. })
                     | (TaskState::Claimed, Event::TaskReleased { .. })
                     | (
                         TaskState::Open | TaskState::Done(_),

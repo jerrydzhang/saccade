@@ -885,3 +885,71 @@ async fn judgment_forms_carry_the_actor_name() {
     );
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
+
+/// The accept door: a delivered task's form carries the actor name,
+/// posts at human tier under it, and the deposit becomes done.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_accept_door_carries_the_actor_name() {
+    let db = scratch_db("console-accept");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "migrate floop");
+    // jerry births t-0; the run's derived attribution claims and delivers
+    let worker = Context {
+        actor: ActorName::new("pi/t-0-1".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    state
+        .execute(&worker, Command::ClaimTask { id: TaskId(0) }, None)
+        .unwrap();
+    state
+        .execute(
+            &worker,
+            Command::CompleteTask {
+                id: TaskId(0),
+                receipt: Prose::new("suite green".into()).unwrap(),
+            },
+            None,
+        )
+        .unwrap();
+
+    // the focused page renders the accept form with the who input
+    let (status, html) = get_html(&format!("{base}/t/0"));
+    assert_eq!(status, 200);
+    assert!(html.contains("● DELIVERED"));
+    assert!(html.contains("action=\"/t/0/accept\""));
+    assert!(html.contains("name=\"who\""));
+
+    // a cookieless accept without a name refuses, naming the fix
+    let (status, body, _) = post_form(&format!("{base}/t/0/accept"), &[], "accept=1");
+    assert_eq!(status, 400);
+    assert!(body.contains("a name is required to record the act"));
+
+    // the named accept lands at human tier and the door opens to done
+    let (status, _, loc, cookie) =
+        post_form_ck(&format!("{base}/t/0/accept"), &[], "accept=1&who=jerry");
+    assert_eq!(status, 303);
+    assert_eq!(loc.as_deref(), Some("/t/0"));
+    assert!(
+        cookie
+            .as_deref()
+            .is_some_and(|c| c.starts_with("actor=jerry")),
+        "the first claim claims the cookie: {cookie:?}"
+    );
+    let snap = match state.snapshot() {
+        Ok(s) => s,
+        Err(_) => panic!("the snapshot refused"),
+    };
+    let accepted = snap
+        .rows
+        .iter()
+        .rev()
+        .find(|r| r.kind == "task_accepted")
+        .expect("the accept landed");
+    assert_eq!(accepted.actor, "jerry");
+    assert_eq!(accepted.tier, "human");
+    assert_eq!(
+        task_view(&world_of(&state), TaskId(0)).unwrap().state,
+        "done"
+    );
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}

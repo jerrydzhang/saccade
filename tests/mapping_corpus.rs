@@ -21,13 +21,15 @@
 use std::path::PathBuf;
 
 use saccade::Reject;
-use saccade::db::{self, LoadState};
+use saccade::db::{self, AtomicBatch, LoadState, RecordDraft};
+use saccade::objects::comment::{Addressee, CommentId, Target};
+use saccade::objects::incarnation::IncarnationId;
 use saccade::objects::task::TaskId;
 use saccade::store::{Context, Tier, World};
 use saccade::types::actor::ActorName;
-use saccade::types::pointers::{GitBranch, GitCommit};
+use saccade::types::pointers::{GitBranch, GitCommit, SessionPointer};
 use saccade::views;
-use saccade::{Command, ProposalAction, ProposalId, Prose, RecordId};
+use saccade::{Command, Event, ProposalAction, ProposalId, Prose, RecordId};
 
 fn importer() -> Context {
     Context {
@@ -74,14 +76,20 @@ fn world_of(conn: &rusqlite::Connection) -> World {
     world
 }
 
+/// A beads closure was already judged done in beads; the import records
+/// the fact under the old event, it does not deliver a run for acceptance.
 fn done(conn: &mut rusqlite::Connection, id: TaskId, receipt: &str, at: u64) {
     db::record(conn, &importer(), Command::ClaimTask { id }, at).unwrap();
-    db::record(
+    db::execute_batch(
         conn,
-        &importer(),
-        Command::CompleteTask {
-            id,
-            receipt: saccade::Prose::new(receipt.into()).unwrap(),
+        AtomicBatch {
+            drafts: vec![RecordDraft {
+                context: importer(),
+                event: Event::TaskDone {
+                    id,
+                    receipt: Prose::new(receipt.into()).unwrap(),
+                },
+            }],
         },
         at,
     )
@@ -564,6 +572,8 @@ fn a_task_lifecycle_folds_through_the_write_path() {
         5,
     )
     .unwrap();
+    // the delivered deposit passes the accept door before the void may drop it
+    db::record(&mut conn, &human, Command::AcceptTask { id: TaskId(1) }, 5).unwrap();
     db::record(
         &mut conn,
         &human,
@@ -584,6 +594,7 @@ fn a_task_lifecycle_folds_through_the_write_path() {
         7,
     )
     .unwrap();
+    db::record(&mut conn, &human, Command::AcceptTask { id: TaskId(0) }, 7).unwrap();
     db::record(&mut conn, &human, create("migrate floop"), 8).unwrap();
     db::record(&mut conn, &agent, Command::ClaimTask { id: TaskId(3) }, 9).unwrap();
     db::record(
@@ -620,7 +631,7 @@ fn a_task_lifecycle_folds_through_the_write_path() {
     db::record(&mut conn, &human, create("open work"), 14).unwrap();
 
     let loadout = db::load(&conn).unwrap();
-    assert_eq!(loadout.rows.len(), 14);
+    assert_eq!(loadout.rows.len(), 16);
     let world = world_of(&conn);
     let state_of = |n: usize| views::TaskView::of(TaskId(n), &world.tasks[n], None).state;
     assert_eq!(state_of(0), "done");
@@ -630,15 +641,15 @@ fn a_task_lifecycle_folds_through_the_write_path() {
     assert_eq!(state_of(4), "open");
 
     // identity, time, and authorship land as stored
-    assert_eq!(loadout.rows[8].seq, 8);
-    assert_eq!(loadout.rows[8].event_time, 9);
-    assert_eq!(loadout.rows[8].actor, "saccade bot");
-    assert_eq!(loadout.rows[9].seq, 9);
-    assert_eq!(loadout.rows[9].event_time, 10);
-    assert_eq!(loadout.rows[9].actor, "human person");
     assert_eq!(loadout.rows[10].seq, 10);
-    assert_eq!(loadout.rows[10].event_time, 11);
+    assert_eq!(loadout.rows[10].event_time, 9);
     assert_eq!(loadout.rows[10].actor, "saccade bot");
+    assert_eq!(loadout.rows[11].seq, 11);
+    assert_eq!(loadout.rows[11].event_time, 10);
+    assert_eq!(loadout.rows[11].actor, "human person");
+    assert_eq!(loadout.rows[12].seq, 12);
+    assert_eq!(loadout.rows[12].event_time, 11);
+    assert_eq!(loadout.rows[12].actor, "saccade bot");
 }
 
 /// The merge-then-checkpoint law, through the write path: a run closes on
@@ -757,6 +768,172 @@ fn a_merged_head_records_through_the_verb_and_never_rewinds() {
             .iter()
             .all(|r| r.actor == "pi" && r.tier == "agent")
     );
+}
+
+/// The receipts law's own story, through the write path: the asker drafts,
+/// the run delivers under its derived attribution, the worker and the
+/// executor are refused at the accept door, and the asker's accept — or
+/// any human's — is the only way to done.
+#[test]
+fn a_delivered_run_waits_for_the_askers_accept() {
+    let asker = Context {
+        actor: ActorName::new("jerry".into()).unwrap(),
+        tier: Tier::Human,
+    };
+    let path = db_path("receipts-law");
+    let mut conn = db::open(&path).unwrap();
+
+    db::record(
+        &mut conn,
+        &asker,
+        Command::CreateTask {
+            name: Prose::new("land the receipts law".into()).unwrap(),
+            parent_id: None,
+        },
+        1,
+    )
+    .unwrap();
+
+    // the demand fires a run; the runner stamps the derived attribution
+    db::record(
+        &mut conn,
+        &asker,
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            body: Prose::new("serve this demand".into()).unwrap(),
+            addressee: Some(Addressee::Agent),
+        },
+        2,
+    )
+    .unwrap();
+    let demand = CommentId(RecordId(1));
+    let system = Context::system();
+    let worker = Context {
+        actor: ActorName::new("pi/t-0-1".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    db::record(
+        &mut conn,
+        &system,
+        Command::BindIncarnation {
+            task_id: TaskId(0),
+            response_target: demand,
+            trigger: RecordId(1),
+            actor: worker.actor.clone(),
+            session: SessionPointer::new("/tmp/pi-t-0-1.jsonl".into()).unwrap(),
+        },
+        3,
+    )
+    .unwrap();
+    db::record(
+        &mut conn,
+        &system,
+        Command::AcceptPrompt {
+            id: IncarnationId(RecordId(2)),
+        },
+        3,
+    )
+    .unwrap();
+
+    // the session claims, answers the demand, and delivers its receipt
+    db::record(&mut conn, &worker, Command::ClaimTask { id: TaskId(0) }, 4).unwrap();
+    db::record(
+        &mut conn,
+        &worker,
+        Command::Comment {
+            target: Target::Comment(demand),
+            body: Prose::new("the work landed; the receipt names the evidence".into()).unwrap(),
+            addressee: None,
+        },
+        5,
+    )
+    .unwrap();
+    let receipt = "suite green, 85 unit + 11 corpus; close settles the run, the receipt stands for the accept";
+    db::record(
+        &mut conn,
+        &worker,
+        Command::CompleteTask {
+            id: TaskId(0),
+            receipt: Prose::new(receipt.into()).unwrap(),
+        },
+        6,
+    )
+    .unwrap();
+
+    let world = world_of(&conn);
+    assert_eq!(
+        views::task_view(&world, TaskId(0)).unwrap().state,
+        "delivered"
+    );
+    assert_eq!(world.tasks[0].birth_actor.as_str(), "jerry");
+    assert_eq!(world.tasks[0].delivered_at, Some(6));
+
+    // the worker cannot accept its own delivery, and neither can the
+    // executor's plain name: attribution equality is exact
+    let before = db::load(&conn).unwrap().rows.len();
+    let executor = Context {
+        actor: ActorName::new("pi".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    for ctx in [worker.clone(), executor, system] {
+        let refused = db::record(&mut conn, &ctx, Command::AcceptTask { id: TaskId(0) }, 7);
+        assert!(
+            matches!(
+                refused,
+                Err(db::ExecuteFail::Reject(Reject::NotBirthAttribution))
+            ),
+            "the accept door refused {}",
+            ctx.actor.as_str()
+        );
+    }
+    assert_eq!(db::load(&conn).unwrap().rows.len(), before);
+
+    // the asker accepts; the receipt rides through the door
+    db::record(&mut conn, &asker, Command::AcceptTask { id: TaskId(0) }, 8).unwrap();
+    let world = world_of(&conn);
+    assert_eq!(views::task_view(&world, TaskId(0)).unwrap().state, "done");
+    let shown = views::show_view(&world, TaskId(0)).unwrap();
+    assert_eq!(shown.receipt.as_deref(), Some(receipt));
+
+    // a human accepts anything: an agent-birthed task's delivery too
+    let author = Context {
+        actor: ActorName::new("dispatch".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    db::record(
+        &mut conn,
+        &author,
+        Command::CreateTask {
+            name: Prose::new("agent-birthed work".into()).unwrap(),
+            parent_id: None,
+        },
+        9,
+    )
+    .unwrap();
+    db::record(&mut conn, &author, Command::ClaimTask { id: TaskId(1) }, 10).unwrap();
+    db::record(
+        &mut conn,
+        &author,
+        Command::CompleteTask {
+            id: TaskId(1),
+            receipt: Prose::new("delivered by the birth attribution itself".into()).unwrap(),
+        },
+        11,
+    )
+    .unwrap();
+    db::record(&mut conn, &asker, Command::AcceptTask { id: TaskId(1) }, 12).unwrap();
+    assert_eq!(
+        views::task_view(&world_of(&conn), TaskId(1)).unwrap().state,
+        "done"
+    );
+
+    let rows = db::load(&conn).unwrap().rows;
+    assert_eq!(rows[6].kind, "task_delivered");
+    assert_eq!(rows[6].actor, "pi/t-0-1");
+    assert_eq!(rows[7].kind, "task_accepted");
+    assert_eq!(rows[7].actor, "jerry");
+    assert_eq!(rows[11].kind, "task_accepted");
+    assert_eq!(rows[11].actor, "jerry");
 }
 
 /// Possession fixes the tier: SACCADE_ACTOR present records agent, its

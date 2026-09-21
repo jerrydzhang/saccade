@@ -459,6 +459,14 @@ mod test {
             12,
         )
         .unwrap();
+        // the delivered deposit passes through the accept door
+        record(
+            &mut conn,
+            &human(),
+            Command::AcceptTask { id: TaskId(0) },
+            12,
+        )
+        .unwrap();
 
         record(&mut conn, &agent(), create("duplicate corpse"), 13).unwrap();
         record(
@@ -475,7 +483,7 @@ mod test {
             &mut conn,
             &human(),
             Command::AcceptProposal {
-                id: ProposalId(RecordId(4)),
+                id: ProposalId(RecordId(5)),
             },
             15,
         )
@@ -498,7 +506,7 @@ mod test {
             &mut conn,
             &human(),
             Command::Comment {
-                target: Target::Comment(CommentId(RecordId(7))),
+                target: Target::Comment(CommentId(RecordId(8))),
                 body: Prose::new("agreed, closing".into()).unwrap(),
                 addressee: None,
             },
@@ -549,8 +557,8 @@ mod test {
             &system,
             Command::BindIncarnation {
                 task_id: TaskId(0),
-                response_target: CommentId(RecordId(12)),
-                trigger: RecordId(12),
+                response_target: CommentId(RecordId(13)),
+                trigger: RecordId(13),
                 actor: ActorName::new("pi".into()).unwrap(),
                 session: SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap(),
             },
@@ -561,7 +569,7 @@ mod test {
             &mut conn,
             &system,
             Command::AcceptPrompt {
-                id: IncarnationId(RecordId(13)),
+                id: IncarnationId(RecordId(14)),
             },
             31,
         )
@@ -570,7 +578,7 @@ mod test {
             &mut conn,
             &agent(),
             Command::Comment {
-                target: Target::Comment(CommentId(RecordId(12))),
+                target: Target::Comment(CommentId(RecordId(13))),
                 body: Prose::new("the fold did, at seq 9".into()).unwrap(),
                 addressee: None,
             },
@@ -581,8 +589,8 @@ mod test {
             &mut conn,
             &system,
             Command::MarkRecord {
-                record_id: RecordId(15),
-                incarnation_id: IncarnationId(RecordId(13)),
+                record_id: RecordId(16),
+                incarnation_id: IncarnationId(RecordId(14)),
             },
             31,
         )
@@ -591,13 +599,14 @@ mod test {
             &mut conn,
             &system,
             Command::SettleIncarnation {
-                id: IncarnationId(RecordId(13)),
+                id: IncarnationId(RecordId(14)),
             },
             31,
         )
         .unwrap();
 
-        // the demand reopened done t-0; the fired session claims and finishes again
+        // the demand reopened done t-0; the fired session claims, delivers,
+        // and the asker accepts again
         record(
             &mut conn,
             &agent(),
@@ -612,6 +621,13 @@ mod test {
                 id: TaskId(0),
                 receipt: Prose::new("refolded the receipt".into()).unwrap(),
             },
+            32,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &human(),
+            Command::AcceptTask { id: TaskId(0) },
             32,
         )
         .unwrap();
@@ -667,19 +683,21 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 24);
-        assert_eq!(loadout.rows[4].kind, "proposal_created");
-        assert_eq!(loadout.rows[5].kind, "proposal_accepted");
-        assert_eq!(loadout.rows[6].kind, "task_dropped");
-        assert_eq!(loadout.rows[9].actor.as_str(), "saccade bot");
-        assert_eq!(loadout.rows[9].tier, "agent");
-        assert_eq!(loadout.rows[11].actor.as_str(), "human person");
-        assert_eq!(loadout.rows[11].tier, "human");
+        assert_eq!(loadout.rows.len(), 26);
+        assert_eq!(loadout.rows[2].kind, "task_delivered");
+        assert_eq!(loadout.rows[3].kind, "task_accepted");
+        assert_eq!(loadout.rows[5].kind, "proposal_created");
+        assert_eq!(loadout.rows[6].kind, "proposal_accepted");
+        assert_eq!(loadout.rows[7].kind, "task_dropped");
+        assert_eq!(loadout.rows[10].actor.as_str(), "saccade bot");
+        assert_eq!(loadout.rows[10].tier, "agent");
+        assert_eq!(loadout.rows[12].actor.as_str(), "human person");
+        assert_eq!(loadout.rows[12].tier, "human");
         // the workspace rows round-trip through the wire columns
-        assert_eq!(loadout.rows[20].kind, "task_workspace_created");
-        assert_eq!(loadout.rows[21].kind, "task_worktree_created");
-        assert_eq!(loadout.rows[22].kind, "task_workspace_checkpointed");
-        assert_eq!(loadout.rows[20].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[22].kind, "task_workspace_created");
+        assert_eq!(loadout.rows[23].kind, "task_worktree_created");
+        assert_eq!(loadout.rows[24].kind, "task_workspace_checkpointed");
+        assert_eq!(loadout.rows[22].actor.as_str(), "saccade");
         assert!(matches!(
             world.tasks[0].workspace.as_ref().map(|w| &w.checkpoint),
             Some(checkpoint) if *checkpoint == GitCommit::new("def456".into()).unwrap()
@@ -689,26 +707,26 @@ mod test {
         assert!(matches!(world.tasks[1].task.state, TaskState::Dropped));
         assert!(matches!(world.tasks[2].task.state, TaskState::Done(_)));
         assert_eq!(
-            world.proposals[&ProposalId(RecordId(4))].proposal.state,
+            world.proposals[&ProposalId(RecordId(5))].proposal.state,
             ProposalState::Accepted
         );
-        let reply = &world.comments[&CommentId(RecordId(8))];
-        let root = &world.comments[&CommentId(RecordId(7))];
+        let reply = &world.comments[&CommentId(RecordId(9))];
+        let root = &world.comments[&CommentId(RecordId(8))];
         assert_eq!(root.actor.as_str(), "saccade bot");
         assert_eq!(reply.actor.as_str(), "human person");
-        let demand = &world.comments[&CommentId(RecordId(12))];
+        let demand = &world.comments[&CommentId(RecordId(13))];
         assert_eq!(
             demand.state,
             CommentState::AddressedToAgent {
                 response: ResponseState::Responded {
-                    reply: CommentId(RecordId(15))
+                    reply: CommentId(RecordId(16))
                 },
                 attempt: AgentAttemptState::Spent,
             }
         );
-        let run = &world.incarnations[&IncarnationId(RecordId(13))];
+        let run = &world.incarnations[&IncarnationId(RecordId(14))];
         assert_eq!(run.state, IncarnationState::Settled);
-        assert_eq!(run.produced, vec![RecordId(15)]);
+        assert_eq!(run.produced, vec![RecordId(16)]);
         assert_eq!(world.tasks[0].active_incarnation, None);
 
         // bi-temporal: event time is caller-supplied, logged time is ours
@@ -742,6 +760,13 @@ mod test {
                 12,
             )
             .unwrap();
+            record(
+                &mut conn,
+                &human(),
+                Command::AcceptTask { id: TaskId(0) },
+                12,
+            )
+            .unwrap();
         } // connection dropped: WAL checkpoints back into the main file
 
         // reopen runs the full open path: pragmas, header-stamp verify
@@ -750,13 +775,13 @@ mod test {
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load after reopen");
         };
-        assert_eq!(loadout.rows.len(), 3);
+        assert_eq!(loadout.rows.len(), 4);
         assert_eq!(world.tasks.len(), 1);
         assert!(matches!(world.tasks[0].task.state, TaskState::Done(_)));
 
         // the read-only path sees the same file
         let ro = open_read(&path).expect("read-only open of a real file");
-        assert_eq!(load(&ro).unwrap().rows.len(), 3);
+        assert_eq!(load(&ro).unwrap().rows.len(), 4);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));

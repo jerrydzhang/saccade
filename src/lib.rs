@@ -44,6 +44,8 @@ pub enum Reject {
     ProposalAlreadyOpen,
     #[error("no comment with that id")]
     InvalidCommentId,
+    #[error("not the task's birth attribution")]
+    NotBirthAttribution,
     // Permissions
     #[error("human-only act")]
     HumanOnly,

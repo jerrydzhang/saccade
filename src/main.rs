@@ -70,7 +70,7 @@ enum Cmd {
     },
     /// Claim an open task
     Claim { id: String },
-    /// Complete a claimed task, depositing a receipt
+    /// Deliver a claimed task's run, depositing the receipt accept reviews
     Done {
         id: String,
         #[arg(long)]
@@ -96,7 +96,8 @@ enum Cmd {
         #[arg(long)]
         name: String,
     },
-    /// Human-only: accept a proposal, executing its act
+    /// Accept a proposal (bare seq, human) or a delivered task (t-N, the
+    /// birth attribution or a human)
     Accept { id: String },
     /// Human-only: reject a proposal with a ruling note
     Reject {
@@ -249,6 +250,7 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::InvalidProposalId => "invalid_proposal_id",
         Reject::ProposalAlreadyOpen => "proposal_already_open",
         Reject::InvalidCommentId => "invalid_comment_id",
+        Reject::NotBirthAttribution => "not_birth_attribution",
         Reject::InvalidIncarnationId => "invalid_incarnation_id",
         Reject::IncarnationAlreadyActive => "incarnation_already_active",
         Reject::DemandNotOnTask => "demand_not_on_task",
@@ -302,9 +304,18 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 },
             },
         },
-        Cmd::Accept { id } => Command::AcceptProposal {
-            id: parse_proposal_id(id)?,
-        },
+        Cmd::Accept { id } => {
+            // one verb, two objects: t-N accepts a task, a bare seq a proposal
+            if id.starts_with("t-") {
+                Command::AcceptTask {
+                    id: parse_task_id(id)?,
+                }
+            } else {
+                Command::AcceptProposal {
+                    id: parse_proposal_id(id)?,
+                }
+            }
+        }
         Cmd::Reject { id, note } => Command::RejectProposal {
             id: parse_proposal_id(id)?,
             note: Prose::new(note.clone())?,
@@ -601,7 +612,7 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
     // the digest question is standing work; history lives in log and show
     let views: Vec<_> = views
         .into_iter()
-        .filter(|v| matches!(v.state, "open" | "claimed"))
+        .filter(|v| matches!(v.state, "open" | "claimed" | "delivered"))
         .collect();
 
     if cli.json {

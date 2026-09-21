@@ -14,12 +14,16 @@ fn required_tier(event: &Event) -> Authority {
         Event::TaskCreated { .. }
         | Event::TaskClaimed { .. }
         | Event::TaskDone { .. }
+        | Event::TaskDelivered { .. }
         | Event::TaskReleased { .. }
         | Event::ProposalCreated { .. }
         | Event::ProposalWithdrawn { .. }
         | Event::Commented { .. }
         | Event::IncarnationCancelled { .. }
         | Event::TaskWorkspaceCheckpointed { .. } => Authority::AnyTier,
+        // accept's door reads the world's birth attribution, so its
+        // authority lives in the fold, not in a tier cell
+        Event::TaskAccepted { .. } => Authority::AnyTier,
         Event::TaskDropped { .. }
         | Event::ProposalRejected { .. }
         | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
@@ -71,7 +75,8 @@ pub fn decide(command: Command) -> Vec<Event> {
         // Task commands
         Command::CreateTask { name, parent_id } => vec![Event::TaskCreated { name, parent_id }],
         Command::ClaimTask { id } => vec![Event::TaskClaimed { id }],
-        Command::CompleteTask { id, receipt } => vec![Event::TaskDone { id, receipt }],
+        Command::CompleteTask { id, receipt } => vec![Event::TaskDelivered { id, receipt }],
+        Command::AcceptTask { id } => vec![Event::TaskAccepted { id }],
         Command::DropTask { id, note } => vec![Event::TaskDropped { id, note }],
         Command::ReleaseTask { id, note } => vec![Event::TaskReleased { id, note }],
         // Proposal commands
@@ -176,6 +181,11 @@ mod test {
                 id: TaskId(0),
                 receipt: Prose::new("filler".into()).unwrap(),
             },
+            Event::TaskDelivered {
+                id: TaskId(0),
+                receipt: Prose::new("filler".into()).unwrap(),
+            },
+            Event::TaskAccepted { id: TaskId(0) },
             Event::TaskDropped {
                 id: TaskId(0),
                 note: Prose::new("filler".into()).unwrap(),

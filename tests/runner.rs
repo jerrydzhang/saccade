@@ -114,6 +114,8 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     assert!(worktree.join(".git").exists());
     let branches = sh(&repo, &["branch", "--list", "saccade/t-0"]);
     assert!(branches.contains("saccade/t-0"));
+    // the run's name is derived: executor/task-incarnation
+    assert_eq!(prepared.actor.as_str(), "pi/t-0-1");
 
     // the run is accepted and holding the demand's attempt
     let world = world_of(&db_path);
@@ -263,7 +265,8 @@ fn the_pointer_prompt_names_the_work_and_the_reply_door() {
     assert!(prompt.contains("c-1"), "{prompt}");
     assert!(prompt.contains("t-0"), "{prompt}");
     assert!(prompt.contains("/bin/sac comment '#1'"), "{prompt}");
-    assert!(prompt.contains("'pi'"), "{prompt}");
+    // the reply door names the run's derived attribution
+    assert!(prompt.contains("'pi/t-0-1'"), "{prompt}");
     std::fs::remove_dir_all(db_path.parent().unwrap()).unwrap();
 }
 
@@ -276,10 +279,11 @@ fn wait_reports_an_unanswered_demand_at_its_deadline() {
 }
 
 /// The session body the supervision tests use: a fixed reply at agent
-/// tier, as a real executor would leave through the CLI. Each test's
-/// driver owns its db, so parallel tests never share a body.
+/// tier under the run's derived attribution, as a real executor would
+/// leave through the CLI. Each test's driver owns its db, so parallel
+/// tests never share a body.
 fn fake_session_for(db: PathBuf) -> SessionDriver {
-    Arc::new(move |_run: &PreparedRun, _prompt: &str, _runs: &LiveRuns| {
+    Arc::new(move |run: &PreparedRun, _prompt: &str, _runs: &LiveRuns| {
         let mut conn = db::open(&db).unwrap();
         let world = world_of(&db);
         let demand = world
@@ -298,7 +302,10 @@ fn fake_session_for(db: PathBuf) -> SessionDriver {
             .expect("the bound demand is in flight");
         db::record(
             &mut conn,
-            &agent(),
+            &Context {
+                actor: run.actor.clone(),
+                tier: Tier::Agent,
+            },
             Command::Comment {
                 target: Target::Comment(demand),
                 body: Prose::new("the fake session answered".into()).unwrap(),
@@ -326,7 +333,17 @@ fn a_write_that_lands_a_demand_fires_a_run_that_answers_it() {
 
     let seen = wait(&db_path, demand, Some(10)).unwrap();
     assert!(seen.contains("the fake session answered"), "{seen}");
+    // the session's write carries the derived attribution
     let world = world_of(&db_path);
+    match &world.comments[&demand].state {
+        CommentState::AddressedToAgent { response, .. } => match response {
+            saccade::objects::comment::ResponseState::Responded { reply } => {
+                assert_eq!(world.comments[reply].actor.as_str(), "pi/t-0-1");
+            }
+            _ => panic!("the reply landed"),
+        },
+        other => panic!("demand answered: {other:?}"),
+    }
     assert_eq!(world.tasks[0].active_incarnation, None);
     match &world.comments[&demand].state {
         CommentState::AddressedToAgent { attempt, .. } => {
@@ -378,6 +395,72 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
             other => panic!("demand spent: {other:?}"),
         }
     }
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+/// Delivered is sweep-open: a finding on a delivered task fires its
+/// in-thread round without reopening the task or touching the deposit.
+#[test]
+fn a_demand_on_a_delivered_task_fires_its_round() {
+    let (repo, db_path, _first) = scaffold("delivered-sweep");
+    let worker = ActorName::new("pi/t-0-1".into()).unwrap();
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &Context {
+            actor: worker.clone(),
+            tier: Tier::Agent,
+        },
+        Command::ClaimTask { id: TaskId(0) },
+        2,
+    )
+    .unwrap();
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &Context {
+            actor: worker,
+            tier: Tier::Agent,
+        },
+        Command::CompleteTask {
+            id: TaskId(0),
+            receipt: Prose::new("delivered; the asker has not accepted".into()).unwrap(),
+        },
+        3,
+    )
+    .unwrap();
+
+    // the finding arrives on the delivered task
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            body: Prose::new("one more finding on the delivered work".into()).unwrap(),
+            addressee: Some(Addressee::Agent),
+        },
+        4,
+    )
+    .unwrap();
+    let finding = latest_demand(&db_path);
+
+    let runner = RunnerConfig {
+        repo_root: repo.clone(),
+        actor: ActorName::new("pi".into()).unwrap(),
+        driver: fake_session_for(db_path.clone()),
+    };
+    let app = AppState::with_runner(&db_path, runner).unwrap();
+
+    // the sweep fires the round; the session answers under its derived name
+    supervisor::sweep(&app);
+    let seen = wait(&db_path, finding, Some(10)).unwrap();
+    assert!(seen.contains("the fake session answered"), "{seen}");
+
+    let world = world_of(&db_path);
+    // delivered survived the round: no reopen, the deposit stands
+    assert_eq!(
+        saccade::views::task_view(&world, TaskId(0)).unwrap().state,
+        "delivered"
+    );
+    assert_eq!(world.tasks[0].active_incarnation, None);
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -600,13 +683,15 @@ fn prepare_heals_a_severed_branch_from_main() {
         4,
     )
     .unwrap();
-    prepare(
+    let second = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
         latest_demand(&db_path),
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
+    // the second run on the task carries the next ordinal
+    assert_eq!(second.actor.as_str(), "pi/t-0-2");
 
     assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).contains("saccade/t-0"));
     let world = world_of(&db_path);

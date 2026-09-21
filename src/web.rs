@@ -14,11 +14,13 @@ use time::OffsetDateTime;
 use time::macros::format_description;
 
 /// The task state's chip color, one per state out of the #522 palette:
-/// open whispers, claimed is gold like the work it holds, done is green
-/// like a settled run, dropped is rose like the human act it was.
+/// open whispers, claimed is gold like the work it holds, delivered is
+/// the link tone like the hand-off it awaits, done is green like a
+/// settled run, dropped is rose like the human act it was.
 fn state_color(state: &str) -> &'static str {
     match state {
         "claimed" => "#dac09a",
+        "delivered" => "#a2c3c4",
         "done" => "#a2c4a3",
         "dropped" => "#c4a6a8",
         _ => "#6d6562",
@@ -272,6 +274,21 @@ fn strip_section(c: &Console) -> String {
             ));
         }
     }
+    // delivered rows are silent when the world is silent: like
+    // asked-of-you, they name an outstanding act
+    if !c.next.awaiting.is_empty() {
+        s.push_str("<div class=\"nsec\">DELIVERED · AWAITING ACCEPTANCE</div>\n");
+        for a in &c.next.awaiting {
+            let tint = if a.stale { " stale" } else { "" };
+            s.push_str(&format!(
+                "<a class=\"nxrow\" href=\"/t/{}\"><span class=\"nid mono\">{}</span><span class=\"nname\">{}</span><span class=\"nfact mono{tint}\">delivered {} ago</span></a>\n",
+                task_num(&a.task).unwrap_or(0),
+                esc(&a.task),
+                esc(&a.name),
+                ago(a.delivered_age),
+            ));
+        }
+    }
     s.push_str("<div class=\"nsec\">CLAIMED · LAST RECORD</div>\n");
     if c.next.candidates.is_empty() {
         s.push_str("<div class=\"nempty\">nothing claimed</div>\n");
@@ -431,6 +448,16 @@ pub fn thread_section(f: &Focus, form: &FormState, landed: Option<usize>) -> Str
         s.push_str(&format!(
             "<div class=\"receipt\"><span class=\"xk\" style=\"color:#dac09a\">RECEIPT</span>\n<div class=\"nbody\">{}</div>\n</div>\n",
             esc(receipt),
+        ));
+    }
+    // a delivered task renders its accept door: one form, one name, one
+    // button — the judgment form pattern on the receipt above it
+    if f.show.state == "delivered"
+        && let Some(n) = task_num(&f.show.id)
+    {
+        s.push_str(&format!(
+            "<div class=\"judge\"><span class=\"jhead mono\">ACCEPT</span> <span class=\"jname\">the delivered receipt</span>\n<form class=\"jform\" method=\"post\" action=\"/t/{n}/accept\">\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"accept\" value=\"1\" type=\"submit\">accept</button></div>\n</form>\n</div>\n",
+            who_input(&form.who),
         ));
     }
     let mut last_time: Option<u64> = None;
@@ -848,7 +875,8 @@ mod tests {
     use crate::types::actor::ActorName;
     use crate::types::pointers::SessionPointer;
     use crate::views::{
-        closed_tasks, forest, next_panel, open_proposals, ribbon_marks, show_view, thread_view,
+        ADRIFT_AFTER_SECS, closed_tasks, forest, next_panel, open_proposals, ribbon_marks,
+        show_view, thread_view,
     };
     use std::sync::OnceLock;
 
@@ -1125,13 +1153,111 @@ mod tests {
         }
     }
 
+    fn console_at(world: &World, now: u64) -> Console {
+        Console {
+            forest: forest(world),
+            closed: closed_tasks(world),
+            gate: open_proposals(world),
+            next: next_panel(world, now),
+            marks: ribbon_marks(world, now),
+            focus: None,
+            form: FormState::default(),
+            now,
+        }
+    }
+
     #[test]
-    fn the_receipt_renders_only_when_done() {
+    fn the_receipt_renders_only_from_deposited_states() {
         let world = fixture();
         let html = thread_section(&focus_of(&world, 0), &Default::default(), None);
         assert!(html.contains("suite green &lt;34&gt;"));
         let open = thread_section(&focus_of(&world, 1), &Default::default(), None);
         assert!(!open.contains("receipt"));
+    }
+
+    /// A delivered task renders its accept door: one form, one name, one
+    /// button — the judgment form pattern, on the receipt it reviews.
+    #[test]
+    fn a_delivered_task_renders_the_accept_form() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("ship the receipts law".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(1, 10, human(), Event::TaskClaimed { id: TaskId(0) }),
+            record(
+                2,
+                20,
+                human(),
+                Event::TaskDelivered {
+                    id: TaskId(0),
+                    receipt: Prose::new("suite green, 85 unit".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), None);
+        // the deposit the form reviews renders above it
+        assert!(html.contains("suite green, 85 unit"));
+        assert!(html.contains("action=\"/t/0/accept\""));
+        assert!(html.contains("<form class=\"jform\""));
+        assert!(html.contains("name=\"who\""));
+        // one accept button, no reject
+        assert_eq!(html.matches("type=\"submit\">").count(), 1);
+        assert_eq!(html.matches(">accept<").count(), 1);
+        assert!(!html.contains("reject"));
+
+        // the focused head and the forest chip carry the delivered state
+        let page = page(&console_of(&world, Some(focus_of(&world, 0))));
+        assert!(page.contains("● DELIVERED"));
+        assert!(page.contains("style=\"color:#a2c3c4\">DELIVERED<"));
+        // a delivered task browses in the live rail, not the closed one
+        assert!(!page.contains("CLOSED"));
+    }
+
+    #[test]
+    fn the_strip_carries_awaiting_acceptance_with_its_age() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("ship the receipts law".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(1, 10, human(), Event::TaskClaimed { id: TaskId(0) }),
+            record(
+                2,
+                20,
+                human(),
+                Event::TaskDelivered {
+                    id: TaskId(0),
+                    receipt: Prose::new("suite green".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        // an hour's wait: the row carries the age, untinted
+        let fresh = strip_section(&console_at(&world, 20 + 3600));
+        assert!(fresh.contains("DELIVERED · AWAITING ACCEPTANCE"));
+        assert!(fresh.contains("ship the receipts law"));
+        assert!(fresh.contains("delivered 1h ago"));
+        assert!(!fresh.contains("nfact mono stale"));
+
+        // past the adrift line the wait tints
+        let stale = strip_section(&console_at(&world, 20 + ADRIFT_AFTER_SECS + 1));
+        assert!(stale.contains("nfact mono stale"));
+
+        // and the section stays silent when nothing awaits
+        let quiet = strip_section(&console_at(&fixture(), NOW));
+        assert!(!quiet.contains("AWAITING ACCEPTANCE"));
     }
 
     #[test]

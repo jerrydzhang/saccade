@@ -24,6 +24,16 @@ pub enum Event {
         id: TaskId,
         receipt: Prose,
     },
+    /// The old law's close: replay-only. Logs written before the receipts
+    /// law record done here and stay done; new closes write TaskDelivered.
+    TaskDelivered {
+        id: TaskId,
+        receipt: Prose,
+    },
+    /// The only door from delivered to done; the receipt rides through.
+    TaskAccepted {
+        id: TaskId,
+    },
     TaskDropped {
         id: TaskId,
         note: Prose,
@@ -114,6 +124,9 @@ pub enum Command {
     CompleteTask {
         id: TaskId,
         receipt: Prose,
+    },
+    AcceptTask {
+        id: TaskId,
     },
     DropTask {
         id: TaskId,

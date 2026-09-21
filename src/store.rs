@@ -43,6 +43,9 @@ pub enum Reason {
     InvalidTaskId,
     InvalidProposalId,
     InvalidCommentId,
+    /// The accept door refuses: the invocation is not the task's birth
+    /// attribution and not human tier.
+    NotBirthAttribution,
     InvalidStateTransition,
     /// A task already holds an open judgment proposal
     ProposalAlreadyOpen,
@@ -56,6 +59,7 @@ impl From<Reason> for Reject {
             Reason::InvalidTaskId => Reject::InvalidTaskId,
             Reason::InvalidProposalId => Reject::InvalidProposalId,
             Reason::InvalidCommentId => Reject::InvalidCommentId,
+            Reason::NotBirthAttribution => Reject::NotBirthAttribution,
             Reason::InvalidParentTaskId => Reject::InvalidParentTaskId,
             Reason::InvalidStateTransition => Reject::InvalidStateTransition,
             Reason::NotClaimHolder => Reject::NotClaimHolder,
@@ -183,9 +187,11 @@ impl World {
                     last_updated: record.id,
                     claimed_at: None,
                     last_record_at: record.timestamp,
+                    delivered_at: None,
                     proposal: None,
                     thread: Vec::new(),
                     holder: None,
+                    birth_actor: record.context.actor.clone(),
                     active_incarnation: None,
                     workspace: None,
                 });
@@ -201,6 +207,8 @@ impl World {
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
                 task_ctx.holder = Some(record.context.actor.clone());
+                // a fresh round spends the delivery the state no longer holds
+                task_ctx.delivered_at = None;
             }
             ref event @ Event::TaskDone { id, .. } => {
                 let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
@@ -217,6 +225,42 @@ impl World {
                 task_ctx.claimed_at = None;
                 task_ctx.last_record_at = record.timestamp;
                 task_ctx.holder = None;
+            }
+            ref event @ Event::TaskDelivered { id, .. } => {
+                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.task.state = task_ctx
+                    .task
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                // only the holder delivers the claim
+                if task_ctx.holder.as_ref() != Some(&record.context.actor) {
+                    return Err(Reason::NotClaimHolder);
+                }
+                task_ctx.last_updated = record.id;
+                task_ctx.claimed_at = None;
+                task_ctx.last_record_at = record.timestamp;
+                task_ctx.delivered_at = Some(record.timestamp);
+                task_ctx.holder = None;
+            }
+            ref event @ Event::TaskAccepted { id } => {
+                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.task.state = task_ctx
+                    .task
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                // the invoking attribution must be the birth attribution
+                // or human tier; system never accepts
+                if record.context.tier == Tier::System
+                    || (record.context.tier == Tier::Agent
+                        && task_ctx.birth_actor != record.context.actor)
+                {
+                    return Err(Reason::NotBirthAttribution);
+                }
+                task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
+                task_ctx.delivered_at = None;
             }
             ref event @ Event::TaskReleased { id, .. } => {
                 let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
@@ -934,6 +978,162 @@ mod test {
     }
 
     #[test]
+    fn accept_reads_the_birth_attribution() {
+        let mut log = Log::new();
+        let asker = human();
+        let worker = Context {
+            actor: ActorName::new("pi/t-0-1".into()).unwrap(),
+            tier: Tier::Agent,
+        };
+        let executor = Context {
+            actor: ActorName::new("pi".into()).unwrap(),
+            tier: Tier::Agent,
+        };
+
+        log.execute(
+            asker.clone(),
+            Command::CreateTask {
+                name: Prose::new("land the receipts law".into()).unwrap(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        assert_eq!(log.world().tasks[0].birth_actor, asker.actor);
+
+        // the delivered deposit: only the holder delivers
+        log.execute(worker.clone(), Command::ClaimTask { id: TaskId(0) }, 2)
+            .unwrap();
+        log.execute(
+            worker.clone(),
+            Command::CompleteTask {
+                id: TaskId(0),
+                receipt: Prose::new("suite green".into()).unwrap(),
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().tasks[0].task.state,
+            TaskState::Delivered(Prose::new("suite green".into()).unwrap())
+        );
+        assert_eq!(log.world().tasks[0].delivered_at, Some(3));
+
+        // a demand on delivered never reopens it: delivered is sweep-open
+        log.execute(
+            asker.clone(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("one more finding".into()).unwrap(),
+                addressee: Some(Addressee::Agent),
+            },
+            4,
+        )
+        .unwrap();
+        assert!(matches!(
+            log.world().tasks[0].task.state,
+            TaskState::Delivered(_)
+        ));
+        let before_refusals = log.records().len();
+
+        // neither the run's attribution nor the executor's plain name is
+        // the birth attribution; system never accepts
+        for ctx in [
+            worker.clone(),
+            executor.clone(),
+            Context {
+                actor: ActorName::new("saccade".into()).unwrap(),
+                tier: Tier::System,
+            },
+        ] {
+            let refused = log.execute(ctx, Command::AcceptTask { id: TaskId(0) }, 5);
+            assert!(matches!(refused, Err(Reject::NotBirthAttribution)));
+        }
+        // the refusals wrote nothing
+        assert_eq!(log.records().len(), before_refusals);
+
+        // the asker accepts: the receipt rides through the door
+        log.execute(asker.clone(), Command::AcceptTask { id: TaskId(0) }, 6)
+            .unwrap();
+        assert_eq!(
+            log.world().tasks[0].task.state,
+            TaskState::Done(Prose::new("suite green".into()).unwrap())
+        );
+        assert_eq!(log.world().tasks[0].delivered_at, None);
+
+        // accept only opens from delivered
+        let refused = log.execute(asker.clone(), Command::AcceptTask { id: TaskId(0) }, 7);
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+
+        // a human accepts anything; the birth attribution holds its own door
+        let author = Context {
+            actor: ActorName::new("dispatch".into()).unwrap(),
+            tier: Tier::Agent,
+        };
+        for (i, name) in ["agent-birthed work", "dispatch's own work"]
+            .iter()
+            .enumerate()
+        {
+            log.execute(
+                author.clone(),
+                Command::CreateTask {
+                    name: Prose::new((*name).into()).unwrap(),
+                    parent_id: None,
+                },
+                8 + i as u64,
+            )
+            .unwrap();
+            log.execute(author.clone(), Command::ClaimTask { id: TaskId(1 + i) }, 8)
+                .unwrap();
+            log.execute(
+                author.clone(),
+                Command::CompleteTask {
+                    id: TaskId(1 + i),
+                    receipt: Prose::new("delivered".into()).unwrap(),
+                },
+                9,
+            )
+            .unwrap();
+        }
+        log.execute(human(), Command::AcceptTask { id: TaskId(1) }, 10)
+            .unwrap();
+        assert!(matches!(
+            log.world().tasks[1].task.state,
+            TaskState::Done(_)
+        ));
+        log.execute(author, Command::AcceptTask { id: TaskId(2) }, 11)
+            .unwrap();
+        assert!(matches!(
+            log.world().tasks[2].task.state,
+            TaskState::Done(_)
+        ));
+
+        // an unknown task names the id
+        let refused = log.execute(human(), Command::AcceptTask { id: TaskId(9) }, 12);
+        assert!(matches!(refused, Err(Reject::InvalidTaskId)));
+
+        // delivering without the claim never folds
+        log.execute(
+            asker,
+            Command::CreateTask {
+                name: Prose::new("never claimed".into()).unwrap(),
+                parent_id: None,
+            },
+            13,
+        )
+        .unwrap();
+        let refused = log.execute(
+            worker,
+            Command::CompleteTask {
+                id: TaskId(3),
+                receipt: Prose::new("not my claim".into()).unwrap(),
+            },
+            14,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+    }
+
+    #[test]
     fn authority_supersedes_existence_in_rejections() {
         let mut log = Log::new();
         let drop = || Command::DropTask {
@@ -1168,8 +1368,8 @@ mod test {
             20,
         )
         .unwrap();
-        let demand = CommentId(RecordId(14));
-        let trigger = RecordId(14);
+        let demand = CommentId(RecordId(16));
+        let trigger = RecordId(16);
 
         // machinery verbs reject judgment tiers: the role is the only door
         let refused = log.execute(
@@ -1196,7 +1396,7 @@ mod test {
             21,
         )
         .unwrap();
-        let run = IncarnationId(RecordId(15));
+        let run = IncarnationId(RecordId(17));
         assert_eq!(
             log.world().incarnations[&run].state,
             IncarnationState::Bound
@@ -1245,7 +1445,7 @@ mod test {
             25,
         )
         .unwrap();
-        let reply = CommentId(RecordId(17));
+        let reply = CommentId(RecordId(19));
         assert_eq!(
             log.world().comments[&demand].state,
             CommentState::AddressedToAgent {
@@ -1258,7 +1458,7 @@ mod test {
         log.execute_system(
             Command::MarkRecord {
                 incarnation_id: run,
-                record_id: RecordId(17),
+                record_id: RecordId(19),
             },
             26,
         )
@@ -1270,7 +1470,7 @@ mod test {
             IncarnationState::Settled
         );
         assert_eq!(log.world().tasks[0].active_incarnation, None);
-        assert_eq!(log.world().incarnations[&run].produced, vec![RecordId(17)]);
+        assert_eq!(log.world().incarnations[&run].produced, vec![RecordId(19)]);
         assert_eq!(
             log.world().comments[&demand].state,
             CommentState::AddressedToAgent {
@@ -1295,12 +1495,12 @@ mod test {
             20,
         )
         .unwrap();
-        let demand = CommentId(RecordId(14));
+        let demand = CommentId(RecordId(16));
         log.execute_system(
             Command::BindIncarnation {
                 task_id: TaskId(0),
                 response_target: demand,
-                trigger: RecordId(14),
+                trigger: RecordId(16),
                 actor: ActorName::new("pi".into()).unwrap(),
                 session,
             },
@@ -1309,7 +1509,7 @@ mod test {
         .unwrap();
         log.execute_system(
             Command::RejectPrompt {
-                id: IncarnationId(RecordId(15)),
+                id: IncarnationId(RecordId(17)),
                 evidence: FailureEvidence::new(
                     FailureCode::PromptRejected,
                     Some("session refused the pointer prompt".into()),
@@ -1318,7 +1518,7 @@ mod test {
             22,
         )
         .unwrap();
-        let run = IncarnationId(RecordId(15));
+        let run = IncarnationId(RecordId(17));
         assert_eq!(
             log.world().incarnations[&run].state,
             IncarnationState::Interrupted
@@ -1351,19 +1551,19 @@ mod test {
             20,
         )
         .unwrap();
-        let demand = CommentId(RecordId(14));
+        let demand = CommentId(RecordId(16));
         log.execute_system(
             Command::BindIncarnation {
                 task_id: TaskId(0),
                 response_target: demand,
-                trigger: RecordId(14),
+                trigger: RecordId(16),
                 actor: ActorName::new("pi".into()).unwrap(),
                 session: SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap(),
             },
             21,
         )
         .unwrap();
-        let run = IncarnationId(RecordId(15));
+        let run = IncarnationId(RecordId(17));
 
         // cancel is a wish any principal may hold: agent tier lands it
         log.execute(agent(), Command::CancelIncarnation { id: run }, 22)
@@ -1799,7 +1999,7 @@ mod test {
         .unwrap();
         assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
 
-        // the second cycle: claim and done again with a fresh receipt
+        // the second cycle: claim, deliver, and the asker accepts again
         log.execute(agent(), Command::ClaimTask { id: TaskId(0) }, 17)
             .unwrap();
         assert_eq!(log.world().tasks[0].task.state, TaskState::Claimed);
@@ -1812,6 +2012,12 @@ mod test {
             18,
         )
         .unwrap();
+        assert_eq!(
+            log.world().tasks[0].task.state,
+            TaskState::Delivered(Prose::new("edge case held".into()).unwrap())
+        );
+        log.execute(human(), Command::AcceptTask { id: TaskId(0) }, 18)
+            .unwrap();
         assert_eq!(
             log.world().tasks[0].task.state,
             TaskState::Done(Prose::new("edge case held".into()).unwrap())
@@ -1831,7 +2037,7 @@ mod test {
         assert_eq!(log.world().tasks[1].task.state, TaskState::Dropped);
     }
 
-    const RECORD_COUNT: usize = 14;
+    const RECORD_COUNT: usize = 16;
 
     fn populate_log(log: &mut Log) {
         let agent_ctx = agent();
@@ -1873,6 +2079,9 @@ mod test {
         )
         .unwrap();
 
+        log.execute(human_ctx.clone(), Command::AcceptTask { id: TaskId(1) }, 5)
+            .unwrap();
+
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
@@ -1892,6 +2101,9 @@ mod test {
             7,
         )
         .unwrap();
+
+        log.execute(human_ctx.clone(), Command::AcceptTask { id: TaskId(0) }, 7)
+            .unwrap();
 
         log.execute(
             human_ctx.clone(),

@@ -20,6 +20,7 @@ enum Action {
     Create { parent: u8, human: bool },
     Claim { task: u8, human: bool },
     Done { task: u8, human: bool },
+    AcceptTask { task: u8, human: bool },
     Drop { task: u8, human: bool },
     Release { task: u8, human: bool },
     Comment { task: u8, reply: u8, human: bool },
@@ -37,6 +38,7 @@ impl Action {
             Action::Create { human, .. }
             | Action::Claim { human, .. }
             | Action::Done { human, .. }
+            | Action::AcceptTask { human, .. }
             | Action::Drop { human, .. }
             | Action::Release { human, .. }
             | Action::ProposeDrop { human, .. }
@@ -54,6 +56,7 @@ impl Action {
             Action::Create { parent, .. } if role == "parent" => *parent,
             Action::Claim { task, .. }
             | Action::Done { task, .. }
+            | Action::AcceptTask { task, .. }
             | Action::Drop { task, .. }
             | Action::Release { task, .. }
             | Action::ProposeDrop { task, .. }
@@ -107,6 +110,27 @@ fn incarnation_at(world: &World, n: u8) -> saccade::objects::incarnation::Incarn
     }
 }
 
+/// Task-accept resolution draws from the world's delivered tasks — the
+/// only state the door opens from — with the same one-past-the-end
+/// sentinel the other id resolutions carry.
+fn delivered_task_at(world: &World, n: u8) -> TaskId {
+    let ids: Vec<TaskId> = world
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| {
+            saccade::views::task_view(world, TaskId(*i)).is_some_and(|v| v.state == "delivered")
+        })
+        .map(|(i, _)| TaskId(i))
+        .collect();
+    let slot = n as usize % (ids.len() + 1);
+    if slot == ids.len() {
+        TaskId(usize::MAX)
+    } else {
+        ids[slot]
+    }
+}
+
 fn comment_at(world: &World, n: u8) -> saccade::CommentId {
     let ids: Vec<&saccade::CommentId> = world.comments.keys().collect();
     let slot = n as usize % (ids.len() + 1);
@@ -135,6 +159,9 @@ fn command_of(action: &Action, world: &World) -> Command {
         Action::Done { .. } => Command::CompleteTask {
             id: task,
             receipt: Prose::new("generated receipt".into()).unwrap(),
+        },
+        Action::AcceptTask { .. } => Command::AcceptTask {
+            id: delivered_task_at(world, action.number("task")),
         },
         Action::Drop { .. } => Command::DropTask {
             id: task,
@@ -207,6 +234,7 @@ fn action_strategy() -> BoxedStrategy<Action> {
         3 => create_strategy(),
         2 => id(|task, human| Action::Claim { task, human }),
         2 => id(|task, human| Action::Done { task, human }),
+        2 => id(|task, human| Action::AcceptTask { task, human }),
         2 => id(|task, human| Action::Drop { task, human }),
         2 => id(|task, human| Action::Release { task, human }),
         3 => (any::<u8>(), any::<u8>(), human_coin())
@@ -297,15 +325,23 @@ fn generator_reaches_deep_states() {
             match db::record(&mut conn, &ctx, cmd, 1) {
                 Ok((stored, world)) => {
                     live = world;
+                    let last = stored.last().unwrap();
                     match action {
                         Action::Accept { .. } => *milestones.entry("accept").or_default() += 1,
+                        Action::Done { .. } => {
+                            if last.kind == "task_delivered" {
+                                *milestones.entry("deliver").or_default() += 1;
+                            }
+                        }
+                        Action::AcceptTask { .. } => {
+                            *milestones.entry("task accept").or_default() += 1;
+                        }
                         Action::Reject { human: true, .. } => {
                             *milestones.entry("human reject").or_default() += 1;
                         }
                         Action::Withdraw { .. } => *milestones.entry("withdraw").or_default() += 1,
                         _ => {}
                     }
-                    let last = stored.last().unwrap();
                     if last.kind == "commented" {
                         let record = stored_to_records(std::slice::from_ref(last)).remove(0);
                         let d = match record.event {
@@ -338,6 +374,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidProposalId => "InvalidProposalId",
                         saccade::Reject::ProposalAlreadyOpen => "ProposalAlreadyOpen",
                         saccade::Reject::InvalidCommentId => "InvalidCommentId",
+                        saccade::Reject::NotBirthAttribution => "NotBirthAttribution",
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
                         saccade::Reject::InvalidActor => "InvalidActor",
@@ -351,8 +388,8 @@ fn generator_reaches_deep_states() {
         let states: Vec<&str> = (0..world.tasks.len())
             .map(|i| saccade::views::task_view(world, TaskId(i)).unwrap().state)
             .collect();
-        if states.contains(&"done") {
-            *milestones.entry("done task").or_default() += 1;
+        if states.contains(&"delivered") {
+            *milestones.entry("delivered task").or_default() += 1;
         }
         if states.contains(&"dropped") {
             *milestones.entry("dropped task").or_default() += 1;
@@ -367,7 +404,9 @@ fn generator_reaches_deep_states() {
         ("accept", 0.10),
         ("human reject", 0.10),
         ("withdraw", 0.10),
-        ("done task", 0.06),
+        ("deliver", 0.04),
+        ("task accept", 0.008),
+        ("delivered task", 0.03),
         ("dropped task", 0.30),
         ("depth 2 thread", 0.04),
     ] {
@@ -385,6 +424,7 @@ fn generator_reaches_deep_states() {
         "InvalidProposalId",
         "InvalidCommentId",
         "InvalidStateTransition",
+        "NotBirthAttribution",
     ] {
         assert!(
             reject_kinds.get(kind).copied().unwrap_or(0) > 0,

@@ -27,10 +27,12 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 19] = [
+const KINDS: [&str; 21] = [
     "task_created",
     "task_claimed",
     "task_done",
+    "task_delivered",
+    "task_accepted",
     "task_dropped",
     "task_released",
     "proposal_created",
@@ -112,6 +114,11 @@ mod test {
                 id: TaskId(0),
                 receipt: Prose::new("tests green".into()).unwrap(),
             },
+            Event::TaskDelivered {
+                id: TaskId(0),
+                receipt: Prose::new("tests green".into()).unwrap(),
+            },
+            Event::TaskAccepted { id: TaskId(0) },
             Event::TaskDropped {
                 id: TaskId(0),
                 note: Prose::new("scope covered elsewhere".into()).unwrap(),

@@ -23,9 +23,15 @@ read in a retro.
 - `--actor` names at either tier and never re-tiers. Your name is what
   `SACCADE_ACTOR` says it is; never override it — attribution is provenance,
   and retro queries count on it being true.
-- `drop`, `release`, `accept`, and `reject` are human-only judgment acts. If you run one you get
+- `drop`, `release`, and the proposal rulings (`accept <seq>`, `reject <seq>`) are
+  human-only judgment acts. If you run one you get
   `rejected: human_only` and exit 1 — that is the system working as designed.
   Do not retry, do not hunt for a flag combination that works; none exists.
+- `accept t-N` is the one judgment act an agent may hold — but only when its
+  attribution is the task's birth attribution (usually the asker's), and a
+  run's derived name (`pi/t-12-1`) never equals one, so in practice runs
+  never accept their own deliveries. Anything else lands
+  `rejected: not_birth_attribution` — escalate instead.
 - Judgment-shaped facts (a duplicate, a supersession, a corpse) have a
   first-class home: `sac propose drop t-12 --name "the evidence"`. The
   proposal carries your evidence into the world; the human rules per act.
@@ -37,10 +43,11 @@ read in a retro.
 |---|---|---|
 | `sac create task "name" [--parent t-N]` | any tier | noun-as-argument; only `task` exists today |
 | `sac claim t-N` | any tier | a claim is a **reservation**, not a progress report |
-| `sac done t-N --receipt "…"` | any tier | receipt required — see receipts below |
+| `sac done t-N --receipt "…"` | any tier | delivers the run's work — the receipt is the deposit the accept reviews |
 | `sac drop t-N [--note "…"]` | **human only** | judgment act; agents propose instead |
 | `sac release t-N [--note "…"]` | **human only** | judgment act; agents propose instead |
 | `sac propose <drop\|release> t-N --name "…"` | any tier | the gate queue: your evidence, the human's call |
+| `sac accept t-N` | birth attribution, or human | the only door from delivered to done |
 | `sac accept <seq>` / `sac reject <seq> --note "…"` | **human only** | ruling acts on proposals |
 | `sac withdraw <seq> --note "…"` | any tier | take your own proposal off the queue |
 | `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | how-context on a task; `#<seq>` replies to a comment |
@@ -75,15 +82,17 @@ reads need none. Add `--json` for machine-readable output, including errors.
    findings, working state) as `sac comment t-N "…"` — never a side file.
    Titles say **what**; comments say **how**. If your observation changes the
    what, that is supersession: propose the drop naming the successor.
-4. `sac done t-N --receipt "…"` when it lands.
+4. `sac done t-N --receipt "…"` when the run's work lands — it delivers;
+   the asker (or any human) accepts the deposit as done.
 5. Task wrong? Propose the judgment (`sac propose drop t-N --name "…"`)
    and say so to the human. Never sit silently on a claim.
 
 ### Receipts
 
-The receipt is the deposit the done-state guards; the retro reads it.
-Name the outcome and the evidence: what changed, which tests ran and their
-counts, which files. "done", "fixed", "implemented" are not receipts.
+The receipt is the deposit the delivered state guards; the accept reviews
+it and the retro reads it. Name the outcome and the evidence: what changed,
+which tests ran and their counts, which files. "done", "fixed", "implemented"
+are not receipts.
 
 ### Event times
 
@@ -102,15 +111,21 @@ Failures exit 1 with a named variant on stderr (`--json` emits
 - `invalid_proposal_id` — no proposal was born at that seq; proposal ids are
   the bare log position of the `proposal_created` event.
 - `invalid_state_transition` — read the log; the task's state says otherwise
-  (e.g. it is already claimed by someone else, or already done).
+  (e.g. it is already claimed by someone else, already done, or not delivered
+  so there is nothing to accept).
+- `not_birth_attribution` — you accepted a delivered task that was not born
+  under your attribution; the asker or a human accepts.
 - `degraded` — a newer binary wrote events this one can't understand. Writes
   and `list` refuse; `sac log` still works. Report it; upgrading fixes it.
 - `database_error` — includes missing file (reads) and corruption (loud, named).
 
 ## Semantics worth knowing
 
-- Task states: `open → claimed → done`; `dropped` is the sole terminal state
-  and human-only. A task can be dropped from `open` or from `done` (a void).
+- Task states: `open → claimed → delivered → done`; `sac done` delivers, `accept`
+  is the only door from delivered to done, and a demand reopens done (never
+  delivered — findings on delivered fire in-thread rounds instead).
+  `dropped` is the sole terminal state and human-only. A task can be dropped
+  from `open` or from `done` (a void), never from `delivered`.
 - "Claimed" means reserved by someone — possibly a human claiming to prevent
   agents from taking it while they think. It does not mean work is happening.
 - Proposals are seq-addressed (`sac accept 614`): the id is the birth event's

@@ -160,7 +160,10 @@ Rules:
   their births, with no counter.
 - Open proposals are inert: they never block their target. Rejecting locks
   was deliberate.
-- Validation depends on tier, never actor identity. The CLI has no tier
+- Validation depends on tier, never actor identity — the one exception is
+  accept's birth-attribution door (t-75): an agent accepts only where its
+  attribution is the task's birth attribution, and a run's derived name
+  (`pi/t-75-2`) never equals one. The CLI has no tier
   argument: `SACCADE_ACTOR` presence is agent tier, its absence human.
   Judgment acts are proposed (`sac propose drop t-N --name`), not executed.
 

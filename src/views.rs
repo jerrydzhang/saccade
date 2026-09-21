@@ -38,6 +38,7 @@ fn state_str(state: &TaskState) -> &'static str {
     match state {
         TaskState::Open => "open",
         TaskState::Claimed => "claimed",
+        TaskState::Delivered(_) => "delivered",
         TaskState::Done(_) => "done",
         TaskState::Dropped => "dropped",
     }
@@ -223,7 +224,7 @@ impl ShowView {
             parent: ctx.task.parent_id.map(|p| format!("t-{}", p.0)),
             name: ctx.task.name.as_str().to_string(),
             receipt: match &ctx.task.state {
-                TaskState::Done(r) => Some(r.as_str().to_string()),
+                TaskState::Delivered(r) | TaskState::Done(r) => Some(r.as_str().to_string()),
                 _ => None,
             },
         }
@@ -389,14 +390,20 @@ pub struct ForestRow {
     pub depth: usize,
 }
 
-/// The live tree as navigation: open and claimed tasks, parents before
-/// children, each row carrying the open-proposal mark it already has.
+/// The live tree as navigation: open, claimed, and delivered tasks,
+/// parents before children, each row carrying the open-proposal mark
+/// it already has. A delivered task still takes findings and its accept.
 pub fn forest(world: &World) -> Vec<ForestRow> {
     world
         .tasks
         .iter()
         .enumerate()
-        .filter(|(_, ctx)| matches!(ctx.task.state, TaskState::Open | TaskState::Claimed))
+        .filter(|(_, ctx)| {
+            matches!(
+                ctx.task.state,
+                TaskState::Open | TaskState::Claimed | TaskState::Delivered(_)
+            )
+        })
         .map(|(i, ctx)| {
             let mut depth = 0;
             let mut up = ctx.task.parent_id;
@@ -507,6 +514,7 @@ pub struct Candidate {
 pub fn next_panel(world: &World, now: u64) -> NextPanel {
     let mut runs = Vec::new();
     let mut candidates = Vec::new();
+    let mut awaiting = Vec::new();
     for (i, ctx) in world.tasks.iter().enumerate() {
         if let Some(id) = ctx.active_incarnation {
             let run = &world.incarnations[&id];
@@ -529,11 +537,21 @@ pub fn next_panel(world: &World, now: u64) -> NextPanel {
                 adrift: last_record_age >= ADRIFT_AFTER_SECS,
             });
         }
+        if let (TaskState::Delivered(_), Some(delivered_at)) = (&ctx.task.state, ctx.delivered_at) {
+            let delivered_age = now.saturating_sub(delivered_at);
+            awaiting.push(AwaitingAcceptance {
+                task: format!("t-{i}"),
+                name: ctx.task.name.as_str().to_string(),
+                delivered_age,
+                stale: delivered_age >= ADRIFT_AFTER_SECS,
+            });
+        }
     }
     NextPanel {
         runs,
         asked_of_you: asked_of_you(world),
         candidates,
+        awaiting,
     }
 }
 
@@ -541,6 +559,17 @@ pub struct NextPanel {
     pub runs: Vec<RunView>,
     pub asked_of_you: Vec<AskedOfYou>,
     pub candidates: Vec<Candidate>,
+    /// Delivered tasks in id order — the accept door's rows.
+    pub awaiting: Vec<AwaitingAcceptance>,
+}
+
+/// A delivered task and its wait for the accept. Stale is the delivered
+/// tint: no accept for ADRIFT_AFTER_SECS.
+pub struct AwaitingAcceptance {
+    pub task: String,
+    pub name: String,
+    pub delivered_age: u64,
+    pub stale: bool,
 }
 
 /// The kind a ribbon mark carries, keyed as the strip names them: a
@@ -616,9 +645,11 @@ mod test {
             last_updated: RecordId(0),
             claimed_at: None,
             last_record_at: 0,
+            delivered_at: None,
             proposal: None,
             thread: Vec::new(),
             holder: None,
+            birth_actor: ActorName::new("human person".into()).unwrap(),
             active_incarnation: None,
             workspace: None,
         }
@@ -633,6 +664,17 @@ mod test {
         assert_eq!(
             TaskView::of(TaskId(0), &ctx_of(TaskState::Claimed), None).state,
             "claimed"
+        );
+        assert_eq!(
+            TaskView::of(
+                TaskId(0),
+                &ctx_of(TaskState::Delivered(
+                    Prose::new("suite green".into()).unwrap()
+                )),
+                None
+            )
+            .state,
+            "delivered"
         );
         assert_eq!(
             TaskView::of(
@@ -963,6 +1005,18 @@ mod panels {
                     note: Prose::new("void".into()).unwrap(),
                 },
             ),
+            // delivered work awaits its accept: it browses with the live
+            task_at(6, 60, "delivered work"),
+            record(7, 70, Tier::Human, Event::TaskClaimed { id: TaskId(3) }),
+            record(
+                8,
+                80,
+                Tier::Human,
+                Event::TaskDelivered {
+                    id: TaskId(3),
+                    receipt: Prose::new("awaiting the asker".into()).unwrap(),
+                },
+            ),
         ])
         .unwrap();
         let closed = closed_tasks(&world);
@@ -971,8 +1025,12 @@ mod panels {
         assert_eq!(closed[0].task.state, "done");
         assert_eq!(closed[1].task.id, "t-1");
         assert_eq!(closed[1].task.state, "dropped");
-        // the live tree holds only what is still open or claimed
-        assert_eq!(forest(&world).len(), 1);
+        // the live tree holds what is open, claimed, or delivered
+        let live = forest(&world);
+        assert_eq!(live.len(), 2);
+        assert_eq!(live[0].task.id, "t-2");
+        assert_eq!(live[1].task.id, "t-3");
+        assert_eq!(live[1].task.state, "delivered");
     }
 
     #[test]

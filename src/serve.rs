@@ -231,6 +231,7 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
             Some(n) => rule(req, app, n, &fields, seq),
             None => page(404, &format!("no open proposal #{seq}")),
         },
+        PostRoute::Accept(n) => accept(req, app, n, &fields),
         PostRoute::NotFound => page(404, "nothing here — try /"),
     }
 }
@@ -319,6 +320,29 @@ fn rule(req: &Req, app: &AppState, n: usize, fields: &[(String, String)], seq: u
         Ok(ok) => ok,
         Err(msg) => return console_reject(req, app, n, fields, &msg),
     };
+    match app.execute(&who.0, command, None) {
+        Ok(_) => {
+            let fired = app.clone();
+            tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));
+            redirect(&format!("/t/{n}"), who.1.as_deref())
+        }
+        Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
+        Err(ExecuteFail::Degraded(reason)) => {
+            page(503, &format!("world projection unavailable: {reason}"))
+        }
+        Err(ExecuteFail::Db(e)) => page(500, &format!("database: {e}")),
+    }
+}
+
+/// The accept door: one form, one name, one button. The receipt stands
+/// as deposited above; identity is claimed at the act; execute, sweep,
+/// and 303 back to the focused task.
+fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
+    let who = match identity(req, fields) {
+        Ok(ok) => ok,
+        Err(msg) => return console_reject(req, app, n, fields, &msg),
+    };
+    let command = Command::AcceptTask { id: TaskId(n) };
     match app.execute(&who.0, command, None) {
         Ok(_) => {
             let fired = app.clone();
@@ -513,6 +537,7 @@ fn reject_text(r: &Reject) -> String {
         InvalidProposalId => "no open proposal with that id".into(),
         ProposalAlreadyOpen => "that task already has an open proposal".into(),
         InvalidCommentId => "no comment with that id".into(),
+        NotBirthAttribution => "only the task's birth attribution or a human may accept".into(),
         InvalidParentTaskId => "no such parent task".into(),
         other => format!("{other:?}"),
     }
@@ -538,6 +563,7 @@ enum Route {
 enum PostRoute {
     Compose,
     Ruling(usize),
+    Accept(usize),
     NotFound,
 }
 
@@ -564,6 +590,13 @@ fn parse_post(url: &str) -> PostRoute {
         .and_then(num)
     {
         return PostRoute::Ruling(seq);
+    }
+    if let Some(n) = path
+        .strip_prefix("/t/")
+        .and_then(|rest| rest.strip_suffix("/accept"))
+        .and_then(num)
+    {
+        return PostRoute::Accept(n);
     }
     PostRoute::NotFound
 }
@@ -624,6 +657,7 @@ mod tests {
     fn post_routes_and_forms_parse() {
         assert!(matches!(parse_post("/compose"), PostRoute::Compose));
         assert!(matches!(parse_post("/p/9/ruling"), PostRoute::Ruling(9)));
+        assert!(matches!(parse_post("/t/3/accept"), PostRoute::Accept(3)));
         assert!(matches!(parse_post("/t/3/comment"), PostRoute::NotFound));
         assert!(matches!(parse_post("/t/3"), PostRoute::NotFound));
         let fields = parse_form("body=hello+world%3C1%3E&task=12&who=jerry");
