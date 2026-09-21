@@ -382,6 +382,53 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
 }
 
 #[test]
+fn a_demand_on_a_dropped_task_fires_nothing() {
+    let (repo, db_path, demand) = scaffold("dropped");
+    // the human drops the task while the demand is still pending
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::DropTask {
+            id: TaskId(0),
+            note: Prose::new("superseded elsewhere".into()).unwrap(),
+        },
+        3,
+    )
+    .unwrap();
+
+    let runner = RunnerConfig {
+        repo_root: repo.clone(),
+        actor: ActorName::new("pi".into()).unwrap(),
+        driver: fake_session_for(db_path.clone()),
+    };
+    let app = AppState::with_runner(&db_path, runner).unwrap();
+
+    // the sweep sees the live demand but fires nothing on the dropped task
+    supervisor::sweep(&app);
+    let world = world_of(&db_path);
+    assert_eq!(world.tasks[0].active_incarnation, None);
+    assert!(supervisor::runnable_demands(&world).is_empty());
+    match &world.comments[&demand].state {
+        CommentState::AddressedToAgent { attempt, .. } => {
+            assert!(matches!(attempt, AgentAttemptState::Authorized { .. }));
+        }
+        other => panic!("demand still awaiting: {other:?}"),
+    }
+
+    // prepare refuses too: the sweep's snapshot can race a landing drop
+    assert!(matches!(
+        prepare(
+            &mut db::open(&db_path).unwrap(),
+            &repo,
+            demand,
+            ActorName::new("pi".into()).unwrap()
+        ),
+        Err(RunnerFail::Usage(_))
+    ));
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn a_server_without_a_runner_writes_but_never_fires() {
     let (repo, db_path, demand) = scaffold("quiet");
     let app = AppState::open(&db_path).unwrap();

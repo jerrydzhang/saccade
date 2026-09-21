@@ -533,6 +533,11 @@ impl World {
                     .tasks
                     .get_mut(root_task_id.0)
                     .ok_or(Reason::InvalidTaskId)?;
+                // a demand reopens done, through the task transition table
+                if let Some(next) = task_ctx.task.state.transition(&record.event) {
+                    task_ctx.task.state = next;
+                    task_ctx.last_updated = record.id;
+                }
                 task_ctx.thread.push(CommentId(record.id));
                 task_ctx.last_record_at = record.timestamp;
             }
@@ -1758,6 +1763,72 @@ mod test {
             }
         }
         assert_eq!(log.records().len(), before + 1);
+    }
+
+    #[test]
+    fn a_demand_on_a_done_task_reopens_it() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+
+        // t-0 is done; a human-addressed comment leaves it done
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("context only, no action asked".into()).unwrap(),
+                addressee: Some(Addressee::Human),
+            },
+            15,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().tasks[0].task.state,
+            TaskState::Done(Prose::new("foo completed successfully".into()).unwrap())
+        );
+
+        // an agent-addressed demand on done reopens it, receipt history intact
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("one more round: check the edge case".into()).unwrap(),
+                addressee: Some(Addressee::Agent),
+            },
+            16,
+        )
+        .unwrap();
+        assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
+
+        // the second cycle: claim and done again with a fresh receipt
+        log.execute(agent(), Command::ClaimTask { id: TaskId(0) }, 17)
+            .unwrap();
+        assert_eq!(log.world().tasks[0].task.state, TaskState::Claimed);
+        log.execute(
+            agent(),
+            Command::CompleteTask {
+                id: TaskId(0),
+                receipt: Prose::new("edge case held".into()).unwrap(),
+            },
+            18,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().tasks[0].task.state,
+            TaskState::Done(Prose::new("edge case held".into()).unwrap())
+        );
+
+        // a demand on a dropped task leaves it dropped
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(1)),
+                body: Prose::new("never mind, one more look".into()).unwrap(),
+                addressee: Some(Addressee::Agent),
+            },
+            19,
+        )
+        .unwrap();
+        assert_eq!(log.world().tasks[1].task.state, TaskState::Dropped);
     }
 
     const RECORD_COUNT: usize = 14;

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Event;
+use crate::objects::comment::Addressee;
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::workspace::WorkspaceContext;
 use crate::types::actor::ActorName;
@@ -30,6 +31,14 @@ impl TaskState {
             (TaskState::Open | TaskState::Done(_), Event::TaskDropped { .. }) => {
                 Some(TaskState::Dropped)
             }
+            // a demand reopens done: the fired session claims afresh
+            (
+                TaskState::Done(_),
+                Event::Commented {
+                    addressee: Some(Addressee::Agent),
+                    ..
+                },
+            ) => Some(TaskState::Open),
             _ => None,
         }
     }
@@ -63,6 +72,7 @@ pub struct TaskContext {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::objects::comment::Target;
     use crate::types::prose::Prose;
 
     /// This test doesn't really test anything its more just a contract that at the time this test
@@ -93,6 +103,21 @@ mod test {
                 id: TaskId(0),
                 note: Prose::new("filler".into()).unwrap(),
             },
+            Event::Commented {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("filler".into()).unwrap(),
+                addressee: Some(Addressee::Agent),
+            },
+            Event::Commented {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("filler".into()).unwrap(),
+                addressee: Some(Addressee::Human),
+            },
+            Event::Commented {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("filler".into()).unwrap(),
+                addressee: None,
+            },
         ];
 
         let legal = |state: &TaskState, event: &Event| {
@@ -104,6 +129,13 @@ mod test {
                     | (
                         TaskState::Open | TaskState::Done(_),
                         Event::TaskDropped { .. }
+                    )
+                    | (
+                        TaskState::Done(_),
+                        Event::Commented {
+                            addressee: Some(Addressee::Agent),
+                            ..
+                        }
                     )
             )
         };

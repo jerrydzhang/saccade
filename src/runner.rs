@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::db::{self, ExecuteFail};
 use crate::objects::comment::{CommentId, CommentState, ResponseState};
 use crate::objects::incarnation::{IncarnationId, IncarnationState};
-use crate::objects::task::{TaskContext, TaskId};
+use crate::objects::task::{TaskContext, TaskId, TaskState};
 use crate::objects::workspace::WorktreeState;
 use crate::paths;
 use crate::types::actor::ActorName;
@@ -149,6 +149,13 @@ pub fn prepare(
     if ctx.active_incarnation.is_some() {
         return Err(RunnerFail::Usage(format!(
             "t-{} already runs an incarnation",
+            task.0
+        )));
+    }
+    // dropped stays terminal: the trigger's snapshot can race a drop
+    if matches!(ctx.task.state, TaskState::Dropped) {
+        return Err(RunnerFail::Usage(format!(
+            "t-{} is dropped; dropped tasks never run",
             task.0
         )));
     }
