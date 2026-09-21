@@ -836,3 +836,93 @@ fn render_proposals(cli: &Cli, world: &World) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Possession is the only tier door: SACCADE_ACTOR's presence records
+    /// agent, its absence human, and --actor names at either tier without
+    /// re-tiering.
+    #[test]
+    fn possession_fixes_the_tier_and_actor_never_re_tiers() {
+        // env is process-global; this is the only test in this binary
+        // that touches SACCADE_ACTOR
+        unsafe { std::env::remove_var("SACCADE_ACTOR") };
+        let bare = Cli::try_parse_from(["sac", "list"]).unwrap();
+        assert_eq!(
+            context_of(&bare).unwrap_or_else(|f| panic!("{f}")).tier,
+            Tier::Human
+        );
+
+        unsafe { std::env::set_var("SACCADE_ACTOR", "pi") };
+        let possessed = Cli::try_parse_from(["sac", "list"]).unwrap();
+        assert_eq!(
+            context_of(&possessed)
+                .unwrap_or_else(|f| panic!("{f}"))
+                .tier,
+            Tier::Agent
+        );
+
+        let named = Cli::try_parse_from(["sac", "--actor", "jerry", "list"]).unwrap();
+        let ctx = context_of(&named).unwrap_or_else(|f| panic!("{f}"));
+        assert_eq!((ctx.tier, ctx.actor.as_str()), (Tier::Agent, "jerry"));
+
+        unsafe { std::env::remove_var("SACCADE_ACTOR") };
+        let named = Cli::try_parse_from(["sac", "--actor", "saccade bot", "list"]).unwrap();
+        let ctx = context_of(&named).unwrap_or_else(|f| panic!("{f}"));
+        assert_eq!((ctx.tier, ctx.actor.as_str()), (Tier::Human, "saccade bot"));
+        unsafe { std::env::remove_var("SACCADE_ACTOR") };
+    }
+
+    /// Hashed tokens learn their bare doors at the parse door: a hashed
+    /// task id wants the bare thread, a hashed c-N wants the bare record,
+    /// a hashed demand wants the c- door.
+    #[test]
+    fn hashed_tokens_learn_their_bare_doors() {
+        let refused = parse_task_id("#t-3")
+            .map_err(|f| f.to_string())
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            "'#t-3' is not a task id (expected t-<n>; only tasks exist); \
+             drop the '#': the task is addressed as t-3"
+        );
+
+        let refused = parse_target("#t-3").map_err(|f| f.to_string()).unwrap_err();
+        assert_eq!(
+            refused,
+            "'#t-3' is not a comment id (expected #<seq>); \
+             drop the '#': the thread is addressed as t-3"
+        );
+
+        let refused = parse_target("#c-7").map_err(|f| f.to_string()).unwrap_err();
+        assert_eq!(
+            refused,
+            "'#c-7' is not a comment id (expected #<seq>); \
+             drop the 'c-': the comment is addressed as #7"
+        );
+
+        let refused = parse_comment_id("#7")
+            .map_err(|f| f.to_string())
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            "'#7' is not a comment id (expected c-<n>); \
+             drop the '#': the demand is c-7"
+        );
+
+        assert_eq!(
+            parse_task_id("t-3").unwrap_or_else(|f| panic!("{f}")),
+            TaskId(3)
+        );
+        assert_eq!(
+            parse_target("#7").unwrap_or_else(|f| panic!("{f}")),
+            Target::Comment(CommentId(RecordId(7)))
+        );
+        assert_eq!(
+            parse_comment_id("c-7").unwrap_or_else(|f| panic!("{f}")),
+            CommentId(RecordId(7))
+        );
+    }
+}

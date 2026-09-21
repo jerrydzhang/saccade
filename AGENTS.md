@@ -118,10 +118,6 @@ Placement is a contract:
   views both consume (`asked_of_you`).
 - `src/db.rs` tests: the persistence layer — one all-event round-trip; new
   event families ride the existing round-trip, they don't get their own.
-- `tests/mapping_corpus.rs`: worked examples through the write path — the
-  beads mapping, and law-level stories whose assertions are world-shaped.
-  (Known wart: the gate-queue deposit scenario lives there until
-  `tests/executor.rs` takes it.)
 - `tests/proptest_harness.rs`: random legal sequences never panic the fold,
   and the world `db::record` returns equals replay and reload.
 - `tests/runner.rs`: the runner end to end — real temp Git, real db,
@@ -146,7 +142,8 @@ Rules:
   the record, not `///` blocks; narration of the next ten lines gets removed.
 - Fixture data reads as narrative: `implement foo`, `migrate floop`, not
   `test task 2`. The log is a story even in tests.
-- Keep the suite green (33 unit + 7 corpus at time of writing) and honest:
+- Keep the suite green (95 unit + 37 integration at time of writing) and
+  honest:
   a failing suite from a fixture change means the fixture changed a contract
   — find out which before editing assertions.
 
