@@ -18,7 +18,8 @@ use crate::objects::comment::Target;
 use crate::objects::proposal::ProposalId;
 use crate::objects::task::TaskId;
 use crate::views::{
-    forest, next_panel, open_proposals, proposal_view, ribbon_marks, show_view, thread_view,
+    closed_tasks, forest, next_panel, open_proposals, proposal_view, ribbon_marks, show_view,
+    thread_view,
 };
 use crate::web;
 use crate::{ActorName, Command, Context, Prose, RecordId, Reject, Tier};
@@ -180,18 +181,20 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
         }
     };
     let now = db::now_epoch();
-    let focused = match focus_id.map(|n| focus(&snapshot.world, n, now)) {
+    let focused = match focus_id.map(|n| focus(&snapshot.world, n)) {
         Some(Some(f)) => Some(f),
         Some(None) => return page(404, &format!("no task t-{n}", n = focus_id.unwrap_or(0))),
         None => None,
     };
     let c = web::Console {
         forest: forest(&snapshot.world),
+        closed: closed_tasks(&snapshot.world),
         gate: open_proposals(&snapshot.world),
         next: next_panel(&snapshot.world, now),
+        marks: ribbon_marks(&snapshot.world, now),
         focus: focused,
         form: web::FormState {
-            need_who: req.actor.is_none(),
+            who: req.actor.clone().unwrap_or_default(),
             ..Default::default()
         },
         now,
@@ -200,8 +203,8 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
 }
 
 /// The focused task's panel facts: identity, open judgment, clustered
-/// thread, ribbon marks.
-fn focus(world: &crate::store::World, n: usize, now: u64) -> Option<web::Focus> {
+/// thread. The strip's movement marks are world-wide, not per focus.
+fn focus(world: &crate::store::World, n: usize) -> Option<web::Focus> {
     let show = show_view(world, TaskId(n))?;
     let proposals = open_proposals(world)
         .into_iter()
@@ -211,7 +214,6 @@ fn focus(world: &crate::store::World, n: usize, now: u64) -> Option<web::Focus> 
         show,
         proposals,
         thread: thread_view(world, TaskId(n))?,
-        marks: ribbon_marks(world, TaskId(n), now),
     })
 }
 
@@ -225,47 +227,8 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
             Ok(n) => compose(req, app, n, &fields),
             Err(_) => page(404, "no task named"),
         },
-        PostRoute::Accept(seq) => match proposal_task(app, seq) {
-            Some(n) => {
-                let who = match identity(req, &fields) {
-                    Ok(ok) => ok,
-                    Err(msg) => return console_reject(req, app, n, &fields, &msg),
-                };
-                judge(
-                    req,
-                    app,
-                    n,
-                    &fields,
-                    who,
-                    Command::AcceptProposal {
-                        id: ProposalId(RecordId(seq)),
-                    },
-                )
-            }
-            None => page(404, &format!("no open proposal #{seq}")),
-        },
-        PostRoute::Reject(seq) => match proposal_task(app, seq) {
-            Some(n) => {
-                let note = form_field(&fields, "note");
-                if Prose::new(note.to_string()).is_err() {
-                    return console_reject(req, app, n, &fields, "a ruling needs a note");
-                }
-                let who = match identity(req, &fields) {
-                    Ok(ok) => ok,
-                    Err(msg) => return console_reject(req, app, n, &fields, &msg),
-                };
-                judge(
-                    req,
-                    app,
-                    n,
-                    &fields,
-                    who,
-                    Command::RejectProposal {
-                        id: ProposalId(RecordId(seq)),
-                        note: Prose::new(note.to_string()).unwrap(),
-                    },
-                )
-            }
+        PostRoute::Ruling(seq) => match proposal_task(app, seq) {
+            Some(n) => rule(req, app, n, &fields, seq),
             None => page(404, &format!("no open proposal #{seq}")),
         },
         PostRoute::NotFound => page(404, "nothing here — try /"),
@@ -308,7 +271,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
             // not swap the new home's section into the old page: the fetch
             // follows the same 303 a plain form post would take
             if is_fetch(req) && root == n {
-                match thread_fragment(app, root) {
+                match thread_fragment(app, root, seq) {
                     Some(body) => {
                         let mut response = html(200, &body);
                         if let Some(name) = first_claim
@@ -332,20 +295,35 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     }
 }
 
-/// The judgment door: execute, sweep, and 303 back to the focused task.
-fn judge(
-    req: &Req,
-    app: &AppState,
-    n: usize,
-    fields: &[(String, String)],
-    who: (Context, Option<String>),
-    command: Command,
-) -> Response {
+/// The judgment door: one form, one name, two buttons. The clicked
+/// button's name/value names the ruling; identity is claimed at the
+/// act; execute, sweep, and 303 back to the focused task.
+fn rule(req: &Req, app: &AppState, n: usize, fields: &[(String, String)], seq: usize) -> Response {
+    let command = match form_field(fields, "ruling") {
+        "accept" => Command::AcceptProposal {
+            id: ProposalId(RecordId(seq)),
+        },
+        "reject" => {
+            let note = form_field(fields, "note");
+            if Prose::new(note.to_string()).is_err() {
+                return console_reject(req, app, n, fields, "a ruling needs a note");
+            }
+            Command::RejectProposal {
+                id: ProposalId(RecordId(seq)),
+                note: Prose::new(note.to_string()).unwrap(),
+            }
+        }
+        _ => return console_reject(req, app, n, fields, "the ruling is accept or reject"),
+    };
+    let who = match identity(req, fields) {
+        Ok(ok) => ok,
+        Err(msg) => return console_reject(req, app, n, fields, &msg),
+    };
     match app.execute(&who.0, command, None) {
         Ok(_) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));
-            redirect(&format!("/t/{n}"), None)
+            redirect(&format!("/t/{n}"), who.1.as_deref())
         }
         Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
@@ -355,12 +333,12 @@ fn judge(
     }
 }
 
-/// The thread section alone, for the fetch swap.
-fn thread_fragment(app: &AppState, n: usize) -> Option<String> {
+/// The thread section alone, for the fetch swap, naming the comment
+/// the swap should land on.
+fn thread_fragment(app: &AppState, n: usize, landed: usize) -> Option<String> {
     let snapshot = app.snapshot().ok()?;
-    let now = db::now_epoch();
-    let f = focus(&snapshot.world, n, now)?;
-    Some(web::thread_section(&f, &Default::default()))
+    let f = focus(&snapshot.world, n)?;
+    Some(web::thread_section(&f, &Default::default(), Some(landed)))
 }
 
 /// The actor's identity is claimed at the act: cookie first, then the
@@ -400,7 +378,7 @@ fn console_reject(
             error: Some(msg.to_string()),
             draft: form_field(fields, "body").to_string(),
             note: form_field(fields, "note").to_string(),
-            need_who: req.actor.is_none(),
+            who: req.actor.clone().unwrap_or_default(),
         };
         return html(400, &web::compose_section(n, &form));
     }
@@ -411,14 +389,16 @@ fn console_reject(
     let now = db::now_epoch();
     let c = web::Console {
         forest: forest(&snapshot.world),
+        closed: closed_tasks(&snapshot.world),
         gate: open_proposals(&snapshot.world),
         next: next_panel(&snapshot.world, now),
-        focus: focus(&snapshot.world, n, now),
+        marks: ribbon_marks(&snapshot.world, now),
+        focus: focus(&snapshot.world, n),
         form: web::FormState {
             error: Some(msg.to_string()),
             draft: form_field(fields, "body").to_string(),
             note: form_field(fields, "note").to_string(),
-            need_who: req.actor.is_none(),
+            who: req.actor.clone().unwrap_or_default(),
         },
         now,
     };
@@ -557,8 +537,7 @@ enum Route {
 
 enum PostRoute {
     Compose,
-    Accept(usize),
-    Reject(usize),
+    Ruling(usize),
     NotFound,
 }
 
@@ -581,17 +560,10 @@ fn parse_post(url: &str) -> PostRoute {
     }
     if let Some(seq) = path
         .strip_prefix("/p/")
-        .and_then(|rest| rest.strip_suffix("/accept"))
+        .and_then(|rest| rest.strip_suffix("/ruling"))
         .and_then(num)
     {
-        return PostRoute::Accept(seq);
-    }
-    if let Some(seq) = path
-        .strip_prefix("/p/")
-        .and_then(|rest| rest.strip_suffix("/reject"))
-        .and_then(num)
-    {
-        return PostRoute::Reject(seq);
+        return PostRoute::Ruling(seq);
     }
     PostRoute::NotFound
 }
@@ -651,8 +623,7 @@ mod tests {
     #[test]
     fn post_routes_and_forms_parse() {
         assert!(matches!(parse_post("/compose"), PostRoute::Compose));
-        assert!(matches!(parse_post("/p/9/accept"), PostRoute::Accept(9)));
-        assert!(matches!(parse_post("/p/9/reject"), PostRoute::Reject(9)));
+        assert!(matches!(parse_post("/p/9/ruling"), PostRoute::Ruling(9)));
         assert!(matches!(parse_post("/t/3/comment"), PostRoute::NotFound));
         assert!(matches!(parse_post("/t/3"), PostRoute::NotFound));
         let fields = parse_form("body=hello+world%3C1%3E&task=12&who=jerry");

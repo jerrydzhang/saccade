@@ -142,7 +142,8 @@ impl World {
 
     /// A run ending: the task's slot frees and the demand's attempt spends
     fn terminalize(&mut self, id: IncarnationId, record: &Record) {
-        if let Some(run) = self.incarnations.get(&id) {
+        if let Some(run) = self.incarnations.get_mut(&id) {
+            run.done_at = Some(record.timestamp);
             if let Some(task_ctx) = self.tasks.get_mut(run.task_id.0)
                 && task_ctx.active_incarnation == Some(id)
             {
@@ -277,6 +278,7 @@ impl World {
                         state: IncarnationState::Bound,
                         produced: Vec::new(),
                         born_at: record.timestamp,
+                        done_at: None,
                     },
                 );
                 task_ctx.active_incarnation = Some(IncarnationId(record.id));

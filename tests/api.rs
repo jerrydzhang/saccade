@@ -288,6 +288,7 @@ use saccade::objects::comment::{
 };
 use saccade::store::{Context, RecordId, Tier};
 use saccade::types::actor::ActorName;
+use saccade::views::task_view;
 use saccade::{Command, Prose, TaskId};
 
 async fn spawn_console(db_path: &std::path::Path) -> (String, ConsoleState) {
@@ -310,6 +311,39 @@ fn human_ctx() -> Context {
 
 type FormReply = (u16, String, Option<String>);
 
+/// The form reply plus the Set-Cookie header, for first-claim contracts.
+fn post_form_ck(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> (u16, String, Option<String>, Option<String>) {
+    let mut r = ureq::post(url)
+        .config()
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .build();
+    for (k, v) in headers {
+        r = r.header(*k, *v);
+    }
+    let mut r = r.send(body).expect("the loopback server answers");
+    let loc = r
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let cookie = r
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    (
+        r.status().as_u16(),
+        r.body_mut().read_to_string().unwrap(),
+        loc,
+        cookie,
+    )
+}
+
 fn world_of(state: &ConsoleState) -> saccade::World {
     match state.snapshot() {
         Ok(s) => s.world,
@@ -317,22 +351,29 @@ fn world_of(state: &ConsoleState) -> saccade::World {
     }
 }
 
-/// The task's thread lines, newest last.
+/// The task's thread lines, oldest first.
 fn lines_of(world: &saccade::World, n: usize) -> Vec<saccade::views::CommentLine> {
     let mut v: Vec<_> = saccade::views::thread_view(world, TaskId(n))
         .expect("the thread folds")
-        .conversations
+        .items
         .into_iter()
-        .flat_map(|c| {
-            let mut all = vec![c.root];
-            all.extend(c.replies);
-            all
+        .flat_map(|item| match item {
+            saccade::views::ThreadItem::Exchange {
+                root,
+                run: _,
+                replies,
+            } => {
+                let mut all = vec![root];
+                all.extend(replies);
+                all
+            }
+            saccade::views::ThreadItem::Group { root, replies } => {
+                let mut all = vec![root];
+                all.extend(replies);
+                all
+            }
+            saccade::views::ThreadItem::Note(line) => vec![line],
         })
-        .chain(
-            saccade::views::thread_view(world, TaskId(n))
-                .expect("the thread folds")
-                .stream,
-        )
         .collect();
     v.sort_by_key(|l| l.seq);
     v
@@ -510,7 +551,10 @@ async fn compose_fetch_swaps_the_thread_section() {
         loc.is_none(),
         "a fetch takes the fragment, never a redirect"
     );
-    assert!(body.starts_with("<section id=\"thread\">"));
+    assert!(
+        body.starts_with("<section id=\"thread\""),
+        "the fragment is the thread section, attributes may follow"
+    );
     assert!(body.contains("build it"));
     // the comment landed once
     assert_eq!(world_of(&state).comments.len(), 1);
@@ -555,9 +599,12 @@ async fn the_console_renders_forest_and_focused_thread() {
         "the forest browses live work"
     );
     assert!(home.contains("no task focused"));
+    // the asked-of-you row names its asking comment and its author
     assert!(
-        home.contains("asked-of-you") || home.contains("asked of you") || home.contains("t-0 · pi")
+        home.contains("ASKED OF YOU") && home.contains("need a ruling on floop"),
+        "the row renders the asking comment"
     );
+    assert!(home.contains(">pi · t-0<"));
     assert!(home.contains("nothing claimed"));
 
     let (status, focused) = get_html(&format!("{base}/t/0"));
@@ -596,5 +643,245 @@ async fn compose_fetch_rehome_redirects_instead_of_swapping() {
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/1#c-2"));
     assert!(!body.contains("<section"), "no fragment rides the redirect");
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// Every /t/… href the console page emits resolves: the rail is the
+/// frame's navigation, so a dead link there is a dead frame. This pins
+/// the forest's token-vs-number contract (c-585) across every link
+/// form the page carries.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_task_href_the_console_emits_resolves() {
+    let db = scratch_db("console-hrefs");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "migrate floop");
+    seed_task(&state, "other work");
+    // a claim feeds the strip's candidates, an agent demand awaiting a
+    // human feeds asked-of-you, a proposal feeds the rail's gate
+    state
+        .execute(&human_ctx(), Command::ClaimTask { id: TaskId(0) }, None)
+        .unwrap();
+    state
+        .execute(
+            &Context {
+                actor: ActorName::new("pi".into()).unwrap(),
+                tier: Tier::Agent,
+            },
+            Command::Comment {
+                target: Target::Task(TaskId(1)),
+                body: Prose::new("need a ruling on floop".into()).unwrap(),
+                addressee: Some(saccade::Addressee::Human),
+            },
+            None,
+        )
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::CreateProposal {
+                name: Prose::new("void the stray".into()).unwrap(),
+                action: saccade::ProposalAction::Drop { task_id: TaskId(1) },
+            },
+            None,
+        )
+        .unwrap();
+    // a comment so the focused thread and its anchors exist
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("a note worth keeping".into()).unwrap(),
+                addressee: None,
+            },
+            None,
+        )
+        .unwrap();
+
+    // harvest every /t/… href from the unfocused and focused pages
+    let mut hrefs: Vec<String> = Vec::new();
+    for path in ["/", "/t/0"] {
+        let (_, html) = get_html(&format!("{base}{path}"));
+        let mut rest = html.as_str();
+        while let Some(i) = rest.find("href=\"/t/") {
+            rest = &rest[i + 6..];
+            let end = rest.find('"').expect("the href closes");
+            let href = &rest[..end];
+            hrefs.push(href.to_string());
+            rest = &rest[end..];
+        }
+    }
+    hrefs.sort();
+    hrefs.dedup();
+    // both link forms light up: bare task links (rail, strip, gate) and
+    // record anchors (asked-of-you rows, ribbon marks)
+    assert!(
+        hrefs.len() >= 4 && hrefs.iter().any(|h| h.contains("#c-")),
+        "the fixture should light up every link form, got {hrefs:?}"
+    );
+    assert!(
+        !hrefs.iter().any(|h| h.starts_with("/t/t-")),
+        "no token-in-href may survive: {hrefs:?}"
+    );
+    for href in &hrefs {
+        let path = href.split('#').next().unwrap();
+        let (status, _) = get_html(&format!("{base}{path}"));
+        assert_eq!(status, 200, "{href} does not resolve");
+    }
+
+    // the visible labels stay the token form
+    let (_, focused) = get_html(&format!("{base}/t/0"));
+    assert!(focused.contains(">t-0<"));
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// Identity is claimed at the act, on every act form: a cookieless
+/// browser rules by typing its name into the judgment form; the forms
+/// carry the field prefilled from the actor cookie when one exists.
+#[tokio::test(flavor = "multi_thread")]
+async fn judgment_forms_carry_the_actor_name() {
+    let db = scratch_db("console-identity");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "migrate floop");
+    let pi = Context {
+        actor: ActorName::new("pi".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    state
+        .execute(&pi, Command::ClaimTask { id: TaskId(0) }, None)
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::CreateProposal {
+                name: Prose::new("hand it back".into()).unwrap(),
+                action: saccade::ProposalAction::Release { task_id: TaskId(0) },
+            },
+            None,
+        )
+        .unwrap();
+    let proposal = saccade::views::open_proposals(&world_of(&state))
+        .first()
+        .expect("the gate holds one proposal")
+        .id;
+
+    // a cookieless ruling without a name refuses, naming the fix
+    let (status, body, _) = post_form(&format!("{base}/p/{proposal}/ruling"), &[], "ruling=accept");
+    assert_eq!(status, 400);
+    assert!(body.contains("a name is required to record the act"));
+
+    // a cookieless accept ruling with who records human tier under that
+    // name, and the first claim sets the cookie like compose does
+    let (status, _, loc, cookie) = post_form_ck(
+        &format!("{base}/p/{proposal}/ruling"),
+        &[],
+        "ruling=accept&who=jerry",
+    );
+    assert_eq!(status, 303);
+    assert_eq!(loc.as_deref(), Some("/t/0"));
+    assert!(
+        cookie
+            .as_deref()
+            .is_some_and(|c| c.starts_with("actor=jerry")),
+        "the first claim claims the cookie: {cookie:?}"
+    );
+    let snap = match state.snapshot() {
+        Ok(s) => s,
+        Err(_) => panic!("the snapshot refused"),
+    };
+    let accepted = snap
+        .rows
+        .iter()
+        .rev()
+        .find(|r| r.kind == "proposal_accepted")
+        .expect("the ruling landed");
+    assert_eq!(accepted.actor, "jerry");
+    assert_eq!(accepted.tier, "human");
+    // the embedded act executed: the claim is released
+    let task = saccade::views::task_view(&world_of(&state), TaskId(0)).unwrap();
+    assert_eq!(task.state, "open");
+
+    // a cookieless reject ruling records the same way — both rulings
+    // land at human tier under the typed name
+    state
+        .execute(
+            &human_ctx(),
+            Command::CreateProposal {
+                name: Prose::new("void it".into()).unwrap(),
+                action: saccade::ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            None,
+        )
+        .unwrap();
+    let proposal = saccade::views::open_proposals(&world_of(&state))
+        .first()
+        .expect("the drop proposal is open")
+        .id;
+    let (status, _, _, _) = post_form_ck(
+        &format!("{base}/p/{proposal}/ruling"),
+        &[],
+        "ruling=reject&who=jerry&note=not+yet",
+    );
+    assert_eq!(status, 303);
+    let snap = match state.snapshot() {
+        Ok(s) => s,
+        Err(_) => panic!("the snapshot refused"),
+    };
+    let rejected = snap
+        .rows
+        .iter()
+        .rev()
+        .find(|r| r.kind == "proposal_rejected")
+        .expect("the rejection landed");
+    assert_eq!(rejected.actor, "jerry");
+    assert_eq!(rejected.tier, "human");
+    assert_eq!(
+        task_view(&world_of(&state), TaskId(0)).unwrap().state,
+        "open"
+    );
+
+    // the rendered judgment form carries the one who input, prefilled
+    // from the actor cookie when one exists, themed by its class
+    state
+        .execute(&pi, Command::ClaimTask { id: TaskId(0) }, None)
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::CreateProposal {
+                name: Prose::new("hand it back again".into()).unwrap(),
+                action: saccade::ProposalAction::Release { task_id: TaskId(0) },
+            },
+            None,
+        )
+        .unwrap();
+
+    let mut r = ureq::get(&format!("{base}/t/0"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .header("Cookie", "actor=jerry")
+        .call()
+        .expect("the loopback server answers");
+    let with_cookie = r.body_mut().read_to_string().unwrap();
+    // the judgment block and the compose dock prefill from the cookie
+    assert_eq!(
+        with_cookie.matches("value=\"jerry\"").count(),
+        2,
+        "every act form prefills from the cookie"
+    );
+
+    let (status, blank) = get_html(&format!("{base}/t/0"));
+    assert_eq!(status, 200);
+    assert!(
+        blank.matches("value=\"\"").count() >= 2,
+        "blank for a fresh browser, never absent"
+    );
+    // the ruling form is the one the CSS themes
+    assert!(
+        blank.contains("<form class=\"jform\" method=\"post\" action=\"/p/"),
+        "the ruling form lacks its themed class: {}",
+        &blank[..blank.len().min(400)]
+    );
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
