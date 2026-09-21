@@ -100,6 +100,20 @@ are not receipts.
 measurement (a timestamp from a log, an import, a CI run). Never invent or
 eyeball a time; omit `--at` and the event stamps honestly as "now".
 
+## Runner-owned state
+
+Task worktrees (`<state dir>/worktrees/t-N`), task branches
+(`saccade/t-N`), and session files belong to the runner — system
+property, not yours to manage. Never `git worktree remove`,
+`git branch -D`, or otherwise mutate them by hand: a task's recorded
+workspace points at its branch and checkpoint, and deleting the branch
+severs the task's demand door — the next demand refuses at prepare.
+
+Merging a task branch into main is normal review flow; the branch
+itself stays. It is the task's canvas, carrying advancement between
+runs. If cleanup is ever needed, that is a proposal to the human — not
+a hand-run git command.
+
 ## Errors and degraded mode
 
 Failures exit 1 with a named variant on stderr (`--json` emits
