@@ -175,10 +175,11 @@ eyeball a time; omit `--at` and the event stamps honestly as "now".
 
 Task worktrees (`<state dir>/worktrees/t-N`), task branches (`saccade/t-N`),
 and session files belong to the runner — system property, not yours to
-manage by hand. Canvases are best-effort and ephemeral: the record
-governs, the canvas is a cache. The lifecycle:
+manage by hand. Task workspaces are best-effort and ephemeral: the
+record governs, the workspace is a cache. The lifecycle:
 
-- **Prepare rebuilds what is missing.** A canvas expected but missing is
+- **Prepare rebuilds what is missing.** A workspace expected but missing
+  is
   re-cut at the recorded checkpoint — or the task's base when no
   checkpoint exists — so absence never refuses. Recreation covers
   absence only, never divergence: a branch that disagrees with the
