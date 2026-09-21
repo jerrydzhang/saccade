@@ -113,9 +113,9 @@ Placement is a contract:
   the in-memory `Log` fixture (test-private, no storage layer) against the
   shared `populate_log` story; plus every `Reason` pinned and the command
   translation table.
-- `src/views.rs` tests: view derivations over folded worlds.
-- `src/demands.rs` tests: the exhaustive shared Human-demand candidate and
-  staleness projection that signal and views both consume.
+- `src/views.rs` tests: view derivations over folded worlds, including the
+  shared Human-demand candidate and staleness projection that signal and
+  views both consume (`asked_of_you`).
 - `src/db.rs` tests: the persistence layer — one all-event round-trip; new
   event families ride the existing round-trip, they don't get their own.
 - `tests/mapping_corpus.rs`: worked examples through the write path — the
@@ -127,8 +127,8 @@ Placement is a contract:
 - `tests/runner.rs`: the runner end to end — real temp Git, real db,
   and the supervision contract: a landed demand fires a run, a queued
   demand fires when the task frees, no runner means no firing.
-- `tests/executor.rs`: real process/Git/server effect and crash contracts,
-  with fake Pi and Telegram.
+- `tests/api.rs`: server, wire, and console contracts over HTTP — command
+  round-trips, the tier law through the wire, malformed bodies, client send.
 
 Rules:
 
