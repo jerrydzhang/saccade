@@ -795,3 +795,122 @@ fn tier_derives_from_possession_not_argument() {
         assert_eq!(rows[0].tier, want, "the tier is possessed, not asserted");
     }
 }
+
+/// The id space teaches: the known confusion cells at the CLI door —
+/// a hashed task id, a birth record used as a comment target, a
+/// judgment refused by the task's state — each refusal names the
+/// expected format and the likely intended target, and a refused
+/// demand shows its refusal on the thread.
+#[test]
+fn refusals_teach_the_id_space_and_the_state() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = db_path("teaching");
+    let mut conn = db::open(&path).unwrap();
+
+    // t-0 born at #0, claimed by the agent; a demand the machinery refuses
+    let agent = Context {
+        actor: ActorName::new("saccade bot".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    db::record(
+        &mut conn,
+        &agent,
+        Command::CreateTask {
+            name: Prose::new("migrate floop".into()).unwrap(),
+            parent_id: None,
+        },
+        100,
+    )
+    .unwrap();
+    db::record(&mut conn, &agent, Command::ClaimTask { id: TaskId(0) }, 101).unwrap();
+    db::record(
+        &mut conn,
+        &importer(),
+        Command::Comment {
+            target: saccade::Target::Task(TaskId(0)),
+            body: Prose::new("run the migration once more".into()).unwrap(),
+            addressee: Some(saccade::Addressee::Agent),
+        },
+        102,
+    )
+    .unwrap();
+    db::record(
+        &mut conn,
+        &Context::system(),
+        Command::RefuseDemand {
+            demand: saccade::CommentId(RecordId(2)),
+            reason: Prose::new(
+                "t-0 worktree is disk-only leftover; reconcile it through the human".into(),
+            )
+            .unwrap(),
+        },
+        103,
+    )
+    .unwrap();
+    drop(conn);
+
+    let sac = |args: &[&str]| {
+        std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .arg("--offline")
+            .env("SACCADE_ACTOR", "assistant")
+            .args(args)
+            .output()
+            .expect("spawn sac")
+    };
+
+    // a birth record used as a comment target names its task
+    let out = sac(&["comment", "#0", "replying to a birth"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("rejected: invalid_comment_id"), "{stderr}");
+    assert!(
+        stderr.contains("#0 is the birth record of task t-0"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("address its thread as t-0"), "{stderr}");
+
+    // a hashed task id learns the bare thread door
+    let out = sac(&["comment", "#t-0", "hashing the task"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("drop the '#': the thread is addressed as t-0"),
+        "{stderr}"
+    );
+
+    // a hashed c-N learns the bare record door
+    let out = sac(&["comment", "#c-0", "hashing the render"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("drop the 'c-': the comment is addressed as #0"),
+        "{stderr}"
+    );
+
+    // a judgment refused by the state names the state and its holder
+    let out = sac(&["propose", "drop", "t-0", "--name", "floop is a corpse"]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("rejected: invalid_state_transition"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("t-0 is claimed (held by saccade bot)"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("a drop proposal needs an open or done task"),
+        "{stderr}"
+    );
+
+    // the refused demand shows its refusal on the thread: reason and time
+    let out = sac(&["show", "t-0"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("(to agent, refused)"), "{stdout}");
+    assert!(stdout.contains("refused "), "{stdout}");
+    assert!(stdout.contains("disk-only leftover"), "{stdout}");
+}

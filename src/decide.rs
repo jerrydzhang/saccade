@@ -23,7 +23,8 @@ fn required_tier(event: &Event) -> Authority {
         Event::TaskDropped { .. }
         | Event::ProposalRejected { .. }
         | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
-        Event::IncarnationBound { .. }
+        Event::DemandRefused { .. }
+        | Event::IncarnationBound { .. }
         | Event::IncarnationPromptAccepted { .. }
         | Event::IncarnationPromptRejected { .. }
         | Event::IncarnationSettled { .. }
@@ -89,6 +90,7 @@ pub fn decide(command: Command) -> Vec<Event> {
             body,
             addressee,
         }],
+        Command::RefuseDemand { demand, reason } => vec![Event::DemandRefused { demand, reason }],
         // Machinery verbs: System authorship comes from the role, never input
         Command::BindIncarnation {
             task_id,
@@ -201,6 +203,10 @@ mod test {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
                 addressee: None,
+            },
+            Event::DemandRefused {
+                demand: CommentId(RecordId(0)),
+                reason: Prose::new("filler".into()).unwrap(),
             },
             Event::IncarnationBound {
                 task_id: TaskId(0),

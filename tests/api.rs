@@ -263,6 +263,31 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         other => panic!("expected a refusal, got {other:?}"),
     }
 
+    // a refusal the world can teach carries the teaching as its detail:
+    // the birth record used as a comment target names its task
+    let fail = client::send(
+        &base,
+        &agent,
+        Command::Comment {
+            target: saccade::Target::Comment(saccade::CommentId(saccade::RecordId(0))),
+            body: saccade::Prose::new("replying to a birth".into()).unwrap(),
+            addressee: None,
+        },
+        None,
+    )
+    .unwrap_err();
+    match &fail {
+        ClientFail::Refused { code, detail } => {
+            assert_eq!(code, "invalid_comment_id");
+            assert!(
+                detail.contains("#0 is the birth record of task t-0"),
+                "{detail}"
+            );
+            assert!(detail.contains("address its thread as t-0"), "{detail}");
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
     // nothing answering at the url is the typed server_required failure
     let dead = client::send(
         "http://127.0.0.1:1",

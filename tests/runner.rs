@@ -415,16 +415,31 @@ fn a_demand_on_a_dropped_task_fires_nothing() {
         other => panic!("demand still awaiting: {other:?}"),
     }
 
-    // prepare refuses too: the sweep's snapshot can race a landing drop
-    assert!(matches!(
-        prepare(
-            &mut db::open(&db_path).unwrap(),
-            &repo,
-            demand,
-            ActorName::new("pi".into()).unwrap()
-        ),
-        Err(RunnerFail::Usage(_))
-    ));
+    // prepare refuses too: the sweep's snapshot can race a landing drop,
+    // and the refusal lands where the asker reads
+    let refusal_text = match prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    ) {
+        Err(RunnerFail::Refused { reason }) => reason,
+        Err(other) => panic!("expected a refusal, got {other:?}"),
+        Ok(_) => panic!("the dropped task refused prepare"),
+    };
+    assert!(refusal_text.contains("dropped"), "{refusal_text}");
+    let world = world_of(&db_path);
+    match &world.comments[&demand].state {
+        CommentState::AddressedToAgent { attempt, .. } => {
+            assert!(matches!(attempt, AgentAttemptState::Spent));
+        }
+        other => panic!("demand spent: {other:?}"),
+    }
+    let refusal = world.comments[&demand]
+        .refusal
+        .as_ref()
+        .expect("the refusal fact landed");
+    assert!(refusal.reason.as_str().contains("dropped tasks never run"));
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -845,8 +860,8 @@ fn a_merged_branch_refuses_until_the_verb_records_the_new_head() {
         second,
         ActorName::new("pi".into()).unwrap(),
     ) {
-        Err(RunnerFail::Usage(message)) => message,
-        Err(other) => panic!("expected a Usage refusal, got {other:?}"),
+        Err(RunnerFail::Refused { reason }) => reason,
+        Err(other) => panic!("expected a refusal, got {other:?}"),
         Ok(_) => panic!("the advanced tip refused prepare"),
     };
     assert!(
@@ -882,16 +897,31 @@ fn a_merged_branch_refuses_until_the_verb_records_the_new_head() {
         String::from_utf8_lossy(&out.stdout)
     );
 
-    // the run proceeds from the recorded head
+    // the refusal spent the ask: re-asking is a new comment, and once the
+    // verb records the merged head the re-ask runs from it
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            body: Prose::new("re-ask: the head is recorded now".into()).unwrap(),
+            addressee: Some(Addressee::Agent),
+        },
+        5,
+    )
+    .unwrap();
     prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        second,
+        latest_demand(&db_path),
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
     assert!(world_of(&db_path).tasks[0].active_incarnation.is_some());
     assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), merged);
+    // the refused ask keeps its fact on the thread
+    let world = world_of(&db_path);
+    assert!(world.comments[&second].refusal.is_some());
 
     // the verb's records carry agent tier under the invoking actor
     let rows = db::load(&db::open_read(&db_path).unwrap()).unwrap().rows;
@@ -951,8 +981,8 @@ fn a_diverged_branch_refuses_naming_both_doors() {
         follow_up_demand(&db_path),
         ActorName::new("pi".into()).unwrap(),
     ) {
-        Err(RunnerFail::Usage(message)) => message,
-        Err(other) => panic!("expected a Usage refusal, got {other:?}"),
+        Err(RunnerFail::Refused { reason }) => reason,
+        Err(other) => panic!("expected a refusal, got {other:?}"),
         Ok(_) => panic!("the diverged tip refused prepare"),
     };
     assert!(refusal.contains("diverged"), "{refusal}");
@@ -978,13 +1008,30 @@ fn prepare_refuses_a_disk_only_leftover_without_prescribing_git() {
         CommentId(saccade::RecordId(1)),
         ActorName::new("pi".into()).unwrap(),
     ) {
-        Err(RunnerFail::Usage(message)) => message,
-        Err(other) => panic!("expected a Usage refusal, got {other:?}"),
+        Err(RunnerFail::Refused { reason }) => reason,
+        Err(other) => panic!("expected a refusal, got {other:?}"),
         Ok(_) => panic!("the leftover worktree refused prepare"),
     };
     assert!(!message.contains("git"), "{message}");
     assert!(message.contains("human"), "{message}");
     // the refusal created nothing behind the record's back
     assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).is_empty());
+
+    // the refusal is a readable fact: the demand's next reader finds it
+    // on the thread, and the sweep will not re-fire the spent ask
+    let world = world_of(&db_path);
+    let demand = CommentId(saccade::RecordId(1));
+    match &world.comments[&demand].state {
+        CommentState::AddressedToAgent { attempt, .. } => {
+            assert!(matches!(attempt, AgentAttemptState::Spent));
+        }
+        other => panic!("the refused ask spent its authorization: {other:?}"),
+    }
+    let refusal = world.comments[&demand]
+        .refusal
+        .as_ref()
+        .expect("the refusal fact landed");
+    assert!(refusal.reason.as_str().contains("disk-only leftover"));
+    assert!(supervisor::runnable_demands(&world).is_empty());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }

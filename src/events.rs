@@ -57,6 +57,13 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         addressee: Option<Addressee>,
     },
+    /// The machinery refused to run a demand: the fact lands where the
+    /// asker reads, not only the operator log. Machinery verb,
+    /// System-authored by role.
+    DemandRefused {
+        demand: CommentId,
+        reason: Prose,
+    },
     // Incarnation events: machinery verbs, System-authored by role
     IncarnationBound {
         task_id: TaskId,
@@ -145,6 +152,10 @@ pub enum Command {
         target: Target,
         body: Prose,
         addressee: Option<Addressee>,
+    },
+    RefuseDemand {
+        demand: CommentId,
+        reason: Prose,
     },
     // Machinery verbs: the executor side acts through the same pipeline
     BindIncarnation {
