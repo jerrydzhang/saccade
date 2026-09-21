@@ -288,6 +288,30 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         other => panic!("expected a refusal, got {other:?}"),
     }
 
+    // the extent lesson rides the comment door through the wire too,
+    // counted honestly for the one task this tracker holds
+    let fail = client::send(
+        &base,
+        &agent,
+        Command::Comment {
+            target: saccade::Target::Task(saccade::TaskId(9)),
+            body: saccade::Prose::new("talking to nothing".into()).unwrap(),
+            addressee: None,
+        },
+        None,
+    )
+    .unwrap_err();
+    match &fail {
+        ClientFail::Refused { code, detail } => {
+            assert_eq!(code, "invalid_task_id");
+            assert!(
+                detail.contains("no task t-9 exists; this tracker holds 1 task, t-0"),
+                "{detail}"
+            );
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
     // nothing answering at the url is the typed server_required failure
     let dead = client::send(
         "http://127.0.0.1:1",

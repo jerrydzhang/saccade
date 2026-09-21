@@ -859,11 +859,44 @@ fn refusals_teach_the_id_space_and_the_state() {
             .output()
             .expect("spawn sac")
     };
+    let refusal_of = |out: std::process::Output| {
+        assert!(!out.status.success(), "the door refused");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+
+    // the extent lesson is driven by door, not by command shape: every
+    // CLI door that can raise invalid_task_id teaches the same sentence
+    for door in [
+        vec!["claim", "t-9"],
+        vec!["done", "t-9", "--receipt", "nope"],
+        vec!["release", "t-9", "--note", "nope"],
+        vec!["propose", "drop", "t-9", "--name", "nope"],
+        vec!["comment", "t-9", "a body"],
+    ] {
+        let stderr = refusal_of(sac(&door));
+        assert!(
+            stderr.contains("no task t-9 exists; this tracker holds 1 task, t-0"),
+            "the {door:?} door teaches: {stderr}"
+        );
+    }
+    // the human-only drop door teaches at human tier — authority passes
+    // there, so the extent lesson is the refusal
+    let out = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&path)
+        .arg("--offline")
+        .env_remove("SACCADE_ACTOR")
+        .args(["drop", "t-9", "--note", "nope"])
+        .output()
+        .expect("spawn sac");
+    let stderr = refusal_of(out);
+    assert!(
+        stderr.contains("no task t-9 exists; this tracker holds 1 task, t-0"),
+        "the drop door teaches: {stderr}"
+    );
 
     // a birth record used as a comment target names its task
-    let out = sac(&["comment", "#0", "replying to a birth"]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = refusal_of(sac(&["comment", "#0", "replying to a birth"]));
     assert!(stderr.contains("rejected: invalid_comment_id"), "{stderr}");
     assert!(
         stderr.contains("#0 is the birth record of task t-0"),
@@ -872,27 +905,28 @@ fn refusals_teach_the_id_space_and_the_state() {
     assert!(stderr.contains("address its thread as t-0"), "{stderr}");
 
     // a hashed task id learns the bare thread door
-    let out = sac(&["comment", "#t-0", "hashing the task"]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = refusal_of(sac(&["comment", "#t-0", "hashing the task"]));
     assert!(
         stderr.contains("drop the '#': the thread is addressed as t-0"),
         "{stderr}"
     );
 
     // a hashed c-N learns the bare record door
-    let out = sac(&["comment", "#c-0", "hashing the render"]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = refusal_of(sac(&["comment", "#c-0", "hashing the render"]));
     assert!(
         stderr.contains("drop the 'c-': the comment is addressed as #0"),
         "{stderr}"
     );
 
-    // a judgment refused by the state names the state and its holder
-    let out = sac(&["propose", "drop", "t-0", "--name", "floop is a corpse"]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    // a judgment refused by the state names the state and its holder —
+    // the propose door and the claim door alike
+    let stderr = refusal_of(sac(&[
+        "propose",
+        "drop",
+        "t-0",
+        "--name",
+        "floop is a corpse",
+    ]));
     assert!(
         stderr.contains("rejected: invalid_state_transition"),
         "{stderr}"
@@ -903,6 +937,11 @@ fn refusals_teach_the_id_space_and_the_state() {
     );
     assert!(
         stderr.contains("a drop proposal needs an open or done task"),
+        "{stderr}"
+    );
+    let stderr = refusal_of(sac(&["claim", "t-0"]));
+    assert!(
+        stderr.contains("t-0 is claimed (held by saccade bot); a claim needs an open task"),
         "{stderr}"
     );
 

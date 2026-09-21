@@ -16,15 +16,14 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
     match reject {
         Reject::InvalidTaskId => {
             let id = command_task(command)?;
-            Some(if world.tasks.is_empty() {
-                format!("no task t-{} exists; this tracker holds no tasks yet", id.0)
-            } else {
-                format!(
-                    "no task t-{} exists; this tracker holds {} tasks, t-0 through t-{}",
+            Some(match world.tasks.len() {
+                0 => format!("no task t-{} exists; this tracker holds no tasks yet", id.0),
+                1 => format!("no task t-{} exists; this tracker holds 1 task, t-0", id.0),
+                n => format!(
+                    "no task t-{} exists; this tracker holds {n} tasks, t-0 through t-{}",
                     id.0,
-                    world.tasks.len(),
-                    world.tasks.len() - 1
-                )
+                    n - 1
+                ),
             })
         }
         Reject::InvalidParentTaskId => {
@@ -33,9 +32,9 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             };
             let id = (*parent_id)?;
             Some(format!(
-                "no task t-{} to parent under; this tracker holds {} tasks",
+                "no task t-{} to parent under; this tracker holds {}",
                 id.0,
-                world.tasks.len()
+                task_count(world.tasks.len())
             ))
         }
         Reject::InvalidProposalId => {
@@ -123,7 +122,9 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
     }
 }
 
-/// The task a refusal names, when the command carries one.
+/// The task a refusal names, when the command carries one — every
+/// command shape that can raise an id-or-state refusal routes here,
+/// so no door escapes the teaching by shape.
 fn command_task(command: &Command) -> Option<TaskId> {
     match command {
         Command::ClaimTask { id }
@@ -134,7 +135,23 @@ fn command_task(command: &Command) -> Option<TaskId> {
         | Command::CreateWorkspace { task_id: id, .. }
         | Command::CreateWorktree { task_id: id, .. }
         | Command::CheckpointWorkspace { task_id: id, .. } => Some(*id),
+        Command::Comment {
+            target: Target::Task(id),
+            ..
+        } => Some(*id),
+        Command::CreateProposal { action, .. } => Some(match action {
+            ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => *task_id,
+        }),
         _ => None,
+    }
+}
+
+/// The count as prose: "1 task" or "N tasks", never "1 tasks".
+fn task_count(n: usize) -> String {
+    match n {
+        0 => "no tasks yet".into(),
+        1 => "1 task".into(),
+        n => format!("{n} tasks"),
     }
 }
 
@@ -304,11 +321,35 @@ mod test {
             "{taught}"
         );
 
-        // a task id out of range learns the tracker's extent
+        // a task id out of range learns the tracker's extent, by routing:
+        // every command shape that names a task flows through the same
+        // cell — the claim door, the comment door, the propose door
+        for command in [
+            Command::ClaimTask { id: TaskId(9) },
+            Command::Comment {
+                target: Target::Task(TaskId(9)),
+                body: Prose::new("a body".into()).unwrap(),
+                addressee: None,
+            },
+            Command::CreateProposal {
+                name: Prose::new("drop floop".into()).unwrap(),
+                action: ProposalAction::Drop { task_id: TaskId(9) },
+            },
+        ] {
+            let taught = teach(&world, &command, &Reject::InvalidTaskId)
+                .unwrap_or_else(|| panic!("the door teaches: {command:?}"));
+            assert!(
+                taught.contains("no task t-9 exists; this tracker holds 2 tasks, t-0 through t-1"),
+                "{taught}"
+            );
+        }
+
+        // a one-task tracker counts honestly
+        let single = World::replay(vec![task(0, "only work")]).unwrap();
         let command = Command::ClaimTask { id: TaskId(9) };
-        let taught = teach(&world, &command, &Reject::InvalidTaskId).unwrap();
+        let taught = teach(&single, &command, &Reject::InvalidTaskId).unwrap();
         assert!(
-            taught.contains("this tracker holds 2 tasks, t-0 through t-1"),
+            taught.contains("this tracker holds 1 task, t-0"),
             "{taught}"
         );
 
