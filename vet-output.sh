@@ -12,7 +12,7 @@
 set -u
 cd "$(dirname "$0")"
 
-BIN="${1:-target/debug/saccade}"
+BIN="${1:-target/debug/sac}"
 if [ $# -eq 0 ]; then
     cargo build -q || exit 1
 fi
@@ -118,9 +118,9 @@ say "proposals --json"      "$BIN" --db "$DB" --json proposals
 echo
 echo "######## comments and show ########"
 say "create for comments"   "$BIN" --db "$DB" "${A[@]}" create task "triage inbox"
-say "comment on task"       "$BIN" --db "$DB" "${A[@]}" comment t-4 "mapping examples live in the corpus, not here"
+say "comment on task"       "$BIN" --db "$DB" "${A[@]}" comment t-4 "inbox swept; two corpses proposed for drop"
 C="$(first_seq)"
-say "reply to comment"      "$BIN" --db "$DB" "${A[@]}" comment "#$C" "correction: worked examples only"
+say "reply to comment"      "$BIN" --db "$DB" "${A[@]}" comment "#$C" "correction: one was fresh work"
 say "show (the dock)"       "$BIN" --db "$DB" show t-4
 
 echo
