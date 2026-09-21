@@ -40,6 +40,10 @@ impl std::fmt::Display for ClientFail {
 #[derive(Deserialize)]
 struct RecordsBody {
     records: Vec<StoredRecord>,
+    /// The born task's token, present only on create replies; servers
+    /// that predate it omit the field
+    #[serde(default)]
+    id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -53,13 +57,21 @@ struct ErrorBody {
     error: ErrorDetail,
 }
 
+/// One command's outcome: the records it landed, and the born task's
+/// token when the command created one.
+#[derive(Debug)]
+pub struct Reply {
+    pub records: Vec<StoredRecord>,
+    pub id: Option<String>,
+}
+
 /// Sends one command and returns the records it landed
 pub fn send(
     url: &str,
     context: &Context,
     command: Command,
     at: Option<u64>,
-) -> Result<Vec<StoredRecord>, ClientFail> {
+) -> Result<Reply, ClientFail> {
     let envelope = Envelope {
         context: WireContext {
             actor: context.actor.clone(),
@@ -93,7 +105,10 @@ pub fn send(
             code: "malformed_response".into(),
             detail: e.to_string(),
         })?;
-        Ok(body.records)
+        Ok(Reply {
+            records: body.records,
+            id: body.id,
+        })
     } else {
         let body: ErrorBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
             code: "malformed_response".into(),

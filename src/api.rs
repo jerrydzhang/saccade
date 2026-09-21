@@ -17,7 +17,7 @@ use tracing::error;
 
 use crate::ActorName;
 use crate::db::{self, ExecuteFail, StoredRecord};
-use crate::store::{Context, Tier, World};
+use crate::store::{Context, RecordId, Tier, World};
 use crate::supervisor;
 use crate::{Command, Reject};
 
@@ -50,6 +50,7 @@ pub struct Snapshot {
 
 /// Degraded still serves the raw rows: the stream is the log's face when
 /// the world will not fold.
+#[derive(Debug)]
 pub struct Degraded {
     pub reason: String,
     pub rows: Vec<StoredRecord>,
@@ -247,7 +248,23 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         Ok(stored) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || supervisor::sweep(&fired));
-            (StatusCode::OK, Json(json!({"records": &stored}))).into_response()
+            let mut reply = json!({"records": &stored});
+            // a create reply names what was born: the id resolved from
+            // the post-write fold, matched by the birth record it landed
+            if matches!(command, Command::CreateTask { .. }) {
+                let birth = stored
+                    .iter()
+                    .find(|r| r.kind == "task_created")
+                    .expect("a create lands its birth record");
+                let born = app
+                    .snapshot()
+                    .expect("a landed write leaves a foldable world")
+                    .world
+                    .task_born_at(RecordId(birth.seq))
+                    .expect("the birth record folds into its task");
+                reply["id"] = json!(format!("t-{}", born.0));
+            }
+            (StatusCode::OK, Json(reply)).into_response()
         }
         Err(e) => {
             let (status, code, detail) = match e {

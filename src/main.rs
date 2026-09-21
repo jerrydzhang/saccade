@@ -434,19 +434,28 @@ fn run(cli: &Cli) -> Result<String, Fail> {
 
     // Identity is required only where it is recorded: mutating commands.
     let context = context_of(cli)?;
+    let creates = matches!(command, Command::CreateTask { .. });
+    let mut born: Option<String> = None;
     let stored = if cli.offline {
         let now = cli.at.unwrap_or_else(db::now_epoch);
         let mut conn = db::open(&db_path).map_err(Fail::Db)?;
         match db::record(&mut conn, &context, command.clone(), now) {
-            Ok((stored, _)) => stored,
+            Ok((stored, world)) => {
+                if creates {
+                    born = born_of(&stored, &world);
+                }
+                stored
+            }
             Err(ExecuteFail::Reject(reject)) => return Err(refused(&conn, &command, reject)),
             Err(other) => return Err(Fail::from(other)),
         }
     } else {
         client::handshake(&cli.server);
-        client::send(&cli.server, &context, command, cli.at).map_err(Fail::Client)?
+        let reply = client::send(&cli.server, &context, command, cli.at).map_err(Fail::Client)?;
+        born = reply.id;
+        reply.records
     };
-    Ok(render_records(cli, &stored))
+    Ok(render_records(cli, &stored, born.as_deref()))
 }
 
 /// A refusal the world can teach: the expected format and, where the
@@ -643,15 +652,32 @@ fn parse_proposal_id(token: &str) -> Result<ProposalId, Fail> {
     Ok(ProposalId(RecordId(n)))
 }
 
-fn render_records(cli: &Cli, stored: &[StoredRecord]) -> String {
+/// The reference a create reply names: the task whose birth record just
+/// landed, resolved against the post-write fold.
+fn born_of(stored: &[StoredRecord], world: &World) -> Option<String> {
+    let birth = stored.iter().find(|r| r.kind == "task_created")?;
+    world
+        .task_born_at(RecordId(birth.seq))
+        .map(|id| format!("t-{}", id.0))
+}
+
+fn render_records(cli: &Cli, stored: &[StoredRecord], born: Option<&str>) -> String {
     if cli.json {
+        if let Some(id) = born {
+            return serde_json::to_string_pretty(&serde_json::json!({
+                "id": id,
+                "records": stored
+            }))
+            .expect("records are plain data");
+        }
         return serde_json::to_string_pretty(stored).expect("records are plain data");
     }
-    stored
-        .iter()
-        .map(record_line)
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = Vec::with_capacity(stored.len() + 1);
+    if let Some(id) = born {
+        lines.push(id.to_string());
+    }
+    lines.extend(stored.iter().map(record_line));
+    lines.join("\n")
 }
 
 fn render_log(cli: &Cli, rows: &[StoredRecord]) -> String {
