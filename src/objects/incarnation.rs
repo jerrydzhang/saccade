@@ -64,6 +64,8 @@ pub struct IncarnationContext {
     pub produced: Vec<RecordId>,
     /// Event time of the bind record
     pub born_at: u64,
+    /// Event time of the terminal record, present once the run ended
+    pub done_at: Option<u64>,
 }
 
 impl IncarnationContext {

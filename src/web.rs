@@ -1,19 +1,30 @@
-//! The console: the webui's one page. Every section is a renderer over
-//! view types; fragments are sections, so the compose fetch swaps what
-//! the page itself renders. The @-compiler is the composer's input
+//! The console: one full-height instrument — supervision strip, forest
+//! rail, focused thread, docked compose. Every section is a renderer
+//! over view types; fragments are sections, so the compose fetch swaps
+//! what the page itself renders. The @-compiler is the composer's input
 //! syntax over Commented events — the parse lives here, never in the
 //! record.
 
 use crate::views::{
     CommentLine, ForestRow, MarkKind, NextPanel, ProposalView, RIBBON_WINDOW_SECS, RibbonMark,
-    ShowView, ThreadView,
+    ShowView, ThreadItem, ThreadView,
 };
 use crate::{Addressee, CommentId, RecordId, Target, TaskId};
+use time::OffsetDateTime;
+use time::macros::format_description;
+
+/// Ribbon layout: percent kept clear at each edge, and the minimum
+/// percent between two mark chips so crowded marks stay readable.
+const PAD_PCT: f64 = 4.0;
+const MARK_GAP_PCT: f64 = 3.5;
 
 pub struct Console {
     pub forest: Vec<ForestRow>,
     pub gate: Vec<ProposalView>,
     pub next: NextPanel,
+    /// The supervision strip's movement marks: every task's window.
+    pub marks: Vec<RibbonMark>,
+    /// The focused task's panel facts, when one is focused.
     pub focus: Option<Focus>,
     pub form: FormState,
     /// The read's now, in epoch seconds; the ages and the ribbon window
@@ -26,7 +37,6 @@ pub struct Focus {
     /// Open proposals targeting the focused task, in birth order.
     pub proposals: Vec<ProposalView>,
     pub thread: ThreadView,
-    pub marks: Vec<RibbonMark>,
 }
 
 #[derive(Default)]
@@ -42,11 +52,6 @@ pub struct Address {
     pub addressee: Option<Addressee>,
     pub target: Target,
 }
-
-/// Ribbon layout: percent kept clear at each edge, and the minimum
-/// percent between two mark chips so crowded marks stay readable.
-const PAD_PCT: f64 = 4.0;
-const MARK_GAP_PCT: f64 = 3.5;
 
 enum Tok {
     Agent,
@@ -147,175 +152,31 @@ fn token_at(chars: &[char], p: usize) -> Option<(Tok, usize)> {
     None
 }
 
-// ---- sections ----
+// ---- local time labels: ids, timestamps, and labels are mono facts ----
 
-pub fn page(c: &Console) -> String {
-    let forest = forest_section(&c.forest, &c.gate);
-    let next = next_section(&c.next);
-    let (thread, ribbon, compose) = match &c.focus {
-        Some(f) => (
-            thread_section(f, &c.form),
-            ribbon_section(&f.show.id, &f.marks, c.now),
-            compose_section(task_num(&f.show.id).unwrap_or(0), &c.form),
-        ),
-        None => (
-            "<section id=\"thread\"><div class=\"fact\">no task focused</div></section>\n"
-                .to_string(),
-            String::new(),
-            String::new(),
-        ),
-    };
-    format!(
-        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade · console</title><style>{STYLE}</style></head>\n<body>\n<input type=\"checkbox\" id=\"nav\">\n<header><span>SACCADE · CONSOLE</span><label class=\"navlabel\" for=\"nav\">forest</label></header>\n<div class=\"console\">\n{forest}\n<div class=\"col\">\n{next}\n{thread}\n{ribbon}\n{compose}\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
-    )
+fn local(ts: u64) -> OffsetDateTime {
+    let dt = OffsetDateTime::from_unix_timestamp(ts as i64).unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    dt.to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC))
 }
 
-fn task_num(id: &str) -> Option<usize> {
-    id.strip_prefix("t-").and_then(|n| n.parse().ok())
+/// 13:07
+fn fmt_t(ts: u64) -> String {
+    let desc = format_description!("[hour repr:24]:[minute]");
+    local(ts).format(&desc).unwrap_or_default()
 }
 
-fn forest_section(rows: &[ForestRow], gate: &[ProposalView]) -> String {
-    let mut s = String::from("<aside id=\"forest\">\n<h2>forest</h2>\n");
-    for row in rows {
-        let n = task_num(&row.task.id).unwrap_or(0);
-        let pad = "· ".repeat(row.depth);
-        let st = if row.task.state == "open" {
-            ""
-        } else {
-            " · claimed"
-        };
-        let mark = if row.task.proposal.is_some() {
-            " <span class=\"pmark\">judgment</span>"
-        } else {
-            ""
-        };
-        s.push_str(&format!(
-            "<a class=\"frow\" href=\"/t/{n}\"><span class=\"tid\">{}</span><span class=\"fname\">{pad}{}{st}{mark}</span></a>\n",
-            esc(&row.task.id),
-            esc(&row.task.name),
-        ));
-    }
-    if rows.is_empty() {
-        s.push_str("<div class=\"fact\">no live tasks</div>\n");
-    }
-    s.push_str("<h2>gate · judgment</h2>\n");
-    for p in gate {
-        let n = task_num(&p.task).unwrap_or(0);
-        s.push_str(&format!(
-            "<a class=\"frow gate\" href=\"/t/{n}\"><span class=\"tid\">#{}</span><span class=\"fname\">{} {} · {}</span></a>\n",
-            p.id,
-            esc(p.action),
-            esc(&p.task),
-            esc(&p.name),
-        ));
-    }
-    if gate.is_empty() {
-        s.push_str("<div class=\"fact\">gate clear</div>\n");
-    }
-    s.push_str("</aside>\n");
-    s
+/// Sun Sep 20
+fn fmt_d(ts: u64) -> String {
+    let desc = format_description!("[weekday repr:short] [month repr:short] [day]");
+    local(ts).format(&desc).unwrap_or_default()
 }
 
-fn next_section(next: &NextPanel) -> String {
-    let mut s = String::from("<section id=\"next\">\n<h2>next</h2>\n");
-    for r in &next.runs {
-        s.push_str(&format!(
-            "<a class=\"nrow run\" href=\"/t/{}\"><span class=\"tid\">i-{}</span><span class=\"fname\">t-{} · {}</span></a>\n",
-            r.task, r.incarnation, r.task, esc(&r.actor),
-        ));
-    }
-    if next.runs.is_empty() {
-        s.push_str("<div class=\"fact\">no runs in flight</div>\n");
-    }
-    for a in &next.asked_of_you {
-        s.push_str(&format!(
-            "<a class=\"nrow ask\" href=\"/t/{}#c-{}\"><span class=\"tid\">c-{}</span><span class=\"fname\">t-{} · {}</span></a>\n",
-            a.task, a.comment, a.comment, a.task, esc(&a.actor),
-        ));
-    }
-    if next.asked_of_you.is_empty() {
-        s.push_str("<div class=\"fact\">nothing asked of you</div>\n");
-    }
-    for c in &next.candidates {
-        let tint = if c.adrift { " adrift" } else { "" };
-        let n = task_num(&c.task).unwrap_or(0);
-        s.push_str(&format!(
-            "<a class=\"nrow cand{tint}\" href=\"/t/{n}\"><span class=\"tid\">{}</span><span class=\"fname\">{}<span class=\"age\"> · claim {} · quiet {}</span></span></a>\n",
-            esc(&c.task),
-            esc(&c.name),
-            ago(c.claim_age),
-            ago(c.last_record_age),
-        ));
-    }
-    if next.candidates.is_empty() {
-        s.push_str("<div class=\"fact\">nothing claimed</div>\n");
-    }
-    s.push_str("</section>\n");
-    s
-}
-
-pub fn thread_section(f: &Focus, form: &FormState) -> String {
-    let mut s = format!(
-        "<section id=\"thread\">\n<div class=\"thead\"><span class=\"tid\">{}</span> <span class=\"tstate\">{}</span> <span class=\"tname\">{}</span>{}</div>\n",
-        esc(&f.show.id),
-        esc(f.show.state),
-        esc(&f.show.name),
-        match &f.show.parent {
-            Some(p) => format!(
-                " <a class=\"parent\" href=\"/t/{}\">↑ {}</a>",
-                task_num(p).unwrap_or(0),
-                esc(p)
-            ),
-            None => String::new(),
-        },
+/// Sun Sep 20 18:02 — the strip's axis
+fn fmt_dt(ts: u64) -> String {
+    let desc = format_description!(
+        "[weekday repr:short] [month repr:short] [day] [hour repr:24]:[minute]"
     );
-    if let Some(receipt) = &f.show.receipt {
-        s.push_str(&format!(
-            "<div class=\"cmt receipt\"><span class=\"meta\">receipt</span>\n<div class=\"body\">{}</div>\n</div>\n",
-            esc(receipt),
-        ));
-    }
-    for p in &f.proposals {
-        s.push_str(&format!(
-            "<div class=\"pblock\"><span class=\"meta\">#{}</span> <span class=\"pname\">{} {} · {}</span>\n<form method=\"post\" action=\"/p/{}/accept\"><button class=\"judge\" type=\"submit\">accept</button></form>\n<form class=\"jform\" method=\"post\" action=\"/p/{}/reject\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<button class=\"judge\" type=\"submit\">reject</button>\n</form>\n</div>\n",
-            p.id,
-            esc(p.action),
-            esc(&p.task),
-            esc(&p.name),
-            p.id,
-            p.id,
-            esc(&form.note),
-        ));
-    }
-    if f.thread.conversations.is_empty() && f.thread.stream.is_empty() {
-        s.push_str("<div class=\"fact\">no comments yet</div>\n");
-    }
-    for conv in &f.thread.conversations {
-        s.push_str("<div class=\"conv\">\n");
-        s.push_str(&cmt_html(&conv.root));
-        for reply in &conv.replies {
-            s.push_str(&cmt_html(reply));
-        }
-        s.push_str("</div>\n");
-    }
-    for line in &f.thread.stream {
-        s.push_str(&cmt_html(line));
-    }
-    s.push_str("</section>\n");
-    s
-}
-
-fn cmt_html(c: &CommentLine) -> String {
-    format!(
-        "<div class=\"cmt\" id=\"c-{}\" style=\"margin-left:{}px\"><span class=\"meta\">#{}</span> <span class=\"who {}\">{}</span><span class=\"tag\">{}</span>\n<div class=\"body\">{}</div>\n</div>\n",
-        c.seq,
-        (c.depth - 1) * 18,
-        c.seq,
-        esc(&c.tier),
-        esc(&c.actor),
-        c.state.as_deref().map(esc).unwrap_or_default(),
-        esc(&c.body),
-    )
+    local(ts).format(&desc).unwrap_or_default()
 }
 
 fn ago(secs: u64) -> String {
@@ -327,24 +188,108 @@ fn ago(secs: u64) -> String {
     }
 }
 
-fn ribbon_section(task: &str, marks: &[RibbonMark], now: u64) -> String {
-    let mut s = format!(
-        "<section id=\"ribbon\">\n<h2>movement · {}</h2>\n",
-        esc(task)
+// ---- the page ----
+
+pub fn page(c: &Console) -> String {
+    let strip = strip_section(c);
+    let forest = forest_section(&c.forest, &c.gate, focus_num(c).as_deref());
+    let panel = match &c.focus {
+        Some(f) => format!(
+            "<div class=\"thead\"><span class=\"tstate\" style=\"color:{state_color}\">● {state}</span>\n<div class=\"ttitle\">{title}</div>\n<div class=\"tmeta mono\">{meta}</div>\n</div>\n{thread}{compose}",
+            state_color = if f.show.state == "claimed" { "#dac09a" } else { "#6d6562" },
+            state = f.show.state.to_uppercase(),
+            title = esc(&f.show.name),
+            meta = esc(&head_meta(&f.show)),
+            thread = thread_section(f, &c.form),
+            compose = compose_section(task_num(&f.show.id).unwrap_or(0), &c.form),
+        ),
+        None => "<div class=\"thead\"></div>\n<section id=\"thread\"><div class=\"nempty\">no task focused</div></section>\n".to_string(),
+    };
+    format!(
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade · console</title><style>{STYLE}</style></head>\n<body>\n<header><span class=\"brand\">SACCADE · CONSOLE</span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>\n<input type=\"checkbox\" id=\"nav\">\n<div class=\"if\">\n{strip}\n<div class=\"cols withforest\">\n{forest}\n<div class=\"tpanel\">\n{panel}\n</div>\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
+    )
+}
+
+fn focus_num(c: &Console) -> Option<String> {
+    c.focus.as_ref().map(|f| f.show.id.clone())
+}
+
+fn head_meta(show: &ShowView) -> String {
+    match &show.parent {
+        Some(p) => format!("{} · under {}", show.id, p),
+        None => show.id.clone(),
+    }
+}
+
+fn task_num(id: &str) -> Option<usize> {
+    id.strip_prefix("t-").and_then(|n| n.parse().ok())
+}
+
+// ---- the supervision strip ----
+
+fn strip_section(c: &Console) -> String {
+    let mut s = String::from("<div class=\"strip\">\n");
+    s.push_str(&format!(
+        "<div class=\"striphead\"><span class=\"strip-title\">SUPERVISION</span><span class=\"strip-axis mono\">{}</span></div>\n",
+        esc(&fmt_dt(c.now)),
+    ));
+    s.push_str("<div class=\"nsec\">RUNS IN FLIGHT</div>\n");
+    if c.next.runs.is_empty() {
+        s.push_str("<div class=\"nempty\">no runs in flight</div>\n");
+    }
+    for r in &c.next.runs {
+        s.push_str(&format!(
+            "<a class=\"nxrow\" href=\"/t/{}\"><span class=\"nid mono\">i-{}</span><span class=\"nname\">t-{} · {}</span><span class=\"nfact mono\">born {} ago</span></a>\n",
+            r.task, r.incarnation, r.task, esc(&r.actor), ago(c.now.saturating_sub(r.born_at)),
+        ));
+    }
+    s.push_str("<div class=\"nsec\">ASKED OF YOU</div>\n");
+    if c.next.asked_of_you.is_empty() {
+        s.push_str("<div class=\"nempty\">nothing asked of you</div>\n");
+    }
+    for a in &c.next.asked_of_you {
+        s.push_str(&format!(
+            "<a class=\"nxrow\" href=\"/t/{}#c-{}\"><span class=\"nid mono\">c-{}</span><span class=\"nname\">t-{} · {}</span><span class=\"nfact mono\">awaiting</span></a>\n",
+            a.task, a.comment, a.comment, a.task, esc(&a.actor),
+        ));
+    }
+    s.push_str("<div class=\"nsec\">CLAIMED · LAST RECORD</div>\n");
+    if c.next.candidates.is_empty() {
+        s.push_str("<div class=\"nempty\">nothing claimed</div>\n");
+    }
+    for cand in &c.next.candidates {
+        let tint = if cand.adrift { " stale" } else { "" };
+        s.push_str(&format!(
+            "<a class=\"nxrow\" href=\"/t/{}\"><span class=\"nid mono\">{}</span><span class=\"nname\">{}</span><span class=\"nfact mono{tint}\">claim {} · last record {}</span></a>\n",
+            task_num(&cand.task).unwrap_or(0),
+            esc(&cand.task),
+            esc(&cand.name),
+            ago(cand.claim_age),
+            ago(cand.last_record_age),
+        ));
+    }
+    s.push_str(&ribbon_section(c));
+    s.push_str("</div>\n");
+    s
+}
+
+fn ribbon_section(c: &Console) -> String {
+    let mut s = String::from(
+        "<div class=\"nsec ribhead\">MOVEMENT · 72H · <span class=\"k-human\">your notes</span> · <span class=\"k-agent\">agent notes</span> · <span class=\"k-run\">runs</span> · <span class=\"k-demand\">demands</span></div>\n",
     );
-    if marks.is_empty() {
-        s.push_str("<div class=\"fact\">no movement in 72h</div>\n</section>\n");
+    if c.marks.is_empty() {
+        s.push_str("<div class=\"rib\"></div>\n");
         return s;
     }
-    let start = now.saturating_sub(RIBBON_WINDOW_SECS);
+    let start = c.now.saturating_sub(RIBBON_WINDOW_SECS);
     let span = RIBBON_WINDOW_SECS.max(1);
     // positions sit inside a small inset so the newest mark is not the
     // literal edge, then packed right-to-left so no two marks overlap:
     // a mark keeps its true position unless the newer mark's chip would
     // cover it
-    let mut lefts = vec![0.0; marks.len()];
+    let mut lefts = vec![0.0; c.marks.len()];
     let mut next: Option<f64> = None;
-    for (i, m) in marks.iter().enumerate().rev() {
+    for (i, m) in c.marks.iter().enumerate().rev() {
         let raw =
             PAD_PCT + (m.at.saturating_sub(start)) as f64 / span as f64 * (100.0 - 2.0 * PAD_PCT);
         let left = match next {
@@ -354,25 +299,228 @@ fn ribbon_section(task: &str, marks: &[RibbonMark], now: u64) -> String {
         lefts[i] = left;
         next = Some(left);
     }
-    s.push_str("<div class=\"rline\">");
-    for (m, left) in marks.iter().zip(&lefts) {
-        let kind = match m.kind {
-            MarkKind::Comment => "comment",
-            MarkKind::Demand => "demand",
-            MarkKind::Run => "run",
-        };
+    s.push_str("<div class=\"rib\">");
+    // 24h gridlines and the now marker
+    for hours in [24, 48] {
+        let pct = PAD_PCT
+            + (RIBBON_WINDOW_SECS - hours * 3600) as f64 / span as f64 * (100.0 - 2.0 * PAD_PCT);
         s.push_str(&format!(
-            "<a class=\"mark k-{kind}\" style=\"left:{left:.1}%\" href=\"#c-{}\" title=\"c-{} · {kind}\">c-{}</a>\n",
-            m.seq, m.seq, m.seq,
+            "<span class=\"rv\" style=\"left:{pct:.1}%\"></span>\n"
         ));
     }
-    s.push_str("</div>\n</section>\n");
+    s.push_str(&format!(
+        "<span class=\"rv now\" style=\"left:{:.1}%\"></span>\n",
+        100.0 - PAD_PCT
+    ));
+    for (m, left) in c.marks.iter().zip(&lefts) {
+        let (class, label) = match m.kind {
+            MarkKind::Note { human: true } => ("note human", "note"),
+            MarkKind::Note { human: false } => ("note agent", "note"),
+            MarkKind::Demand => ("demand", "demand"),
+            MarkKind::Run => ("run", "run"),
+        };
+        s.push_str(&format!(
+            "<a class=\"mrk {class}\" style=\"left:{left:.1}%\" href=\"/t/{}#c-{}\" title=\"t-{} · {label} #{} · {}\"></a>\n",
+            m.task, m.seq, m.task, m.seq, esc(&fmt_t(m.at)),
+        ));
+    }
+    s.push_str("</div>\n");
     s
+}
+
+// ---- the forest rail ----
+
+fn forest_section(rows: &[ForestRow], gate: &[ProposalView], focus: Option<&str>) -> String {
+    let mut s = String::from("<aside class=\"forest\">\n");
+    for row in rows {
+        let sel = focus == Some(row.task.id.as_str());
+        let (chip, color) = if row.task.state == "claimed" {
+            ("CLAIMED", "#dac09a")
+        } else {
+            ("OPEN", "#6d6562")
+        };
+        let pad = row.depth * 14;
+        s.push_str(&format!(
+            "<a class=\"frow{}\" style=\"margin-left:{pad}px\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{color}\">{chip}</span><span class=\"fname\">{}</span></a>\n",
+            if sel { " sel" } else { "" },
+            row.task.id,
+            esc(&row.task.id),
+            esc(&row.task.name),
+        ));
+    }
+    if rows.is_empty() {
+        s.push_str("<div class=\"fgate-empty\">no live tasks</div>\n");
+    }
+    s.push_str("<div class=\"fsect\">GATE · JUDGMENT</div>\n");
+    for p in gate {
+        s.push_str(&format!(
+            "<a class=\"frow\" href=\"/t/{}\"><span class=\"fid mono\">#{}</span><span class=\"fname\">{} {} · {}</span></a>\n",
+            p.task,
+            p.id,
+            esc(p.action),
+            esc(&p.task),
+            esc(&p.name),
+        ));
+    }
+    if gate.is_empty() {
+        s.push_str("<div class=\"fgate-empty\">nothing awaiting judgment</div>\n");
+    }
+    s.push_str("</aside>\n");
+    s
+}
+
+// ---- the thread panel ----
+
+pub fn thread_section(f: &Focus, form: &FormState) -> String {
+    let mut s = String::from("<section id=\"thread\">\n");
+    for p in &f.proposals {
+        s.push_str(&format!(
+            "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<div class=\"jrow\">\n<form method=\"post\" action=\"/p/{}/accept\"><button class=\"sendbtn\" type=\"submit\">accept</button></form>\n<form class=\"jform\" method=\"post\" action=\"/p/{}/reject\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<button class=\"sendbtn\" type=\"submit\">reject</button>\n</form>\n</div>\n</div>\n",
+            p.id,
+            esc(p.action),
+            esc(&p.task),
+            esc(&p.name),
+            p.id,
+            p.id,
+            esc(&form.note),
+        ));
+    }
+    if let Some(receipt) = &f.show.receipt {
+        s.push_str(&format!(
+            "<div class=\"receipt\"><span class=\"xk\" style=\"color:#dac09a\">RECEIPT</span>\n<div class=\"nbody\">{}</div>\n</div>\n",
+            esc(receipt),
+        ));
+    }
+    let mut last_time: Option<u64> = None;
+    for item in &f.thread.items {
+        let (first_at, last_at) = item_span(item);
+        if let Some(prev) = last_time
+            && first_at.saturating_sub(prev) > 4 * 3600
+        {
+            s.push_str(&format!(
+                "<div class=\"gapdiv mono\">{}</div>\n",
+                esc(&fmt_d(first_at)),
+            ));
+        }
+        last_time = Some(last_at);
+        s.push_str(&item_html(item));
+    }
+    if f.thread.items.is_empty() && f.show.receipt.is_none() && f.proposals.is_empty() {
+        s.push_str("<div class=\"nempty\">no comments yet</div>\n");
+    }
+    s.push_str("</section>\n");
+    s
+}
+
+fn item_span(item: &ThreadItem) -> (u64, u64) {
+    match item {
+        ThreadItem::Note(line) => (line.born_at, line.born_at),
+        ThreadItem::Group { root, replies } | ThreadItem::Exchange { root, replies, .. } => {
+            let last = replies.last().map(|r| r.born_at).unwrap_or(root.born_at);
+            (root.born_at, last)
+        }
+    }
+}
+
+fn item_html(item: &ThreadItem) -> String {
+    match item {
+        ThreadItem::Exchange { root, run, replies } => match run {
+            Some(run) => {
+                let open = run.in_flight();
+                let window = match run.done_at {
+                    Some(done) => format!("{}–{}", fmt_t(run.born_at), fmt_t(done)),
+                    None => format!("{}– in flight", fmt_t(run.born_at)),
+                };
+                let mut s = format!(
+                    "<div class=\"xg{}\">\n<div class=\"xhead\"><span class=\"xk\">EXCHANGE</span><span class=\"xd mono\">#{}</span><span class=\"xmeta mono\">{} · {}</span></div>\n<div class=\"xbody\">\n",
+                    if open { " open" } else { "" },
+                    root.seq,
+                    esc(&window),
+                    if open { "in flight" } else { "settled" },
+                );
+                s.push_str(&node_html(root, 0, Some(("DEMAND", "#dac09a")), None));
+                s.push_str(&format!(
+                    "<div class=\"nrow2 runrow\"><div class=\"nmeta\"><span class=\"xk\" style=\"color:#a2c4a3\">RUN</span><span class=\"nwho\">{}</span><span class=\"nseq mono\">{}</span></div>\n</div>\n",
+                    esc(&run.actor),
+                    esc(&window),
+                ));
+                for r in replies {
+                    s.push_str(&node_html(
+                        r,
+                        r.depth.saturating_sub(2),
+                        Some(("REPLY", "#a2c4a3")),
+                        None,
+                    ));
+                }
+                s.push_str("</div>\n</div>\n");
+                s
+            }
+            None => {
+                // the demand awaits its run: a plain row, not a card
+                let mut s = node_html(
+                    root,
+                    0,
+                    Some(("DEMAND", "#dac09a")),
+                    Some("awaiting incarnation"),
+                );
+                for r in replies {
+                    s.push_str(&node_html(
+                        r,
+                        r.depth.saturating_sub(1),
+                        Some(("REPLY", "#a2c4a3")),
+                        None,
+                    ));
+                }
+                s
+            }
+        },
+        ThreadItem::Group { root, replies } => {
+            let mut s = String::from("<div class=\"ntg\">\n");
+            s.push_str(&node_html(root, 0, None, None));
+            for r in replies {
+                s.push_str(&node_html(r, r.depth.saturating_sub(2), None, None));
+            }
+            s.push_str("</div>\n");
+            s
+        }
+        ThreadItem::Note(line) => node_html(line, 0, None, None),
+    }
+}
+
+/// One comment row: kind chip, whisper mono meta (actor, seq, time),
+/// full body.
+fn node_html(
+    line: &CommentLine,
+    indent: usize,
+    kind: Option<(&str, &str)>,
+    tag: Option<&str>,
+) -> String {
+    let chip = kind
+        .map(|(k, color)| format!("<span class=\"xk\" style=\"color:{color}\">{k}</span>"))
+        .unwrap_or_default();
+    let state = line
+        .state
+        .as_deref()
+        .filter(|_| kind.is_none())
+        .map(|s| format!("<span class=\"nseq\">{}</span>", esc(s)))
+        .unwrap_or_default();
+    let extra = tag
+        .map(|t| format!("<span class=\"nseq\">{}</span>", esc(t)))
+        .unwrap_or_default();
+    format!(
+        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">#{seq}</span>{state}{extra}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody\">{body}</div>\n</div>\n",
+        seq = line.seq,
+        pad = 26 + indent * 22,
+        tier = esc(&line.tier),
+        actor = esc(&line.actor),
+        time = esc(&fmt_t(line.born_at)),
+        body = esc(&line.body),
+    )
 }
 
 pub fn compose_section(task: usize, form: &FormState) -> String {
     let who = if form.need_who {
-        "<input name=\"who\" placeholder=\"your name\" autocomplete=\"name\">\n"
+        "<input class=\"who\" name=\"who\" placeholder=\"your name\" autocomplete=\"name\">\n"
     } else {
         ""
     };
@@ -382,9 +530,19 @@ pub fn compose_section(task: usize, form: &FormState) -> String {
         .map(|e| format!("<div class=\"formerr\">{}</div>\n", esc(e)))
         .unwrap_or_default();
     format!(
-        "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<textarea id=\"body\" name=\"body\" rows=\"3\" placeholder=\"write\">{}</textarea>\n<div id=\"address\" class=\"address\"></div>\n{who}{error}<button type=\"submit\">post</button>\n</form>\n</section>\n",
+        "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<div id=\"address\" class=\"addrline mono\"></div>\n<textarea id=\"body\" name=\"body\" rows=\"2\" placeholder=\"write\">{}</textarea>\n<div class=\"sendrow\">{who}{error}<button class=\"sendbtn\" type=\"submit\">send</button></div>\n</form>\n</section>\n",
         esc(&form.draft),
     )
+}
+
+/// The left positions of the ribbon's mark chips, in render order.
+#[cfg(test)]
+fn mark_lefts(ribbon_html: &str) -> Vec<f64> {
+    ribbon_html
+        .split("class=\"mrk")
+        .skip(1)
+        .filter_map(|seg| seg.split("left:").nth(1)?.split('%').next()?.parse().ok())
+        .collect()
 }
 
 fn esc(s: &str) -> String {
@@ -442,146 +600,192 @@ document.addEventListener('submit', (e) => {
 "#;
 
 pub(crate) const STYLE: &str = r#"
-:root { color-scheme: dark; }
 * { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
 #nav { position: absolute; opacity: 0; }
 body {
-  margin: 0; background: #100f0e; color: #b6b0a7;
-  font: 15px/1.55 "Noto Sans", system-ui, sans-serif;
+  background: #100f0e; color: #d4ceca;
+  font: 500 13.5px/1.55 "Noto Sans", system-ui, sans-serif;
 }
+.mono, .nseq, .nfact, .nid, .schip, .xd, .xmeta, .tmeta, .addrline, .gapdiv, .strip-axis, .strip-title, .nsec, .fsect, .jhead, .xk, .tstate {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+a { color: #a2c3c4; text-decoration: none; }
+
+/* mode line */
 header {
-  display: flex; justify-content: space-between; align-items: baseline;
-  padding: 10px 18px; border-bottom: 1px solid #211e1b;
-  font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  letter-spacing: 0.25em; color: #6f675c;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 16px; background: #1b1918;
 }
-.navlabel { display: none; cursor: pointer; letter-spacing: 0.1em; }
-.console {
-  display: grid; grid-template-columns: 270px 1fr;
-  max-width: 1180px; margin: 0 auto; min-height: calc(100vh - 40px);
+header .brand {
+  font: 600 11px "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: .2em; color: #e8e2dd;
 }
-#forest {
-  border-right: 1px solid #211e1b; padding: 10px 14px 40px;
-  background: #141210;
+.fbtn {
+  display: none; cursor: pointer; color: #6d6562;
+  font: 500 11px "JetBrains Mono", ui-monospace, monospace;
+  border: 1px solid #2e2a28; padding: 2px 9px; border-radius: 3px;
 }
-.col { padding: 6px 18px 60px; max-width: 780px; }
-h2 {
-  font: 500 11px ui-monospace, "SF Mono", Menlo, monospace;
-  letter-spacing: 0.22em; text-transform: uppercase;
-  color: #6f675c; margin: 18px 0 6px;
+.fbtn:hover { color: #e8e2dd; }
+
+/* full-height frame: strip over (rail | thread) */
+.if { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 41px); }
+
+/* supervision strip: one surface band, dense rows */
+.strip { background: #1b1918; padding: 10px 16px 12px; }
+.striphead { display: flex; gap: 14px; align-items: baseline; }
+.strip-title { font: 600 10.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .2em; color: #6d6562; }
+.strip-axis { margin-left: auto; font-size: 10px; color: #4a4543; }
+.nsec { font: 600 9.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .16em; color: #6d6562; margin: 8px 0 2px; }
+.nxrow {
+  display: grid; grid-template-columns: 52px minmax(180px, 300px) 1fr; gap: 12px;
+  padding: 3px 6px; border-radius: 3px; align-items: baseline; color: inherit;
 }
-h2:first-child { margin-top: 6px; }
-a { color: #8b98a8; text-decoration: none; }
-a:hover { color: #c9b99b; }
-.frow, .nrow {
-  display: flex; gap: 8px; padding: 2px 6px; border-radius: 3px;
-  align-items: baseline; color: inherit;
+.nxrow:hover { background: #292624; }
+.nid { color: #dac09a; font-size: 11.5px; white-space: nowrap; }
+.nname { font-size: 12.5px; color: #d4ceca; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nfact { font-size: 11px; color: #6d6562; text-align: right; }
+.nfact.stale { color: #dac09a; }
+.nempty { font-size: 11px; color: #4a4543; padding: 1px 6px 2px; }
+
+/* movement ribbon */
+.ribhead { margin-top: 12px; }
+.k-human { color: #c4a6a8; }
+.k-agent { color: #6d6562; }
+.k-run { color: #a2c4a3; }
+.k-demand { color: #dac09a; }
+.rib { position: relative; height: 12px; background: #100f0e; border-radius: 2px; margin-top: 4px; }
+.rv { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1px solid #292624; }
+.rv.now { border-left: 2px solid #d4ceca; }
+.mrk { position: absolute; top: 1px; bottom: 1px; }
+.mrk.note.human { width: 3px; background: #c4a6a8; border-radius: 1px; }
+.mrk.note.agent { width: 3px; background: #6d6562; border-radius: 1px; }
+.mrk.demand { width: 3px; background: #dac09a; border-radius: 1px; }
+.mrk.run { width: 3px; background: rgba(162,196,163,.38); border-left: 2px solid #a2c4a3; border-radius: 1px; }
+.mrk:hover { background: #e8e2dd; }
+
+/* columns: forest surface | thread deep — tone separates, no dividers */
+.cols { display: grid; min-height: 0; }
+.cols.withforest { grid-template-columns: 252px 1fr; }
+.forest { background: #1b1918; overflow-y: auto; padding: 10px 8px; }
+.frow {
+  display: flex; flex-wrap: nowrap; gap: 7px; align-items: center;
+  padding: 4px 8px; border-radius: 3px; color: inherit;
 }
-.frow:hover, .nrow:hover { background: #1b1918; }
-.tid {
-  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
-  color: #6f675c; flex: none; min-width: 40px;
+.frow:hover { background: #292624; }
+.frow.sel { background: #292624; }
+.frow.sel .fname { color: #e8e2dd; }
+.fid { color: #dac09a; font-size: 11.5px; white-space: nowrap; flex-shrink: 0; }
+.schip { white-space: nowrap; flex-shrink: 0; font: 500 9.5px/1.6 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .06em; }
+.fname { flex: 1; min-width: 0; font-size: 12.5px; color: #d4ceca; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fsect { font: 600 9.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .16em; color: #6d6562; margin: 16px 8px 4px; }
+.fgate-empty { padding: 4px 8px; font-size: 11.5px; color: #4a4543; }
+
+/* thread panel: head / scroll / compose */
+.tpanel { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; min-width: 0; }
+.thead { padding: 14px 18px 10px; }
+.ttitle { font: 800 16px/1.3 "Noto Sans", system-ui, sans-serif; color: #e8e2dd; margin: 4px 0 3px; overflow-wrap: anywhere; }
+.tmeta { font-size: 11.5px; color: #6d6562; }
+.tstate { font: 600 10.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .12em; }
+
+#thread { overflow-y: auto; min-height: 0; padding: 4px 0 12px; }
+
+/* day dividers at gaps */
+.gapdiv {
+  display: flex; align-items: center; gap: 10px; margin: 12px 18px 6px;
+  color: #4a4543; font-size: 10px; letter-spacing: .14em;
 }
-.fname { overflow-wrap: anywhere; color: #cfc8bd; }
-.fname .age { color: #57504a; font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
-.frow.gate { border-left: 2px solid #b3905f; margin: 2px 0; }
-.pmark { color: #b3905f; font: 11px ui-monospace, "SF Mono", Menlo, monospace; }
-.nrow.ask { border-left: 2px solid #b3905f; }
-.nrow.run { border-left: 2px solid #87996f; }
-.nrow.adrift { background: #1c1614; }
-.nrow.adrift .fname { color: #c39a90; }
-.fact { color: #57504a; padding: 1px 6px; font-size: 13px; }
-.thead { margin: 14px 0 4px; }
-.tstate {
-  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
-  letter-spacing: 0.12em; color: #b3905f;
+.gapdiv::before, .gapdiv::after { content: ""; flex: 1; border-top: 1px solid #1e1c1a; }
+
+/* nodes: whisper mono meta, full body */
+.nrow2 { padding: 5px 18px 5px 26px; position: relative; }
+.nrow2:hover { background: #1b1918; }
+.nmeta { display: flex; gap: 8px; align-items: baseline; font-size: 11px; color: #4a4543; margin-bottom: 2px; flex-wrap: wrap; }
+.nwho { color: #6d6562; }
+.nwho.human { color: #c4a6a8; }
+.nwho.agent { color: #6d6562; }
+.nseq { font-size: 11px; color: #4a4543; }
+.nbody { font-size: 13.5px; line-height: 1.55; color: #d4ceca; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* conversations: raised tone cards, borderless */
+.xg { margin: 4px 18px 6px 16px; background: #1e1c1a; border-radius: 6px; }
+.xg.open { background: rgba(218,192,154,.05); }
+.xhead { display: flex; gap: 10px; align-items: center; padding: 7px 12px; font-size: 11px; }
+.xk { color: #a2c4a3; font-size: 10px; letter-spacing: .14em; }
+.xg.open .xhead .xk { color: #dac09a; }
+.xd { color: #6d6562; }
+.xmeta { color: #4a4543; font-size: 10.5px; margin-left: auto; }
+.xbody { border-top: 1px solid #2e2a28; padding: 4px 0; }
+.xg .nrow2 { padding-left: 14px; padding-right: 14px; }
+.xg .nrow2.runrow { padding-top: 0; padding-bottom: 2px; }
+.ntg { margin: 4px 18px 6px 16px; background: #1e1c1a; border-radius: 6px; padding: 3px 0; }
+.ntg .nrow2 { padding-left: 14px; padding-right: 14px; }
+
+/* receipt and judgment: quiet gold facts */
+.receipt { margin: 4px 18px 6px 16px; background: #1e1c1a; border-radius: 6px; padding: 7px 12px; }
+.receipt .nbody { color: #b3aca6; margin-top: 2px; }
+.judge { margin: 4px 18px 8px 16px; background: #1e1c1a; border-radius: 6px; padding: 8px 12px; }
+.jhead { color: #6d6562; font-size: 11px; }
+.jname { color: #dac09a; overflow-wrap: anywhere; }
+.jrow { display: flex; gap: 14px; align-items: flex-start; margin-top: 6px; }
+.jrow form { margin: 0; }
+.jform { flex: 1; }
+
+/* compose: docked surface band */
+#compose { background: #1b1918; padding: 10px 18px 12px; }
+.addrline { font-size: 11px; color: #6d6562; margin-bottom: 6px; min-height: 14px; }
+#compose textarea {
+  width: 100%; background: #100f0e; color: #d4ceca;
+  border: 1px solid #100f0e; border-radius: 4px;
+  font: 500 13.5px "Noto Sans", system-ui, sans-serif; padding: 9px 11px; resize: vertical;
 }
-.tname { color: #e2dcd2; overflow-wrap: anywhere; }
-.parent { font-size: 13px; }
-.conv { margin: 10px 0; border-left: 1px solid #211e1b; padding-left: 10px; }
-.cmt { margin: 8px 0; }
-.cmt .meta {
-  font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: #6f675c;
+#compose textarea:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
+.sendrow { display: flex; justify-content: flex-end; gap: 10px; align-items: center; margin-top: 6px; }
+.sendrow .who {
+  background: #100f0e; color: #d4ceca; border: 1px solid #100f0e; border-radius: 4px;
+  font: 500 12.5px "Noto Sans", system-ui, sans-serif; padding: 6px 10px;
 }
-.cmt .who { font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
-.cmt .who.human { color: #c39a90; }
-.cmt .who.agent { color: #8a8172; }
-.cmt .tag {
-  font: 11px ui-monospace, "SF Mono", Menlo, monospace;
-  color: #b3905f; margin-left: 6px;
+.sendrow .who:focus { outline: none; border-color: #2e2a28; }
+.sendbtn {
+  background: #292624; color: #d4ceca; border: none; border-radius: 3px;
+  padding: 6px 18px; cursor: pointer; font: 600 12px "Noto Sans", sans-serif;
 }
-.cmt .body {
-  color: #b6b0a7; white-space: pre-wrap; overflow-wrap: anywhere;
-  margin-top: 1px;
-}
-.cmt.receipt .body { color: #8a8172; }
-.pblock {
-  border-left: 2px solid #b3905f; padding: 6px 10px; margin: 10px 0;
-  background: #161311;
-}
-.pblock .pname { color: #b3905f; overflow-wrap: anywhere; }
+.sendbtn:hover { color: #dac09a; }
 .jform textarea {
-  width: 100%; background: #1b1918; color: #b6b0a7;
-  border: 1px solid #26221f; border-radius: 3px;
-  padding: 6px 8px; font: inherit; resize: vertical;
-}
-button {
-  background: #292624; color: #b6b0a7; border: 1px solid #211e1b;
-  border-radius: 3px; padding: 4px 14px; font: inherit;
-  margin-top: 6px; cursor: pointer;
-}
-button:hover { border-color: #b3905f; }
-button.judge { border-color: #5a4a33; color: #b3905f; }
-#cform { margin: 14px 0 0; }
-#cform textarea {
-  width: 100%; background: #1b1918; color: #b6b0a7;
-  border: 1px solid #26221f; border-radius: 3px;
-  padding: 8px 10px; font: inherit; resize: vertical;
-}
-#cform textarea:focus { outline: none; border-color: #5a4a33; }
-#cform input {
-  background: #1b1918; color: #b6b0a7; border: 1px solid #26221f;
-  border-radius: 3px; padding: 4px 8px; font: inherit; margin-top: 4px;
-}
-.address {
-  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
-  color: #8b98a8; min-height: 18px; margin-top: 4px;
+  width: 100%; background: #100f0e; color: #d4ceca;
+  border: 1px solid #100f0e; border-radius: 4px;
+  font: 500 12.5px "Noto Sans", system-ui, sans-serif; padding: 6px 9px; resize: vertical;
 }
 .formerr {
-  color: #c39a90; border-left: 2px solid #c39a90;
-  padding: 4px 8px; margin-top: 8px;
+  color: #c4a6a8; align-self: center;
+  font: 500 11px "JetBrains Mono", ui-monospace, monospace;
 }
-.rline {
-  position: relative; height: 30px; margin: 10px 0 2px;
-  border-bottom: 1px solid #211e1b;
-}
-.mark {
-  position: absolute; bottom: 0; transform: translateX(-50%);
-  font: 10px ui-monospace, "SF Mono", Menlo, monospace;
-  min-width: 34px; text-align: center;
-  padding: 2px 4px; background: #141210;
-  border: 1px solid #211e1b; border-radius: 3px 3px 0 0;
-}
-.k-comment { color: #57504a; }
-.k-demand { color: #b3905f; }
-.k-run { color: #87996f; }
-.mark:hover { background: #292624; }
-@media (max-width: 760px) {
-  .console { grid-template-columns: 1fr; }
-  #forest { display: none; border-right: none; border-bottom: 1px solid #211e1b; }
-  .navlabel { display: inline; }
-  #nav:checked ~ .console #forest { display: block; }
+
+/* narrow: the rail collapses behind the mode-line toggle */
+@media (max-width: 1100px) {
+  .fbtn { display: inline-block; }
+  .cols.withforest { grid-template-columns: 1fr; }
+  .forest {
+    position: fixed; left: 0; top: 41px; bottom: 0; width: 280px; z-index: 40;
+    transform: translateX(-102%); transition: transform .15s ease;
+    box-shadow: 8px 0 24px rgba(0,0,0,.6);
+  }
+  #nav:checked ~ .if .forest { transform: none; }
 }
 "#;
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::Prose;
     use crate::events::Event;
+    use crate::objects::comment::Target;
+    use crate::objects::incarnation::IncarnationId;
     use crate::objects::proposal::ProposalAction;
     use crate::store::{Context, Record, Tier, World};
     use crate::types::actor::ActorName;
+    use crate::types::pointers::SessionPointer;
     use crate::views::{forest, next_panel, open_proposals, ribbon_marks, show_view, thread_view};
     use std::sync::OnceLock;
 
@@ -702,10 +906,13 @@ mod tests {
         assert_eq!(compile("@agent\ndo it", task(7)).body, "do it");
     }
 
-    // ---- section rendering ----
+    // ---- the frame ----
 
-    /// t-0 ship it (done, receipt); t-1 <foo> task with a proposal and a
-    /// demand exchange; now = 4000h puts everything in the ribbon window.
+    const NOW: u64 = 3_210 * 3600;
+
+    /// t-0 done with receipt; t-1 open under t-0 with a settled exchange
+    /// (demand c-5, run i-6, reply c-6) and an orphan note c-7;
+    /// t-2 claimed and long adrift.
     fn fixture() -> World {
         World::replay(vec![
             record(
@@ -748,7 +955,7 @@ mod tests {
             record(
                 5,
                 3_140 * 3600,
-                agent(),
+                human(),
                 Event::Commented {
                     target: task(1),
                     body: Prose::new("demand body".into()).unwrap(),
@@ -757,6 +964,32 @@ mod tests {
             ),
             record(
                 6,
+                3_150 * 3600,
+                &Context {
+                    actor: ActorName::new("system".into()).unwrap(),
+                    tier: Tier::System,
+                },
+                Event::IncarnationBound {
+                    task_id: TaskId(1),
+                    response_target: CommentId(RecordId(5)),
+                    trigger: RecordId(5),
+                    actor: ActorName::new("pi".into()).unwrap(),
+                    session: SessionPointer::new("/tmp/s".into()).unwrap(),
+                },
+            ),
+            record(
+                7,
+                3_155 * 3600,
+                &Context {
+                    actor: ActorName::new("system".into()).unwrap(),
+                    tier: Tier::System,
+                },
+                Event::IncarnationPromptAccepted {
+                    id: IncarnationId(RecordId(6)),
+                },
+            ),
+            record(
+                8,
                 3_160 * 3600,
                 agent(),
                 Event::Commented {
@@ -766,7 +999,18 @@ mod tests {
                 },
             ),
             record(
-                7,
+                9,
+                3_170 * 3600,
+                &Context {
+                    actor: ActorName::new("system".into()).unwrap(),
+                    tier: Tier::System,
+                },
+                Event::IncarnationSettled {
+                    id: IncarnationId(RecordId(6)),
+                },
+            ),
+            record(
+                10,
                 3_200 * 3600,
                 human(),
                 Event::Commented {
@@ -775,11 +1019,26 @@ mod tests {
                     addressee: None,
                 },
             ),
+            record(
+                11,
+                40,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("adrift work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                12,
+                100 * 3600,
+                human(),
+                Event::TaskClaimed { id: TaskId(2) },
+            ),
         ])
         .unwrap()
     }
 
-    fn focus_of(world: &World, n: usize, now: u64) -> Focus {
+    fn focus_of(world: &World, n: usize) -> Focus {
         Focus {
             show: show_view(world, TaskId(n)).unwrap(),
             proposals: open_proposals(world)
@@ -787,23 +1046,34 @@ mod tests {
                 .filter(|v| v.task == format!("t-{n}"))
                 .collect(),
             thread: thread_view(world, TaskId(n)).unwrap(),
-            marks: ribbon_marks(world, TaskId(n), now),
+        }
+    }
+
+    fn console_of(world: &World, focus: Option<Focus>) -> Console {
+        Console {
+            forest: forest(world),
+            gate: open_proposals(world),
+            next: next_panel(world, NOW),
+            marks: ribbon_marks(world, NOW),
+            focus,
+            form: FormState::default(),
+            now: NOW,
         }
     }
 
     #[test]
     fn the_receipt_renders_only_when_done() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 0, 0), &Default::default());
+        let html = thread_section(&focus_of(&world, 0), &Default::default());
         assert!(html.contains("suite green &lt;34&gt;"));
-        let open = thread_section(&focus_of(&world, 1, 0), &Default::default());
+        let open = thread_section(&focus_of(&world, 1), &Default::default());
         assert!(!open.contains("receipt"));
     }
 
     #[test]
     fn judgment_forms_render_on_the_focused_task() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1, 0), &Default::default());
+        let html = thread_section(&focus_of(&world, 1), &Default::default());
         assert!(html.contains("action=\"/p/4/accept\""));
         assert!(html.contains("action=\"/p/4/reject\""));
         assert!(html.contains("name=\"note\""));
@@ -812,71 +1082,80 @@ mod tests {
     #[test]
     fn bodies_and_names_escape() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1, 0), &Default::default());
-        assert!(html.contains("build &lt;foo&gt;"));
-        assert!(!html.contains("build <foo>"));
-        let console = Console {
-            forest: forest(&world),
-            gate: open_proposals(&world),
-            next: next_panel(&world, 0),
-            focus: None,
-            form: FormState::default(),
-            now: 0,
-        };
-        let page = page(&console);
+        let page = page(&console_of(&world, Some(focus_of(&world, 1))));
         assert!(page.contains("build &lt;foo&gt;"));
+        assert!(!page.contains("build <foo>"));
     }
 
     #[test]
-    fn the_exchange_nests_under_its_demand_and_orphans_stay_flat() {
+    fn the_exchange_is_a_settled_card() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1, 0), &Default::default());
-        let reply = html.split("id=\"c-6\"").nth(1).expect("reply rendered");
-        let root_left = html
-            .split("id=\"c-5\"")
-            .nth(1)
-            .expect("demand rendered")
-            .split("style=\"margin-left:")
-            .nth(1)
-            .and_then(|s| s.split('p').next())
-            .and_then(|s| s.parse::<usize>().ok());
-        assert_eq!(root_left, Some(0));
-        let reply_left = reply
-            .split("style=\"margin-left:")
-            .nth(1)
-            .and_then(|s| s.split('p').next())
-            .and_then(|s| s.parse::<usize>().ok());
-        assert_eq!(reply_left, Some(18));
-        assert!(html.contains("lonely note"));
+        let html = thread_section(&focus_of(&world, 1), &Default::default());
+        assert!(html.contains("EXCHANGE"));
+        assert!(html.contains("#5"));
+        assert!(html.contains("settled"), "the run's window closed");
+        assert!(html.contains("DEMAND"));
+        assert!(html.contains("REPLY"));
+        assert!(html.contains(">RUN<"));
+        assert!(html.contains("demand body"));
+        assert!(html.contains("reply body"));
+        // the reply lives inside the settled card, the orphan after it
+        assert!(html.contains("<div class=\"xg\">"));
+        let open_card = html.find("EXCHANGE").unwrap();
+        let reply = html.find("id=\"c-8\"").unwrap();
+        let orphan = html.find("id=\"c-10\"").unwrap();
+        assert!(open_card < reply, "the reply nests in the card");
+        assert!(reply < orphan, "the orphan note follows the card");
     }
 
     #[test]
-    fn ribbon_marks_position_and_click_through() {
+    fn the_head_names_state_title_and_lineage() {
         let world = fixture();
-        let now = 3_210 * 3600u64;
-        let f = focus_of(&world, 1, now);
-        // c-5 demand at 3140h, c-6 reply at 3160h, c-7 note at 3200h;
-        // window [3138h, 3210h] holds all three, inset from the edges
-        let html = ribbon_section("t-1", &f.marks, now);
-        assert!(html.contains("href=\"#c-5\""));
-        assert!(html.contains("href=\"#c-7\""));
-        assert!(html.contains("k-demand"));
-        assert!(html.contains("k-comment"));
-        assert!(html.contains("left:6.6%"));
-        assert!(html.contains("left:32.1%"));
-        assert!(html.contains("left:83.2%"));
-        assert!(!html.contains("k-run"), "no run bound in this fixture");
-        // outside the window: nothing renders at all
-        let late = ribbon_section(
-            "t-1",
-            &focus_of(&world, 1, 4_000 * 3600).marks,
-            4_000 * 3600,
+        let page = page(&console_of(&world, Some(focus_of(&world, 1))));
+        assert!(page.contains("● OPEN"));
+        assert!(page.contains("build &lt;foo&gt;"));
+        assert!(page.contains("t-1 · under t-0"));
+        assert!(
+            page.contains("class=\"frow sel\""),
+            "the forest marks focus"
         );
-        assert!(late.contains("no movement in 72h"));
     }
 
-    /// Minutes-old marks all sit near the window's right edge; the inset
-    /// keeps them off it and the packing keeps each chip readable.
+    #[test]
+    fn the_strip_carries_supervision_rows() {
+        let world = fixture();
+        let page = page(&console_of(&world, None));
+        assert!(page.contains("SUPERVISION"));
+        assert!(page.contains("RUNS IN FLIGHT"));
+        assert!(page.contains("ASKED OF YOU"));
+        assert!(page.contains("CLAIMED · LAST RECORD"));
+        // the adrift claim tints its ages gold
+        assert!(page.contains("adrift work"));
+        assert!(page.contains("nfact mono stale"));
+        assert!(page.contains("nothing asked of you"));
+        assert!(!page.contains("nothing claimed") || page.contains("adrift work"));
+    }
+
+    #[test]
+    fn ribbon_marks_stay_inside_the_inset_and_unpacked() {
+        let world = fixture();
+        let marks = ribbon_marks(&world, NOW);
+        assert_eq!(marks.len(), 4, "demand, run, reply note, orphan note");
+        let html = ribbon_section(&console_of(&world, None));
+        let mut lefts: Vec<f64> = mark_lefts(&html);
+        assert_eq!(lefts.len(), 4);
+        lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for left in &lefts {
+            assert!(*left >= PAD_PCT - 0.1, "off the left edge: {left}");
+            assert!(*left <= 100.0 - PAD_PCT + 0.1, "off the right edge: {left}");
+        }
+        for pair in lefts.windows(2) {
+            assert!(pair[1] - pair[0] >= MARK_GAP_PCT - 0.1, "chips overlap");
+        }
+        assert!(html.contains("href=\"/t/1#c-5\""));
+        assert!(html.contains("k-demand"));
+    }
+
     #[test]
     fn recent_marks_stay_individually_visible() {
         let now = 3_210 * 3600u64;
@@ -922,13 +1201,8 @@ mod tests {
             ),
         ])
         .unwrap();
-        let f = focus_of(&world, 0, now);
-        let html = ribbon_section("t-0", &f.marks, now);
-        let mut lefts: Vec<f64> = html
-            .split("left:")
-            .skip(1)
-            .map(|seg| seg.split('%').next().unwrap().parse::<f64>().unwrap())
-            .collect();
+        let html = ribbon_section(&console_of(&world, None));
+        let mut lefts: Vec<f64> = mark_lefts(&html);
         assert_eq!(lefts.len(), 3);
         lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
         for left in &lefts {
@@ -936,15 +1210,12 @@ mod tests {
             assert!(*left <= 100.0 - PAD_PCT + 0.1, "off the right edge: {left}");
         }
         for pair in lefts.windows(2) {
-            assert!(
-                pair[1] - pair[0] >= MARK_GAP_PCT - 0.1,
-                "chips overlap: {lefts:?}"
-            );
+            assert!(pair[1] - pair[0] >= MARK_GAP_PCT - 0.1, "chips overlap");
         }
     }
 
     #[test]
-    fn the_compose_form_names_its_task() {
+    fn the_compose_dock_holds_the_grammar() {
         let html = compose_section(
             9,
             &FormState {
@@ -952,9 +1223,18 @@ mod tests {
                 ..Default::default()
             },
         );
+        assert!(html.contains("<section id=\"compose\">"));
         assert!(html.contains("name=\"task\" value=\"9\""));
         assert!(html.contains("action=\"/compose\""));
-        assert!(html.contains("name=\"who\""));
         assert!(html.contains("placeholder=\"write\""));
+        assert!(html.contains("name=\"who\""));
+        assert!(html.contains("type=\"submit\">send<"));
+    }
+
+    #[test]
+    fn an_unfocused_column_states_it() {
+        let world = fixture();
+        let page = page(&console_of(&world, None));
+        assert!(page.contains("no task focused"));
     }
 }

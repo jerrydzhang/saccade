@@ -180,7 +180,7 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
         }
     };
     let now = db::now_epoch();
-    let focused = match focus_id.map(|n| focus(&snapshot.world, n, now)) {
+    let focused = match focus_id.map(|n| focus(&snapshot.world, n)) {
         Some(Some(f)) => Some(f),
         Some(None) => return page(404, &format!("no task t-{n}", n = focus_id.unwrap_or(0))),
         None => None,
@@ -189,6 +189,7 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
         forest: forest(&snapshot.world),
         gate: open_proposals(&snapshot.world),
         next: next_panel(&snapshot.world, now),
+        marks: ribbon_marks(&snapshot.world, now),
         focus: focused,
         form: web::FormState {
             need_who: req.actor.is_none(),
@@ -200,8 +201,8 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
 }
 
 /// The focused task's panel facts: identity, open judgment, clustered
-/// thread, ribbon marks.
-fn focus(world: &crate::store::World, n: usize, now: u64) -> Option<web::Focus> {
+/// thread. The strip's movement marks are world-wide, not per focus.
+fn focus(world: &crate::store::World, n: usize) -> Option<web::Focus> {
     let show = show_view(world, TaskId(n))?;
     let proposals = open_proposals(world)
         .into_iter()
@@ -211,7 +212,6 @@ fn focus(world: &crate::store::World, n: usize, now: u64) -> Option<web::Focus> 
         show,
         proposals,
         thread: thread_view(world, TaskId(n))?,
-        marks: ribbon_marks(world, TaskId(n), now),
     })
 }
 
@@ -358,8 +358,7 @@ fn judge(
 /// The thread section alone, for the fetch swap.
 fn thread_fragment(app: &AppState, n: usize) -> Option<String> {
     let snapshot = app.snapshot().ok()?;
-    let now = db::now_epoch();
-    let f = focus(&snapshot.world, n, now)?;
+    let f = focus(&snapshot.world, n)?;
     Some(web::thread_section(&f, &Default::default()))
 }
 
@@ -413,7 +412,8 @@ fn console_reject(
         forest: forest(&snapshot.world),
         gate: open_proposals(&snapshot.world),
         next: next_panel(&snapshot.world, now),
-        focus: focus(&snapshot.world, n, now),
+        marks: ribbon_marks(&snapshot.world, now),
+        focus: focus(&snapshot.world, n),
         form: web::FormState {
             error: Some(msg.to_string()),
             draft: form_field(fields, "body").to_string(),

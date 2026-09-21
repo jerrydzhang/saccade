@@ -8,7 +8,7 @@ use crate::objects::comment::{
 };
 use crate::objects::proposal::{ProposalAction, ProposalContext, ProposalId, ProposalState};
 use crate::objects::task::{TaskContext, TaskId, TaskState};
-use crate::store::World;
+use crate::store::{Tier, World};
 use crate::types::prose::Prose;
 
 /// A claimed task with no record movement for this long renders adrift.
@@ -127,6 +127,7 @@ fn is_stale(ctx: &ProposalContext, target_state: Option<&TaskState>) -> bool {
 
 /// A row of the task's thread view. Depth is position in the rendered
 /// thread — the task is the root, so a comment addressing it sits at 1.
+#[derive(Debug)]
 pub struct CommentLine {
     pub seq: usize,
     pub depth: usize,
@@ -134,6 +135,7 @@ pub struct CommentLine {
     pub tier: String,
     pub body: String,
     pub state: Option<String>,
+    pub born_at: u64,
 }
 
 /// One conversation: a comment plus every reply hanging off it, in
@@ -143,11 +145,27 @@ pub struct Conversation {
     pub replies: Vec<CommentLine>,
 }
 
-/// The focused task's thread: conversations with replies, and the
-/// unlinked annotations between them, also in record order.
+/// The focused task's thread in record order by first comment: an
+/// agent-addressed exchange with its run, any other conversation, or
+/// one unlinked annotation.
+#[derive(Debug)]
+pub enum ThreadItem {
+    Exchange {
+        root: CommentLine,
+        run: Option<RunView>,
+        replies: Vec<CommentLine>,
+    },
+    Group {
+        root: CommentLine,
+        replies: Vec<CommentLine>,
+    },
+    Note(CommentLine),
+}
+
+/// The focused task's thread as a view: the context's pointer index,
+/// followed, grouped by reply links, ordered by first comment.
 pub struct ThreadView {
-    pub conversations: Vec<Conversation>,
-    pub stream: Vec<CommentLine>,
+    pub items: Vec<ThreadItem>,
 }
 
 fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> CommentLine {
@@ -171,6 +189,7 @@ fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
         tier: format!("{:?}", cctx.tier).to_lowercase(),
         body: cctx.comment.body.as_str().to_string(),
         state: demand_tag(&cctx.state),
+        born_at: cctx.born_at,
     }
 }
 
@@ -273,36 +292,84 @@ pub fn open_proposals(world: &World) -> Vec<ProposalView> {
 /// each root opened, and the annotations no one replied to.
 pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
     let ctx = world.tasks.get(id.0)?;
-    // groups: (root line, replies) in record order; replies always come
-    // after their root, so one pass suffices
-    let mut groups: Vec<(CommentLine, Vec<CommentLine>)> = Vec::new();
+    // building groups in record order; replies always come after their
+    // root, so one pass suffices. An agent-addressed root is an
+    // exchange and carries the run that answered it, if one did.
+    enum Building {
+        Exchange {
+            root: CommentLine,
+            replies: Vec<CommentLine>,
+        },
+        Group {
+            root: CommentLine,
+            replies: Vec<CommentLine>,
+        },
+    }
+    let mut groups: Vec<Building> = Vec::new();
     let mut root_index: BTreeMap<CommentId, usize> = BTreeMap::new();
     for cid in &ctx.thread {
         let root = root_of(&world.comments, *cid);
         if root == *cid {
+            let line = line_of(&world.comments, *cid);
             root_index.insert(*cid, groups.len());
-            groups.push((line_of(&world.comments, *cid), Vec::new()));
+            if is_agent_demand(&line.state) {
+                groups.push(Building::Exchange {
+                    root: line,
+                    replies: Vec::new(),
+                });
+            } else {
+                groups.push(Building::Group {
+                    root: line,
+                    replies: Vec::new(),
+                });
+            }
         } else {
             let g = root_index
                 .get(&root)
                 .copied()
                 .expect("a reply's root is resident and earlier");
-            groups[g].1.push(line_of(&world.comments, *cid));
+            let line = line_of(&world.comments, *cid);
+            match &mut groups[g] {
+                Building::Exchange { replies, .. } | Building::Group { replies, .. } => {
+                    replies.push(line)
+                }
+            }
         }
     }
-    let mut conversations = Vec::new();
-    let mut stream = Vec::new();
-    for (root, replies) in groups {
-        if replies.is_empty() {
-            stream.push(root);
-        } else {
-            conversations.push(Conversation { root, replies });
-        }
-    }
-    Some(ThreadView {
-        conversations,
-        stream,
-    })
+    let items = groups
+        .into_iter()
+        .map(|g| match g {
+            Building::Exchange { root, replies } => {
+                // the run that answered this demand, if one did
+                let run = world
+                    .incarnations
+                    .iter()
+                    .find(|(_, r)| r.response_target.0.0 == root.seq)
+                    .map(|(id, r)| RunView {
+                        incarnation: id.0.0,
+                        task: r.task_id.0,
+                        actor: r.actor.as_str().to_string(),
+                        born_at: r.born_at,
+                        done_at: r.done_at,
+                    });
+                ThreadItem::Exchange { root, run, replies }
+            }
+            Building::Group { root, replies } => {
+                if replies.is_empty() {
+                    ThreadItem::Note(root)
+                } else {
+                    ThreadItem::Group { root, replies }
+                }
+            }
+        })
+        .collect();
+    Some(ThreadView { items })
+}
+
+/// An agent-addressed demand opens an exchange; a human-addressed or
+/// unaddressed root is an ordinary group.
+fn is_agent_demand(state: &Option<String>) -> bool {
+    state.as_deref().is_some_and(|s| s.starts_with("to agent"))
 }
 
 /// The chain member whose target is the task — cid itself when it is a
@@ -377,11 +444,21 @@ pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
         .collect()
 }
 
-/// A run in flight, as the next panel names it.
+/// A run, as the strip and an exchange card name it.
+#[derive(Debug)]
 pub struct RunView {
     pub incarnation: usize,
     pub task: usize,
     pub actor: String,
+    pub born_at: u64,
+    pub done_at: Option<u64>,
+}
+
+impl RunView {
+    /// A run is in flight until its terminal record lands.
+    pub fn in_flight(&self) -> bool {
+        self.done_at.is_none()
+    }
 }
 
 /// A claimed task and its two ages. Adrift is the t-53 tint: no record
@@ -406,6 +483,8 @@ pub fn next_panel(world: &World, now: u64) -> NextPanel {
                 incarnation: id.0.0,
                 task: run.task_id.0,
                 actor: run.actor.as_str().to_string(),
+                born_at: run.born_at,
+                done_at: run.done_at,
             });
         }
         if let (TaskState::Claimed, Some(claimed_at)) = (&ctx.task.state, ctx.claimed_at) {
@@ -432,11 +511,11 @@ pub struct NextPanel {
     pub candidates: Vec<Candidate>,
 }
 
-/// The kind a ribbon mark carries: a plain comment, an addressed demand
-/// (either way), or a run's birth.
+/// The kind a ribbon mark carries, keyed as the strip names them: a
+/// note by its author's tier, a demand, or a run's birth.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MarkKind {
-    Comment,
+    Note { human: bool },
     Demand,
     Run,
 }
@@ -447,37 +526,38 @@ pub struct RibbonMark {
     pub kind: MarkKind,
     pub at: u64,
     pub seq: usize,
+    pub task: usize,
 }
 
-/// The focused task's comment, demand, and run positions inside the
-/// 72h window ending now, oldest first.
-pub fn ribbon_marks(world: &World, id: TaskId, now: u64) -> Vec<RibbonMark> {
-    let Some(ctx) = world.tasks.get(id.0) else {
-        return Vec::new();
-    };
+/// Every comment, demand, and run birth inside the 72h window ending
+/// now, across all tasks, oldest first.
+pub fn ribbon_marks(world: &World, now: u64) -> Vec<RibbonMark> {
     let from = now.saturating_sub(RIBBON_WINDOW_SECS);
     let mut marks: Vec<RibbonMark> = Vec::new();
-    for cid in &ctx.thread {
-        let c = &world.comments[cid];
+    for (id, c) in &world.comments {
         if c.born_at < from || c.born_at > now {
             continue;
         }
         let kind = match c.state {
-            CommentState::Unaddressed => MarkKind::Comment,
+            CommentState::Unaddressed => MarkKind::Note {
+                human: c.tier == Tier::Human,
+            },
             _ => MarkKind::Demand,
         };
         marks.push(RibbonMark {
             kind,
             at: c.born_at,
-            seq: cid.0.0,
+            seq: id.0.0,
+            task: c.comment.root.0,
         });
     }
     for run in world.incarnations.values() {
-        if run.task_id == id && run.born_at >= from && run.born_at <= now {
+        if run.born_at >= from && run.born_at <= now {
             marks.push(RibbonMark {
                 kind: MarkKind::Run,
                 at: run.born_at,
                 seq: run.response_target.0.0,
+                task: run.task_id.0,
             });
         }
     }
@@ -638,6 +718,7 @@ mod panels {
     use crate::Addressee;
     use crate::events::Event;
     use crate::objects::comment::Target;
+    use crate::objects::incarnation::IncarnationId;
     use crate::store::{Context, Record, RecordId, Tier, World};
     use crate::types::actor::ActorName;
     use crate::types::pointers::SessionPointer;
@@ -732,18 +813,97 @@ mod panels {
     fn the_thread_clusters_by_reply_links() {
         let world = clustered();
         let v = thread_view(&world, TaskId(0)).unwrap();
-        assert_eq!(v.conversations.len(), 2);
-        assert_eq!(v.stream.len(), 1);
-        let first = &v.conversations[0];
-        assert_eq!(first.root.seq, 2);
-        assert_eq!(first.replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [3]);
-        assert_eq!(v.stream[0].seq, 4);
-        let second = &v.conversations[1];
-        assert_eq!(second.root.seq, 5);
-        assert_eq!(
-            second.replies.iter().map(|r| r.seq).collect::<Vec<_>>(),
-            [6]
-        );
+        assert_eq!(v.items.len(), 3);
+        match &v.items[0] {
+            ThreadItem::Exchange { root, run, replies } => {
+                // c-2 is an unanswered demand: the exchange opens, no run yet
+                assert_eq!(root.seq, 2);
+                assert!(run.is_none());
+                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [3]);
+            }
+            other => panic!("expected an exchange, got {other:?}"),
+        }
+        match &v.items[1] {
+            ThreadItem::Note(line) => assert_eq!(line.seq, 4),
+            other => panic!("expected a note, got {other:?}"),
+        }
+        match &v.items[2] {
+            ThreadItem::Group { root, replies } => {
+                // c-5 is unaddressed: a plain group with its reply
+                assert_eq!(root.seq, 5);
+                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [6]);
+            }
+            other => panic!("expected a group, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_answered_demand_carries_its_run() {
+        let bind = |seq: usize, at: u64| {
+            record(
+                seq,
+                at,
+                Tier::System,
+                Event::IncarnationBound {
+                    task_id: TaskId(0),
+                    response_target: CommentId(RecordId(2)),
+                    trigger: RecordId(2),
+                    actor: ActorName::new("pi".into()).unwrap(),
+                    session: SessionPointer::new("/tmp/s".into()).unwrap(),
+                },
+            )
+        };
+        let settle = |seq: usize, at: u64| {
+            record(
+                seq,
+                at,
+                Tier::System,
+                Event::IncarnationSettled {
+                    id: IncarnationId(RecordId(3)),
+                },
+            )
+        };
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                2 * HOUR,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                Some(Addressee::Agent),
+            ),
+            bind(3, 3 * HOUR),
+            record(
+                4,
+                3 * HOUR + 30 * 60,
+                Tier::System,
+                Event::IncarnationPromptAccepted {
+                    id: IncarnationId(RecordId(3)),
+                },
+            ),
+            comment_at(
+                5,
+                4 * HOUR,
+                Tier::Agent,
+                Target::Comment(CommentId(RecordId(2))),
+                None,
+            ),
+            settle(6, 5 * HOUR),
+        ])
+        .unwrap();
+        let v = thread_view(&world, TaskId(0)).unwrap();
+        match &v.items[0] {
+            ThreadItem::Exchange { root, run, replies } => {
+                assert_eq!(root.seq, 2);
+                let run = run.as_ref().expect("the bind answered the demand");
+                assert_eq!(run.actor, "pi");
+                assert_eq!(run.born_at, 3 * HOUR);
+                assert_eq!(run.done_at, Some(5 * HOUR));
+                assert!(!run.in_flight());
+                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [5]);
+            }
+            other => panic!("expected an exchange, got {other:?}"),
+        }
     }
 
     #[test]
@@ -845,10 +1005,14 @@ mod panels {
         ])
         .unwrap();
         let now = 100 * HOUR;
-        let marks = ribbon_marks(&world, TaskId(0), now);
+        let marks = ribbon_marks(&world, now);
         // the 10h comment is older than 72h; 80h and 90h stay
         assert_eq!(marks.iter().map(|m| m.seq).collect::<Vec<_>>(), [4, 5]);
-        assert!(marks.iter().all(|m| m.kind == MarkKind::Comment));
+        assert!(
+            marks
+                .iter()
+                .all(|m| m.kind == MarkKind::Note { human: true })
+        );
 
         let fresh = World::replay(vec![
             task_at(0, 0, "real work"),
@@ -869,14 +1033,14 @@ mod panels {
             ),
         ])
         .unwrap();
-        let marks = ribbon_marks(&fresh, TaskId(0), 13 * HOUR);
+        let marks = ribbon_marks(&fresh, 13 * HOUR);
         // the run marks the demand it answered, at the bind's birth time
         assert_eq!(
             marks.iter().map(|m| (m.seq, m.kind)).collect::<Vec<_>>(),
             [
                 (2, MarkKind::Demand),
                 (2, MarkKind::Run),
-                (4, MarkKind::Comment),
+                (4, MarkKind::Note { human: false }),
             ]
         );
     }

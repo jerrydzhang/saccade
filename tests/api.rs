@@ -317,22 +317,29 @@ fn world_of(state: &ConsoleState) -> saccade::World {
     }
 }
 
-/// The task's thread lines, newest last.
+/// The task's thread lines, oldest first.
 fn lines_of(world: &saccade::World, n: usize) -> Vec<saccade::views::CommentLine> {
     let mut v: Vec<_> = saccade::views::thread_view(world, TaskId(n))
         .expect("the thread folds")
-        .conversations
+        .items
         .into_iter()
-        .flat_map(|c| {
-            let mut all = vec![c.root];
-            all.extend(c.replies);
-            all
+        .flat_map(|item| match item {
+            saccade::views::ThreadItem::Exchange {
+                root,
+                run: _,
+                replies,
+            } => {
+                let mut all = vec![root];
+                all.extend(replies);
+                all
+            }
+            saccade::views::ThreadItem::Group { root, replies } => {
+                let mut all = vec![root];
+                all.extend(replies);
+                all
+            }
+            saccade::views::ThreadItem::Note(line) => vec![line],
         })
-        .chain(
-            saccade::views::thread_view(world, TaskId(n))
-                .expect("the thread folds")
-                .stream,
-        )
         .collect();
     v.sort_by_key(|l| l.seq);
     v
