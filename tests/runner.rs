@@ -801,58 +801,26 @@ fn latest_demand(db_path: &Path) -> CommentId {
 }
 
 #[test]
-fn prepare_heals_a_severed_branch_from_main() {
-    let (repo, db_path, demand) = scaffold("heal");
+fn a_severed_branch_rebuilds_at_the_recorded_checkpoint() {
+    let (repo, db_path, demand) = scaffold("severed");
 
     // one full course leaves a workspace, a branch, and a checkpoint
-    let worktree = saccade::paths::worktree_at(&repo, 0);
-    prepare(
-        &mut db::open(&db_path).unwrap(),
-        &repo,
-        demand,
-        ActorName::new("pi".into()).unwrap(),
-    )
-    .unwrap();
-    db::record(
-        &mut db::open(&db_path).unwrap(),
-        &agent(),
-        Command::Comment {
-            target: Target::Comment(demand),
-            body: Prose::new("receipt written, tests green".into()).unwrap(),
-            addressee: None,
-        },
-        3,
-    )
-    .unwrap();
-    std::fs::write(worktree.join("receipt"), "done\n").unwrap();
-    sh(&worktree, &["add", "."]);
-    sh(&worktree, &["commit", "-m", "receipt"]);
-    close(&mut db::open(&db_path).unwrap(), TaskId(0)).unwrap();
+    let checkpoint = run_one_course(&repo, &db_path, demand);
 
     // review hygiene deletes the worktree and the branch while main moves on
+    let worktree = saccade::paths::worktree_at(&repo, 0);
     sh(&repo, &["worktree", "remove", worktree.to_str().unwrap()]);
     sh(&repo, &["branch", "-D", "saccade/t-0"]);
     std::fs::write(repo.join("readme"), "main moved on\n").unwrap();
     sh(&repo, &["add", "."]);
     sh(&repo, &["commit", "-m", "advance main"]);
 
-    // the next demand's prepare succeeds: the branch lives again, cut
-    // from main, the checkpoint naming main's head
-    db::record(
-        &mut db::open(&db_path).unwrap(),
-        &human(),
-        Command::Comment {
-            target: Target::Task(TaskId(0)),
-            body: Prose::new("one more round".into()).unwrap(),
-            addressee: Some(Addressee::Agent),
-        },
-        4,
-    )
-    .unwrap();
+    // the next demand's prepare succeeds: the canvas is rebuilt at the
+    // recorded checkpoint, not at the moved main
     let second = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        latest_demand(&db_path),
+        follow_up_demand(&db_path),
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
@@ -860,22 +828,32 @@ fn prepare_heals_a_severed_branch_from_main() {
     assert_eq!(second.actor.as_str(), "pi/t-0-2");
 
     assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).contains("saccade/t-0"));
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), checkpoint);
+    // the rebuilt canvas sits at the recorded work, receipt included
+    assert_eq!(sh(&worktree, &["rev-parse", "HEAD"]), checkpoint);
+    assert!(worktree.join("receipt").exists());
     let world = world_of(&db_path);
-    let workspace = world.tasks[0].workspace.as_ref().unwrap();
+    // the record never moved: the checkpoint still names the receipt head
     assert_eq!(
-        workspace.checkpoint.as_str(),
-        sh(&repo, &["rev-parse", "main"])
+        world.tasks[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .checkpoint
+            .as_str(),
+        checkpoint
     );
     assert_eq!(
         world.incarnations[&world.tasks[0].active_incarnation.unwrap()].state,
         IncarnationState::PromptAccepted
     );
+    assert_eq!(second.worktree, worktree);
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
 #[test]
-fn prepare_heals_a_severed_child_branch_from_the_parent_branch_tip() {
-    let (repo, db_path, demand) = scaffold("heal-child");
+fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
+    let (repo, db_path, demand) = scaffold("severed-child");
     let actor = ActorName::new("pi".into()).unwrap();
 
     // the parent task runs one course, leaving its branch alive
@@ -952,6 +930,7 @@ fn prepare_heals_a_severed_child_branch_from_the_parent_branch_tip() {
     sh(&child_worktree, &["add", "."]);
     sh(&child_worktree, &["commit", "-m", "child receipt"]);
     close(&mut db::open(&db_path).unwrap(), TaskId(1)).unwrap();
+    let child_checkpoint = sh(&repo, &["rev-parse", "saccade/t-1"]);
 
     // review hygiene severs the child branch and worktree
     sh(
@@ -960,8 +939,8 @@ fn prepare_heals_a_severed_child_branch_from_the_parent_branch_tip() {
     );
     sh(&repo, &["branch", "-D", "saccade/t-1"]);
 
-    // the child's next demand heals from the parent's branch tip, not
-    // its recorded checkpoint
+    // the child's next demand rebuilds at its own recorded checkpoint,
+    // not at the parent's advanced tip
     db::record(
         &mut db::open(&db_path).unwrap(),
         &human(),
@@ -981,21 +960,200 @@ fn prepare_heals_a_severed_child_branch_from_the_parent_branch_tip() {
     )
     .unwrap();
 
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-1"]), child_checkpoint);
     let world = world_of(&db_path);
     let child_workspace = world.tasks[1].workspace.as_ref().unwrap();
-    assert_eq!(child_workspace.checkpoint.as_str(), parent_tip);
-    assert_ne!(
-        child_workspace.checkpoint.as_str(),
-        world.tasks[0]
-            .workspace
-            .as_ref()
-            .unwrap()
-            .checkpoint
-            .as_str()
-    );
+    assert_eq!(child_workspace.checkpoint.as_str(), child_checkpoint);
+    assert_ne!(child_workspace.checkpoint.as_str(), parent_tip);
     assert_eq!(
         world.incarnations[&world.tasks[1].active_incarnation.unwrap()].state,
         IncarnationState::PromptAccepted
+    );
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_deleted_canvas_rebuilds_calmly_under_its_live_branch() {
+    let (repo, db_path, demand) = scaffold("rebuild");
+
+    // one full course checkpoints the receipt head
+    let checkpoint = run_one_course(&repo, &db_path, demand);
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+
+    // manual hygiene removes the canvas by bare rm, branch and record intact
+    std::fs::remove_dir_all(&worktree).unwrap();
+
+    let second = prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        follow_up_demand(&db_path),
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(second.actor.as_str(), "pi/t-0-2");
+
+    // the canvas is back at the recorded checkpoint, recorded work included
+    assert_eq!(sh(&worktree, &["rev-parse", "HEAD"]), checkpoint);
+    assert!(worktree.join("receipt").exists());
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), checkpoint);
+    assert!(world_of(&db_path).tasks[0].active_incarnation.is_some());
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_never_run_tasks_canvas_rebuilds_at_base() {
+    let (repo, db_path, demand) = scaffold("at-base");
+    let base = sh(&repo, &["rev-parse", "main"]);
+
+    // the first run provisions the workspace but settles by cancellation:
+    // no checkpoint was ever recorded, so the checkpoint is born at base
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    let run = world_of(&db_path).tasks[0].active_incarnation.unwrap();
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::CancelIncarnation { id: run },
+        3,
+    )
+    .unwrap();
+
+    // manual hygiene removes the canvas by bare rm
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+    std::fs::remove_dir_all(&worktree).unwrap();
+
+    let second = prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        follow_up_demand(&db_path),
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(second.actor.as_str(), "pi/t-0-2");
+
+    // the canvas is back at the task's base, and no checkpoint was invented
+    assert_eq!(sh(&worktree, &["rev-parse", "HEAD"]), base);
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), base);
+    let world = world_of(&db_path);
+    let workspace = world.tasks[0].workspace.as_ref().unwrap();
+    assert_eq!(workspace.checkpoint.as_str(), base);
+    assert!(world.tasks[0].active_incarnation.is_some());
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn an_unreachable_checkpoint_refuses_naming_lost_work() {
+    let (repo, db_path, demand) = scaffold("unreachable");
+    let checkpoint = run_one_course(&repo, &db_path, demand);
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+
+    // repo surgery takes the canvas, the branch, and the commit itself
+    sh(&repo, &["worktree", "remove", worktree.to_str().unwrap()]);
+    sh(&repo, &["branch", "-D", "saccade/t-0"]);
+    sh(&repo, &["reflog", "expire", "--expire=now", "--all"]);
+    sh(&repo, &["gc", "--prune=now"]);
+    let survives = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["cat-file", "-e", &checkpoint])
+        .output()
+        .expect("git runs");
+    assert!(!survives.status.success(), "the fixture lost the commit");
+
+    // the next demand refuses: the recorded work is lost, and the refusal
+    // names the task, the branch, and the lost commit
+    let refusal = match prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        follow_up_demand(&db_path),
+        ActorName::new("pi".into()).unwrap(),
+    ) {
+        Err(RunnerFail::Refused { reason }) => reason,
+        Err(other) => panic!("expected a refusal, got {other:?}"),
+        Ok(_) => panic!("the lost checkpoint refused prepare"),
+    };
+    assert!(refusal.contains("unreachable"), "{refusal}");
+    assert!(refusal.contains(&checkpoint), "{refusal}");
+    assert!(refusal.contains("recorded work is lost"), "{refusal}");
+    assert!(refusal.contains("sac checkpoint t-0"), "{refusal}");
+
+    // the refusal moved nothing and bound no run
+    assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).is_empty());
+    assert!(!worktree.exists());
+    let world = world_of(&db_path);
+    assert!(world.tasks[0].active_incarnation.is_none());
+    let refused = world
+        .comments
+        .values()
+        .find(|c| c.refusal.is_some())
+        .expect("the refusal fact landed");
+    assert!(
+        refused
+            .refusal
+            .as_ref()
+            .unwrap()
+            .reason
+            .as_str()
+            .contains("unreachable")
+    );
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_dropped_tasks_demand_arriving_to_no_canvas_refuses_calmly() {
+    let (repo, db_path, demand) = scaffold("dropped-calm");
+    run_one_course(&repo, &db_path, demand);
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+
+    // the human drops the task and collects the residue: no canvas, no branch
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::DropTask {
+            id: TaskId(0),
+            note: Prose::new("superseded".into()).unwrap(),
+        },
+        4,
+    )
+    .unwrap();
+    sh(&repo, &["worktree", "remove", worktree.to_str().unwrap()]);
+    sh(&repo, &["branch", "-D", "saccade/t-0"]);
+
+    // the stale demand refuses through the dropped door: no git error from
+    // the missing canvas, no rebuild behind the refusal
+    let refusal = match prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        follow_up_demand(&db_path),
+        ActorName::new("pi".into()).unwrap(),
+    ) {
+        Err(RunnerFail::Refused { reason }) => reason,
+        Err(other) => panic!("expected a refusal, got {other:?}"),
+        Ok(_) => panic!("the dropped task refused prepare"),
+    };
+    assert!(refusal.contains("dropped tasks never run"), "{refusal}");
+    assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).is_empty());
+    assert!(!worktree.exists());
+    let world = world_of(&db_path);
+    assert!(world.tasks[0].active_incarnation.is_none());
+    let refused = world
+        .comments
+        .values()
+        .find(|c| c.refusal.is_some())
+        .expect("the refusal fact landed");
+    assert!(
+        refused
+            .refusal
+            .as_ref()
+            .unwrap()
+            .reason
+            .as_str()
+            .contains("dropped")
     );
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }

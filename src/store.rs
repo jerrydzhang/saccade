@@ -445,8 +445,8 @@ impl World {
                     .workspace
                     .as_mut()
                     .ok_or(Reason::WorkspaceMissing)?;
-                // the machinery (close, boot recovery, the severed-branch
-                // heal) rebases the checkpoint; the explicit door never
+                // the machinery (run close, boot recovery) rebases the
+                // checkpoint; the explicit door never
                 // returns to a head the record left
                 if record.context.tier != Tier::System
                     && *checkpoint != workspace.checkpoint
@@ -1932,13 +1932,13 @@ mod test {
         )
         .unwrap();
 
-        // the machinery rebases freely: a severed-branch heal names an
+        // the machinery rebases freely: boot recovery names an
         // unrelated head and lands
-        let healed = GitCommit::new("777000".into()).unwrap();
+        let recovery = GitCommit::new("777000".into()).unwrap();
         log.execute_system(
             Command::CheckpointWorkspace {
                 task_id: TaskId(0),
-                checkpoint: healed.clone(),
+                checkpoint: recovery.clone(),
             },
             3,
         )
@@ -1979,9 +1979,9 @@ mod test {
             merged
         );
 
-        // a rewind names a head the record left: the base, the healed
+        // a rewind names a head the record left: the base, the recovered
         // head — refused at both explicit tiers, writing nothing
-        for rewind in [base, healed] {
+        for rewind in [base, recovery] {
             for ctx in [agent(), human()] {
                 let refused = log.execute(
                     ctx,

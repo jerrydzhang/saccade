@@ -90,28 +90,10 @@ fn commit(hash: String) -> Result<GitCommit, RunnerFail> {
     GitCommit::new(hash).map_err(|e| RunnerFail::Usage(format!("git gave no commit: {e:?}")))
 }
 
-/// The base a healed branch cuts from: the parent task's branch tip
-/// while that branch is alive, else main.
-fn heal_base(world: &World, repo_root: &Path, task: TaskId) -> Result<String, RunnerFail> {
-    let parent_branch = task_ctx(world, task)?
-        .task
-        .parent_id
-        .and_then(|parent| world.tasks.get(parent.0))
-        .and_then(|parent| parent.workspace.as_ref())
-        .map(|workspace| workspace.branch.clone());
-    if let Some(branch) = parent_branch
-        && let Ok(tip) = git(
-            repo_root,
-            &[
-                "rev-parse",
-                "--verify",
-                &format!("refs/heads/{}", String::from(branch)),
-            ],
-        )
-    {
-        return Ok(tip);
-    }
-    git(repo_root, &["rev-parse", "main"])
+/// The commit an object database still holds: `Some` when the sha
+/// resolves as a commit, `None` when nothing retains it.
+fn commit_exists(repo_root: &Path, sha: &str) -> Option<String> {
+    branch_tip(repo_root, &format!("{sha}^{{commit}}"))
 }
 
 /// A refusal the asker must read: the fact lands on the demand's
@@ -238,6 +220,10 @@ pub fn prepare(
                     git(&worktree, &["reset", "--hard", &target])?;
                     git(&worktree, &["clean", "-fd"])?;
                 } else {
+                    // the canvas is a cache: a manual deletion may have
+                    // been a clean remove or a bare rm, and a bare rm
+                    // leaves a registration that prune clears
+                    git(repo_root, &["worktree", "prune"])?;
                     git(
                         repo_root,
                         &["worktree", "add", &worktree.to_string_lossy(), &branch],
@@ -246,15 +232,16 @@ pub fn prepare(
                         git(&worktree, &["reset", "--hard", &target])?;
                     }
                 }
-            } else {
-                let base = heal_base(&world, repo_root, task)?;
+            } else if commit_exists(repo_root, &checkpoint).is_some() {
+                // the branch is gone but the recorded head still lives:
+                // the canvas is rebuilt at the checkpoint the record names
                 warn!(
                     task = task.0,
                     branch = %branch,
-                    checkpoint = %checkpoint,
-                    rebuilt_from = %base,
-                    "the recorded branch is gone; its checkpoint went unreachable with it, rebuilding the worktree"
+                    rebuilt_at = %checkpoint,
+                    "the recorded branch is gone; rebuilding the canvas at the recorded checkpoint"
                 );
+                git(repo_root, &["worktree", "prune"])?;
                 git(
                     repo_root,
                     &[
@@ -263,18 +250,21 @@ pub fn prepare(
                         "-b",
                         &branch,
                         &worktree.to_string_lossy(),
-                        &base,
+                        &checkpoint,
                     ],
                 )?;
-                db::record(
+            } else {
+                // nothing retains the recorded head: the work is lost, and
+                // the refusal names it rather than silently re-cutting a
+                // lineage the record never knew
+                return Err(refuse(
                     conn,
-                    &system,
-                    Command::CheckpointWorkspace {
-                        task_id: task,
-                        checkpoint: commit(base)?,
-                    },
-                    now,
-                )?;
+                    demand,
+                    format!(
+                        "t-{} branch {}: the recorded checkpoint {} is unreachable; nothing retains the commit, the recorded work is lost. Re-cut a lineage by hand and record it with sac checkpoint t-{}, or drop the task",
+                        task.0, branch, checkpoint, task.0
+                    ),
+                ));
             }
         }
         None => {
