@@ -310,6 +310,39 @@ fn human_ctx() -> Context {
 
 type FormReply = (u16, String, Option<String>);
 
+/// The form reply plus the Set-Cookie header, for first-claim contracts.
+fn post_form_ck(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> (u16, String, Option<String>, Option<String>) {
+    let mut r = ureq::post(url)
+        .config()
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .build();
+    for (k, v) in headers {
+        r = r.header(*k, *v);
+    }
+    let mut r = r.send(body).expect("the loopback server answers");
+    let loc = r
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let cookie = r
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    (
+        r.status().as_u16(),
+        r.body_mut().read_to_string().unwrap(),
+        loc,
+        cookie,
+    )
+}
+
 fn world_of(state: &ConsoleState) -> saccade::World {
     match state.snapshot() {
         Ok(s) => s.world,
@@ -692,5 +725,111 @@ async fn every_task_href_the_console_emits_resolves() {
     // the visible labels stay the token form
     let (_, focused) = get_html(&format!("{base}/t/0"));
     assert!(focused.contains(">t-0<"));
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// Identity is claimed at the act, on every act form: a cookieless
+/// browser rules by typing its name into the judgment form; the forms
+/// carry the field prefilled from the actor cookie when one exists.
+#[tokio::test(flavor = "multi_thread")]
+async fn judgment_forms_carry_the_actor_name() {
+    let db = scratch_db("console-identity");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "migrate floop");
+    let pi = Context {
+        actor: ActorName::new("pi".into()).unwrap(),
+        tier: Tier::Agent,
+    };
+    state
+        .execute(&pi, Command::ClaimTask { id: TaskId(0) }, None)
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::CreateProposal {
+                name: Prose::new("hand it back".into()).unwrap(),
+                action: saccade::ProposalAction::Release { task_id: TaskId(0) },
+            },
+            None,
+        )
+        .unwrap();
+    let proposal = world_of(&state)
+        .proposals
+        .keys()
+        .next()
+        .expect("the gate holds one proposal")
+        .0
+        .0;
+
+    // a cookieless accept without a name refuses, naming the fix
+    let (status, body, _) = post_form(&format!("{base}/p/{proposal}/accept"), &[], "");
+    assert_eq!(status, 400);
+    assert!(body.contains("a name is required to record the act"));
+
+    // a cookieless accept with who records human tier under that name,
+    // and the first claim sets the cookie like compose does
+    let (status, _, loc, cookie) =
+        post_form_ck(&format!("{base}/p/{proposal}/accept"), &[], "who=jerry");
+    assert_eq!(status, 303);
+    assert_eq!(loc.as_deref(), Some("/t/0"));
+    assert!(
+        cookie
+            .as_deref()
+            .is_some_and(|c| c.starts_with("actor=jerry")),
+        "the first claim claims the cookie: {cookie:?}"
+    );
+    let snap = match state.snapshot() {
+        Ok(s) => s,
+        Err(_) => panic!("the snapshot refused"),
+    };
+    let accepted = snap
+        .rows
+        .iter()
+        .rev()
+        .find(|r| r.kind == "proposal_accepted")
+        .expect("the ruling landed");
+    assert_eq!(accepted.actor, "jerry");
+    assert_eq!(accepted.tier, "human");
+    // the embedded act executed: the claim is released
+    let task = saccade::views::task_view(&world_of(&state), TaskId(0)).unwrap();
+    assert_eq!(task.state, "open");
+
+    // the rendered judgment forms carry the who input, prefilled from
+    // the actor cookie when one exists
+    state
+        .execute(&pi, Command::ClaimTask { id: TaskId(0) }, None)
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::CreateProposal {
+                name: Prose::new("hand it back again".into()).unwrap(),
+                action: saccade::ProposalAction::Release { task_id: TaskId(0) },
+            },
+            None,
+        )
+        .unwrap();
+
+    let mut r = ureq::get(&format!("{base}/t/0"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .header("Cookie", "actor=jerry")
+        .call()
+        .expect("the loopback server answers");
+    let with_cookie = r.body_mut().read_to_string().unwrap();
+    // accept + reject + the compose dock all prefill from the cookie
+    assert_eq!(
+        with_cookie.matches("value=\"jerry\"").count(),
+        3,
+        "every act form prefills from the cookie"
+    );
+
+    let (status, blank) = get_html(&format!("{base}/t/0"));
+    assert_eq!(status, 200);
+    assert!(
+        blank.matches("value=\"\"").count() >= 2,
+        "blank for a fresh browser, never absent"
+    );
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }

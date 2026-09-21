@@ -44,7 +44,9 @@ pub struct FormState {
     pub error: Option<String>,
     pub draft: String,
     pub note: String,
-    pub need_who: bool,
+    /// The actor name prefilled into every act form — the cookie's
+    /// value when one exists, blank for a fresh browser.
+    pub who: String,
 }
 
 pub struct Address {
@@ -374,8 +376,9 @@ fn forest_section(rows: &[ForestRow], gate: &[ProposalView], focus: Option<&str>
 pub fn thread_section(f: &Focus, form: &FormState) -> String {
     let mut s = String::from("<section id=\"thread\">\n");
     for p in &f.proposals {
+        let who = who_input(&form.who);
         s.push_str(&format!(
-            "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<div class=\"jrow\">\n<form method=\"post\" action=\"/p/{}/accept\"><button class=\"sendbtn\" type=\"submit\">accept</button></form>\n<form class=\"jform\" method=\"post\" action=\"/p/{}/reject\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<button class=\"sendbtn\" type=\"submit\">reject</button>\n</form>\n</div>\n</div>\n",
+            "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<div class=\"jrow\">\n<form method=\"post\" action=\"/p/{}/accept\">{who}<button class=\"sendbtn\" type=\"submit\">accept</button></form>\n<form class=\"jform\" method=\"post\" action=\"/p/{}/reject\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<div class=\"jreject\">{who}<button class=\"sendbtn\" type=\"submit\">reject</button></div>\n</form>\n</div>\n</div>\n",
             p.id,
             esc(p.action),
             esc(&p.task),
@@ -519,11 +522,6 @@ fn node_html(
 }
 
 pub fn compose_section(task: usize, form: &FormState) -> String {
-    let who = if form.need_who {
-        "<input class=\"who\" name=\"who\" placeholder=\"your name\" autocomplete=\"name\">\n"
-    } else {
-        ""
-    };
     let error = form
         .error
         .as_deref()
@@ -532,6 +530,17 @@ pub fn compose_section(task: usize, form: &FormState) -> String {
     format!(
         "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<div id=\"address\" class=\"addrline mono\"></div>\n<textarea id=\"body\" name=\"body\" rows=\"2\" placeholder=\"write\">{}</textarea>\n<div class=\"sendrow\">{who}{error}<button class=\"sendbtn\" type=\"submit\">send</button></div>\n</form>\n</section>\n",
         esc(&form.draft),
+        who = who_input(&form.who),
+    )
+}
+
+/// Every act form carries the actor name: prefilled from the cookie
+/// when one exists, blank for a fresh browser — the no-JS path types
+/// its name and posts.
+fn who_input(prefill: &str) -> String {
+    format!(
+        "<input class=\"who\" name=\"who\" placeholder=\"your name\" autocomplete=\"name\" value=\"{}\">\n",
+        esc(prefill)
     )
 }
 
@@ -727,9 +736,17 @@ header .brand {
 .judge { margin: 4px 18px 8px 16px; background: #1e1c1a; border-radius: 6px; padding: 8px 12px; }
 .jhead { color: #6d6562; font-size: 11px; }
 .jname { color: #dac09a; overflow-wrap: anywhere; }
-.jrow { display: flex; gap: 14px; align-items: flex-start; margin-top: 6px; }
-.jrow form { margin: 0; }
-.jform { flex: 1; }
+.jrow { display: flex; gap: 14px; align-items: flex-start; margin-top: 6px; flex-wrap: wrap; }
+.jrow form { margin: 0; display: flex; gap: 8px; align-items: center; }
+.jform { flex: 1; min-width: 220px; }
+.jform textarea { width: 100%; }
+.jreject { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+input.who {
+  background: #100f0e; color: #d4ceca; border: 1px solid #100f0e; border-radius: 4px;
+  font: 500 11px "JetBrains Mono", ui-monospace, monospace;
+  padding: 5px 8px; width: 110px;
+}
+input.who:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
 
 /* compose: docked surface band */
 #compose { background: #1b1918; padding: 10px 18px 12px; }
@@ -742,8 +759,7 @@ header .brand {
 #compose textarea:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
 .sendrow { display: flex; justify-content: flex-end; gap: 10px; align-items: center; margin-top: 6px; }
 .sendrow .who {
-  background: #100f0e; color: #d4ceca; border: 1px solid #100f0e; border-radius: 4px;
-  font: 500 12.5px "Noto Sans", system-ui, sans-serif; padding: 6px 10px;
+  width: auto; font: 500 12.5px "Noto Sans", system-ui, sans-serif; padding: 6px 10px;
 }
 .sendrow .who:focus { outline: none; border-color: #2e2a28; }
 .sendbtn {
@@ -1216,19 +1232,45 @@ mod tests {
 
     #[test]
     fn the_compose_dock_holds_the_grammar() {
-        let html = compose_section(
-            9,
-            &FormState {
-                need_who: true,
-                ..Default::default()
-            },
-        );
+        let html = compose_section(9, &FormState::default());
         assert!(html.contains("<section id=\"compose\">"));
         assert!(html.contains("name=\"task\" value=\"9\""));
         assert!(html.contains("action=\"/compose\""));
         assert!(html.contains("placeholder=\"write\""));
-        assert!(html.contains("name=\"who\""));
+        assert!(
+            html.contains("name=\"who\""),
+            "every act form carries the name"
+        );
+        assert!(html.contains("value=\"\""));
         assert!(html.contains("type=\"submit\">send<"));
+
+        let prefilled = compose_section(
+            9,
+            &FormState {
+                who: "jerry".into(),
+                ..Default::default()
+            },
+        );
+        assert!(prefilled.contains("value=\"jerry\""), "the cookie prefills");
+    }
+
+    #[test]
+    fn the_judgment_forms_carry_the_name_too() {
+        let world = fixture();
+        let html = thread_section(&focus_of(&world, 1), &Default::default());
+        assert_eq!(
+            html.matches("name=\"who\"").count(),
+            2,
+            "accept and reject each carry it"
+        );
+        let prefilled = thread_section(
+            &focus_of(&world, 1),
+            &FormState {
+                who: "jerry".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(prefilled.matches("value=\"jerry\"").count(), 2);
     }
 
     #[test]

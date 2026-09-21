@@ -192,7 +192,7 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
         marks: ribbon_marks(&snapshot.world, now),
         focus: focused,
         form: web::FormState {
-            need_who: req.actor.is_none(),
+            who: req.actor.clone().unwrap_or_default(),
             ..Default::default()
         },
         now,
@@ -333,6 +333,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
 }
 
 /// The judgment door: execute, sweep, and 303 back to the focused task.
+/// A first identity claim here sets the cookie like compose does.
 fn judge(
     req: &Req,
     app: &AppState,
@@ -345,7 +346,7 @@ fn judge(
         Ok(_) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));
-            redirect(&format!("/t/{n}"), None)
+            redirect(&format!("/t/{n}"), who.1.as_deref())
         }
         Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
@@ -399,7 +400,7 @@ fn console_reject(
             error: Some(msg.to_string()),
             draft: form_field(fields, "body").to_string(),
             note: form_field(fields, "note").to_string(),
-            need_who: req.actor.is_none(),
+            who: req.actor.clone().unwrap_or_default(),
         };
         return html(400, &web::compose_section(n, &form));
     }
@@ -418,7 +419,7 @@ fn console_reject(
             error: Some(msg.to_string()),
             draft: form_field(fields, "body").to_string(),
             note: form_field(fields, "note").to_string(),
-            need_who: req.actor.is_none(),
+            who: req.actor.clone().unwrap_or_default(),
         },
         now,
     };
