@@ -184,8 +184,8 @@ manage by hand. The lifecycle:
   review flow; the branch itself stays.
 - **A dropped task has no door.** Its worktree and branch are residue —
   collectable, but still not by your hand: cleanup is a proposal to the
-  human (the tracker has no collection verb yet), naming the canvases and
-  their tasks.
+  human (the tracker has no collection verb yet), naming the workspaces
+  and their tasks.
 
 ## Errors and degraded mode
 
