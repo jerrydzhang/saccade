@@ -1,10 +1,16 @@
 {
-  description = "Saccade devshell setup";
+  description = "Saccade devshell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     saccade.url = "github:jerrydzhang/saccade/v0.1.1";
+    devenv.url = "github:cachix/devenv";
+  };
+
+  nixConfig = {
+    extra-substituters = ["https://devenv.cachix.org"];
+    extra-trusted-public-keys = ["devenv.cachix.org-1:w1cLUi8dv3hnoSPGAuibQv+f9TZLr6cv/Hm9XgU50cw="];
   };
 
   outputs = {
@@ -12,8 +18,9 @@
     nixpkgs,
     rust-overlay,
     saccade,
+    devenv,
     ...
-  }: let
+  } @ inputs: let
     inherit (nixpkgs) lib;
     forAllSystems = lib.genAttrs lib.systems.flakeExposed;
     overlays = [rust-overlay.overlays.default];
@@ -31,18 +38,34 @@
           ];
         };
       in {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            rustToolchain
-            (pkgs.python3.withPackages (ps: [ps.playwright]))
-            prek
-            just
-            saccade.packages.${system}.default
-          ];
+        default = devenv.lib.mkShell {
+          inherit inputs pkgs;
+          modules = [
+            ({...}: {
+              packages = with  pkgs; [
+                rustToolchain
+                (pkgs.python3.withPackages (ps: [ps.playwright]))
+                prek
+                just
+                saccade.packages.${system}.default
+              ];
 
-          shellHook = ''
-            export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
-          '';
+              env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+
+              process.manager.implementation = "native";
+              processes.sac = {
+                exec = "${saccade.packages.${system}.default}/bin/sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811";
+                restart = {
+                  on = "on_failure";
+                  max = 10;
+                };
+                ready.http.get = {
+                  port = 8811;
+                  path = "/";
+                };
+              };
+            })
+          ];
         };
       }
     );

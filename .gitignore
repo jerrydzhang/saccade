@@ -32,3 +32,4 @@ rustc-ice-*.txt
 #  gitignore or into this one. A more nuclear option (not recommended) is to ignore
 #  the entire idea folder.
 #.idea/
+.devenv/
