@@ -227,47 +227,8 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
             Ok(n) => compose(req, app, n, &fields),
             Err(_) => page(404, "no task named"),
         },
-        PostRoute::Accept(seq) => match proposal_task(app, seq) {
-            Some(n) => {
-                let who = match identity(req, &fields) {
-                    Ok(ok) => ok,
-                    Err(msg) => return console_reject(req, app, n, &fields, &msg),
-                };
-                judge(
-                    req,
-                    app,
-                    n,
-                    &fields,
-                    who,
-                    Command::AcceptProposal {
-                        id: ProposalId(RecordId(seq)),
-                    },
-                )
-            }
-            None => page(404, &format!("no open proposal #{seq}")),
-        },
-        PostRoute::Reject(seq) => match proposal_task(app, seq) {
-            Some(n) => {
-                let note = form_field(&fields, "note");
-                if Prose::new(note.to_string()).is_err() {
-                    return console_reject(req, app, n, &fields, "a ruling needs a note");
-                }
-                let who = match identity(req, &fields) {
-                    Ok(ok) => ok,
-                    Err(msg) => return console_reject(req, app, n, &fields, &msg),
-                };
-                judge(
-                    req,
-                    app,
-                    n,
-                    &fields,
-                    who,
-                    Command::RejectProposal {
-                        id: ProposalId(RecordId(seq)),
-                        note: Prose::new(note.to_string()).unwrap(),
-                    },
-                )
-            }
+        PostRoute::Ruling(seq) => match proposal_task(app, seq) {
+            Some(n) => rule(req, app, n, &fields, seq),
             None => page(404, &format!("no open proposal #{seq}")),
         },
         PostRoute::NotFound => page(404, "nothing here — try /"),
@@ -334,16 +295,30 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     }
 }
 
-/// The judgment door: execute, sweep, and 303 back to the focused task.
-/// A first identity claim here sets the cookie like compose does.
-fn judge(
-    req: &Req,
-    app: &AppState,
-    n: usize,
-    fields: &[(String, String)],
-    who: (Context, Option<String>),
-    command: Command,
-) -> Response {
+/// The judgment door: one form, one name, two buttons. The clicked
+/// button's name/value names the ruling; identity is claimed at the
+/// act; execute, sweep, and 303 back to the focused task.
+fn rule(req: &Req, app: &AppState, n: usize, fields: &[(String, String)], seq: usize) -> Response {
+    let command = match form_field(fields, "ruling") {
+        "accept" => Command::AcceptProposal {
+            id: ProposalId(RecordId(seq)),
+        },
+        "reject" => {
+            let note = form_field(fields, "note");
+            if Prose::new(note.to_string()).is_err() {
+                return console_reject(req, app, n, fields, "a ruling needs a note");
+            }
+            Command::RejectProposal {
+                id: ProposalId(RecordId(seq)),
+                note: Prose::new(note.to_string()).unwrap(),
+            }
+        }
+        _ => return console_reject(req, app, n, fields, "the ruling is accept or reject"),
+    };
+    let who = match identity(req, fields) {
+        Ok(ok) => ok,
+        Err(msg) => return console_reject(req, app, n, fields, &msg),
+    };
     match app.execute(&who.0, command, None) {
         Ok(_) => {
             let fired = app.clone();
@@ -561,8 +536,7 @@ enum Route {
 
 enum PostRoute {
     Compose,
-    Accept(usize),
-    Reject(usize),
+    Ruling(usize),
     NotFound,
 }
 
@@ -585,17 +559,10 @@ fn parse_post(url: &str) -> PostRoute {
     }
     if let Some(seq) = path
         .strip_prefix("/p/")
-        .and_then(|rest| rest.strip_suffix("/accept"))
+        .and_then(|rest| rest.strip_suffix("/ruling"))
         .and_then(num)
     {
-        return PostRoute::Accept(seq);
-    }
-    if let Some(seq) = path
-        .strip_prefix("/p/")
-        .and_then(|rest| rest.strip_suffix("/reject"))
-        .and_then(num)
-    {
-        return PostRoute::Reject(seq);
+        return PostRoute::Ruling(seq);
     }
     PostRoute::NotFound
 }
@@ -655,8 +622,7 @@ mod tests {
     #[test]
     fn post_routes_and_forms_parse() {
         assert!(matches!(parse_post("/compose"), PostRoute::Compose));
-        assert!(matches!(parse_post("/p/9/accept"), PostRoute::Accept(9)));
-        assert!(matches!(parse_post("/p/9/reject"), PostRoute::Reject(9)));
+        assert!(matches!(parse_post("/p/9/ruling"), PostRoute::Ruling(9)));
         assert!(matches!(parse_post("/t/3/comment"), PostRoute::NotFound));
         assert!(matches!(parse_post("/t/3"), PostRoute::NotFound));
         let fields = parse_form("body=hello+world%3C1%3E&task=12&who=jerry");

@@ -976,6 +976,53 @@ mod panels {
     }
 
     #[test]
+    fn an_active_incarnation_yields_a_run_row() {
+        let bind = |seq: usize, at: u64| {
+            record(
+                seq,
+                at,
+                Tier::System,
+                Event::IncarnationBound {
+                    task_id: TaskId(0),
+                    response_target: CommentId(RecordId(2)),
+                    trigger: RecordId(2),
+                    actor: ActorName::new("pi".into()).unwrap(),
+                    session: SessionPointer::new("/tmp/s".into()).unwrap(),
+                },
+            )
+        };
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                2 * HOUR,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                Some(Addressee::Agent),
+            ),
+            bind(3, 3 * HOUR),
+            record(
+                4,
+                3 * HOUR + 30 * 60,
+                Tier::System,
+                Event::IncarnationPromptAccepted {
+                    id: IncarnationId(RecordId(3)),
+                },
+            ),
+        ])
+        .unwrap();
+        // bound and accepted, not yet settled: the strip names the run
+        let next = next_panel(&world, 4 * HOUR);
+        assert_eq!(next.runs.len(), 1);
+        let r = &next.runs[0];
+        assert_eq!(r.incarnation, 3);
+        assert_eq!(r.task, 0);
+        assert_eq!(r.demand, 2);
+        assert_eq!(r.actor, "pi");
+        assert!(r.in_flight());
+    }
+
+    #[test]
     fn asked_of_you_scans_awaiting_human_demands() {
         let world = World::replay(vec![
             task_at(0, 0, "real work"),

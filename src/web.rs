@@ -341,8 +341,8 @@ fn ribbon_section(c: &Console) -> String {
         };
         let top = row as f64 * ROW_HEIGHT_PX + 1.0;
         s.push_str(&format!(
-            "<a class=\"mrk {class}\" style=\"left:{left:.1}%;top:{top:.0}px\" href=\"/t/{}#c-{}\" title=\"t-{} · {label} #{} · {}\">c-{}</a>\n",
-            m.task, m.seq, m.task, m.seq, esc(&fmt_t(m.at)), m.seq,
+            "<a class=\"mrk {class}\" style=\"left:{left:.1}%;top:{top:.0}px\" href=\"/t/{}#c-{}\" title=\"t-{} · {label} #{} · {}\"></a>\n",
+            m.task, m.seq, m.task, m.seq, esc(&fmt_t(m.at)),
         ));
     }
     s.push_str("</div>\n");
@@ -411,16 +411,15 @@ fn forest_section(
 pub fn thread_section(f: &Focus, form: &FormState) -> String {
     let mut s = String::from("<section id=\"thread\">\n");
     for p in &f.proposals {
-        let who = who_input(&form.who);
         s.push_str(&format!(
-            "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<div class=\"jrow\">\n<form method=\"post\" action=\"/p/{}/accept\">{who}<button class=\"sendbtn\" type=\"submit\">accept</button></form>\n<form class=\"jform\" method=\"post\" action=\"/p/{}/reject\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<div class=\"jreject\">{who}<button class=\"sendbtn\" type=\"submit\">reject</button></div>\n</form>\n</div>\n</div>\n",
+            "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<form method=\"post\" action=\"/p/{}/ruling\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"ruling\" value=\"accept\" type=\"submit\">accept</button>\n<button class=\"sendbtn\" name=\"ruling\" value=\"reject\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
             p.id,
             esc(p.action),
             esc(&p.task),
             esc(&p.name),
             p.id,
-            p.id,
             esc(&form.note),
+            who_input(&form.who),
         ));
     }
     if let Some(receipt) = &f.show.receipt {
@@ -694,16 +693,12 @@ header .brand {
 }
 .rv { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #292624; }
 .rv.now { border-left: 2px solid #d4ceca; }
-.mrk {
-  position: absolute; min-width: 30px; text-align: center;
-  font: 500 9px/1.5 "JetBrains Mono", ui-monospace, monospace;
-  color: #100f0e; padding: 0 2px; border-radius: 2px;
-}
+.mrk { position: absolute; width: 2px; }
 .mrk.human { background: #c4a6a8; }
 .mrk.agent { background: #6d6562; }
 .mrk.demand { background: #dac09a; }
 .mrk.run { background: #a2c4a3; }
-.mrk:hover { outline: 1px solid #e8e2dd; z-index: 2; }
+.mrk:hover { width: 3px; outline: 1px solid #e8e2dd; z-index: 2; }
 
 /* columns: forest surface | thread deep — tone separates, no dividers */
 .cols { display: grid; min-height: 0; }
@@ -1129,9 +1124,11 @@ mod tests {
     fn judgment_forms_render_on_the_focused_task() {
         let world = fixture();
         let html = thread_section(&focus_of(&world, 1), &Default::default());
-        assert!(html.contains("action=\"/p/4/accept\""));
-        assert!(html.contains("action=\"/p/4/reject\""));
+        // one form, one route, two rulings
+        assert!(html.contains("action=\"/p/4/ruling\""));
         assert!(html.contains("name=\"note\""));
+        assert!(html.contains("name=\"ruling\" value=\"accept\""));
+        assert!(html.contains("name=\"ruling\" value=\"reject\""));
     }
 
     #[test]
@@ -1405,13 +1402,13 @@ mod tests {
     }
 
     #[test]
-    fn the_judgment_forms_carry_the_name_too() {
+    fn the_judgment_form_carries_one_name() {
         let world = fixture();
         let html = thread_section(&focus_of(&world, 1), &Default::default());
         assert_eq!(
             html.matches("name=\"who\"").count(),
-            2,
-            "accept and reject each carry it"
+            1,
+            "one ruling, one name"
         );
         let prefilled = thread_section(
             &focus_of(&world, 1),
@@ -1420,7 +1417,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(prefilled.matches("value=\"jerry\"").count(), 2);
+        assert_eq!(prefilled.matches("value=\"jerry\"").count(), 1);
     }
 
     #[test]

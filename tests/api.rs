@@ -288,6 +288,7 @@ use saccade::objects::comment::{
 };
 use saccade::store::{Context, RecordId, Tier};
 use saccade::types::actor::ActorName;
+use saccade::views::task_view;
 use saccade::{Command, Prose, TaskId};
 
 async fn spawn_console(db_path: &std::path::Path) -> (String, ConsoleState) {
@@ -756,23 +757,23 @@ async fn judgment_forms_carry_the_actor_name() {
             None,
         )
         .unwrap();
-    let proposal = world_of(&state)
-        .proposals
-        .keys()
-        .next()
+    let proposal = saccade::views::open_proposals(&world_of(&state))
+        .first()
         .expect("the gate holds one proposal")
-        .0
-        .0;
+        .id;
 
-    // a cookieless accept without a name refuses, naming the fix
-    let (status, body, _) = post_form(&format!("{base}/p/{proposal}/accept"), &[], "");
+    // a cookieless ruling without a name refuses, naming the fix
+    let (status, body, _) = post_form(&format!("{base}/p/{proposal}/ruling"), &[], "ruling=accept");
     assert_eq!(status, 400);
     assert!(body.contains("a name is required to record the act"));
 
-    // a cookieless accept with who records human tier under that name,
-    // and the first claim sets the cookie like compose does
-    let (status, _, loc, cookie) =
-        post_form_ck(&format!("{base}/p/{proposal}/accept"), &[], "who=jerry");
+    // a cookieless accept ruling with who records human tier under that
+    // name, and the first claim sets the cookie like compose does
+    let (status, _, loc, cookie) = post_form_ck(
+        &format!("{base}/p/{proposal}/ruling"),
+        &[],
+        "ruling=accept&who=jerry",
+    );
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/0"));
     assert!(
@@ -797,8 +798,47 @@ async fn judgment_forms_carry_the_actor_name() {
     let task = saccade::views::task_view(&world_of(&state), TaskId(0)).unwrap();
     assert_eq!(task.state, "open");
 
-    // the rendered judgment forms carry the who input, prefilled from
-    // the actor cookie when one exists
+    // a cookieless reject ruling records the same way — both rulings
+    // land at human tier under the typed name
+    state
+        .execute(
+            &human_ctx(),
+            Command::CreateProposal {
+                name: Prose::new("void it".into()).unwrap(),
+                action: saccade::ProposalAction::Drop { task_id: TaskId(0) },
+            },
+            None,
+        )
+        .unwrap();
+    let proposal = saccade::views::open_proposals(&world_of(&state))
+        .first()
+        .expect("the drop proposal is open")
+        .id;
+    let (status, _, _, _) = post_form_ck(
+        &format!("{base}/p/{proposal}/ruling"),
+        &[],
+        "ruling=reject&who=jerry&note=not+yet",
+    );
+    assert_eq!(status, 303);
+    let snap = match state.snapshot() {
+        Ok(s) => s,
+        Err(_) => panic!("the snapshot refused"),
+    };
+    let rejected = snap
+        .rows
+        .iter()
+        .rev()
+        .find(|r| r.kind == "proposal_rejected")
+        .expect("the rejection landed");
+    assert_eq!(rejected.actor, "jerry");
+    assert_eq!(rejected.tier, "human");
+    assert_eq!(
+        task_view(&world_of(&state), TaskId(0)).unwrap().state,
+        "open"
+    );
+
+    // the rendered judgment form carries the one who input, prefilled
+    // from the actor cookie when one exists
     state
         .execute(&pi, Command::ClaimTask { id: TaskId(0) }, None)
         .unwrap();
@@ -821,10 +861,10 @@ async fn judgment_forms_carry_the_actor_name() {
         .call()
         .expect("the loopback server answers");
     let with_cookie = r.body_mut().read_to_string().unwrap();
-    // accept + reject + the compose dock all prefill from the cookie
+    // the judgment block and the compose dock prefill from the cookie
     assert_eq!(
         with_cookie.matches("value=\"jerry\"").count(),
-        3,
+        2,
         "every act form prefills from the cookie"
     );
 
