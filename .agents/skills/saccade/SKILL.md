@@ -37,8 +37,9 @@ that skips it burns its reasoning on re-derivation or acts on guesses.
    conclusion; a write that cannot name its next reader doesn't earn bytes.
 3. **Disagreement is a finding.** When the record, the skill, and the
    code disagree — with each other or with what you observe — stop and
-   name the conflict on the thread; never resolve it silently. Hidden
-   staleness poisons the cache for every later reader.
+   name the conflict on the thread and route it to your asker — the
+   asker carries it to the skill's author. Never resolve it silently.
+   Hidden staleness poisons the cache for every later reader.
 
 ## Workflow
 
@@ -195,6 +196,7 @@ record governs, the workspace is a cache. The lifecycle:
   itself stays.
 - **Deletion is manual hygiene**, under one rule: never delete the sole
   holder of recorded work. The record names the checkpoint, so
+
   sole-holder is checkable before deleting — a branch merged into the
   mainline is not sole holder, an unmerged branch usually is, and a
   worktree's uncommitted files are never recorded work.
@@ -206,7 +208,9 @@ record governs, the workspace is a cache. The lifecycle:
 ## Errors and degraded mode
 
 Failures exit 1 with a named variant on stderr (`--json` emits
-`{"error": "<variant>", "detail": "…"}`):
+`{"error": "<variant>", "detail": "…"}`). If resolving an error requires
+violating any law of this skill, that is a finding — name it on the
+thread before proceeding.
 
 - `human_only` — you attempted a judgment act. Stop; escalate.
 - `invalid_task_id` / `invalid_parent_task_id` — no such task; ids are exact
