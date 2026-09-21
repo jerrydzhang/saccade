@@ -44,6 +44,29 @@ fn git(cwd: &Path, args: &[&str]) -> Result<String, RunnerFail> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The named ref's tip, or None when the ref does not resolve.
+fn branch_tip(cwd: &Path, refs: &str) -> Option<String> {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "--verify", refs])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// True when `ancestor` is an ancestor of `descendant`, equal included.
+fn is_ancestor(cwd: &Path, ancestor: &str, descendant: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn load_world(conn: &rusqlite::Connection) -> Result<World, RunnerFail> {
     let loadout = db::load(conn).map_err(ExecuteFail::Db)?;
     match loadout.state {
@@ -143,14 +166,45 @@ pub fn prepare(
             let checkpoint = workspace.checkpoint.as_str().to_string();
             let branch: String = workspace.branch.clone().into();
             let refs = format!("refs/heads/{branch}");
-            if worktree.exists() {
-                git(&worktree, &["reset", "--hard", &checkpoint])?;
-                git(&worktree, &["clean", "-fd"])?;
-            } else if git(repo_root, &["rev-parse", "--verify", &refs]).is_ok() {
-                git(
-                    repo_root,
-                    &["worktree", "add", &worktree.to_string_lossy(), &branch],
-                )?;
+            if let Some(tip) = branch_tip(repo_root, &refs) {
+                // the branch tip and the recorded checkpoint reconcile
+                // before any git effect, so a refused run moves nothing
+                let target = if tip == checkpoint {
+                    checkpoint.clone()
+                } else if is_ancestor(repo_root, &checkpoint, &tip) {
+                    // the refusal text names task, branch, and the door; it
+                    // rides the error into the sweep's own log line
+                    return Err(RunnerFail::Usage(format!(
+                        "t-{} branch {}: branch tip has advanced past the recorded checkpoint; run: sac checkpoint t-{} to record the current head",
+                        task.0, branch, task.0
+                    )));
+                } else if is_ancestor(repo_root, &tip, &checkpoint) {
+                    warn!(
+                        task = task.0,
+                        branch = %branch,
+                        restored_to = %checkpoint,
+                        found_behind = %tip,
+                        "the branch sat behind the recorded checkpoint; restoring the recorded work"
+                    );
+                    checkpoint.clone()
+                } else {
+                    return Err(RunnerFail::Usage(format!(
+                        "t-{} branch {} diverged from the recorded checkpoint; record the new lineage with sac checkpoint t-{}, or reset the branch back",
+                        task.0, branch, task.0
+                    )));
+                };
+                if worktree.exists() {
+                    git(&worktree, &["reset", "--hard", &target])?;
+                    git(&worktree, &["clean", "-fd"])?;
+                } else {
+                    git(
+                        repo_root,
+                        &["worktree", "add", &worktree.to_string_lossy(), &branch],
+                    )?;
+                    if target != tip {
+                        git(&worktree, &["reset", "--hard", &target])?;
+                    }
+                }
             } else {
                 let base = heal_base(&world, repo_root, task)?;
                 warn!(

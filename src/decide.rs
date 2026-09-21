@@ -18,7 +18,8 @@ fn required_tier(event: &Event) -> Authority {
         | Event::ProposalCreated { .. }
         | Event::ProposalWithdrawn { .. }
         | Event::Commented { .. }
-        | Event::IncarnationCancelled { .. } => Authority::AnyTier,
+        | Event::IncarnationCancelled { .. }
+        | Event::TaskWorkspaceCheckpointed { .. } => Authority::AnyTier,
         Event::TaskDropped { .. }
         | Event::ProposalRejected { .. }
         | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
@@ -28,8 +29,7 @@ fn required_tier(event: &Event) -> Authority {
         | Event::IncarnationSettled { .. }
         | Event::RecordProducedBy { .. }
         | Event::TaskWorkspaceCreated { .. }
-        | Event::TaskWorktreeCreated { .. }
-        | Event::TaskWorkspaceCheckpointed { .. } => Authority::Require(Tier::System),
+        | Event::TaskWorktreeCreated { .. } => Authority::Require(Tier::System),
     }
 }
 

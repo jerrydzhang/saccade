@@ -37,6 +37,9 @@ pub enum Reason {
     WorkspaceMissing,
     /// A second physical creation while the worktree is present.
     WorktreeAlreadyPresent,
+    /// An agent- or human-tier checkpoint names a head the workspace
+    /// already left; the explicit door never rewinds.
+    CheckpointRewind,
     InvalidTaskId,
     InvalidProposalId,
     InvalidCommentId,
@@ -62,6 +65,7 @@ impl From<Reason> for Reject {
             Reason::WorkspaceAlreadyExists => Reject::WorkspaceAlreadyExists,
             Reason::WorkspaceMissing => Reject::WorkspaceMissing,
             Reason::WorktreeAlreadyPresent => Reject::WorktreeAlreadyPresent,
+            Reason::CheckpointRewind => Reject::CheckpointRewind,
             Reason::ProposalAlreadyOpen => Reject::ProposalAlreadyOpen,
         }
     }
@@ -359,6 +363,7 @@ impl World {
                     branch: branch.clone(),
                     // the checkpoint starts at the base the workspace was cut from
                     checkpoint: base.clone(),
+                    heads: vec![base.clone()],
                     worktree: WorktreeState::Absent,
                 });
                 task_ctx.last_updated = record.id;
@@ -386,7 +391,19 @@ impl World {
                     .workspace
                     .as_mut()
                     .ok_or(Reason::WorkspaceMissing)?;
-                workspace.checkpoint = checkpoint.clone();
+                // the machinery (close, boot recovery, the severed-branch
+                // heal) rebases the checkpoint; the explicit door never
+                // returns to a head the record left
+                if record.context.tier != Tier::System
+                    && *checkpoint != workspace.checkpoint
+                    && workspace.heads.contains(checkpoint)
+                {
+                    return Err(Reason::CheckpointRewind);
+                }
+                if *checkpoint != workspace.checkpoint {
+                    workspace.heads.push(checkpoint.clone());
+                    workspace.checkpoint = checkpoint.clone();
+                }
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
@@ -708,6 +725,10 @@ mod test {
         assert!(matches!(
             Reject::from(Reason::WorktreeAlreadyPresent),
             Reject::WorktreeAlreadyPresent
+        ));
+        assert!(matches!(
+            Reject::from(Reason::CheckpointRewind),
+            Reject::CheckpointRewind
         ));
     }
 
@@ -1625,6 +1646,94 @@ mod test {
             log.world().tasks[0].workspace.as_ref().unwrap().checkpoint,
             head
         );
+    }
+
+    #[test]
+    fn checkpoints_never_rewind_at_the_explicit_door() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: Prose::new("carry a merge through the worktree".into()).unwrap(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        let base = GitCommit::new("abc123".into()).unwrap();
+        log.execute_system(
+            Command::CreateWorkspace {
+                task_id: TaskId(0),
+                base: base.clone(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+            },
+            2,
+        )
+        .unwrap();
+
+        // the machinery rebases freely: a severed-branch heal names an
+        // unrelated head and lands
+        let healed = GitCommit::new("777000".into()).unwrap();
+        log.execute_system(
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: healed.clone(),
+            },
+            3,
+        )
+        .unwrap();
+
+        // the explicit door is agent- and human-held: an advance lands
+        let merged = GitCommit::new("def456".into()).unwrap();
+        for ctx in [agent(), human()] {
+            log.execute(
+                ctx,
+                Command::CheckpointWorkspace {
+                    task_id: TaskId(0),
+                    checkpoint: merged.clone(),
+                },
+                4,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            log.world().tasks[0].workspace.as_ref().unwrap().checkpoint,
+            merged
+        );
+
+        // restating the recorded head is a no-op that succeeds
+        let before = log.records().len();
+        log.execute(
+            agent(),
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: merged.clone(),
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(log.records().len(), before + 1);
+        assert_eq!(
+            log.world().tasks[0].workspace.as_ref().unwrap().checkpoint,
+            merged
+        );
+
+        // a rewind names a head the record left: the base, the healed
+        // head — refused at both explicit tiers, writing nothing
+        for rewind in [base, healed] {
+            for ctx in [agent(), human()] {
+                let refused = log.execute(
+                    ctx,
+                    Command::CheckpointWorkspace {
+                        task_id: TaskId(0),
+                        checkpoint: rewind.clone(),
+                    },
+                    6,
+                );
+                assert!(matches!(refused, Err(Reject::CheckpointRewind)));
+            }
+        }
+        assert_eq!(log.records().len(), before + 1);
     }
 
     const RECORD_COUNT: usize = 14;

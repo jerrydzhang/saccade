@@ -332,6 +332,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::WorkspaceAlreadyExists => "WorkspaceAlreadyExists",
                         saccade::Reject::WorkspaceMissing => "WorkspaceMissing",
                         saccade::Reject::WorktreeAlreadyPresent => "WorktreeAlreadyPresent",
+                        saccade::Reject::CheckpointRewind => "CheckpointRewind",
                         saccade::Reject::InvalidTaskId => "InvalidTaskId",
                         saccade::Reject::InvalidParentTaskId => "InvalidParentTaskId",
                         saccade::Reject::InvalidProposalId => "InvalidProposalId",

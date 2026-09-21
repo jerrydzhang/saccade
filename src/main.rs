@@ -8,8 +8,8 @@ use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{ProposalView, TaskView, comment_thread, proposal_view, show_view, task_view};
 use saccade::{
-    ActorName, Addressee, Command, CommentId, Context, ProposalAction, ProposalId, Prose, RecordId,
-    Reject, Target, Tier,
+    ActorName, Addressee, Command, CommentId, Context, GitCommit, ProposalAction, ProposalId,
+    Prose, RecordId, Reject, Target, Tier,
 };
 
 #[derive(Parser)]
@@ -140,6 +140,8 @@ enum Cmd {
     },
     /// Stop a task's active run: the event is the kill request
     Cancel { id: String },
+    /// Record a task's current branch tip as its checkpoint
+    Checkpoint { id: String },
     /// Block until a demand's reply lands, then print it
     Wait {
         /// The demand to watch (c-<n>)
@@ -253,6 +255,7 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::WorkspaceAlreadyExists => "workspace_already_exists",
         Reject::WorkspaceMissing => "workspace_missing",
         Reject::WorktreeAlreadyPresent => "worktree_already_present",
+        Reject::CheckpointRewind => "checkpoint_rewind",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
         Reject::NotClaimHolder => "not_claim_holder",
@@ -365,6 +368,48 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             };
             Command::CancelIncarnation { id: incarnation }
         }
+        Cmd::Checkpoint { id } => {
+            let task = parse_task_id(id)?;
+            let repo_root = match &cli.repo {
+                Some(repo) => repo
+                    .canonicalize()
+                    .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display())))?,
+                None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(|_| {
+                    Fail::Usage(
+                        "the working directory is not inside a git repository; pass --repo so checkpoint can resolve the branch".into(),
+                    )
+                })?,
+            };
+            let conn = db::open_read(&db_path).map_err(Fail::Db)?;
+            let loadout = db::load(&conn).map_err(Fail::Db)?;
+            let LoadState::Full(world) = loadout.state else {
+                return Err(Fail::Degraded(
+                    "checkpoint needs the world; the log will not fold".into(),
+                ));
+            };
+            let ctx = world.tasks.get(task.0).ok_or(Reject::InvalidTaskId)?;
+            let workspace = ctx.workspace.as_ref().ok_or(Reject::WorkspaceMissing)?;
+            let branch: String = workspace.branch.clone().into();
+            let tip = sh_git(
+                &repo_root,
+                &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+            )
+            .map_err(Fail::Usage)?;
+            let recorded = workspace.checkpoint.as_str();
+            if tip == recorded {
+                return Ok(format!("t-{} checkpoint unchanged at {tip}", task.0));
+            }
+            // a tip strictly behind the recorded checkpoint rewinds it; a
+            // descended or diverged tip is an advance or a new lineage
+            if is_ancestor(&repo_root, &tip, recorded) {
+                return Err(Fail::Reject(Reject::CheckpointRewind));
+            }
+            Command::CheckpointWorkspace {
+                task_id: task,
+                checkpoint: GitCommit::new(tip)
+                    .map_err(|e| Fail::Usage(format!("git gave no commit: {e:?}")))?,
+            }
+        }
     };
 
     // Identity is required only where it is recorded: mutating commands.
@@ -388,6 +433,34 @@ fn runner_fail(e: saccade::runner::RunnerFail) -> Fail {
             Fail::Usage(m)
         }
     }
+}
+
+fn sh_git(cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git {}: {e}", args.first().unwrap_or(&"")))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git {} failed: {}",
+            args.first().unwrap_or(&""),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// True when `ancestor` is an ancestor of `descendant`, equal included.
+fn is_ancestor(root: &std::path::Path, ancestor: &str, descendant: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// The db default: explicit path, else the named repo's state root,
