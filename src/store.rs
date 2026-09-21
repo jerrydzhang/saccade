@@ -1383,12 +1383,12 @@ mod test {
     }
 
     #[test]
-    fn agent_demands_fold_and_answer_by_exact_tier() {
+    fn a_human_reply_marks_any_demand_responded() {
         let mut log = Log::new();
         populate_log(&mut log);
         let before = log.records().len();
 
-        // the demand is born authorized on its own birth record
+        // the agent demand is born authorized on its own birth record
         log.execute(
             human(),
             Command::Comment {
@@ -1410,57 +1410,19 @@ mod test {
             }
         );
 
-        // a wrong-tier reply lands but does not answer
+        // the human's reply answers regardless of addressee and spends
+        // the attempt, so the sweep never fires the demand again
         log.execute(
             human(),
             Command::Comment {
                 target: Target::Comment(demand),
-                body: Prose::new("asking the agent, not you".into()).unwrap(),
+                body: Prose::new("never mind, the ask is retracted".into()).unwrap(),
                 addressee: None,
             },
             21,
         )
         .unwrap();
-        assert!(matches!(
-            &log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
-                response: ResponseState::Awaiting,
-                ..
-            }
-        ));
-
-        // a deeper descendant never satisfies the ancestor
-        let mid = CommentId(RecordId(before + 1));
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Comment(mid),
-                body: Prose::new("still gathering".into()).unwrap(),
-                addressee: None,
-            },
-            22,
-        )
-        .unwrap();
-        assert!(matches!(
-            &log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
-                response: ResponseState::Awaiting,
-                ..
-            }
-        ));
-
-        // the first exact-tier direct reply answers and spends the attempt
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Comment(demand),
-                body: Prose::new("fourteen, fixtures unchanged".into()).unwrap(),
-                addressee: None,
-            },
-            23,
-        )
-        .unwrap();
-        let reply = CommentId(RecordId(before + 3));
+        let reply = CommentId(RecordId(before + 1));
         assert_eq!(
             log.world().comments[&demand].state,
             CommentState::AddressedToAgent {
@@ -1469,15 +1431,15 @@ mod test {
             }
         );
 
-        // a second exact-tier reply changes nothing
+        // a later agent reply changes nothing
         log.execute(
             agent(),
             Command::Comment {
                 target: Target::Comment(demand),
-                body: Prose::new("also fourteen".into()).unwrap(),
+                body: Prose::new("fourteen, for the record".into()).unwrap(),
                 addressee: None,
             },
-            24,
+            22,
         )
         .unwrap();
         assert_eq!(
@@ -1485,6 +1447,66 @@ mod test {
             CommentState::AddressedToAgent {
                 response: ResponseState::Responded { reply },
                 attempt: AgentAttemptState::Spent,
+            }
+        );
+
+        // agent work still awaits its agent: a human-addressed demand
+        // survives an agent reply and that reply's deeper descendant
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("sanity check the fold count".into()).unwrap(),
+                addressee: Some(Addressee::Human),
+            },
+            23,
+        )
+        .unwrap();
+        let human_demand = CommentId(RecordId(before + 3));
+        let mid = CommentId(RecordId(before + 4));
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Comment(human_demand),
+                body: Prose::new("still gathering".into()).unwrap(),
+                addressee: None,
+            },
+            24,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Comment(mid),
+                body: Prose::new("gathering more".into()).unwrap(),
+                addressee: None,
+            },
+            25,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().comments[&human_demand].state,
+            CommentState::AddressedToHuman {
+                response: ResponseState::Awaiting,
+            }
+        );
+
+        // and the human's own direct reply ends it
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Comment(human_demand),
+                body: Prose::new("checked it myself".into()).unwrap(),
+                addressee: None,
+            },
+            26,
+        )
+        .unwrap();
+        let answer = CommentId(RecordId(before + 6));
+        assert_eq!(
+            log.world().comments[&human_demand].state,
+            CommentState::AddressedToHuman {
+                response: ResponseState::Responded { reply: answer },
             }
         );
     }
