@@ -495,3 +495,263 @@ fn boot_recovery_settles_an_orphaned_run() {
     assert!(supervisor::runnable_demands(&world).is_empty());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
+
+/// The last comment landed is the demand just created: ids are dense
+/// log positions.
+fn latest_demand(db_path: &Path) -> CommentId {
+    let world = world_of(db_path);
+    let latest = world.comments.keys().map(|id| id.0).max().unwrap();
+    CommentId(latest)
+}
+
+#[test]
+fn prepare_heals_a_severed_branch_from_main() {
+    let (repo, db_path, demand) = scaffold("heal");
+
+    // one full course leaves a workspace, a branch, and a checkpoint
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &agent(),
+        Command::Comment {
+            target: Target::Comment(demand),
+            body: Prose::new("receipt written, tests green".into()).unwrap(),
+            addressee: None,
+        },
+        3,
+    )
+    .unwrap();
+    std::fs::write(worktree.join("receipt"), "done\n").unwrap();
+    sh(&worktree, &["add", "."]);
+    sh(&worktree, &["commit", "-m", "receipt"]);
+    close(&mut db::open(&db_path).unwrap(), TaskId(0)).unwrap();
+
+    // review hygiene deletes the worktree and the branch while main moves on
+    sh(&repo, &["worktree", "remove", worktree.to_str().unwrap()]);
+    sh(&repo, &["branch", "-D", "saccade/t-0"]);
+    std::fs::write(repo.join("readme"), "main moved on\n").unwrap();
+    sh(&repo, &["add", "."]);
+    sh(&repo, &["commit", "-m", "advance main"]);
+
+    // the next demand's prepare succeeds: the branch lives again, cut
+    // from main, the checkpoint naming main's head
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            body: Prose::new("one more round".into()).unwrap(),
+            addressee: Some(Addressee::Agent),
+        },
+        4,
+    )
+    .unwrap();
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        latest_demand(&db_path),
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+
+    assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).contains("saccade/t-0"));
+    let world = world_of(&db_path);
+    let workspace = world.tasks[0].workspace.as_ref().unwrap();
+    assert_eq!(
+        workspace.checkpoint.as_str(),
+        sh(&repo, &["rev-parse", "main"])
+    );
+    assert_eq!(
+        world.incarnations[&world.tasks[0].active_incarnation.unwrap()].state,
+        IncarnationState::PromptAccepted
+    );
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn prepare_heals_a_severed_child_branch_from_the_parent_branch_tip() {
+    let (repo, db_path, demand) = scaffold("heal-child");
+    let actor = ActorName::new("pi".into()).unwrap();
+
+    // the parent task runs one course, leaving its branch alive
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        actor.clone(),
+    )
+    .unwrap();
+    let parent_worktree = saccade::paths::worktree_at(&repo, 0);
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &agent(),
+        Command::Comment {
+            target: Target::Comment(demand),
+            body: Prose::new("parent receipt".into()).unwrap(),
+            addressee: None,
+        },
+        3,
+    )
+    .unwrap();
+    close(&mut db::open(&db_path).unwrap(), TaskId(0)).unwrap();
+
+    // the parent's branch advances past its recorded checkpoint while idle
+    std::fs::write(parent_worktree.join("notes"), "parent keeps working\n").unwrap();
+    sh(&parent_worktree, &["add", "."]);
+    sh(&parent_worktree, &["commit", "-m", "parent advances"]);
+    let parent_tip = sh(&repo, &["rev-parse", "saccade/t-0"]);
+
+    // a child task births from main and runs one course
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::CreateTask {
+            name: Prose::new("help the parent task".into()).unwrap(),
+            parent_id: Some(TaskId(0)),
+        },
+        4,
+    )
+    .unwrap();
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Task(TaskId(1)),
+            body: Prose::new("write the child receipt".into()).unwrap(),
+            addressee: Some(Addressee::Agent),
+        },
+        5,
+    )
+    .unwrap();
+    let child_demand = latest_demand(&db_path);
+    let child_worktree = saccade::paths::worktree_at(&repo, 1);
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        child_demand,
+        actor.clone(),
+    )
+    .unwrap();
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &agent(),
+        Command::Comment {
+            target: Target::Comment(child_demand),
+            body: Prose::new("child receipt".into()).unwrap(),
+            addressee: None,
+        },
+        6,
+    )
+    .unwrap();
+    std::fs::write(child_worktree.join("receipt"), "done\n").unwrap();
+    sh(&child_worktree, &["add", "."]);
+    sh(&child_worktree, &["commit", "-m", "child receipt"]);
+    close(&mut db::open(&db_path).unwrap(), TaskId(1)).unwrap();
+
+    // review hygiene severs the child branch and worktree
+    sh(
+        &repo,
+        &["worktree", "remove", child_worktree.to_str().unwrap()],
+    );
+    sh(&repo, &["branch", "-D", "saccade/t-1"]);
+
+    // the child's next demand heals from the parent's branch tip, not
+    // its recorded checkpoint
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Task(TaskId(1)),
+            body: Prose::new("one more round".into()).unwrap(),
+            addressee: Some(Addressee::Agent),
+        },
+        7,
+    )
+    .unwrap();
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        latest_demand(&db_path),
+        actor,
+    )
+    .unwrap();
+
+    let world = world_of(&db_path);
+    let child_workspace = world.tasks[1].workspace.as_ref().unwrap();
+    assert_eq!(child_workspace.checkpoint.as_str(), parent_tip);
+    assert_ne!(
+        child_workspace.checkpoint.as_str(),
+        world.tasks[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .checkpoint
+            .as_str()
+    );
+    assert_eq!(
+        world.incarnations[&world.tasks[1].active_incarnation.unwrap()].state,
+        IncarnationState::PromptAccepted
+    );
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn prepare_births_the_task_branch_from_main_even_when_head_elsewhere() {
+    let (repo, db_path, demand) = scaffold("birth");
+
+    // the repo's HEAD leaves main before the first run
+    sh(&repo, &["checkout", "--detach"]);
+    std::fs::write(repo.join("readme"), "work off main\n").unwrap();
+    sh(&repo, &["add", "."]);
+    sh(&repo, &["commit", "-m", "detached work"]);
+    let main_head = sh(&repo, &["rev-parse", "main"]);
+
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+
+    // the task branch was cut from main, not from the detached HEAD
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), main_head);
+    let world = world_of(&db_path);
+    assert_eq!(
+        world.tasks[0].workspace.as_ref().unwrap().base.as_str(),
+        main_head
+    );
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn prepare_refuses_a_disk_only_leftover_without_prescribing_git() {
+    let (repo, db_path, _demand) = scaffold("leftover");
+
+    // the worktree path exists with no workspace behind it
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+    std::fs::create_dir_all(&worktree).unwrap();
+
+    let message = match prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        CommentId(saccade::RecordId(1)),
+        ActorName::new("pi".into()).unwrap(),
+    ) {
+        Err(RunnerFail::Usage(message)) => message,
+        Err(other) => panic!("expected a Usage refusal, got {other:?}"),
+        Ok(_) => panic!("the leftover worktree refused prepare"),
+    };
+    assert!(!message.contains("git"), "{message}");
+    assert!(message.contains("human"), "{message}");
+    // the refusal created nothing behind the record's back
+    assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).is_empty());
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}

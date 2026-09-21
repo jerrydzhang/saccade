@@ -15,6 +15,7 @@ use crate::types::failure::{FailureCode, FailureEvidence};
 use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
 use crate::{Command, Context, RecordId, World};
 use rusqlite::Connection;
+use tracing::warn;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunnerFail {
@@ -62,6 +63,30 @@ fn task_ctx(world: &World, task: TaskId) -> Result<&TaskContext, RunnerFail> {
 
 fn commit(hash: String) -> Result<GitCommit, RunnerFail> {
     GitCommit::new(hash).map_err(|e| RunnerFail::Usage(format!("git gave no commit: {e:?}")))
+}
+
+/// The base a healed branch cuts from: the parent task's branch tip
+/// while that branch is alive, else main.
+fn heal_base(world: &World, repo_root: &Path, task: TaskId) -> Result<String, RunnerFail> {
+    let parent_branch = task_ctx(world, task)?
+        .task
+        .parent_id
+        .and_then(|parent| world.tasks.get(parent.0))
+        .and_then(|parent| parent.workspace.as_ref())
+        .map(|workspace| workspace.branch.clone());
+    if let Some(branch) = parent_branch
+        && let Ok(tip) = git(
+            repo_root,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("refs/heads/{}", String::from(branch)),
+            ],
+        )
+    {
+        return Ok(tip);
+    }
+    git(repo_root, &["rev-parse", "main"])
 }
 
 pub struct PreparedRun {
@@ -117,26 +142,51 @@ pub fn prepare(
         Some(workspace) => {
             let checkpoint = workspace.checkpoint.as_str().to_string();
             let branch: String = workspace.branch.clone().into();
+            let refs = format!("refs/heads/{branch}");
             if worktree.exists() {
                 git(&worktree, &["reset", "--hard", &checkpoint])?;
                 git(&worktree, &["clean", "-fd"])?;
-            } else {
+            } else if git(repo_root, &["rev-parse", "--verify", &refs]).is_ok() {
                 git(
                     repo_root,
                     &["worktree", "add", &worktree.to_string_lossy(), &branch],
                 )?;
+            } else {
+                let base = heal_base(&world, repo_root, task)?;
+                warn!(
+                    task = task.0,
+                    branch = %branch,
+                    checkpoint = %checkpoint,
+                    rebuilt_from = %base,
+                    "the recorded branch is gone; its checkpoint went unreachable with it, rebuilding the worktree"
+                );
+                git(
+                    repo_root,
+                    &[
+                        "worktree",
+                        "add",
+                        "-b",
+                        &branch,
+                        &worktree.to_string_lossy(),
+                        &base,
+                    ],
+                )?;
+                db::record(
+                    conn,
+                    &system,
+                    Command::CheckpointWorkspace {
+                        task_id: task,
+                        checkpoint: commit(base)?,
+                    },
+                    now,
+                )?;
             }
         }
         None => {
-            let base = git(repo_root, &["rev-parse", "HEAD"])?;
+            let base = git(repo_root, &["rev-parse", "main"])?;
             if worktree.exists() {
-                let fix = format!(
-                    "git worktree remove --force {p} && git branch -D {b}",
-                    p = worktree.display(),
-                    b = branch.as_str()
-                );
                 return Err(RunnerFail::Usage(format!(
-                    "{} already exists; the record has no workspace for this task, so it is disk-only leftover. Remove it ({fix}) or reconcile the record",
+                    "{} already exists; the record has no workspace for this task, so it is disk-only leftover. Reconcile it through the human against the record.",
                     worktree.display()
                 )));
             }
