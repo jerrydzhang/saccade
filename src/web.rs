@@ -13,10 +13,13 @@ use crate::{Addressee, CommentId, RecordId, Target, TaskId};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
-/// Ribbon layout: percent kept clear at each edge, and the minimum
-/// percent between two mark chips so crowded marks stay readable.
+/// Ribbon layout: percent kept clear at each edge; a chip's footprint
+/// in percent — a chip landing on a covered row drops a row down, the
+/// only deviation from time-truth the bar allows.
 const PAD_PCT: f64 = 4.0;
-const MARK_GAP_PCT: f64 = 3.5;
+const CHIP_GAP_PCT: f64 = 3.0;
+const RIBBON_ROWS: usize = 3;
+const ROW_HEIGHT_PX: f64 = 13.0;
 
 pub struct Console {
     pub forest: Vec<ForestRow>,
@@ -241,8 +244,8 @@ fn strip_section(c: &Console) -> String {
     }
     for r in &c.next.runs {
         s.push_str(&format!(
-            "<a class=\"nxrow\" href=\"/t/{}\"><span class=\"nid mono\">i-{}</span><span class=\"nname\">t-{} · {}</span><span class=\"nfact mono\">born {} ago</span></a>\n",
-            r.task, r.incarnation, r.task, esc(&r.actor), ago(c.now.saturating_sub(r.born_at)),
+            "<a class=\"nxrow\" href=\"/t/{}#c-{}\"><span class=\"nid mono\">i-{}</span><span class=\"nname\">t-{} · {}</span><span class=\"nfact mono\">demand c-{} · born {} ago</span></a>\n",
+            r.task, r.demand, r.incarnation, r.task, esc(&r.actor), r.demand, ago(c.now.saturating_sub(r.born_at)),
         ));
     }
     s.push_str("<div class=\"nsec\">ASKED OF YOU</div>\n");
@@ -285,21 +288,22 @@ fn ribbon_section(c: &Console) -> String {
     }
     let start = c.now.saturating_sub(RIBBON_WINDOW_SECS);
     let span = RIBBON_WINDOW_SECS.max(1);
-    // positions sit inside a small inset so the newest mark is not the
-    // literal edge, then packed right-to-left so no two marks overlap:
-    // a mark keeps its true position unless the newer mark's chip would
-    // cover it
-    let mut lefts = vec![0.0; c.marks.len()];
-    let mut next: Option<f64> = None;
-    for (i, m) in c.marks.iter().enumerate().rev() {
+    // positions derive from event_time across the inset window. The
+    // only deviation from time-truth is vertical: a chip that would
+    // cover a newer one on its row drops a row down, so crowded marks
+    // stay individually visible without ever leaving the bar.
+    let mut last = [-f64::INFINITY; RIBBON_ROWS];
+    let mut placed: Vec<(&RibbonMark, f64, usize)> = Vec::with_capacity(c.marks.len());
+    for m in &c.marks {
         let raw =
             PAD_PCT + (m.at.saturating_sub(start)) as f64 / span as f64 * (100.0 - 2.0 * PAD_PCT);
-        let left = match next {
-            Some(n) => raw.min(n - MARK_GAP_PCT),
-            None => raw.min(100.0 - PAD_PCT),
-        };
-        lefts[i] = left;
-        next = Some(left);
+        // the first row with room; when every row is covered at this
+        // position, cycle rows so identical positions stack evenly
+        let row = (0..RIBBON_ROWS)
+            .find(|r| raw - last[*r] >= CHIP_GAP_PCT)
+            .unwrap_or(placed.len() % RIBBON_ROWS);
+        last[row] = raw;
+        placed.push((m, raw, row));
     }
     s.push_str("<div class=\"rib\">");
     // 24h gridlines and the now marker
@@ -314,16 +318,17 @@ fn ribbon_section(c: &Console) -> String {
         "<span class=\"rv now\" style=\"left:{:.1}%\"></span>\n",
         100.0 - PAD_PCT
     ));
-    for (m, left) in c.marks.iter().zip(&lefts) {
+    for (m, left, row) in placed {
         let (class, label) = match m.kind {
-            MarkKind::Note { human: true } => ("note human", "note"),
-            MarkKind::Note { human: false } => ("note agent", "note"),
+            MarkKind::Note { human: true } => ("human", "note"),
+            MarkKind::Note { human: false } => ("agent", "note"),
             MarkKind::Demand => ("demand", "demand"),
             MarkKind::Run => ("run", "run"),
         };
+        let top = row as f64 * ROW_HEIGHT_PX + 1.0;
         s.push_str(&format!(
-            "<a class=\"mrk {class}\" style=\"left:{left:.1}%\" href=\"/t/{}#c-{}\" title=\"t-{} · {label} #{} · {}\"></a>\n",
-            m.task, m.seq, m.task, m.seq, esc(&fmt_t(m.at)),
+            "<a class=\"mrk {class}\" style=\"left:{left:.1}%;top:{top:.0}px\" href=\"/t/{}#c-{}\" title=\"t-{} · {label} #{} · {}\">c-{}</a>\n",
+            m.task, m.seq, m.task, m.seq, esc(&fmt_t(m.at)), m.seq,
         ));
     }
     s.push_str("</div>\n");
@@ -544,16 +549,6 @@ fn who_input(prefill: &str) -> String {
     )
 }
 
-/// The left positions of the ribbon's mark chips, in render order.
-#[cfg(test)]
-fn mark_lefts(ribbon_html: &str) -> Vec<f64> {
-    ribbon_html
-        .split("class=\"mrk")
-        .skip(1)
-        .filter_map(|seg| seg.split("left:").nth(1)?.split('%').next()?.parse().ok())
-        .collect()
-}
-
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -663,15 +658,22 @@ header .brand {
 .k-agent { color: #6d6562; }
 .k-run { color: #a2c4a3; }
 .k-demand { color: #dac09a; }
-.rib { position: relative; height: 12px; background: #100f0e; border-radius: 2px; margin-top: 4px; }
-.rv { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1px solid #292624; }
+.rib {
+  position: relative; height: 40px; background: #100f0e;
+  border-radius: 2px; margin-top: 4px;
+}
+.rv { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #292624; }
 .rv.now { border-left: 2px solid #d4ceca; }
-.mrk { position: absolute; top: 1px; bottom: 1px; }
-.mrk.note.human { width: 3px; background: #c4a6a8; border-radius: 1px; }
-.mrk.note.agent { width: 3px; background: #6d6562; border-radius: 1px; }
-.mrk.demand { width: 3px; background: #dac09a; border-radius: 1px; }
-.mrk.run { width: 3px; background: rgba(162,196,163,.38); border-left: 2px solid #a2c4a3; border-radius: 1px; }
-.mrk:hover { background: #e8e2dd; }
+.mrk {
+  position: absolute; min-width: 30px; text-align: center;
+  font: 500 9px/1.5 "JetBrains Mono", ui-monospace, monospace;
+  color: #100f0e; padding: 0 2px; border-radius: 2px;
+}
+.mrk.human { background: #c4a6a8; }
+.mrk.agent { background: #6d6562; }
+.mrk.demand { background: #dac09a; }
+.mrk.run { background: #a2c4a3; }
+.mrk:hover { outline: 1px solid #e8e2dd; z-index: 2; }
 
 /* columns: forest surface | thread deep — tone separates, no dividers */
 .cols { display: grid; min-height: 0; }
@@ -1152,82 +1154,90 @@ mod tests {
         assert!(!page.contains("nothing claimed") || page.contains("adrift work"));
     }
 
-    #[test]
-    fn ribbon_marks_stay_inside_the_inset_and_unpacked() {
-        let world = fixture();
-        let marks = ribbon_marks(&world, NOW);
-        assert_eq!(marks.len(), 4, "demand, run, reply note, orphan note");
-        let html = ribbon_section(&console_of(&world, None));
-        let mut lefts: Vec<f64> = mark_lefts(&html);
-        assert_eq!(lefts.len(), 4);
-        lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        for left in &lefts {
-            assert!(*left >= PAD_PCT - 0.1, "off the left edge: {left}");
-            assert!(*left <= 100.0 - PAD_PCT + 0.1, "off the right edge: {left}");
-        }
-        for pair in lefts.windows(2) {
-            assert!(pair[1] - pair[0] >= MARK_GAP_PCT - 0.1, "chips overlap");
-        }
-        assert!(html.contains("href=\"/t/1#c-5\""));
-        assert!(html.contains("k-demand"));
+    /// The chip positions the ribbon rendered, in render order.
+    fn mark_chips(ribbon_html: &str) -> Vec<(f64, f64)> {
+        ribbon_html
+            .split("class=\"mrk ")
+            .skip(1)
+            .filter_map(|seg| {
+                let left: f64 = seg.split("left:").nth(1)?.split('%').next()?.parse().ok()?;
+                let top: f64 = seg.split("top:").nth(1)?.split('p').next()?.parse().ok()?;
+                Some((left, top))
+            })
+            .collect()
     }
 
     #[test]
-    fn recent_marks_stay_individually_visible() {
-        let now = 3_210 * 3600u64;
-        let world = World::replay(vec![
-            record(
-                0,
-                0,
-                human(),
-                Event::TaskCreated {
-                    name: Prose::new("ship it".into()).unwrap(),
-                    parent_id: None,
-                },
-            ),
-            record(
-                1,
-                now - 300,
-                human(),
-                Event::Commented {
-                    target: task(0),
-                    body: Prose::new("three minutes ago".into()).unwrap(),
-                    addressee: None,
-                },
-            ),
-            record(
-                2,
-                now - 240,
-                human(),
-                Event::Commented {
-                    target: task(0),
-                    body: Prose::new("two minutes ago".into()).unwrap(),
-                    addressee: None,
-                },
-            ),
-            record(
-                3,
-                now - 180,
-                human(),
-                Event::Commented {
-                    target: task(0),
-                    body: Prose::new("a minute ago".into()).unwrap(),
-                    addressee: None,
-                },
-            ),
-        ])
-        .unwrap();
+    fn sparse_marks_land_time_true() {
+        let world = fixture();
         let html = ribbon_section(&console_of(&world, None));
-        let mut lefts: Vec<f64> = mark_lefts(&html);
-        assert_eq!(lefts.len(), 3);
-        lefts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        for left in &lefts {
+        let chips = mark_chips(&html);
+        assert_eq!(chips.len(), 4, "demand, run, reply note, orphan note");
+        // window [3138h, 3210h]: each chip sits at its event_time's
+        // inset position, on the first row — no packing was needed
+        let raw = |hours: f64| 4.0 + (hours - 3_138.0) / 72.0 * 92.0;
+        let expect = [6.6, 19.3, 32.1, 83.2];
+        for (chip, want) in chips.iter().zip(expect) {
+            assert!(
+                (chip.0 - want).abs() < 0.15,
+                "not time-true: {} vs {want}",
+                chip.0
+            );
+            assert_eq!(chip.1, 1.0, "sparse marks share the first row");
+        }
+        assert!((chips[3].0 - raw(3_200.0)).abs() < 0.15);
+    }
+
+    #[test]
+    fn a_burst_packs_without_leaving_the_bar() {
+        let now = 3_210 * 3600u64;
+        let mut records = vec![record(
+            0,
+            0,
+            human(),
+            Event::TaskCreated {
+                name: Prose::new("ship it".into()).unwrap(),
+                parent_id: None,
+            },
+        )];
+        for i in 0..30u64 {
+            records.push(record(
+                1 + i as usize,
+                now - 60 + i,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("burst".into()).unwrap(),
+                    addressee: None,
+                },
+            ));
+        }
+        let world = World::replay(records).unwrap();
+        let html = ribbon_section(&console_of(&world, None));
+        let chips = mark_chips(&html);
+        assert_eq!(chips.len(), 30, "every mark renders");
+        for (left, top) in &chips {
             assert!(*left >= PAD_PCT - 0.1, "off the left edge: {left}");
             assert!(*left <= 100.0 - PAD_PCT + 0.1, "off the right edge: {left}");
+            assert!(
+                *top <= RIBBON_ROWS as f64 * ROW_HEIGHT_PX,
+                "off the rows: {top}"
+            );
         }
-        for pair in lefts.windows(2) {
-            assert!(pair[1] - pair[0] >= MARK_GAP_PCT - 0.1, "chips overlap");
-        }
+        // the newest chip sits at the now marker's inset position
+        let newest = chips
+            .iter()
+            .map(|(l, _)| *l)
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (newest - (100.0 - PAD_PCT)).abs() < 0.5,
+            "newest off now: {newest}"
+        );
+        // visibility: the burst engages every row — the bar spreads the
+        // instant's cluster RIBBON_ROWS wide, its honest limit
+        let tops: std::collections::BTreeSet<u32> =
+            chips.iter().map(|(_, t)| (*t * 10.0) as u32).collect();
+        assert!(tops.len() >= 2, "a burst must use the rows: {tops:?}");
     }
 
     #[test]

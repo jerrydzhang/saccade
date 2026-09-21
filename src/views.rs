@@ -348,6 +348,7 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
                     .map(|(id, r)| RunView {
                         incarnation: id.0.0,
                         task: r.task_id.0,
+                        demand: r.response_target.0.0,
                         actor: r.actor.as_str().to_string(),
                         born_at: r.born_at,
                         done_at: r.done_at,
@@ -449,6 +450,8 @@ pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
 pub struct RunView {
     pub incarnation: usize,
     pub task: usize,
+    /// The demand comment the run answers
+    pub demand: usize,
     pub actor: String,
     pub born_at: u64,
     pub done_at: Option<u64>,
@@ -482,6 +485,7 @@ pub fn next_panel(world: &World, now: u64) -> NextPanel {
             runs.push(RunView {
                 incarnation: id.0.0,
                 task: run.task_id.0,
+                demand: run.response_target.0.0,
                 actor: run.actor.as_str().to_string(),
                 born_at: run.born_at,
                 done_at: run.done_at,
