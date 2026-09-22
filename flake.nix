@@ -7,6 +7,10 @@
     saccade.url = "github:jerrydzhang/saccade";
     llm-agents.url = "github:numtide/llm-agents.nix";
     devenv.url = "github:cachix/devenv";
+    # the pinned release's self-input would nest one generation per
+    # release bump; it aliases the same pin, and only the release's
+    # devShell — never instantiated here — wants it
+    saccade.inputs.saccade.follows = "saccade";
   };
 
   nixConfig = {
