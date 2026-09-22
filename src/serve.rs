@@ -35,9 +35,28 @@ pub async fn run(
         .map_err(|e| format!("the serving repo: {e}"))?;
     let actor = ActorName::new(executor.to_string())
         .map_err(|e| format!("'{executor}' is not a valid actor name: {e:?}"))?;
-    let runner = crate::supervisor::RunnerConfig::serving(repo_root, actor);
-    let state = AppState::with_runner(db_path, runner)?;
-    info!("demands will fire runs; boot scan next");
+    // sessions reach this server at its loopback face, whatever it
+    // bound to for the console
+    let host = match bind {
+        "0.0.0.0" | "::" | "[::]" => "127.0.0.1",
+        other => other,
+    };
+    let server_url = format!("http://{host}:{port}");
+    let state = match crate::supervisor::RunnerConfig::serving(repo_root, actor, &server_url) {
+        Some(runner) => {
+            let state = AppState::with_runner(db_path, runner)?;
+            info!(%server_url, "demands will fire runs; boot scan next");
+            state
+        }
+        None => {
+            let state = AppState::open(db_path)?;
+            warn!(
+                "no pinned executor: SACCADE_PI_PATH was not baked at build and SACCADE_PI is unset; \
+                 demands queue but never fire"
+            );
+            state
+        }
+    };
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("cannot bind {addr}: {e}"))?;
@@ -252,7 +271,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     let command = Command::Comment {
         target: addr.target,
         body: Prose::new(addr.body.clone()).unwrap(),
-        addressee: addr.addressee,
+        kind: addr.kind,
     };
     match app.execute(&context, command, None) {
         Ok(stored) => {

@@ -1,4 +1,4 @@
-use crate::objects::comment::{Addressee, CommentId, Target};
+use crate::objects::comment::{CommentId, CommentKind, Target};
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::proposal::{ProposalAction, ProposalId};
 use crate::objects::task::TaskId;
@@ -64,15 +64,18 @@ pub enum Event {
     Commented {
         target: Target,
         body: Prose,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        addressee: Option<Addressee>,
+        kind: CommentKind,
     },
-    /// The machinery refused to run a demand: the fact lands where the
-    /// asker reads, not only the operator log. Machinery verb,
-    /// System-authored by role.
+    /// The refusal fact: a demand the machinery would not run, landed
+    /// where the asker reads.
     DemandRefused {
         demand: CommentId,
         reason: Prose,
+    },
+    /// A steer delivered to the live run that consumed it. Machinery
+    /// verb, System-authored by role.
+    SteerForwarded {
+        steer: CommentId,
     },
     // Incarnation events: machinery verbs, System-authored by role
     IncarnationBound {
@@ -164,11 +167,16 @@ pub enum Command {
     Comment {
         target: Target,
         body: Prose,
-        addressee: Option<Addressee>,
+        kind: CommentKind,
     },
     RefuseDemand {
         demand: CommentId,
         reason: Prose,
+    },
+    // Machinery verbs: the runner forwards standing steers to the run
+    // that consumed them
+    ForwardSteer {
+        steer: CommentId,
     },
     // Machinery verbs: the executor side acts through the same pipeline
     BindIncarnation {

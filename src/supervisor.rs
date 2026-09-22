@@ -4,36 +4,111 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use tracing::{info, warn};
 
 use crate::api::AppState;
-use crate::objects::comment::{AgentAttemptState, CommentId, CommentState, ResponseState};
+use crate::db;
+use crate::objects::comment::{
+    AgentAttemptState, CommentId, CommentState, ResponseState, SteerDelivery,
+};
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::{TaskId, TaskState};
+use crate::rpc::ClientCommand;
 use crate::runner::{self, PreparedRun, RunnerFail};
 use crate::store::World;
 use crate::types::actor::ActorName;
+use crate::{Command, Context};
 
 /// What the session body is: run to completion, clean exit or not. The
 /// reply's presence is the outcome, not the exit status.
 pub type SessionDriver =
     Arc<dyn Fn(&PreparedRun, &str, &LiveRuns) -> Result<bool, RunnerFail> + Send + Sync>;
 
-/// The pids of sessions this server spawned, by the incarnation they
-/// serve. Operational state, never record: outcomes live in the log,
-/// processes live here.
+/// One live session's connection: the protocol handle for commands,
+/// the pid for the last resort. The stdin behind it is the session's
+/// only command door — dropping it closes the session (EOF).
+#[derive(Clone)]
+pub struct RunHandle {
+    pid: u32,
+    stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
+    abort_sent: Arc<AtomicBool>,
+}
+
+impl RunHandle {
+    /// A session the runner cannot command: only its pid is known.
+    pub fn process_only(pid: u32) -> Self {
+        RunHandle {
+            pid,
+            stdin: Arc::new(Mutex::new(None)),
+            abort_sent: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn new(pid: u32, stdin: std::process::ChildStdin) -> Self {
+        RunHandle {
+            pid,
+            stdin: Arc::new(Mutex::new(Some(stdin))),
+            abort_sent: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn has_protocol(&self) -> bool {
+        self.stdin
+            .lock()
+            .expect("the run registry is not poisoned")
+            .is_some()
+    }
+
+    /// Write one command frame. False when the session's stdin is
+    /// already gone — the session ended.
+    pub(crate) fn send(&self, command: &ClientCommand) -> bool {
+        use std::io::Write;
+        let mut guard = self.stdin.lock().expect("the run registry is not poisoned");
+        match guard.as_mut() {
+            Some(stdin) => stdin
+                .write_all(command.frame().as_bytes())
+                .and_then(|_| stdin.flush())
+                .is_ok(),
+            None => false,
+        }
+    }
+
+    /// Close the session's command door: EOF ends the process.
+    pub(crate) fn close(&self) {
+        self.stdin
+            .lock()
+            .expect("the run registry is not poisoned")
+            .take();
+    }
+
+    /// The protocol act of cancel: one abort, once. False when there is
+    /// no protocol to abort through or the abort already went out —
+    /// the caller escalates to the kill.
+    fn abort(&self) -> bool {
+        if !self.has_protocol() || self.abort_sent.swap(true, Ordering::Relaxed) {
+            return false;
+        }
+        self.send(&ClientCommand::Abort)
+    }
+}
+
+/// The sessions this server spawned, by the incarnation they serve —
+/// connection state, never record: outcomes live in the log, processes
+/// live here.
 #[derive(Clone, Default)]
-pub struct LiveRuns(Arc<Mutex<HashMap<IncarnationId, u32>>>);
+pub struct LiveRuns(Arc<Mutex<HashMap<IncarnationId, RunHandle>>>);
 
 impl LiveRuns {
-    pub fn register(&self, id: IncarnationId, pid: u32) {
+    pub fn register(&self, id: IncarnationId, handle: RunHandle) {
         self.0
             .lock()
             .expect("the run registry is not poisoned")
-            .insert(id, pid);
+            .insert(id, handle);
     }
 
     pub fn unregister(&self, id: IncarnationId) {
@@ -59,18 +134,36 @@ impl LiveRuns {
             .collect()
     }
 
-    /// TERM the session's process. The run thread's wait observes the
-    /// exit and closes; std has no kill(2) without libc, so kill(1)
-    /// carries the signal. None means no live session owns the
-    /// incarnation — the run is an orphan the fold already terminalized.
-    pub fn kill(&self, id: IncarnationId) -> Option<bool> {
-        let pid = self
-            .0
+    fn handle(&self, id: IncarnationId) -> Option<RunHandle> {
+        self.0
             .lock()
             .expect("the run registry is not poisoned")
             .get(&id)
-            .copied();
-        let pid = pid?;
+            .cloned()
+    }
+
+    /// Deliver a steer to the live session. False when no session owns
+    /// the incarnation or its door already closed.
+    pub fn steer(&self, id: IncarnationId, message: &str) -> bool {
+        self.handle(id).is_some_and(|h| {
+            h.send(&ClientCommand::Steer {
+                message: message.into(),
+            })
+        })
+    }
+
+    /// The protocol half of a cancel: abort through the connection.
+    /// None means no live session owns the incarnation — the run is an
+    /// orphan the fold already terminalized.
+    pub fn abort(&self, id: IncarnationId) -> Option<bool> {
+        self.handle(id).map(|h| h.abort())
+    }
+
+    /// TERM the session's process. The last resort: the protocol took
+    /// its abort, or there is no protocol to take one. std has no
+    /// kill(2) without libc, so kill(1) carries the signal.
+    pub fn kill(&self, id: IncarnationId) -> Option<bool> {
+        let pid = self.handle(id)?.pid;
         Some(
             std::process::Command::new("kill")
                 .arg(pid.to_string())
@@ -97,12 +190,25 @@ pub struct RunnerConfig {
 }
 
 impl RunnerConfig {
-    pub fn serving(repo_root: PathBuf, actor: ActorName) -> Self {
-        RunnerConfig {
+    /// A server that runs what it is asked: demands fire RPC sessions
+    /// against the pinned executor. None when the pin resolves to
+    /// nothing — this server writes but never runs.
+    pub fn serving(repo_root: PathBuf, actor: ActorName, server_url: &str) -> Option<Self> {
+        let pi = runner::resolve_pi().ok()?;
+        let sac = std::env::current_exe().unwrap_or_else(|_| "sac".into());
+        let executor = runner::Executor {
+            pi,
+            server: server_url.to_string(),
+            extension: repo_root.join("executor").join("ask.ts"),
+            sac,
+        };
+        Some(RunnerConfig {
             repo_root,
             actor,
-            driver: Arc::new(runner::execute_session),
-        }
+            driver: Arc::new(move |run, prompt, runs| {
+                runner::execute_session(run, prompt, runs, &executor)
+            }),
+        })
     }
 }
 
@@ -125,7 +231,7 @@ pub fn runnable_demands(world: &World) -> Vec<CommentId> {
                 c.comment.root == task
                     && matches!(
                         &c.state,
-                        CommentState::AddressedToAgent {
+                        CommentState::Demand {
                             response: ResponseState::Awaiting,
                             // only live authorization fires: a spent
                             // attempt on an unanswered demand is dead —
@@ -189,16 +295,25 @@ pub fn sweep(app: &AppState) {
             .get(&id)
             .is_some_and(|run| run.is_terminal())
         {
-            match app.runs().kill(id) {
+            // the record already ended this run: the protocol abort is
+            // the first act, the kill the last resort — a session with
+            // no protocol, or one that already took its abort, dies now
+            match app.runs().abort(id) {
                 Some(true) => info!(
                     incarnation = id.0.0,
-                    "the record already ended this run; killed"
+                    "the record already ended this run; aborted through the protocol"
                 ),
-                Some(false) => warn!(
-                    incarnation = id.0.0,
-                    "the record ended this run but the kill failed; the fold is terminal, the process is not"
-                ),
-                None => {}
+                _ => match app.runs().kill(id) {
+                    Some(true) => info!(
+                        incarnation = id.0.0,
+                        "the record already ended this run; killed"
+                    ),
+                    Some(false) => warn!(
+                        incarnation = id.0.0,
+                        "the record ended this run but the kill failed; the fold is terminal, the process is not"
+                    ),
+                    None => {}
+                },
             }
         }
     }
@@ -220,6 +335,10 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
             Err(_) => return,
         };
 
+        // standing steers reach the session once it lives: the watcher
+        // polls read-only until the run's thread ends it
+        let watch = SteerWatch::start(&app, prepared.task, prepared.incarnation);
+
         let sac = env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "sac".into());
@@ -234,6 +353,7 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
                 false
             }
         };
+        watch.stop();
         if !clean {
             warn!(
                 incarnation = prepared.incarnation.0.0,
@@ -270,4 +390,68 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
             sweep(&app);
         }
     });
+}
+
+/// The steer watcher: standing intent on the run's task reaches the
+/// live session. Wait-shaped — a read-only poll, abandonment costs
+/// nothing — because no write trigger need fire between a run's bind
+/// and its first comment.
+struct SteerWatch {
+    stop: Arc<AtomicBool>,
+}
+
+impl SteerWatch {
+    fn start(app: &AppState, task: TaskId, incarnation: IncarnationId) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let app = app.clone();
+        thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                deliver_standing_steers(&app, task, incarnation);
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
+        SteerWatch { stop }
+    }
+
+    fn stop(self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// One pass: every standing steer on the task, delivered to the
+/// session and recorded as its consumption. The send precedes the
+/// record — a crash between them may duplicate a delivery, never
+/// lose the intent.
+fn deliver_standing_steers(app: &AppState, task: TaskId, incarnation: IncarnationId) {
+    let Ok(snapshot) = app.snapshot() else {
+        return;
+    };
+    for (id, c) in &snapshot.world.comments {
+        let body = match (&c.state, c.comment.root) {
+            (
+                CommentState::Steer {
+                    delivery: SteerDelivery::Standing,
+                },
+                root,
+            ) if root == task => c.comment.body.as_str().to_string(),
+            _ => continue,
+        };
+        // no live session behind the handle: the steer stands for the
+        // next run, unconsumed
+        if !app.runs().steer(incarnation, &body) {
+            continue;
+        }
+        let recorded = app.with_conn(|conn| {
+            db::record(
+                conn,
+                &Context::system(),
+                Command::ForwardSteer { steer: *id },
+                db::now_epoch(),
+            )
+        });
+        if let Err(e) = recorded {
+            warn!(steer = id.0.0, "the forward fact did not land: {e}");
+        }
+    }
 }

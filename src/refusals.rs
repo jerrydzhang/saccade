@@ -203,7 +203,7 @@ mod test {
     use crate::objects::comment::CommentId;
     use crate::store::{Context, Record, Tier};
     use crate::types::actor::ActorName;
-    use crate::{Prose, Target};
+    use crate::{CommentKind, Prose, Target};
 
     fn human() -> Context {
         Context {
@@ -256,7 +256,7 @@ mod test {
         let command = Command::Comment {
             target: Target::Comment(CommentId(RecordId(0))),
             body: Prose::new("replying to a birth".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         };
         let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
         assert!(
@@ -269,7 +269,7 @@ mod test {
         let command = Command::Comment {
             target: Target::Comment(CommentId(RecordId(99))),
             body: Prose::new("replying to nothing".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         };
         let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
         assert!(taught.contains("#99 names no comment"), "{taught}");
@@ -295,7 +295,7 @@ mod test {
         let command = Command::Comment {
             target: Target::Comment(CommentId(RecordId(1))),
             body: Prose::new("replying to a proposal".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         };
         let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
         assert!(
@@ -330,7 +330,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(9)),
                 body: Prose::new("a body".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             Command::CreateProposal {
                 name: Prose::new("drop floop".into()).unwrap(),

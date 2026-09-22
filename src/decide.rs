@@ -28,6 +28,7 @@ fn required_tier(event: &Event) -> Authority {
         | Event::ProposalRejected { .. }
         | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
         Event::DemandRefused { .. }
+        | Event::SteerForwarded { .. }
         | Event::IncarnationBound { .. }
         | Event::IncarnationPromptAccepted { .. }
         | Event::IncarnationPromptRejected { .. }
@@ -86,16 +87,9 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::RejectProposal { id, note } => vec![Event::ProposalRejected { id, note }],
         Command::AcceptProposal { id } => vec![Event::ProposalAccepted { id }],
         // Comment commands
-        Command::Comment {
-            target,
-            body,
-            addressee,
-        } => vec![Event::Commented {
-            target,
-            body,
-            addressee,
-        }],
+        Command::Comment { target, body, kind } => vec![Event::Commented { target, body, kind }],
         Command::RefuseDemand { demand, reason } => vec![Event::DemandRefused { demand, reason }],
+        Command::ForwardSteer { steer } => vec![Event::SteerForwarded { steer }],
         // Machinery verbs: System authorship comes from the role, never input
         Command::BindIncarnation {
             task_id,
@@ -148,7 +142,7 @@ pub fn decide(command: Command) -> Vec<Event> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::CommentId;
+    use crate::objects::comment::{CommentId, CommentKind};
     use crate::objects::incarnation::IncarnationId;
     use crate::types::actor::ActorName;
     use crate::types::failure::{FailureCode, FailureEvidence};
@@ -212,11 +206,14 @@ mod test {
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             Event::DemandRefused {
                 demand: CommentId(RecordId(0)),
                 reason: Prose::new("filler".into()).unwrap(),
+            },
+            Event::SteerForwarded {
+                steer: CommentId(RecordId(0)),
             },
             Event::IncarnationBound {
                 task_id: TaskId(0),

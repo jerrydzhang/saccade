@@ -27,7 +27,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 22] = [
+const KINDS: [&str; 23] = [
     "task_created",
     "task_claimed",
     "task_done",
@@ -41,6 +41,7 @@ const KINDS: [&str; 22] = [
     "proposal_withdrawn",
     "commented",
     "demand_refused",
+    "steer_forwarded",
     "incarnation_bound",
     "incarnation_prompt_accepted",
     "incarnation_prompt_rejected",
@@ -69,10 +70,34 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
     if !KINDS.contains(&kind) {
         return Err(ParseFail::UnknownKind(kind.to_string()));
     }
-    let inner: serde_json::Value = serde_json::from_str(payload).map_err(|e| malformed(kind, e))?;
+    let payload = if kind == "commented" {
+        migrate_commented(payload).map_err(|e| malformed(kind, e))?
+    } else {
+        payload.to_string()
+    };
+    let inner: serde_json::Value =
+        serde_json::from_str(&payload).map_err(|e| malformed(kind, e))?;
     let mut tagged = serde_json::Map::new();
     tagged.insert(kind.to_string(), inner);
     serde_json::from_value(serde_json::Value::Object(tagged)).map_err(|e| malformed(kind, e))
+}
+
+/// Old logs carry the addressee field; the tagged union carries kind.
+/// The map is the ratified migration: to:agent becomes a demand,
+/// everything else a note.
+fn migrate_commented(payload: &str) -> Result<String, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(payload)?;
+    if let Some(object) = value.as_object_mut()
+        && !object.contains_key("kind")
+    {
+        let kind = match object.get("addressee").and_then(|a| a.as_str()) {
+            Some("agent") => "demand",
+            _ => "note",
+        };
+        object.remove("addressee");
+        object.insert("kind".into(), kind.into());
+    }
+    Ok(value.to_string())
 }
 
 fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
@@ -85,7 +110,7 @@ fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::{CommentId, Target};
+    use crate::objects::comment::{CommentId, CommentKind, Target};
     use crate::objects::incarnation::IncarnationId;
     use crate::objects::task::TaskId;
     use crate::types::prose::Prose;
@@ -135,12 +160,25 @@ mod test {
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("leaning sections, owner: jerry".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             Event::Commented {
                 target: Target::Comment(CommentId(RecordId(6))),
                 body: Prose::new("no - pure tree, here is why".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Demand,
+            },
+            Event::Commented {
+                target: Target::Comment(CommentId(RecordId(6))),
+                body: Prose::new("change of plan, do it this way".into()).unwrap(),
+                kind: CommentKind::Steer,
+            },
+            Event::Commented {
+                target: Target::Comment(CommentId(RecordId(6))),
+                body: Prose::new("which way do you want it?".into()).unwrap(),
+                kind: CommentKind::Ask,
+            },
+            Event::SteerForwarded {
+                steer: CommentId(RecordId(6)),
             },
             Event::DemandRefused {
                 demand: CommentId(RecordId(6)),
@@ -193,5 +231,49 @@ mod test {
             assemble("task_claimed", r#"{"id":"three"}"#),
             Err(ParseFail::Malformed { .. })
         ));
+    }
+
+    /// The ratified migration: old addressee payloads load unchanged —
+    /// to:agent becomes a demand, everything else a note; a payload
+    /// that already carries kind passes through untouched.
+    #[test]
+    fn old_addressee_payloads_load_as_their_kinds() {
+        let agent = assemble(
+            "commented",
+            r#"{"target":{"task":0},"body":"build it","addressee":"agent"}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                &agent,
+                Event::Commented {
+                    kind: CommentKind::Demand,
+                    ..
+                }
+            ),
+            "{agent:?}"
+        );
+        for payload in [
+            r#"{"target":{"task":0},"body":"just talking","addressee":"human"}"#.to_string(),
+            r#"{"target":{"task":0},"body":"a note","addressee":null}"#.to_string(),
+            r#"{"target":{"task":0},"body":"a bare note"}"#.to_string(),
+        ] {
+            let note = assemble("commented", &payload).unwrap();
+            assert!(
+                matches!(
+                    &note,
+                    Event::Commented {
+                        kind: CommentKind::Note,
+                        ..
+                    }
+                ),
+                "{note:?}"
+            );
+        }
+        // the new shape round-trips through the same door
+        let (kind, payload) = disassemble(&agent);
+        assert_eq!(kind, "commented");
+        assert!(!payload.contains("addressee"), "{payload}");
+        assert_eq!(&assemble(&kind, &payload).unwrap(), &agent);
     }
 }

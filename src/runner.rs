@@ -10,6 +10,8 @@ use crate::objects::incarnation::{IncarnationId, IncarnationState};
 use crate::objects::task::{TaskContext, TaskId, TaskState};
 use crate::objects::workspace::WorktreeState;
 use crate::paths;
+use crate::rpc::{ClientCommand, ServerEvent, frames};
+use crate::supervisor::RunHandle;
 use crate::types::actor::ActorName;
 use crate::types::failure::{FailureCode, FailureEvidence};
 use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
@@ -142,10 +144,10 @@ pub fn prepare(
         .get(&demand)
         .ok_or_else(|| RunnerFail::Usage(format!("no comment c-{} in this tracker", demand.0.0)))?;
     match &demand_ctx.state {
-        CommentState::AddressedToAgent { .. } => {}
+        CommentState::Demand { .. } => {}
         _ => {
             return Err(RunnerFail::Usage(format!(
-                "c-{} is not an agent-addressed demand",
+                "c-{} is not a demand",
                 demand.0.0
             )));
         }
@@ -377,34 +379,129 @@ The .agents/skills/saccade skill in this repo documents the tracker.",
     )
 }
 
-/// Spawn the executor on the prompt and block until it exits. A clean
-/// exit is not a success claim; the reply's presence is. The pid is
-/// registered for the run's life so cancel and shutdown can reach it.
+/// The executor the runner speaks: the pinned pi, the server its
+/// sessions write to, the ask extension the runner loads, and this
+/// binary's path for the session's own CLI calls. The flake bakes the
+/// pin; SACCADE_PI overrides for development only.
+pub struct Executor {
+    pub pi: std::path::PathBuf,
+    pub server: String,
+    pub extension: std::path::PathBuf,
+    pub sac: std::path::PathBuf,
+}
+
+/// The pinned executor's path, or why there is none. The ambient
+/// binary is never used.
+pub fn resolve_pi() -> Result<std::path::PathBuf, String> {
+    if let Some(path) = std::env::var_os("SACCADE_PI") {
+        return Ok(std::path::PathBuf::from(path));
+    }
+    option_env!("SACCADE_PI_PATH")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| {
+            "no pinned executor: SACCADE_PI_PATH was not baked at build; \
+             set SACCADE_PI for development, or build through the flake"
+                .into()
+        })
+}
+
+/// Spawn the executor on the prompt and block until it settles: a
+/// JSONL RPC client over the session's stdio. The prompt goes through
+/// the protocol, liveness is the event stream (agent_start, turn
+/// events, agent_settled), and the reply stays the run's own sac
+/// comment — the exit status is never a success claim. The connection
+/// registers for the run's life so steer and cancel reach the session
+/// as protocol acts; the pid behind it stays the kill of last resort.
 pub fn execute_session(
     run: &PreparedRun,
     prompt: &str,
     runs: &crate::supervisor::LiveRuns,
+    executor: &Executor,
 ) -> Result<bool, RunnerFail> {
-    let mut child = std::process::Command::new("pi")
-        // the run's actor is machine-established: the parent's env does
-        // not pass through, only the actor the bind named
-        .env_remove("SACCADE_ACTOR")
-        .env("SACCADE_ACTOR", run.actor.as_str())
+    if !executor.extension.exists() {
+        return Err(RunnerFail::Usage(format!(
+            "the ask extension is missing at {}; the runner loads it at spawn",
+            executor.extension.display()
+        )));
+    }
+    let mut child = std::process::Command::new(&executor.pi)
+        // not pass through, only what the bind named and the doors the
+        // session needs — this server, this binary, this task
         .env_remove("SACCADE_TIER")
-        .env_remove("SACCADE_SERVER")
-        .arg("-p")
+        .env_remove("SACCADE_PI")
+        .env("SACCADE_ACTOR", run.actor.as_str())
+        .env("SACCADE_SERVER", &executor.server)
+        .env("SACCADE_SAC", &executor.sac)
+        .env("SACCADE_TASK", run.task.0.to_string())
+        .arg("--mode")
+        .arg("rpc")
         .arg("--session")
         .arg(&run.session)
         .arg("-a")
-        .arg("--")
-        .arg(prompt)
+        .arg("--extension")
+        .arg(&executor.extension)
         .current_dir(&run.worktree)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| RunnerFail::Git(format!("spawning the executor failed: {e}")))?;
-    runs.register(run.incarnation, child.id());
-    let clean = child.wait().map(|s| s.success());
+    let stdin = child.stdin.take().expect("stdin was piped");
+    let handle = RunHandle::new(child.id(), stdin);
+    runs.register(run.incarnation, handle.clone());
+    handle.send(&ClientCommand::Prompt {
+        message: prompt.to_string(),
+    });
+
+    // the read loop: events until the session settles or its stream
+    // ends. A refused prompt is the one event the runner answers.
+    let mut stdout = child.stdout.take().expect("stdout was piped");
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let mut prompt_error: Option<String> = None;
+    use std::io::Read;
+    loop {
+        let n = stdout
+            .read(&mut chunk)
+            .map_err(|e| RunnerFail::Git(format!("reading the executor stream failed: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..n]);
+        for line in frames(&mut buffer) {
+            match ServerEvent::parse(&line) {
+                ServerEvent::Response {
+                    command,
+                    success: false,
+                    error,
+                } if command == "prompt" => {
+                    prompt_error = Some(error.unwrap_or_else(|| "prompt refused".into()));
+                }
+                ServerEvent::AgentSettled => {
+                    // settled work: the session ends at EOF, which the
+                    // closed stdin delivers
+                    handle.close();
+                }
+                _ => {}
+            }
+        }
+        if prompt_error.is_some() {
+            break;
+        }
+    }
+    if let Some(reason) = prompt_error {
+        runs.unregister(run.incarnation);
+        handle.close();
+        let _ = child.wait();
+        return Err(RunnerFail::Usage(format!(
+            "the executor refused the prompt: {reason}"
+        )));
+    }
+    let clean = child
+        .wait()
+        .map(|s| s.success())
+        .map_err(|e| RunnerFail::Git(format!("waiting on the executor failed: {e}")))?;
     runs.unregister(run.incarnation);
-    clean.map_err(|e| RunnerFail::Git(format!("waiting on the executor failed: {e}")))
+    Ok(clean)
 }
 
 pub fn close(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> {
@@ -416,7 +513,7 @@ pub fn close(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> 
     let run = &world.incarnations[&incarnation];
     let demand = run.response_target;
     let reply = match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { response, .. } => match response {
+        CommentState::Demand { response, .. } => match response {
             ResponseState::Responded { reply } => Some(*reply),
             ResponseState::Awaiting => None,
         },
@@ -505,18 +602,43 @@ pub fn wait(
 }
 
 /// The demand's release, when a fold fact fires one: the run settled,
-/// cancelled, or raised a prompt awaiting an answer; the demand refused;
+/// cancelled, or asked something of the waiter; the demand refused;
 /// or the demand was answered with no run behind the answer. A reply
-/// alone never releases — a run still working holds the wait.
+/// alone never releases — a run still working holds the wait. An ask
+/// holds its own wait: it releases on its answer, carrying it.
 fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, RunnerFail> {
     let ctx = world.comments.get(&comment).ok_or_else(|| {
         RunnerFail::Usage(format!("no comment c-{} in this tracker", comment.0.0))
     })?;
-    if matches!(ctx.state, CommentState::Unaddressed) {
-        return Err(RunnerFail::Usage(format!(
-            "c-{} addresses nobody; it will never respond",
-            comment.0.0
-        )));
+    match &ctx.state {
+        CommentState::Note => {
+            return Err(RunnerFail::Usage(format!(
+                "c-{} is a note; it addresses nobody and will never respond",
+                comment.0.0
+            )));
+        }
+        CommentState::Steer { delivery } => {
+            return Err(RunnerFail::Usage(format!(
+                "c-{} is a steer ({delivery:?}); a steer holds no wait — wait on the task's demand",
+                comment.0.0
+            )));
+        }
+        CommentState::Ask { response } => {
+            return match response {
+                ResponseState::Awaiting => Ok(None),
+                ResponseState::Responded { reply } => {
+                    let answer = &world.comments[reply];
+                    Ok(Some(format!(
+                        "c-{}: answered by c-{} ({})\n{}",
+                        comment.0.0,
+                        reply.0.0,
+                        answer.actor.as_str(),
+                        answer.comment.body.as_str(),
+                    )))
+                }
+            };
+        }
+        CommentState::Demand { .. } => {}
     }
     if let Some(refusal) = &ctx.refusal {
         return Ok(Some(format!(
@@ -560,17 +682,46 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
                     prompt_text(run.task_id, run.response_target, &run.actor, &sac)
                 )));
             }
-            // accepted work has not ended, and an interrupted run never
+            // accepted work has not ended; an interrupted run never
             // accepted it: neither asks anything of the waiter yet
-            IncarnationState::PromptAccepted | IncarnationState::Interrupted => {
+            IncarnationState::PromptAccepted => {
+                // the run suspends on a question it authored: every
+                // waiter on the task releases to answer it
+                if let Some((id, ask)) = world.comments.iter().find(|(_, c)| {
+                    c.comment.root == run.task_id
+                        && c.actor == run.actor
+                        && matches!(
+                            c.state,
+                            CommentState::Ask {
+                                response: ResponseState::Awaiting,
+                            }
+                        )
+                }) {
+                    let sac = std::env::current_exe()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| "sac".into());
+                    return Ok(Some(format!(
+                        "c-{}: i-{} asks (c-{}):\n{}\nanswer: {sac} comment '#{}' '<your answer>', then re-arm sac wait c-{}",
+                        comment.0.0,
+                        id.0.0,
+                        id.0.0,
+                        ask.comment.body.as_str(),
+                        id.0.0,
+                        comment.0.0,
+                    )));
+                }
+                return Ok(None);
+            }
+            IncarnationState::Interrupted => {
                 return Ok(None);
             }
         }
     }
     let response = match &ctx.state {
-        CommentState::AddressedToHuman { response }
-        | CommentState::AddressedToAgent { response, .. } => response,
-        CommentState::Unaddressed => unreachable!("the unaddressed door returned above"),
+        CommentState::Demand { response, .. } => response,
+        CommentState::Note | CommentState::Steer { .. } | CommentState::Ask { .. } => {
+            unreachable!("the variant doors returned above")
+        }
     };
     match response {
         ResponseState::Responded { reply } => {

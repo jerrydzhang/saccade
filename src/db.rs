@@ -401,7 +401,7 @@ pub fn now_epoch() -> u64 {
 mod test {
     use super::*;
     use crate::events::{Command, Event};
-    use crate::objects::comment::Addressee;
+    use crate::objects::comment::CommentKind;
     use crate::objects::comment::{AgentAttemptState, CommentState, ResponseState};
     use crate::objects::incarnation::{IncarnationId, IncarnationState};
     use crate::objects::task::{TaskId, TaskState};
@@ -497,7 +497,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("receipt verified against receipts test".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             30,
         )
@@ -508,7 +508,7 @@ mod test {
             Command::Comment {
                 target: Target::Comment(CommentId(RecordId(8))),
                 body: Prose::new("agreed, closing".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             31,
         )
@@ -546,7 +546,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("who folded the receipt?".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             31,
         )
@@ -580,7 +580,7 @@ mod test {
             Command::Comment {
                 target: Target::Comment(CommentId(RecordId(13))),
                 body: Prose::new("the fold did, at seq 9".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             31,
         )
@@ -673,7 +673,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("one more round".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             33,
         )
@@ -718,6 +718,94 @@ mod test {
         )
         .unwrap();
 
+        // the variant cycle rides the same round-trip: a demand fires a
+        // run, a steer reaches it and is consumed, an ask is answered,
+        // the run settles
+        record(
+            &mut conn,
+            &human(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("serve the re-cut".into()).unwrap(),
+                kind: CommentKind::Demand,
+            },
+            34,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::BindIncarnation {
+                task_id: TaskId(0),
+                response_target: CommentId(RecordId(30)),
+                trigger: RecordId(30),
+                actor: ActorName::new("pi/t-0-2".into()).unwrap(),
+                session: SessionPointer::new("/tmp/pi-session-2.jsonl".into()).unwrap(),
+            },
+            34,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::AcceptPrompt {
+                id: IncarnationId(RecordId(31)),
+            },
+            34,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &human(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("also cover the offline path".into()).unwrap(),
+                kind: CommentKind::Steer,
+            },
+            34,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::ForwardSteer {
+                steer: CommentId(RecordId(33)),
+            },
+            34,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("which offline path, break-glass or the copy?".into()).unwrap(),
+                kind: CommentKind::Ask,
+            },
+            34,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &human(),
+            Command::Comment {
+                target: Target::Comment(CommentId(RecordId(35))),
+                body: Prose::new("break-glass; the copy is dead".into()).unwrap(),
+                kind: CommentKind::Note,
+            },
+            34,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::SettleIncarnation {
+                id: IncarnationId(RecordId(31)),
+            },
+            34,
+        )
+        .unwrap();
+
         // the returned world is the one a full reload produces
         let (_, returned) = record(
             &mut conn,
@@ -725,7 +813,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("post-fold receipt".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             35,
         )
@@ -736,7 +824,7 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 31);
+        assert_eq!(loadout.rows.len(), 39);
         assert_eq!(loadout.rows[2].kind, "task_delivered");
         assert_eq!(loadout.rows[3].kind, "task_accepted");
         assert_eq!(loadout.rows[5].kind, "proposal_created");
@@ -755,12 +843,33 @@ mod test {
         assert_eq!(loadout.rows[23].kind, "task_worktree_created");
         assert_eq!(loadout.rows[24].kind, "task_workspace_checkpointed");
         assert_eq!(loadout.rows[22].actor.as_str(), "saccade");
+        // the variant cycle round-trips: the steer's consumption and the
+        // ask's answer ride the same columns
+        assert_eq!(loadout.rows[34].kind, "steer_forwarded");
+        assert_eq!(loadout.rows[34].actor.as_str(), "saccade");
+        assert!(matches!(
+            world.comments[&CommentId(RecordId(33))].state,
+            crate::objects::comment::CommentState::Steer {
+                delivery: crate::objects::comment::SteerDelivery::Forwarded,
+            }
+        ));
+        assert!(matches!(
+            world.comments[&CommentId(RecordId(35))].state,
+            crate::objects::comment::CommentState::Ask {
+                response: ResponseState::Responded {
+                    reply: CommentId(RecordId(36))
+                },
+            }
+        ));
+        assert_eq!(world.tasks[0].active_incarnation, None);
         assert!(matches!(
             world.tasks[0].workspace.as_ref().map(|w| &w.checkpoint),
             Some(checkpoint) if *checkpoint == GitCommit::new("def456".into()).unwrap()
         ));
         assert_eq!(world.tasks.len(), 3);
-        assert!(matches!(world.tasks[0].task.state, TaskState::Done(_)));
+        // the variant cycle's demand reopened t-0 and its run settled
+        // unanswered: open, holding a spent ask
+        assert!(matches!(world.tasks[0].task.state, TaskState::Open));
         assert!(matches!(world.tasks[1].task.state, TaskState::Dropped));
         assert!(matches!(world.tasks[2].task.state, TaskState::Done(_)));
         assert_eq!(
@@ -774,7 +883,7 @@ mod test {
         let demand = &world.comments[&CommentId(RecordId(13))];
         assert_eq!(
             demand.state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Responded {
                     reply: CommentId(RecordId(16))
                 },
@@ -791,7 +900,7 @@ mod test {
         let refused = &world.comments[&CommentId(RecordId(25))];
         assert_eq!(
             refused.state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::Spent,
             }

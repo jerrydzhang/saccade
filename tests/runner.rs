@@ -12,10 +12,10 @@ use saccade::objects::comment::AgentAttemptState;
 use saccade::objects::comment::CommentState;
 use saccade::objects::incarnation::IncarnationState;
 use saccade::runner::{PreparedRun, RunnerFail, close, pointer_prompt, prepare, wait};
-use saccade::supervisor::{self, LiveRuns, RunnerConfig, SessionDriver};
+use saccade::supervisor::{self, LiveRuns, RunHandle, RunnerConfig, SessionDriver};
 use saccade::types::actor::ActorName;
 use saccade::types::pointers::SessionPointer;
-use saccade::{Addressee, Command, CommentId, Context, Prose, Target, TaskId, Tier, World};
+use saccade::{Command, CommentId, CommentKind, Context, Prose, Target, TaskId, Tier, World};
 
 fn sh(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
@@ -81,7 +81,7 @@ fn scaffold(tag: &str) -> (PathBuf, PathBuf, CommentId) {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("write the receipt".into()).unwrap(),
-            addressee: Some(Addressee::Agent),
+            kind: CommentKind::Demand,
         },
         2,
     )
@@ -137,7 +137,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
         Command::Comment {
             target: Target::Comment(demand),
             body: Prose::new("receipt written, tests green".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         },
         3,
     )
@@ -165,7 +165,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     );
     // the produced pointer names exactly the demand's reply
     let reply = match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { response, .. } => match response {
+        CommentState::Demand { response, .. } => match response {
             saccade::objects::comment::ResponseState::Responded { reply } => *reply,
             _ => panic!("the reply landed"),
         },
@@ -176,7 +176,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
         vec![reply.0]
     );
     match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { attempt, .. } => {
+        CommentState::Demand { attempt, .. } => {
             assert!(matches!(
                 attempt,
                 saccade::objects::comment::AgentAttemptState::Spent
@@ -203,7 +203,7 @@ fn prepare_refuses_what_the_fold_would_refuse() {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("just talking".into()).unwrap(),
-            addressee: Some(Addressee::Human),
+            kind: CommentKind::Note,
         },
         3,
     )
@@ -313,7 +313,7 @@ fn wait_releases_on_settlement_naming_the_receipt() {
         Command::Comment {
             target: Target::Comment(demand),
             body: Prose::new("the deposit stands".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         },
         5,
     )
@@ -385,7 +385,7 @@ fn wait_releases_on_an_answer_with_no_run_behind_it() {
         Command::Comment {
             target: Target::Comment(demand),
             body: Prose::new("never mind, handled it myself".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         },
         3,
     )
@@ -443,7 +443,7 @@ fn fake_session_for(db: PathBuf) -> SessionDriver {
             .find(|(_, c)| {
                 matches!(
                     &c.state,
-                    CommentState::AddressedToAgent {
+                    CommentState::Demand {
                         attempt: AgentAttemptState::InFlight { .. },
                         ..
                     }
@@ -460,7 +460,7 @@ fn fake_session_for(db: PathBuf) -> SessionDriver {
             Command::Comment {
                 target: Target::Comment(demand),
                 body: Prose::new("the fake session answered".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             9,
         )
@@ -487,7 +487,7 @@ fn a_write_that_lands_a_demand_fires_a_run_that_answers_it() {
     // the session's write carries the derived attribution
     let world = world_of(&db_path);
     match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { response, .. } => match response {
+        CommentState::Demand { response, .. } => match response {
             saccade::objects::comment::ResponseState::Responded { reply } => {
                 assert_eq!(world.comments[reply].actor.as_str(), "pi/t-0-1");
             }
@@ -497,7 +497,7 @@ fn a_write_that_lands_a_demand_fires_a_run_that_answers_it() {
     }
     assert_eq!(world.tasks[0].active_incarnation, None);
     match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { attempt, .. } => {
+        CommentState::Demand { attempt, .. } => {
             assert!(matches!(attempt, AgentAttemptState::Spent));
         }
         other => panic!("demand spent: {other:?}"),
@@ -515,7 +515,7 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("and then this one".into()).unwrap(),
-            addressee: Some(Addressee::Agent),
+            kind: CommentKind::Demand,
         },
         3,
     )
@@ -536,7 +536,7 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
     let world = world_of(&db_path);
     for demand in [first, second] {
         match &world.comments[&demand].state {
-            CommentState::AddressedToAgent { attempt, .. } => {
+            CommentState::Demand { attempt, .. } => {
                 assert!(
                     matches!(attempt, AgentAttemptState::Spent),
                     "c-{} spent",
@@ -586,7 +586,7 @@ fn a_demand_on_a_delivered_task_fires_its_round() {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("one more finding on the delivered work".into()).unwrap(),
-            addressee: Some(Addressee::Agent),
+            kind: CommentKind::Demand,
         },
         4,
     )
@@ -643,7 +643,7 @@ fn a_demand_on_a_dropped_task_fires_nothing() {
     assert_eq!(world.tasks[0].active_incarnation, None);
     assert!(supervisor::runnable_demands(&world).is_empty());
     match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { attempt, .. } => {
+        CommentState::Demand { attempt, .. } => {
             assert!(matches!(attempt, AgentAttemptState::Authorized { .. }));
         }
         other => panic!("demand still awaiting: {other:?}"),
@@ -664,7 +664,7 @@ fn a_demand_on_a_dropped_task_fires_nothing() {
     assert!(refusal_text.contains("dropped"), "{refusal_text}");
     let world = world_of(&db_path);
     match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { attempt, .. } => {
+        CommentState::Demand { attempt, .. } => {
             assert!(matches!(attempt, AgentAttemptState::Spent));
         }
         other => panic!("demand spent: {other:?}"),
@@ -698,7 +698,7 @@ fn sleeping_session() -> SessionDriver {
             .current_dir(&run.worktree)
             .spawn()
             .expect("the sleeper spawns");
-        runs.register(run.incarnation, child.id());
+        runs.register(run.incarnation, RunHandle::process_only(child.id()));
         let clean = child.wait().map(|s| s.success()).unwrap_or(false);
         runs.unregister(run.incarnation);
         Ok(clean)
@@ -755,7 +755,7 @@ fn a_cancel_kills_the_run_and_frees_the_task() {
         IncarnationState::Cancelled
     );
     match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { attempt, .. } => {
+        CommentState::Demand { attempt, .. } => {
             assert!(matches!(attempt, AgentAttemptState::Spent));
         }
         other => panic!("demand spent: {other:?}"),
@@ -779,7 +779,7 @@ fn boot_recovery_settles_an_orphaned_run() {
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
     match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { attempt, .. } => {
+        CommentState::Demand { attempt, .. } => {
             assert!(matches!(attempt, AgentAttemptState::Spent));
         }
         other => panic!("demand spent: {other:?}"),
@@ -871,7 +871,7 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
         Command::Comment {
             target: Target::Comment(demand),
             body: Prose::new("parent receipt".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         },
         3,
     )
@@ -901,7 +901,7 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
         Command::Comment {
             target: Target::Task(TaskId(1)),
             body: Prose::new("write the child receipt".into()).unwrap(),
-            addressee: Some(Addressee::Agent),
+            kind: CommentKind::Demand,
         },
         5,
     )
@@ -921,7 +921,7 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
         Command::Comment {
             target: Target::Comment(child_demand),
             body: Prose::new("child receipt".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         },
         6,
     )
@@ -947,7 +947,7 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
         Command::Comment {
             target: Target::Task(TaskId(1)),
             body: Prose::new("one more round".into()).unwrap(),
-            addressee: Some(Addressee::Agent),
+            kind: CommentKind::Demand,
         },
         7,
     )
@@ -1203,7 +1203,7 @@ fn run_one_course(repo: &Path, db_path: &Path, demand: CommentId) -> String {
         Command::Comment {
             target: Target::Comment(demand),
             body: Prose::new("receipt written, tests green".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         },
         3,
     )
@@ -1224,7 +1224,7 @@ fn follow_up_demand(db_path: &Path) -> CommentId {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("one more round".into()).unwrap(),
-            addressee: Some(Addressee::Agent),
+            kind: CommentKind::Demand,
         },
         4,
     )
@@ -1299,7 +1299,7 @@ fn a_merged_branch_refuses_until_the_verb_records_the_new_head() {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("re-ask: the head is recorded now".into()).unwrap(),
-            addressee: Some(Addressee::Agent),
+            kind: CommentKind::Demand,
         },
         5,
     )
@@ -1416,7 +1416,7 @@ fn prepare_refuses_a_disk_only_leftover_without_prescribing_git() {
     let world = world_of(&db_path);
     let demand = CommentId(saccade::RecordId(1));
     match &world.comments[&demand].state {
-        CommentState::AddressedToAgent { attempt, .. } => {
+        CommentState::Demand { attempt, .. } => {
             assert!(matches!(attempt, AgentAttemptState::Spent));
         }
         other => panic!("the refused ask spent its authorization: {other:?}"),

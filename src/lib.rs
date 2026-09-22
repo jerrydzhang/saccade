@@ -8,6 +8,7 @@ pub mod events;
 pub mod objects;
 pub mod paths;
 pub mod refusals;
+pub mod rpc;
 pub mod runner;
 pub mod serve;
 pub mod store;
@@ -21,7 +22,7 @@ use serde::{Deserialize, Serialize};
 
 pub use decide::decide;
 pub use events::{Command, Event};
-pub use objects::comment::{Addressee, Comment, CommentId, Target};
+pub use objects::comment::{Comment, CommentId, CommentKind, Target};
 pub use objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
 pub use objects::task::{Task, TaskId, TaskState};
 pub use store::{Context, Record, RecordId, Tier, World};
@@ -66,6 +67,10 @@ pub enum Reject {
     WorktreeAlreadyPresent,
     #[error("the tip rewinds the recorded checkpoint")]
     CheckpointRewind,
+    #[error("the steer is not standing intent")]
+    SteerNotStanding,
+    #[error("the task runs no incarnation")]
+    NoActiveIncarnation,
     // Misc
     #[error("invalid actor name")]
     InvalidActor,

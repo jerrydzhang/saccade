@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::decide::{decide, enforce_tier, expand};
 use crate::events::{Command, Event};
 use crate::objects::comment::{
-    Addressee, AgentAttemptState, Comment, CommentContext, CommentId, CommentState, Refusal,
-    ResponseState,
+    AgentAttemptState, Comment, CommentContext, CommentId, CommentKind, CommentState, Refusal,
+    ResponseState, SteerDelivery,
 };
 use crate::objects::incarnation::{IncarnationContext, IncarnationId, IncarnationState};
 use crate::objects::proposal::{Proposal, ProposalContext, ProposalId, ProposalState};
@@ -50,6 +50,11 @@ pub enum Reason {
     InvalidStateTransition,
     /// A task already holds an open judgment proposal
     ProposalAlreadyOpen,
+    /// A forward names a steer that is not standing intent: wrong kind
+    /// or already consumed by a run.
+    SteerNotStanding,
+    /// A forward names a task whose run slot is empty: nothing consumes it.
+    NoActiveIncarnation,
 }
 
 /// Command-path translation of fold failures into refusals; total over Reason
@@ -72,6 +77,8 @@ impl From<Reason> for Reject {
             Reason::WorktreeAlreadyPresent => Reject::WorktreeAlreadyPresent,
             Reason::CheckpointRewind => Reject::CheckpointRewind,
             Reason::ProposalAlreadyOpen => Reject::ProposalAlreadyOpen,
+            Reason::SteerNotStanding => Reject::SteerNotStanding,
+            Reason::NoActiveIncarnation => Reject::NoActiveIncarnation,
         }
     }
 }
@@ -527,7 +534,7 @@ impl World {
             Event::Commented {
                 ref target,
                 ref body,
-                addressee,
+                kind,
             } => {
                 let mut up = *target;
                 let root_task_id = loop {
@@ -544,14 +551,17 @@ impl World {
                     }
                 };
 
-                let state = match addressee {
-                    None => CommentState::Unaddressed,
-                    Some(Addressee::Human) => CommentState::AddressedToHuman {
-                        response: ResponseState::Awaiting,
-                    },
-                    Some(Addressee::Agent) => CommentState::AddressedToAgent {
+                let state = match kind {
+                    CommentKind::Note => CommentState::Note,
+                    CommentKind::Demand => CommentState::Demand {
                         response: ResponseState::Awaiting,
                         attempt: AgentAttemptState::Authorized { trigger: record.id },
+                    },
+                    CommentKind::Steer => CommentState::Steer {
+                        delivery: SteerDelivery::Standing,
+                    },
+                    CommentKind::Ask => CommentState::Ask {
+                        response: ResponseState::Awaiting,
                     },
                 };
 
@@ -611,6 +621,58 @@ impl World {
                 });
                 let root = demand_ctx.comment.root;
                 let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
+            }
+            // The delivery fact: the live run consumed this steer; the
+            // send preceded the record, so a crash between them may
+            // duplicate delivery, never lose it
+            ref event @ Event::SteerForwarded { steer } => {
+                let root = {
+                    let ctx = self.comments.get(&steer).ok_or(Reason::InvalidCommentId)?;
+                    ctx.comment.root
+                };
+                if self
+                    .tasks
+                    .get(root.0)
+                    .ok_or(Reason::InvalidTaskId)?
+                    .active_incarnation
+                    .is_none()
+                {
+                    return Err(Reason::NoActiveIncarnation);
+                }
+                let steer_ctx = self.comments.get_mut(&steer).expect("validated above");
+                steer_ctx.state = steer_ctx
+                    .state
+                    .transition(event, &record)
+                    .ok_or(Reason::SteerNotStanding)?;
+                let task_ctx = self.tasks.get_mut(root.0).expect("validated above");
+                task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
+            }
+            // The delivery fact: the live run consumed this steer; the
+            // send preceded the record, so a crash between them may
+            // duplicate delivery, never lose it
+            ref event @ Event::SteerForwarded { steer } => {
+                let root = {
+                    let ctx = self.comments.get(&steer).ok_or(Reason::InvalidCommentId)?;
+                    ctx.comment.root
+                };
+                if self
+                    .tasks
+                    .get(root.0)
+                    .ok_or(Reason::InvalidTaskId)?
+                    .active_incarnation
+                    .is_none()
+                {
+                    return Err(Reason::NoActiveIncarnation);
+                }
+                let steer_ctx = self.comments.get_mut(&steer).expect("validated above");
+                steer_ctx.state = steer_ctx
+                    .state
+                    .transition(event, &record)
+                    .ok_or(Reason::SteerNotStanding)?;
+                let task_ctx = self.tasks.get_mut(root.0).expect("validated above");
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
@@ -675,7 +737,7 @@ mod test {
     use super::*;
     use crate::Event;
     use crate::objects::comment::{
-        Addressee, AgentAttemptState, CommentId, CommentState, ResponseState, Target,
+        AgentAttemptState, CommentId, CommentKind, CommentState, ResponseState, Target,
     };
     use crate::objects::incarnation::{IncarnationId, IncarnationState};
     use crate::objects::proposal::{ProposalAction, ProposalId, ProposalState};
@@ -1057,7 +1119,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("one more finding".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             4,
         )
@@ -1395,7 +1457,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("run the suite".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             20,
         )
@@ -1436,7 +1498,7 @@ mod test {
         assert_eq!(log.world().tasks[0].active_incarnation, Some(run));
         assert_eq!(
             log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::InFlight { incarnation: run }
             }
@@ -1472,7 +1534,7 @@ mod test {
             Command::Comment {
                 target: Target::Comment(demand),
                 body: Prose::new("55 green, nothing flaky".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             25,
         )
@@ -1480,7 +1542,7 @@ mod test {
         let reply = CommentId(RecordId(19));
         assert_eq!(
             log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Responded { reply },
                 attempt: AgentAttemptState::InFlight { incarnation: run }
             }
@@ -1505,7 +1567,7 @@ mod test {
         assert_eq!(log.world().incarnations[&run].produced, vec![RecordId(19)]);
         assert_eq!(
             log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Responded { reply },
                 attempt: AgentAttemptState::Spent
             }
@@ -1522,7 +1584,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("run the flaky one".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             20,
         )
@@ -1558,7 +1620,7 @@ mod test {
         assert_eq!(log.world().tasks[0].active_incarnation, None);
         assert_eq!(
             log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::Spent
             }
@@ -1578,7 +1640,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("run the flaky one".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             20,
         )
@@ -1607,7 +1669,7 @@ mod test {
         assert_eq!(log.world().tasks[0].active_incarnation, None);
         assert_eq!(
             log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::Spent
             }
@@ -1633,7 +1695,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("what is the fold count?".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             20,
         )
@@ -1641,7 +1703,7 @@ mod test {
         let demand = CommentId(RecordId(before));
         assert_eq!(
             log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::Authorized {
                     trigger: RecordId(before)
@@ -1656,7 +1718,7 @@ mod test {
             Command::Comment {
                 target: Target::Comment(demand),
                 body: Prose::new("never mind, the ask is retracted".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             21,
         )
@@ -1664,7 +1726,7 @@ mod test {
         let reply = CommentId(RecordId(before + 1));
         assert_eq!(
             log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Responded { reply },
                 attempt: AgentAttemptState::Spent,
             }
@@ -1676,76 +1738,71 @@ mod test {
             Command::Comment {
                 target: Target::Comment(demand),
                 body: Prose::new("fourteen, for the record".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             22,
         )
         .unwrap();
         assert_eq!(
             log.world().comments[&demand].state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Responded { reply },
                 attempt: AgentAttemptState::Spent,
             }
         );
 
-        // agent work still awaits its agent: a human-addressed demand
-        // survives an agent reply and that reply's deeper descendant
+        // an ask holds for its answer: the first reply answers it, a
+        // system reply never does, and later replies are ordinary notes
         log.execute(
-            human(),
+            agent(),
             Command::Comment {
                 target: Target::Task(TaskId(0)),
-                body: Prose::new("sanity check the fold count".into()).unwrap(),
-                addressee: Some(Addressee::Human),
+                body: Prose::new("which fold count did you want?".into()).unwrap(),
+                kind: CommentKind::Ask,
             },
             23,
         )
         .unwrap();
-        let human_demand = CommentId(RecordId(before + 3));
+        let ask = CommentId(RecordId(before + 3));
+        assert_eq!(
+            log.world().comments[&ask].state,
+            CommentState::Ask {
+                response: ResponseState::Awaiting,
+            }
+        );
         let mid = CommentId(RecordId(before + 4));
         log.execute(
             agent(),
             Command::Comment {
-                target: Target::Comment(human_demand),
-                body: Prose::new("still gathering".into()).unwrap(),
-                addressee: None,
-            },
-            24,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Comment(mid),
-                body: Prose::new("gathering more".into()).unwrap(),
-                addressee: None,
+                target: Target::Comment(ask),
+                body: Prose::new("drafting an answer".into()).unwrap(),
+                kind: CommentKind::Note,
             },
             25,
         )
         .unwrap();
         assert_eq!(
-            log.world().comments[&human_demand].state,
-            CommentState::AddressedToHuman {
-                response: ResponseState::Awaiting,
+            log.world().comments[&ask].state,
+            CommentState::Ask {
+                response: ResponseState::Responded { reply: mid },
             }
         );
 
-        // and the human's own direct reply ends it
+        // later answers queue as ordinary notes: the ask holds its answer
         log.execute(
             human(),
             Command::Comment {
-                target: Target::Comment(human_demand),
-                body: Prose::new("checked it myself".into()).unwrap(),
-                addressee: None,
+                target: Target::Comment(ask),
+                body: Prose::new("checked it myself too".into()).unwrap(),
+                kind: CommentKind::Note,
             },
             26,
         )
         .unwrap();
-        let answer = CommentId(RecordId(before + 6));
         assert_eq!(
-            log.world().comments[&human_demand].state,
-            CommentState::AddressedToHuman {
-                response: ResponseState::Responded { reply: answer },
+            log.world().comments[&ask].state,
+            CommentState::Ask {
+                response: ResponseState::Responded { reply: mid },
             }
         );
     }
@@ -1792,7 +1849,7 @@ mod test {
                 Command::Comment {
                     target: Target::Task(TaskId(id)),
                     body: Prose::new(format!("for the record, on the {state} task")).unwrap(),
-                    addressee: None,
+                    kind: CommentKind::Note,
                 },
                 9,
             )
@@ -1806,7 +1863,7 @@ mod test {
             Command::Comment {
                 target: Target::Comment(CommentId(RecordId(99))),
                 body: Prose::new("addresses nothing".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             10,
         );
@@ -2006,7 +2063,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(4)),
                 body: Prose::new("run the sweep once more".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             20,
         )
@@ -2035,7 +2092,7 @@ mod test {
         let ctx = &log.world().comments[&demand];
         assert_eq!(
             ctx.state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::Spent,
             }
@@ -2060,7 +2117,7 @@ mod test {
             Command::Comment {
                 target: Target::Comment(demand),
                 body: Prose::new("never mind, reconciled by hand".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             23,
         )
@@ -2068,7 +2125,7 @@ mod test {
         let ctx = &log.world().comments[&demand];
         assert!(matches!(
             &ctx.state,
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Responded { .. },
                 attempt: AgentAttemptState::Spent,
             }
@@ -2081,13 +2138,23 @@ mod test {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        // t-0 is done; a human-addressed comment leaves it done
+        // t-0 is done; a note and an ask both leave it done
         log.execute(
             agent(),
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("context only, no action asked".into()).unwrap(),
-                addressee: Some(Addressee::Human),
+                kind: CommentKind::Note,
+            },
+            15,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("which edge case worried you?".into()).unwrap(),
+                kind: CommentKind::Ask,
             },
             15,
         )
@@ -2097,13 +2164,13 @@ mod test {
             TaskState::Done(Prose::new("foo completed successfully".into()).unwrap())
         );
 
-        // an agent-addressed demand on done reopens it, receipt history intact
+        // a demand on done reopens it, receipt history intact
         log.execute(
             agent(),
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("one more round: check the edge case".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             16,
         )
@@ -2140,7 +2207,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(1)),
                 body: Prose::new("never mind, one more look".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             19,
         )

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Event;
-use crate::objects::comment::Addressee;
+use crate::objects::comment::CommentKind;
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::workspace::WorkspaceContext;
 use crate::types::actor::ActorName;
@@ -49,7 +49,7 @@ impl TaskState {
             (
                 TaskState::Done(_),
                 Event::Commented {
-                    addressee: Some(Addressee::Agent),
+                    kind: CommentKind::Demand,
                     ..
                 },
             ) => Some(TaskState::Open),
@@ -92,7 +92,7 @@ pub struct TaskContext {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::Target;
+    use crate::objects::comment::{CommentKind, Target};
     use crate::types::prose::Prose;
 
     /// This test doesn't really test anything its more just a contract that at the time this test
@@ -132,17 +132,22 @@ mod test {
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
-                addressee: Some(Addressee::Agent),
+                kind: CommentKind::Demand,
             },
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
-                addressee: Some(Addressee::Human),
+                kind: CommentKind::Note,
             },
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Steer,
+            },
+            Event::Commented {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("filler".into()).unwrap(),
+                kind: CommentKind::Ask,
             },
         ];
 
@@ -162,7 +167,7 @@ mod test {
                     | (
                         TaskState::Done(_),
                         Event::Commented {
-                            addressee: Some(Addressee::Agent),
+                            kind: CommentKind::Demand,
                             ..
                         }
                     )

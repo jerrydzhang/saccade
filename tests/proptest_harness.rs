@@ -12,24 +12,66 @@ use saccade::store::Record;
 use saccade::types::actor::ActorName;
 use saccade::wire;
 use saccade::{
-    Command, Context, ProposalAction, ProposalId, Prose, RecordId, Target, TaskId, Tier, World,
+    Command, CommentKind, Context, ProposalAction, ProposalId, Prose, RecordId, Target, TaskId,
+    Tier, World,
 };
 
 #[derive(Clone, Debug)]
 enum Action {
-    Create { parent: u8, human: bool },
-    Claim { task: u8, human: bool },
-    Done { task: u8, human: bool },
-    AcceptTask { task: u8, human: bool },
-    Drop { task: u8, human: bool },
-    Release { task: u8, human: bool },
-    Comment { task: u8, reply: u8, human: bool },
-    ProposeDrop { task: u8, human: bool },
-    ProposeRelease { task: u8, human: bool },
-    Accept { proposal: u8, human: bool },
-    Reject { proposal: u8, human: bool },
-    Withdraw { proposal: u8, human: bool },
-    Cancel { incarnation: u8, human: bool },
+    Create {
+        parent: u8,
+        human: bool,
+    },
+    Claim {
+        task: u8,
+        human: bool,
+    },
+    Done {
+        task: u8,
+        human: bool,
+    },
+    AcceptTask {
+        task: u8,
+        human: bool,
+    },
+    Drop {
+        task: u8,
+        human: bool,
+    },
+    Release {
+        task: u8,
+        human: bool,
+    },
+    Comment {
+        task: u8,
+        reply: u8,
+        variant: u8,
+        human: bool,
+    },
+    ProposeDrop {
+        task: u8,
+        human: bool,
+    },
+    ProposeRelease {
+        task: u8,
+        human: bool,
+    },
+    Accept {
+        proposal: u8,
+        human: bool,
+    },
+    Reject {
+        proposal: u8,
+        human: bool,
+    },
+    Withdraw {
+        proposal: u8,
+        human: bool,
+    },
+    Cancel {
+        incarnation: u8,
+        human: bool,
+    },
 }
 
 impl Action {
@@ -61,11 +103,11 @@ impl Action {
             | Action::Release { task, .. }
             | Action::ProposeDrop { task, .. }
             | Action::ProposeRelease { task, .. }
-            | Action::Comment { task, .. }
                 if role == "task" =>
             {
                 *task
             }
+            Action::Comment { task, .. } if role == "task" => *task,
             Action::Accept { proposal, .. }
             | Action::Reject { proposal, .. }
             | Action::Withdraw { proposal, .. }
@@ -171,14 +213,19 @@ fn command_of(action: &Action, world: &World) -> Command {
             id: task,
             note: Prose::new("generated note".into()).unwrap(),
         },
-        Action::Comment { reply, .. } => Command::Comment {
+        Action::Comment { reply, variant, .. } => Command::Comment {
             target: if reply % 2 == 0 {
                 Target::Task(task)
             } else {
                 Target::Comment(comment_at(world, *reply))
             },
             body: Prose::new("generated comment".into()).unwrap(),
-            addressee: None,
+            kind: match variant % 4 {
+                0 => CommentKind::Note,
+                1 => CommentKind::Demand,
+                2 => CommentKind::Steer,
+                _ => CommentKind::Ask,
+            },
         },
         Action::ProposeDrop { .. } => Command::CreateProposal {
             name: Prose::new("generated proposal".into()).unwrap(),
@@ -237,8 +284,8 @@ fn action_strategy() -> BoxedStrategy<Action> {
         2 => id(|task, human| Action::AcceptTask { task, human }),
         2 => id(|task, human| Action::Drop { task, human }),
         2 => id(|task, human| Action::Release { task, human }),
-        3 => (any::<u8>(), any::<u8>(), human_coin())
-            .prop_map(|(task, reply, human)| { Action::Comment { task, reply, human } }),
+        3 => (any::<u8>(), any::<u8>(), any::<u8>(), human_coin())
+            .prop_map(|(task, reply, variant, human)| { Action::Comment { task, reply, variant, human } }),
         3 => id(|task, human| Action::ProposeDrop { task, human }),
         2 => id(|task, human| Action::ProposeRelease { task, human }),
         3 => id(|proposal, human| Action::Accept { proposal, human }),
@@ -340,6 +387,16 @@ fn generator_reaches_deep_states() {
                             *milestones.entry("human reject").or_default() += 1;
                         }
                         Action::Withdraw { .. } => *milestones.entry("withdraw").or_default() += 1,
+                        Action::Comment { variant, .. } => {
+                            // the variant grammar must actually land
+                            let name = match variant % 4 {
+                                0 => "note comment",
+                                1 => "demand comment",
+                                2 => "steer comment",
+                                _ => "ask comment",
+                            };
+                            *milestones.entry(name).or_default() += 1;
+                        }
                         _ => {}
                     }
                     if last.kind == "commented" {
@@ -378,6 +435,8 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
                         saccade::Reject::InvalidActor => "InvalidActor",
+                        saccade::Reject::SteerNotStanding => "SteerNotStanding",
+                        saccade::Reject::NoActiveIncarnation => "NoActiveIncarnation",
                     };
                     *reject_kinds.entry(kind).or_default() += 1;
                 }
@@ -409,6 +468,9 @@ fn generator_reaches_deep_states() {
         ("delivered task", 0.03),
         ("dropped task", 0.30),
         ("depth 2 thread", 0.04),
+        ("demand comment", 0.10),
+        ("steer comment", 0.05),
+        ("ask comment", 0.05),
     ] {
         let hit = milestones.get(name).copied().unwrap_or(0);
         assert!(

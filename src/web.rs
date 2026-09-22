@@ -9,7 +9,7 @@ use crate::views::{
     CommentLine, ForestRow, MarkKind, NextPanel, ProposalView, RIBBON_WINDOW_SECS, RibbonMark,
     ShowView, ThreadItem, ThreadView,
 };
-use crate::{Addressee, CommentId, RecordId, Target, TaskId};
+use crate::{CommentId, CommentKind, RecordId, Target, TaskId};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
@@ -69,7 +69,7 @@ pub struct FormState {
 
 pub struct Address {
     pub body: String,
-    pub addressee: Option<Addressee>,
+    pub kind: CommentKind,
     pub target: Target,
 }
 
@@ -87,7 +87,7 @@ enum Tok {
 pub(crate) fn compile(body: &str, fallback: Target) -> Address {
     let chars: Vec<char> = body.chars().collect();
     let mut out = String::with_capacity(body.len());
-    let mut addressee = None;
+    let mut kind = CommentKind::Note;
     let mut target = fallback;
     let mut target_taken = false;
     let mut i = 0;
@@ -100,7 +100,7 @@ pub(crate) fn compile(body: &str, fallback: Target) -> Address {
         };
         match token {
             Some((Tok::Agent, end)) => {
-                addressee = Some(Addressee::Agent);
+                kind = CommentKind::Demand;
                 i = skip_space(&chars, end, &out);
             }
             Some((Tok::Target(t), end)) if !target_taken => {
@@ -121,7 +121,7 @@ pub(crate) fn compile(body: &str, fallback: Target) -> Address {
     }
     Address {
         body: out.trim().to_string(),
-        addressee,
+        kind,
         target,
     }
 }
@@ -311,7 +311,7 @@ fn strip_section(c: &Console) -> String {
 
 fn ribbon_section(c: &Console) -> String {
     let mut s = String::from(
-        "<div class=\"nsec ribhead\">MOVEMENT · 72H · <span class=\"k-human\">your notes</span> · <span class=\"k-agent\">agent notes</span> · <span class=\"k-run\">runs</span> · <span class=\"k-demand\">demands</span></div>\n",
+        "<div class=\"nsec ribhead\">MOVEMENT · 72H · <span class=\"k-human\">your notes</span> · <span class=\"k-agent\">agent notes</span> · <span class=\"k-run\">runs</span> · <span class=\"k-demand\">demands</span> · <span class=\"k-steer\">steers</span> · <span class=\"k-ask\">asks</span></div>\n",
     );
     if c.marks.is_empty() {
         s.push_str("<div class=\"rib\"></div>\n");
@@ -354,6 +354,8 @@ fn ribbon_section(c: &Console) -> String {
             MarkKind::Note { human: true } => ("human", "note"),
             MarkKind::Note { human: false } => ("agent", "note"),
             MarkKind::Demand => ("demand", "demand"),
+            MarkKind::Steer => ("steer", "steer"),
+            MarkKind::Ask => ("ask", "ask"),
             MarkKind::Run => ("run", "run"),
         };
         let top = row as f64 * ROW_HEIGHT_PX + 1.0;
@@ -553,7 +555,12 @@ fn item_html(item: &ThreadItem) -> String {
         },
         ThreadItem::Group { root, replies } => {
             let mut s = String::from("<div class=\"ntg\">\n");
-            s.push_str(&node_html(root, 0, None, None));
+            let chip = match root.kind {
+                "steer" => Some(("STEER", "#a2c3c4")),
+                "ask" => Some(("ASK", "#dac09a")),
+                _ => None,
+            };
+            s.push_str(&node_html(root, 0, chip, None));
             for r in replies {
                 s.push_str(&node_html(r, r.depth.saturating_sub(2), None, None));
             }
@@ -578,7 +585,6 @@ fn node_html(
     let state = line
         .state
         .as_deref()
-        .filter(|_| kind.is_none())
         .map(|s| format!("<span class=\"nseq\">{}</span>", esc(s)))
         .unwrap_or_default();
     let extra = tag
@@ -733,6 +739,8 @@ header .brand {
 .k-agent { color: #6d6562; }
 .k-run { color: #a2c4a3; }
 .k-demand { color: #dac09a; }
+.k-steer { color: #a2c3c4; }
+.k-ask { color: #c9b8a0; }
 .rib {
   position: relative; height: 40px; background: #100f0e;
   border-radius: 2px; margin-top: 4px;
@@ -743,6 +751,8 @@ header .brand {
 .mrk.human { background: #c4a6a8; }
 .mrk.agent { background: #6d6562; }
 .mrk.demand { background: #dac09a; }
+.mrk.steer { background: #a2c3c4; }
+.mrk.ask { background: #c9b8a0; }
 .mrk.run { background: #a2c4a3; }
 .mrk:hover { width: 3px; outline: 1px solid #e8e2dd; z-index: 2; }
 
@@ -923,7 +933,7 @@ mod tests {
     fn bare_body_passes_through() {
         let a = compile("look at t-1 and c-2", task(7));
         assert_eq!(a.body, "look at t-1 and c-2");
-        assert_eq!(a.addressee, None);
+        assert_eq!(a.kind, CommentKind::Note);
         assert_eq!(a.target, task(7));
     }
 
@@ -931,7 +941,7 @@ mod tests {
     fn agent_makes_the_demand() {
         let a = compile("@agent build the thing", task(7));
         assert_eq!(a.body, "build the thing");
-        assert_eq!(a.addressee, Some(Addressee::Agent));
+        assert_eq!(a.kind, CommentKind::Demand);
         assert_eq!(a.target, task(7));
     }
 
@@ -939,14 +949,14 @@ mod tests {
     fn trailing_agent_leaves_the_words() {
         let a = compile("do it @agent", task(7));
         assert_eq!(a.body, "do it");
-        assert_eq!(a.addressee, Some(Addressee::Agent));
+        assert_eq!(a.kind, CommentKind::Demand);
     }
 
     #[test]
     fn comment_token_parents() {
         let a = compile("saw it @c-19", task(7));
         assert_eq!(a.body, "saw it");
-        assert_eq!(a.addressee, None);
+        assert_eq!(a.kind, CommentKind::Note);
         assert_eq!(a.target, Target::Comment(CommentId(RecordId(19))));
     }
 
@@ -961,7 +971,7 @@ mod tests {
     fn demand_and_rehome_combine() {
         let a = compile("@agent @t-3 fix it there", task(7));
         assert_eq!(a.body, "fix it there");
-        assert_eq!(a.addressee, Some(Addressee::Agent));
+        assert_eq!(a.kind, CommentKind::Demand);
         assert_eq!(a.target, task(3));
     }
 
@@ -976,14 +986,14 @@ mod tests {
     fn at_human_is_not_console_grammar() {
         let a = compile("ask @human to rule", task(7));
         assert_eq!(a.body, "ask @human to rule");
-        assert_eq!(a.addressee, None);
+        assert_eq!(a.kind, CommentKind::Note);
     }
 
     #[test]
     fn tokens_must_stand_alone() {
         let a = compile("mail me@agent now", task(7));
         assert_eq!(a.body, "mail me@agent now");
-        assert_eq!(a.addressee, None);
+        assert_eq!(a.kind, CommentKind::Note);
         let a = compile("see x@t-1", task(7));
         assert_eq!(a.body, "see x@t-1");
         assert_eq!(a.target, task(7));
@@ -994,7 +1004,7 @@ mod tests {
         for body in ["@agentx", "@c-1x", "@t-", "@c- 5", "@agent-3", "@c-x"] {
             let a = compile(body, task(7));
             assert_eq!(a.body, body, "{body}");
-            assert_eq!(a.addressee, None, "{body}");
+            assert_eq!(a.kind, CommentKind::Note, "{body}");
             assert_eq!(a.target, task(7), "{body}");
         }
     }
@@ -1058,7 +1068,7 @@ mod tests {
                 Event::Commented {
                     target: task(1),
                     body: Prose::new("demand body".into()).unwrap(),
-                    addressee: Some(Addressee::Agent),
+                    kind: CommentKind::Demand,
                 },
             ),
             record(
@@ -1094,7 +1104,7 @@ mod tests {
                 Event::Commented {
                     target: Target::Comment(CommentId(RecordId(5))),
                     body: Prose::new("reply body".into()).unwrap(),
-                    addressee: None,
+                    kind: CommentKind::Note,
                 },
             ),
             record(
@@ -1115,7 +1125,7 @@ mod tests {
                 Event::Commented {
                     target: task(1),
                     body: Prose::new("lonely note".into()).unwrap(),
-                    addressee: None,
+                    kind: CommentKind::Note,
                 },
             ),
             record(
@@ -1354,7 +1364,7 @@ mod tests {
                 Event::Commented {
                     target: task(0),
                     body: Prose::new("run it again".into()).unwrap(),
-                    addressee: Some(Addressee::Agent),
+                    kind: CommentKind::Demand,
                 },
             ),
             record(
@@ -1402,7 +1412,7 @@ mod tests {
                 Event::Commented {
                     target: task(0),
                     body: Prose::new("need a ruling on the checkpoint rule".into()).unwrap(),
-                    addressee: Some(Addressee::Human),
+                    kind: CommentKind::Ask,
                 },
             ),
         ])
@@ -1431,7 +1441,7 @@ mod tests {
                 Event::Commented {
                     target: task(0),
                     body: Prose::new("need a ruling".into()).unwrap(),
-                    addressee: Some(Addressee::Human),
+                    kind: CommentKind::Ask,
                 },
             ),
             record(
@@ -1441,7 +1451,7 @@ mod tests {
                 Event::Commented {
                     target: Target::Comment(CommentId(RecordId(1))),
                     body: Prose::new("ruled".into()).unwrap(),
-                    addressee: None,
+                    kind: CommentKind::Note,
                 },
             ),
         ])
@@ -1541,7 +1551,7 @@ mod tests {
                 Event::Commented {
                     target: task(0),
                     body: Prose::new("burst".into()).unwrap(),
-                    addressee: None,
+                    kind: CommentKind::Note,
                 },
             ));
         }

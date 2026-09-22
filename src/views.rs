@@ -134,6 +134,8 @@ pub struct CommentLine {
     pub depth: usize,
     pub actor: String,
     pub tier: String,
+    /// The variant the comment carries: note, demand, steer, or ask
+    pub kind: &'static str,
     pub body: String,
     pub state: Option<String>,
     pub born_at: u64,
@@ -178,6 +180,16 @@ pub struct ThreadView {
     pub items: Vec<ThreadItem>,
 }
 
+/// The variant a comment state carries — the kind never moves.
+pub fn kind_of(state: &CommentState) -> &'static str {
+    match state {
+        CommentState::Note => "note",
+        CommentState::Demand { .. } => "demand",
+        CommentState::Steer { .. } => "steer",
+        CommentState::Ask { .. } => "ask",
+    }
+}
+
 fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> CommentLine {
     let cctx = comments
         .get(&cid)
@@ -197,8 +209,9 @@ fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
         depth,
         actor: cctx.actor.as_str().to_string(),
         tier: format!("{:?}", cctx.tier).to_lowercase(),
+        kind: kind_of(&cctx.state),
         body: cctx.comment.body.as_str().to_string(),
-        state: demand_tag(&cctx.state, cctx.refusal.as_ref()),
+        state: state_tag(&cctx.state, cctx.refusal.as_ref()),
         born_at: cctx.born_at,
         refusal: cctx.refusal.as_ref().map(|r| RefusalView {
             reason: r.reason.as_str().to_string(),
@@ -268,18 +281,14 @@ pub fn show_view(world: &World, id: TaskId) -> Option<ShowView> {
     world.tasks.get(id.0).map(|ctx| ShowView::of(id, ctx))
 }
 
-/// The demand tag a thread row carries: who it addresses and where the
-/// response stands. Unaddressed rows carry nothing.
-fn demand_tag(state: &CommentState, refusal: Option<&Refusal>) -> Option<String> {
+/// The tag a thread row carries: its variant and where the response
+/// stands. Notes carry nothing.
+fn state_tag(state: &CommentState, refusal: Option<&Refusal>) -> Option<String> {
     match state {
-        CommentState::Unaddressed => None,
-        CommentState::AddressedToHuman { response } => match response {
-            ResponseState::Awaiting => Some("to human, awaiting".into()),
-            ResponseState::Responded { .. } => Some("to human, responded".into()),
-        },
-        CommentState::AddressedToAgent { response, attempt } => {
+        CommentState::Note => None,
+        CommentState::Demand { response, attempt } => {
             if refusal.is_some() {
-                return Some("to agent, refused".into());
+                return Some("demand, refused".into());
             }
             let response = match response {
                 ResponseState::Awaiting => "awaiting",
@@ -290,8 +299,16 @@ fn demand_tag(state: &CommentState, refusal: Option<&Refusal>) -> Option<String>
                 AgentAttemptState::InFlight { .. } => ", in flight",
                 AgentAttemptState::Spent => "",
             };
-            Some(format!("to agent, {response}{attempt}"))
+            Some(format!("demand, {response}{attempt}"))
         }
+        CommentState::Steer { delivery } => Some(match delivery {
+            crate::objects::comment::SteerDelivery::Standing => "steer, standing".into(),
+            crate::objects::comment::SteerDelivery::Forwarded => "steer, forwarded".into(),
+        }),
+        CommentState::Ask { response } => Some(match response {
+            ResponseState::Awaiting => "ask, awaiting".into(),
+            ResponseState::Responded { .. } => "ask, answered".into(),
+        }),
     }
 }
 
@@ -329,7 +346,7 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
         if root == *cid {
             let line = line_of(&world.comments, *cid);
             root_index.insert(*cid, groups.len());
-            if is_agent_demand(&line.state) {
+            if line.kind == "demand" {
                 groups.push(Building::Exchange {
                     root: line,
                     replies: Vec::new(),
@@ -382,12 +399,6 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
         })
         .collect();
     Some(ThreadView { items })
-}
-
-/// An agent-addressed demand opens an exchange; a human-addressed or
-/// unaddressed root is an ordinary group.
-fn is_agent_demand(state: &Option<String>) -> bool {
-    state.as_deref().is_some_and(|s| s.starts_with("to agent"))
 }
 
 /// The chain member whose target is the task — cid itself when it is a
@@ -465,7 +476,8 @@ pub fn closed_tasks(world: &World) -> Vec<ForestRow> {
         .collect()
 }
 
-/// A human-addressed demand awaiting an answer.
+/// A question awaiting its answer: the residual that reaches the
+/// human, who is the dependency root of every ask.
 pub struct AskedOfYou {
     pub comment: usize,
     pub task: usize,
@@ -473,8 +485,8 @@ pub struct AskedOfYou {
     pub body: String,
 }
 
-/// Every AddressedToHuman demand still awaiting, oldest first — the
-/// mirror of the supervisor's runnable-demand scan.
+/// Every ask still awaiting its answer, oldest first — the residual
+/// inbox; the waiter's own view of it is the wait release.
 pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
     world
         .comments
@@ -482,7 +494,7 @@ pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
         .filter(|(_, c)| {
             matches!(
                 c.state,
-                CommentState::AddressedToHuman {
+                CommentState::Ask {
                     response: ResponseState::Awaiting,
                 }
             )
@@ -589,11 +601,13 @@ pub struct AwaitingAcceptance {
 }
 
 /// The kind a ribbon mark carries, keyed as the strip names them: a
-/// note by its author's tier, a demand, or a run's birth.
+/// note by its author's tier, a demand, a steer, an ask, or a run's birth.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MarkKind {
     Note { human: bool },
     Demand,
+    Steer,
+    Ask,
     Run,
 }
 
@@ -616,10 +630,12 @@ pub fn ribbon_marks(world: &World, now: u64) -> Vec<RibbonMark> {
             continue;
         }
         let kind = match c.state {
-            CommentState::Unaddressed => MarkKind::Note {
+            CommentState::Note => MarkKind::Note {
                 human: c.tier == Tier::Human,
             },
-            _ => MarkKind::Demand,
+            CommentState::Demand { .. } => MarkKind::Demand,
+            CommentState::Steer { .. } => MarkKind::Steer,
+            CommentState::Ask { .. } => MarkKind::Ask,
         };
         marks.push(RibbonMark {
             kind,
@@ -645,6 +661,7 @@ pub fn ribbon_marks(world: &World, now: u64) -> Vec<RibbonMark> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::CommentKind;
     use crate::events::Event;
     use crate::objects::comment::{CommentId, Target};
     use crate::objects::task::Task;
@@ -735,7 +752,7 @@ mod test {
             event: Event::Commented {
                 target,
                 body: Prose::new(body.into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
         };
         let birth = |id: usize, ctx: &Context, name: &str| Record {
@@ -806,7 +823,7 @@ mod test {
 #[cfg(test)]
 mod panels {
     use super::*;
-    use crate::Addressee;
+    use crate::CommentKind;
     use crate::events::Event;
     use crate::objects::comment::Target;
     use crate::objects::incarnation::IncarnationId;
@@ -848,13 +865,7 @@ mod panels {
         )
     }
 
-    fn comment_at(
-        seq: usize,
-        at: u64,
-        tier: Tier,
-        target: Target,
-        to: Option<Addressee>,
-    ) -> Record {
+    fn comment_at(seq: usize, at: u64, tier: Tier, target: Target, kind: CommentKind) -> Record {
         record(
             seq,
             at,
@@ -862,7 +873,7 @@ mod panels {
             Event::Commented {
                 target,
                 body: Prose::new("a body worth keeping".into()).unwrap(),
-                addressee: to,
+                kind,
             },
         )
     }
@@ -878,23 +889,35 @@ mod panels {
                 2,
                 Tier::Human,
                 Target::Task(TaskId(0)),
-                Some(Addressee::Agent),
+                CommentKind::Demand,
             ),
             comment_at(
                 3,
                 3,
                 Tier::Agent,
                 Target::Comment(CommentId(RecordId(2))),
-                None,
+                CommentKind::Note,
             ),
-            comment_at(4, 4, Tier::Human, Target::Task(TaskId(0)), None),
-            comment_at(5, 5, Tier::Human, Target::Task(TaskId(0)), None),
+            comment_at(
+                4,
+                4,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
+            comment_at(
+                5,
+                5,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
             comment_at(
                 6,
                 6,
                 Tier::Agent,
                 Target::Comment(CommentId(RecordId(5))),
-                None,
+                CommentKind::Note,
             ),
         ])
         .unwrap()
@@ -961,7 +984,7 @@ mod panels {
                 2 * HOUR,
                 Tier::Human,
                 Target::Task(TaskId(0)),
-                Some(Addressee::Agent),
+                CommentKind::Demand,
             ),
             bind(3, 3 * HOUR),
             record(
@@ -977,7 +1000,7 @@ mod panels {
                 4 * HOUR,
                 Tier::Agent,
                 Target::Comment(CommentId(RecordId(2))),
-                None,
+                CommentKind::Note,
             ),
             settle(6, 5 * HOUR),
         ])
@@ -1073,7 +1096,7 @@ mod panels {
                 2 * HOUR,
                 Tier::Human,
                 Target::Task(TaskId(0)),
-                Some(Addressee::Agent),
+                CommentKind::Demand,
             ),
             bind(3, 3 * HOUR),
             record(
@@ -1106,7 +1129,7 @@ mod panels {
                 2 * HOUR,
                 Tier::Human,
                 Target::Task(TaskId(0)),
-                Some(Addressee::Agent),
+                CommentKind::Demand,
             ),
             record(
                 3,
@@ -1129,7 +1152,7 @@ mod panels {
                 assert_eq!(root.seq, 2);
                 assert!(run.is_none(), "a refused demand never bound a run");
                 assert!(replies.is_empty());
-                assert_eq!(root.state.as_deref(), Some("to agent, refused"));
+                assert_eq!(root.state.as_deref(), Some("demand, refused"));
                 let refusal = root.refusal.as_ref().expect("the refusal rides the line");
                 assert_eq!(refusal.at, 3 * HOUR);
                 assert!(refusal.reason.contains("disk-only leftover"));
@@ -1143,15 +1166,15 @@ mod panels {
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
             // agent asks the human: it shows up
-            comment_at(
-                1,
-                1,
-                Tier::Agent,
-                Target::Task(TaskId(0)),
-                Some(Addressee::Human),
-            ),
+            comment_at(1, 1, Tier::Agent, Target::Task(TaskId(0)), CommentKind::Ask),
             // an unaddressed note never asks
-            comment_at(2, 2, Tier::Human, Target::Task(TaskId(0)), None),
+            comment_at(
+                2,
+                2,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
         ])
         .unwrap();
         let asked = asked_of_you(&world);
@@ -1163,20 +1186,20 @@ mod panels {
         // the human's reply answers it and the scan empties
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
+            comment_at(1, 1, Tier::Agent, Target::Task(TaskId(0)), CommentKind::Ask),
             comment_at(
-                1,
-                1,
-                Tier::Agent,
+                2,
+                2,
+                Tier::Human,
                 Target::Task(TaskId(0)),
-                Some(Addressee::Human),
+                CommentKind::Note,
             ),
-            comment_at(2, 2, Tier::Human, Target::Task(TaskId(0)), None),
             comment_at(
                 3,
                 3,
                 Tier::Human,
                 Target::Comment(CommentId(RecordId(1))),
-                None,
+                CommentKind::Note,
             ),
         ])
         .unwrap();
@@ -1229,11 +1252,23 @@ mod panels {
                 10 * HOUR,
                 Tier::Human,
                 Target::Task(TaskId(0)),
-                Some(Addressee::Agent),
+                CommentKind::Demand,
             ),
             bind(3, 11 * HOUR, RecordId(2)),
-            comment_at(4, 80 * HOUR, Tier::Human, Target::Task(TaskId(0)), None),
-            comment_at(5, 90 * HOUR, Tier::Human, Target::Task(TaskId(0)), None),
+            comment_at(
+                4,
+                80 * HOUR,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
+            comment_at(
+                5,
+                90 * HOUR,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
         ])
         .unwrap();
         let now = 100 * HOUR;
@@ -1253,7 +1288,7 @@ mod panels {
                 10 * HOUR,
                 Tier::Human,
                 Target::Task(TaskId(0)),
-                Some(Addressee::Agent),
+                CommentKind::Demand,
             ),
             bind(3, 11 * HOUR, RecordId(2)),
             comment_at(
@@ -1261,7 +1296,7 @@ mod panels {
                 12 * HOUR,
                 Tier::Agent,
                 Target::Comment(CommentId(RecordId(2))),
-                None,
+                CommentKind::Note,
             ),
         ])
         .unwrap();

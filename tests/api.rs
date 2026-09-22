@@ -275,7 +275,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         Command::Comment {
             target: saccade::Target::Comment(saccade::CommentId(saccade::RecordId(0))),
             body: saccade::Prose::new("replying to a birth".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         },
         None,
     )
@@ -300,7 +300,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         Command::Comment {
             target: saccade::Target::Task(saccade::TaskId(9)),
             body: saccade::Prose::new("talking to nothing".into()).unwrap(),
-            addressee: None,
+            kind: CommentKind::Note,
         },
         None,
     )
@@ -335,6 +335,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
 
 // ---- the console: compose through the real HTTP surface ----
 
+use saccade::CommentKind;
 use saccade::api::AppState as ConsoleState;
 use saccade::objects::comment::{
     AgentAttemptState, CommentId, CommentState, ResponseState, Target,
@@ -498,7 +499,7 @@ async fn compose_agent_demand_lands_authorized() {
     let c = &world.comments[&CommentId(RecordId(1))];
     assert_eq!(
         c.state,
-        CommentState::AddressedToAgent {
+        CommentState::Demand {
             response: ResponseState::Awaiting,
             attempt: AgentAttemptState::Authorized {
                 trigger: RecordId(1)
@@ -639,7 +640,7 @@ async fn the_console_renders_forest_and_focused_thread() {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("need a ruling on floop".into()).unwrap(),
-                addressee: Some(saccade::Addressee::Human),
+                kind: saccade::CommentKind::Ask,
             },
             None,
         )
@@ -723,7 +724,7 @@ async fn every_task_href_the_console_emits_resolves() {
             Command::Comment {
                 target: Target::Task(TaskId(1)),
                 body: Prose::new("need a ruling on floop".into()).unwrap(),
-                addressee: Some(saccade::Addressee::Human),
+                kind: saccade::CommentKind::Ask,
             },
             None,
         )
@@ -745,7 +746,7 @@ async fn every_task_href_the_console_emits_resolves() {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("a note worth keeping".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
             None,
         )
@@ -1140,7 +1141,7 @@ async fn offline_comment_reply_matches_the_wire() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"task": 0}, "body": "implement foo", "addressee": null}}),
+            json!({"comment": {"target": {"task": 0}, "body": "implement foo", "kind": "note"}}),
         ),
     );
     assert_eq!(status, 200);
@@ -1231,4 +1232,174 @@ async fn offline_done_reply_matches_the_wire() {
 
     std::fs::remove_dir_all(wire_db.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(offline_db.parent().unwrap()).unwrap();
+}
+
+// ---- the tagged union: wire shapes and the ask door ----
+
+use saccade::objects::comment::SteerDelivery;
+use saccade::views::asked_of_you;
+
+/// The comment door carries the tagged union: each kind lands its fold
+/// state, and the stored payload round-trips with its kind tag.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_comment_kinds_land_their_states_through_the_wire() {
+    let db = scratch_db("kinds");
+    let base_url = spawn_server(&db).await;
+    for name in ["migrate floop", "second work"] {
+        post_command(
+            &base_url,
+            &envelope(
+                "human person",
+                "human",
+                json!({"create_task": {"name": name, "parent_id": null}}),
+            ),
+        );
+    }
+
+    // a demand: authorized on its birth record, reopening done work
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 0}, "body": "run the migration", "kind": "demand"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let records = json_of(&body)["records"].as_array().unwrap().clone();
+    assert_eq!(records[0]["kind"], "commented");
+    assert!(records[0]["payload"].to_string().contains("\"demand\""));
+
+    // a steer: standing intent on the thread
+    let (status, _) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 1}, "body": "also cover the offline path", "kind": "steer"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+
+    let state = AppState::open(&db).unwrap();
+    let snapshot = state.snapshot().unwrap();
+    let demand = &snapshot.world.comments[&saccade::CommentId(saccade::RecordId(2))];
+    assert!(matches!(
+        &demand.state,
+        CommentState::Demand {
+            attempt: saccade::objects::comment::AgentAttemptState::Authorized { .. },
+            ..
+        }
+    ));
+    let steer = &snapshot.world.comments[&saccade::CommentId(saccade::RecordId(3))];
+    assert_eq!(
+        steer.state,
+        CommentState::Steer {
+            delivery: SteerDelivery::Standing
+        }
+    );
+
+    // a note carries no machinery: the default kind is note
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 1}, "body": "for the record"}}),
+        ),
+    );
+    assert_eq!(status, 400, "the kind field is the wire's vocabulary now");
+    assert_eq!(json_of(&body)["error"]["code"], "malformed_request");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The ask door: the variant rides the existing comment door at agent
+/// tier (the extension's path), waits for its answer, and the first
+/// reply answers it — the shape the runner's extension speaks.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ask_round_trips_through_the_comment_door() {
+    let db = scratch_db("ask-door");
+    let base_url = spawn_server(&db).await;
+    post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+        ),
+    );
+
+    // the extension's write: agent tier under the run's actor, kind ask
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi/t-0-1",
+            "agent",
+            json!({"comment": {"target": {"task": 0}, "body": "break-glass or the copy?", "kind": "ask"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let seq = json_of(&body)["records"][0]["seq"].as_u64().unwrap();
+
+    let state = AppState::open(&db).unwrap();
+    let ask = &state.snapshot().unwrap().world.comments
+        [&saccade::CommentId(saccade::RecordId(seq as usize))];
+    assert_eq!(
+        ask.state,
+        CommentState::Ask {
+            response: saccade::objects::comment::ResponseState::Awaiting,
+        }
+    );
+    // the residual inbox carries the unanswered ask
+    let asked = asked_of_you(&state.snapshot().unwrap().world);
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].comment, seq as usize);
+    assert_eq!(asked[0].actor, "pi/t-0-1");
+    assert_eq!(asked[0].body, "break-glass or the copy?");
+
+    // the human answers: the first reply responds the ask
+    let (status, _) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"comment": {"target": {"comment": seq}, "body": "break-glass; the copy is dead", "kind": "note"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+
+    // the answer landed through the server's own state, so a fresh
+    // read of the db sees the responded ask
+    let conn = saccade::db::open_read(&db).unwrap();
+    let loadout = saccade::db::load(&conn).unwrap();
+    let saccade::db::LoadState::Full(world) = loadout.state else {
+        panic!("expected a full load");
+    };
+    let ask = &world.comments[&saccade::CommentId(saccade::RecordId(seq as usize))];
+    assert!(matches!(
+        &ask.state,
+        CommentState::Ask {
+            response: saccade::objects::comment::ResponseState::Responded { .. },
+        }
+    ));
+    // answered: the residual inbox empties
+    assert!(asked_of_you(&world).is_empty());
+
+    // the wait release on the ask carries the answer body — the bytes
+    // the extension returns as its tool result
+    let seen = saccade::runner::wait(
+        &db,
+        saccade::CommentId(saccade::RecordId(seq as usize)),
+        Some(5),
+    )
+    .unwrap();
+    assert!(
+        seen.contains(&format!("c-{seq}: answered by c-{}", seq as usize + 1)),
+        "{seen}"
+    );
+    assert!(seen.contains("(human person)"), "{seen}");
+    assert!(seen.contains("break-glass; the copy is dead"), "{seen}");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }

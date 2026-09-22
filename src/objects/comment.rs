@@ -17,13 +17,16 @@ pub enum Target {
     Comment(CommentId),
 }
 
-/// Who a comment asks for a response. System is not a respondent and is
-/// unrepresentable here rather than rejected at the fold.
+/// What a comment is for. No variant carries an address: routing is
+/// structural — the note pulls, the demand fires a run, the steer
+/// reaches the live run, the ask holds a wait for its answer.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Addressee {
-    Human,
-    Agent,
+pub enum CommentKind {
+    Note,
+    Demand,
+    Steer,
+    Ask,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +41,13 @@ pub struct Comment {
 pub enum ResponseState {
     Awaiting,
     Responded { reply: CommentId },
+}
+
+/// A steer's delivery: standing intent until the live run consumes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SteerDelivery {
+    Standing,
+    Forwarded,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -96,41 +106,41 @@ impl AgentAttemptState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommentState {
-    Unaddressed,
-    AddressedToHuman {
-        response: ResponseState,
-    },
-    AddressedToAgent {
+    Note,
+    /// The demand: fires a run when the task is free, queues while
+    /// busy. The attempt is the run machinery's slot on it.
+    Demand {
         response: ResponseState,
         attempt: AgentAttemptState,
+    },
+    /// The steer: forwarded to the live run at the turn boundary,
+    /// consumed by it, never re-fired.
+    Steer {
+        delivery: SteerDelivery,
+    },
+    /// The ask: a blocking question; the first reply answers it and
+    /// resumes the run, later replies are ordinary notes.
+    Ask {
+        response: ResponseState,
     },
 }
 
 impl CommentState {
-    /// The demand state machine table, all transitions must go through
-    /// this. The replying tier is a cell guard, so who may answer is a
-    /// table fact — the human's word ends any demand; unaddressed
-    /// comments never transition.
+    /// The comment state machine table, all transitions must go through
+    /// this. The replying tier is a cell guard for demands — the human's
+    /// word ends any demand — and asks answer at any judgment tier;
+    /// notes and steers never transition on replies. A steer moves only
+    /// on its own forward event.
     pub fn transition(&self, event: &Event, record: &Record) -> Option<CommentState> {
         match (self, event) {
             (
-                CommentState::AddressedToHuman {
-                    response: ResponseState::Awaiting,
-                },
-                Event::Commented { .. },
-            ) if record.context.tier == Tier::Human => Some(CommentState::AddressedToHuman {
-                response: ResponseState::Responded {
-                    reply: CommentId(record.id),
-                },
-            }),
-            (
-                CommentState::AddressedToAgent {
+                CommentState::Demand {
                     response: ResponseState::Awaiting,
                     attempt,
                 },
                 Event::Commented { .. },
             ) if matches!(record.context.tier, Tier::Agent | Tier::Human) => {
-                Some(CommentState::AddressedToAgent {
+                Some(CommentState::Demand {
                     response: ResponseState::Responded {
                         reply: CommentId(record.id),
                     },
@@ -138,7 +148,7 @@ impl CommentState {
                 })
             }
             (
-                CommentState::AddressedToAgent { response, attempt },
+                CommentState::Demand { response, attempt },
                 Event::IncarnationBound { .. }
                 | Event::IncarnationSettled { .. }
                 // only a rejected prompt, a cancel, or a refusal is
@@ -146,9 +156,27 @@ impl CommentState {
                 | Event::IncarnationPromptRejected { .. }
                 | Event::IncarnationCancelled { .. }
                 | Event::DemandRefused { .. },
-            ) => Some(CommentState::AddressedToAgent {
+            ) => Some(CommentState::Demand {
                 response: response.clone(),
                 attempt: attempt.transition(event, record)?,
+            }),
+            // the run consumed the steer: standing intent, delivered once
+            (CommentState::Steer { delivery: SteerDelivery::Standing }, Event::SteerForwarded { .. }) => {
+                Some(CommentState::Steer {
+                    delivery: SteerDelivery::Forwarded,
+                })
+            }
+            // the first reply answers the ask; an answered ask holds —
+            // later replies are ordinary notes
+            (
+                CommentState::Ask {
+                    response: ResponseState::Awaiting,
+                },
+                Event::Commented { .. },
+            ) if matches!(record.context.tier, Tier::Agent | Tier::Human) => Some(CommentState::Ask {
+                response: ResponseState::Responded {
+                    reply: CommentId(record.id),
+                },
             }),
             _ => None,
         }
@@ -201,7 +229,7 @@ mod tables {
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
-                addressee: None,
+                kind: CommentKind::Note,
             },
         )
     }
@@ -224,6 +252,15 @@ mod tables {
             Tier::System,
             Event::IncarnationSettled {
                 id: IncarnationId(RecordId(3)),
+            },
+        )
+    }
+
+    fn forwarded() -> Record {
+        at(
+            Tier::System,
+            Event::SteerForwarded {
+                steer: CommentId(RecordId(1)),
             },
         )
     }
@@ -334,28 +371,22 @@ mod tables {
         let answered = CommentId(RecordId(9));
         let trigger = RecordId(1);
         let states = [
-            CommentState::Unaddressed,
-            CommentState::AddressedToHuman {
-                response: ResponseState::Awaiting,
-            },
-            CommentState::AddressedToHuman {
-                response: ResponseState::Responded { reply: answered },
-            },
-            CommentState::AddressedToAgent {
+            CommentState::Note,
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::Authorized { trigger },
             },
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::InFlight {
                     incarnation: IncarnationId(RecordId(3)),
                 },
             },
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Awaiting,
                 attempt: AgentAttemptState::Spent,
             },
-            CommentState::AddressedToAgent {
+            CommentState::Demand {
                 response: ResponseState::Responded { reply: answered },
                 attempt: AgentAttemptState::Spent,
             },
@@ -371,32 +402,80 @@ mod tables {
             prompt_rejected(),
             cancelled(),
             refused(),
+            forwarded(),
         ];
 
         for state in &states {
             for record in &records {
                 let legal = match (state, &record.event) {
-                    (CommentState::Unaddressed, _) => false,
-                    (CommentState::AddressedToHuman { response }, Event::Commented { .. }) => {
-                        *response == ResponseState::Awaiting && record.context.tier == Tier::Human
-                    }
-                    (CommentState::AddressedToHuman { .. }, _) => false,
-                    (
-                        CommentState::AddressedToAgent { response, attempt },
-                        Event::Commented { .. },
-                    ) => {
+                    (CommentState::Note, _) => false,
+                    (CommentState::Demand { response, attempt }, Event::Commented { .. }) => {
                         *response == ResponseState::Awaiting
                             && matches!(record.context.tier, Tier::Agent | Tier::Human)
                             && attempt.transition(&record.event, record).is_some()
                     }
                     (
-                        CommentState::AddressedToAgent { attempt, .. },
+                        CommentState::Demand { attempt, .. },
                         Event::IncarnationBound { .. }
                         | Event::IncarnationSettled { .. }
                         | Event::IncarnationPromptRejected { .. }
                         | Event::IncarnationCancelled { .. }
                         | Event::DemandRefused { .. },
                     ) => attempt.transition(&record.event, record).is_some(),
+                    _ => false,
+                };
+                assert_eq!(
+                    state.transition(&record.event, record).is_some(),
+                    legal,
+                    "table disagrees at ({state:?}, {:?})",
+                    record.event
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn steer_and_ask_tables_admit_exactly_the_legal_cells() {
+        let states = [
+            CommentState::Steer {
+                delivery: SteerDelivery::Standing,
+            },
+            CommentState::Steer {
+                delivery: SteerDelivery::Forwarded,
+            },
+            CommentState::Ask {
+                response: ResponseState::Awaiting,
+            },
+            CommentState::Ask {
+                response: ResponseState::Responded {
+                    reply: CommentId(RecordId(9)),
+                },
+            },
+        ];
+        let records = [
+            reply(Tier::Human),
+            reply(Tier::Agent),
+            reply(Tier::System),
+            forwarded(),
+            settled(),
+            bind(RecordId(1)),
+        ];
+
+        for state in &states {
+            for record in &records {
+                let legal = match (state, &record.event) {
+                    (
+                        CommentState::Steer {
+                            delivery: SteerDelivery::Standing,
+                        },
+                        Event::SteerForwarded { .. },
+                    ) => true,
+                    (
+                        CommentState::Ask {
+                            response: ResponseState::Awaiting,
+                        },
+                        Event::Commented { .. },
+                    ) => matches!(record.context.tier, Tier::Agent | Tier::Human),
                     _ => false,
                 };
                 assert_eq!(

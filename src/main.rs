@@ -8,7 +8,7 @@ use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{ProposalView, TaskView, comment_thread, proposal_view, show_view, task_view};
 use saccade::{
-    ActorName, Addressee, Command, CommentId, Context, GitCommit, ProposalAction, ProposalId,
+    ActorName, Command, CommentId, CommentKind, Context, GitCommit, ProposalAction, ProposalId,
     Prose, RecordId, Reject, Target, Tier,
 };
 
@@ -50,12 +50,6 @@ struct Cli {
 
     #[command(subcommand)]
     command: Cmd,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum TierArg {
-    Human,
-    Agent,
 }
 
 #[derive(Subcommand)]
@@ -124,9 +118,13 @@ enum Cmd {
     Comment {
         target: String,
         body: String,
-        #[arg(long, value_enum)]
-        to: Option<TierArg>,
+        /// Fire a run on the task when it is free, queue while busy
+        #[arg(long)]
+        demand: bool,
     },
+    /// Steer a task's live run at its next turn boundary; with no run
+    /// living, the steer stands on the thread as intent
+    Steer { id: String, body: String },
     /// Everything about one task: state, receipt, comment thread
     Show { id: String },
     /// Serve the read-only canvas over HTTP (127.0.0.1 by default)
@@ -267,6 +265,10 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::WorkspaceMissing => "workspace_missing",
         Reject::WorktreeAlreadyPresent => "worktree_already_present",
         Reject::CheckpointRewind => "checkpoint_rewind",
+        Reject::SteerNotStanding => "steer_not_standing",
+        Reject::NoActiveIncarnation => "no_active_incarnation",
+        Reject::SteerNotStanding => "steer_not_standing",
+        Reject::NoActiveIncarnation => "no_active_incarnation",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
         Reject::NotClaimHolder => "not_claim_holder",
@@ -333,13 +335,23 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             id: parse_proposal_id(id)?,
             note: Prose::new(note.clone())?,
         },
-        Cmd::Comment { target, body, to } => Command::Comment {
+        Cmd::Comment {
+            target,
+            body,
+            demand,
+        } => Command::Comment {
             target: parse_target(target)?,
             body: Prose::new(body.clone())?,
-            addressee: to.map(|t| match t {
-                TierArg::Human => Addressee::Human,
-                TierArg::Agent => Addressee::Agent,
-            }),
+            kind: if *demand {
+                CommentKind::Demand
+            } else {
+                CommentKind::Note
+            },
+        },
+        Cmd::Steer { id, body } => Command::Comment {
+            target: Target::Task(parse_task_id(id)?),
+            body: Prose::new(body.clone())?,
+            kind: CommentKind::Steer,
         },
         Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => {
             return read_only(cli, &db_path);
