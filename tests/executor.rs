@@ -576,8 +576,17 @@ async fn a_cancel_aborts_the_session_through_the_protocol() {
 /// completes the event arc.
 #[test]
 fn the_real_pi_smoke_validates_the_pin() {
-    let pi = runner::resolve_pi()
-        .unwrap_or_else(|reason| panic!("the pinned executor is unavailable: {reason}"));
+    let Ok(pi) = runner::resolve_pi() else {
+        // a bare clone has no pin: red must mean contract breakage,
+        // never environment. Wrapped environments (the flake's baked
+        // SACCADE_PI_PATH, the devShell's SACCADE_PI) run the full smoke
+        eprintln!(
+            "smoke: skipped, no pinned executor (SACCADE_PI_PATH not baked \
+             and SACCADE_PI unset); build through the flake or set SACCADE_PI \
+             to validate the pin"
+        );
+        return;
+    };
     let extension = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("executor")
         .join("ask.ts");
