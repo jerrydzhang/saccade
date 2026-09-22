@@ -267,8 +267,6 @@ fn reject_code(reject: &Reject) -> &'static str {
         Reject::CheckpointRewind => "checkpoint_rewind",
         Reject::SteerNotStanding => "steer_not_standing",
         Reject::NoActiveIncarnation => "no_active_incarnation",
-        Reject::SteerNotStanding => "steer_not_standing",
-        Reject::NoActiveIncarnation => "no_active_incarnation",
         Reject::InvalidStateTransition => "invalid_state_transition",
         Reject::HumanOnly => "human_only",
         Reject::NotClaimHolder => "not_claim_holder",

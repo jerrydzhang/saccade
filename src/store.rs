@@ -650,32 +650,6 @@ impl World {
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
-            // The delivery fact: the live run consumed this steer; the
-            // send preceded the record, so a crash between them may
-            // duplicate delivery, never lose it
-            ref event @ Event::SteerForwarded { steer } => {
-                let root = {
-                    let ctx = self.comments.get(&steer).ok_or(Reason::InvalidCommentId)?;
-                    ctx.comment.root
-                };
-                if self
-                    .tasks
-                    .get(root.0)
-                    .ok_or(Reason::InvalidTaskId)?
-                    .active_incarnation
-                    .is_none()
-                {
-                    return Err(Reason::NoActiveIncarnation);
-                }
-                let steer_ctx = self.comments.get_mut(&steer).expect("validated above");
-                steer_ctx.state = steer_ctx
-                    .state
-                    .transition(event, &record)
-                    .ok_or(Reason::SteerNotStanding)?;
-                let task_ctx = self.tasks.get_mut(root.0).expect("validated above");
-                task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-            }
         }
 
         Ok(())

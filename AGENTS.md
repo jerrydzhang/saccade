@@ -91,6 +91,20 @@ the tracker, which ages with them.
   service, rung 5 — not before.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes — accepted).
+- The executor is pi, pinned as a flake input — never the ambient
+  binary; SACCADE_PI overrides for development only. The runner speaks
+  pi's RPC protocol (JSONL over stdio, strict LF framing; subset:
+  prompt, steer, abort, agent_start/turn/agent_settled events). The
+  fake-Pi stub speaking that subset is the contract; pi is an
+  implementation of it.
+- An incarnation's role is spawn-time composition of pi's levers —
+  prompt, tool set, context files in the worktree, model/provider —
+  never a saccade-built harness. The agent loop stays pi's; saccade
+  delivers messages, never owns turns.
+- Attention routes through declared dependency and chain judgment,
+  never addressing. No comment names a recipient. The human is reached
+  by waits held, derived residuals (unrooted asks, accepts pending),
+  and the descriptive pull surface.
 - Comments land at the tier they describe: work facts on the work thread,
   episode facts on the episode's container, direction facts on the direction
   home; session-shaped work writes no thread receipts unless it changed law —
@@ -123,6 +137,10 @@ Placement is a contract:
 - `tests/runner.rs`: the runner end to end — real temp Git, real db,
   and the supervision contract: a landed demand fires a run, a queued
   demand fires when the task frees, no runner means no firing.
+- `tests/executor.rs`: the executor contract — the fake-Pi stub speaks
+  the protocol subset (fire, ask, steer, abort through the real RPC
+  driver), and the real-pi smoke validates the pin against the same
+  subset at pin and bump time.
 - `tests/api.rs`: server, wire, and console contracts over HTTP — command
   round-trips, the tier law through the wire, malformed bodies, client send,
   and the CLI face through a real subprocess.
@@ -143,7 +161,7 @@ Rules:
   the record, not `///` blocks; narration of the next ten lines gets removed.
 - Fixture data reads as narrative: `implement foo`, `migrate floop`, not
   `test task 2`. The log is a story even in tests.
-- Keep the suite green (95 unit + 37 integration at time of writing) and
+- Keep the suite green (97 unit + 37 integration at time of writing) and
   honest:
   a failing suite from a fixture change means the fixture changed a contract
   — find out which before editing assertions.
@@ -164,6 +182,11 @@ Rules:
   (`pi/t-75-2`) never equals one. The CLI has no tier
   argument: `SACCADE_ACTOR` presence is agent tier, its absence human.
   Judgment acts are proposed (`sac propose drop t-N --name`), not executed.
+- Comments carry a variant — note, demand, steer, ask — never an
+  address. The demand fires and queues; the steer reaches the live run
+  and is consumed once; the ask blocks its run on the thread's answer.
+  The ask variant has no CLI door: it rides the wire's comment door,
+  and the in-tree extension is its sole caller.
 
 ## Edit mechanics (scar tissue)
 

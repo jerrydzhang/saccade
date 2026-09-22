@@ -66,10 +66,15 @@ outcome, not the goal.
 2. **Work in the task's worktree** — its branch `saccade/t-N`, prepared
    from the recorded checkpoint. The runner owns it (see Runner-owned
    state); park what you learn as you learn it.
-3. **Deviate openly.** If the spec cannot be followed as written, say so
+3. **Ask when blocked.** Your session carries an `ask` tool: a blocking
+   question to the human. The question lands on the task's thread; the
+   tool returns when the human answers; the answer is the tool result.
+   Observations that don't block the work are notes on the thread, not
+   asks.
+4. **Deviate openly.** If the spec cannot be followed as written, say so
    on the thread with evidence — a narrowed scope silently executed is a
    failure; a deviation announced is a finding.
-4. **Deliver**: commit your work to the task branch, `sac checkpoint
+5. **Deliver**: commit your work to the task branch, `sac checkpoint
    t-N`, claim, then `sac done t-N --receipt "…"`. The claim is the door
    key `done` requires — it is not an in-flight signal (the demand
    carries in-flight); take it at delivery, never before. Delivery is not
@@ -104,9 +109,13 @@ superseding cleanly on re-cut.
    sourced — read this session from the record or the tree — or
    explicitly marked open for the executor to resolve; a belief costumed
    as a source is the failure carrier.
-3. **Fire the demand**: `sac comment t-N "spec…" --to agent`.
+3. **Fire the demand**: `sac comment t-N "spec…" --demand`.
 4. **Wait by outcome**: `sac wait c-<seq>` — the seq is your demand's own,
    printed in its reply. It releases when the run asks something of you —
+   it settles (the receipt is named), cancels, refuses (the reason is
+   carried), is answered with no run behind it, or asks a blocking
+   question (the release carries it; answer on the thread, then re-arm
+   the wait). It never releases on replies: acks hold.
    it settles (the receipt is named), cancels, refuses (the reason is
    carried), is answered with no run behind it, or raises a prompt
    awaiting an answer. It never releases on replies: acks hold.
@@ -156,7 +165,8 @@ which commands were exercised, which files were touched. "done", "fixed",
 | `sac propose <drop\|release> t-N --name "…"` | any tier | the gate queue: your evidence, the human's call |
 | `sac accept t-N` | birth attribution, or human | the only door from delivered to done |
 | `sac accept <seq>` / `sac reject <seq> --note` | **human only** | ruling acts on proposals |
-| `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | park or reply; `--to <actor>` addresses |
+| `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | park or reply — a note; `--demand` fires a run |
+| `sac steer t-N "…"` | any tier | reach the task's live run at its next turn boundary; with no run it stands as intent on the thread |
 | `sac wait c-<seq>` | any tier | blocks on the demand's outcome, never replies |
 | `sac cancel t-N` | any tier | the kill request for a task's active run |
 | `sac checkpoint t-N` | any tier | records the branch tip as the task's checkpoint |
@@ -220,6 +230,10 @@ thread before proceeding.
 - `invalid_state_transition` — read the log; the task's state says otherwise
   (already claimed, already done, not delivered so there is nothing to
   accept).
+- `steer_not_standing` — the forward names a steer that is not standing
+  intent (wrong kind, or already consumed by its run).
+- `no_active_incarnation` — the forward names a task whose run slot is
+  empty: nothing consumes the steer.
 - `not_birth_attribution` — you accepted a delivered task not born under
   your attribution; the asker or a human accepts.
 - `degraded` — a newer binary wrote events this one can't understand.

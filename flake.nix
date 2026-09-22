@@ -5,6 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     saccade.url = "github:jerrydzhang/saccade";
+    llm-agents.url = "github:numtide/llm-agents.nix";
     devenv.url = "github:cachix/devenv";
   };
 
@@ -18,6 +19,7 @@
     nixpkgs,
     rust-overlay,
     saccade,
+    llm-agents,
     devenv,
     ...
   } @ inputs: let
@@ -48,9 +50,15 @@
                 prek
                 just
                 saccade.packages.${system}.default
+                llm-agents.packages.${system}.pi
               ];
 
-              env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+              env = {
+                PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+                # development override for the pinned executor; the
+                # package bakes SACCADE_PI_PATH instead
+                SACCADE_PI = "${llm-agents.packages.${system}.pi}/bin/pi";
+              };
 
               process.manager.implementation = "native";
               processes.sac = {
@@ -81,8 +89,16 @@
           src = ./.;
           buildInputs = [];
           # the suite's runner tests exercise git worktrees and the
-          # state root under a writable home
-          nativeBuildInputs = [pkgs.git];
+          # state root under a writable home; the executor tests need
+          # python3 for the fake-Pi stub
+          nativeBuildInputs = [
+            pkgs.git
+            pkgs.python3
+            llm-agents.packages.${system}.pi
+          ];
+          # the executor pin: never the ambient binary. The check phase
+          # runs the real-pi smoke and the fake-Pi stub against this path
+          env.SACCADE_PI_PATH = "${llm-agents.packages.${system}.pi}/bin/pi";
           preCheck = ''
             export HOME=$(mktemp -d)
           '';
