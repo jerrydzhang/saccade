@@ -142,6 +142,8 @@ _leaks = [
     for f in ("--no-extensions", "--no-skills", "--no-prompt-templates")
     if f not in sys.argv
 ]
+if not os.environ.get("PI_CODING_AGENT_DIR"):
+    _leaks.append("PI_CODING_AGENT_DIR")
 if _leaks:
     emit(
         {
@@ -608,6 +610,12 @@ fn the_real_pi_smoke_validates_the_pin() {
     let extension = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("executor")
         .join("ask.ts");
+    // the smoke exercises the same composed config home the runner
+    // spawns under: symlinked credentials, mirrored model keys, and
+    // nothing of the operator's beyond those
+    let agent_dir = std::env::temp_dir().join(format!("sac-smoke-agent-{}", std::process::id()));
+    runner::compose_agent_dir(&agent_dir)
+        .unwrap_or_else(|e| panic!("composing the smoke agent dir: {e:?}"));
     let mut child = std::process::Command::new(&pi)
         .args([
             "--mode",
@@ -621,6 +629,7 @@ fn the_real_pi_smoke_validates_the_pin() {
             "-e",
         ])
         .arg(&extension)
+        .env("PI_CODING_AGENT_DIR", &agent_dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()

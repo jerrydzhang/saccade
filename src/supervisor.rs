@@ -18,6 +18,7 @@ use crate::objects::comment::{
 };
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::{TaskId, TaskState};
+use crate::paths;
 use crate::rpc::ClientCommand;
 use crate::runner::{self, PreparedRun, RunnerFail};
 use crate::store::World;
@@ -315,6 +316,17 @@ pub fn sweep(app: &AppState) {
                     None => {}
                 },
             }
+        }
+    }
+    for (i, ctx) in world.tasks.iter().enumerate() {
+        // a terminal task never runs again: its composed agent dir has
+        // no consumer left
+        if matches!(ctx.task.state, TaskState::Done(_) | TaskState::Dropped)
+            && ctx.active_incarnation.is_none()
+            && let Err(e) = std::fs::remove_dir_all(paths::agent_dir_at(&config.repo_root, i))
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(task = i, "agent dir sweep failed: {e}");
         }
     }
     for demand in runnable_demands(&world) {

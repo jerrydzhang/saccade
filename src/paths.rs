@@ -86,6 +86,12 @@ pub fn session_at(repo_root: &Path, task: usize) -> PathBuf {
         .join(format!("t-{task}.jsonl"))
 }
 
+/// The pi agent dir a task's runs are composed under: saccade-owned,
+/// so the operator's own agent dir never reaches an incarnation.
+pub fn agent_dir_at(repo_root: &Path, task: usize) -> PathBuf {
+    state_dir(repo_root).join("agent").join(format!("t-{task}"))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

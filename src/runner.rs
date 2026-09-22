@@ -121,12 +121,77 @@ fn refuse(conn: &mut Connection, demand: CommentId, reason: String) -> RunnerFai
     }
 }
 
+/// Compose the agent dir an incarnation's pi runs under: symlinks to
+/// the operator's credentials and model catalogs (shared data, and a
+/// copy would freeze OAuth refresh), a settings file carrying only the
+/// three model-choice keys — the one inheritance that crosses, made
+/// here in code instead of pi silently reading the operator's file —
+/// and nothing else: no extensions, skills, prompts, or AGENTS.md.
+pub fn compose_agent_dir(dir: &Path) -> Result<(), RunnerFail> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| RunnerFail::Git(format!("agent dir {}: {e}", dir.display())))?;
+    let operator = home_agent_dir();
+    for name in ["auth.json", "models.json", "models-store.json"] {
+        let source = operator.join(name);
+        if source.exists()
+            && let Err(e) = symlink_fresh(&source, &dir.join(name))
+        {
+            return Err(RunnerFail::Git(format!("agent dir link {name}: {e}")));
+        }
+    }
+    let mirrored = operator
+        .join("settings.json")
+        .exists()
+        .then(|| mirror_model_settings(&operator))
+        .flatten();
+    let settings = match mirrored {
+        Some(json) => serde_json::to_string(&json),
+        None => Ok("{}".to_string()),
+    }
+    .map_err(|e| RunnerFail::Git(format!("agent dir settings: {e}")))?;
+    std::fs::write(dir.join("settings.json"), settings)
+        .map_err(|e| RunnerFail::Git(format!("agent dir settings: {e}")))?;
+    Ok(())
+}
+
+/// The operator's own agent dir, pi's conventional `~/.pi/agent`.
+fn home_agent_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".pi").join("agent"))
+        .unwrap_or_else(|| PathBuf::from("/nonexistent"))
+}
+
+/// The three keys that name a model choice; everything else in the
+/// operator's settings — packages, subagents, theme — never crosses.
+fn mirror_model_settings(operator: &Path) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(operator.join("settings.json")).ok()?;
+    let full: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let mut mirrored = serde_json::Map::new();
+    for key in ["defaultModel", "defaultProvider", "defaultThinkingLevel"] {
+        if let Some(value) = full.get(key) {
+            mirrored.insert(key.to_string(), value.clone());
+        }
+    }
+    Some(serde_json::Value::Object(mirrored))
+}
+
+/// A symlink that replaces whatever stands at `at`, so recomposition
+/// is idempotent.
+fn symlink_fresh(source: &Path, at: &Path) -> std::io::Result<()> {
+    if at.symlink_metadata().is_ok() {
+        std::fs::remove_file(at)?;
+    }
+    std::os::unix::fs::symlink(source, at)
+}
+
 pub struct PreparedRun {
     pub task: TaskId,
     pub demand: CommentId,
     pub incarnation: IncarnationId,
     pub worktree: PathBuf,
     pub session: PathBuf,
+    pub agent_dir: PathBuf,
     pub actor: ActorName,
 }
 
@@ -171,6 +236,7 @@ pub fn prepare(
     }
     let worktree = paths::worktree_at(repo_root, task.0);
     let session = paths::session_at(repo_root, task.0);
+    let agent_dir = paths::agent_dir_at(repo_root, task.0);
     let branch = format!("saccade/t-{}", task.0);
     let system = Context::system();
     let now = db::now_epoch();
@@ -346,12 +412,15 @@ pub fn prepare(
         now,
     )?;
 
+    compose_agent_dir(&agent_dir)?;
+
     Ok(PreparedRun {
         task,
         demand,
         incarnation,
         worktree,
         session,
+        agent_dir,
         actor: session_actor,
     })
 }
@@ -433,6 +502,9 @@ pub fn execute_session(
         .env("SACCADE_SERVER", &executor.server)
         .env("SACCADE_SAC", &executor.sac)
         .env("SACCADE_TASK", run.task.0.to_string())
+        // the config home itself is saccade-composed: the operator's
+        // agent dir never reaches the incarnation
+        .env("PI_CODING_AGENT_DIR", &run.agent_dir)
         .arg("--mode")
         .arg("rpc")
         // the session is composed at spawn: the ask extension is the

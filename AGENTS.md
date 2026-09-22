@@ -101,8 +101,10 @@ the tracker, which ages with them.
   prompt, tool set, context files in the worktree, model/provider —
   never a saccade-built harness. The agent loop stays pi's; saccade
   delivers messages, never owns turns. Ambient pi config is not a
-  lever: spawn disables discovery, and the ask extension passed
-  explicitly is the whole extension surface.
+  lever: spawn disables discovery, runs under a saccade-composed
+  agent dir, and the ask extension passed explicitly is the whole
+  extension surface — credentials and model catalogs cross as data,
+  the model choice as three explicit keys, nothing else.
 - Attention routes through declared dependency and chain judgment,
   never addressing. No comment names a recipient. The human is reached
   by waits held, derived residuals (unrooted asks, accepts pending),
