@@ -80,8 +80,8 @@ the tracker, which ages with them.
   local cardinality included. No unread or aggregate counts of demands,
   tasks, states, incarnations, or records; no detached badges, urgency
   emphasis, inferred priority/progress/success/correctness, or narrative
-  annotations. The push signal summons attention; the pull UI never
-  competes or coerces.
+  annotations. Outreach is an attending actor's judgment, never a
+  projection; the pull UI never competes or coerces.
 - Every capability that reduces contact must add record in the same change;
   comprehension rides the record, never the conversation.
 - Every telemetry emit names its reader and the moment they read it, the
