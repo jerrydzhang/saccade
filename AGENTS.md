@@ -100,7 +100,9 @@ the tracker, which ages with them.
 - An incarnation's role is spawn-time composition of pi's levers —
   prompt, tool set, context files in the worktree, model/provider —
   never a saccade-built harness. The agent loop stays pi's; saccade
-  delivers messages, never owns turns.
+  delivers messages, never owns turns. Ambient pi config is not a
+  lever: spawn disables discovery, and the ask extension passed
+  explicitly is the whole extension surface.
 - Attention routes through declared dependency and chain judgment,
   never addressing. No comment names a recipient. The human is reached
   by waits held, derived residuals (unrooted asks, accepts pending),

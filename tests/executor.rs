@@ -135,6 +135,24 @@ def note(text):
             f.write(text + "\n")
 
 
+# the spawn contract: the runner composes the session at spawn, and
+# any missing isolation flag is a leak back into the operator's pi
+_leaks = [
+    f
+    for f in ("--no-extensions", "--no-skills", "--no-prompt-templates")
+    if f not in sys.argv
+]
+if _leaks:
+    emit(
+        {
+            "type": "response",
+            "command": "prompt",
+            "success": False,
+            "error": f"ambient config leak: missing {_leaks}",
+        }
+    )
+    sys.exit(1)
+
 def run(*args, **kw):
     r = subprocess.run(args, capture_output=True, text=True, **kw)
     if r.returncode != 0:

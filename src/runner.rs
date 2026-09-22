@@ -435,6 +435,12 @@ pub fn execute_session(
         .env("SACCADE_TASK", run.task.0.to_string())
         .arg("--mode")
         .arg("rpc")
+        // the session is composed at spawn: the ask extension is the
+        // whole extension surface, and the operator's ambient pi —
+        // global extensions, skills, templates — is not a lever
+        .arg("--no-extensions")
+        .arg("--no-skills")
+        .arg("--no-prompt-templates")
         .arg("--session")
         .arg(&run.session)
         .arg("-a")
