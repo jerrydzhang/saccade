@@ -450,30 +450,32 @@ pub fn forest(world: &World) -> Vec<ForestRow> {
         .collect()
 }
 
-/// The rail's archive: done and dropped tasks, parents before children.
+/// The rail's archive: done and dropped tasks, most recently settled
+/// first — the order a reviewer opens them in. Depth is flattened: the
+/// archive is a list, not a forest.
 pub fn closed_tasks(world: &World) -> Vec<ForestRow> {
-    world
+    let mut rows: Vec<(u64, usize, ForestRow)> = world
         .tasks
         .iter()
         .enumerate()
         .filter(|(_, ctx)| matches!(ctx.task.state, TaskState::Done(_) | TaskState::Dropped))
         .map(|(i, ctx)| {
-            let mut depth = 0;
-            let mut up = ctx.task.parent_id;
-            while let Some(parent) = up {
-                depth += 1;
-                up = world.tasks[parent.0].task.parent_id;
-            }
-            ForestRow {
-                task: TaskView::of(
-                    TaskId(i),
-                    ctx,
-                    ctx.proposal.and_then(|p| world.proposals.get(&p)),
-                ),
-                depth,
-            }
+            (
+                ctx.last_record_at,
+                i,
+                ForestRow {
+                    task: TaskView::of(
+                        TaskId(i),
+                        ctx,
+                        ctx.proposal.and_then(|p| world.proposals.get(&p)),
+                    ),
+                    depth: 0,
+                },
+            )
         })
-        .collect()
+        .collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    rows.into_iter().map(|(_, _, row)| row).collect()
 }
 
 /// A question awaiting its answer: the residual that reaches the
@@ -1061,10 +1063,11 @@ mod panels {
         .unwrap();
         let closed = closed_tasks(&world);
         assert_eq!(closed.len(), 2);
-        assert_eq!(closed[0].task.id, "t-0");
-        assert_eq!(closed[0].task.state, "done");
-        assert_eq!(closed[1].task.id, "t-1");
-        assert_eq!(closed[1].task.state, "dropped");
+        // most recently settled first: t-1 dropped at 50, t-0 done at 20
+        assert_eq!(closed[0].task.id, "t-1");
+        assert_eq!(closed[0].task.state, "dropped");
+        assert_eq!(closed[1].task.id, "t-0");
+        assert_eq!(closed[1].task.state, "done");
         // the live tree holds what is open, claimed, or delivered
         let live = forest(&world);
         assert_eq!(live.len(), 2);
