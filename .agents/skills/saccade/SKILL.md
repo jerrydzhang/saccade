@@ -63,18 +63,26 @@ outcome, not the goal.
    spec, prior verdicts, dead ends, parked working state — then the code
    and record it names. Followed honestly, this is resuming the work, not
    starting it.
-2. **Work in the task's worktree** — its branch `saccade/t-N`, prepared
+2. **Split before starting when the spec names independent changes.**
+   Labels like CHANGE ONE, CHANGE TWO are task boundaries wearing phase
+   names: if a change could land and be accepted on its own, it is a
+   task. Park the split on the thread (`sac create task --parent`),
+   fire the children, and deliver the split itself. A spec you have
+   already called large is the signal — naming its size and executing
+   it whole is the failure this law exists to stop; resuming after a
+   crash is never a reason to keep a too-large shape.
+3. **Work in the task's worktree** — its branch `saccade/t-N`, prepared
    from the recorded checkpoint. The runner owns it (see Runner-owned
    state); park what you learn as you learn it.
-3. **Ask when blocked.** Your session carries an `ask` tool: a blocking
+4. **Ask when blocked.** Your session carries an `ask` tool: a blocking
    question to the human. The question lands on the task's thread; the
    tool returns when the human answers; the answer is the tool result.
    Observations that don't block the work are notes on the thread, not
    asks.
-4. **Deviate openly.** If the spec cannot be followed as written, say so
+5. **Deviate openly.** If the spec cannot be followed as written, say so
    on the thread with evidence — a narrowed scope silently executed is a
    failure; a deviation announced is a finding.
-5. **Deliver**: commit your work to the task branch, `sac checkpoint
+6. **Deliver**: commit your work to the task branch, `sac checkpoint
    t-N`, claim, then `sac done t-N --receipt "…"`. The claim is the door
    key `done` requires — it is not an in-flight signal (the demand
    carries in-flight); take it at delivery, never before. Delivery is not
