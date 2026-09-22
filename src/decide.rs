@@ -162,8 +162,6 @@ mod test {
             tier: Tier::Human,
         }
     }
-    /// This test doesn't really test anything its more just a contract that at the time this test
-    /// was written this is the expected behavior that shouldn't regress
     #[test]
     fn authority_table_gates_exactly_the_gated_events() {
         let pid = ProposalId(RecordId(0));

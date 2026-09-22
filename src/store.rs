@@ -162,7 +162,6 @@ impl World {
         Ok(self)
     }
 
-    /// A run ending: the task's slot frees and the demand's attempt spends
     fn terminalize(&mut self, id: IncarnationId, record: &Record) {
         if let Some(run) = self.incarnations.get_mut(&id) {
             run.done_at = Some(record.timestamp);
@@ -232,7 +231,6 @@ impl World {
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
-                // only the holder completes the claim
                 if task_ctx.holder.as_ref() != Some(&record.context.actor) {
                     return Err(Reason::NotClaimHolder);
                 }
@@ -248,7 +246,6 @@ impl World {
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
-                // only the holder delivers the claim
                 if task_ctx.holder.as_ref() != Some(&record.context.actor) {
                     return Err(Reason::NotClaimHolder);
                 }
@@ -265,8 +262,6 @@ impl World {
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
-                // the invoking attribution must be the birth attribution
-                // or human tier; system never accepts
                 if record.context.tier == Tier::System
                     || (record.context.tier == Tier::Agent
                         && task_ctx.birth_actor != record.context.actor)
@@ -284,7 +279,6 @@ impl World {
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
-                // humans may release any claim, agents only their own
                 if record.context.tier != Tier::Human
                     && task_ctx.holder.as_ref() != Some(&record.context.actor)
                 {
@@ -322,7 +316,6 @@ impl World {
                     .comments
                     .get_mut(response_target)
                     .ok_or(Reason::InvalidCommentId)?;
-                // the run binds a demand on its own task
                 if demand.comment.root != *task_id {
                     return Err(Reason::DemandNotOnTask);
                 }
@@ -422,7 +415,6 @@ impl World {
                 task_ctx.workspace = Some(WorkspaceContext {
                     base: base.clone(),
                     branch: branch.clone(),
-                    // the checkpoint starts at the base the workspace was cut from
                     checkpoint: base.clone(),
                     heads: vec![base.clone()],
                     worktree: WorktreeState::Absent,
@@ -476,7 +468,6 @@ impl World {
             } => {
                 let proposal_id = ProposalId(record.id);
 
-                // one judgment at a time
                 match action {
                     ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
                         let task_ctx =

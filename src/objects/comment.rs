@@ -303,8 +303,6 @@ mod tables {
         )
     }
 
-    /// This test doesn't really test anything its more just a contract that at the time this test
-    /// was written this is the expected behavior that shouldn't regress
     #[test]
     fn attempt_table_admits_exactly_the_legal_cells() {
         let trigger = RecordId(1);
