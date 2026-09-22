@@ -450,9 +450,9 @@ pub fn forest(world: &World) -> Vec<ForestRow> {
         .collect()
 }
 
-/// The rail's archive: done and dropped tasks, most recently settled
-/// first — the order a reviewer opens them in. Depth is flattened: the
-/// archive is a list, not a forest.
+/// The rail's archive: done and dropped tasks, newest first — the sort
+/// key is last touch, which never sits earlier than the settle itself.
+/// Depth is flattened: the archive is a list, not a forest.
 pub fn closed_tasks(world: &World) -> Vec<ForestRow> {
     let mut rows: Vec<(u64, usize, ForestRow)> = world
         .tasks

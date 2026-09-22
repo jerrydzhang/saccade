@@ -121,12 +121,8 @@ fn refuse(conn: &mut Connection, demand: CommentId, reason: String) -> RunnerFai
     }
 }
 
-/// Compose the agent dir an incarnation's pi runs under: symlinks to
-/// the operator's credentials and model catalogs (shared data, and a
-/// copy would freeze OAuth refresh), a settings file carrying only the
-/// three model-choice keys — the one inheritance that crosses, made
-/// here in code instead of pi silently reading the operator's file —
-/// and nothing else: no extensions, skills, prompts, or AGENTS.md.
+/// Compose the agent dir an incarnation's pi runs under. Links, not
+/// copies: a copied credential would freeze OAuth refresh.
 pub fn compose_agent_dir(dir: &Path) -> Result<(), RunnerFail> {
     std::fs::create_dir_all(dir)
         .map_err(|e| RunnerFail::Git(format!("agent dir {}: {e}", dir.display())))?;
@@ -162,8 +158,6 @@ fn home_agent_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/nonexistent"))
 }
 
-/// The three keys that name a model choice; everything else in the
-/// operator's settings — packages, subagents, theme — never crosses.
 fn mirror_model_settings(operator: &Path) -> Option<serde_json::Value> {
     let text = std::fs::read_to_string(operator.join("settings.json")).ok()?;
     let full: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -502,14 +496,11 @@ pub fn execute_session(
         .env("SACCADE_SERVER", &executor.server)
         .env("SACCADE_SAC", &executor.sac)
         .env("SACCADE_TASK", run.task.0.to_string())
-        // the config home itself is saccade-composed: the operator's
-        // agent dir never reaches the incarnation
         .env("PI_CODING_AGENT_DIR", &run.agent_dir)
         .arg("--mode")
         .arg("rpc")
-        // the session is composed at spawn: the ask extension is the
-        // whole extension surface, and the operator's ambient pi —
-        // global extensions, skills, templates — is not a lever
+        // ambient pi config is not a lever; the ask extension below
+        // is the whole surface
         .arg("--no-extensions")
         .arg("--no-skills")
         .arg("--no-prompt-templates")

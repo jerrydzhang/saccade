@@ -683,9 +683,8 @@ document.addEventListener('submit', (e) => {
     });
 });
 
-// the rail is the navigator: its scroll position is where the reader
-// is, and a task click must not take it away — save on leave, restore
-// on arrival.
+// sessionStorage: the position survives full navigations and dies with
+// the tab
 const fkey = 'forest-scroll';
 addEventListener('pagehide', () => {
   const f = document.querySelector('.forest');
@@ -693,8 +692,8 @@ addEventListener('pagehide', () => {
 });
 const saved = sessionStorage.getItem(fkey);
 if (saved !== null) {
-  // at parse the grid has not settled: restoring now clamps against
-  // half-laid-out heights. Wait for load, then place the rail.
+  // before load the grid is half-laid-out and the clamp eats the
+  // saved position
   addEventListener('load', () => {
     const f = document.querySelector('.forest');
     if (f) f.scrollTop = Number(saved);

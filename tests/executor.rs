@@ -135,8 +135,7 @@ def note(text):
             f.write(text + "\n")
 
 
-# the spawn contract: the runner composes the session at spawn, and
-# any missing isolation flag is a leak back into the operator's pi
+# the spawn contract: refuse any spawn that leaks the operator's pi
 _leaks = [
     f
     for f in ("--no-extensions", "--no-skills", "--no-prompt-templates")
@@ -610,9 +609,8 @@ fn the_real_pi_smoke_validates_the_pin() {
     let extension = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("executor")
         .join("ask.ts");
-    // the smoke exercises the same composed config home the runner
-    // spawns under: symlinked credentials, mirrored model keys, and
-    // nothing of the operator's beyond those
+    // the pin is validated under the same composed config home the
+    // runner spawns in, auth symlink included
     let agent_dir = std::env::temp_dir().join(format!("sac-smoke-agent-{}", std::process::id()));
     runner::compose_agent_dir(&agent_dir)
         .unwrap_or_else(|e| panic!("composing the smoke agent dir: {e:?}"));
