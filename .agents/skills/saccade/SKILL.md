@@ -63,17 +63,19 @@ outcome, not the goal.
    spec, prior verdicts, dead ends, parked working state — then the code
    and record it names. Followed honestly, this is resuming the work, not
    starting it.
-2. **Split before starting when the spec names independent changes.**
-   Labels like CHANGE ONE, CHANGE TWO are task boundaries wearing phase
-   names: if a change could land and be accepted on its own, it is a
-   task. Park the split on the thread (`sac create task --parent`),
-   then let the dependencies pick the shape: a chain fires one child
-   at a time, each demand when its upstream lands; a fan-out fires
-   together when the changes share nothing. Name the shape when you
-   park the split. A spec you have already called large is the signal
-   — naming its size and executing it whole is the failure this law
-   exists to stop; resuming after a crash is never a reason to keep a
-   too-large shape.
+2. **Size the work.** After retrieval — or after the reasoning an
+   ambiguous spec demanded, whichever road produced your understanding —
+   answer the sizing question explicitly: one acceptable sitting, or
+   several tasks. Labels like CHANGE ONE, CHANGE TWO are task boundaries
+   wearing phase names: a change that could land and be accepted on its
+   own is a task. Several parks the split on the thread (`sac create
+   task --parent`) with its shape named — a chain fires one child at a
+   time, each demand when its upstream lands; a fan-out fires together
+   when the changes share nothing. The question is never skipped, only
+   answered: a spec you have already called large is the signal, and
+   naming its size while executing it whole is the failure this step
+   exists to stop. Crash resume is never a reason to keep a too-large
+   shape.
 3. **Work in the task's worktree** — its branch `saccade/t-N`, prepared
    from the recorded checkpoint. The runner owns it (see Runner-owned
    state); park what you learn as you learn it.
