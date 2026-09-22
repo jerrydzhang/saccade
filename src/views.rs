@@ -222,8 +222,6 @@ fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
 
 /// The task's thread as a view: the context's pointer index, followed.
 /// Membership is fixed at birth, so this walks pointers, never scans.
-// TODO: this walks the parent chain for depth while the Commented fold
-// walks the same chain for root; maybe stamp depth at birth instead
 pub fn comment_thread(
     comments: &BTreeMap<CommentId, CommentContext>,
     ctx: &TaskContext,
