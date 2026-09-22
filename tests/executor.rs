@@ -136,7 +136,10 @@ def note(text):
 
 
 def run(*args, **kw):
-    return subprocess.run(args, capture_output=True, text=True, **kw)
+    r = subprocess.run(args, capture_output=True, text=True, **kw)
+    if r.returncode != 0:
+        note(f"sac-failed {args}: rc={r.returncode} err={r.stderr.strip()[:200]}")
+    return r
 
 
 def demand_of(prompt):
@@ -196,7 +199,10 @@ def handle(line):
             # hold the turn open: the steer command finishes it
             pass
         elif MODE == "sleep":
-            time.sleep(120)
+            # the work runs in the background; the read loop stays live
+            # so the abort reaches this session while it works
+            import threading
+            threading.Thread(target=lambda: time.sleep(120), daemon=True).start()
     elif kind == "steer":
         emit({"type": "response", "command": "steer", "success": True})
         if MODE == "steer":
@@ -207,6 +213,7 @@ def handle(line):
         emit({"type": "response", "command": "abort", "success": True})
         note("aborted")
         emit({"type": "agent_settled"})
+        sys.exit(0)
 
 
 demand_of_cache = None
@@ -319,7 +326,7 @@ async fn the_stub_contract_answers_a_demand_over_rpc() {
     }
     // the stub really spoke the subset: the prompt went in as a command
     let said = std::fs::read_to_string(&log).unwrap();
-    assert!(said.contains("\"type\": \"prompt\""), "{said}");
+    assert!(said.contains("\"type\":\"prompt\""), "{said}");
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -451,7 +458,7 @@ async fn a_standing_steer_reaches_the_live_session_once() {
     let said = std::fs::read_to_string(&log).unwrap();
     let deliveries = said
         .lines()
-        .filter(|l| l.contains("\"type\": \"steer\""))
+        .filter(|l| l.contains("\"type\":\"steer\""))
         .count();
     assert_eq!(deliveries, 1, "{said}");
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
@@ -539,7 +546,7 @@ async fn a_cancel_aborts_the_session_through_the_protocol() {
         said.contains("aborted"),
         "the stub never saw the abort command: {said}"
     );
-    assert!(said.contains("\"type\": \"abort\""), "{said}");
+    assert!(said.contains("\"type\":\"abort\""), "{said}");
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
