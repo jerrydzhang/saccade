@@ -67,10 +67,13 @@ outcome, not the goal.
    Labels like CHANGE ONE, CHANGE TWO are task boundaries wearing phase
    names: if a change could land and be accepted on its own, it is a
    task. Park the split on the thread (`sac create task --parent`),
-   fire the children, and deliver the split itself. A spec you have
-   already called large is the signal — naming its size and executing
-   it whole is the failure this law exists to stop; resuming after a
-   crash is never a reason to keep a too-large shape.
+   then let the dependencies pick the shape: a chain fires one child
+   at a time, each demand when its upstream lands; a fan-out fires
+   together when the changes share nothing. Name the shape when you
+   park the split. A spec you have already called large is the signal
+   — naming its size and executing it whole is the failure this law
+   exists to stop; resuming after a crash is never a reason to keep a
+   too-large shape.
 3. **Work in the task's worktree** — its branch `saccade/t-N`, prepared
    from the recorded checkpoint. The runner owns it (see Runner-owned
    state); park what you learn as you learn it.
