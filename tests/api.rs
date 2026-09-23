@@ -1286,19 +1286,24 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(out.contains("t-1  open  floop guard"), "{out}");
     assert!(out.contains("#1  pi"), "{out}");
 
-    // a positional id that parses but points at nothing renderable refuses
+    // a positional id that parses but names nothing the log holds
+    // refuses with the log's own extent
     let (ok, _, err) = sac(&["show", "#99999"]);
     assert!(!ok);
     assert!(
-        err.contains("#99999 is not a comment, an artifact, or a task birth"),
+        err.contains("no record #99999; the log holds 7 records, #0 through #6"),
         "{err}"
     );
-    // a record that is neither a comment nor a birth refuses the same way
-    let (ok, _, err) = sac(&["show", "#3"]);
-    assert!(!ok);
+    // the raw-id door opens any record: a machinery event renders as
+    // the log renders it, header and payload
+    let (ok, out, _) = sac(&["show", "#3"]);
+    assert!(ok, "{out}");
+    assert_eq!(out.trim_end(), "#3  task_claimed  pi\n{\"id\":0}");
+    let (ok, out, _) = sac(&["show", "#4"]);
+    assert!(ok, "{out}");
     assert!(
-        err.contains("#3 is not a comment, an artifact, or a task birth"),
-        "{err}"
+        out.starts_with("#4  task_delivered  pi\n{\"id\":0,"),
+        "the accept-family payload rides whole: {out}"
     );
     let (ok, _, err) = sac(&["show", "bogus"]);
     assert!(!ok);

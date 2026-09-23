@@ -146,7 +146,8 @@ enum Cmd {
     /// Everything about tasks and records, many at once; raw ids show
     /// the event, t-<n> shows the task plus its thread
     Show {
-        /// Ids in any mix: #<seq> or c-<seq> a comment or a task's birth,
+        /// Ids in any mix: #<seq> or c-<seq> a record — comments and
+        /// artifacts as their blocks, every other event as itself —
         /// t-<n> a whole thread
         #[arg(required_unless_present = "stdin")]
         ids: Vec<String>,
@@ -771,11 +772,11 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
         Cmd::Show { ids, stdin } => match loadout.state {
             LoadState::Full(world) => {
                 if *stdin {
-                    return show_stdin(&world, ids);
+                    return show_stdin(&world, &loadout.rows, ids);
                 }
                 let mut blocks = Vec::new();
                 for token in ids {
-                    blocks.push(render_id(&world, token)?);
+                    blocks.push(render_id(&world, &loadout.rows, token)?);
                 }
                 Ok(blocks.join("\n\n"))
             }
@@ -1054,10 +1055,11 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
 }
 
 /// Render one id: a thread whole, or a record as itself — a comment
-/// as its block, a task's birth as the literal event (header and
-/// relation, no thread substitution: the relation names t-N, and the
-/// taught law does the rest).
-fn render_id(world: &World, token: &str) -> Result<String, Fail> {
+/// as its block, an artifact as its pointer line, a task's birth as
+/// the literal event (header and relation, no thread substitution:
+/// the relation names t-N, and the taught law does the rest), and
+/// every other record as the log renders it, header and payload.
+fn render_id(world: &World, rows: &[db::StoredRecord], token: &str) -> Result<String, Fail> {
     match parse_show_id(token)? {
         ShowId::Thread(id) => render_show(world, id),
         ShowId::Record(id) => {
@@ -1080,9 +1082,19 @@ fn render_id(world: &World, token: &str) -> Result<String, Fail> {
                     task.0
                 ));
             }
+            // the raw-id door opens any record the log holds: the
+            // event itself, header and payload
+            if let Some(row) = rows.get(id.0.0) {
+                return Ok(format!(
+                    "#{}  {}  {}\n{}",
+                    row.seq, row.kind, row.actor, row.payload
+                ));
+            }
             Err(Fail::Usage(format!(
-                "#{} is not a comment, an artifact, or a task birth",
-                id.0.0
+                "no record #{}; the log holds {} records, #0 through #{}",
+                id.0.0,
+                rows.len(),
+                rows.len().saturating_sub(1)
             )))
         }
     }
@@ -1090,7 +1102,7 @@ fn render_id(world: &World, token: &str) -> Result<String, Fail> {
 
 /// The piped face: one id per line, every failure a skip with a note,
 /// never a broken chain. Empty input is silence.
-fn show_stdin(world: &World, ids: &[String]) -> Result<String, Fail> {
+fn show_stdin(world: &World, rows: &[db::StoredRecord], ids: &[String]) -> Result<String, Fail> {
     if !ids.is_empty() {
         return Err(Fail::Usage("ids as arguments or --stdin, not both".into()));
     }
@@ -1106,7 +1118,7 @@ fn show_stdin(world: &World, ids: &[String]) -> Result<String, Fail> {
         if token.is_empty() {
             continue;
         }
-        match render_id(world, token) {
+        match render_id(world, rows, token) {
             Ok(block) => blocks.push(block),
             Err(f) => blocks.push(format!("skipped '{token}': {f}")),
         }

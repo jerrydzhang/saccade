@@ -212,7 +212,7 @@ The power tail is unchanged: `sac log | grep` reads the raw record.
 | `sac accept t-N` | birth attribution, or human | the only door from delivered to done |
 | `sac accept <seq>` / `sac reject <seq> --note` | **human only** | ruling acts on proposals |
 | `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | park or reply — a note; `--demand` fires a run |
-| `sac artifact t-N <path> [--name "…"]` | any tier | park an artifact on a thread: the file's bytes hash into the store, the record carries the pointer |
+| `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only; bytes never ride the wire, the db, or the server |
 | `sac steer t-N "…"` | any tier | reach the task's live run at its next turn boundary; with no run it stands as intent on the thread |
 | `sac wait c-<seq>` | any tier | blocks on the demand's outcome, never replies |
 | `sac cancel t-N` | any tier | the kill request for a task's active run |
@@ -291,6 +291,12 @@ the conditions from the attempts log.
   target), show `stale` in the queue when the embedded act goes illegal,
   and re-proposing after a rejection is free — the rejection note names
   the missing evidence.
+- Artifacts are pointers, never payloads — the record holds name+hash,
+  the bytes live content-addressed under the state root, an artifact
+  renders at its home position (CLI pointer line, console inline image
+  via `/a/<hash>`), a `#N` mention resolving to an artifact renders as
+  the card, and the store write precedes the record so a crash orphans
+  content, never points at absence.
 - Each repo has one tracker, served locally (`--server`, or
   `SACCADE_SERVER`; default `127.0.0.1:8811`); its state root derives
   from the repo path, never from your working directory — `--repo` or
