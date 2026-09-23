@@ -8,7 +8,7 @@ use crate::objects::comment::{
 };
 use crate::objects::proposal::{ProposalAction, ProposalContext, ProposalId, ProposalState};
 use crate::objects::task::{TaskContext, TaskId, TaskState};
-use crate::store::{Tier, World};
+use crate::store::{RecordId, Tier, World};
 use crate::types::prose::Prose;
 
 /// A claimed task with no record movement for this long renders adrift.
@@ -656,6 +656,355 @@ pub fn ribbon_marks(world: &World, now: u64) -> Vec<RibbonMark> {
     }
     marks.sort_by_key(|m| m.at);
     marks
+}
+
+// -- The search door -------------------------------------------------
+
+/// One only-show-me filter; none of them rank, suggest, or remember.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Facet {
+    /// Only records living on this thread
+    In(TaskId),
+    /// Only records whose author's name contains this, case-folded
+    By(String),
+    /// Only records of this kind; the vocabulary is SEARCH_KINDS
+    Kind(&'static str),
+    /// Only records on this thread's task or any of its descendants
+    Under(TaskId),
+}
+
+/// The kinds a searched record can be — kind:'s whole vocabulary.
+pub const SEARCH_KINDS: [&str; 6] = ["task", "note", "demand", "steer", "ask", "receipt"];
+
+/// A term: plain words match text; ids are reference searches.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Term {
+    /// Matches as a whole, word-bounded token, case-folded
+    Plain(String),
+    /// #N: prose citations of the comment, and replies addressing it
+    Comment(RecordId),
+    /// t-N: prose namings of the task, births under it, comments
+    /// addressing it
+    Task(TaskId),
+}
+
+impl Term {
+    /// The string scanned for in prose.
+    fn canonical(&self) -> String {
+        match self {
+            Term::Plain(s) => s.clone(),
+            Term::Comment(id) => format!("#{}", id.0),
+            Term::Task(id) => format!("t-{}", id.0),
+        }
+    }
+}
+
+/// The parsed query: every term must match, every facet must pass.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SearchQuery {
+    pub terms: Vec<Term>,
+    pub facets: Vec<Facet>,
+}
+
+/// The grammar is strict so a mistyped facet never becomes a quiet term.
+#[derive(Debug, PartialEq)]
+pub enum SearchFail {
+    Usage(String),
+    /// A facet named a task the fold does not hold
+    NoSuchTask {
+        asked: TaskId,
+        holds: usize,
+    },
+}
+
+impl std::fmt::Display for SearchFail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SearchFail::Usage(m) => write!(f, "{m}"),
+            SearchFail::NoSuchTask { asked, holds } => match holds {
+                0 => write!(
+                    f,
+                    "no task t-{} exists; this tracker holds no tasks yet",
+                    asked.0
+                ),
+                1 => write!(
+                    f,
+                    "no task t-{} exists; this tracker holds 1 task, t-0",
+                    asked.0
+                ),
+                n => write!(
+                    f,
+                    "no task t-{} exists; this tracker holds {n} tasks, t-0 through t-{}",
+                    asked.0,
+                    n - 1
+                ),
+            },
+        }
+    }
+}
+
+fn task_ref(token: &str, facet: &str) -> Result<TaskId, SearchFail> {
+    token
+        .strip_prefix("t-")
+        .and_then(|n| n.parse::<usize>().ok())
+        .map(TaskId)
+        .ok_or_else(|| SearchFail::Usage(format!("{facet} takes a task id, e.g. {facet}:t-4")))
+}
+
+impl SearchQuery {
+    pub fn parse(tokens: &[String]) -> Result<SearchQuery, SearchFail> {
+        let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+        let mut query = SearchQuery::default();
+        for token in tokens {
+            if let Some(rest) = token.strip_prefix("in:") {
+                query.facets.push(Facet::In(task_ref(rest, "in:")?));
+            } else if let Some(rest) = token.strip_prefix("under:") {
+                query.facets.push(Facet::Under(task_ref(rest, "under:")?));
+            } else if let Some(rest) = token.strip_prefix("by:") {
+                if rest.is_empty() {
+                    return Err(SearchFail::Usage(
+                        "by: needs an actor name, e.g. by:pi".into(),
+                    ));
+                }
+                query.facets.push(Facet::By(rest.to_lowercase()));
+            } else if let Some(rest) = token.strip_prefix("kind:") {
+                let Some(kind) = SEARCH_KINDS.iter().find(|k| **k == rest) else {
+                    return Err(SearchFail::Usage(format!(
+                        "kind: {rest} is not a kind; the kinds are {}",
+                        SEARCH_KINDS.join(", ")
+                    )));
+                };
+                query.facets.push(Facet::Kind(kind));
+            } else if let Some(n) = token.strip_prefix('#').filter(|n| numeric(n)) {
+                query
+                    .terms
+                    .push(Term::Comment(RecordId(n.parse().expect("digits checked"))));
+            } else if let Some(n) = token.strip_prefix("t-").filter(|n| numeric(n)) {
+                query
+                    .terms
+                    .push(Term::Task(TaskId(n.parse().expect("digits checked"))));
+            } else if token.is_empty() {
+                return Err(SearchFail::Usage("a term is required".into()));
+            } else {
+                query.terms.push(Term::Plain(token.to_lowercase()));
+            }
+        }
+        if query.terms.is_empty() && query.facets.is_empty() {
+            return Err(SearchFail::Usage(
+                "give at least one term or a facet (in:, by:, kind:, under:)".into(),
+            ));
+        }
+        Ok(query)
+    }
+}
+
+/// Id grammar is word grammar: letters, digits, '-', '#', '_' are word
+/// characters, so "t-49" never matches inside "t-490" or "pi/t-90-1".
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '-' || c == '#' || c == '_'
+}
+
+/// A term matches a field when it appears as a whole token, case-folded;
+/// never a substring, never ranked.
+fn token_in_field(term: &str, field: &str) -> bool {
+    let field = field.to_lowercase();
+    let mut from = 0;
+    while let Some(at) = field[from..].find(term) {
+        let start = from + at;
+        let end = start + term.len();
+        let bounded = field[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_word_char(c))
+            && field[end..].chars().next().is_none_or(|c| !is_word_char(c));
+        if bounded {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+/// A structural reference a record carries beside its text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Ref {
+    Comment(RecordId),
+    Task(TaskId),
+}
+
+/// Every term must be satisfied, each by the text or by a reference.
+fn terms_match(query: &SearchQuery, text: &str, refs: &[Ref]) -> bool {
+    query.terms.iter().all(|term| match term {
+        Term::Plain(s) => token_in_field(s, text),
+        Term::Comment(id) => {
+            token_in_field(&Term::Comment(*id).canonical(), text)
+                || refs.contains(&Ref::Comment(*id))
+        }
+        Term::Task(id) => {
+            token_in_field(&Term::Task(*id).canonical(), text) || refs.contains(&Ref::Task(*id))
+        }
+    })
+}
+
+/// The one line a result shows: the first line a term lands on, else
+/// the field's first line (a reference-only match still points).
+fn matched_line(terms: &[Term], text: &str) -> String {
+    for line in text.lines() {
+        if terms.is_empty() || terms.iter().any(|t| token_in_field(&t.canonical(), line)) {
+            return line.to_string();
+        }
+    }
+    text.lines().next().unwrap_or_default().to_string()
+}
+
+/// One matched record: a pointer and the one line that matched.
+#[derive(Debug, PartialEq)]
+pub struct SearchRecord {
+    /// "#907" for a comment or a birth; "t-90 receipt" — the fold keeps
+    /// no delivery seq, so the task is the receipt's address
+    pub pointer: String,
+    pub kind: &'static str,
+    /// The author, when the fold keeps one; receipts carry none
+    pub actor: Option<String>,
+    pub line: String,
+    /// The record's position; a receipt, having none, closes its group
+    order: usize,
+}
+
+/// A thread's results: its records after the facets, and the term
+/// matches it held before any facet narrowed them.
+#[derive(Debug)]
+pub struct SearchGroup {
+    pub task: usize,
+    pub title: String,
+    pub records: Vec<SearchRecord>,
+    pub total: usize,
+}
+
+/// Search the fold: no index, no ranking, no memory between calls.
+pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, SearchFail> {
+    for facet in &query.facets {
+        let asked = match facet {
+            Facet::In(id) | Facet::Under(id) => Some(*id),
+            _ => None,
+        };
+        if let Some(id) = asked
+            && id.0 >= world.tasks.len()
+        {
+            return Err(SearchFail::NoSuchTask {
+                asked: id,
+                holds: world.tasks.len(),
+            });
+        }
+    }
+
+    let mut matches: Vec<(usize, SearchRecord)> = Vec::new();
+    for (i, ctx) in world.tasks.iter().enumerate() {
+        let title = ctx.task.name.as_str();
+        let refs = ctx
+            .task
+            .parent_id
+            .map(Ref::Task)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if terms_match(query, title, &refs) {
+            matches.push((
+                i,
+                SearchRecord {
+                    pointer: format!("#{}", ctx.birth.0),
+                    kind: "task",
+                    actor: Some(ctx.birth_actor.as_str().to_string()),
+                    line: matched_line(&query.terms, title),
+                    order: ctx.birth.0,
+                },
+            ));
+        }
+        if let TaskState::Delivered(receipt) | TaskState::Done(receipt) = &ctx.task.state {
+            let text = receipt.as_str();
+            if terms_match(query, text, &[]) {
+                matches.push((
+                    i,
+                    SearchRecord {
+                        pointer: format!("t-{i} receipt"),
+                        kind: "receipt",
+                        actor: None,
+                        line: matched_line(&query.terms, text),
+                        order: usize::MAX,
+                    },
+                ));
+            }
+        }
+    }
+    for (id, cctx) in &world.comments {
+        let body = cctx.comment.body.as_str();
+        let refs = [match cctx.comment.target {
+            Target::Task(t) => Ref::Task(t),
+            Target::Comment(c) => Ref::Comment(c.0),
+        }];
+        if terms_match(query, body, &refs) {
+            matches.push((
+                cctx.comment.root.0,
+                SearchRecord {
+                    pointer: format!("#{}", id.0.0),
+                    kind: kind_of(&cctx.state),
+                    actor: Some(cctx.actor.as_str().to_string()),
+                    line: matched_line(&query.terms, body),
+                    order: id.0.0,
+                },
+            ));
+        }
+    }
+
+    // group by thread; records by position, the receipt closing its group
+    let mut by_thread: BTreeMap<usize, Vec<SearchRecord>> = BTreeMap::new();
+    for (thread, record) in matches {
+        by_thread.entry(thread).or_default().push(record);
+    }
+    let mut groups: Vec<(usize, SearchGroup)> = Vec::new();
+    for (thread, mut records) in by_thread {
+        records.sort_by_key(|r| r.order);
+        let first = records.first().expect("groups hold a match").order;
+        let total = records.len();
+        let records: Vec<SearchRecord> = records
+            .into_iter()
+            .filter(|r| facets_pass(world, query, thread, r))
+            .collect();
+        groups.push((
+            first,
+            SearchGroup {
+                task: thread,
+                title: world.tasks[thread].task.name.as_str().to_string(),
+                records,
+                total,
+            },
+        ));
+    }
+    // threads enter by their first match, never by narrowing side effects
+    groups.sort_by_key(|(first, g)| (*first, g.task));
+    Ok(groups.into_iter().map(|(_, g)| g).collect())
+}
+
+fn facets_pass(world: &World, query: &SearchQuery, thread: usize, record: &SearchRecord) -> bool {
+    query.facets.iter().all(|facet| match facet {
+        Facet::In(id) => thread == id.0,
+        Facet::Under(id) => under(world, thread, *id),
+        Facet::By(name) => record
+            .actor
+            .as_deref()
+            .is_some_and(|a| a.to_lowercase().contains(name)),
+        Facet::Kind(kind) => record.kind == *kind,
+    })
+}
+
+fn under(world: &World, thread: usize, root: TaskId) -> bool {
+    let mut up = Some(TaskId(thread));
+    while let Some(id) = up {
+        if id == root {
+            return true;
+        }
+        up = world.tasks[id.0].task.parent_id;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1310,6 +1659,320 @@ mod panels {
                 (2, MarkKind::Run),
                 (4, MarkKind::Note { human: false }),
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod search {
+    use super::*;
+    use crate::CommentKind;
+    use crate::events::Event;
+    use crate::objects::comment::Target;
+    use crate::store::{Context, Record, RecordId, Tier, World};
+    use crate::types::actor::ActorName;
+    use crate::types::prose::Prose;
+
+    fn ctx(tier: Tier, name: &str) -> Context {
+        Context {
+            actor: ActorName::new(name.into()).unwrap(),
+            tier,
+        }
+    }
+
+    fn record(seq: usize, at: u64, ctx: &Context, event: Event) -> Record {
+        Record {
+            id: RecordId(seq),
+            timestamp: at,
+            context: ctx.clone(),
+            event,
+        }
+    }
+
+    fn task(seq: usize, at: u64, ctx: &Context, name: &str, parent: Option<TaskId>) -> Record {
+        record(
+            seq,
+            at,
+            ctx,
+            Event::TaskCreated {
+                name: Prose::new(name.into()).unwrap(),
+                parent_id: parent,
+            },
+        )
+    }
+
+    fn note(seq: usize, at: u64, ctx: &Context, target: Target, body: &str) -> Record {
+        record(
+            seq,
+            at,
+            ctx,
+            Event::Commented {
+                target,
+                body: Prose::new(body.into()).unwrap(),
+                kind: CommentKind::Note,
+            },
+        )
+    }
+
+    /// t-0 "implement foo" holds the demand #2, its reply #3 (pi), and
+    /// the later answer #9 (bot, citing #2 by address alone); t-1
+    /// "migrate floop" is born under t-0, named in prose by #5, carried
+    /// a run-name line in #6, and was delivered by the bot with a
+    /// receipt citing #2; t-2's title guards the id boundary.
+    fn story() -> World {
+        let jerry = ctx(Tier::Human, "jerry");
+        let bot = ctx(Tier::Agent, "saccade bot");
+        let pi = ctx(Tier::Agent, "pi");
+        World::replay(vec![
+            task(0, 0, &jerry, "implement foo", None),
+            task(1, 10, &bot, "migrate floop", Some(TaskId(0))),
+            note(
+                2,
+                20,
+                &jerry,
+                Target::Task(TaskId(0)),
+                "parked: the fluke blocks foo\ntelemetries abound here",
+            ),
+            note(
+                3,
+                30,
+                &pi,
+                Target::Comment(CommentId(RecordId(2))),
+                "the fluke is real; floop proceeds",
+            ),
+            task(4, 40, &jerry, "t-490 the id boundary guard", None),
+            note(
+                5,
+                50,
+                &pi,
+                Target::Task(TaskId(1)),
+                "t-0 waits on this thread",
+            ),
+            note(
+                6,
+                60,
+                &pi,
+                Target::Task(TaskId(1)),
+                "the run pi/t-90-1 answered\nsee #123 for the trail",
+            ),
+            record(7, 70, &bot, Event::TaskClaimed { id: TaskId(1) }),
+            record(
+                8,
+                80,
+                &bot,
+                Event::TaskDelivered {
+                    id: TaskId(1),
+                    receipt: Prose::new("suite 9 green; the floop migration landed per #2".into())
+                        .unwrap(),
+                },
+            ),
+            note(
+                9,
+                90,
+                &bot,
+                Target::Comment(CommentId(RecordId(2))),
+                "done, per the plan above",
+            ),
+        ])
+        .unwrap()
+    }
+
+    fn q(tokens: &[&str]) -> SearchQuery {
+        let owned: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
+        SearchQuery::parse(&owned).unwrap()
+    }
+
+    fn pointers(groups: &[SearchGroup]) -> Vec<(usize, Vec<String>)> {
+        groups
+            .iter()
+            .map(|g| {
+                (
+                    g.task,
+                    g.records
+                        .iter()
+                        .map(|r| r.pointer.clone())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_plain_term_reads_titles_bodies_and_receipts() {
+        let groups = search(&story(), &q(&["floop"])).unwrap();
+        // threads enter by first match: t-1's title at #1 before t-0's #3
+        assert_eq!(
+            pointers(&groups),
+            vec![
+                (1, vec!["#1".into(), "t-1 receipt".into()]),
+                (0, vec!["#3".into()])
+            ]
+        );
+        let title = &groups[0].records[0];
+        assert_eq!(
+            (title.kind, title.actor.as_deref()),
+            ("task", Some("saccade bot"))
+        );
+        let receipt = &groups[0].records[1];
+        // the receipt carries no author in the fold and closes its group
+        assert_eq!((receipt.kind, receipt.actor.as_deref()), ("receipt", None));
+        assert_eq!(
+            receipt.line,
+            "suite 9 green; the floop migration landed per #2"
+        );
+        assert_eq!(groups[0].title, "migrate floop");
+    }
+
+    #[test]
+    fn matching_is_case_folded_and_word_bounded() {
+        let world = story();
+        assert_eq!(search(&world, &q(&["FLOOP"])).unwrap().len(), 2);
+        // plurals and embedded ids never match
+        assert!(search(&world, &q(&["telemetry"])).unwrap().is_empty());
+        assert!(search(&world, &q(&["t-49"])).unwrap().is_empty());
+        assert!(search(&world, &q(&["t-90"])).unwrap().is_empty());
+        assert!(search(&world, &q(&["#12"])).unwrap().is_empty());
+        // the tokens themselves do
+        assert_eq!(
+            pointers(&search(&world, &q(&["t-490"])).unwrap()),
+            vec![(2, vec!["#4".into()])]
+        );
+        let groups = search(&world, &q(&["#123"])).unwrap();
+        assert_eq!(pointers(&groups), vec![(1, vec!["#6".into()])]);
+        // the matched line is the line the term landed on
+        assert_eq!(groups[0].records[0].line, "see #123 for the trail");
+    }
+
+    #[test]
+    fn an_id_term_is_a_reference_search() {
+        let world = story();
+        // '#2': the receipt cites it in prose, #3 and #9 address it by reply
+        assert_eq!(
+            pointers(&search(&world, &q(&["#2"])).unwrap()),
+            vec![
+                (0, vec!["#3".into(), "#9".into()]),
+                (1, vec!["t-1 receipt".into()])
+            ]
+        );
+        // 't-0': #1 names it as parent, #5 in prose, #2 by address
+        assert_eq!(
+            pointers(&search(&world, &q(&["t-0"])).unwrap()),
+            vec![(1, vec!["#1".into(), "#5".into()]), (0, vec!["#2".into()])]
+        );
+    }
+
+    #[test]
+    fn facets_narrow_with_visible_counts() {
+        let world = story();
+        // in: only t-0's records show; t-1 stays visible as a count row
+        let groups = search(&world, &q(&["floop", "in:t-0"])).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.task, g.records.len(), g.total))
+                .collect::<Vec<_>>(),
+            vec![(1, 0, 2), (0, 1, 1)]
+        );
+        // by: a receipt carries no author, so the filter narrows it out
+        let groups = search(&world, &q(&["floop", "by:pi"])).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.task, g.records.len(), g.total))
+                .collect::<Vec<_>>(),
+            vec![(1, 0, 2), (0, 1, 1)]
+        );
+        // kind: receipts only
+        let groups = search(&world, &q(&["floop", "kind:receipt"])).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.task, g.records.iter().map(|r| r.kind).collect::<Vec<_>>()))
+                .collect::<Vec<_>>(),
+            vec![(1, vec!["receipt"]), (0, vec![])]
+        );
+        // under: t-0's subtree holds t-0 and t-1; t-2's match stays
+        // visible as a count-only row, never silently excluded
+        let groups = search(&world, &q(&["t-490", "under:t-0"])).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.task, g.records.len(), g.total))
+                .collect::<Vec<_>>(),
+            vec![(2, 0, 1)]
+        );
+        let groups = search(&world, &q(&["floop", "under:t-0"])).unwrap();
+        assert_eq!(
+            groups.iter().map(|g| (g.task, g.total)).collect::<Vec<_>>(),
+            vec![(1, 2), (0, 1)]
+        );
+    }
+
+    #[test]
+    fn a_facet_may_browse_a_whole_thread() {
+        // a facet alone matches everything, narrowed by the facet; the
+        // other threads stay as count-only rows
+        let groups = search(&story(), &q(&["in:t-0"])).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (
+                    g.task,
+                    g.records
+                        .iter()
+                        .map(|r| r.pointer.clone())
+                        .collect::<Vec<_>>(),
+                    g.total
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    0,
+                    vec!["#0".into(), "#2".into(), "#3".into(), "#9".into()],
+                    4
+                ),
+                (1, vec![], 4),
+                (2, vec![], 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_facet_tasks_and_grammar_refuse() {
+        let world = story();
+        assert!(matches!(
+            search(&world, &q(&["in:t-9"])),
+            Err(SearchFail::NoSuchTask {
+                asked: TaskId(9),
+                holds: 3
+            })
+        ));
+        let owned = |t: &str| vec![t.to_string()];
+        assert!(
+            SearchQuery::parse(&owned("kind:bogus"))
+                .unwrap_err()
+                .to_string()
+                .contains("the kinds are")
+        );
+        assert!(matches!(SearchQuery::parse(&[]), Err(SearchFail::Usage(_))));
+        assert!(matches!(
+            SearchQuery::parse(&owned("in:x")),
+            Err(SearchFail::Usage(_))
+        ));
+        assert!(matches!(
+            SearchQuery::parse(&owned("by:")),
+            Err(SearchFail::Usage(_))
+        ));
+        assert_eq!(
+            q(&["#2", "t-3", "Floop"]),
+            SearchQuery {
+                terms: vec![
+                    Term::Comment(RecordId(2)),
+                    Term::Task(TaskId(3)),
+                    Term::Plain("floop".into())
+                ],
+                facets: Vec::new()
+            }
         );
     }
 }

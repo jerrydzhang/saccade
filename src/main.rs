@@ -6,7 +6,10 @@ use saccade::World;
 use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
-use saccade::views::{ProposalView, TaskView, comment_thread, proposal_view, show_view, task_view};
+use saccade::views::{
+    ProposalView, SearchGroup, SearchQuery, TaskView, Term, comment_thread, proposal_view, search,
+    show_view, task_view,
+};
 use saccade::{
     ActorName, Command, CommentId, CommentKind, Context, GitCommit, ProposalAction, ProposalId,
     Prose, RecordId, Reject, Target, Tier,
@@ -127,6 +130,15 @@ enum Cmd {
     Steer { id: String, body: String },
     /// Everything about one task: state, receipt, comment thread
     Show { id: String },
+    /// Search the folded record: exact terms over task titles, comment
+    /// bodies, and receipts; an id term is a reference search
+    Search {
+        /// Terms and only-show-me facets: in:t-N, by:NAME, kind:K, under:t-N
+        terms: Vec<String>,
+        /// With one id term: that record plus N before and after
+        #[arg(short = 'C', long)]
+        context: Option<usize>,
+    },
     /// Serve the read-only canvas over HTTP (127.0.0.1 by default)
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
@@ -336,7 +348,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             body: Prose::new(body.clone())?,
             kind: CommentKind::Steer,
         },
-        Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } => {
+        Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } | Cmd::Search { .. } => {
             return read_only(cli, &db_path);
         }
         Cmd::Serve {
@@ -601,6 +613,20 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
             }
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
+        Cmd::Search { terms, context } => {
+            let query = SearchQuery::parse(terms).map_err(|f| Fail::Usage(f.to_string()))?;
+            if let Some(around) = context {
+                let anchor = anchor_seq(&loadout, &query)?;
+                return Ok(render_anchor(cli, &loadout.rows, anchor, *around));
+            }
+            match loadout.state {
+                LoadState::Full(world) => {
+                    let groups = search(&world, &query).map_err(|f| Fail::Usage(f.to_string()))?;
+                    Ok(render_search(cli, &groups, !query.facets.is_empty()))
+                }
+                LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+            }
+        }
         _ => unreachable!("read_only reached from a mutating command"),
     }
 }
@@ -873,6 +899,148 @@ fn render_proposals(cli: &Cli, world: &World) -> String {
         .map(|v| format!("{}\t{}\t{} {}\t{}", v.id, v.state, v.action, v.task, v.name))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The search door as text: thread groups of pointers, one matched
+/// line each. Counts ride the headers only when the query narrows —
+/// narrowing's visibility, never an aggregate badge.
+fn render_search(cli: &Cli, groups: &[SearchGroup], counts: bool) -> String {
+    if cli.json {
+        let rows: Vec<serde_json::Value> = groups
+            .iter()
+            .map(|g| {
+                let mut row = serde_json::json!({
+                    "task": format!("t-{}", g.task),
+                    "title": g.title,
+                    "records": g.records.iter().map(|r| serde_json::json!({
+                        "pointer": r.pointer,
+                        "kind": r.kind,
+                        "actor": r.actor,
+                        "line": r.line,
+                    })).collect::<Vec<_>>(),
+                });
+                if counts {
+                    row["shown"] = serde_json::json!(g.records.len());
+                    row["total"] = serde_json::json!(g.total);
+                }
+                row
+            })
+            .collect();
+        return serde_json::to_string_pretty(&serde_json::json!({ "groups": rows }))
+            .expect("results are plain data");
+    }
+    let mut out = Vec::new();
+    for g in groups {
+        let mark = if counts {
+            format!(" ({} of {})", g.records.len(), g.total)
+        } else {
+            String::new()
+        };
+        out.push(format!("t-{}  {}{}", g.task, g.title, mark));
+        for r in &g.records {
+            let actor = r
+                .actor
+                .as_deref()
+                .map(|a| format!("{a}  "))
+                .unwrap_or_default();
+            let prefix = format!("  {}  {actor}", r.pointer);
+            let budget = WIDTH.saturating_sub(prefix.chars().count());
+            out.push(format!("{prefix}{}", glimpse(&r.line, budget)));
+        }
+    }
+    out.join("\n")
+}
+
+/// The anchor query names one record: #N itself, or t-N's birth.
+fn anchor_seq(loadout: &db::Loadout, query: &SearchQuery) -> Result<usize, Fail> {
+    match query.terms.as_slice() {
+        [Term::Comment(id)] => {
+            if id.0 >= loadout.rows.len() {
+                return Err(Fail::Usage(format!(
+                    "no record #{}; the log holds {} records, #0 through #{}",
+                    id.0,
+                    loadout.rows.len(),
+                    loadout.rows.len().saturating_sub(1)
+                )));
+            }
+            Ok(id.0)
+        }
+        [Term::Task(id)] => match &loadout.state {
+            LoadState::Full(world) => {
+                world.tasks.get(id.0).map(|ctx| ctx.birth.0).ok_or_else(|| {
+                    Fail::Usage(format!(
+                        "no task t-{}; the fold holds {} tasks",
+                        id.0,
+                        world.tasks.len()
+                    ))
+                })
+            }
+            LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
+        },
+        _ => Err(Fail::Usage(
+            "-C anchors on one record: give a single id term (#seq or t-N) and no facets".into(),
+        )),
+    }
+}
+
+/// The anchor's window: the record, N before, N after — one line each,
+/// straight off the log's own rows.
+fn render_anchor(cli: &Cli, rows: &[StoredRecord], anchor: usize, around: usize) -> String {
+    let from = anchor.saturating_sub(around);
+    let to = (anchor + around).min(rows.len().saturating_sub(1));
+    let window = &rows[from..=to];
+    if cli.json {
+        let records: Vec<serde_json::Value> = window
+            .iter()
+            .map(|row| {
+                serde_json::json!({
+                    "seq": row.seq,
+                    "kind": row.kind,
+                    "actor": format!("{}/{}", row.actor, row.tier),
+                    "line": row_line(row),
+                })
+            })
+            .collect();
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "anchor": anchor,
+            "records": records
+        }))
+        .expect("rows are plain data");
+    }
+    window
+        .iter()
+        .map(|row| {
+            let prefix = format!("#{}  {}  {}/{}", row.seq, row.kind, row.actor, row.tier);
+            let budget = WIDTH.saturating_sub(prefix.chars().count() + 2);
+            format!("{prefix}  {}", glimpse(&row_line(row), budget))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The record's own first text line — the same fields the log prints.
+fn row_line(row: &StoredRecord) -> String {
+    let payload: serde_json::Value = match serde_json::from_str(&row.payload) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+    ["body", "name", "receipt", "note"]
+        .iter()
+        .find_map(|k| payload.get(k).and_then(|v| v.as_str()))
+        .map(|t| t.lines().next().unwrap_or_default().to_string())
+        .unwrap_or_default()
+}
+
+/// One line cut to its budget on a char boundary; the ellipsis is the
+/// only mark a cut earns.
+fn glimpse(line: &str, budget: usize) -> String {
+    if line.chars().count() <= budget {
+        line.to_string()
+    } else {
+        let mut cut: String = line.chars().take(budget.saturating_sub(1)).collect();
+        cut.push('…');
+        cut
+    }
 }
 
 #[cfg(test)]
