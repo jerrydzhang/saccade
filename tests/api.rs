@@ -533,22 +533,16 @@ fn lines_of(world: &saccade::World, n: usize) -> Vec<saccade::views::CommentLine
                 replies,
             } => {
                 let mut all = vec![root];
-                all.extend(replies.into_iter().filter_map(|r| match r {
-                    saccade::views::ThreadEntry::Comment(c) => Some(c),
-                    saccade::views::ThreadEntry::Artifact(_) => None,
-                }));
+                all.extend(replies);
                 all
             }
             saccade::views::ThreadItem::Group { root, replies } => {
                 let mut all = vec![root];
-                all.extend(replies.into_iter().filter_map(|r| match r {
-                    saccade::views::ThreadEntry::Comment(c) => Some(c),
-                    saccade::views::ThreadEntry::Artifact(_) => None,
-                }));
+                all.extend(replies);
                 all
             }
             saccade::views::ThreadItem::Note(line) => vec![line],
-            saccade::views::ThreadItem::Artifact(_) => Vec::new(),
+            saccade::views::ThreadItem::Artifacts(_) => Vec::new(),
         })
         .collect();
     v.sort_by_key(|l| l.seq);

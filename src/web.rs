@@ -7,7 +7,7 @@
 
 use crate::views::{
     ArtifactLine, CommentLine, ForestRow, MarkKind, NextPanel, ProposalView, RIBBON_WINDOW_SECS,
-    RefTarget, RibbonMark, ShowView, ThreadEntry, ThreadItem, ThreadView,
+    RefTarget, RibbonMark, ShowView, ThreadItem, ThreadView,
 };
 use crate::{CommentId, CommentKind, RecordId, Target, TaskId};
 use std::collections::BTreeMap;
@@ -525,7 +525,7 @@ pub fn thread_section(
     for item in &f.thread.items {
         // artifacts carry no time in the fold; they ride beside the
         // utterances, never opening a gap
-        if matches!(item, ThreadItem::Artifact(_)) {
+        if matches!(item, ThreadItem::Artifacts(_)) {
             s.push_str(&item_html(item, &f.refs, store));
             continue;
         }
@@ -551,17 +551,10 @@ pub fn thread_section(
 fn item_span(item: &ThreadItem) -> (u64, u64) {
     match item {
         // artifacts carry no time in the fold; the gap logic skips them
-        ThreadItem::Artifact(_) => (0, 0),
+        ThreadItem::Artifacts(_) => (0, 0),
         ThreadItem::Note(line) => (line.born_at, line.born_at),
         ThreadItem::Group { root, replies } | ThreadItem::Exchange { root, replies, .. } => {
-            let last = replies
-                .iter()
-                .rev()
-                .find_map(|r| match r {
-                    ThreadEntry::Comment(c) => Some(c.born_at),
-                    ThreadEntry::Artifact(_) => None,
-                })
-                .unwrap_or(root.born_at);
+            let last = replies.last().map(|r| r.born_at).unwrap_or(root.born_at);
             (root.born_at, last)
         }
     }
@@ -573,7 +566,16 @@ fn item_html(
     store: &ArtifactStore,
 ) -> String {
     match item {
-        ThreadItem::Artifact(line) => artifact_html(line, 0, store),
+        // the cluster is its own card: each artifact renders inside,
+        // association with a comment only by citation
+        ThreadItem::Artifacts(lines) => {
+            let mut s = String::from("<div class=\"agrp\">\n");
+            for line in lines {
+                s.push_str(&artifact_html(line, 0, store));
+            }
+            s.push_str("</div>\n");
+            s
+        }
         ThreadItem::Exchange { root, run, replies } => match run {
             Some(run) => {
                 let open = run.in_flight();
@@ -602,19 +604,14 @@ fn item_html(
                     esc(&window),
                 ));
                 for r in replies {
-                    match r {
-                        ThreadEntry::Comment(c) => s.push_str(&node_html(
-                            c,
-                            c.depth.saturating_sub(2),
-                            Some(("REPLY", "#a2c4a3")),
-                            None,
-                            refs,
-                            store,
-                        )),
-                        ThreadEntry::Artifact(a) => {
-                            s.push_str(&artifact_html(a, 1, store));
-                        }
-                    }
+                    s.push_str(&node_html(
+                        r,
+                        r.depth.saturating_sub(2),
+                        Some(("REPLY", "#a2c4a3")),
+                        None,
+                        refs,
+                        store,
+                    ));
                 }
                 s.push_str("</div>\n</div>\n");
                 s
@@ -636,19 +633,14 @@ fn item_html(
                     ));
                 }
                 for r in replies {
-                    match r {
-                        ThreadEntry::Comment(c) => s.push_str(&node_html(
-                            c,
-                            c.depth.saturating_sub(1),
-                            Some(("REPLY", "#a2c4a3")),
-                            None,
-                            refs,
-                            store,
-                        )),
-                        ThreadEntry::Artifact(a) => {
-                            s.push_str(&artifact_html(a, 1, store));
-                        }
-                    }
+                    s.push_str(&node_html(
+                        r,
+                        r.depth.saturating_sub(1),
+                        Some(("REPLY", "#a2c4a3")),
+                        None,
+                        refs,
+                        store,
+                    ));
                 }
                 s
             }
@@ -662,17 +654,14 @@ fn item_html(
             };
             s.push_str(&node_html(root, 0, chip, None, refs, store));
             for r in replies {
-                match r {
-                    ThreadEntry::Comment(c) => s.push_str(&node_html(
-                        c,
-                        c.depth.saturating_sub(2),
-                        None,
-                        None,
-                        refs,
-                        store,
-                    )),
-                    ThreadEntry::Artifact(a) => s.push_str(&artifact_html(a, 1, store)),
-                }
+                s.push_str(&node_html(
+                    r,
+                    r.depth.saturating_sub(2),
+                    None,
+                    None,
+                    refs,
+                    store,
+                ));
             }
             s.push_str("</div>\n");
             s
@@ -1046,6 +1035,8 @@ header .brand {
 .xg .nrow2.runrow { padding-top: 0; padding-bottom: 2px; }
 .ntg { margin: 4px 18px 6px 16px; background: #1e1c1a; border-radius: 6px; padding: 3px 0; }
 .ntg .nrow2 { padding-left: 14px; padding-right: 14px; }
+.agrp { margin: 4px 18px 6px 16px; background: #1e1c1a; border-radius: 6px; padding: 3px 0; }
+.agrp .nrow2 { padding-left: 14px; padding-right: 14px; }
 
 /* receipt and judgment: quiet gold facts */
 .receipt { margin: 4px 18px 6px 16px; background: #1e1c1a; border-radius: 6px; padding: 7px 12px; }
@@ -2200,6 +2191,84 @@ mod tests {
         // the store miss renders its honest verdict
         assert!(html.contains("vanished figure · unavailable"), "{html}");
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The cluster is its own card between the comment cards: two
+    /// consecutive artifacts render inside one card, never inside a
+    /// comment's.
+    #[test]
+    fn artifact_clusters_render_as_their_own_card() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                1,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("the verdict, figures below".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+            record(
+                2,
+                2,
+                human(),
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: crate::types::artifact::Artifact {
+                        name: Prose::new("sweep figure".into()).unwrap(),
+                        hash: crate::ContentHash::of(PNG_HEAD),
+                    },
+                },
+            ),
+            record(
+                3,
+                3,
+                human(),
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: crate::types::artifact::Artifact {
+                        name: Prose::new("spread figure".into()).unwrap(),
+                        hash: crate::ContentHash::of(PNG_HEAD),
+                    },
+                },
+            ),
+            record(
+                4,
+                4,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("the closing words".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+        ])
+        .unwrap();
+        let (store, dir) = store_of(&[PNG_HEAD], "cluster");
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), None, &store);
+        // one cluster card, both artifacts inside it
+        assert_eq!(html.matches("class=\"agrp\"").count(), 1, "{html}");
+        let verdict = html.find("the verdict, figures below").unwrap();
+        let card = html.find("class=\"agrp\"").unwrap();
+        let sweep = html.find("alt=\"sweep figure\"").unwrap();
+        let spread = html.find("alt=\"spread figure\"").unwrap();
+        let closing = html.find("the closing words").unwrap();
+        // the cluster sits between the comment cards, its artifacts
+        // inside it, and never inside a comment's card
+        assert!(verdict < card, "{html}");
+        assert!(card < sweep && sweep < spread, "{html}");
+        assert!(spread < closing, "{html}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -190,14 +190,17 @@ pub enum ThreadItem {
     Exchange {
         root: CommentLine,
         run: Option<RunView>,
-        replies: Vec<ThreadEntry>,
+        replies: Vec<CommentLine>,
     },
     Group {
         root: CommentLine,
-        replies: Vec<ThreadEntry>,
+        replies: Vec<CommentLine>,
     },
     Note(CommentLine),
-    Artifact(ArtifactLine),
+    /// Artifacts clustered within themselves: consecutive artifact
+    /// records as one item, never attached to a comment's group —
+    /// association with a comment is what citing is for.
+    Artifacts(Vec<ArtifactLine>),
 }
 
 /// The focused task's thread as a view: the context's pointer index,
@@ -405,20 +408,21 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
     enum Building {
         Exchange {
             root: CommentLine,
-            replies: Vec<ThreadEntry>,
+            replies: Vec<CommentLine>,
         },
         Group {
             root: CommentLine,
-            replies: Vec<ThreadEntry>,
+            replies: Vec<CommentLine>,
         },
     }
     enum Member {
         Comment(CommentId),
         Artifact(RecordId, Artifact),
     }
-    // the thread's utterances merged by position: an artifact rides the
-    // stream beside the comments and lands in the group open at its
-    // seq — position is the association
+    // the thread's utterances merged by position; artifacts never join
+    // a comment's group. Consecutive artifacts accumulate into one
+    // cluster and any comment closes it — the thread-top cluster and
+    // the mid-stream one are the same path.
     let mut stream: Vec<(usize, Member)> = ctx
         .thread
         .iter()
@@ -433,11 +437,14 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
 
     let mut groups: Vec<Building> = Vec::new();
     let mut root_index: BTreeMap<CommentId, usize> = BTreeMap::new();
-    let mut lead: Vec<ArtifactLine> = Vec::new();
-    let mut last_group: Option<usize> = None;
+    let mut clusters: Vec<(usize, Vec<ArtifactLine>)> = Vec::new();
+    let mut open_cluster: Option<(usize, Vec<ArtifactLine>)> = None;
     for (_, member) in stream {
         match member {
             Member::Comment(cid) => {
+                if let Some(cluster) = open_cluster.take() {
+                    clusters.push(cluster);
+                }
                 let root = root_of(&world.comments, cid);
                 if root == cid {
                     let line = line_of(&world.comments, cid);
@@ -453,7 +460,6 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
                             replies: Vec::new(),
                         });
                     }
-                    last_group = Some(groups.len() - 1);
                 } else {
                     let g = root_index
                         .get(&root)
@@ -462,52 +468,74 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
                     let line = line_of(&world.comments, cid);
                     match &mut groups[g] {
                         Building::Exchange { replies, .. } | Building::Group { replies, .. } => {
-                            replies.push(ThreadEntry::Comment(line))
+                            replies.push(line)
                         }
                     }
-                    last_group = Some(g);
                 }
             }
             Member::Artifact(rid, artifact) => {
                 let line = artifact_line_of(rid.0, &artifact);
-                match last_group {
-                    Some(g) => match &mut groups[g] {
-                        Building::Exchange { replies, .. } | Building::Group { replies, .. } => {
-                            replies.push(ThreadEntry::Artifact(line))
-                        }
-                    },
-                    // no comment precedes it: a standalone item at the top
-                    None => lead.push(line),
+                match &mut open_cluster {
+                    Some((_, lines)) => lines.push(line),
+                    None => open_cluster = Some((rid.0, vec![line])),
                 }
             }
         }
     }
-    let mut items: Vec<ThreadItem> = lead.into_iter().map(ThreadItem::Artifact).collect();
-    items.extend(groups.into_iter().map(|g| match g {
-        Building::Exchange { root, replies } => {
-            // the run that answered this demand, if one did
-            let run = world
-                .incarnations
-                .iter()
-                .find(|(_, r)| r.response_target.0.0 == root.seq)
-                .map(|(id, r)| RunView {
-                    incarnation: id.0.0,
-                    task: r.task_id.0,
-                    demand: r.response_target.0.0,
-                    actor: r.actor.as_str().to_string(),
-                    born_at: r.born_at,
-                    done_at: r.done_at,
-                });
-            ThreadItem::Exchange { root, run, replies }
-        }
-        Building::Group { root, replies } => {
-            if replies.is_empty() {
-                ThreadItem::Note(root)
-            } else {
-                ThreadItem::Group { root, replies }
+    if let Some(cluster) = open_cluster.take() {
+        clusters.push(cluster);
+    }
+
+    // items enter by their first record, clusters and groups alike
+    let group_items: Vec<(usize, ThreadItem)> = groups
+        .into_iter()
+        .map(|g| match g {
+            Building::Exchange { root, replies } => {
+                // the run that answered this demand, if one did
+                let run = world
+                    .incarnations
+                    .iter()
+                    .find(|(_, r)| r.response_target.0.0 == root.seq)
+                    .map(|(id, r)| RunView {
+                        incarnation: id.0.0,
+                        task: r.task_id.0,
+                        demand: r.response_target.0.0,
+                        actor: r.actor.as_str().to_string(),
+                        born_at: r.born_at,
+                        done_at: r.done_at,
+                    });
+                (root.seq, ThreadItem::Exchange { root, run, replies })
             }
-        }
-    }));
+            Building::Group { root, replies } => {
+                if replies.is_empty() {
+                    (root.seq, ThreadItem::Note(root))
+                } else {
+                    (root.seq, ThreadItem::Group { root, replies })
+                }
+            }
+        })
+        .collect();
+    let cluster_items: Vec<(usize, ThreadItem)> = clusters
+        .into_iter()
+        .map(|(seq, lines)| (seq, ThreadItem::Artifacts(lines)))
+        .collect();
+    // both lists are sorted by their first seq; one merge orders the items
+    let mut items: Vec<ThreadItem> = Vec::with_capacity(group_items.len() + cluster_items.len());
+    let mut groups_iter = group_items.into_iter().peekable();
+    let mut clusters_iter = cluster_items.into_iter().peekable();
+    loop {
+        let take_group = match (groups_iter.peek(), clusters_iter.peek()) {
+            (None, None) => break,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (Some((gseq, _)), Some((cseq, _))) => gseq < cseq,
+        };
+        items.push(if take_group {
+            groups_iter.next().expect("peeked").1
+        } else {
+            clusters_iter.next().expect("peeked").1
+        });
+    }
     Some(ThreadView { items })
 }
 
@@ -1412,13 +1440,6 @@ mod panels {
         )
     }
 
-    fn entry_seq(entry: &ThreadEntry) -> usize {
-        match entry {
-            ThreadEntry::Comment(c) => c.seq,
-            ThreadEntry::Artifact(a) => a.seq,
-        }
-    }
-
     /// t-0 holds: c-2 (root, the demand) <- c-3 (its reply), c-4 (an
     /// orphan note), c-5 (a second root) <- c-6 (its reply), with c-4
     /// born between the two conversations.
@@ -1486,10 +1507,12 @@ mod panels {
         }
     }
 
-    /// Position is the association: artifacts ride the thread's seq
-    /// order, inside the group open where they fall.
+    /// Artifacts cluster within themselves and never attach to a
+    /// comment's group; a comment closes the cluster, and items enter
+    /// by their first record either kind.
     #[test]
-    fn artifacts_land_at_their_position_in_the_thread() {
+    fn artifacts_cluster_within_themselves() {
+        // the demand, a run of two figures, the reply, a trailing figure
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
             comment_at(
@@ -1512,23 +1535,34 @@ mod panels {
         ])
         .unwrap();
         let v = thread_view(&world, TaskId(0)).unwrap();
+        // the exchange holds only its comment reply; the figures are
+        // separate items, the consecutive two one cluster
+        assert_eq!(v.items.len(), 3, "{:?}", v.items);
         match &v.items[0] {
             ThreadItem::Exchange { root, run, replies } => {
                 assert_eq!(root.seq, 2);
                 assert!(run.is_none());
-                assert_eq!(
-                    replies.iter().map(entry_shape).collect::<Vec<_>>(),
-                    [
-                        ("artifact", 3),
-                        ("artifact", 4),
-                        ("comment", 5),
-                        ("artifact", 6),
-                    ]
-                );
+                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [5]);
             }
             other => panic!("expected an exchange, got {other:?}"),
         }
-        // the flat show stream holds the same order
+        match &v.items[1] {
+            ThreadItem::Artifacts(lines) => assert_eq!(
+                lines
+                    .iter()
+                    .map(|l| (l.seq, l.name.as_str()))
+                    .collect::<Vec<_>>(),
+                [(3, "sweep figure"), (4, "spread figure")]
+            ),
+            other => panic!("expected a cluster, got {other:?}"),
+        }
+        match &v.items[2] {
+            ThreadItem::Artifacts(lines) => {
+                assert_eq!(lines.iter().map(|l| l.seq).collect::<Vec<_>>(), [6])
+            }
+            other => panic!("expected the trailing cluster, got {other:?}"),
+        }
+        // the flat show stream still merges by position
         let flat = thread_entries(&world.comments, &world.tasks[0]);
         assert_eq!(
             flat.iter().map(entry_shape).collect::<Vec<_>>(),
@@ -1541,13 +1575,15 @@ mod panels {
             ]
         );
 
-        // an artifact no comment precedes stands alone at the top
+        // artifacts before any comment: the thread-top cluster, the
+        // same path as the mid-stream one
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
             artifact_record(1, 1, "lead figure"),
+            artifact_record(2, 2, "second lead figure"),
             comment_at(
-                2,
-                2,
+                3,
+                3,
                 Tier::Human,
                 Target::Task(TaskId(0)),
                 CommentKind::Note,
@@ -1555,22 +1591,62 @@ mod panels {
         ])
         .unwrap();
         let v = thread_view(&world, TaskId(0)).unwrap();
+        assert_eq!(v.items.len(), 2, "{:?}", v.items);
         match &v.items[0] {
-            ThreadItem::Artifact(line) => {
-                assert_eq!(line.seq, 1);
-                assert_eq!(line.name, "lead figure");
-                assert_eq!(line.hash, crate::ContentHash::of(b"lead figure").as_str());
+            ThreadItem::Artifacts(lines) => {
+                assert_eq!(lines.iter().map(|l| l.seq).collect::<Vec<_>>(), [1, 2])
             }
-            other => panic!("expected a lead artifact, got {other:?}"),
+            other => panic!("expected the leading cluster, got {other:?}"),
         }
         match &v.items[1] {
-            ThreadItem::Note(line) => assert_eq!(line.seq, 2),
+            ThreadItem::Note(line) => assert_eq!(line.seq, 3),
             other => panic!("expected a note, got {other:?}"),
         }
         // the pointer lookup show's record door uses
         let line = artifact_line(&world, RecordId(1)).expect("the artifact resolves");
         assert_eq!(line.short_hash().len(), 12);
-        assert!(artifact_line(&world, RecordId(2)).is_none());
+        assert_eq!(line.hash, crate::ContentHash::of(b"lead figure").as_str());
+        assert!(artifact_line(&world, RecordId(3)).is_none());
+    }
+
+    /// An artifact interleaved among an exchange's replies exits to the
+    /// top-level stream: association only by citation.
+    #[test]
+    fn an_interleaved_artifact_exits_the_exchange() {
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                2,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Demand,
+            ),
+            artifact_record(3, 3, "mid-run figure"),
+            comment_at(
+                4,
+                4,
+                Tier::Agent,
+                Target::Comment(CommentId(RecordId(2))),
+                CommentKind::Note,
+            ),
+        ])
+        .unwrap();
+        let v = thread_view(&world, TaskId(0)).unwrap();
+        assert_eq!(v.items.len(), 2, "{:?}", v.items);
+        match &v.items[0] {
+            ThreadItem::Exchange { root, replies, .. } => {
+                assert_eq!(root.seq, 2);
+                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [4]);
+            }
+            other => panic!("expected an exchange, got {other:?}"),
+        }
+        match &v.items[1] {
+            ThreadItem::Artifacts(lines) => {
+                assert_eq!(lines.iter().map(|l| l.seq).collect::<Vec<_>>(), [3])
+            }
+            other => panic!("expected the exited cluster, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1583,7 +1659,7 @@ mod panels {
                 // c-2 is an unanswered demand: the exchange opens, no run yet
                 assert_eq!(root.seq, 2);
                 assert!(run.is_none());
-                assert_eq!(replies.iter().map(entry_seq).collect::<Vec<_>>(), [3]);
+                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [3]);
             }
             other => panic!("expected an exchange, got {other:?}"),
         }
@@ -1595,7 +1671,7 @@ mod panels {
             ThreadItem::Group { root, replies } => {
                 // c-5 is unaddressed: a plain group with its reply
                 assert_eq!(root.seq, 5);
-                assert_eq!(replies.iter().map(entry_seq).collect::<Vec<_>>(), [6]);
+                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [6]);
             }
             other => panic!("expected a group, got {other:?}"),
         }
@@ -1664,7 +1740,7 @@ mod panels {
                 assert_eq!(run.born_at, 3 * HOUR);
                 assert_eq!(run.done_at, Some(5 * HOUR));
                 assert!(!run.in_flight());
-                assert_eq!(replies.iter().map(entry_seq).collect::<Vec<_>>(), [5]);
+                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [5]);
             }
             other => panic!("expected an exchange, got {other:?}"),
         }
