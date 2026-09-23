@@ -4,13 +4,15 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
-    saccade.url = "github:jerrydzhang/saccade";
+    saccade = {
+      url = "github:jerrydzhang/saccade";
+      # the pinned release's self-input would nest one generation per
+      # release bump; it aliases the same pin, and only the release's
+      # devShell wants it
+      inputs.saccade.follows = "saccade";
+    };
     llm-agents.url = "github:numtide/llm-agents.nix";
     devenv.url = "github:cachix/devenv";
-    # the pinned release's self-input would nest one generation per
-    # release bump; it aliases the same pin, and only the release's
-    # devShell — never instantiated here — wants it
-    saccade.inputs.saccade.follows = "saccade";
   };
 
   nixConfig = {
@@ -48,7 +50,7 @@
           inherit inputs pkgs;
           modules = [
             ({...}: {
-              packages = with  pkgs; [
+              packages = with pkgs; [
                 rustToolchain
                 (pkgs.python3.withPackages (ps: [ps.playwright]))
                 prek
