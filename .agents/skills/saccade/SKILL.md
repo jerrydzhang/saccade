@@ -166,6 +166,12 @@ outcome and the evidence: what changed, which tests ran and their counts,
 which commands were exercised, which files were touched. "done", "fixed",
 "implemented" are not receipts.
 
+One idea per comment, at every door. A multi-idea answer forks into
+one comment per idea; the formal reply or receipt indexes them, never
+contains them. This is practice, not machinery: the reply door stays
+single, and the day a reviewed blob survives this law anyway is the day
+the door itself changes.
+
 ## Commands
 
 | Command | Who | Notes |
