@@ -198,6 +198,15 @@ async fn malformed_bodies_get_typed_envelopes() {
     assert_eq!(status, 400);
     assert_eq!(json_of(&body)["error"]["code"], "malformed_request");
 
+    // the shape survives exactly once: the line holds the raw bytes
+    // with no actor to name, and the code the parse door refused with
+    let lines = attempts_lines(&db);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["outcome"], "refused");
+    assert_eq!(lines[0]["code"], "malformed_request");
+    assert_eq!(lines[0]["actor"], Value::Null);
+    assert_eq!(lines[0]["request"], "not json at all");
+
     // empty prose refuses at the boundary, not inside the fold
     let (status, body) = post_command(
         &base_url,
@@ -330,6 +339,103 @@ async fn client_send_lands_and_refuses_through_the_wire() {
     assert!(matches!(dead, ClientFail::ServerUnreachable { .. }));
     assert_eq!(dead.code(), "server_required");
 
+    // the client names itself: the attempts line carries both versions
+    let lines = attempts_lines(&db);
+    let landed = &lines[0];
+    assert_eq!(landed["client"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(landed["server"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(landed["actor"], "saccade bot");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+fn attempts_lines(db: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(saccade::paths::attempts_at(db))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("one json object per line"))
+        .collect()
+}
+
+/// The reproduction recipe end to end: a refused write's logged line,
+/// cloned against its own cursor and replayed, refuses identically —
+/// and a landed line is the correlation and nothing else.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_writes_line_replays_against_a_cursor_clone() {
+    let db = scratch_db("replay");
+    let base_url = spawn_server(&db).await;
+
+    // a landed write names the seq it became; the log has its cursor
+    let (status, _) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+        ),
+    );
+    assert_eq!(status, 200);
+
+    // the refused write: its shape survives only in the attempts line
+    let raw =
+        serde_json::to_string(&envelope("pi", "agent", json!({"claim_task": {"id": 9}}))).unwrap();
+    let (status, body) = post_raw(&base_url, &raw);
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_task_id");
+
+    let lines = attempts_lines(&db);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    let landed = &lines[0];
+    let refused = &lines[1];
+
+    // thin on success: the seqs it became, never the payload
+    assert_eq!(landed["outcome"], "landed");
+    assert_eq!(landed["seqs"], json!([0]));
+    assert_eq!(landed.get("request"), None);
+
+    // fat on refusal: the request as received plus the cursor it died against
+    assert_eq!(refused["outcome"], "refused");
+    assert_eq!(refused["code"], "invalid_task_id");
+    assert_eq!(refused["actor"], "pi");
+    assert_eq!(refused["request"], raw);
+    let cursor = refused["cursor"]
+        .as_u64()
+        .expect("a cursor against a live log") as usize;
+    assert_eq!(cursor, 0);
+
+    // the cursor clone: the log's prefix through the cursor, as a fresh tracker
+    let clone_dir = db.parent().unwrap().join("clone");
+    std::fs::create_dir_all(&clone_dir).unwrap();
+    let clone_db = clone_dir.join("saccade.db");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sac"))
+        .arg("--db")
+        .arg(&db)
+        .arg("clone")
+        .arg("--at")
+        .arg(cursor.to_string())
+        .arg("--out")
+        .arg(&clone_db)
+        .output()
+        .expect("spawn sac clone");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        format!("cloned 1 records through seq 0 to {}", clone_db.display())
+    );
+
+    // the replay: the logged request, against the clone, refuses the same
+    let clone_base = spawn_server(&clone_db).await;
+    let replay = refused["request"]
+        .as_str()
+        .expect("the request as received");
+    let (status, body) = post_raw(&clone_base, replay);
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_task_id");
+
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
@@ -354,6 +460,15 @@ async fn spawn_console(db_path: &std::path::Path) -> (String, ConsoleState) {
         axum::serve(listener, router).await.unwrap();
     });
     (format!("http://{addr}"), state)
+}
+
+/// A judged request with no client binary to name and no restatable
+/// body: these tests drive the seam directly, not a door.
+fn bare_request() -> saccade::attempts::AsReceived {
+    saccade::attempts::AsReceived {
+        client: None,
+        raw: String::new(),
+    }
 }
 
 fn human_ctx() -> Context {
@@ -474,6 +589,7 @@ fn seed_task(state: &ConsoleState, name: &str) {
                 parent_id: None,
             },
             None,
+            bare_request(),
         )
         .expect("the seed task lands");
 }
@@ -643,6 +759,7 @@ async fn the_console_renders_forest_and_focused_thread() {
                 kind: saccade::CommentKind::Ask,
             },
             None,
+            bare_request(),
         )
         .unwrap();
 
@@ -713,7 +830,12 @@ async fn every_task_href_the_console_emits_resolves() {
     // a claim feeds the strip's candidates, an agent demand awaiting a
     // human feeds asked-of-you, a proposal feeds the rail's gate
     state
-        .execute(&human_ctx(), Command::ClaimTask { id: TaskId(0) }, None)
+        .execute(
+            &human_ctx(),
+            Command::ClaimTask { id: TaskId(0) },
+            None,
+            bare_request(),
+        )
         .unwrap();
     state
         .execute(
@@ -727,6 +849,7 @@ async fn every_task_href_the_console_emits_resolves() {
                 kind: saccade::CommentKind::Ask,
             },
             None,
+            bare_request(),
         )
         .unwrap();
     state
@@ -737,6 +860,7 @@ async fn every_task_href_the_console_emits_resolves() {
                 action: saccade::ProposalAction::Drop { task_id: TaskId(1) },
             },
             None,
+            bare_request(),
         )
         .unwrap();
     // a comment so the focused thread and its anchors exist
@@ -749,6 +873,7 @@ async fn every_task_href_the_console_emits_resolves() {
                 kind: CommentKind::Note,
             },
             None,
+            bare_request(),
         )
         .unwrap();
 
@@ -802,7 +927,12 @@ async fn judgment_forms_carry_the_actor_name() {
         tier: Tier::Agent,
     };
     state
-        .execute(&pi, Command::ClaimTask { id: TaskId(0) }, None)
+        .execute(
+            &pi,
+            Command::ClaimTask { id: TaskId(0) },
+            None,
+            bare_request(),
+        )
         .unwrap();
     state
         .execute(
@@ -812,6 +942,7 @@ async fn judgment_forms_carry_the_actor_name() {
                 action: saccade::ProposalAction::Release { task_id: TaskId(0) },
             },
             None,
+            bare_request(),
         )
         .unwrap();
     let proposal = saccade::views::open_proposals(&world_of(&state))
@@ -865,6 +996,7 @@ async fn judgment_forms_carry_the_actor_name() {
                 action: saccade::ProposalAction::Drop { task_id: TaskId(0) },
             },
             None,
+            bare_request(),
         )
         .unwrap();
     let proposal = saccade::views::open_proposals(&world_of(&state))
@@ -897,7 +1029,12 @@ async fn judgment_forms_carry_the_actor_name() {
     // the rendered judgment form carries the one who input, prefilled
     // from the actor cookie when one exists, themed by its class
     state
-        .execute(&pi, Command::ClaimTask { id: TaskId(0) }, None)
+        .execute(
+            &pi,
+            Command::ClaimTask { id: TaskId(0) },
+            None,
+            bare_request(),
+        )
         .unwrap();
     state
         .execute(
@@ -907,6 +1044,7 @@ async fn judgment_forms_carry_the_actor_name() {
                 action: saccade::ProposalAction::Release { task_id: TaskId(0) },
             },
             None,
+            bare_request(),
         )
         .unwrap();
 
@@ -953,7 +1091,12 @@ async fn the_accept_door_carries_the_actor_name() {
         tier: Tier::Agent,
     };
     state
-        .execute(&worker, Command::ClaimTask { id: TaskId(0) }, None)
+        .execute(
+            &worker,
+            Command::ClaimTask { id: TaskId(0) },
+            None,
+            bare_request(),
+        )
         .unwrap();
     state
         .execute(
@@ -963,6 +1106,7 @@ async fn the_accept_door_carries_the_actor_name() {
                 receipt: Prose::new("suite green".into()).unwrap(),
             },
             None,
+            bare_request(),
         )
         .unwrap();
 
@@ -989,6 +1133,19 @@ async fn the_accept_door_carries_the_actor_name() {
             .is_some_and(|c| c.starts_with("actor=jerry")),
         "the first claim claims the cookie: {cookie:?}"
     );
+
+    // a console refusal through judgment leaves its fat line too: the
+    // raw form body, the code, and no client binary to name
+    let (status, body, _) = post_form(&format!("{base}/t/0/accept"), &[], "accept=1&who=jerry");
+    assert_eq!(status, 400);
+    assert!(body.contains("InvalidStateTransition"));
+    let lines = attempts_lines(&db);
+    let refused = &lines[lines.len() - 1];
+    assert_eq!(refused["outcome"], "refused");
+    assert_eq!(refused["code"], "invalid_state_transition");
+    assert_eq!(refused["actor"], "jerry");
+    assert_eq!(refused["client"], Value::Null);
+    assert_eq!(refused["request"], "accept=1&who=jerry");
     let snap = match state.snapshot() {
         Ok(s) => s,
         Err(_) => panic!("the snapshot refused"),

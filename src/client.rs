@@ -83,6 +83,7 @@ pub fn send(
         },
         command,
         at,
+        client: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
     let mut response = ureq::post(&format!("{url}/api/v1/command"))
         .config()

@@ -18,7 +18,13 @@ Environment=RUST_LOG=info
   (dashboard). Any device that can reach the port writes at human tier
   through the forms — the conceded boundary.
 - stderr goes to the journal; `journalctl --user -u saccade -p warning`
-  is the audit path.
+  is the audit path — and the warns land in the same
+  `attempts.jsonl` beside the db as every judged write, so one
+  surface greps everything.
+- The attempts log is the diagnoser's door: refusals carry the full
+  request and the storage-seq cursor they died against. Reproduce a
+  refusal with `sac clone --at <cursor> --out <path>`, serve the
+  clone, and re-post the logged request.
 - Stop is SIGTERM: the server kills its live runs and exits 143. The
   two-stroke Ctrl-C courtesy is for terminals, not services.
 

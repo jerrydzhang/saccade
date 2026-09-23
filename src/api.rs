@@ -13,9 +13,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::error;
 
 use crate::ActorName;
+use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::store::{Context, RecordId, Tier, World};
 use crate::supervisor;
@@ -41,6 +41,7 @@ pub struct AppState {
     inner: Arc<Mutex<ServerState>>,
     runner: Option<supervisor::RunnerConfig>,
     runs: supervisor::LiveRuns,
+    attempts: Attempts,
 }
 
 pub struct Snapshot {
@@ -72,6 +73,7 @@ impl AppState {
             inner: Arc::new(Mutex::new(state)),
             runner: None,
             runs: supervisor::LiveRuns::default(),
+            attempts: Attempts::beside(db_path),
         })
     }
 
@@ -119,27 +121,65 @@ impl AppState {
         }
     }
 
+    /// The judging seam: one write attempt, one line in the attempts
+    /// log, appended while the writer lock is held so the file's order
+    /// is the judgment order. Duration includes the lock wait — the
+    /// queueing a request met is part of what the diagnoser wants.
     pub fn execute(
         &self,
         context: &Context,
         command: Command,
         at: Option<u64>,
+        received: AsReceived,
     ) -> Result<Vec<StoredRecord>, ExecuteFail> {
+        let started = std::time::Instant::now();
         let mut guard = self.inner.lock().expect("the writer lock is not poisoned");
-        match &mut *guard {
+        let cursor = match &*guard {
+            ServerState::Ready(inner) => inner.rows.last().map(|r| r.seq),
+            ServerState::Degraded(..) => None,
+        };
+        let outcome = match &mut *guard {
             ServerState::Degraded(reason, _) => Err(ExecuteFail::Degraded(reason.clone())),
-            ServerState::Ready(inner) => {
-                let (stored, world) = db::record(
-                    &mut inner.conn,
-                    context,
-                    command,
-                    at.unwrap_or_else(db::now_epoch),
-                )?;
+            ServerState::Ready(inner) => db::record(
+                &mut inner.conn,
+                context,
+                command,
+                at.unwrap_or_else(db::now_epoch),
+            )
+            .map(|(stored, world)| {
                 inner.world = world;
                 inner.rows.extend(stored.iter().cloned());
-                Ok(stored)
-            }
+                stored
+            }),
+        };
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let code = match &outcome {
+            Ok(_) => None,
+            Err(ExecuteFail::Reject(reject)) => Some(reject.code()),
+            Err(ExecuteFail::Degraded(_)) => Some("degraded"),
+            Err(ExecuteFail::Db(_)) => Some("storage"),
+        };
+        match &outcome {
+            Ok(stored) => self.attempts.append(
+                Some(context.actor.as_str()),
+                received.client.as_deref(),
+                duration_ms,
+                Outcome::Landed {
+                    seqs: &stored.iter().map(|s| s.seq).collect::<Vec<_>>(),
+                },
+            ),
+            Err(_) => self.attempts.append(
+                Some(context.actor.as_str()),
+                received.client.as_deref(),
+                duration_ms,
+                Outcome::Refused {
+                    code: code.expect("a refusal names its code"),
+                    cursor,
+                    request: &received.raw,
+                },
+            ),
         }
+        outcome
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, Degraded> {
@@ -175,6 +215,10 @@ pub struct Envelope {
     pub(crate) context: WireContext,
     pub(crate) command: Command,
     pub(crate) at: Option<u64>,
+    /// The client binary that built the request, when it names itself;
+    /// the attempts log carries it beside the server's own version.
+    #[serde(default)]
+    pub(crate) client: Option<String>,
 }
 
 enum ApiFail {
@@ -198,8 +242,8 @@ impl ApiFail {
     fn parts(self) -> (StatusCode, String, Value) {
         match self {
             ApiFail::Reject(reject, taught) => {
-                let detail = serde_json::to_value(&reject).unwrap_or(Value::Null);
-                let code = detail.as_str().unwrap_or("rejected").to_string();
+                let code = reject.code().to_string();
+                let detail = serde_json::to_value(reject).unwrap_or(Value::Null);
                 match taught {
                     Some(text) => (StatusCode::BAD_REQUEST, code, Value::String(text)),
                     None => (StatusCode::BAD_REQUEST, code, detail),
@@ -228,6 +272,22 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     let envelope: Envelope = match serde_json::from_slice(&body) {
         Ok(e) => e,
         Err(e) => {
+            // a refusal that enters no journal: the line is the request's
+            // only surviving shape, with no actor to name
+            let cursor = app
+                .snapshot()
+                .ok()
+                .and_then(|s| s.rows.last().map(|r| r.seq));
+            app.attempts.append(
+                None,
+                None,
+                0,
+                Outcome::Refused {
+                    code: "malformed_request",
+                    cursor,
+                    request: &String::from_utf8_lossy(&body),
+                },
+            );
             let (status, code, detail) = ApiFail::Malformed(e.to_string()).parts();
             return (
                 status,
@@ -244,7 +304,11 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         },
     };
     let command = envelope.command;
-    match app.execute(&context, command.clone(), envelope.at) {
+    let received = AsReceived {
+        client: envelope.client,
+        raw: String::from_utf8_lossy(&body).into_owned(),
+    };
+    match app.execute(&context, command.clone(), envelope.at, received) {
         Ok(stored) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || supervisor::sweep(&fired));
@@ -279,7 +343,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                 }
                 other => ApiFail::from(other).parts(),
             };
-            error!(%code, "command refused");
             (
                 status,
                 Json(json!({"error": {"code": code, "detail": detail}})),

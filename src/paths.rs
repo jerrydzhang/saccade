@@ -72,6 +72,19 @@ pub fn db_at(repo_root: &Path) -> PathBuf {
     state_dir(repo_root).join("saccade.db")
 }
 
+/// The write-attempt log's home: beside the tracker it observes, so a
+/// `--db`-named tracker gets its attempts named the same way.
+pub fn attempts_at(db_path: &Path) -> PathBuf {
+    db_path.with_file_name("attempts.jsonl")
+}
+
+/// Where a terminal task's session artifacts outlive their agent dir.
+pub fn retention_at(repo_root: &Path, task: usize) -> PathBuf {
+    state_dir(repo_root)
+        .join("retention")
+        .join(format!("t-{task}"))
+}
+
 /// The worktree a task's workspace provisions.
 pub fn worktree_at(repo_root: &Path, task: usize) -> PathBuf {
     state_dir(repo_root)

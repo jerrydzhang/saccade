@@ -35,6 +35,15 @@ fn sh(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// A judged request with no client binary to name and no restatable
+/// body: these tests drive the seam directly, not a door.
+fn bare_request() -> saccade::attempts::AsReceived {
+    saccade::attempts::AsReceived {
+        client: None,
+        raw: String::new(),
+    }
+}
+
 fn human() -> Context {
     Context {
         actor: ActorName::new("human person".into()).unwrap(),
@@ -403,6 +412,7 @@ async fn an_ask_round_trips_through_the_stub() {
                 kind: CommentKind::Note,
             },
             None,
+            bare_request(),
         )
         .unwrap();
 
@@ -521,6 +531,7 @@ async fn a_midrun_steer_reaches_the_open_turn() {
                 kind: CommentKind::Steer,
             },
             None,
+            bare_request(),
         )
         .unwrap();
 
@@ -558,6 +569,7 @@ async fn a_cancel_aborts_the_session_through_the_protocol() {
             &human(),
             Command::CancelIncarnation { id: incarnation },
             None,
+            bare_request(),
         )
         .unwrap();
     supervisor::sweep(&state);

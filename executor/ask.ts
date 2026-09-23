@@ -47,6 +47,7 @@ export default function (pi: ExtensionAPI) {
         body: JSON.stringify({
           context: { actor, tier: "agent" },
           at: null,
+          client: "ask.ts",
           command: {
             comment: {
               target: { task: Number(task) },

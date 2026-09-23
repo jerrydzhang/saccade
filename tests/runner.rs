@@ -11,7 +11,9 @@ use saccade::db::{self, LoadState};
 use saccade::objects::comment::AgentAttemptState;
 use saccade::objects::comment::CommentState;
 use saccade::objects::incarnation::IncarnationState;
-use saccade::runner::{PreparedRun, RunnerFail, close, pointer_prompt, prepare, wait};
+use saccade::runner::{
+    PreparedRun, RunnerFail, close, compose_agent_dir, pointer_prompt, prepare, wait,
+};
 use saccade::supervisor::{self, LiveRuns, RunHandle, RunnerConfig, SessionDriver};
 use saccade::types::actor::ActorName;
 use saccade::types::pointers::SessionPointer;
@@ -34,6 +36,15 @@ fn sh(dir: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A judged request with no client binary to name and no restatable
+/// body: these tests drive the seam directly, not a door.
+fn bare_request() -> saccade::attempts::AsReceived {
+    saccade::attempts::AsReceived {
+        client: None,
+        raw: String::new(),
+    }
 }
 
 fn human() -> Context {
@@ -677,6 +688,75 @@ fn a_demand_on_a_dropped_task_fires_nothing() {
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
+/// A terminal task's session artifacts outlive their agent dir: the
+/// sweep moves what the executor wrote at runtime to the retention
+/// root, and the composed surface — credential links, mirrored
+/// settings — dies with the dir, never retained.
+#[test]
+fn a_terminal_tasks_session_artifacts_survive_the_sweep_at_retention() {
+    let (repo, db_path, _demand) = scaffold("retention");
+    let agent_dir = saccade::paths::agent_dir_at(&repo, 0);
+    compose_agent_dir(&agent_dir).unwrap();
+    // the executor's runtime output: what pi writes into its agent dir
+    std::fs::write(
+        agent_dir.join("run-history.jsonl"),
+        "{\"session\":\"t-0\"}\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(agent_dir.join("sessions").join("a-cwd")).unwrap();
+    std::fs::write(
+        agent_dir
+            .join("sessions")
+            .join("a-cwd")
+            .join("rollup.jsonl"),
+        "{}\n",
+    )
+    .unwrap();
+
+    // terminal: the human drops the task, and the sweep runs
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::DropTask {
+            id: TaskId(0),
+            note: Prose::new("superseded elsewhere".into()).unwrap(),
+        },
+        3,
+    )
+    .unwrap();
+    let runner = RunnerConfig {
+        repo_root: repo.clone(),
+        actor: ActorName::new("pi".into()).unwrap(),
+        driver: Arc::new(|_, _, _| Ok(true)),
+    };
+    let app = AppState::with_runner(&db_path, runner).unwrap();
+    supervisor::sweep(&app);
+
+    // the artifacts survive at the retention root, layout intact
+    let retained = saccade::paths::retention_at(&repo, 0);
+    assert_eq!(
+        std::fs::read_to_string(retained.join("run-history.jsonl")).unwrap(),
+        "{\"session\":\"t-0\"}\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(retained.join("sessions").join("a-cwd").join("rollup.jsonl"))
+            .unwrap(),
+        "{}\n"
+    );
+    // the agent dir is gone, and the composed surface never reached
+    // retention: credentials are links, and links never move
+    assert!(!agent_dir.exists());
+    for composed in [
+        "auth.json",
+        "models.json",
+        "models-store.json",
+        "settings.json",
+    ] {
+        assert!(!retained.join(composed).exists(), "{composed} was retained");
+    }
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
 #[test]
 fn a_server_without_a_runner_writes_but_never_fires() {
     let (repo, db_path, demand) = scaffold("quiet");
@@ -734,6 +814,7 @@ fn a_cancel_kills_the_run_and_frees_the_task() {
         &agent(),
         Command::CancelIncarnation { id: incarnation },
         None,
+        bare_request(),
     )
     .unwrap();
     supervisor::sweep(&app);
