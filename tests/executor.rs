@@ -319,9 +319,6 @@ async fn stub_app(repo: &Path, db_path: &Path, mode: &str) -> AppState {
         let executor = Executor {
             pi: stub.clone(),
             server: cell.lock().unwrap().clone(),
-            extension: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("executor")
-                .join("ask.ts"),
             sac: PathBuf::from(env!("CARGO_BIN_EXE_sac")),
         };
         runner::execute_session(run, prompt, runs, &executor)
@@ -618,14 +615,13 @@ fn the_real_pi_smoke_validates_the_pin() {
         );
         return;
     };
-    let extension = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("executor")
-        .join("ask.ts");
     // the pin is validated under the same composed config home the
-    // runner spawns in, auth symlink included
+    // runner spawns in, auth symlink included; the ask door loads
+    // from where compose materialized it
     let agent_dir = std::env::temp_dir().join(format!("sac-smoke-agent-{}", std::process::id()));
     runner::compose_agent_dir(&agent_dir)
         .unwrap_or_else(|e| panic!("composing the smoke agent dir: {e:?}"));
+    let extension = runner::ask_extension_at(&agent_dir);
     let mut child = std::process::Command::new(&pi)
         .args([
             "--mode",

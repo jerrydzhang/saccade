@@ -200,7 +200,6 @@ impl RunnerConfig {
         let executor = runner::Executor {
             pi,
             server: server_url.to_string(),
-            extension: repo_root.join("executor").join("ask.ts"),
             sac,
         };
         Some(RunnerConfig {
@@ -343,14 +342,15 @@ pub fn sweep(app: &AppState) {
 }
 
 /// The composed surface of an agent dir: links into the operator's
-/// credentials and the mirrored settings. Everything else in the dir
-/// is the executor's own runtime output — session artifacts that
-/// outlive the run through retention.
-const COMPOSED_SURFACE: [&str; 4] = [
+/// credentials, the mirrored settings, and the materialized ask door.
+/// Everything else in the dir is the executor's own runtime output —
+/// session artifacts that outlive the run through retention.
+const COMPOSED_SURFACE: [&str; 5] = [
     "auth.json",
     "models.json",
     "models-store.json",
     "settings.json",
+    "ask.ts",
 ];
 
 /// Move a terminal task's session artifacts from its agent dir to the

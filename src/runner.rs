@@ -121,8 +121,21 @@ fn refuse(conn: &mut Connection, demand: CommentId, reason: String) -> RunnerFai
     }
 }
 
+/// The ask door's source, embedded from the in-tree `executor/ask.ts`:
+/// the file is the source, this is its pinned copy inside the binary,
+/// so every build is spawn-capable with no repo lookup anywhere.
+const ASK_EXTENSION: &str = include_str!("../executor/ask.ts");
+
+/// The ask door's materialized home: the agent dir compose provisions.
+/// One definition, so the writer and the spawner never disagree.
+pub fn ask_extension_at(agent_dir: &Path) -> PathBuf {
+    agent_dir.join("ask.ts")
+}
+
 /// Compose the agent dir an incarnation's pi runs under. Links, not
-/// copies: a copied credential would freeze OAuth refresh.
+/// copies: a copied credential would freeze OAuth refresh. The ask
+/// door materializes here; a failure to write it is the failure that
+/// surfaces — no run spawns on a door it cannot load.
 pub fn compose_agent_dir(dir: &Path) -> Result<(), RunnerFail> {
     std::fs::create_dir_all(dir)
         .map_err(|e| RunnerFail::Git(format!("agent dir {}: {e}", dir.display())))?;
@@ -147,6 +160,8 @@ pub fn compose_agent_dir(dir: &Path) -> Result<(), RunnerFail> {
     .map_err(|e| RunnerFail::Git(format!("agent dir settings: {e}")))?;
     std::fs::write(dir.join("settings.json"), settings)
         .map_err(|e| RunnerFail::Git(format!("agent dir settings: {e}")))?;
+    std::fs::write(ask_extension_at(dir), ASK_EXTENSION)
+        .map_err(|e| RunnerFail::Git(format!("agent dir ask extension: {e}")))?;
     Ok(())
 }
 
@@ -443,13 +458,12 @@ The .agents/skills/saccade skill in this repo documents the tracker.",
 }
 
 /// The executor the runner speaks: the pinned pi, the server its
-/// sessions write to, the ask extension the runner loads, and this
-/// binary's path for the session's own CLI calls. The flake bakes the
-/// pin; SACCADE_PI overrides for development only.
+/// sessions write to, and this binary's path for the session's own CLI
+/// calls. The flake bakes the pin; SACCADE_PI overrides for development
+/// only.
 pub struct Executor {
     pub pi: std::path::PathBuf,
     pub server: String,
-    pub extension: std::path::PathBuf,
     pub sac: std::path::PathBuf,
 }
 
@@ -481,12 +495,9 @@ pub fn execute_session(
     runs: &crate::supervisor::LiveRuns,
     executor: &Executor,
 ) -> Result<bool, RunnerFail> {
-    if !executor.extension.exists() {
-        return Err(RunnerFail::Usage(format!(
-            "the ask extension is missing at {}; the runner loads it at spawn",
-            executor.extension.display()
-        )));
-    }
+    // the materialized ask door compose provisions; its presence is
+    // compose's guarantee, so no refusal guards the spawn
+    let extension = ask_extension_at(&run.agent_dir);
     let mut child = std::process::Command::new(&executor.pi)
         // not pass through, only what the bind named and the doors the
         // session needs — this server, this binary, this task
@@ -508,7 +519,7 @@ pub fn execute_session(
         .arg(&run.session)
         .arg("-a")
         .arg("--extension")
-        .arg(&executor.extension)
+        .arg(&extension)
         .current_dir(&run.worktree)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

@@ -692,12 +692,19 @@ fn a_demand_on_a_dropped_task_fires_nothing() {
 /// A terminal task's session artifacts outlive their agent dir: the
 /// sweep moves what the executor wrote at runtime to the retention
 /// root, and the composed surface — credential links, mirrored
-/// settings — dies with the dir, never retained.
+/// settings, the materialized ask door — dies with the dir, never
+/// retained.
 #[test]
 fn a_terminal_tasks_session_artifacts_survive_the_sweep_at_retention() {
     let (repo, db_path, _demand) = scaffold("retention");
     let agent_dir = saccade::paths::agent_dir_at(&repo, 0);
     compose_agent_dir(&agent_dir).unwrap();
+    // the bundled ask door materialized at compose, byte-identical
+    // with the in-tree source
+    assert_eq!(
+        std::fs::read_to_string(agent_dir.join("ask.ts")).unwrap(),
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/executor/ask.ts")).unwrap()
+    );
     // the executor's runtime output: what pi writes into its agent dir
     std::fs::write(
         agent_dir.join("run-history.jsonl"),
@@ -752,6 +759,7 @@ fn a_terminal_tasks_session_artifacts_survive_the_sweep_at_retention() {
         "models.json",
         "models-store.json",
         "settings.json",
+        "ask.ts",
     ] {
         assert!(!retained.join(composed).exists(), "{composed} was retained");
     }
