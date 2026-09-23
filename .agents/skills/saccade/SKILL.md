@@ -177,26 +177,38 @@ the door itself changes.
 `sac search` finds records by exact terms over the folded text fields —
 task titles, comment bodies, receipts. No ranking, no relevance, no
 fuzzy: a term matches as a whole, word-bounded token, case-folded, or it
-doesn't match. Results are thread-grouped pointers with one matched
-line each, in record order; `sac show t-N` opens any group.
+doesn't match — inflections do not match, so try each form (`migrate`
+will not find `migration`); several terms are AND-ed, and a record must
+match every one. Results are thread-grouped pointers with one matched
+line each, in record order; `sac show` opens any pointer.
 
 - **Find where something was decided**: `sac search telemetry`. The
   groups are the threads that hold matches.
 - **Follow a reference**: an id term is a reference search — `sac search
   '#907'` finds every record citing that comment (in prose or by
   reply), `sac search t-49` everything naming that task (prose, births
-  under it, comments addressed to it). Quote the hash so the shell
-  keeps it one token.
+  under it, comments addressed to it). Quote the hash (`'#907'`) —
+  left bare, the shell takes it for a comment.
 - **Narrow**: `in:t-N` (one thread), `by:NAME` (author; matches within
   names, so `by:pi` finds `pi` and `pi/t-90-1`), `kind:` (`task`,
   `note`, `demand`, `steer`, `ask`, `receipt`), `under:t-N` (the task
   and all its descendants' threads). Facets are plain only-show-me
   filters, AND-ed with the terms and each other. Every narrowing prints
-  visible counts — each group header carries `(shown of total)` and a
-  thread whose matches were all filtered out stays as a count-only
-  row: nothing is silently excluded.
+  visible counts — each group header carries `(shown of total)`, and a
+  thread whose term matches were all filtered out stays as a count-only
+  row: nothing is silently excluded. A facet-only query shows only the
+  threads it matches, and a query that matches nothing at all prints
+  one line — `no matches (<terms>)` — and exits 0.
 - **Read the neighborhood**: `sac search '#907' -C 3` anchors on that
   record and shows it plus three before and after, one line each.
+- **Read whole records**: search shows one matched line; the pointers
+  open in `sac show` — raw ids show the event, `t-N` shows the task
+  plus thread. A comment renders as its block, a task's birth as its
+  header and relation (`birth of t-27 (parent t-19)`), a thread
+  whole. Several ids in one call, or one per line through `--stdin`
+  (blank and invalid lines are skipped with a note). The pipe reads
+  end to end:
+  `sac search telemetry --json | jq -r '.groups[].records[].pointer' | sac show --stdin`.
 
 Pointers stay pointers: a receipt's address is its task (`t-90
 receipt` — the fold keeps no delivery seq), and a receipt carries no
@@ -220,7 +232,7 @@ The power tail is unchanged: `sac log | grep` reads the raw record.
 | `sac wait c-<seq>` | any tier | blocks on the demand's outcome, never replies |
 | `sac cancel t-N` | any tier | the kill request for a task's active run |
 | `sac checkpoint t-N` | any tier | records the branch tip as the task's checkpoint |
-| `sac list` / `sac show t-N` / `sac log` / `sac proposals` | anonymous | the board, a thread, raw events, the ruling queue |
+| `sac list` / `sac show <ids…>` / `sac log` / `sac proposals` | anonymous | the board, threads and records, raw events, the ruling queue |
 | `sac search <terms…> [in:t-N by:NAME kind:K under:t-N] [-C N]` | anonymous | exact terms over titles, comment bodies, receipts; id terms are reference searches; facets only-show-me with visible counts; `-C N` anchors on one record |
 
 ## Hygiene

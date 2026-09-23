@@ -232,6 +232,15 @@ pub fn comment_thread(
         .collect()
 }
 
+/// One comment as the thread view renders it, whatever thread it lives
+/// on — the body format `show` prints for a pointer.
+pub fn comment_line(world: &World, id: CommentId) -> Option<CommentLine> {
+    world
+        .comments
+        .contains_key(&id)
+        .then(|| line_of(&world.comments, id))
+}
+
 pub struct ShowView {
     pub id: String,
     pub state: &'static str,
@@ -748,7 +757,7 @@ fn task_ref(token: &str, facet: &str) -> Result<TaskId, SearchFail> {
         .strip_prefix("t-")
         .and_then(|n| n.parse::<usize>().ok())
         .map(TaskId)
-        .ok_or_else(|| SearchFail::Usage(format!("{facet} takes a task id, e.g. {facet}:t-4")))
+        .ok_or_else(|| SearchFail::Usage(format!("{facet} takes a task id, e.g. {facet}t-4")))
 }
 
 impl SearchQuery {
@@ -791,7 +800,7 @@ impl SearchQuery {
         }
         if query.terms.is_empty() && query.facets.is_empty() {
             return Err(SearchFail::Usage(
-                "give at least one term or a facet (in:, by:, kind:, under:)".into(),
+                "give at least one term or a facet (in:, by:, kind:, under:); the moves:\n  sac search telemetry      find where it was decided\n  sac search '#907'         follow a reference (quote the hash)\n  sac search floop in:t-0   narrow with facets\n  sac search '#907' -C 3    read the neighborhood".into(),
             ));
         }
         Ok(query)
@@ -846,9 +855,10 @@ fn terms_match(query: &SearchQuery, text: &str, refs: &[Ref]) -> bool {
     })
 }
 
-/// The one line a result shows: the first line a term lands on, else
-/// the field's first line (a reference-only match still points).
-fn matched_line(terms: &[Term], text: &str) -> String {
+/// The line a result renders: the first line a term lands on, else
+/// the field's first line (a reference-only match still points). A
+/// facet-only query has no terms, so its results read as first lines.
+pub fn matched_line(terms: &[Term], text: &str) -> String {
     for line in text.lines() {
         if terms.is_empty() || terms.iter().any(|t| token_in_field(&t.canonical(), line)) {
             return line.to_string();
@@ -857,7 +867,8 @@ fn matched_line(terms: &[Term], text: &str) -> String {
     text.lines().next().unwrap_or_default().to_string()
 }
 
-/// One matched record: a pointer and the one line that matched.
+/// One matched record: a pointer and the full text of the field it
+/// matched; the rendered face cuts that to the matched line.
 #[derive(Debug, PartialEq)]
 pub struct SearchRecord {
     /// "#907" for a comment or a birth; "t-90 receipt" — the fold keeps
@@ -866,7 +877,7 @@ pub struct SearchRecord {
     pub kind: &'static str,
     /// The author, when the fold keeps one; receipts carry none
     pub actor: Option<String>,
-    pub line: String,
+    pub body: String,
     /// The record's position; a receipt, having none, closes its group
     order: usize,
 }
@@ -914,7 +925,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                     pointer: format!("#{}", ctx.birth.0),
                     kind: "task",
                     actor: Some(ctx.birth_actor.as_str().to_string()),
-                    line: matched_line(&query.terms, title),
+                    body: title.to_string(),
                     order: ctx.birth.0,
                 },
             ));
@@ -928,7 +939,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                         pointer: format!("t-{i} receipt"),
                         kind: "receipt",
                         actor: None,
-                        line: matched_line(&query.terms, text),
+                        body: text.to_string(),
                         order: usize::MAX,
                     },
                 ));
@@ -948,7 +959,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                     pointer: format!("#{}", id.0.0),
                     kind: kind_of(&cctx.state),
                     actor: Some(cctx.actor.as_str().to_string()),
-                    line: matched_line(&query.terms, body),
+                    body: body.to_string(),
                     order: id.0.0,
                 },
             ));
@@ -960,6 +971,9 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
     for (thread, record) in matches {
         by_thread.entry(thread).or_default().push(record);
     }
+    // a facet-only query has no terms, so a thread it filters out holds
+    // nothing worth a count row — only the threads it matches render
+    let facet_only = query.terms.is_empty();
     let mut groups: Vec<(usize, SearchGroup)> = Vec::new();
     for (thread, mut records) in by_thread {
         records.sort_by_key(|r| r.order);
@@ -969,6 +983,9 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
             .into_iter()
             .filter(|r| facets_pass(world, query, thread, r))
             .collect();
+        if facet_only && records.is_empty() {
+            continue;
+        }
         groups.push((
             first,
             SearchGroup {
@@ -1817,7 +1834,7 @@ mod search {
         // the receipt carries no author in the fold and closes its group
         assert_eq!((receipt.kind, receipt.actor.as_deref()), ("receipt", None));
         assert_eq!(
-            receipt.line,
+            receipt.body,
             "suite 9 green; the floop migration landed per #2"
         );
         assert_eq!(groups[0].title, "migrate floop");
@@ -1839,8 +1856,16 @@ mod search {
         );
         let groups = search(&world, &q(&["#123"])).unwrap();
         assert_eq!(pointers(&groups), vec![(1, vec!["#6".into()])]);
-        // the matched line is the line the term landed on
-        assert_eq!(groups[0].records[0].line, "see #123 for the trail");
+        // the record carries the field whole; the matched line is a
+        // render cut of it
+        assert_eq!(
+            groups[0].records[0].body,
+            "the run pi/t-90-1 answered\nsee #123 for the trail"
+        );
+        assert_eq!(
+            matched_line(&q(&["#123"]).terms, &groups[0].records[0].body),
+            "see #123 for the trail"
+        );
     }
 
     #[test]
@@ -1910,8 +1935,8 @@ mod search {
 
     #[test]
     fn a_facet_may_browse_a_whole_thread() {
-        // a facet alone matches everything, narrowed by the facet; the
-        // other threads stay as count-only rows
+        // a facet alone matches everything, narrowed by the facet; only
+        // the threads the facet matches render — no count-row flood
         let groups = search(&story(), &q(&["in:t-0"])).unwrap();
         assert_eq!(
             groups
@@ -1925,15 +1950,27 @@ mod search {
                     g.total
                 ))
                 .collect::<Vec<_>>(),
-            vec![
-                (
-                    0,
-                    vec!["#0".into(), "#2".into(), "#3".into(), "#9".into()],
-                    4
-                ),
-                (1, vec![], 4),
-                (2, vec![], 1),
-            ]
+            vec![(
+                0,
+                vec!["#0".into(), "#2".into(), "#3".into(), "#9".into()],
+                4
+            )]
+        );
+        // a facet alone that nothing passes renders nothing at all
+        assert!(search(&story(), &q(&["by:nobody"])).unwrap().is_empty());
+    }
+
+    #[test]
+    fn term_matches_filtered_by_facets_stay_as_count_rows() {
+        // a term's matches stay visible as counts when a facet filters
+        // them out — narrowing is visible, never silent
+        let groups = search(&story(), &q(&["floop", "by:jerry"])).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.task, g.records.len(), g.total))
+                .collect::<Vec<_>>(),
+            vec![(1, 0, 2), (0, 0, 1)]
         );
     }
 
