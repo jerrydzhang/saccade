@@ -1,6 +1,7 @@
 //! Saccade - issue tracker (idk what makes it special yet other than it's mine)
 
 pub mod api;
+pub mod attempts;
 pub mod client;
 pub mod db;
 pub mod decide;
@@ -78,4 +79,74 @@ pub enum Reject {
     InvalidStateTransition,
     #[error("words are required")]
     ReasonRequired,
+}
+
+impl Reject {
+    /// The stable refusal code every face cites: the wire's error body,
+    /// the CLI's exit line, and the attempts log's refusal lines.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Reject::InvalidTaskId => "invalid_task_id",
+            Reject::InvalidParentTaskId => "invalid_parent_task_id",
+            Reject::InvalidProposalId => "invalid_proposal_id",
+            Reject::ProposalAlreadyOpen => "proposal_already_open",
+            Reject::InvalidCommentId => "invalid_comment_id",
+            Reject::NotBirthAttribution => "not_birth_attribution",
+            Reject::HumanOnly => "human_only",
+            Reject::NotClaimHolder => "not_claim_holder",
+            Reject::InvalidIncarnationId => "invalid_incarnation_id",
+            Reject::IncarnationAlreadyActive => "incarnation_already_active",
+            Reject::DemandNotOnTask => "demand_not_on_task",
+            Reject::WorkspaceAlreadyExists => "workspace_already_exists",
+            Reject::WorkspaceMissing => "workspace_missing",
+            Reject::WorktreeAlreadyPresent => "worktree_already_present",
+            Reject::CheckpointRewind => "checkpoint_rewind",
+            Reject::SteerNotStanding => "steer_not_standing",
+            Reject::NoActiveIncarnation => "no_active_incarnation",
+            Reject::InvalidActor => "invalid_actor",
+            Reject::InvalidStateTransition => "invalid_state_transition",
+            Reject::ReasonRequired => "reason_required",
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Reject;
+
+    /// The code table is exhaustive and matches the wire's serde names,
+    /// so the three faces that cite codes cannot drift apart.
+    #[test]
+    fn refusal_codes_match_the_wire_names() {
+        let every = [
+            Reject::InvalidTaskId,
+            Reject::InvalidParentTaskId,
+            Reject::InvalidProposalId,
+            Reject::ProposalAlreadyOpen,
+            Reject::InvalidCommentId,
+            Reject::NotBirthAttribution,
+            Reject::HumanOnly,
+            Reject::NotClaimHolder,
+            Reject::InvalidIncarnationId,
+            Reject::IncarnationAlreadyActive,
+            Reject::DemandNotOnTask,
+            Reject::WorkspaceAlreadyExists,
+            Reject::WorkspaceMissing,
+            Reject::WorktreeAlreadyPresent,
+            Reject::CheckpointRewind,
+            Reject::SteerNotStanding,
+            Reject::NoActiveIncarnation,
+            Reject::InvalidActor,
+            Reject::InvalidStateTransition,
+            Reject::ReasonRequired,
+        ];
+        for reject in every {
+            let wire = serde_json::to_value(&reject).unwrap();
+            assert_eq!(
+                wire.as_str().unwrap(),
+                reject.code(),
+                "the code and the wire name disagree for {wire}"
+            );
+        }
+    }
 }

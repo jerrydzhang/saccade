@@ -319,19 +319,74 @@ pub fn sweep(app: &AppState) {
         }
     }
     for (i, ctx) in world.tasks.iter().enumerate() {
-        // a terminal task never runs again: its composed agent dir has
-        // no consumer left
+        // a terminal task never runs again: what its executor wrote at
+        // runtime moves to the retention root, then the composed agent
+        // dir has no consumer left
         if matches!(ctx.task.state, TaskState::Done(_) | TaskState::Dropped)
             && ctx.active_incarnation.is_none()
-            && let Err(e) = std::fs::remove_dir_all(paths::agent_dir_at(&config.repo_root, i))
-            && e.kind() != std::io::ErrorKind::NotFound
         {
-            warn!(task = i, "agent dir sweep failed: {e}");
+            if let Err(e) = retain_artifacts(&config.repo_root, i) {
+                warn!(task = i, "session artifact retention failed: {e}");
+            }
+            if let Err(e) = std::fs::remove_dir_all(paths::agent_dir_at(&config.repo_root, i))
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(task = i, "agent dir sweep failed: {e}");
+            }
         }
     }
     for demand in runnable_demands(&world) {
         spawn_run(app.clone(), config.clone(), demand);
     }
+}
+
+/// The composed surface of an agent dir: links into the operator's
+/// credentials and the mirrored settings. Everything else in the dir
+/// is the executor's own runtime output — session artifacts that
+/// outlive the run through retention.
+const COMPOSED_SURFACE: [&str; 4] = [
+    "auth.json",
+    "models.json",
+    "models-store.json",
+    "settings.json",
+];
+
+/// Move a terminal task's session artifacts from its agent dir to the
+/// retention root before the dir dies: post-hoc joins over them stay
+/// possible after completion. Links never move — retention is for
+/// content, not pointers into the operator's machine. A reopened
+/// task's second terminal pass replaces the first: the newest life's
+/// artifacts win.
+fn retain_artifacts(repo_root: &std::path::Path, task: usize) -> std::io::Result<()> {
+    let agent_dir = paths::agent_dir_at(repo_root, task);
+    let entries = match std::fs::read_dir(&agent_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if COMPOSED_SURFACE.contains(&name.as_str()) {
+            continue;
+        }
+        let to = paths::retention_at(repo_root, task).join(&name);
+        std::fs::create_dir_all(to.parent().expect("retention paths name a file"))?;
+        if let Ok(meta) = to.symlink_metadata() {
+            if meta.is_dir() {
+                std::fs::remove_dir_all(&to)?;
+            } else {
+                std::fs::remove_file(&to)?;
+            }
+        }
+        std::fs::rename(entry.path(), &to)?;
+    }
+    Ok(())
 }
 
 fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {

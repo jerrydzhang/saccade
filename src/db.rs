@@ -317,6 +317,56 @@ pub fn record(
     Ok((stored, world))
 }
 
+/// Clone the log's prefix through `at` into a fresh tracker at `out`:
+/// the schema and identity stamps first, then the rows in order — the
+/// cursor-cloning recipe as one verb. The cursor is the storage seq
+/// read from the rows, never a record id; the two series need not
+/// agree. In-place truncation is impossible (the append-only triggers),
+/// so a clone is always a fresh file.
+pub fn clone(source: &Path, at: usize, out: &Path) -> Result<usize, DbError> {
+    if out.exists() {
+        return Err(DbError::Io(format!(
+            "refusing to overwrite {}; clone to a fresh path",
+            out.display()
+        )));
+    }
+    let src = open_read(source)?;
+    let rows = load(&src)?.rows;
+    let Some(last) = rows.last() else {
+        return Err(DbError::Io(format!(
+            "{} holds no records; --at {at} names nothing",
+            source.display()
+        )));
+    };
+    if at > last.seq {
+        return Err(DbError::Io(format!(
+            "--at {at} is beyond the log's last seq {}",
+            last.seq
+        )));
+    }
+    let mut dst = open(out)?;
+    let txn = dst.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut copied = 0usize;
+    for row in rows.iter().take_while(|r| r.seq <= at) {
+        txn.execute(
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                row.seq as i64,
+                row.event_time as i64,
+                row.logged_time as i64,
+                row.actor,
+                row.tier,
+                row.kind,
+                row.payload
+            ],
+        )?;
+        copied += 1;
+    }
+    txn.commit()?;
+    Ok(copied)
+}
+
 /// Fold-validated all-or-none append of a mixed-context batch; positional ids
 /// are assigned inside the transaction. No authority here: batches are
 /// programmatic, tier gates live in the command path.
@@ -1101,5 +1151,47 @@ mod test {
                 .is_err()
         );
         assert_eq!(load(&conn).unwrap().rows.len(), 1);
+    }
+
+    /// The cursor-clone recipe: schema and stamps first, then the
+    /// prefix in order, into a file nobody else holds.
+    #[test]
+    fn clone_copies_the_prefix_into_a_fresh_tracker() {
+        let dir = std::env::temp_dir().join(format!("sac-clone-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("saccade.db");
+        {
+            let mut conn = open(&source).unwrap();
+            for name in ["migrate floop", "write the receipt", "accept it"] {
+                record(&mut conn, &human(), create(name), 1).unwrap();
+            }
+        }
+
+        let out = dir.join("prefix.db");
+        let copied = clone(&source, 1, &out).unwrap();
+        assert_eq!(copied, 2);
+        let loadout = load(&open(&out).unwrap()).unwrap();
+        assert_eq!(
+            loadout.rows.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(loadout.rows[1].kind, "task_created");
+        // the identity stamps ride: the clone is a tracker, not a raw copy
+        assert!(open_read(&out).is_ok());
+
+        // the prefix refolds to its own world
+        let LoadState::Full(world) = loadout.state else {
+            panic!("a prefix folds");
+        };
+        assert_eq!(world.tasks.len(), 2);
+
+        // a fresh path only, and a cursor inside the log only
+        assert!(matches!(clone(&source, 0, &out), Err(DbError::Io(_))));
+        let beyond = dir.join("beyond.db");
+        assert!(matches!(clone(&source, 9, &beyond), Err(DbError::Io(_))));
+        assert!(!beyond.exists(), "a refused clone writes nothing");
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

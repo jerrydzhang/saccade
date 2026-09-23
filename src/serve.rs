@@ -143,6 +143,15 @@ fn is_fetch(req: &Req) -> bool {
     req.sec_fetch_mode.as_deref() == Some("cors")
 }
 
+/// A console post as the attempts log receives it: the raw form body,
+/// with no client binary to name.
+fn console_request(req: &Req) -> crate::attempts::AsReceived {
+    crate::attempts::AsReceived {
+        client: None,
+        raw: req.body.clone(),
+    }
+}
+
 fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -273,7 +282,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
         body: Prose::new(addr.body.clone()).unwrap(),
         kind: addr.kind,
     };
-    match app.execute(&context, command, None) {
+    match app.execute(&context, command, None, console_request(req)) {
         Ok(stored) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));
@@ -339,7 +348,7 @@ fn rule(req: &Req, app: &AppState, n: usize, fields: &[(String, String)], seq: u
         Ok(ok) => ok,
         Err(msg) => return console_reject(req, app, n, fields, &msg),
     };
-    match app.execute(&who.0, command, None) {
+    match app.execute(&who.0, command, None, console_request(req)) {
         Ok(_) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));
@@ -362,7 +371,7 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
         Err(msg) => return console_reject(req, app, n, fields, &msg),
     };
     let command = Command::AcceptTask { id: TaskId(n) };
-    match app.execute(&who.0, command, None) {
+    match app.execute(&who.0, command, None, console_request(req)) {
         Ok(_) => {
             let fired = app.clone();
             tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));

@@ -141,6 +141,16 @@ enum Cmd {
     Cancel { id: String },
     /// Record a task's current branch tip as its checkpoint
     Checkpoint { id: String },
+    /// Clone the log's prefix through a storage seq into a fresh
+    /// tracker: the reproduction recipe's cursor half
+    Clone {
+        /// The storage seq to copy through, inclusive
+        #[arg(long)]
+        at: u64,
+        /// The fresh tracker to write; must not exist
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Block until the demand's run asks something of the waiter: settle,
     /// cancel, refusal, an answer with no run behind it, or a prompt
     /// awaiting an answer — never replies
@@ -226,7 +236,7 @@ impl Fail {
         match self {
             Fail::Db(_) => "database_error",
             Fail::Degraded(_) => "degraded",
-            Fail::Reject(r) => reject_code(r),
+            Fail::Reject(r) => r.code(),
             Fail::Taught { code, .. } => code,
             Fail::Usage(_) => "usage",
             Fail::Client(c) => c.code(),
@@ -242,36 +252,11 @@ impl std::fmt::Display for Fail {
                 f,
                 "world projection unavailable: {r}\nraw records via 'sac log'; repair the record or upgrade this binary to resume"
             ),
-            Fail::Reject(r) => write!(f, "rejected: {}", reject_code(r)),
+            Fail::Reject(r) => write!(f, "rejected: {}", r.code()),
             Fail::Taught { code, text } => write!(f, "rejected: {code} — {text}"),
             Fail::Usage(m) => write!(f, "{m}"),
             Fail::Client(c) => write!(f, "{c}"),
         }
-    }
-}
-
-fn reject_code(reject: &Reject) -> &'static str {
-    match reject {
-        Reject::InvalidTaskId => "invalid_task_id",
-        Reject::InvalidParentTaskId => "invalid_parent_task_id",
-        Reject::InvalidProposalId => "invalid_proposal_id",
-        Reject::ProposalAlreadyOpen => "proposal_already_open",
-        Reject::InvalidCommentId => "invalid_comment_id",
-        Reject::NotBirthAttribution => "not_birth_attribution",
-        Reject::InvalidIncarnationId => "invalid_incarnation_id",
-        Reject::IncarnationAlreadyActive => "incarnation_already_active",
-        Reject::DemandNotOnTask => "demand_not_on_task",
-        Reject::WorkspaceAlreadyExists => "workspace_already_exists",
-        Reject::WorkspaceMissing => "workspace_missing",
-        Reject::WorktreeAlreadyPresent => "worktree_already_present",
-        Reject::CheckpointRewind => "checkpoint_rewind",
-        Reject::SteerNotStanding => "steer_not_standing",
-        Reject::NoActiveIncarnation => "no_active_incarnation",
-        Reject::InvalidStateTransition => "invalid_state_transition",
-        Reject::HumanOnly => "human_only",
-        Reject::NotClaimHolder => "not_claim_holder",
-        Reject::InvalidActor => "invalid_actor",
-        Reject::ReasonRequired => "reason_required",
     }
 }
 
@@ -365,7 +350,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                     tracing_subscriber::EnvFilter::try_from_default_env()
                         .unwrap_or_else(|_| "info".into()),
                 )
-                .with_writer(std::io::stderr)
+                .with_writer(saccade::attempts::WarnsTee::beside(&db_path))
                 .try_init();
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -379,6 +364,24 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::Wait { id, timeout } => {
             let comment = parse_comment_id(id)?;
             return saccade::runner::wait(&db_path, comment, *timeout).map_err(runner_fail);
+        }
+        Cmd::Clone { at, out } => {
+            // the reproduction recipe's cursor half: the clone names the
+            // world a refused request died against
+            let cloned = db::clone(&db_path, *at as usize, out).map_err(Fail::Db)?;
+            return Ok(if cli.json {
+                serde_json::json!({
+                    "cloned": cloned,
+                    "through": at,
+                    "out": out.display().to_string(),
+                })
+                .to_string()
+            } else {
+                format!(
+                    "cloned {cloned} records through seq {at} to {}",
+                    out.display()
+                )
+            });
         }
         Cmd::Cancel { id } => {
             let task = parse_task_id(id)?;
@@ -477,7 +480,7 @@ fn refused(conn: &rusqlite::Connection, command: &Command, reject: Reject) -> Fa
     });
     match taught {
         Some(text) => Fail::Taught {
-            code: reject_code(&reject),
+            code: reject.code(),
             text,
         },
         None => Fail::Reject(reject),
