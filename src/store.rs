@@ -333,6 +333,7 @@ impl World {
                         session: session.clone(),
                         state: IncarnationState::Bound,
                         produced: Vec::new(),
+                        rejection: None,
                         born_at: record.timestamp,
                         done_at: None,
                     },
@@ -351,7 +352,7 @@ impl World {
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
             }
-            ref event @ Event::IncarnationPromptRejected { id, .. } => {
+            ref event @ Event::IncarnationPromptRejected { id, ref evidence } => {
                 let run = self
                     .incarnations
                     .get_mut(&id)
@@ -360,6 +361,7 @@ impl World {
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
+                run.rejection = Some(evidence.clone());
                 self.terminalize(id, &record);
             }
             ref event @ Event::IncarnationSettled { id } => {
@@ -1581,6 +1583,15 @@ mod test {
         assert_eq!(
             log.world().incarnations[&run].state,
             IncarnationState::Interrupted
+        );
+        // the fold carries the recorded cause for the surfaces that
+        // release on it
+        assert_eq!(
+            log.world().incarnations[&run].rejection,
+            Some(FailureEvidence::new(
+                FailureCode::PromptRejected,
+                Some("session refused the pointer prompt".into()),
+            ))
         );
         assert_eq!(log.world().tasks[0].active_incarnation, None);
         assert_eq!(

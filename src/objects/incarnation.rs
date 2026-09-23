@@ -5,6 +5,7 @@ use crate::objects::comment::CommentId;
 use crate::objects::task::TaskId;
 use crate::store::RecordId;
 use crate::types::actor::ActorName;
+use crate::types::failure::FailureEvidence;
 use crate::types::pointers::SessionPointer;
 
 /// The record id of IncarnationBound is the incarnation's identity.
@@ -62,6 +63,9 @@ pub struct IncarnationContext {
     pub state: IncarnationState,
     /// Agent records this run produced, in birth order.
     pub produced: Vec<RecordId>,
+    /// The recorded cause of the rejected prompt that interrupted the
+    /// run, present once a never-accepted run terminalized
+    pub rejection: Option<FailureEvidence>,
     /// Event time of the bind record
     pub born_at: u64,
     /// Event time of the terminal record, present once the run ended

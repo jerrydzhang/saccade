@@ -10,10 +10,10 @@ use saccade::api::AppState;
 use saccade::db::{self, LoadState};
 use saccade::objects::comment::AgentAttemptState;
 use saccade::objects::comment::CommentState;
-use saccade::objects::incarnation::IncarnationState;
+use saccade::objects::incarnation::{IncarnationId, IncarnationState};
 use saccade::runner::{
-    PreparedRun, RunnerFail, close, close_as_found, compose_agent_dir, pointer_prompt, prepare,
-    wait,
+    PreparedRun, RunnerFail, close, close_as_found, compose_agent_dir, execute_session,
+    pointer_prompt, prepare, wait,
 };
 use saccade::supervisor::{self, LiveRuns, RunHandle, RunnerConfig, SessionDriver};
 use saccade::types::actor::ActorName;
@@ -110,6 +110,19 @@ fn world_of(db_path: &Path) -> World {
     world
 }
 
+/// The RPC truth the real driver records: acceptance lands when the
+/// executor answers the prompt frame. The seam tests below the driver
+/// record it by hand where they used to get it from prepare.
+fn accepted(db_path: &Path, run: IncarnationId) {
+    db::record(
+        &mut db::open(db_path).unwrap(),
+        &Context::system(),
+        Command::AcceptPrompt { id: run },
+        9,
+    )
+    .unwrap();
+}
+
 #[test]
 fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     let (repo, db_path, demand) = scaffold("course");
@@ -130,12 +143,21 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     // the run's name is derived: executor/task-incarnation
     assert_eq!(prepared.actor.as_str(), "pi/t-0-1");
 
-    // the run is accepted and holding the demand's attempt
+    // prepare binds without accepting: acceptance is the executor's
+    // own word, so the run sits Bound until the RPC answers
     let world = world_of(&db_path);
     assert_eq!(
         world.tasks[0].active_incarnation,
         Some(prepared.incarnation)
     );
+    assert_eq!(
+        world.incarnations[&prepared.incarnation].state,
+        IncarnationState::Bound
+    );
+    accepted(&db_path, prepared.incarnation);
+
+    // the run is accepted and holding the demand's attempt
+    let world = world_of(&db_path);
     assert_eq!(
         world.incarnations[&prepared.incarnation].state,
         IncarnationState::PromptAccepted
@@ -296,13 +318,14 @@ fn wait_reports_an_unanswered_demand_at_its_deadline() {
 #[test]
 fn wait_releases_on_settlement_naming_the_receipt() {
     let (repo, db_path, demand) = scaffold("wait-settle");
-    prepare(
+    let prepared = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
         demand,
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
+    accepted(&db_path, prepared.incarnation);
     let worker = Context {
         actor: ActorName::new("pi/t-0-1".into()).unwrap(),
         tier: Tier::Agent,
@@ -409,11 +432,12 @@ fn wait_releases_on_an_answer_with_no_run_behind_it() {
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
-/// The path that has never fired in anger: a run bound whose prompt was
-/// neither accepted nor rejected, constructed through the prompt
-/// machinery's own verbs.
+/// The birth window: a run bound whose prompt no executor answered
+/// yet, constructed through the prompt machinery's own verbs. Bound
+/// is every healthy spawn's startup state, so the wait holds — no
+/// release narrates a birth in progress.
 #[test]
-fn wait_releases_on_a_prompt_awaiting_its_answer() {
+fn a_bound_run_holds_the_wait_through_its_birth_window() {
     let (repo, db_path, demand) = scaffold("wait-prompt");
     db::record(
         &mut db::open(&db_path).unwrap(),
@@ -429,15 +453,11 @@ fn wait_releases_on_a_prompt_awaiting_its_answer() {
     )
     .unwrap();
 
-    let seen = wait(&db_path, demand, Some(5)).unwrap();
-    assert!(
-        seen.contains("i-2 raised a prompt that awaits an answer"),
-        "{seen}"
-    );
-    assert!(seen.contains("re-arm sac wait c-1"), "{seen}");
-    // the release carries the prompt itself
-    assert!(seen.contains("Serve tracked demand c-1"), "{seen}");
-    assert!(seen.contains("Reply when done, as 'pi/t-0-1'"), "{seen}");
+    // the wait holds: the deadline is the honest exit, never a release
+    assert!(matches!(
+        wait(&db_path, demand, Some(0)),
+        Err(RunnerFail::Usage(_))
+    ));
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -446,39 +466,50 @@ fn wait_releases_on_a_prompt_awaiting_its_answer() {
 /// leave through the CLI. Each test's driver owns its db, so parallel
 /// tests never share a body.
 fn fake_session_for(db: PathBuf) -> SessionDriver {
-    Arc::new(move |run: &PreparedRun, _prompt: &str, _runs: &LiveRuns| {
-        let mut conn = db::open(&db).unwrap();
-        let world = world_of(&db);
-        let demand = world
-            .comments
-            .iter()
-            .find(|(_, c)| {
-                matches!(
-                    &c.state,
-                    CommentState::Demand {
-                        attempt: AgentAttemptState::InFlight { .. },
-                        ..
-                    }
-                )
+    Arc::new(
+        move |run: &PreparedRun,
+              _prompt: &str,
+              _runs: &LiveRuns,
+              record: &dyn Fn(Command) -> Result<(), String>| {
+            // the executor's own word first: acceptance records through
+            // the door the real driver carries
+            record(Command::AcceptPrompt {
+                id: run.incarnation,
             })
-            .map(|(id, _)| *id)
-            .expect("the bound demand is in flight");
-        db::record(
-            &mut conn,
-            &Context {
-                actor: run.actor.clone(),
-                tier: Tier::Agent,
-            },
-            Command::Comment {
-                target: Target::Comment(demand),
-                body: Prose::new("the fake session answered".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            9,
-        )
-        .unwrap();
-        Ok(true)
-    })
+            .expect("the acceptance fact landed");
+            let mut conn = db::open(&db).unwrap();
+            let world = world_of(&db);
+            let demand = world
+                .comments
+                .iter()
+                .find(|(_, c)| {
+                    matches!(
+                        &c.state,
+                        CommentState::Demand {
+                            attempt: AgentAttemptState::InFlight { .. },
+                            ..
+                        }
+                    )
+                })
+                .map(|(id, _)| *id)
+                .expect("the bound demand is in flight");
+            db::record(
+                &mut conn,
+                &Context {
+                    actor: run.actor.clone(),
+                    tier: Tier::Agent,
+                },
+                Command::Comment {
+                    target: Target::Comment(demand),
+                    body: Prose::new("the fake session answered".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+                9,
+            )
+            .unwrap();
+            Ok(true)
+        },
+    )
 }
 
 #[test]
@@ -558,6 +589,63 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
             other => panic!("demand spent: {other:?}"),
         }
     }
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+/// The stillbirth door: an executor that cannot spawn dies before the
+/// prompt was ever answered. The rejection records with its cause, the
+/// demand slot frees, and the supervising wait releases naming it —
+/// never a settled run with nothing to show.
+#[test]
+fn a_spawn_that_dies_before_acceptance_records_its_rejection() {
+    let (repo, db_path, demand) = scaffold("stillbirth");
+    let executor = saccade::runner::Executor {
+        pi: repo.parent().unwrap().join("state").join("no-such-pi"),
+        server: "http://127.0.0.1:1".into(),
+        sac: std::path::PathBuf::from(env!("CARGO_BIN_EXE_sac")),
+    };
+    let runner = RunnerConfig {
+        repo_root: repo.clone(),
+        actor: ActorName::new("pi".into()).unwrap(),
+        driver: Arc::new(move |run, prompt, runs, record| {
+            execute_session(run, prompt, runs, &executor, record)
+        }),
+    };
+    let app = AppState::with_runner(&db_path, runner).unwrap();
+
+    supervisor::sweep(&app);
+
+    // the wait releases carrying the recorded cause
+    let seen = wait(&db_path, demand, Some(10)).unwrap();
+    assert!(seen.contains("rejected the prompt"), "{seen}");
+    assert!(seen.contains("spawning the executor"), "{seen}");
+    assert!(seen.contains("no-such-pi"), "{seen}");
+
+    let world = world_of(&db_path);
+    // the run terminalized as interrupted, its evidence in the fold
+    assert_eq!(world.tasks[0].active_incarnation, None);
+    let run = world
+        .incarnations
+        .values()
+        .find(|r| r.response_target == demand)
+        .expect("the stillborn run is in the fold");
+    assert_eq!(run.state, IncarnationState::Interrupted);
+    assert!(
+        run.rejection
+            .as_ref()
+            .and_then(|e| e.detail.as_deref())
+            .unwrap_or_default()
+            .contains("spawning the executor")
+    );
+    // the demand slot freed: re-asking is a new comment, the spent ask
+    // never re-fires
+    match &world.comments[&demand].state {
+        CommentState::Demand { attempt, .. } => {
+            assert!(matches!(attempt, AgentAttemptState::Spent));
+        }
+        other => panic!("demand spent: {other:?}"),
+    }
+    assert!(supervisor::runnable_demands(&world).is_empty());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -735,7 +823,7 @@ fn a_terminal_tasks_session_artifacts_survive_the_sweep_at_retention() {
     let runner = RunnerConfig {
         repo_root: repo.clone(),
         actor: ActorName::new("pi".into()).unwrap(),
-        driver: Arc::new(|_, _, _| Ok(true)),
+        driver: Arc::new(|_, _, _, _| Ok(true)),
     };
     let app = AppState::with_runner(&db_path, runner).unwrap();
     supervisor::sweep(&app);
@@ -780,18 +868,23 @@ fn a_server_without_a_runner_writes_but_never_fires() {
 /// The session body that really sleeps: a child process this server
 /// owns, so cancel has something to kill.
 fn sleeping_session() -> SessionDriver {
-    Arc::new(move |run: &PreparedRun, _prompt: &str, runs: &LiveRuns| {
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("sleep 30")
-            .current_dir(&run.worktree)
-            .spawn()
-            .expect("the sleeper spawns");
-        runs.register(run.incarnation, RunHandle::process_only(child.id()));
-        let clean = child.wait().map(|s| s.success()).unwrap_or(false);
-        runs.unregister(run.incarnation);
-        Ok(clean)
-    })
+    Arc::new(
+        move |run: &PreparedRun,
+              _prompt: &str,
+              runs: &LiveRuns,
+              _record: &dyn Fn(Command) -> Result<(), String>| {
+            let mut child = std::process::Command::new("sh")
+                .arg("-c")
+                .arg("sleep 30")
+                .current_dir(&run.worktree)
+                .spawn()
+                .expect("the sleeper spawns");
+            runs.register(run.incarnation, RunHandle::process_only(child.id()));
+            let clean = child.wait().map(|s| s.success()).unwrap_or(false);
+            runs.unregister(run.incarnation);
+            Ok(clean)
+        },
+    )
 }
 
 #[test]
@@ -854,9 +947,10 @@ fn a_cancel_kills_the_run_and_frees_the_task() {
 }
 
 #[test]
-fn boot_recovery_settles_an_orphaned_run() {
+fn boot_recovery_interrupts_an_orphaned_run_that_never_accepted() {
     let (repo, db_path, demand) = scaffold("recover");
-    // an orphan: prepare bound and accepted, then the server died
+    // an orphan: prepare bound, the executor never answered, then the
+    // server died
     let app = AppState::open(&db_path).unwrap();
     let actor = ActorName::new("pi".into()).unwrap();
     app.with_conn(|conn| prepare(conn, &repo, demand, actor))
@@ -868,13 +962,23 @@ fn boot_recovery_settles_an_orphaned_run() {
 
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
+    let run = world.incarnations.values().last().unwrap();
+    assert_eq!(run.state, IncarnationState::Interrupted);
+    // the fold carries the recorded cause
+    assert!(
+        run.rejection
+            .as_ref()
+            .and_then(|e| e.detail.as_deref())
+            .unwrap_or_default()
+            .contains("the run never accepted")
+    );
     match &world.comments[&demand].state {
         CommentState::Demand { attempt, .. } => {
             assert!(matches!(attempt, AgentAttemptState::Spent));
         }
         other => panic!("demand spent: {other:?}"),
     }
-    // the settled orphan leaves its workspace for the next run's reuse
+    // the interrupted orphan leaves its workspace for the next run's reuse
     assert!(world.tasks[0].workspace.is_some());
     // the spent unanswered demand is dead: no live authorization, the
     // sweep must not see it
@@ -888,13 +992,14 @@ fn boot_recovery_settles_a_gone_worktree_at_its_recorded_checkpoint() {
 
     // the incident shape: bound, accepted, answered, checkpointed
     // mid-flight — then the session and server died together
-    prepare(
+    let prepared = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
         demand,
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
+    accepted(&db_path, prepared.incarnation);
     let run = world_of(&db_path).tasks[0].active_incarnation.unwrap();
     db::record(
         &mut db::open(&db_path).unwrap(),
@@ -964,13 +1069,14 @@ fn boot_recovery_settles_naming_the_loss_when_nothing_retains_the_work() {
     let (repo, db_path, demand) = scaffold("recover-lost");
 
     // the orphan checkpointed mid-flight, its answer still unwritten
-    prepare(
+    let prepared = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
         demand,
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
+    accepted(&db_path, prepared.incarnation);
     let run = world_of(&db_path).tasks[0].active_incarnation.unwrap();
     let worktree = saccade::paths::worktree_at(&repo, 0);
     std::fs::write(worktree.join("receipt"), "half done\n").unwrap();
@@ -1054,6 +1160,7 @@ fn a_severed_branch_rebuilds_at_the_recorded_checkpoint() {
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
+    accepted(&db_path, second.incarnation);
     // the second run on the task carries the next ordinal
     assert_eq!(second.actor.as_str(), "pi/t-0-2");
 
@@ -1087,13 +1194,14 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
     let actor = ActorName::new("pi".into()).unwrap();
 
     // the parent task runs one course, leaving its branch alive
-    prepare(
+    let parent = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
         demand,
         actor.clone(),
     )
     .unwrap();
+    accepted(&db_path, parent.incarnation);
     let parent_worktree = saccade::paths::worktree_at(&repo, 0);
     db::record(
         &mut db::open(&db_path).unwrap(),
@@ -1138,13 +1246,14 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
     .unwrap();
     let child_demand = latest_demand(&db_path);
     let child_worktree = saccade::paths::worktree_at(&repo, 1);
-    prepare(
+    let child = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
         child_demand,
         actor.clone(),
     )
     .unwrap();
+    accepted(&db_path, child.incarnation);
     db::record(
         &mut db::open(&db_path).unwrap(),
         &agent(),
@@ -1189,6 +1298,8 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
         actor,
     )
     .unwrap();
+    let rebuilt = world_of(&db_path).tasks[1].active_incarnation.unwrap();
+    accepted(&db_path, rebuilt);
 
     assert_eq!(sh(&repo, &["rev-parse", "saccade/t-1"]), child_checkpoint);
     let world = world_of(&db_path);
@@ -1420,13 +1531,14 @@ fn prepare_births_the_task_branch_from_main_even_when_head_elsewhere() {
 /// One full course: prepare, reply, a commit in the worktree, close. The
 /// checkpoint lands on the receipt commit and the task's slot frees.
 fn run_one_course(repo: &Path, db_path: &Path, demand: CommentId) -> String {
-    prepare(
+    let prepared = prepare(
         &mut db::open(db_path).unwrap(),
         repo,
         demand,
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
+    accepted(db_path, prepared.incarnation);
     db::record(
         &mut db::open(db_path).unwrap(),
         &agent(),

@@ -16,19 +16,31 @@ use crate::db;
 use crate::objects::comment::{
     AgentAttemptState, CommentId, CommentState, ResponseState, SteerDelivery,
 };
-use crate::objects::incarnation::IncarnationId;
+use crate::objects::incarnation::{IncarnationId, IncarnationState};
 use crate::objects::task::{TaskId, TaskState};
 use crate::paths;
 use crate::rpc::ClientCommand;
 use crate::runner::{self, PreparedRun, RunnerFail};
 use crate::store::World;
 use crate::types::actor::ActorName;
+use crate::types::failure::{FailureCode, FailureEvidence};
 use crate::{Command, Context};
 
 /// What the session body is: run to completion, clean exit or not. The
-/// reply's presence is the outcome, not the exit status.
-pub type SessionDriver =
-    Arc<dyn Fn(&PreparedRun, &str, &LiveRuns) -> Result<bool, RunnerFail> + Send + Sync>;
+/// reply's presence is the outcome, not the exit status. The last
+/// parameter is the recording door — one system command into the log
+/// at the moment the session's own truth makes it land, so acceptance
+/// records at the executor's word, never ahead of it.
+pub type SessionDriver = Arc<
+    dyn Fn(
+            &PreparedRun,
+            &str,
+            &LiveRuns,
+            &dyn Fn(Command) -> Result<(), String>,
+        ) -> Result<bool, RunnerFail>
+        + Send
+        + Sync,
+>;
 
 /// One live session's connection: the protocol handle for commands,
 /// the pid for the last resort. The stdin behind it is the session's
@@ -205,8 +217,8 @@ impl RunnerConfig {
         Some(RunnerConfig {
             repo_root,
             actor,
-            driver: Arc::new(move |run, prompt, runs| {
-                runner::execute_session(run, prompt, runs, &executor)
+            driver: Arc::new(move |run, prompt, runs, record| {
+                runner::execute_session(run, prompt, runs, &executor, record)
             }),
         })
     }
@@ -412,9 +424,22 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "sac".into());
         let prompt = runner::pointer_prompt(&prepared, &sac);
-        let clean = match (config.driver)(&prepared, &prompt, &app.runs()) {
+        // the recording door: the driver writes the machinery's own
+        // facts through the sole writer, at the moment they land
+        let door = |command: Command| -> Result<(), String> {
+            app.with_conn(|conn| db::record(conn, &Context::system(), command, db::now_epoch()))
+                .and_then(|said| said.map(|_| ()).map_err(|e| e.to_string()))
+        };
+        let clean = match (config.driver)(&prepared, &prompt, &app.runs(), &door) {
             Ok(clean) => clean,
             Err(e) => {
+                if reject_unaccepted(&app, prepared.incarnation, &e) {
+                    watch.stop();
+                    // the rejection freed the task; whatever queued
+                    // behind it fires now
+                    sweep(&app);
+                    return;
+                }
                 warn!(
                     incarnation = prepared.incarnation.0.0,
                     "session driver failed: {e}"
@@ -460,6 +485,59 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
             sweep(&app);
         }
     });
+}
+
+/// A driver failure while the run never accepted its prompt is a
+/// stillbirth: it terminalizes as a recorded rejection carrying the
+/// cause, so the supervising wait releases on a fold fact instead of
+/// holding on a run that will never answer. The record lands before
+/// any warn names it — the refuse() ordering. A failure after
+/// acceptance returns false: that run keeps the settle shape, work
+/// may have happened, and the reply's presence is the outcome.
+fn reject_unaccepted(app: &AppState, incarnation: IncarnationId, failure: &RunnerFail) -> bool {
+    let bound = app
+        .snapshot()
+        .map(|s| {
+            s.world
+                .incarnations
+                .get(&incarnation)
+                .is_some_and(|run| run.state == IncarnationState::Bound)
+        })
+        .unwrap_or(false);
+    if !bound {
+        return false;
+    }
+    let said = app.with_conn(|conn| {
+        db::record(
+            conn,
+            &Context::system(),
+            Command::RejectPrompt {
+                id: incarnation,
+                evidence: FailureEvidence::new(
+                    FailureCode::PromptRejected,
+                    Some(failure.to_string()),
+                ),
+            },
+            db::now_epoch(),
+        )
+    });
+    match said {
+        Ok(Ok(_)) => true,
+        Ok(Err(e)) => {
+            warn!(
+                incarnation = incarnation.0.0,
+                "the rejection fact did not land: {e}"
+            );
+            false
+        }
+        Err(e) => {
+            warn!(
+                incarnation = incarnation.0.0,
+                "the rejection fact did not land: {e}"
+            );
+            false
+        }
+    }
 }
 
 /// The steer watcher: standing intent on the run's task reaches the

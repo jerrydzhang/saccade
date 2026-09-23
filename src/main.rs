@@ -186,8 +186,8 @@ enum Cmd {
         out: PathBuf,
     },
     /// Block until the demand's run asks something of the waiter: settle,
-    /// cancel, refusal, an answer with no run behind it, or a prompt
-    /// awaiting an answer — never replies
+    /// cancel, prompt rejection carrying the cause, refusal, an answer
+    /// with no run behind it, or a blocking ask — never replies
     Wait {
         /// The demand to watch (c-<n>)
         id: String,

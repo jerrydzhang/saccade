@@ -414,12 +414,6 @@ pub fn prepare(
         now,
     )?;
     let incarnation = IncarnationId(RecordId(bound[0].seq));
-    db::record(
-        conn,
-        &system,
-        Command::AcceptPrompt { id: incarnation },
-        now,
-    )?;
 
     compose_agent_dir(&agent_dir)?;
 
@@ -486,14 +480,18 @@ pub fn resolve_pi() -> Result<std::path::PathBuf, String> {
 /// JSONL RPC client over the session's stdio. The prompt goes through
 /// the protocol, liveness is the event stream (agent_start, turn
 /// events, agent_settled), and the reply stays the run's own sac
-/// comment — the exit status is never a success claim. The connection
-/// registers for the run's life so steer and cancel reach the session
-/// as protocol acts; the pid behind it stays the kill of last resort.
+/// comment — the exit status is never a success claim. Acceptance
+/// records at the executor's own word, through the recording door:
+/// every failure before that response leaves the run Bound. The
+/// connection registers for the run's life so steer and cancel reach
+/// the session as protocol acts; the pid behind it stays the kill of
+/// last resort.
 pub fn execute_session(
     run: &PreparedRun,
     prompt: &str,
     runs: &crate::supervisor::LiveRuns,
     executor: &Executor,
+    record: &dyn Fn(Command) -> Result<(), String>,
 ) -> Result<bool, RunnerFail> {
     // the materialized ask door compose provisions; its presence is
     // compose's guarantee, so no refusal guards the spawn
@@ -524,7 +522,12 @@ pub fn execute_session(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| RunnerFail::Git(format!("spawning the executor failed: {e}")))?;
+        .map_err(|e| {
+            RunnerFail::Usage(format!(
+                "spawning the executor {} failed: {e}",
+                executor.pi.display()
+            ))
+        })?;
     let stdin = child.stdin.take().expect("stdin was piped");
     let handle = RunHandle::new(child.id(), stdin);
     runs.register(run.incarnation, handle.clone());
@@ -533,16 +536,18 @@ pub fn execute_session(
     });
 
     // the read loop: events until the session settles or its stream
-    // ends. A refused prompt is the one event the runner answers.
+    // ends. The prompt's response is the one truth the runner records:
+    // acceptance lands here or the run stays Bound.
     let mut stdout = child.stdout.take().expect("stdout was piped");
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 8192];
     let mut prompt_error: Option<String> = None;
+    let mut answered = false;
     use std::io::Read;
     loop {
         let n = stdout
             .read(&mut chunk)
-            .map_err(|e| RunnerFail::Git(format!("reading the executor stream failed: {e}")))?;
+            .map_err(|e| RunnerFail::Usage(format!("reading the executor stream failed: {e}")))?;
         if n == 0 {
             break;
         }
@@ -551,10 +556,24 @@ pub fn execute_session(
             match ServerEvent::parse(&line) {
                 ServerEvent::Response {
                     command,
-                    success: false,
+                    success,
                     error,
                 } if command == "prompt" => {
-                    prompt_error = Some(error.unwrap_or_else(|| "prompt refused".into()));
+                    answered = true;
+                    if success {
+                        // acceptance at the executor's own word, never
+                        // ahead of it
+                        if let Err(e) = record(Command::AcceptPrompt {
+                            id: run.incarnation,
+                        }) {
+                            warn!(
+                                incarnation = run.incarnation.0.0,
+                                "the acceptance fact did not land: {e}"
+                            );
+                        }
+                    } else {
+                        prompt_error = Some(error.unwrap_or_else(|| "prompt refused".into()));
+                    }
                 }
                 ServerEvent::AgentSettled => {
                     // settled work: the session ends at EOF, which the
@@ -576,10 +595,23 @@ pub fn execute_session(
             "the executor refused the prompt: {reason}"
         )));
     }
+    if !answered {
+        // the stream ended without a word on the prompt: the run died
+        // before accepting it, a pre-acceptance failure like any other
+        runs.unregister(run.incarnation);
+        handle.close();
+        let status = match child.wait() {
+            Ok(status) => status.to_string(),
+            Err(e) => format!("waiting on the executor failed: {e}"),
+        };
+        return Err(RunnerFail::Usage(format!(
+            "the executor ended before answering the prompt: {status}"
+        )));
+    }
     let clean = child
         .wait()
         .map(|s| s.success())
-        .map_err(|e| RunnerFail::Git(format!("waiting on the executor failed: {e}")))?;
+        .map_err(|e| RunnerFail::Usage(format!("waiting on the executor failed: {e}")))?;
     runs.unregister(run.incarnation);
     Ok(clean)
 }
@@ -712,10 +744,12 @@ pub fn wait(
 }
 
 /// The demand's release, when a fold fact fires one: the run settled,
-/// cancelled, or asked something of the waiter; the demand refused;
-/// or the demand was answered with no run behind the answer. A reply
-/// alone never releases — a run still working holds the wait. An ask
-/// holds its own wait: it releases on its answer, carrying it.
+/// cancelled, or rejected its prompt before accepting (the cause is
+/// carried); the demand refused; or the demand was answered with no
+/// run behind the answer. A reply alone never releases — a run still
+/// working holds the wait, and so does a run still being born: a
+/// Bound run is every healthy spawn's startup window. An ask holds
+/// its own wait: it releases on its answer, carrying it.
 fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, RunnerFail> {
     let ctx = world.comments.get(&comment).ok_or_else(|| {
         RunnerFail::Usage(format!("no comment c-{} in this tracker", comment.0.0))
@@ -780,20 +814,14 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
             IncarnationState::Cancelled => {
                 return Ok(Some(format!("c-{}: i-{} cancelled", comment.0.0, id.0.0)));
             }
+            // the startup window: the executor has the prompt and has
+            // not answered it. Nothing here asks anything of the
+            // waiter — a wedged birth is wait --timeout and sac
+            // cancel's to end
             IncarnationState::Bound => {
-                let sac = std::env::current_exe()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| "sac".into());
-                return Ok(Some(format!(
-                    "c-{}: i-{} raised a prompt that awaits an answer; act, then re-arm sac wait c-{}\n\n{}",
-                    comment.0.0,
-                    id.0.0,
-                    comment.0.0,
-                    prompt_text(run.task_id, run.response_target, &run.actor, &sac)
-                )));
+                return Ok(None);
             }
-            // accepted work has not ended; an interrupted run never
-            // accepted it: neither asks anything of the waiter yet
+            // accepted work has not ended
             IncarnationState::PromptAccepted => {
                 // the run suspends on a question it authored: every
                 // waiter on the task releases to answer it
@@ -823,7 +851,15 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
                 return Ok(None);
             }
             IncarnationState::Interrupted => {
-                return Ok(None);
+                // the run died before accepting its prompt: the
+                // recorded rejection releases the wait carrying its
+                // cause, the same shape as the refusal door
+                let mut said = format!("c-{}: i-{} rejected the prompt", comment.0.0, id.0.0);
+                if let Some(cause) = run.rejection.as_ref().and_then(|e| e.detail.as_deref()) {
+                    said.push_str("; ");
+                    said.push_str(cause);
+                }
+                return Ok(Some(said));
             }
         }
     }

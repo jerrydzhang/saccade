@@ -205,6 +205,10 @@ def handle(line):
     note(f"command {line.strip()}")
     kind = cmd.get("type")
     if kind == "prompt":
+        if MODE == "refuse":
+            # the RPC refusal class: the executor's own string rides out
+            emit({"type": "response", "command": "prompt", "success": False, "error": "the model catalog is empty"})
+            sys.exit(1)
         emit({"type": "response", "command": "prompt", "success": True})
         emit({"type": "agent_start"})
         emit({"type": "turn_start"})
@@ -315,13 +319,13 @@ async fn stub_app(repo: &Path, db_path: &Path, mode: &str) -> AppState {
     let (stub, _log) = write_stub(&repo.parent().unwrap().join("state"), mode, db_path);
     let server = Arc::new(std::sync::Mutex::new("http://127.0.0.1:1".to_string()));
     let cell = server.clone();
-    let driver: SessionDriver = Arc::new(move |run, prompt, runs| {
+    let driver: SessionDriver = Arc::new(move |run, prompt, runs, record| {
         let executor = Executor {
             pi: stub.clone(),
             server: cell.lock().unwrap().clone(),
             sac: PathBuf::from(env!("CARGO_BIN_EXE_sac")),
         };
-        runner::execute_session(run, prompt, runs, &executor)
+        runner::execute_session(run, prompt, runs, &executor, record)
     });
     let state = AppState::with_runner(
         db_path,
@@ -367,6 +371,52 @@ async fn the_stub_contract_answers_a_demand_over_rpc() {
     // the stub really spoke the subset: the prompt went in as a command
     let said = std::fs::read_to_string(&log).unwrap();
     assert!(said.contains("\"type\":\"prompt\""), "{said}");
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+/// A refused prompt is a recorded rejection, never a settled run: the
+/// executor's own string relays into the evidence, the demand slot
+/// frees, and the wait releases carrying the cause.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_prompt_records_its_rejection_with_the_executors_string() {
+    let (repo, db_path, demand) = scaffold("refuse");
+    let state = stub_app(&repo, &db_path, "refuse").await;
+
+    supervisor::sweep(&state);
+
+    let seen = saccade::runner::wait(&db_path, demand, Some(30)).unwrap();
+    assert!(seen.contains("rejected the prompt"), "{seen}");
+    assert!(
+        seen.contains("the executor refused the prompt: the model catalog is empty"),
+        "{seen}"
+    );
+    let world = world_of(&db_path);
+    assert_eq!(world.tasks[0].active_incarnation, None);
+    let run = world
+        .incarnations
+        .values()
+        .find(|r| r.response_target == demand)
+        .expect("the refused run is in the fold");
+    assert_eq!(
+        run.state,
+        saccade::objects::incarnation::IncarnationState::Interrupted
+    );
+    assert!(
+        run.rejection
+            .as_ref()
+            .and_then(|e| e.detail.as_deref())
+            .unwrap_or_default()
+            .contains("the model catalog is empty")
+    );
+    match &world.comments[&demand].state {
+        CommentState::Demand { attempt, .. } => {
+            assert!(matches!(
+                attempt,
+                saccade::objects::comment::AgentAttemptState::Spent
+            ));
+        }
+        other => panic!("demand spent: {other:?}"),
+    }
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 

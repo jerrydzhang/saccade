@@ -125,13 +125,12 @@ superseding cleanly on re-cut.
 3. **Fire the demand**: `sac comment t-N "spec…" --demand`.
 4. **Wait by outcome**: `sac wait c-<seq>` — the seq is your demand's own,
    printed in its reply. It releases when the run asks something of you —
-   it settles (the receipt is named), cancels, refuses (the reason is
-   carried), is answered with no run behind it, or asks a blocking
-   question (the release carries it; answer on the thread, then re-arm
-   the wait). It never releases on replies: acks hold.
-   it settles (the receipt is named), cancels, refuses (the reason is
-   carried), is answered with no run behind it, or raises a prompt
-   awaiting an answer. It never releases on replies: acks hold.
+   it settles (the receipt is named), cancels, rejects its prompt before
+   accepting (the cause is carried), refuses (the reason is carried), is
+   answered with no run behind it, or asks a blocking question (the
+   release carries it; answer on the thread, then re-arm the wait). It
+   never releases on replies: acks hold, and a run still being born
+   holds the wait too.
 5. **Verify the claims** — that is what makes them knowledge. Clean
    checkout, suite counts, a live smoke on a scratch db. Cheap verification
    is why receipts name evidence.
