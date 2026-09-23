@@ -16,6 +16,8 @@ use saccade::{
     Prose, RecordId, Reject, Target, Tier,
 };
 
+mod skill;
+
 #[derive(Parser)]
 #[command(name = "sac", version, about = "Saccade: awesome issue tracker")]
 struct Cli {
@@ -193,6 +195,20 @@ enum Cmd {
         #[arg(long)]
         timeout: Option<u64>,
     },
+    /// Deploy this binary's embedded skill, or verify the copy in this repo
+    Skill {
+        #[command(subcommand)]
+        verb: SkillVerb,
+    },
+}
+
+#[derive(Clone, Copy, Subcommand)]
+enum SkillVerb {
+    /// Write this binary's skill into ./.agents/skills/saccade; a
+    /// differing copy refuses until the directory is deleted
+    Install,
+    /// Compare ./.agents/skills/saccade with this binary's embedded copy
+    Check,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -214,6 +230,12 @@ fn main() -> ExitCode {
     }
 
     let cli = Cli::parse();
+
+    // the skill door carries no db: the binary deploys its own embed,
+    // in any directory, repo or not
+    if let Cmd::Skill { verb } = &cli.command {
+        return skill_door(cli.json, *verb);
+    }
 
     match run(&cli) {
         Ok(output) => {
@@ -435,6 +457,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             };
             Command::CancelIncarnation { id: incarnation }
         }
+        Cmd::Skill { .. } => unreachable!("the skill door dispatches before the db doors"),
         Cmd::Checkpoint { id } => {
             let task = parse_task_id(id)?;
             let repo_root = match &cli.repo {
@@ -527,6 +550,75 @@ fn runner_fail(e: saccade::runner::RunnerFail) -> Fail {
         saccade::runner::RunnerFail::Usage(m)
         | saccade::runner::RunnerFail::Git(m)
         | saccade::runner::RunnerFail::Refused { reason: m } => Fail::Usage(m),
+    }
+}
+
+/// The skill verbs' output door: the verdict lands on stdout — drift
+/// and absence are findings, not failures — and the exit code carries
+/// it for scripts.
+fn skill_door(json: bool, verb: SkillVerb) -> ExitCode {
+    let cwd = std::path::Path::new(".");
+    let version = env!("CARGO_PKG_VERSION");
+    let report = |verdict: &str, carries: Option<&str>| {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"verdict": verdict, "carries": carries, "binary": version})
+            );
+        } else {
+            let carries = carries.unwrap_or("no version");
+            println!(
+                "skill {verdict}: {} carries {carries}, binary is {version}",
+                skill::HOME
+            );
+        }
+    };
+    match verb {
+        SkillVerb::Install => match skill::install(cwd, version) {
+            Ok(skill::Deployed::Wrote) => {
+                report("installed", Some(version));
+                ExitCode::SUCCESS
+            }
+            Ok(skill::Deployed::Untouched) => {
+                report("in-sync", Some(version));
+                ExitCode::SUCCESS
+            }
+            Err(detail) => {
+                if json {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"error": "usage", "detail": detail})
+                    );
+                } else {
+                    eprintln!("error: {detail}");
+                }
+                ExitCode::FAILURE
+            }
+        },
+        SkillVerb::Check => match skill::check(cwd) {
+            skill::Verdict::InSync(carries) => {
+                report("in-sync", carries.as_deref());
+                ExitCode::SUCCESS
+            }
+            skill::Verdict::Drifted(carries) => {
+                report("drifted", carries.as_deref());
+                ExitCode::FAILURE
+            }
+            skill::Verdict::Absent => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"verdict": "absent", "carries": null, "binary": version})
+                    );
+                } else {
+                    println!(
+                        "skill absent: no {} in this directory — sac skill install deploys this binary's copy",
+                        skill::HOME
+                    );
+                }
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 

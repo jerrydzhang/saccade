@@ -1433,6 +1433,98 @@ fn create_reply_names_the_born_task() {
     assert_eq!(created["records"][0]["kind"], "task_created");
 }
 
+/// The skill ships with the binary: install deploys the embedded
+/// copy — the on-disk source byte for byte, SKILL.md stamped with the
+/// binary's version inside its frontmatter — and check verifies the
+/// deployed copy through both of its doors.
+#[test]
+fn the_binary_deploys_and_verifies_its_embedded_skill() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let dir = std::env::temp_dir().join(format!("sac-skill-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sac = |args: &[&str]| {
+        let out = std::process::Command::new(bin)
+            .current_dir(&dir)
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let home = dir.join(".agents/skills/saccade");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".agents/skills/saccade");
+    let version = env!("CARGO_PKG_VERSION");
+    let in_sync =
+        format!("skill in-sync: .agents/skills/saccade carries {version}, binary is {version}");
+
+    // the door carries no db: install lands in a bare directory
+    let (ok, out, err) = sac(&["skill", "install"]);
+    assert!(ok, "{out}{err}");
+
+    // the deployed files are the on-disk source byte for byte, SKILL.md
+    // stamped with the binary's version ahead of its closing fence
+    let src_skill = std::fs::read_to_string(source.join("SKILL.md")).unwrap();
+    let (front, rest) = src_skill.split_once("\n---\n").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(home.join("SKILL.md")).unwrap(),
+        format!("{front}\nx-saccade-version: {version}\n---\n{rest}")
+    );
+    assert_eq!(
+        std::fs::read(home.join("errors.md")).unwrap(),
+        std::fs::read(source.join("errors.md")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(home.join("diagnosing.md")).unwrap(),
+        std::fs::read(source.join("diagnosing.md")).unwrap()
+    );
+
+    // check names both versions, and the second install is a no-op
+    let (ok, out, _) = sac(&["skill", "check"]);
+    assert!(ok, "{out}");
+    assert_eq!(out.trim_end(), in_sync);
+    let (ok, out, _) = sac(&["skill", "install"]);
+    assert!(ok, "{out}");
+    assert_eq!(out.trim_end(), in_sync);
+    let (ok, out, _) = sac(&["skill", "check", "--json"]);
+    assert!(ok, "{out}");
+    let json: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        json,
+        json!({"verdict": "in-sync", "carries": version, "binary": version})
+    );
+
+    // a touched file: install refuses naming the delete path, check drifts
+    let mut touched = std::fs::read_to_string(home.join("errors.md")).unwrap();
+    touched.push_str("a local edit\n");
+    std::fs::write(home.join("errors.md"), touched).unwrap();
+    let (ok, _, err) = sac(&["skill", "install"]);
+    assert!(!ok);
+    assert_eq!(
+        err.trim_end(),
+        "error: .agents/skills/saccade differs from this binary's skill — delete the directory and run sac skill install to deploy this version"
+    );
+    let (ok, out, _) = sac(&["skill", "check"]);
+    assert!(!ok, "{out}");
+    assert_eq!(
+        out.trim_end(),
+        format!("skill drifted: .agents/skills/saccade carries {version}, binary is {version}")
+    );
+
+    // no copy at all is absent, named as absent
+    std::fs::remove_dir_all(&home).unwrap();
+    let (ok, out, _) = sac(&["skill", "check"]);
+    assert!(!ok, "{out}");
+    assert_eq!(
+        out.trim_end(),
+        "skill absent: no .agents/skills/saccade in this directory — sac skill install deploys this binary's copy"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// One CLI verb run offline against a scratch db, --json on, agent tier.
 fn sac_offline(db: &std::path::Path, args: &[&str]) -> String {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_sac"))
