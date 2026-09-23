@@ -573,7 +573,36 @@ pub fn execute_session(
     Ok(clean)
 }
 
-pub fn close(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> {
+/// Where a settle finds the run's work. The worktree's HEAD is the
+/// truth while the worktree lives; a worktree deleted under the
+/// deletion law settles at the recorded checkpoint, and nothing
+/// surviving even that is a loss the settle names. Absence never
+/// refuses.
+enum FoundWork {
+    Head(GitCommit),
+    Checkpoint(GitCommit),
+    Lost(GitCommit),
+}
+
+fn found_work(repo_root: &Path, ctx: &TaskContext) -> Result<FoundWork, RunnerFail> {
+    let workspace = ctx.workspace.as_ref().expect("a bound run has a workspace");
+    match &workspace.worktree {
+        WorktreeState::Present(worktree) if worktree.as_path().exists() => {
+            let head = git(worktree.as_path(), &["rev-parse", "HEAD"])?;
+            Ok(FoundWork::Head(commit(head)?))
+        }
+        _ => {
+            let checkpoint = workspace.checkpoint.clone();
+            if commit_exists(repo_root, checkpoint.as_str()).is_some() {
+                Ok(FoundWork::Checkpoint(checkpoint))
+            } else {
+                Ok(FoundWork::Lost(checkpoint))
+            }
+        }
+    }
+}
+
+pub fn close(conn: &mut Connection, repo_root: &Path, task: TaskId) -> Result<String, RunnerFail> {
     let world = load_world(conn)?;
     let ctx = task_ctx(&world, task)?;
     let incarnation = ctx
@@ -588,31 +617,23 @@ pub fn close(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> 
         },
         _ => None,
     };
-    let WorktreeState::Present(worktree) = &ctx
-        .workspace
-        .as_ref()
-        .expect("a bound run has a workspace")
-        .worktree
-    else {
-        return Err(RunnerFail::Usage(format!(
-            "t-{} has no worktree to checkpoint",
-            task.0
-        )));
-    };
-
-    let checkpoint = git(worktree.as_path(), &["rev-parse", "HEAD"])?;
+    let found = found_work(repo_root, ctx)?;
 
     let system = Context::system();
     let now = db::now_epoch();
-    db::record(
-        conn,
-        &system,
-        Command::CheckpointWorkspace {
-            task_id: task,
-            checkpoint: commit(checkpoint.clone())?,
-        },
-        now,
-    )?;
+    // a gone worktree's finding is the checkpoint the record already
+    // names: there is no new head to record
+    if let FoundWork::Head(checkpoint) = &found {
+        db::record(
+            conn,
+            &system,
+            Command::CheckpointWorkspace {
+                task_id: task,
+                checkpoint: checkpoint.clone(),
+            },
+            now,
+        )?;
+    }
     if let Some(reply) = reply {
         db::record(
             conn,
@@ -631,15 +652,24 @@ pub fn close(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> 
         now,
     )?;
 
+    let said = match &found {
+        FoundWork::Head(checkpoint) => {
+            format!("settled i-{} at {}", incarnation.0.0, checkpoint.as_str())
+        }
+        FoundWork::Checkpoint(checkpoint) => format!(
+            "settled i-{} at {}; the worktree is gone, the recorded checkpoint is the finding",
+            incarnation.0.0,
+            checkpoint.as_str()
+        ),
+        FoundWork::Lost(checkpoint) => format!(
+            "settled i-{}; the worktree is gone and nothing retains the recorded checkpoint {}: no recorded work survives",
+            incarnation.0.0,
+            checkpoint.as_str()
+        ),
+    };
     Ok(match reply {
-        Some(reply) => format!(
-            "settled i-{} at {checkpoint}; produced c-{}",
-            incarnation.0.0, reply.0.0
-        ),
-        None => format!(
-            "settled i-{} at {checkpoint}; the demand went unanswered",
-            incarnation.0.0
-        ),
+        Some(reply) => format!("{said}; produced c-{}", reply.0.0),
+        None => format!("{said}; the demand went unanswered"),
     })
 }
 
@@ -810,7 +840,11 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
 /// accepted run settles through close's honest path; a bound run is
 /// interrupted, because the lifecycle table forbids settling a run
 /// that never accepted.
-pub fn close_as_found(conn: &mut Connection, task: TaskId) -> Result<String, RunnerFail> {
+pub fn close_as_found(
+    conn: &mut Connection,
+    repo_root: &Path,
+    task: TaskId,
+) -> Result<String, RunnerFail> {
     let world = load_world(conn)?;
     let Some(incarnation) = task_ctx(&world, task)?.active_incarnation else {
         return Err(RunnerFail::Usage(format!(
@@ -819,7 +853,7 @@ pub fn close_as_found(conn: &mut Connection, task: TaskId) -> Result<String, Run
         )));
     };
     match world.incarnations[&incarnation].state.clone() {
-        IncarnationState::PromptAccepted => close(conn, task),
+        IncarnationState::PromptAccepted => close(conn, repo_root, task),
         IncarnationState::Bound => {
             let system = Context::system();
             db::record(

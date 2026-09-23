@@ -12,7 +12,8 @@ use saccade::objects::comment::AgentAttemptState;
 use saccade::objects::comment::CommentState;
 use saccade::objects::incarnation::IncarnationState;
 use saccade::runner::{
-    PreparedRun, RunnerFail, close, compose_agent_dir, pointer_prompt, prepare, wait,
+    PreparedRun, RunnerFail, close, close_as_found, compose_agent_dir, pointer_prompt, prepare,
+    wait,
 };
 use saccade::supervisor::{self, LiveRuns, RunHandle, RunnerConfig, SessionDriver};
 use saccade::types::actor::ActorName;
@@ -165,7 +166,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     sh(&worktree, &["add", "."]);
     sh(&worktree, &["commit", "-m", "receipt"]);
 
-    let note = close(&mut db::open(&db_path).unwrap(), TaskId(0)).unwrap();
+    let note = close(&mut db::open(&db_path).unwrap(), &repo, TaskId(0)).unwrap();
     assert!(note.contains("settled i-"), "{note}");
 
     let world = world_of(&db_path);
@@ -258,7 +259,7 @@ fn prepare_refuses_what_the_fold_would_refuse() {
     )
     .unwrap();
     assert!(matches!(
-        close(&mut db::open(&db_path).unwrap(), TaskId(1)),
+        close(&mut db::open(&db_path).unwrap(), &repo, TaskId(1)),
         Err(RunnerFail::Usage(_))
     ));
 
@@ -333,7 +334,7 @@ fn wait_releases_on_settlement_naming_the_receipt() {
     std::fs::write(worktree.join("receipt"), "done\n").unwrap();
     sh(&worktree, &["add", "."]);
     sh(&worktree, &["commit", "-m", "receipt"]);
-    close(&mut db::open(&db_path).unwrap(), TaskId(0)).unwrap();
+    close(&mut db::open(&db_path).unwrap(), &repo, TaskId(0)).unwrap();
 
     let seen = wait(&db_path, demand, Some(5)).unwrap();
     assert!(seen.contains("settled"), "{seen}");
@@ -855,7 +856,7 @@ fn boot_recovery_settles_an_orphaned_run() {
         .unwrap();
     assert!(world_of(&db_path).tasks[0].active_incarnation.is_some());
 
-    supervisor::recover(&app);
+    supervisor::recover(&app, &repo);
 
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
@@ -870,6 +871,146 @@ fn boot_recovery_settles_an_orphaned_run() {
     // the spent unanswered demand is dead: no live authorization, the
     // sweep must not see it
     assert!(supervisor::runnable_demands(&world).is_empty());
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn boot_recovery_settles_a_gone_worktree_at_its_recorded_checkpoint() {
+    let (repo, db_path, demand) = scaffold("recover-gone");
+
+    // the incident shape: bound, accepted, answered, checkpointed
+    // mid-flight — then the session and server died together
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    let run = world_of(&db_path).tasks[0].active_incarnation.unwrap();
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &agent(),
+        Command::Comment {
+            target: Target::Comment(demand),
+            body: Prose::new("receipt parked mid-flight".into()).unwrap(),
+            kind: CommentKind::Note,
+        },
+        3,
+    )
+    .unwrap();
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+    std::fs::write(worktree.join("receipt"), "done\n").unwrap();
+    sh(&worktree, &["add", "."]);
+    sh(&worktree, &["commit", "-m", "receipt"]);
+    let checkpoint = sh(&worktree, &["rev-parse", "HEAD"]);
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &agent(),
+        Command::CheckpointWorkspace {
+            task_id: TaskId(0),
+            checkpoint: saccade::GitCommit::new(checkpoint.clone()).unwrap(),
+        },
+        4,
+    )
+    .unwrap();
+
+    // review hygiene merges the branch in, then deletes worktree and branch
+    sh(&repo, &["merge", "saccade/t-0"]);
+    sh(&repo, &["worktree", "remove", worktree.to_str().unwrap()]);
+    sh(&repo, &["branch", "-D", "saccade/t-0"]);
+    assert!(!worktree.exists());
+
+    // the restart settles the orphan, citing the recorded checkpoint
+    let note = close_as_found(&mut db::open(&db_path).unwrap(), &repo, TaskId(0)).unwrap();
+    assert!(note.contains(&checkpoint), "{note}");
+    assert!(note.contains("recorded checkpoint"), "{note}");
+
+    let world = world_of(&db_path);
+    assert_eq!(world.tasks[0].active_incarnation, None);
+    assert_eq!(world.incarnations[&run].state, IncarnationState::Settled);
+    // the settle invented no new head: the record still names the checkpoint
+    assert_eq!(
+        world.tasks[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .checkpoint
+            .as_str(),
+        checkpoint
+    );
+    // the parked reply is the run's produced record
+    let reply = match &world.comments[&demand].state {
+        CommentState::Demand { response, .. } => match response {
+            saccade::objects::comment::ResponseState::Responded { reply } => *reply,
+            _ => panic!("the parked reply landed"),
+        },
+        other => panic!("demand answered: {other:?}"),
+    };
+    assert_eq!(world.incarnations[&run].produced, vec![reply.0]);
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn boot_recovery_settles_naming_the_loss_when_nothing_retains_the_work() {
+    let (repo, db_path, demand) = scaffold("recover-lost");
+
+    // the orphan checkpointed mid-flight, its answer still unwritten
+    prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        demand,
+        ActorName::new("pi".into()).unwrap(),
+    )
+    .unwrap();
+    let run = world_of(&db_path).tasks[0].active_incarnation.unwrap();
+    let worktree = saccade::paths::worktree_at(&repo, 0);
+    std::fs::write(worktree.join("receipt"), "half done\n").unwrap();
+    sh(&worktree, &["add", "."]);
+    sh(&worktree, &["commit", "-m", "half done"]);
+    let checkpoint = sh(&worktree, &["rev-parse", "HEAD"]);
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &agent(),
+        Command::CheckpointWorkspace {
+            task_id: TaskId(0),
+            checkpoint: saccade::GitCommit::new(checkpoint.clone()).unwrap(),
+        },
+        3,
+    )
+    .unwrap();
+
+    // repo surgery takes the worktree, the branch, and the commit itself
+    sh(&repo, &["worktree", "remove", worktree.to_str().unwrap()]);
+    sh(&repo, &["branch", "-D", "saccade/t-0"]);
+    sh(&repo, &["reflog", "expire", "--expire=now", "--all"]);
+    sh(&repo, &["gc", "--prune=now"]);
+    let survives = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["cat-file", "-e", &checkpoint])
+        .output()
+        .expect("git runs");
+    assert!(!survives.status.success(), "the fixture lost the commit");
+
+    // the restart settles anyway: an honest loss beats a permanent lie
+    let note = close_as_found(&mut db::open(&db_path).unwrap(), &repo, TaskId(0)).unwrap();
+    assert!(note.contains("no recorded work survives"), "{note}");
+    assert!(note.contains(&checkpoint), "{note}");
+
+    let world = world_of(&db_path);
+    assert_eq!(world.tasks[0].active_incarnation, None);
+    assert_eq!(world.incarnations[&run].state, IncarnationState::Settled);
+    // the record keeps naming the checkpoint nothing retains
+    assert_eq!(
+        world.tasks[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .checkpoint
+            .as_str(),
+        checkpoint
+    );
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -957,7 +1098,7 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
         3,
     )
     .unwrap();
-    close(&mut db::open(&db_path).unwrap(), TaskId(0)).unwrap();
+    close(&mut db::open(&db_path).unwrap(), &repo, TaskId(0)).unwrap();
 
     // the parent's branch advances past its recorded checkpoint while idle
     std::fs::write(parent_worktree.join("notes"), "parent keeps working\n").unwrap();
@@ -1010,7 +1151,7 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
     std::fs::write(child_worktree.join("receipt"), "done\n").unwrap();
     sh(&child_worktree, &["add", "."]);
     sh(&child_worktree, &["commit", "-m", "child receipt"]);
-    close(&mut db::open(&db_path).unwrap(), TaskId(1)).unwrap();
+    close(&mut db::open(&db_path).unwrap(), &repo, TaskId(1)).unwrap();
     let child_checkpoint = sh(&repo, &["rev-parse", "saccade/t-1"]);
 
     // review hygiene severs the child branch and worktree
@@ -1293,7 +1434,7 @@ fn run_one_course(repo: &Path, db_path: &Path, demand: CommentId) -> String {
     std::fs::write(worktree.join("receipt"), "done\n").unwrap();
     sh(&worktree, &["add", "."]);
     sh(&worktree, &["commit", "-m", "receipt"]);
-    close(&mut db::open(db_path).unwrap(), TaskId(0)).unwrap();
+    close(&mut db::open(db_path).unwrap(), repo, TaskId(0)).unwrap();
     sh(repo, &["rev-parse", "saccade/t-0"])
 }
 

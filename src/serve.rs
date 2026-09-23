@@ -42,7 +42,11 @@ pub async fn run(
         other => other,
     };
     let server_url = format!("http://{host}:{port}");
-    let state = match crate::supervisor::RunnerConfig::serving(repo_root, actor, &server_url) {
+    let state = match crate::supervisor::RunnerConfig::serving(
+        repo_root.clone(),
+        actor,
+        &server_url,
+    ) {
         Some(runner) => {
             let state = AppState::with_runner(db_path, runner)?;
             info!(%server_url, "demands will fire runs; boot scan next");
@@ -72,7 +76,7 @@ pub async fn run(
     tokio::task::spawn_blocking({
         let state = state.clone();
         move || {
-            crate::supervisor::recover(&state);
+            crate::supervisor::recover(&state, &repo_root);
             crate::supervisor::sweep(&state);
         }
     });
