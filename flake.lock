@@ -885,11 +885,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1790181736,
-        "narHash": "sha256-Lptxdsx8Q4XdMdyZdLLLgU46f9pU79dY6Ot8ypqXuG4=",
+        "lastModified": 1790197302,
+        "narHash": "sha256-vZfY8YzR99CoM5HvhqUJ4Is/ktdElx0pKXt1jBYgBSw=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "5e8bf75ebd0f64913a7f35d7264788fc70b2c3ee",
+        "rev": "e25617fcc246fac7cfd2efb82b5bb97bd785f59e",
         "type": "github"
       },
       "original": {
