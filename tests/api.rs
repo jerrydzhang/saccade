@@ -1166,6 +1166,66 @@ async fn the_accept_door_carries_the_actor_name() {
 }
 
 #[test]
+fn search_reads_the_record_through_the_cli_face() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = scratch_db("search-door");
+    let sac = |args: &[&str]| {
+        let out = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .arg("--offline")
+            .env("SACCADE_ACTOR", "pi")
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    assert!(sac(&["create", "task", "migrate floop"]).0);
+    assert!(sac(&["comment", "t-0", "the floop migration proceeds"]).0);
+    assert!(sac(&["create", "task", "floop guard"]).0);
+    assert!(sac(&["claim", "t-0"]).0);
+    assert!(sac(&["done", "t-0", "--receipt", "floop landed; suite green"]).0);
+
+    let (ok, out, _) = sac(&["search", "floop"]);
+    assert!(ok, "{out}");
+    // thread-grouped pointers, record order, the receipt closing its group
+    let lines: Vec<&str> = out.lines().collect();
+    let t0 = lines
+        .iter()
+        .position(|l| *l == "t-0  migrate floop")
+        .expect("the owning thread groups first");
+    assert_eq!(lines[t0 + 1], "  #0  pi  migrate floop");
+    assert_eq!(lines[t0 + 2], "  #1  pi  the floop migration proceeds");
+    assert_eq!(lines[t0 + 3], "  t-0 receipt  floop landed; suite green");
+    assert!(lines.contains(&"t-1  floop guard"), "{out}");
+
+    // narrowing prints visible counts; the filtered thread stays visible
+    let (ok, out, _) = sac(&["search", "floop", "kind:receipt"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("t-0  migrate floop (1 of 3)"), "{out}");
+    assert!(out.contains("t-1  floop guard (0 of 1)"), "{out}");
+
+    // the anchor window reads the log's own rows
+    let (ok, out, _) = sac(&["search", "#1", "-C", "1"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("#0  task_created  pi/agent"), "{out}");
+    assert!(
+        out.contains("#1  commented  pi/agent  the floop migration"),
+        "{out}"
+    );
+
+    // an empty query refuses at the grammar door
+    let (ok, _, err) = sac(&["search"]);
+    assert!(!ok);
+    assert!(err.contains("give at least one term"), "{err}");
+}
+
+#[test]
 fn create_reply_names_the_born_task() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("create-reply");
