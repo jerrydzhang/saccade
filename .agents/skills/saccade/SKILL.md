@@ -219,6 +219,7 @@ The power tail is unchanged: `sac log | grep` reads the raw record.
 | `sac checkpoint t-N` | any tier | records the branch tip as the task's checkpoint |
 | `sac list` / `sac show <ids…>` / `sac log` / `sac proposals` | anonymous | the board, threads and records, raw events, the ruling queue |
 | `sac search <terms…> [in:t-N by:NAME kind:K under:t-N] [-C N]` | anonymous | exact terms over titles, comment bodies, receipts; id terms are reference searches; facets only-show-me with visible counts; `-C N` anchors on one record |
+| `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
 
 ## Hygiene
 
