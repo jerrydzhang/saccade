@@ -53,7 +53,8 @@ pub async fn run(
             state
         }
         None => {
-            let state = AppState::open(db_path)?;
+            let state =
+                AppState::open(db_path)?.with_artifacts(crate::paths::artifacts_at(&repo_root));
             warn!(
                 "no pinned executor: SACCADE_PI_PATH was not baked at build and SACCADE_PI is unset; \
                  demands queue but never fire"
@@ -197,8 +198,35 @@ fn respond_get(req: &Req, app: &AppState) -> Response {
     match parse_route(&req.url) {
         Route::Home => console(req, app, None),
         Route::Task(n) => console(req, app, Some(n)),
+        Route::Artifact(hash) => artifact_bytes(app, &hash),
         Route::NotFound => page(404, "nothing here — try /"),
     }
+}
+
+/// The artifact bytes door: store bytes by sniffed content type, an
+/// honest miss for anything the store does not hold. The hash is a
+/// validated token before it ever names a path.
+fn artifact_bytes(app: &AppState, hash: &str) -> Response {
+    let valid = hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !valid {
+        return page(404, "nothing here — try /");
+    }
+    let Some(dir) = app.artifacts_dir() else {
+        return page(404, "artifact unavailable");
+    };
+    let path = dir.join(hash);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return page(404, "artifact unavailable");
+    };
+    let content_type = web::sniff_image(&bytes).unwrap_or("application/octet-stream");
+    let mut response = (StatusCode::OK, bytes).into_response();
+    if let Ok(value) = header::HeaderValue::from_str(content_type) {
+        response.headers_mut().insert(header::CONTENT_TYPE, value);
+    }
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
 }
 
 /// The console page, optionally focused on one task.
@@ -218,6 +246,10 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
         Some(None) => return page(404, &format!("no task t-{n}", n = focus_id.unwrap_or(0))),
         None => None,
     };
+    let store = match app.artifacts_dir() {
+        Some(dir) => web::ArtifactStore::at(dir.to_path_buf()),
+        None => web::ArtifactStore::default(),
+    };
     let c = web::Console {
         forest: forest(&snapshot.world),
         closed: closed_tasks(&snapshot.world),
@@ -229,6 +261,7 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
             who: req.actor.clone().unwrap_or_default(),
             ..Default::default()
         },
+        store,
         now,
     };
     html(200, &web::page(&c))
@@ -246,6 +279,7 @@ fn focus(world: &crate::store::World, n: usize) -> Option<web::Focus> {
         show,
         proposals,
         thread: thread_view(world, TaskId(n))?,
+        refs: crate::views::ref_index(world),
     })
 }
 
@@ -394,7 +428,16 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
 fn thread_fragment(app: &AppState, n: usize, landed: usize) -> Option<String> {
     let snapshot = app.snapshot().ok()?;
     let f = focus(&snapshot.world, n)?;
-    Some(web::thread_section(&f, &Default::default(), Some(landed)))
+    let store = match app.artifacts_dir() {
+        Some(dir) => web::ArtifactStore::at(dir.to_path_buf()),
+        None => web::ArtifactStore::default(),
+    };
+    Some(web::thread_section(
+        &f,
+        &Default::default(),
+        Some(landed),
+        &store,
+    ))
 }
 
 /// The actor's identity is claimed at the act: cookie first, then the
@@ -455,6 +498,10 @@ fn console_reject(
             draft: form_field(fields, "body").to_string(),
             note: form_field(fields, "note").to_string(),
             who: req.actor.clone().unwrap_or_default(),
+        },
+        store: match app.artifacts_dir() {
+            Some(dir) => web::ArtifactStore::at(dir.to_path_buf()),
+            None => web::ArtifactStore::default(),
         },
         now,
     };
@@ -586,12 +633,13 @@ fn proposal_task(app: &AppState, seq: usize) -> Option<usize> {
     task_num(&view.task)
 }
 
+#[derive(Debug)]
 enum Route {
     Home,
     Task(usize),
+    Artifact(String),
     NotFound,
 }
-
 enum PostRoute {
     Compose,
     Ruling(usize),
@@ -603,10 +651,15 @@ fn parse_route(url: &str) -> Route {
     let path = url.split('?').next().unwrap_or(url);
     match path {
         "/" => Route::Home,
-        _ => match path.strip_prefix("/t/").and_then(|rest| rest.parse().ok()) {
-            Some(n) => Route::Task(n),
-            None => Route::NotFound,
-        },
+        _ => {
+            if let Some(n) = path.strip_prefix("/t/").and_then(|rest| rest.parse().ok()) {
+                return Route::Task(n);
+            }
+            if let Some(hash) = path.strip_prefix("/a/") {
+                return Route::Artifact(hash.to_string());
+            }
+            Route::NotFound
+        }
     }
 }
 
@@ -683,6 +736,10 @@ mod tests {
         assert!(matches!(parse_route("/nope"), Route::NotFound));
         assert!(matches!(parse_route("/t/x"), Route::NotFound));
         assert!(matches!(parse_route("/stream"), Route::NotFound));
+        match parse_route("/a/3941d4453740985f0c363433c74070c2c4aa649d8a73fe52a573831c0f87aa7e") {
+            Route::Artifact(hash) => assert_eq!(hash.len(), 64),
+            other => panic!("the bytes door parses: {other:?}"),
+        }
     }
 
     #[test]

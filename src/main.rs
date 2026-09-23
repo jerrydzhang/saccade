@@ -8,12 +8,13 @@ use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{
-    CommentLine, ProposalView, SearchGroup, SearchQuery, TaskView, Term, comment_line,
-    comment_thread, matched_line, proposal_view, search, show_view, task_view,
+    ArtifactLine, CommentLine, ProposalView, SearchGroup, SearchQuery, TaskView, Term, ThreadEntry,
+    artifact_line, comment_line, matched_line, proposal_view, search, show_view, task_view,
+    thread_entries,
 };
 use saccade::{
-    ActorName, Command, CommentId, CommentKind, Context, GitCommit, ProposalAction, ProposalId,
-    Prose, RecordId, Reject, Target, Tier,
+    ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, GitCommit,
+    ProposalAction, ProposalId, Prose, RecordId, Reject, Target, Tier,
 };
 
 mod skill;
@@ -131,6 +132,17 @@ enum Cmd {
     /// Steer a task's live run at its next turn boundary; with no run
     /// living, the steer stands on the thread as intent
     Steer { id: String, body: String },
+    /// Park an artifact on a task's thread: hash the file into the
+    /// store, record the pointer — the bytes never ride the wire
+    Artifact {
+        /// The task whose thread holds it (t-<n>)
+        task: String,
+        /// The file whose bytes become the artifact
+        path: PathBuf,
+        /// The artifact's name; defaults to the file's basename
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Everything about tasks and records, many at once; raw ids show
     /// the event, t-<n> shows the task plus its thread
     Show {
@@ -150,7 +162,7 @@ enum Cmd {
         /// only-show-me facets:
         ///   in:t-N     one thread's records only
         ///   by:NAME    author, matched within names (by:pi finds pi/t-90-1)
-        ///   kind:K     task, note, demand, steer, ask, receipt
+        ///   kind:K     task, note, demand, steer, ask, receipt, artifact
         ///   under:t-N  the task's thread and its descendants' threads
         ///
         /// An id term — '#907' or 't-49' — is a reference search: every
@@ -392,6 +404,42 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             body: Prose::new(body.clone())?,
             kind: CommentKind::Steer,
         },
+        Cmd::Artifact { task, path, name } => {
+            let id = parse_task_id(task)?;
+            let repo_root = match &cli.repo {
+                Some(repo) => repo
+                    .canonicalize()
+                    .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display())))?,
+                None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(|_| {
+                    Fail::Usage(
+                        "the working directory is not inside a git repository; pass --repo so artifact can resolve the store".into(),
+                    )
+                })?,
+            };
+            let bytes = std::fs::read(path)
+                .map_err(|e| Fail::Usage(format!("cannot read {}: {e}", path.display())))?;
+            let artifact = Artifact {
+                name: Prose::new(match name {
+                    Some(given) => given.clone(),
+                    None => path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "artifact".into()),
+                })?,
+                hash: ContentHash::of(&bytes),
+            };
+            // bytes land in the store before the record names them: a
+            // crash can orphan content, never point at its absence
+            let store = saccade::paths::artifacts_at(&repo_root);
+            let home = store.join(artifact.hash.as_str());
+            if !home.exists() {
+                std::fs::create_dir_all(&store)
+                    .map_err(|e| Fail::Usage(format!("artifact store {}: {e}", store.display())))?;
+                std::fs::write(&home, &bytes)
+                    .map_err(|e| Fail::Usage(format!("artifact store {}: {e}", home.display())))?;
+            }
+            Command::Artifact { root: id, artifact }
+        }
         Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } | Cmd::Search { .. } => {
             return read_only(cli, &db_path);
         }
@@ -924,11 +972,22 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
         out.push(wrap(receipt, WIDTH, "  ", "  "));
     }
     let ctx = &world.tasks[task_id.0];
-    for line in comment_thread(&world.comments, ctx) {
+    for entry in thread_entries(&world.comments, ctx) {
         out.push(String::new());
-        out.extend(comment_block(&line));
+        match entry {
+            ThreadEntry::Comment(line) => out.extend(comment_block(&line)),
+            ThreadEntry::Artifact(line) => out.extend(artifact_block(&line)),
+        }
     }
     Ok(out.join("\n"))
+}
+
+/// An artifact's body format: the pointer line — name and short hash.
+fn artifact_block(line: &ArtifactLine) -> Vec<String> {
+    vec![
+        format!("#{}  artifact", line.seq),
+        format!("  {} · {}", line.name, line.short_hash()),
+    ]
 }
 
 /// A thread view's body format for one comment: its header line, the
@@ -1005,6 +1064,9 @@ fn render_id(world: &World, token: &str) -> Result<String, Fail> {
             if let Some(line) = comment_line(world, id) {
                 return Ok(comment_block(&line).join("\n"));
             }
+            if let Some(line) = artifact_line(world, id.0) {
+                return Ok(artifact_block(&line).join("\n"));
+            }
             if let Some(task) = world.task_born_at(id.0) {
                 let ctx = &world.tasks[task.0];
                 let parent = task_view(world, task)
@@ -1019,7 +1081,7 @@ fn render_id(world: &World, token: &str) -> Result<String, Fail> {
                 ));
             }
             Err(Fail::Usage(format!(
-                "#{} is not a comment or a task birth",
+                "#{} is not a comment, an artifact, or a task birth",
                 id.0.0
             )))
         }

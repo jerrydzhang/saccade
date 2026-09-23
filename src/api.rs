@@ -42,6 +42,9 @@ pub struct AppState {
     runner: Option<supervisor::RunnerConfig>,
     runs: supervisor::LiveRuns,
     attempts: Attempts,
+    /// The artifact store the bytes door serves from; a server that
+    /// was not told a repo root has none.
+    artifacts: Option<std::path::PathBuf>,
 }
 
 pub struct Snapshot {
@@ -74,16 +77,30 @@ impl AppState {
             runner: None,
             runs: supervisor::LiveRuns::default(),
             attempts: Attempts::beside(db_path),
+            artifacts: None,
         })
     }
 
     /// A server that runs what it is asked: demands fire sessions.
     pub fn with_runner(db_path: &Path, runner: supervisor::RunnerConfig) -> Result<Self, String> {
+        let artifacts = Some(crate::paths::artifacts_at(&runner.repo_root));
         let app = Self::open(db_path)?;
         Ok(AppState {
             runner: Some(runner),
+            artifacts,
             ..app
         })
+    }
+
+    /// Name the artifact store this server serves bytes from.
+    pub fn with_artifacts(mut self, dir: std::path::PathBuf) -> Self {
+        self.artifacts = Some(dir);
+        self
+    }
+
+    /// The artifact store's home, when this server knows one.
+    pub fn artifacts_dir(&self) -> Option<&Path> {
+        self.artifacts.as_deref()
     }
 
     pub fn runner_config(&self) -> Option<&supervisor::RunnerConfig> {

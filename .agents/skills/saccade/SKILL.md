@@ -174,7 +174,7 @@ the door itself changes.
 ## Searching
 
 `sac search` finds records by exact terms over the folded text fields —
-task titles, comment bodies, receipts. No ranking, no relevance, no
+task titles, comment bodies, receipts, and artifact names. No ranking, no relevance, no
 fuzzy: a term matches as a whole, word-bounded, case-folded, or it
 doesn't match — inflections do not match, so try each form. Results are
 thread-grouped pointers with one matched line each, in record order.
@@ -212,6 +212,7 @@ The power tail is unchanged: `sac log | grep` reads the raw record.
 | `sac accept t-N` | birth attribution, or human | the only door from delivered to done |
 | `sac accept <seq>` / `sac reject <seq> --note` | **human only** | ruling acts on proposals |
 | `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | park or reply — a note; `--demand` fires a run |
+| `sac artifact t-N <path> [--name "…"]` | any tier | park an artifact on a thread: the file's bytes hash into the store, the record carries the pointer |
 | `sac steer t-N "…"` | any tier | reach the task's live run at its next turn boundary; with no run it stands as intent on the thread |
 | `sac wait c-<seq>` | any tier | blocks on the demand's outcome, never replies |
 | `sac cancel t-N` | any tier | the kill request for a task's active run |

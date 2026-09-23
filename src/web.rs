@@ -6,12 +6,62 @@
 //! record.
 
 use crate::views::{
-    CommentLine, ForestRow, MarkKind, NextPanel, ProposalView, RIBBON_WINDOW_SECS, RibbonMark,
-    ShowView, ThreadItem, ThreadView,
+    ArtifactLine, CommentLine, ForestRow, MarkKind, NextPanel, ProposalView, RIBBON_WINDOW_SECS,
+    RefTarget, RibbonMark, ShowView, ThreadEntry, ThreadItem, ThreadView,
 };
 use crate::{CommentId, CommentKind, RecordId, Target, TaskId};
+use std::collections::BTreeMap;
+use std::io::Read;
+use std::path::PathBuf;
 use time::OffsetDateTime;
 use time::macros::format_description;
+
+/// The artifact store's render-side face: where the bytes live, whether
+/// they are present, and whether they sniff as an image. The one sniff
+/// definition — the read door serves the same content types it inlines.
+#[derive(Clone, Default)]
+pub struct ArtifactStore {
+    dir: Option<PathBuf>,
+}
+
+impl ArtifactStore {
+    pub fn at(dir: PathBuf) -> Self {
+        ArtifactStore { dir: Some(dir) }
+    }
+
+    /// One artifact's bytes in the store.
+    pub fn path(&self, hash: &str) -> Option<PathBuf> {
+        self.dir.as_ref().map(|dir| dir.join(hash))
+    }
+
+    /// Some(true): present and an image. Some(false): present, other
+    /// content. None: absent — the honest miss.
+    pub fn probe(&self, hash: &str) -> Option<bool> {
+        let mut prefix = [0u8; 16];
+        let read = std::fs::File::open(self.path(hash)?)
+            .ok()?
+            .read(&mut prefix)
+            .ok()?;
+        Some(sniff_image(&prefix[..read]).is_some())
+    }
+}
+
+/// Content type by magic bytes — the formats the console inlines.
+pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(b"BM") {
+        Some("image/bmp")
+    } else {
+        None
+    }
+}
 
 /// The task state's chip color, one per state out of the #522 palette:
 /// open whispers, claimed is gold like the work it holds, delivered is
@@ -45,6 +95,8 @@ pub struct Console {
     /// The focused task's panel facts, when one is focused.
     pub focus: Option<Focus>,
     pub form: FormState,
+    /// The artifact bytes door's store, for rendering at position.
+    pub store: ArtifactStore,
     /// The read's now, in epoch seconds; the ages and the ribbon window
     /// hang off it.
     pub now: u64,
@@ -55,6 +107,8 @@ pub struct Focus {
     /// Open proposals targeting the focused task, in birth order.
     pub proposals: Vec<ProposalView>,
     pub thread: ThreadView,
+    /// The reading-side resolver's index over the whole fold.
+    pub refs: BTreeMap<usize, RefTarget>,
 }
 
 #[derive(Default)]
@@ -220,7 +274,7 @@ pub fn page(c: &Console) -> String {
             state = f.show.state.to_uppercase(),
             title = esc(&f.show.name),
             meta = esc(&head_meta(&f.show)),
-            thread = thread_section(f, &c.form, None),
+            thread = thread_section(f, &c.form, None, &c.store),
             compose = compose_section(task_num(&f.show.id).unwrap_or(0), &c.form),
         ),
         None => "<div class=\"thead\"></div>\n<section id=\"thread\"><div class=\"nempty\">no task focused</div></section>\n".to_string(),
@@ -429,7 +483,12 @@ fn forest_section(
 
 /// `landed` names the comment a just-accepted compose created, so the
 /// swap can meet the reader's eyes with it.
-pub fn thread_section(f: &Focus, form: &FormState, landed: Option<usize>) -> String {
+pub fn thread_section(
+    f: &Focus,
+    form: &FormState,
+    landed: Option<usize>,
+    store: &ArtifactStore,
+) -> String {
     let mut s = match landed {
         Some(seq) => format!("<section id=\"thread\" data-focus=\"c-{seq}\">\n"),
         None => String::from("<section id=\"thread\">\n"),
@@ -449,7 +508,7 @@ pub fn thread_section(f: &Focus, form: &FormState, landed: Option<usize>) -> Str
     if let Some(receipt) = &f.show.receipt {
         s.push_str(&format!(
             "<div class=\"receipt\"><span class=\"xk\" style=\"color:#dac09a\">RECEIPT</span>\n<div class=\"nbody\">{}</div>\n</div>\n",
-            esc(receipt),
+            linkify(&esc(receipt), &f.refs, store),
         ));
     }
     // a delivered task renders its accept door: one form, one name, one
@@ -464,6 +523,12 @@ pub fn thread_section(f: &Focus, form: &FormState, landed: Option<usize>) -> Str
     }
     let mut last_time: Option<u64> = None;
     for item in &f.thread.items {
+        // artifacts carry no time in the fold; they ride beside the
+        // utterances, never opening a gap
+        if matches!(item, ThreadItem::Artifact(_)) {
+            s.push_str(&item_html(item, &f.refs, store));
+            continue;
+        }
         let (first_at, last_at) = item_span(item);
         if let Some(prev) = last_time
             && first_at.saturating_sub(prev) > 4 * 3600
@@ -474,7 +539,7 @@ pub fn thread_section(f: &Focus, form: &FormState, landed: Option<usize>) -> Str
             ));
         }
         last_time = Some(last_at);
-        s.push_str(&item_html(item));
+        s.push_str(&item_html(item, &f.refs, store));
     }
     if f.thread.items.is_empty() && f.show.receipt.is_none() && f.proposals.is_empty() {
         s.push_str("<div class=\"nempty\">no comments yet</div>\n");
@@ -485,16 +550,30 @@ pub fn thread_section(f: &Focus, form: &FormState, landed: Option<usize>) -> Str
 
 fn item_span(item: &ThreadItem) -> (u64, u64) {
     match item {
+        // artifacts carry no time in the fold; the gap logic skips them
+        ThreadItem::Artifact(_) => (0, 0),
         ThreadItem::Note(line) => (line.born_at, line.born_at),
         ThreadItem::Group { root, replies } | ThreadItem::Exchange { root, replies, .. } => {
-            let last = replies.last().map(|r| r.born_at).unwrap_or(root.born_at);
+            let last = replies
+                .iter()
+                .rev()
+                .find_map(|r| match r {
+                    ThreadEntry::Comment(c) => Some(c.born_at),
+                    ThreadEntry::Artifact(_) => None,
+                })
+                .unwrap_or(root.born_at);
             (root.born_at, last)
         }
     }
 }
 
-fn item_html(item: &ThreadItem) -> String {
+fn item_html(
+    item: &ThreadItem,
+    refs: &BTreeMap<usize, RefTarget>,
+    store: &ArtifactStore,
+) -> String {
     match item {
+        ThreadItem::Artifact(line) => artifact_html(line, 0, store),
         ThreadItem::Exchange { root, run, replies } => match run {
             Some(run) => {
                 let open = run.in_flight();
@@ -509,19 +588,33 @@ fn item_html(item: &ThreadItem) -> String {
                     esc(&window),
                     if open { "in flight" } else { "settled" },
                 );
-                s.push_str(&node_html(root, 0, Some(("DEMAND", "#dac09a")), None));
+                s.push_str(&node_html(
+                    root,
+                    0,
+                    Some(("DEMAND", "#dac09a")),
+                    None,
+                    refs,
+                    store,
+                ));
                 s.push_str(&format!(
                     "<div class=\"nrow2 runrow\"><div class=\"nmeta\"><span class=\"xk\" style=\"color:#a2c4a3\">RUN</span><span class=\"nwho\">{}</span><span class=\"nseq mono\">{}</span></div>\n</div>\n",
                     esc(&run.actor),
                     esc(&window),
                 ));
                 for r in replies {
-                    s.push_str(&node_html(
-                        r,
-                        r.depth.saturating_sub(2),
-                        Some(("REPLY", "#a2c4a3")),
-                        None,
-                    ));
+                    match r {
+                        ThreadEntry::Comment(c) => s.push_str(&node_html(
+                            c,
+                            c.depth.saturating_sub(2),
+                            Some(("REPLY", "#a2c4a3")),
+                            None,
+                            refs,
+                            store,
+                        )),
+                        ThreadEntry::Artifact(a) => {
+                            s.push_str(&artifact_html(a, 1, store));
+                        }
+                    }
                 }
                 s.push_str("</div>\n</div>\n");
                 s
@@ -533,22 +626,29 @@ fn item_html(item: &ThreadItem) -> String {
                 } else {
                     "awaiting incarnation"
                 };
-                let mut s = node_html(root, 0, Some(("DEMAND", "#dac09a")), Some(tag));
+                let mut s = node_html(root, 0, Some(("DEMAND", "#dac09a")), Some(tag), refs, store);
                 // the refusal fact, where the run row would sit: reason and time
                 if let Some(r) = &root.refusal {
                     s.push_str(&format!(
                         "<div class=\"nrow2 runrow\"><div class=\"nmeta\"><span class=\"xk\" style=\"color:#c4a6a8\">REFUSED</span><span class=\"nseq mono\">{}</span></div>\n<div class=\"nbody\">{}</div>\n</div>\n",
                         esc(&fmt_t(r.at)),
-                        esc(&r.reason),
+                        linkify(&esc(&r.reason), refs, store),
                     ));
                 }
                 for r in replies {
-                    s.push_str(&node_html(
-                        r,
-                        r.depth.saturating_sub(1),
-                        Some(("REPLY", "#a2c4a3")),
-                        None,
-                    ));
+                    match r {
+                        ThreadEntry::Comment(c) => s.push_str(&node_html(
+                            c,
+                            c.depth.saturating_sub(1),
+                            Some(("REPLY", "#a2c4a3")),
+                            None,
+                            refs,
+                            store,
+                        )),
+                        ThreadEntry::Artifact(a) => {
+                            s.push_str(&artifact_html(a, 1, store));
+                        }
+                    }
                 }
                 s
             }
@@ -560,24 +660,36 @@ fn item_html(item: &ThreadItem) -> String {
                 "ask" => Some(("ASK", "#dac09a")),
                 _ => None,
             };
-            s.push_str(&node_html(root, 0, chip, None));
+            s.push_str(&node_html(root, 0, chip, None, refs, store));
             for r in replies {
-                s.push_str(&node_html(r, r.depth.saturating_sub(2), None, None));
+                match r {
+                    ThreadEntry::Comment(c) => s.push_str(&node_html(
+                        c,
+                        c.depth.saturating_sub(2),
+                        None,
+                        None,
+                        refs,
+                        store,
+                    )),
+                    ThreadEntry::Artifact(a) => s.push_str(&artifact_html(a, 1, store)),
+                }
             }
             s.push_str("</div>\n");
             s
         }
-        ThreadItem::Note(line) => node_html(line, 0, None, None),
+        ThreadItem::Note(line) => node_html(line, 0, None, None, refs, store),
     }
 }
 
 /// One comment row: kind chip, whisper mono meta (actor, seq, time),
-/// full body.
+/// full body. Body renders through the reading-side resolver.
 fn node_html(
     line: &CommentLine,
     indent: usize,
     kind: Option<(&str, &str)>,
     tag: Option<&str>,
+    refs: &BTreeMap<usize, RefTarget>,
+    store: &ArtifactStore,
 ) -> String {
     let chip = kind
         .map(|(k, color)| format!("<span class=\"xk\" style=\"color:{color}\">{k}</span>"))
@@ -597,8 +709,94 @@ fn node_html(
         tier = esc(&line.tier),
         actor = esc(&line.actor),
         time = esc(&fmt_t(line.born_at)),
-        body = esc(&line.body),
+        body = linkify(&esc(&line.body), refs, store),
     )
+}
+
+/// One artifact at its home position: caption plus inline image by
+/// content type, a pointer for other bytes, honestly unavailable on a
+/// store miss. The image links the bytes door.
+fn artifact_html(line: &ArtifactLine, indent: usize, store: &ArtifactStore) -> String {
+    let pad = 26 + indent * 22;
+    let short: String = line.hash.chars().take(12).collect();
+    let name = esc(&line.name);
+    let figure = match store.probe(&line.hash) {
+        Some(true) => format!(
+            "<a class=\"afull\" href=\"/a/{hash}\"><img class=\"aimg\" src=\"/a/{hash}\" alt=\"{name}\"></a>\n",
+            hash = esc(&line.hash),
+        ),
+        Some(false) => format!(
+            "<a class=\"afile\" href=\"/a/{hash}\">{name} · {short}</a>\n",
+            hash = esc(&line.hash),
+        ),
+        None => format!("<span class=\"acap\">{name} · unavailable</span>\n"),
+    };
+    format!(
+        "<div class=\"nrow2 arow\" id=\"a-{seq}\" style=\"padding-left:{pad}px\">\n{figure}<div class=\"nmeta\"><span class=\"xk\" style=\"color:#a2c3c4\">ARTIFACT</span><span class=\"nseq mono\">#{seq}</span></div>\n</div>\n",
+        seq = line.seq,
+    )
+}
+
+/// The mention's render: a thumbnail-and-caption card linking the
+/// artifact's home position. A non-image is a caption card; a miss is
+/// the card with its honest verdict.
+fn mention_card(seq: usize, task: usize, name: &str, hash: &str, store: &ArtifactStore) -> String {
+    let home = format!("/t/{task}#a-{seq}");
+    let caption = esc(name);
+    let short: String = hash.chars().take(12).collect();
+    match store.probe(hash) {
+        Some(true) => format!(
+            "<a class=\"acard\" href=\"{home}\"><img src=\"/a/{hash}\" alt=\"{caption}\"><span class=\"acap\">{caption}</span></a>"
+        ),
+        Some(false) => format!(
+            "<a class=\"acard file\" href=\"{home}\"><span class=\"acap\">{caption} · {short}</span></a>"
+        ),
+        None => format!(
+            "<a class=\"acard miss\" href=\"{home}\"><span class=\"acap\">{caption} · unavailable</span></a>"
+        ),
+    }
+}
+
+/// The reading-side resolver over escaped text: a '#N' token the fold
+/// holds as a comment becomes a pure link to its home anchor, as an
+/// artifact becomes the card linking home; every other token stays
+/// the words it was. The parse lives here, never in the record.
+fn linkify(escaped: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStore) -> String {
+    let chars: Vec<char> = escaped.chars().collect();
+    let word = |c: char| c.is_alphanumeric() || matches!(c, '-' | '#' | '_');
+    let mut out = String::with_capacity(escaped.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '#' && (i == 0 || !word(chars[i - 1])) {
+            let digits: String = chars[i + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            let n = digits.len();
+            let bounded = i + 1 + n >= chars.len() || !word(chars[i + 1 + n]);
+            if n > 0
+                && bounded
+                && let Ok(seq) = digits.parse::<usize>()
+            {
+                match refs.get(&seq) {
+                    Some(RefTarget::Comment { task }) => {
+                        out.push_str(&format!("<a href=\"/t/{task}#c-{seq}\">#{seq}</a>"));
+                        i += 1 + n;
+                        continue;
+                    }
+                    Some(RefTarget::Artifact { task, name, hash }) => {
+                        out.push_str(&mention_card(seq, *task, name, hash, store));
+                        i += 1 + n;
+                        continue;
+                    }
+                    None => {}
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 pub fn compose_section(task: usize, form: &FormState) -> String {
@@ -817,6 +1015,23 @@ header .brand {
 .nwho.agent { color: #6d6562; }
 .nseq { font-size: 11px; color: #4a4543; }
 .nbody { font-size: 13.5px; line-height: 1.55; color: #d4ceca; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* artifacts: figure at position, card for mentions */
+.arow { padding-top: 2px; }
+.aimg { display: block; max-width: min(480px, 100%); max-height: 360px; border-radius: 4px; margin: 4px 0 2px; }
+.afull { display: block; }
+.afile { color: #a2c3c4; font-size: 12.5px; display: inline-block; margin: 4px 0 2px; }
+.acap { font-size: 11.5px; color: #6d6562; overflow-wrap: anywhere; }
+.arow .acap { display: inline-block; margin-top: 2px; }
+.acard {
+  display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  vertical-align: top; margin: 2px 6px 2px 0; padding: 4px;
+  background: #1e1c1a; border-radius: 6px; color: inherit;
+}
+.acard:hover { background: #292624; }
+.acard img { max-width: 180px; max-height: 120px; border-radius: 3px; display: block; }
+.acard.miss img { display: none; }
+.xg .acard, .ntg .acard { background: #100f0e; }
 
 /* conversations: raised tone cards, borderless */
 .xg { margin: 4px 18px 6px 16px; background: #1e1c1a; border-radius: 6px; }
@@ -1172,6 +1387,7 @@ mod tests {
                 .filter(|v| v.task == format!("t-{n}"))
                 .collect(),
             thread: thread_view(world, TaskId(n)).unwrap(),
+            refs: crate::views::ref_index(world),
         }
     }
 
@@ -1184,6 +1400,7 @@ mod tests {
             marks: ribbon_marks(world, NOW),
             focus,
             form: FormState::default(),
+            store: ArtifactStore::default(),
             now: NOW,
         }
     }
@@ -1197,6 +1414,7 @@ mod tests {
             marks: ribbon_marks(world, now),
             focus: None,
             form: FormState::default(),
+            store: ArtifactStore::default(),
             now,
         }
     }
@@ -1204,9 +1422,19 @@ mod tests {
     #[test]
     fn the_receipt_renders_only_from_deposited_states() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 0), &Default::default(), None);
+        let html = thread_section(
+            &focus_of(&world, 0),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
         assert!(html.contains("suite green &lt;34&gt;"));
-        let open = thread_section(&focus_of(&world, 1), &Default::default(), None);
+        let open = thread_section(
+            &focus_of(&world, 1),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
         assert!(!open.contains("receipt"));
     }
 
@@ -1236,7 +1464,12 @@ mod tests {
             ),
         ])
         .unwrap();
-        let html = thread_section(&focus_of(&world, 0), &Default::default(), None);
+        let html = thread_section(
+            &focus_of(&world, 0),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
         // the deposit the form reviews renders above it
         assert!(html.contains("suite green, 85 unit"));
         assert!(html.contains("action=\"/t/0/accept\""));
@@ -1298,7 +1531,12 @@ mod tests {
     #[test]
     fn judgment_forms_render_on_the_focused_task() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1), &Default::default(), None);
+        let html = thread_section(
+            &focus_of(&world, 1),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
         // one form, one route, two rulings — and the themed class on it
         assert!(html.contains("<form class=\"jform\" method=\"post\" action=\"/p/4/ruling\">"));
         assert!(html.contains("name=\"note\""));
@@ -1317,7 +1555,12 @@ mod tests {
     #[test]
     fn the_exchange_is_a_settled_card() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1), &Default::default(), None);
+        let html = thread_section(
+            &focus_of(&world, 1),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
         assert!(html.contains("EXCHANGE"));
         assert!(html.contains("#5"));
         assert!(html.contains("settled"), "the run's window closed");
@@ -1401,7 +1644,12 @@ mod tests {
             ),
         ])
         .unwrap();
-        let html = thread_section(&focus_of(&world, 0), &Default::default(), None);
+        let html = thread_section(
+            &focus_of(&world, 0),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
         // the demand names its refusal, and the fact carries reason and time
         assert!(html.contains(">refused<"), "{html}");
         assert!(html.contains("REFUSED"));
@@ -1603,14 +1851,24 @@ mod tests {
     #[test]
     fn the_swap_knows_where_the_thread_landed() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1), &Default::default(), Some(8));
+        let html = thread_section(
+            &focus_of(&world, 1),
+            &Default::default(),
+            Some(8),
+            &ArtifactStore::default(),
+        );
         assert!(
             html.contains("data-focus=\"c-8\""),
             "no landed anchor: {}",
             &html[..html.len().min(200)]
         );
         // a page load names nothing
-        let plain = thread_section(&focus_of(&world, 1), &Default::default(), None);
+        let plain = thread_section(
+            &focus_of(&world, 1),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
         assert!(!plain.contains("data-focus"));
     }
 
@@ -1658,7 +1916,12 @@ mod tests {
     #[test]
     fn the_judgment_form_carries_one_name() {
         let world = fixture();
-        let html = thread_section(&focus_of(&world, 1), &Default::default(), None);
+        let html = thread_section(
+            &focus_of(&world, 1),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
         assert_eq!(
             html.matches("name=\"who\"").count(),
             1,
@@ -1671,6 +1934,7 @@ mod tests {
                 ..Default::default()
             },
             None,
+            &ArtifactStore::default(),
         );
         assert_eq!(prefilled.matches("value=\"jerry\"").count(), 1);
     }
@@ -1680,5 +1944,291 @@ mod tests {
         let world = fixture();
         let page = page(&console_of(&world, None));
         assert!(page.contains("no task focused"));
+    }
+
+    // ---- artifacts and the reading-side resolver ----
+
+    const PNG_HEAD: &[u8] = b"\x89PNG\r\n\x1a\nrest-of-the-bytes";
+
+    /// A throwaway store holding the named contents, keyed by hash.
+    fn store_of(contents: &[&[u8]], tag: &str) -> (ArtifactStore, std::path::PathBuf) {
+        let dir = std::env::temp_dir()
+            .join(format!("sac-web-store-{}", std::process::id()))
+            .join(tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for bytes in contents {
+            std::fs::write(dir.join(crate::ContentHash::of(bytes).as_str()), bytes).unwrap();
+        }
+        (ArtifactStore::at(dir.clone()), dir)
+    }
+
+    /// t-0 delivered with a receipt citing its artifact; t-1's comment
+    /// mentions both the comment #3 and the artifact #4, beside a birth
+    /// reference and an unresolved token.
+    fn resolver_world() -> World {
+        World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(1, 1, human(), Event::TaskClaimed { id: TaskId(0) }),
+            record(
+                2,
+                2,
+                human(),
+                Event::TaskDelivered {
+                    id: TaskId(0),
+                    receipt: Prose::new("suite green, per #4".into()).unwrap(),
+                },
+            ),
+            record(
+                3,
+                3,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("the verdict stands <plain>".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+            record(
+                4,
+                4,
+                human(),
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: crate::types::artifact::Artifact {
+                        name: Prose::new("sweep figure".into()).unwrap(),
+                        hash: crate::ContentHash::of(PNG_HEAD),
+                    },
+                },
+            ),
+            record(
+                5,
+                5,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("other work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                6,
+                6,
+                human(),
+                Event::Commented {
+                    target: task(1),
+                    body: Prose::new(
+                        "see #3 and #4 — birth #0 stays words, pi#3 stays words, #99 unresolved"
+                            .into(),
+                    )
+                    .unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn mentions_resolve_to_links_and_cards_or_stay_text() {
+        let world = resolver_world();
+        let (store, dir) = store_of(&[PNG_HEAD], "png");
+        let hash = crate::ContentHash::of(PNG_HEAD).as_str().to_string();
+
+        // the foreign body: a comment mention is a pure link
+        let html = thread_section(&focus_of(&world, 1), &Default::default(), None, &store);
+        assert!(html.contains("<a href=\"/t/0#c-3\">#3</a>"), "{html}");
+        // an artifact mention is the card linking home
+        assert!(
+            html.contains(&format!(
+                "<a class=\"acard\" href=\"/t/0#a-4\"><img src=\"/a/{hash}\" alt=\"sweep figure\"><span class=\"acap\">sweep figure</span></a>"
+            )),
+            "{html}"
+        );
+        // unresolved tokens stay the words they were
+        assert!(html.contains("birth #0 stays words"), "{html}");
+        assert!(html.contains("pi#3 stays words"), "{html}");
+        assert!(html.contains("#99 unresolved"), "{html}");
+        assert!(!html.contains("#0</a>"), "{html}");
+        assert!(!html.contains("#99</a>"), "{html}");
+        assert!(!html.contains("pi<a"), "{html}");
+
+        // the receipt resolves through the same rule
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), None, &store);
+        assert!(
+            html.contains("suite green, per <a class=\"acard\" href=\"/t/0#a-4\""),
+            "{html}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_resolver_escapes_before_it_links() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                1,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("the <b>bold</b> verdict & #1".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+        ])
+        .unwrap();
+        let (store, dir) = store_of(&[], "escape");
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), None, &store);
+        // the words escaped, and the bounded token still resolved
+        assert!(
+            html.contains("the &lt;b&gt;bold&lt;/b&gt; verdict &amp; <a href=\"/t/0#c-1\">#1</a>"),
+            "{html}"
+        );
+        assert!(!html.contains("<b>"), "{html}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn artifacts_render_by_content_type_with_honest_misses() {
+        let prose_bytes: &[u8] = b"not a figure, just words";
+        let png_hash = crate::ContentHash::of(PNG_HEAD).as_str().to_string();
+        let txt_hash = crate::ContentHash::of(prose_bytes).as_str().to_string();
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                1,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("the verdict, figures below".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+            record(
+                2,
+                2,
+                human(),
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: crate::types::artifact::Artifact {
+                        name: Prose::new("sweep figure".into()).unwrap(),
+                        hash: crate::ContentHash::of(PNG_HEAD),
+                    },
+                },
+            ),
+            record(
+                3,
+                3,
+                human(),
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: crate::types::artifact::Artifact {
+                        name: Prose::new("the numbers".into()).unwrap(),
+                        hash: crate::ContentHash::of(prose_bytes),
+                    },
+                },
+            ),
+            record(
+                4,
+                4,
+                human(),
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: crate::types::artifact::Artifact {
+                        name: Prose::new("vanished figure".into()).unwrap(),
+                        hash: crate::ContentHash::of(b"bytes the store never held"),
+                    },
+                },
+            ),
+        ])
+        .unwrap();
+        let (store, dir) = store_of(&[PNG_HEAD, prose_bytes], "mixed");
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), None, &store);
+
+        // the image inlines at its position, anchored home, linking the bytes
+        assert!(
+            html.contains("<div class=\"nrow2 arow\" id=\"a-2\""),
+            "{html}"
+        );
+        assert!(
+            html.contains(&format!(
+                "<a class=\"afull\" href=\"/a/{png_hash}\"><img class=\"aimg\" src=\"/a/{png_hash}\" alt=\"sweep figure\"></a>"
+            )),
+            "{html}"
+        );
+        // the verdict sits above the figures: position is the association
+        let verdict = html.find("the verdict, figures below").unwrap();
+        let figure = html.find("alt=\"sweep figure\"").unwrap();
+        assert!(verdict < figure, "{html}");
+
+        // other content is a pointer, never an img
+        assert!(
+            html.contains(&format!(
+                "<a class=\"afile\" href=\"/a/{txt_hash}\">the numbers · {}</a>",
+                txt_hash.chars().take(12).collect::<String>()
+            )),
+            "{html}"
+        );
+        assert!(!html.contains(&format!("img class=\"aimg\" src=\"/a/{txt_hash}\"")));
+
+        // the store miss renders its honest verdict
+        assert!(html.contains("vanished figure · unavailable"), "{html}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_mention_card_carries_the_miss_honestly() {
+        let world = resolver_world();
+        // no store: every probe misses
+        let (store, dir) = store_of(&[], "miss");
+        let html = thread_section(&focus_of(&world, 1), &Default::default(), None, &store);
+        assert!(
+            html.contains(
+                "<a class=\"acard miss\" href=\"/t/0#a-4\"><span class=\"acap\">sweep figure · unavailable</span></a>"
+            ),
+            "{html}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sniffing_names_the_inlined_formats() {
+        assert_eq!(sniff_image(PNG_HEAD), Some("image/png"));
+        assert_eq!(sniff_image(b"\xff\xd8\xff\xe0jpeg"), Some("image/jpeg"));
+        assert_eq!(sniff_image(b"GIF89a gif"), Some("image/gif"));
+        assert_eq!(
+            sniff_image(b"RIFF\x00\x00\x00\x00WEBPVP8 "),
+            Some("image/webp")
+        );
+        assert_eq!(sniff_image(b"BM bitmap"), Some("image/bmp"));
+        assert_eq!(sniff_image(b"plain words"), None);
+        assert_eq!(sniff_image(b""), None);
     }
 }

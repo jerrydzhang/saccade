@@ -533,15 +533,22 @@ fn lines_of(world: &saccade::World, n: usize) -> Vec<saccade::views::CommentLine
                 replies,
             } => {
                 let mut all = vec![root];
-                all.extend(replies);
+                all.extend(replies.into_iter().filter_map(|r| match r {
+                    saccade::views::ThreadEntry::Comment(c) => Some(c),
+                    saccade::views::ThreadEntry::Artifact(_) => None,
+                }));
                 all
             }
             saccade::views::ThreadItem::Group { root, replies } => {
                 let mut all = vec![root];
-                all.extend(replies);
+                all.extend(replies.into_iter().filter_map(|r| match r {
+                    saccade::views::ThreadEntry::Comment(c) => Some(c),
+                    saccade::views::ThreadEntry::Artifact(_) => None,
+                }));
                 all
             }
             saccade::views::ThreadItem::Note(line) => vec![line],
+            saccade::views::ThreadItem::Artifact(_) => Vec::new(),
         })
         .collect();
     v.sort_by_key(|l| l.seq);
@@ -1283,13 +1290,16 @@ fn search_reads_the_record_through_the_cli_face() {
     let (ok, _, err) = sac(&["show", "#99999"]);
     assert!(!ok);
     assert!(
-        err.contains("#99999 is not a comment or a task birth"),
+        err.contains("#99999 is not a comment, an artifact, or a task birth"),
         "{err}"
     );
     // a record that is neither a comment nor a birth refuses the same way
     let (ok, _, err) = sac(&["show", "#3"]);
     assert!(!ok);
-    assert!(err.contains("#3 is not a comment or a task birth"), "{err}");
+    assert!(
+        err.contains("#3 is not a comment, an artifact, or a task birth"),
+        "{err}"
+    );
     let (ok, _, err) = sac(&["show", "bogus"]);
     assert!(!ok);
     assert!(
@@ -1861,6 +1871,241 @@ async fn an_ask_round_trips_through_the_comment_door() {
     );
     assert!(seen.contains("(human person)"), "{seen}");
     assert!(seen.contains("break-glass; the copy is dead"), "{seen}");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+// ---- artifacts: the wire, the bytes door, the console render ----
+
+/// A console whose state also serves an artifact store.
+async fn spawn_console_with_artifacts(
+    db_path: &std::path::Path,
+    dir: &std::path::Path,
+) -> (String, ConsoleState) {
+    let state = ConsoleState::open(db_path)
+        .expect("the scratch tracker opens")
+        .with_artifacts(dir.to_path_buf());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = saccade::serve::router(state.clone());
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    (format!("http://{addr}"), state)
+}
+
+const PNG_BYTES: &[u8] = b"\x89PNG\r\n\x1a\nfigure bytes";
+
+/// The artifact contract over HTTP: the wire carries the pointer only,
+/// the door serves the store's bytes by sniffed content type, and a
+/// miss or a malformed token names itself.
+#[tokio::test(flavor = "multi_thread")]
+async fn artifacts_park_over_the_wire_and_the_door_serves_bytes() {
+    let db = scratch_db("artifact-wire");
+    let dir = db.parent().unwrap().join("artifacts");
+    std::fs::create_dir_all(&dir).unwrap();
+    let hash = saccade::ContentHash::of(PNG_BYTES);
+    std::fs::write(dir.join(hash.as_str()), PNG_BYTES).unwrap();
+    let (base, _state) = spawn_console_with_artifacts(&db, &dir).await;
+
+    let (status, _) = post_command(
+        &base,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "hold the figures", "parent_id": null}}),
+        ),
+    );
+    assert_eq!(status, 200);
+
+    // the wire carries {name, hash} only — the bytes stay client-side
+    let (status, body) = post_command(
+        &base,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"artifact": {"root": 0, "artifact": {"name": "sweep figure", "hash": hash.as_str()}}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let record = &json_of(&body)["records"][0];
+    assert_eq!(record["kind"], "artifact_added");
+    assert_eq!(record["payload"]["artifact"]["name"], "sweep figure");
+    assert_eq!(record["payload"]["artifact"]["hash"], hash.as_str());
+    assert_eq!(record["payload"]["root"], 0);
+    let mut keys: Vec<&str> = record["payload"]["artifact"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec!["hash", "name"],
+        "the pointer is the artifact's whole shape"
+    );
+
+    // the db holds no bytes: the figure never touched the columns
+    let stored = std::fs::read(&db).unwrap();
+    assert!(
+        !stored.windows(PNG_BYTES.len()).any(|w| w == PNG_BYTES),
+        "the artifact bytes rode the db"
+    );
+
+    // the door serves the store's bytes with their sniffed type
+    let mut r = ureq::get(&format!("{base}/a/{}", hash.as_str()))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .expect("the loopback server answers");
+    assert_eq!(r.status().as_u16(), 200);
+    assert_eq!(r.headers().get("content-type").unwrap(), "image/png");
+    assert_eq!(r.body_mut().read_to_vec().unwrap(), PNG_BYTES);
+
+    // other content serves as itself: octet-stream, never an image type
+    let plain = b"not a figure, just words";
+    let plain_hash = saccade::ContentHash::of(plain);
+    std::fs::write(dir.join(plain_hash.as_str()), plain).unwrap();
+    let r = ureq::get(&format!("{base}/a/{}", plain_hash.as_str()))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .expect("the loopback server answers");
+    assert_eq!(r.status().as_u16(), 200);
+    assert_eq!(
+        r.headers().get("content-type").unwrap(),
+        "application/octet-stream"
+    );
+
+    // a store miss is a 404 that names itself
+    let missing = saccade::ContentHash::of(b"bytes never parked");
+    let mut r = ureq::get(&format!("{base}/a/{}", missing.as_str()))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .expect("the loopback server answers");
+    assert_eq!(r.status().as_u16(), 404);
+    assert!(
+        r.body_mut()
+            .read_to_string()
+            .unwrap()
+            .contains("unavailable")
+    );
+
+    // a malformed token never names a path
+    let mut r = ureq::get(&format!("{base}/a/../../etc/passwd"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .expect("the loopback server answers");
+    assert_eq!(r.status().as_u16(), 404);
+    assert!(!r.body_mut().read_to_string().unwrap().contains("root"));
+
+    // a non-hex hash refuses at the boundary, writing nothing
+    let (status, body) = post_command(
+        &base,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"artifact": {"root": 0, "artifact": {"name": "bad hash", "hash": "ABC"}}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "malformed_request");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The console renders the artifact at its home position and resolves
+/// a later '#N' mention into the card linking home.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_console_renders_artifacts_and_their_mentions() {
+    let db = scratch_db("artifact-console");
+    let dir = db.parent().unwrap().join("artifacts");
+    std::fs::create_dir_all(&dir).unwrap();
+    let hash = saccade::ContentHash::of(PNG_BYTES);
+    std::fs::write(dir.join(hash.as_str()), PNG_BYTES).unwrap();
+    let (base, state) = spawn_console_with_artifacts(&db, &dir).await;
+
+    seed_task(&state, "hold the figures");
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("the verdict, figure below".into()).unwrap(),
+                kind: CommentKind::Note,
+            },
+            None,
+            bare_request(),
+        )
+        .unwrap();
+    let parked = state
+        .execute(
+            &human_ctx(),
+            Command::Artifact {
+                root: TaskId(0),
+                artifact: saccade::types::artifact::Artifact {
+                    name: Prose::new("sweep figure".into()).unwrap(),
+                    hash: hash.clone(),
+                },
+            },
+            None,
+            bare_request(),
+        )
+        .unwrap();
+    let seq = parked[0].seq;
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new(format!("citing #{seq} from the verdict")).unwrap(),
+                kind: CommentKind::Note,
+            },
+            None,
+            bare_request(),
+        )
+        .unwrap();
+
+    let (status, page) = get_html(&format!("{base}/t/0"));
+    assert_eq!(status, 200);
+    // the figure renders at its position: caption, inline image, anchor
+    assert!(page.contains(&format!("id=\"a-{seq}\"")), "{page}");
+    assert!(
+        page.contains(&format!(
+            "<img class=\"aimg\" src=\"/a/{}\" alt=\"sweep figure\">",
+            hash.as_str()
+        )),
+        "{page}"
+    );
+    assert!(page.contains("ARTIFACT"), "{page}");
+    // the verdict sits above the figure it names
+    let verdict = page.find("the verdict, figure below").unwrap();
+    let figure = page.find("alt=\"sweep figure\"").unwrap();
+    assert!(verdict < figure);
+    // the later mention renders as the card linking home
+    assert!(
+        page.contains(&format!("citing <a class=\"acard\" href=\"/t/0#a-{seq}\">")),
+        "{page}"
+    );
+
+    // a store emptied under the record renders the honest miss
+    std::fs::remove_file(dir.join(hash.as_str())).unwrap();
+    let (status, page) = get_html(&format!("{base}/t/0"));
+    assert_eq!(status, 200);
+    assert!(page.contains("sweep figure · unavailable"), "{page}");
+    assert!(!page.contains("class=\"aimg\""), "{page}");
+    // and the mention card carries the same verdict
+    assert!(
+        page.contains("sweep figure · unavailable</span></a>"),
+        "{page}"
+    );
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }

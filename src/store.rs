@@ -204,6 +204,7 @@ impl World {
                     delivered_at: None,
                     proposal: None,
                     thread: Vec::new(),
+                    artifacts: Vec::new(),
                     holder: None,
                     birth_actor: record.context.actor.clone(),
                     active_incarnation: None,
@@ -643,6 +644,14 @@ impl World {
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
+            // A thread holding an artifact: the record parks the pointer,
+            // the bytes already sit in the store. Bookkeeping follows the
+            // Commented precedent — the thread moved, the state did not.
+            Event::ArtifactAdded { root, ref artifact } => {
+                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.artifacts.push((record.id, artifact.clone()));
+                task_ctx.last_record_at = record.timestamp;
+            }
         }
 
         Ok(())
@@ -702,6 +711,7 @@ pub fn execute(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::ContentHash;
     use crate::Event;
     use crate::objects::comment::{
         AgentAttemptState, CommentId, CommentKind, CommentState, ResponseState, Target,
@@ -711,6 +721,7 @@ mod test {
     use crate::objects::task::{TaskId, TaskState};
     use crate::objects::workspace::WorktreeState;
     use crate::types::actor::ActorName;
+    use crate::types::artifact::Artifact;
     use crate::types::failure::{FailureCode, FailureEvidence};
     use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
     use crate::types::prose::Prose;
@@ -1781,6 +1792,72 @@ mod test {
                 response: ResponseState::Responded { reply: mid },
             }
         );
+    }
+
+    #[test]
+    fn artifacts_land_seq_ordered_beside_comments() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+        let figure = Artifact {
+            name: Prose::new("sweep over 28 decades".into()).unwrap(),
+            hash: ContentHash::of(b"figure bytes"),
+        };
+
+        // both tiers author the act, like notes
+        for ctx in [agent(), human()] {
+            log.execute(
+                ctx,
+                Command::Artifact {
+                    root: TaskId(3),
+                    artifact: figure.clone(),
+                },
+                20,
+            )
+            .unwrap();
+        }
+
+        // an unknown task refuses, writing nothing
+        let before = log.records().len();
+        let refused = log.execute(
+            human(),
+            Command::Artifact {
+                root: TaskId(9),
+                artifact: figure.clone(),
+            },
+            21,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidTaskId)));
+        assert_eq!(log.records().len(), before);
+
+        // the thread moved but the state did not: t-3 keeps its claim
+        assert!(matches!(
+            log.world().tasks[3].task.state,
+            TaskState::Claimed
+        ));
+        assert_eq!(log.world().tasks[3].holder, Some(agent().actor));
+        assert_eq!(log.world().tasks[3].last_record_at, 20);
+
+        // the pointers land in record order with their seqs
+        let artifacts = &log.world().tasks[3].artifacts;
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0].0, RecordId(RECORD_COUNT));
+        assert_eq!(artifacts[1].0, RecordId(RECORD_COUNT + 1));
+        assert_eq!(artifacts[0].1, figure);
+        assert_eq!(artifacts[1].1, figure);
+        // and only the named thread holds them
+        assert!(log.world().tasks[0].artifacts.is_empty());
+
+        // no state gate: a dropped task holds the pointer too
+        log.execute(
+            agent(),
+            Command::Artifact {
+                root: TaskId(2),
+                artifact: figure,
+            },
+            22,
+        )
+        .unwrap();
+        assert_eq!(log.world().tasks[2].artifacts.len(), 1);
     }
 
     #[test]

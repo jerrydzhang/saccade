@@ -4,6 +4,7 @@ use crate::objects::proposal::{ProposalAction, ProposalId};
 use crate::objects::task::TaskId;
 use crate::store::RecordId;
 use crate::types::actor::ActorName;
+use crate::types::artifact::Artifact;
 use crate::types::failure::FailureEvidence;
 use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
 use crate::types::prose::Prose;
@@ -76,6 +77,12 @@ pub enum Event {
     /// verb, System-authored by role.
     SteerForwarded {
         steer: CommentId,
+    },
+    /// A thread holding an artifact: name and content identity, the
+    /// bytes stay in the store. Authored like a comment, any tier.
+    ArtifactAdded {
+        root: TaskId,
+        artifact: Artifact,
     },
     // Incarnation events: machinery verbs, System-authored by role
     IncarnationBound {
@@ -172,6 +179,10 @@ pub enum Command {
     RefuseDemand {
         demand: CommentId,
         reason: Prose,
+    },
+    Artifact {
+        root: TaskId,
+        artifact: Artifact,
     },
     // Machinery verbs: the runner forwards standing steers to the run
     // that consumed them

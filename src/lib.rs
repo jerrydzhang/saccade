@@ -28,6 +28,7 @@ pub use objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState}
 pub use objects::task::{Task, TaskId, TaskState};
 pub use store::{Context, Record, RecordId, Tier, World};
 pub use types::actor::ActorName;
+pub use types::artifact::{Artifact, ContentHash};
 pub use types::failure::{FailureCode, FailureEvidence};
 pub use types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
 pub use types::prose::Prose;

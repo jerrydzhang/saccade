@@ -78,6 +78,13 @@ pub fn attempts_at(db_path: &Path) -> PathBuf {
     db_path.with_file_name("attempts.jsonl")
 }
 
+/// The artifact store: content-addressed bytes under the state root,
+/// one home per repo. The writer parks `<sha256>` files here; the read
+/// door serves them. Lifetime is store-wide, never per task.
+pub fn artifacts_at(repo_root: &Path) -> PathBuf {
+    state_dir(repo_root).join("artifacts")
+}
+
 /// Where a terminal task's session artifacts outlive their agent dir.
 pub fn retention_at(repo_root: &Path, task: usize) -> PathBuf {
     state_dir(repo_root)

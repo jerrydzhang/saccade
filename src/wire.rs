@@ -27,7 +27,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 23] = [
+const KINDS: [&str; 24] = [
     "task_created",
     "task_claimed",
     "task_done",
@@ -42,6 +42,7 @@ const KINDS: [&str; 23] = [
     "commented",
     "demand_refused",
     "steer_forwarded",
+    "artifact_added",
     "incarnation_bound",
     "incarnation_prompt_accepted",
     "incarnation_prompt_rejected",
@@ -121,7 +122,9 @@ mod test {
             assert_eq!(tier_from(tier_of(&tier)).unwrap(), tier);
         }
     }
+    use crate::ContentHash;
     use crate::store::RecordId;
+    use crate::types::artifact::Artifact;
     use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
     #[test]
@@ -179,6 +182,13 @@ mod test {
             },
             Event::SteerForwarded {
                 steer: CommentId(RecordId(6)),
+            },
+            Event::ArtifactAdded {
+                root: TaskId(0),
+                artifact: Artifact {
+                    name: Prose::new("sweep figure".into()).unwrap(),
+                    hash: ContentHash::of(b"figure bytes"),
+                },
             },
             Event::DemandRefused {
                 demand: CommentId(RecordId(6)),

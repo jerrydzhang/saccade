@@ -5,6 +5,7 @@ use crate::objects::comment::CommentKind;
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::workspace::WorkspaceContext;
 use crate::types::actor::ActorName;
+use crate::types::artifact::Artifact;
 use crate::types::prose::Prose;
 use crate::{CommentId, ProposalId, RecordId};
 
@@ -79,6 +80,8 @@ pub struct TaskContext {
     pub delivered_at: Option<u64>,
     pub proposal: Option<ProposalId>,
     pub thread: Vec<CommentId>,
+    /// Artifacts the thread holds, in record order
+    pub artifacts: Vec<(RecordId, Artifact)>,
     /// Holder of the current claim, present only while the task is claimed
     pub holder: Option<ActorName>,
     /// The attribution that birthed the task, from the birth record

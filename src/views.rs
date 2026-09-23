@@ -9,6 +9,7 @@ use crate::objects::comment::{
 use crate::objects::proposal::{ProposalAction, ProposalContext, ProposalId, ProposalState};
 use crate::objects::task::{TaskContext, TaskId, TaskState};
 use crate::store::{RecordId, Tier, World};
+use crate::types::artifact::Artifact;
 use crate::types::prose::Prose;
 
 /// A claimed task with no record movement for this long renders adrift.
@@ -150,6 +151,30 @@ pub struct RefusalView {
     pub at: u64,
 }
 
+/// An artifact's thread line: its position and its pointer. The fold
+/// keeps no author and no time for an artifact — the record names
+/// content, not a moment of speech.
+#[derive(Debug, PartialEq)]
+pub struct ArtifactLine {
+    pub seq: usize,
+    pub name: String,
+    pub hash: String,
+}
+
+impl ArtifactLine {
+    /// The pointer line's short form of the hash.
+    pub fn short_hash(&self) -> String {
+        self.hash.chars().take(12).collect()
+    }
+}
+
+/// One position in a flattened thread: a comment or an artifact.
+#[derive(Debug)]
+pub enum ThreadEntry {
+    Comment(CommentLine),
+    Artifact(ArtifactLine),
+}
+
 /// One conversation: a comment plus every reply hanging off it, in
 /// record order. Bounded by the reply links, never by the renderer.
 pub struct Conversation {
@@ -165,13 +190,14 @@ pub enum ThreadItem {
     Exchange {
         root: CommentLine,
         run: Option<RunView>,
-        replies: Vec<CommentLine>,
+        replies: Vec<ThreadEntry>,
     },
     Group {
         root: CommentLine,
-        replies: Vec<CommentLine>,
+        replies: Vec<ThreadEntry>,
     },
     Note(CommentLine),
+    Artifact(ArtifactLine),
 }
 
 /// The focused task's thread as a view: the context's pointer index,
@@ -230,6 +256,46 @@ pub fn comment_thread(
         .iter()
         .map(|cid| line_of(comments, *cid))
         .collect()
+}
+
+/// The thread flat in record order: comments and artifacts merged by
+/// position — the show shape.
+pub fn thread_entries(
+    comments: &BTreeMap<CommentId, CommentContext>,
+    ctx: &TaskContext,
+) -> Vec<ThreadEntry> {
+    let mut entries: Vec<(usize, ThreadEntry)> = ctx
+        .thread
+        .iter()
+        .map(|cid| (cid.0.0, ThreadEntry::Comment(line_of(comments, *cid))))
+        .collect();
+    entries.extend(ctx.artifacts.iter().map(|(rid, artifact)| {
+        (
+            rid.0,
+            ThreadEntry::Artifact(artifact_line_of(rid.0, artifact)),
+        )
+    }));
+    entries.sort_by_key(|(seq, _)| *seq);
+    entries.into_iter().map(|(_, entry)| entry).collect()
+}
+
+fn artifact_line_of(seq: usize, artifact: &Artifact) -> ArtifactLine {
+    ArtifactLine {
+        seq,
+        name: artifact.name.as_str().to_string(),
+        hash: artifact.hash.as_str().to_string(),
+    }
+}
+
+/// One artifact as the thread view renders it, whatever thread holds
+/// it — the pointer format `show` prints for a record id.
+pub fn artifact_line(world: &World, id: RecordId) -> Option<ArtifactLine> {
+    world.tasks.iter().find_map(|ctx| {
+        ctx.artifacts
+            .iter()
+            .find(|(rid, _)| *rid == id)
+            .map(|(_, artifact)| artifact_line_of(id.0, artifact))
+    })
 }
 
 /// One comment as the thread view renders it, whatever thread it lives
@@ -339,72 +405,109 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
     enum Building {
         Exchange {
             root: CommentLine,
-            replies: Vec<CommentLine>,
+            replies: Vec<ThreadEntry>,
         },
         Group {
             root: CommentLine,
-            replies: Vec<CommentLine>,
+            replies: Vec<ThreadEntry>,
         },
     }
+    enum Member {
+        Comment(CommentId),
+        Artifact(RecordId, Artifact),
+    }
+    // the thread's utterances merged by position: an artifact rides the
+    // stream beside the comments and lands in the group open at its
+    // seq — position is the association
+    let mut stream: Vec<(usize, Member)> = ctx
+        .thread
+        .iter()
+        .map(|cid| (cid.0.0, Member::Comment(*cid)))
+        .collect();
+    stream.extend(
+        ctx.artifacts
+            .iter()
+            .map(|(rid, artifact)| (rid.0, Member::Artifact(*rid, artifact.clone()))),
+    );
+    stream.sort_by_key(|(seq, _)| *seq);
+
     let mut groups: Vec<Building> = Vec::new();
     let mut root_index: BTreeMap<CommentId, usize> = BTreeMap::new();
-    for cid in &ctx.thread {
-        let root = root_of(&world.comments, *cid);
-        if root == *cid {
-            let line = line_of(&world.comments, *cid);
-            root_index.insert(*cid, groups.len());
-            if line.kind == "demand" {
-                groups.push(Building::Exchange {
-                    root: line,
-                    replies: Vec::new(),
-                });
-            } else {
-                groups.push(Building::Group {
-                    root: line,
-                    replies: Vec::new(),
-                });
+    let mut lead: Vec<ArtifactLine> = Vec::new();
+    let mut last_group: Option<usize> = None;
+    for (_, member) in stream {
+        match member {
+            Member::Comment(cid) => {
+                let root = root_of(&world.comments, cid);
+                if root == cid {
+                    let line = line_of(&world.comments, cid);
+                    root_index.insert(cid, groups.len());
+                    if line.kind == "demand" {
+                        groups.push(Building::Exchange {
+                            root: line,
+                            replies: Vec::new(),
+                        });
+                    } else {
+                        groups.push(Building::Group {
+                            root: line,
+                            replies: Vec::new(),
+                        });
+                    }
+                    last_group = Some(groups.len() - 1);
+                } else {
+                    let g = root_index
+                        .get(&root)
+                        .copied()
+                        .expect("a reply's root is resident and earlier");
+                    let line = line_of(&world.comments, cid);
+                    match &mut groups[g] {
+                        Building::Exchange { replies, .. } | Building::Group { replies, .. } => {
+                            replies.push(ThreadEntry::Comment(line))
+                        }
+                    }
+                    last_group = Some(g);
+                }
             }
-        } else {
-            let g = root_index
-                .get(&root)
-                .copied()
-                .expect("a reply's root is resident and earlier");
-            let line = line_of(&world.comments, *cid);
-            match &mut groups[g] {
-                Building::Exchange { replies, .. } | Building::Group { replies, .. } => {
-                    replies.push(line)
+            Member::Artifact(rid, artifact) => {
+                let line = artifact_line_of(rid.0, &artifact);
+                match last_group {
+                    Some(g) => match &mut groups[g] {
+                        Building::Exchange { replies, .. } | Building::Group { replies, .. } => {
+                            replies.push(ThreadEntry::Artifact(line))
+                        }
+                    },
+                    // no comment precedes it: a standalone item at the top
+                    None => lead.push(line),
                 }
             }
         }
     }
-    let items = groups
-        .into_iter()
-        .map(|g| match g {
-            Building::Exchange { root, replies } => {
-                // the run that answered this demand, if one did
-                let run = world
-                    .incarnations
-                    .iter()
-                    .find(|(_, r)| r.response_target.0.0 == root.seq)
-                    .map(|(id, r)| RunView {
-                        incarnation: id.0.0,
-                        task: r.task_id.0,
-                        demand: r.response_target.0.0,
-                        actor: r.actor.as_str().to_string(),
-                        born_at: r.born_at,
-                        done_at: r.done_at,
-                    });
-                ThreadItem::Exchange { root, run, replies }
+    let mut items: Vec<ThreadItem> = lead.into_iter().map(ThreadItem::Artifact).collect();
+    items.extend(groups.into_iter().map(|g| match g {
+        Building::Exchange { root, replies } => {
+            // the run that answered this demand, if one did
+            let run = world
+                .incarnations
+                .iter()
+                .find(|(_, r)| r.response_target.0.0 == root.seq)
+                .map(|(id, r)| RunView {
+                    incarnation: id.0.0,
+                    task: r.task_id.0,
+                    demand: r.response_target.0.0,
+                    actor: r.actor.as_str().to_string(),
+                    born_at: r.born_at,
+                    done_at: r.done_at,
+                });
+            ThreadItem::Exchange { root, run, replies }
+        }
+        Building::Group { root, replies } => {
+            if replies.is_empty() {
+                ThreadItem::Note(root)
+            } else {
+                ThreadItem::Group { root, replies }
             }
-            Building::Group { root, replies } => {
-                if replies.is_empty() {
-                    ThreadItem::Note(root)
-                } else {
-                    ThreadItem::Group { root, replies }
-                }
-            }
-        })
-        .collect();
+        }
+    }));
     Some(ThreadView { items })
 }
 
@@ -515,6 +618,52 @@ pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
             body: c.comment.body.as_str().to_string(),
         })
         .collect()
+}
+
+// -- the reading-side reference resolver's index --------------------
+
+/// What a '#N' mention resolves to on the reading side: a comment's
+/// home anchor, or an artifact's home card. The mention parse itself
+/// lives in the view, never in the record.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RefTarget {
+    Comment {
+        task: usize,
+    },
+    Artifact {
+        task: usize,
+        name: String,
+        hash: String,
+    },
+}
+
+/// Every seq the fold holds as a comment or an artifact, mapped to its
+/// mention's render — the index the webui's body renders resolve
+/// against. Births and machinery records stay unresolvable on purpose:
+/// an unresolved token renders as plain text.
+pub fn ref_index(world: &World) -> BTreeMap<usize, RefTarget> {
+    let mut index = BTreeMap::new();
+    for (id, cctx) in &world.comments {
+        index.insert(
+            id.0.0,
+            RefTarget::Comment {
+                task: cctx.comment.root.0,
+            },
+        );
+    }
+    for (i, ctx) in world.tasks.iter().enumerate() {
+        for (rid, artifact) in &ctx.artifacts {
+            index.insert(
+                rid.0,
+                RefTarget::Artifact {
+                    task: i,
+                    name: artifact.name.as_str().to_string(),
+                    hash: artifact.hash.as_str().to_string(),
+                },
+            );
+        }
+    }
+    index
 }
 
 /// A run, as the strip and an exchange card name it.
@@ -683,7 +832,9 @@ pub enum Facet {
 }
 
 /// The kinds a searched record can be — kind:'s whole vocabulary.
-pub const SEARCH_KINDS: [&str; 6] = ["task", "note", "demand", "steer", "ask", "receipt"];
+pub const SEARCH_KINDS: [&str; 7] = [
+    "task", "note", "demand", "steer", "ask", "receipt", "artifact",
+];
 
 /// A term: plain words match text; ids are reference searches.
 #[derive(Clone, Debug, PartialEq)]
@@ -945,6 +1096,22 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                 ));
             }
         }
+        // artifacts are name-indexed: the pointer's text is the name
+        for (rid, artifact) in &ctx.artifacts {
+            let name = artifact.name.as_str();
+            if terms_match(query, name, &[]) {
+                matches.push((
+                    i,
+                    SearchRecord {
+                        pointer: format!("#{}", rid.0),
+                        kind: "artifact",
+                        actor: None,
+                        body: name.to_string(),
+                        order: rid.0,
+                    },
+                ));
+            }
+        }
     }
     for (id, cctx) in &world.comments {
         let body = cctx.comment.body.as_str();
@@ -1048,6 +1215,7 @@ mod test {
             delivered_at: None,
             proposal: None,
             thread: Vec::new(),
+            artifacts: Vec::new(),
             holder: None,
             birth_actor: ActorName::new("human person".into()).unwrap(),
             active_incarnation: None,
@@ -1244,6 +1412,13 @@ mod panels {
         )
     }
 
+    fn entry_seq(entry: &ThreadEntry) -> usize {
+        match entry {
+            ThreadEntry::Comment(c) => c.seq,
+            ThreadEntry::Artifact(a) => a.seq,
+        }
+    }
+
     /// t-0 holds: c-2 (root, the demand) <- c-3 (its reply), c-4 (an
     /// orphan note), c-5 (a second root) <- c-6 (its reply), with c-4
     /// born between the two conversations.
@@ -1289,6 +1464,115 @@ mod panels {
         .unwrap()
     }
 
+    fn artifact_record(seq: usize, at: u64, name: &str) -> Record {
+        record(
+            seq,
+            at,
+            Tier::Human,
+            Event::ArtifactAdded {
+                root: TaskId(0),
+                artifact: crate::types::artifact::Artifact {
+                    name: Prose::new(name.into()).unwrap(),
+                    hash: crate::ContentHash::of(name.as_bytes()),
+                },
+            },
+        )
+    }
+
+    fn entry_shape(entry: &ThreadEntry) -> (&'static str, usize) {
+        match entry {
+            ThreadEntry::Comment(c) => ("comment", c.seq),
+            ThreadEntry::Artifact(a) => ("artifact", a.seq),
+        }
+    }
+
+    /// Position is the association: artifacts ride the thread's seq
+    /// order, inside the group open where they fall.
+    #[test]
+    fn artifacts_land_at_their_position_in_the_thread() {
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                2,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Demand,
+            ),
+            artifact_record(3, 3, "sweep figure"),
+            artifact_record(4, 4, "spread figure"),
+            comment_at(
+                5,
+                5,
+                Tier::Agent,
+                Target::Comment(CommentId(RecordId(2))),
+                CommentKind::Note,
+            ),
+            artifact_record(6, 6, "verdict figure"),
+        ])
+        .unwrap();
+        let v = thread_view(&world, TaskId(0)).unwrap();
+        match &v.items[0] {
+            ThreadItem::Exchange { root, run, replies } => {
+                assert_eq!(root.seq, 2);
+                assert!(run.is_none());
+                assert_eq!(
+                    replies.iter().map(entry_shape).collect::<Vec<_>>(),
+                    [
+                        ("artifact", 3),
+                        ("artifact", 4),
+                        ("comment", 5),
+                        ("artifact", 6),
+                    ]
+                );
+            }
+            other => panic!("expected an exchange, got {other:?}"),
+        }
+        // the flat show stream holds the same order
+        let flat = thread_entries(&world.comments, &world.tasks[0]);
+        assert_eq!(
+            flat.iter().map(entry_shape).collect::<Vec<_>>(),
+            [
+                ("comment", 2),
+                ("artifact", 3),
+                ("artifact", 4),
+                ("comment", 5),
+                ("artifact", 6),
+            ]
+        );
+
+        // an artifact no comment precedes stands alone at the top
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            artifact_record(1, 1, "lead figure"),
+            comment_at(
+                2,
+                2,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
+        ])
+        .unwrap();
+        let v = thread_view(&world, TaskId(0)).unwrap();
+        match &v.items[0] {
+            ThreadItem::Artifact(line) => {
+                assert_eq!(line.seq, 1);
+                assert_eq!(line.name, "lead figure");
+                assert_eq!(line.hash, crate::ContentHash::of(b"lead figure").as_str());
+            }
+            other => panic!("expected a lead artifact, got {other:?}"),
+        }
+        match &v.items[1] {
+            ThreadItem::Note(line) => assert_eq!(line.seq, 2),
+            other => panic!("expected a note, got {other:?}"),
+        }
+        // the pointer lookup show's record door uses
+        let line = artifact_line(&world, RecordId(1)).expect("the artifact resolves");
+        assert_eq!(line.short_hash().len(), 12);
+        assert!(artifact_line(&world, RecordId(2)).is_none());
+    }
+
     #[test]
     fn the_thread_clusters_by_reply_links() {
         let world = clustered();
@@ -1299,7 +1583,7 @@ mod panels {
                 // c-2 is an unanswered demand: the exchange opens, no run yet
                 assert_eq!(root.seq, 2);
                 assert!(run.is_none());
-                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [3]);
+                assert_eq!(replies.iter().map(entry_seq).collect::<Vec<_>>(), [3]);
             }
             other => panic!("expected an exchange, got {other:?}"),
         }
@@ -1311,7 +1595,7 @@ mod panels {
             ThreadItem::Group { root, replies } => {
                 // c-5 is unaddressed: a plain group with its reply
                 assert_eq!(root.seq, 5);
-                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [6]);
+                assert_eq!(replies.iter().map(entry_seq).collect::<Vec<_>>(), [6]);
             }
             other => panic!("expected a group, got {other:?}"),
         }
@@ -1380,7 +1664,7 @@ mod panels {
                 assert_eq!(run.born_at, 3 * HOUR);
                 assert_eq!(run.done_at, Some(5 * HOUR));
                 assert!(!run.in_flight());
-                assert_eq!(replies.iter().map(|r| r.seq).collect::<Vec<_>>(), [5]);
+                assert_eq!(replies.iter().map(entry_seq).collect::<Vec<_>>(), [5]);
             }
             other => panic!("expected an exchange, got {other:?}"),
         }
@@ -1812,6 +2096,47 @@ mod search {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn artifact_names_are_searchable_and_kinded() {
+        let jerry = ctx(Tier::Human, "jerry");
+        let world = World::replay(vec![
+            task(0, 0, &jerry, "hold the sweep", None),
+            record(
+                1,
+                1,
+                &jerry,
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: crate::types::artifact::Artifact {
+                        name: Prose::new("sweep-overview".into()).unwrap(),
+                        hash: crate::ContentHash::of(b"figure bytes"),
+                    },
+                },
+            ),
+            note(
+                2,
+                2,
+                &jerry,
+                Target::Task(TaskId(0)),
+                "the verdict cites #1 above",
+            ),
+        ])
+        .unwrap();
+        // the name matches as a whole token; the title's "sweep" does not
+        let groups = search(&world, &q(&["sweep-overview"])).unwrap();
+        assert_eq!(pointers(&groups), vec![(0, vec!["#1".into()])]);
+        let groups = &groups[0];
+        assert_eq!(groups.records[0].kind, "artifact");
+        assert_eq!(groups.records[0].actor, None);
+        assert_eq!(groups.records[0].body, "sweep-overview");
+        // the kind facet narrows to artifacts alone
+        let groups = search(&world, &q(&["sweep-overview", "kind:artifact"])).unwrap();
+        assert_eq!(pointers(&groups), vec![(0, vec!["#1".into()])]);
+        // and the mention is a reference search finding its namer
+        let groups = search(&world, &q(&["#1"])).unwrap();
+        assert_eq!(pointers(&groups), vec![(0, vec!["#2".into()])]);
     }
 
     #[test]

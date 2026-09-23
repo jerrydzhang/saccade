@@ -456,8 +456,11 @@ mod test {
     use crate::objects::incarnation::{IncarnationId, IncarnationState};
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
+    use crate::types::artifact::Artifact;
     use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
-    use crate::{CommentId, ProposalAction, ProposalId, ProposalState, Prose, RecordId, Target};
+    use crate::{
+        CommentId, ContentHash, ProposalAction, ProposalId, ProposalState, Prose, RecordId, Target,
+    };
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().expect("open memory db");
@@ -856,6 +859,22 @@ mod test {
         )
         .unwrap();
 
+        // an artifact parks its pointer on the thread: name and hash,
+        // the bytes never ride the columns
+        record(
+            &mut conn,
+            &agent(),
+            Command::Artifact {
+                root: TaskId(0),
+                artifact: Artifact {
+                    name: Prose::new("sweep figure".into()).unwrap(),
+                    hash: ContentHash::of(b"figure bytes"),
+                },
+            },
+            35,
+        )
+        .unwrap();
+
         // the returned world is the one a full reload produces
         let (_, returned) = record(
             &mut conn,
@@ -874,7 +893,25 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 39);
+        assert_eq!(loadout.rows.len(), 40);
+        // the artifact family rides the same columns: pointer only
+        assert_eq!(loadout.rows[38].kind, "artifact_added");
+        assert!(loadout.rows[38].payload.contains("sweep figure"));
+        assert!(
+            loadout.rows[38]
+                .payload
+                .contains(ContentHash::of(b"figure bytes").as_str())
+        );
+        assert_eq!(
+            world.tasks[0].artifacts,
+            vec![(
+                RecordId(38),
+                Artifact {
+                    name: Prose::new("sweep figure".into()).unwrap(),
+                    hash: ContentHash::of(b"figure bytes"),
+                }
+            )]
+        );
         assert_eq!(loadout.rows[2].kind, "task_delivered");
         assert_eq!(loadout.rows[3].kind, "task_accepted");
         assert_eq!(loadout.rows[5].kind, "proposal_created");

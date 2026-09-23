@@ -19,6 +19,7 @@ fn required_tier(event: &Event) -> Authority {
         | Event::ProposalCreated { .. }
         | Event::ProposalWithdrawn { .. }
         | Event::Commented { .. }
+        | Event::ArtifactAdded { .. }
         | Event::IncarnationCancelled { .. }
         | Event::TaskWorkspaceCheckpointed { .. } => Authority::AnyTier,
         // accept's door reads the world's birth attribution, so its
@@ -89,6 +90,7 @@ pub fn decide(command: Command) -> Vec<Event> {
         // Comment commands
         Command::Comment { target, body, kind } => vec![Event::Commented { target, body, kind }],
         Command::RefuseDemand { demand, reason } => vec![Event::DemandRefused { demand, reason }],
+        Command::Artifact { root, artifact } => vec![Event::ArtifactAdded { root, artifact }],
         Command::ForwardSteer { steer } => vec![Event::SteerForwarded { steer }],
         // Machinery verbs: System authorship comes from the role, never input
         Command::BindIncarnation {
@@ -145,9 +147,10 @@ mod test {
     use crate::objects::comment::{CommentId, CommentKind};
     use crate::objects::incarnation::IncarnationId;
     use crate::types::actor::ActorName;
+    use crate::types::artifact::Artifact;
     use crate::types::failure::{FailureCode, FailureEvidence};
     use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
-    use crate::{ProposalAction, ProposalId, Prose, RecordId, Target, TaskId};
+    use crate::{ContentHash, ProposalAction, ProposalId, Prose, RecordId, Target, TaskId};
 
     fn agent() -> Context {
         Context {
@@ -212,6 +215,13 @@ mod test {
             },
             Event::SteerForwarded {
                 steer: CommentId(RecordId(0)),
+            },
+            Event::ArtifactAdded {
+                root: TaskId(0),
+                artifact: Artifact {
+                    name: Prose::new("sweep figure".into()).unwrap(),
+                    hash: ContentHash::of(b"bytes"),
+                },
             },
             Event::IncarnationBound {
                 task_id: TaskId(0),
