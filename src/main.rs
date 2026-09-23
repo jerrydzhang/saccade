@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -7,8 +8,8 @@ use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{
-    ProposalView, SearchGroup, SearchQuery, TaskView, Term, comment_thread, proposal_view, search,
-    show_view, task_view,
+    CommentLine, ProposalView, SearchGroup, SearchQuery, TaskView, Term, comment_line,
+    comment_thread, matched_line, proposal_view, search, show_view, task_view,
 };
 use saccade::{
     ActorName, Command, CommentId, CommentKind, Context, GitCommit, ProposalAction, ProposalId,
@@ -128,12 +129,30 @@ enum Cmd {
     /// Steer a task's live run at its next turn boundary; with no run
     /// living, the steer stands on the thread as intent
     Steer { id: String, body: String },
-    /// Everything about one task: state, receipt, comment thread
-    Show { id: String },
+    /// Everything about tasks and records: whole threads (t-<n>) or
+    /// single comments (#<seq> or c-<seq>), many at once
+    Show {
+        /// Ids to open, in any mix: t-<n> threads, #<seq> or c-<seq> comments
+        #[arg(required_unless_present = "stdin")]
+        ids: Vec<String>,
+        /// Read one id per line from stdin instead of arguments; blank
+        /// and invalid lines are skipped with a note
+        #[arg(long)]
+        stdin: bool,
+    },
     /// Search the folded record: exact terms over task titles, comment
     /// bodies, and receipts; an id term is a reference search
     Search {
-        /// Terms and only-show-me facets: in:t-N, by:NAME, kind:K, under:t-N
+        /// Terms to match (a record must match them all) and
+        /// only-show-me facets:
+        ///   in:t-N     one thread's records only
+        ///   by:NAME    author, matched within names (by:pi finds pi/t-90-1)
+        ///   kind:K     task, note, demand, steer, ask, receipt
+        ///   under:t-N  the task's thread and its descendants' threads
+        ///
+        /// An id term — '#907' or 't-49' — is a reference search: every
+        /// record citing it or addressing it; quote the hash in shells
+        #[arg(verbatim_doc_comment)]
         terms: Vec<String>,
         /// With one id term: that record plus N before and after
         #[arg(short = 'C', long)]
@@ -197,7 +216,9 @@ fn main() -> ExitCode {
 
     match run(&cli) {
         Ok(output) => {
-            println!("{output}");
+            if !output.is_empty() {
+                println!("{output}");
+            }
             ExitCode::SUCCESS
         }
         Err(fail) => {
@@ -606,10 +627,16 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
             LoadState::Full(world) => Ok(render_proposals(cli, &world)),
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
-        Cmd::Show { id } => match loadout.state {
+        Cmd::Show { ids, stdin } => match loadout.state {
             LoadState::Full(world) => {
-                let task_id = parse_task_id(id)?;
-                Ok(render_show(&world, task_id)?)
+                if *stdin {
+                    return show_stdin(&world, ids);
+                }
+                let mut blocks = Vec::new();
+                for token in ids {
+                    blocks.push(render_id(&world, token)?);
+                }
+                Ok(blocks.join("\n\n"))
             }
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
@@ -622,7 +649,7 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
             match loadout.state {
                 LoadState::Full(world) => {
                     let groups = search(&world, &query).map_err(|f| Fail::Usage(f.to_string()))?;
-                    Ok(render_search(cli, &groups, !query.facets.is_empty()))
+                    Ok(render_search(cli, &groups, terms, &query))
                 }
                 LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
             }
@@ -805,26 +832,120 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     }
     let ctx = &world.tasks[task_id.0];
     for line in comment_thread(&world.comments, ctx) {
-        let indent = "  ".repeat(line.depth.saturating_sub(1));
         out.push(String::new());
-        let state = line.state.map(|s| format!("  ({s})")).unwrap_or_default();
-        out.push(format!("{indent}#{}  {}{state}", line.seq, line.actor));
+        out.extend(comment_block(&line));
+    }
+    Ok(out.join("\n"))
+}
+
+/// A thread view's body format for one comment: its header line, the
+/// wrapped body, and the machinery's refusal when it refused — the
+/// same block whether it rides a thread or a pointer opened it.
+fn comment_block(line: &CommentLine) -> Vec<String> {
+    let indent = "  ".repeat(line.depth.saturating_sub(1));
+    let state = line
+        .state
+        .as_ref()
+        .map(|s| format!("  ({s})"))
+        .unwrap_or_default();
+    let mut out = vec![format!("{indent}#{}  {}{state}", line.seq, line.actor)];
+    out.push(wrap(
+        &line.body,
+        WIDTH,
+        &format!("{indent}  "),
+        &format!("{indent}  "),
+    ));
+    if let Some(refusal) = &line.refusal {
         out.push(wrap(
-            &line.body,
+            &format!("refused {}: {}", fmt_when(refusal.at), refusal.reason),
             WIDTH,
             &format!("{indent}  "),
             &format!("{indent}  "),
         ));
-        if let Some(refusal) = &line.refusal {
-            out.push(wrap(
-                &format!("refused {}: {}", fmt_when(refusal.at), refusal.reason),
-                WIDTH,
-                &format!("{indent}  "),
-                &format!("{indent}  "),
-            ));
+    }
+    out
+}
+
+/// One id as show sees it: a whole thread or a single record.
+#[derive(Clone, Copy, Debug)]
+enum ShowId {
+    Thread(TaskId),
+    Record(CommentId),
+}
+
+fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
+    let not_an_id = || {
+        Fail::Usage(format!(
+            "'{token}' is not an id (expected t-<n>, #<seq>, or c-<seq>)"
+        ))
+    };
+    if let Some(rest) = token
+        .strip_prefix('#')
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    {
+        return Ok(ShowId::Record(CommentId(RecordId(
+            rest.parse().expect("digits checked"),
+        ))));
+    }
+    if let Some(rest) = token
+        .strip_prefix("c-")
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    {
+        return Ok(ShowId::Record(CommentId(RecordId(
+            rest.parse().expect("digits checked"),
+        ))));
+    }
+    if token.starts_with("t-") {
+        return Ok(ShowId::Thread(parse_task_id(token)?));
+    }
+    Err(not_an_id())
+}
+
+/// Render one id: a thread whole, or a record in the thread view's
+/// body format — a comment as its block, a task's birth as the thread
+/// it birthed.
+fn render_id(world: &World, token: &str) -> Result<String, Fail> {
+    match parse_show_id(token)? {
+        ShowId::Thread(id) => render_show(world, id),
+        ShowId::Record(id) => {
+            if let Some(line) = comment_line(world, id) {
+                return Ok(comment_block(&line).join("\n"));
+            }
+            if let Some(task) = world.task_born_at(id.0) {
+                return render_show(world, task);
+            }
+            Err(Fail::Usage(format!(
+                "#{} is not a comment or a task birth",
+                id.0.0
+            )))
         }
     }
-    Ok(out.join("\n"))
+}
+
+/// The piped face: one id per line, every failure a skip with a note,
+/// never a broken chain. Empty input is silence.
+fn show_stdin(world: &World, ids: &[String]) -> Result<String, Fail> {
+    if !ids.is_empty() {
+        return Err(Fail::Usage("ids as arguments or --stdin, not both".into()));
+    }
+    if std::io::stdin().is_terminal() {
+        return Err(Fail::Usage(
+            "nothing piped: --stdin reads ids one per line".into(),
+        ));
+    }
+    let mut blocks = Vec::new();
+    for line in std::io::stdin().lines() {
+        let line = line.map_err(|e| Fail::Usage(format!("stdin: {e}")))?;
+        let token = line.trim();
+        if token.is_empty() {
+            continue;
+        }
+        match render_id(world, token) {
+            Ok(block) => blocks.push(block),
+            Err(f) => blocks.push(format!("skipped '{token}': {f}")),
+        }
+    }
+    Ok(blocks.join("\n\n"))
 }
 
 /// The refusal's moment, as the thread renders it.
@@ -903,8 +1024,15 @@ fn render_proposals(cli: &Cli, world: &World) -> String {
 
 /// The search door as text: thread groups of pointers, one matched
 /// line each. Counts ride the headers only when the query narrows —
-/// narrowing's visibility, never an aggregate badge.
-fn render_search(cli: &Cli, groups: &[SearchGroup], counts: bool) -> String {
+/// narrowing's visibility, never an aggregate badge — and a query
+/// that matched nothing says so in one line.
+fn render_search(
+    cli: &Cli,
+    groups: &[SearchGroup],
+    tokens: &[String],
+    query: &SearchQuery,
+) -> String {
+    let counts = !query.facets.is_empty();
     if cli.json {
         let rows: Vec<serde_json::Value> = groups
             .iter()
@@ -916,7 +1044,7 @@ fn render_search(cli: &Cli, groups: &[SearchGroup], counts: bool) -> String {
                         "pointer": r.pointer,
                         "kind": r.kind,
                         "actor": r.actor,
-                        "line": r.line,
+                        "body": r.body,
                     })).collect::<Vec<_>>(),
                 });
                 if counts {
@@ -928,6 +1056,9 @@ fn render_search(cli: &Cli, groups: &[SearchGroup], counts: bool) -> String {
             .collect();
         return serde_json::to_string_pretty(&serde_json::json!({ "groups": rows }))
             .expect("results are plain data");
+    }
+    if groups.is_empty() {
+        return format!("no matches ({})", tokens.join(" "));
     }
     let mut out = Vec::new();
     for g in groups {
@@ -945,7 +1076,8 @@ fn render_search(cli: &Cli, groups: &[SearchGroup], counts: bool) -> String {
                 .unwrap_or_default();
             let prefix = format!("  {}  {actor}", r.pointer);
             let budget = WIDTH.saturating_sub(prefix.chars().count());
-            out.push(format!("{prefix}{}", glimpse(&r.line, budget)));
+            let line = matched_line(&query.terms, &r.body);
+            out.push(format!("{prefix}{}", glimpse(&line, budget)));
         }
     }
     out.join("\n")

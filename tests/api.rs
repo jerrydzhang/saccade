@@ -1210,6 +1210,31 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(out.contains("t-0  migrate floop (1 of 3)"), "{out}");
     assert!(out.contains("t-1  floop guard (0 of 1)"), "{out}");
 
+    // a multi-line body rides the json face whole, 'body' its name
+    assert!(
+        sac(&[
+            "comment",
+            "t-1",
+            "floop guards the door\nthe second line holds the detail"
+        ])
+        .0
+    );
+    let (ok, out, _) = sac(&["search", "--json", "guards"]);
+    assert!(ok, "{out}");
+    let json: Value = serde_json::from_str(&out).expect("the json face parses");
+    assert_eq!(
+        json["groups"][0]["records"][0]["body"],
+        "floop guards the door\nthe second line holds the detail"
+    );
+
+    // total zero says so in one line and exits clean, terms or facets
+    let (ok, out, _) = sac(&["search", "#99999"]);
+    assert!(ok, "{out}");
+    assert_eq!(out.trim_end(), "no matches (#99999)");
+    let (ok, out, _) = sac(&["search", "by:nobody"]);
+    assert!(ok, "{out}");
+    assert_eq!(out.trim_end(), "no matches (by:nobody)");
+
     // the anchor window reads the log's own rows
     let (ok, out, _) = sac(&["search", "#1", "-C", "1"]);
     assert!(ok, "{out}");
@@ -1219,10 +1244,120 @@ fn search_reads_the_record_through_the_cli_face() {
         "{out}"
     );
 
-    // an empty query refuses at the grammar door
+    // an empty query refuses at the grammar door, naming the moves
     let (ok, _, err) = sac(&["search"]);
     assert!(!ok);
     assert!(err.contains("give at least one term"), "{err}");
+    assert!(err.contains("the moves"), "{err}");
+    assert!(err.contains("'#907' -C 3"), "{err}");
+
+    // show opens records in the thread view's body format, either face;
+    // the whole body renders, reflowed at the thread's width
+    let (ok, out, _) = sac(&["show", "#5"]);
+    assert!(ok, "{out}");
+    assert_eq!(
+        out.trim_end(),
+        "#5  pi\n  floop guards the door the second line holds the detail"
+    );
+    let (ok, out, _) = sac(&["show", "c-5"]);
+    assert!(ok, "{out}");
+    assert!(out.starts_with("#5  pi"), "{out}");
+
+    // several ids render each, threads and records in one call
+    let (ok, out, _) = sac(&["show", "t-1", "#1"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("t-1  open  floop guard"), "{out}");
+    assert!(out.contains("#1  pi"), "{out}");
+
+    // a positional id that parses but points at nothing renderable refuses
+    let (ok, _, err) = sac(&["show", "#99999"]);
+    assert!(!ok);
+    assert!(
+        err.contains("#99999 is not a comment or a task birth"),
+        "{err}"
+    );
+    let (ok, _, err) = sac(&["show", "bogus"]);
+    assert!(!ok);
+    assert!(
+        err.contains("'bogus' is not an id (expected t-<n>, #<seq>, or c-<seq>)"),
+        "{err}"
+    );
+
+    // the piped face: one id per line, failures skip with a note
+    let pipe = |input: &str, args: &[&str]| {
+        use std::io::Write as _;
+        use std::process::Stdio;
+        let mut child = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .arg("--offline")
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn sac");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin pipes")
+            .write_all(input.as_bytes())
+            .expect("feed stdin");
+        let out = child.wait_with_output().expect("wait sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (ok, _, err) = pipe("", &["show", "t-0", "--stdin"]);
+    assert!(!ok);
+    assert!(
+        err.contains("ids as arguments or --stdin, not both"),
+        "{err}"
+    );
+
+    // empty input is silence, exit 0
+    let (ok, out, _) = pipe("", &["show", "--stdin"]);
+    assert!(ok, "{out}");
+    assert_eq!(out, "");
+
+    // blank lines skip silently; bad ids skip with a note; good ids render
+    let (ok, out, _) = pipe("\n\nbogus\nt-0 receipt\n#1\n", &["show", "--stdin"]);
+    assert!(ok, "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(
+        lines.contains(
+            &"skipped 'bogus': 'bogus' is not an id (expected t-<n>, #<seq>, or c-<seq>)"
+        ),
+        "{out}"
+    );
+    // a receipt's pointer is not an id; the pipe says so and moves on
+    assert!(
+        out.contains("skipped 't-0 receipt': 't-0 receipt' is not a task id"),
+        "{out}"
+    );
+    assert!(lines.contains(&"#1  pi"), "{out}");
+    assert!(lines.contains(&"  the floop migration proceeds"), "{out}");
+
+    // the pipe chain runs end to end: json pointers feed show
+    let (ok, out, _) = sac(&["search", "--json", "floop"]);
+    assert!(ok, "{out}");
+    let json: Value = serde_json::from_str(&out).expect("the json face parses");
+    let feed = json["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .flat_map(|g| g["records"].as_array().expect("records"))
+        .filter_map(|r| r["pointer"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (ok, out, _) = pipe(&format!("{feed}\n"), &["show", "--stdin"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("t-0  delivered  migrate floop"), "{out}");
+    assert!(out.contains("#1  pi"), "{out}");
+    assert!(out.contains("skipped 't-0 receipt'"), "{out}");
 }
 
 #[test]
