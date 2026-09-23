@@ -202,10 +202,12 @@ line each, in record order; `sac show` opens any pointer.
 - **Read the neighborhood**: `sac search '#907' -C 3` anchors on that
   record and shows it plus three before and after, one line each.
 - **Read whole records**: search shows one matched line; the pointers
-  open in `sac show` — `t-N` a whole thread, `#N` or `c-N` a single
-  record in the thread view's body format, several ids in one call or
-  one per line through `--stdin` (blank and invalid lines are skipped
-  with a note). The pipe reads end to end:
+  open in `sac show` — raw ids show the event, `t-N` shows the task
+  plus thread. A comment renders as its block, a task's birth as its
+  header and relation (`birth of t-27 (parent t-19)`), a thread
+  whole. Several ids in one call, or one per line through `--stdin`
+  (blank and invalid lines are skipped with a note). The pipe reads
+  end to end:
   `sac search telemetry --json | jq -r '.groups[].records[].pointer' | sac show --stdin`.
 
 Pointers stay pointers: a receipt's address is its task (`t-90

@@ -1263,6 +1263,16 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(ok, "{out}");
     assert!(out.starts_with("#5  pi"), "{out}");
 
+    // a birth renders as itself: header and relation, never the thread
+    // behind it — the relation names t-N, t-N opens the thread
+    assert!(sac(&["create", "task", "guard child", "--parent", "t-1"]).0);
+    let (ok, out, _) = sac(&["show", "#6"]);
+    assert!(ok, "{out}");
+    assert_eq!(out.trim_end(), "#6  task  pi\nbirth of t-2 (parent t-1)");
+    let (ok, out, _) = sac(&["show", "#0"]);
+    assert!(ok, "{out}");
+    assert_eq!(out.trim_end(), "#0  task  pi\nbirth of t-0");
+
     // several ids render each, threads and records in one call
     let (ok, out, _) = sac(&["show", "t-1", "#1"]);
     assert!(ok, "{out}");
@@ -1276,6 +1286,10 @@ fn search_reads_the_record_through_the_cli_face() {
         err.contains("#99999 is not a comment or a task birth"),
         "{err}"
     );
+    // a record that is neither a comment nor a birth refuses the same way
+    let (ok, _, err) = sac(&["show", "#3"]);
+    assert!(!ok);
+    assert!(err.contains("#3 is not a comment or a task birth"), "{err}");
     let (ok, _, err) = sac(&["show", "bogus"]);
     assert!(!ok);
     assert!(
@@ -1355,8 +1369,11 @@ fn search_reads_the_record_through_the_cli_face() {
         .join("\n");
     let (ok, out, _) = pipe(&format!("{feed}\n"), &["show", "--stdin"]);
     assert!(ok, "{out}");
-    assert!(out.contains("t-0  delivered  migrate floop"), "{out}");
-    assert!(out.contains("#1  pi"), "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    // birth pointers render their event; the thread stays behind t-N
+    assert!(lines.contains(&"#0  task  pi"), "{out}");
+    assert!(lines.contains(&"birth of t-0"), "{out}");
+    assert!(lines.contains(&"#1  pi"), "{out}");
     assert!(out.contains("skipped 't-0 receipt'"), "{out}");
 }
 

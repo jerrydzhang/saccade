@@ -129,10 +129,11 @@ enum Cmd {
     /// Steer a task's live run at its next turn boundary; with no run
     /// living, the steer stands on the thread as intent
     Steer { id: String, body: String },
-    /// Everything about tasks and records: whole threads (t-<n>) or
-    /// single comments (#<seq> or c-<seq>), many at once
+    /// Everything about tasks and records, many at once; raw ids show
+    /// the event, t-<n> shows the task plus its thread
     Show {
-        /// Ids to open, in any mix: t-<n> threads, #<seq> or c-<seq> comments
+        /// Ids in any mix: #<seq> or c-<seq> a comment or a task's birth,
+        /// t-<n> a whole thread
         #[arg(required_unless_present = "stdin")]
         ids: Vec<String>,
         /// Read one id per line from stdin instead of arguments; blank
@@ -901,9 +902,10 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
     Err(not_an_id())
 }
 
-/// Render one id: a thread whole, or a record in the thread view's
-/// body format — a comment as its block, a task's birth as the thread
-/// it birthed.
+/// Render one id: a thread whole, or a record as itself — a comment
+/// as its block, a task's birth as the literal event (header and
+/// relation, no thread substitution: the relation names t-N, and the
+/// taught law does the rest).
 fn render_id(world: &World, token: &str) -> Result<String, Fail> {
     match parse_show_id(token)? {
         ShowId::Thread(id) => render_show(world, id),
@@ -912,7 +914,17 @@ fn render_id(world: &World, token: &str) -> Result<String, Fail> {
                 return Ok(comment_block(&line).join("\n"));
             }
             if let Some(task) = world.task_born_at(id.0) {
-                return render_show(world, task);
+                let ctx = &world.tasks[task.0];
+                let parent = task_view(world, task)
+                    .and_then(|v| v.parent)
+                    .map(|p| format!(" (parent {p})"))
+                    .unwrap_or_default();
+                return Ok(format!(
+                    "#{}  task  {}\nbirth of t-{}{parent}",
+                    ctx.birth.0,
+                    ctx.birth_actor.as_str(),
+                    task.0
+                ));
             }
             Err(Fail::Usage(format!(
                 "#{} is not a comment or a task birth",
