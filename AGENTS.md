@@ -165,7 +165,7 @@ Rules:
   the record, not `///` blocks; narration of the next ten lines gets removed.
 - Fixture data reads as narrative: `implement foo`, `migrate floop`, not
   `test task 2`. The log is a story even in tests.
-- Keep the suite green (121 unit + 64 integration at time of writing) and
+- Keep the suite green (123 unit + 64 integration at time of writing) and
   honest:
   a failing suite from a fixture change means the fixture changed a contract
   — find out which before editing assertions.
