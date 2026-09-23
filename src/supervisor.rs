@@ -250,9 +250,11 @@ pub fn runnable_demands(world: &World) -> Vec<CommentId> {
 }
 
 /// Close every run the world says is active but this server does not
-/// own: the boot reconciliation. Settle-as-found — the worktree's
-/// actual HEAD is the truth, never a guess about a dead process.
-pub fn recover(app: &AppState) {
+/// own: the boot reconciliation. Settle-as-found — the worktree's HEAD
+/// is the truth while the worktree lives; a worktree deleted under the
+/// deletion law settles at the recorded checkpoint, and a checkpoint
+/// nothing retains settles naming the loss.
+pub fn recover(app: &AppState, repo_root: &std::path::Path) {
     let orphans = match app.snapshot() {
         Ok(s) => s
             .world
@@ -267,7 +269,7 @@ pub fn recover(app: &AppState) {
         }
     };
     for task in orphans {
-        match app.with_conn(|conn| runner::close_as_found(conn, task)) {
+        match app.with_conn(|conn| runner::close_as_found(conn, repo_root, task)) {
             Ok(Ok(note)) => info!("{note}"),
             Ok(Err(e)) => warn!(task = task.0, "recovery refused, the run stays active: {e}"),
             Err(e) => warn!(task = task.0, "recovery lost the writer: {e}"),
@@ -440,17 +442,18 @@ fn spawn_run(app: AppState, config: RunnerConfig, demand: CommentId) {
             return;
         }
 
-        let settled = match app.with_conn(|conn| runner::close(conn, prepared.task)) {
-            Ok(Ok(_)) => true,
-            Ok(Err(e)) => {
-                warn!(
-                    incarnation = prepared.incarnation.0.0,
-                    "close failed; the run stays active for recovery: {e}"
-                );
-                false
-            }
-            Err(_) => false,
-        };
+        let settled =
+            match app.with_conn(|conn| runner::close(conn, &config.repo_root, prepared.task)) {
+                Ok(Ok(_)) => true,
+                Ok(Err(e)) => {
+                    warn!(
+                        incarnation = prepared.incarnation.0.0,
+                        "close failed; the run stays active for recovery: {e}"
+                    );
+                    false
+                }
+                Err(_) => false,
+            };
 
         // the settle freed the task; whatever queued behind it fires now
         if settled {
