@@ -11,7 +11,7 @@ use crate::views::{
     RefTarget, RibbonMark, ShowView, ThreadItem, ThreadView,
 };
 use crate::{CommentId, CommentKind, RecordId, Target, TaskId};
-use latex2mathml::{DisplayStyle, latex_to_mathml};
+use math_core::{LatexToMathML, MathDisplay};
 use pulldown_cmark::{Alignment, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -803,15 +803,17 @@ fn http_s(dest: &str) -> bool {
 /// markup beyond the crate's own vocabulary — renders the literal
 /// source, the honest-miss shape artifacts already use.
 fn math_html(src: &str, fence: &str) -> String {
-    match latex_to_mathml(src, DisplayStyle::Inline) {
-        Ok(m) if crate_authored(&m) => m,
+    let converted = LatexToMathML::new(Default::default())
+        .ok()
+        .and_then(|c| c.convert_with_local_counter(src, MathDisplay::Inline).ok());
+    match converted {
+        Some(m) if crate_authored(&m) => m,
         _ => format!("{fence}{}{fence}", esc(src)),
     }
 }
 
-/// latex2mathml interpolates its parse into markup without escaping;
-/// only its own tag vocabulary may pass, so any other tag shape is a
-/// miss, never markup.
+/// The converter renders author bytes into markup; only its own tag
+/// vocabulary may pass, so any other tag shape is a miss, never markup.
 fn crate_authored(mathml: &str) -> bool {
     const TAGS: &[&str] = &[
         "math",
@@ -820,6 +822,7 @@ fn crate_authored(mathml: &str) -> bool {
         "mo",
         "mtext",
         "mspace",
+        "mpadded",
         "mrow",
         "mfrac",
         "msqrt",
@@ -827,10 +830,13 @@ fn crate_authored(mathml: &str) -> bool {
         "msub",
         "msup",
         "msubsup",
+        "mmultiscripts",
+        "mprescripts",
         "mover",
         "munder",
         "munderover",
-        "mstyle",
+        "menclose",
+        "merror",
         "mtable",
         "mtr",
         "mtd",
@@ -2358,15 +2364,18 @@ mod tests {
     #[test]
     fn math_renders_to_inline_mathml_and_a_miss_keeps_the_source() {
         let html = prose_html_of(&prose_world(
-            "growth $x^2+1$ and $$\\frac{a}{b}$$ and a miss $\\begin{bogus}x$",
+            "growth $x^2+1$ and $$\\frac{a}{b}$$ and script $\\mathcal{L}[f]$ and $a < b$ and a miss $\\notacommand{x}$",
         ));
-        // both dollar forms render MathML, both inline
-        assert_eq!(html.matches("<math ").count(), 2, "{html}");
-        assert_eq!(html.matches("display=\"inline\"").count(), 2, "{html}");
+        // every dollar form renders MathML, inline by the absent display attribute
+        assert_eq!(html.matches("<math>").count(), 4, "{html}");
+        assert!(!html.contains("display=\"block\""), "{html}");
         assert!(html.contains("<msup>"), "{html}");
         assert!(html.contains("<mfrac>"), "{html}");
+        // working vocabulary: script letters and escaped comparisons render
+        assert!(html.contains("ℒ"), "{html}");
+        assert!(html.contains("<mo>&lt;</mo>"), "{html}");
         // the failed parse keeps its literal source
-        assert!(html.contains("$\\begin{bogus}x$"), "{html}");
+        assert!(html.contains("$\\notacommand{x}$"), "{html}");
     }
 
     #[test]
