@@ -649,9 +649,10 @@ async fn a_cancel_aborts_the_session_through_the_protocol() {
 }
 
 /// The real-pi smoke: the pinned binary through the subset the stub
-/// defines — prompt to agent_start..agent_settled, steer, abort — with
-/// the ask extension loaded. Runs keyless: a failed model call still
-/// completes the event arc.
+/// defines — prompt to agent_start, steer acked mid-turn, abort closing
+/// the arc, agent_settled — with the ask extension loaded. Runs keyless
+/// and offline: the arc is driven, closing on the steer ack's abort,
+/// never waited out; the deadline only bounds a stalled pin.
 #[test]
 fn the_real_pi_smoke_validates_the_pin() {
     let Ok(pi) = runner::resolve_pi() else {
@@ -770,6 +771,15 @@ fn the_real_pi_smoke_validates_the_pin() {
                 }
                 if command == "steer" {
                     steer_ok = success;
+                    if success && !aborted {
+                        // the arc is driven, not waited out: the ack is
+                        // the mid-turn answer, and offline the abort is
+                        // the only settler there will ever be — so close
+                        // the arc now; the deadline bounds only a pin
+                        // that never acks
+                        aborted = true;
+                        send("{\"type\":\"abort\"}");
+                    }
                 }
                 if command == "abort" {
                     abort_ok = success;
