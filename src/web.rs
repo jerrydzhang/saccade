@@ -3,13 +3,16 @@
 //! over view types; fragments are sections, so the compose fetch swaps
 //! what the page itself renders. The @-compiler is the composer's input
 //! syntax over Commented events — the parse lives here, never in the
-//! record.
+//! record. So does the prose renderer: bodies, receipts, and refusal
+//! reasons parse as markdown with math on the way out, never in.
 
 use crate::views::{
     ArtifactLine, CommentLine, ForestRow, MarkKind, NextPanel, ProposalView, RIBBON_WINDOW_SECS,
     RefTarget, RibbonMark, ShowView, ThreadItem, ThreadView,
 };
 use crate::{CommentId, CommentKind, RecordId, Target, TaskId};
+use latex2mathml::{DisplayStyle, latex_to_mathml};
+use pulldown_cmark::{Alignment, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -508,7 +511,7 @@ pub fn thread_section(
     if let Some(receipt) = &f.show.receipt {
         s.push_str(&format!(
             "<div class=\"receipt\"><span class=\"xk\" style=\"color:#dac09a\">RECEIPT</span>\n<div class=\"nbody\">{}</div>\n</div>\n",
-            linkify(&esc(receipt), &f.refs, store),
+            prose_html(receipt, &f.refs, store),
         ));
     }
     // a delivered task renders its accept door: one form, one name, one
@@ -629,7 +632,7 @@ fn item_html(
                     s.push_str(&format!(
                         "<div class=\"nrow2 runrow\"><div class=\"nmeta\"><span class=\"xk\" style=\"color:#c4a6a8\">REFUSED</span><span class=\"nseq mono\">{}</span></div>\n<div class=\"nbody\">{}</div>\n</div>\n",
                         esc(&fmt_t(r.at)),
-                        linkify(&esc(&r.reason), refs, store),
+                        prose_html(&r.reason, refs, store),
                     ));
                 }
                 for r in replies {
@@ -698,7 +701,7 @@ fn node_html(
         tier = esc(&line.tier),
         actor = esc(&line.actor),
         time = esc(&fmt_t(line.born_at)),
-        body = linkify(&esc(&line.body), refs, store),
+        body = prose_html(&line.body, refs, store),
     )
 }
 
@@ -784,6 +787,198 @@ fn linkify(escaped: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactSto
         }
         out.push(chars[i]);
         i += 1;
+    }
+    out
+}
+
+/// The one scheme door for a markdown link: http or https renders as a
+/// link; every other scheme — and no scheme — renders as words.
+fn http_s(dest: &str) -> bool {
+    let d = dest.as_bytes();
+    let head = |p: &[u8]| d.len() >= p.len() && d[..p.len()].eq_ignore_ascii_case(p);
+    head(b"http://") || head(b"https://")
+}
+
+/// Math renders to inline MathML Core; a parse that fails — or
+/// markup beyond the crate's own vocabulary — renders the literal
+/// source, the honest-miss shape artifacts already use.
+fn math_html(src: &str, fence: &str) -> String {
+    match latex_to_mathml(src, DisplayStyle::Inline) {
+        Ok(m) if crate_authored(&m) => m,
+        _ => format!("{fence}{}{fence}", esc(src)),
+    }
+}
+
+/// latex2mathml interpolates its parse into markup without escaping;
+/// only its own tag vocabulary may pass, so any other tag shape is a
+/// miss, never markup.
+fn crate_authored(mathml: &str) -> bool {
+    const TAGS: &[&str] = &[
+        "math",
+        "mi",
+        "mn",
+        "mo",
+        "mtext",
+        "mspace",
+        "mrow",
+        "mfrac",
+        "msqrt",
+        "mroot",
+        "msub",
+        "msup",
+        "msubsup",
+        "mover",
+        "munder",
+        "munderover",
+        "mstyle",
+        "mtable",
+        "mtr",
+        "mtd",
+    ];
+    let b = mathml.as_bytes();
+    let mut i = 0;
+    while let Some(at) = b[i..].iter().position(|&c| c == b'<') {
+        let open = i + at + 1;
+        let open = if open < b.len() && b[open] == b'/' {
+            open + 1
+        } else {
+            open
+        };
+        let end = b[open..]
+            .iter()
+            .position(|&c| !c.is_ascii_alphanumeric())
+            .map_or(b.len(), |p| open + p);
+        let name = std::str::from_utf8(&b[open..end]).unwrap_or("");
+        if !TAGS.contains(&name) {
+            return false;
+        }
+        i = end;
+    }
+    true
+}
+
+/// The prose renderer over raw bytes: CommonMark with tables and
+/// math, the same law as the @-compiler and linkify — the parse lives
+/// here, never in the record. Text events escape and resolve '#N'
+/// mentions; code spans and code blocks are verbatim; raw HTML never
+/// passes, rendering as the words it was; a link renders only on the
+/// http(s) schemes with rel=noopener; soft breaks are whitespace and
+/// hard breaks the CommonMark kinds.
+fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStore) -> String {
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES | Options::ENABLE_MATH);
+    let mut out = String::with_capacity(raw.len());
+    let mut in_code = false;
+    let mut in_head = false;
+    let mut link_open = false;
+    let mut aligns: Vec<Alignment> = Vec::new();
+    let mut col = 0;
+    for ev in Parser::new_ext(raw, opts) {
+        match ev {
+            MdEvent::Start(tag) => match tag {
+                Tag::Paragraph => out.push_str("<p>"),
+                Tag::Heading { level, .. } => out.push_str(&format!("<h{}>", level as u8)),
+                Tag::BlockQuote(_) => out.push_str("<blockquote>\n"),
+                Tag::CodeBlock(_) => {
+                    in_code = true;
+                    out.push_str("<pre><code>");
+                }
+                Tag::List(None) => out.push_str("<ul>\n"),
+                Tag::List(Some(1)) => out.push_str("<ol>\n"),
+                Tag::List(Some(start)) => out.push_str(&format!("<ol start=\"{start}\">\n")),
+                Tag::Item => out.push_str("<li>"),
+                Tag::Table(align) => {
+                    aligns = align;
+                    out.push_str("<table>\n");
+                }
+                Tag::TableHead => {
+                    in_head = true;
+                    col = 0;
+                    out.push_str("<thead><tr>");
+                }
+                Tag::TableRow => {
+                    col = 0;
+                    out.push_str("<tr>");
+                }
+                Tag::TableCell => {
+                    let style = match aligns.get(col).copied().unwrap_or(Alignment::None) {
+                        Alignment::None => "",
+                        Alignment::Left => " style=\"text-align:left\"",
+                        Alignment::Center => " style=\"text-align:center\"",
+                        Alignment::Right => " style=\"text-align:right\"",
+                    };
+                    let cell = if in_head {
+                        format!("<th{style}>")
+                    } else {
+                        format!("<td{style}>")
+                    };
+                    out.push_str(&cell);
+                    col += 1;
+                }
+                Tag::Emphasis => out.push_str("<em>"),
+                Tag::Strong => out.push_str("<strong>"),
+                Tag::Link {
+                    dest_url, title, ..
+                } if http_s(&dest_url) => {
+                    link_open = true;
+                    let t = if title.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" title=\"{}\"", esc(&title))
+                    };
+                    out.push_str(&format!(
+                        "<a href=\"{}\" rel=\"noopener\"{t}>",
+                        esc(&dest_url)
+                    ));
+                }
+                _ => {}
+            },
+            MdEvent::End(end) => match end {
+                TagEnd::Paragraph => out.push_str("</p>\n"),
+                TagEnd::Heading(level) => out.push_str(&format!("</h{}>\n", level as u8)),
+                TagEnd::BlockQuote(_) => out.push_str("</blockquote>\n"),
+                TagEnd::CodeBlock => {
+                    in_code = false;
+                    out.push_str("</code></pre>\n");
+                }
+                TagEnd::List(ordered) => out.push_str(if ordered { "</ol>\n" } else { "</ul>\n" }),
+                TagEnd::Item => out.push_str("</li>\n"),
+                TagEnd::Table => {
+                    aligns.clear();
+                    out.push_str("</table>\n");
+                }
+                TagEnd::TableHead => {
+                    in_head = false;
+                    out.push_str("</tr></thead>\n");
+                }
+                TagEnd::TableRow => out.push_str("</tr>\n"),
+                TagEnd::TableCell => {
+                    out.push_str(if in_head { "</th>" } else { "</td>" });
+                }
+                TagEnd::Emphasis => out.push_str("</em>"),
+                TagEnd::Strong => out.push_str("</strong>"),
+                TagEnd::Link if link_open => {
+                    link_open = false;
+                    out.push_str("</a>");
+                }
+                _ => {}
+            },
+            MdEvent::Text(t) => {
+                if in_code {
+                    out.push_str(&esc(&t));
+                } else {
+                    out.push_str(&linkify(&esc(&t), refs, store));
+                }
+            }
+            MdEvent::Code(c) => out.push_str(&format!("<code>{}</code>", esc(&c))),
+            MdEvent::InlineMath(src) => out.push_str(&math_html(&src, "$")),
+            MdEvent::DisplayMath(src) => out.push_str(&math_html(&src, "$$")),
+            MdEvent::Html(h) | MdEvent::InlineHtml(h) => out.push_str(&esc(&h)),
+            MdEvent::SoftBreak => out.push('\n'),
+            MdEvent::HardBreak => out.push_str("<br />\n"),
+            MdEvent::Rule => out.push_str("<hr>\n"),
+            _ => {}
+        }
     }
     out
 }
@@ -1003,7 +1198,34 @@ header .brand {
 .nwho.human { color: #c4a6a8; }
 .nwho.agent { color: #6d6562; }
 .nseq { font-size: 11px; color: #4a4543; }
-.nbody { font-size: 13.5px; line-height: 1.55; color: #d4ceca; white-space: pre-wrap; overflow-wrap: anywhere; }
+.nbody { font-size: 13.5px; line-height: 1.55; color: #d4ceca; overflow-wrap: anywhere; }
+/* markdown children: restrained to the thread's scale */
+.nbody p { margin: 0 0 .45em; }
+.nbody > :last-child { margin-bottom: 0; }
+.nbody h1, .nbody h2, .nbody h3, .nbody h4, .nbody h5, .nbody h6 {
+  font: 650 14px/1.35 "Noto Sans", system-ui, sans-serif; color: #e8e2dd; margin: .8em 0 .35em;
+}
+.nbody h1 { font-size: 16px; }
+.nbody h2 { font-size: 15px; }
+.nbody h1:first-child, .nbody h2:first-child, .nbody h3:first-child,
+.nbody h4:first-child, .nbody h5:first-child, .nbody h6:first-child { margin-top: 0; }
+.nbody ul, .nbody ol { margin: .35em 0; padding-left: 1.5em; }
+.nbody li { margin: .12em 0; }
+.nbody li > p { margin: .12em 0; }
+.nbody blockquote {
+  margin: .45em 0; padding: .05em .9em; border-left: 2px solid #2e2a28; color: #b3aca6;
+}
+.nbody code {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px; background: #1e1c1a; border-radius: 3px; padding: .1em .35em;
+}
+.nbody pre { margin: .45em 0; padding: 7px 10px; background: #1e1c1a; border-radius: 4px; overflow-x: auto; }
+.nbody pre code { background: none; padding: 0; font-size: 12px; }
+.nbody table { border-collapse: collapse; margin: .45em 0; font-size: 12.5px; }
+.nbody th, .nbody td { border: 1px solid #2e2a28; padding: 3px 9px; }
+.nbody th { color: #b3aca6; background: #1e1c1a; }
+.nbody hr { border: none; border-top: 1px solid #2e2a28; margin: .9em 0; }
+.nbody math { font-size: 106%; }
 
 /* artifacts: figure at position, card for mentions */
 .arow { padding-top: 2px; }
@@ -2094,6 +2316,113 @@ mod tests {
         );
         assert!(!html.contains("<b>"), "{html}");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ---- the prose renderer: markdown with math ----
+
+    /// One comment whose body exercises the prose renderer's doors.
+    fn prose_world(body: &str) -> World {
+        World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                1,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new(body.into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+        ])
+        .unwrap()
+    }
+
+    fn prose_html_of(world: &World) -> String {
+        thread_section(
+            &focus_of(world, 0),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        )
+    }
+
+    #[test]
+    fn math_renders_to_inline_mathml_and_a_miss_keeps_the_source() {
+        let html = prose_html_of(&prose_world(
+            "growth $x^2+1$ and $$\\frac{a}{b}$$ and a miss $\\begin{bogus}x$",
+        ));
+        // both dollar forms render MathML, both inline
+        assert_eq!(html.matches("<math ").count(), 2, "{html}");
+        assert_eq!(html.matches("display=\"inline\"").count(), 2, "{html}");
+        assert!(html.contains("<msup>"), "{html}");
+        assert!(html.contains("<mfrac>"), "{html}");
+        // the failed parse keeps its literal source
+        assert!(html.contains("$\\begin{bogus}x$"), "{html}");
+    }
+
+    #[test]
+    fn mentions_resolve_inside_emphasis() {
+        let html = prose_html_of(&prose_world("the verdict, *per #1*, stands"));
+        assert!(
+            html.contains("<em>per <a href=\"/t/0#c-1\">#1</a></em>"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn code_spans_stay_verbatim() {
+        let html = prose_html_of(&prose_world("the token `#1` stays put, but #1 resolves"));
+        assert!(html.contains("<code>#1</code>"), "{html}");
+        assert!(
+            html.contains("but <a href=\"/t/0#c-1\">#1</a> resolves"),
+            "{html}"
+        );
+        assert_eq!(html.matches("/t/0#c-1").count(), 1, "{html}");
+    }
+
+    #[test]
+    fn links_render_only_on_http_s() {
+        let html = prose_html_of(&prose_world(
+            "[guide](https://example.net/spec) not [trap](javascript:alert(1)) nor [file](ftp://h/x) and <https://plain.example>",
+        ));
+        // the http(s) link and the autolink carry rel=noopener
+        assert!(
+            html.contains("<a href=\"https://example.net/spec\" rel=\"noopener\">guide</a>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<a href=\"https://plain.example\" rel=\"noopener\">"),
+            "{html}"
+        );
+        // every other scheme stays words: no anchor, no url in the page
+        assert!(html.contains("not trap nor file and"), "{html}");
+        assert!(!html.contains("javascript:"), "{html}");
+        assert!(!html.contains("ftp://"), "{html}");
+        assert_eq!(html.matches("rel=\"noopener\"").count(), 2, "{html}");
+    }
+
+    #[test]
+    fn raw_html_stays_escaped_words() {
+        let html = prose_html_of(&prose_world(
+            "the <b>bold</b> verdict and <img src=x onerror=alert(1)> stays",
+        ));
+        assert!(
+            html.contains(
+                "the &lt;b&gt;bold&lt;/b&gt; verdict and &lt;img src=x onerror=alert(1)&gt; stays"
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("<img"), "{html}");
+        assert!(!html.contains("<b>"), "{html}");
     }
 
     #[test]
