@@ -807,7 +807,15 @@ fn math_html(src: &str, fence: &str) -> String {
         .ok()
         .and_then(|c| c.convert_with_local_counter(src, MathDisplay::Inline).ok());
     match converted {
-        Some(m) if crate_authored(&m) => m,
+        Some(m) if crate_authored(&m) => {
+            // the return path: a click on the formula copies these bytes
+            let raw = esc(src);
+            m.replacen(
+                "<math>",
+                &format!("<math data-raw=\"{raw}\" title=\"{raw}\">"),
+                1,
+            )
+        }
         _ => format!("{fence}{}{fence}", esc(src)),
     }
 }
@@ -875,6 +883,7 @@ fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStor
     opts.insert(Options::ENABLE_TABLES | Options::ENABLE_MATH);
     let mut out = String::with_capacity(raw.len());
     let mut in_code = false;
+    let mut code_buf = String::new();
     let mut in_head = false;
     let mut link_open = false;
     let mut aligns: Vec<Alignment> = Vec::new();
@@ -887,7 +896,7 @@ fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStor
                 Tag::BlockQuote(_) => out.push_str("<blockquote>\n"),
                 Tag::CodeBlock(_) => {
                     in_code = true;
-                    out.push_str("<pre><code>");
+                    code_buf.clear();
                 }
                 Tag::List(None) => out.push_str("<ul>\n"),
                 Tag::List(Some(1)) => out.push_str("<ol>\n"),
@@ -945,7 +954,12 @@ fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStor
                 TagEnd::BlockQuote(_) => out.push_str("</blockquote>\n"),
                 TagEnd::CodeBlock => {
                     in_code = false;
-                    out.push_str("</code></pre>\n");
+                    // the whole block's bytes ride the pre for the copy button
+                    out.push_str(&format!(
+                        "<pre data-raw=\"{}\"><code>{}</code></pre>\n",
+                        esc(&code_buf),
+                        esc(&code_buf)
+                    ));
                 }
                 TagEnd::List(ordered) => out.push_str(if ordered { "</ol>\n" } else { "</ul>\n" }),
                 TagEnd::Item => out.push_str("</li>\n"),
@@ -971,7 +985,7 @@ fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStor
             },
             MdEvent::Text(t) => {
                 if in_code {
-                    out.push_str(&esc(&t));
+                    code_buf.push_str(&t);
                 } else {
                     out.push_str(&linkify(&esc(&t), refs, store));
                 }
@@ -1087,6 +1101,39 @@ if (saved !== null) {
     if (f) f.scrollTop = Number(saved);
   });
 }
+
+// the return path: rendered math and code carry their author bytes in
+// data-raw; a click on a formula copies them whole, and code blocks
+// get a corner button — clicks inside code stay free to anchor partial
+// selections. Nothing is sent anywhere; the clipboard is the only exit.
+function sacCopy(text, done) {
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+  else done(false);
+}
+document.addEventListener('click', (e) => {
+  const m = e.target.closest && e.target.closest('math[data-raw]');
+  if (!m) return;
+  sacCopy(m.getAttribute('data-raw'), (ok) => {
+    m.classList.add(ok ? 'copied' : 'copyfail');
+    setTimeout(() => { m.classList.remove('copied'); m.classList.remove('copyfail'); }, 900);
+  });
+});
+document.querySelectorAll('pre[data-raw]').forEach((pre) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'copybtn';
+  b.title = 'copy code';
+  b.setAttribute('aria-label', 'copy code');
+  b.textContent = '\u29C9';
+  b.addEventListener('click', () => {
+    sacCopy(pre.getAttribute('data-raw'), (ok) => {
+      b.textContent = ok ? '\u2713' : '\u2717';
+      setTimeout(() => { b.textContent = '\u29C9'; }, 900);
+    });
+  });
+  pre.appendChild(b);
+});
 "#;
 
 pub(crate) const STYLE: &str = r#"
@@ -1225,8 +1272,19 @@ header .brand {
   font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 12px; background: #1e1c1a; border-radius: 3px; padding: .1em .35em;
 }
-.nbody pre { margin: .45em 0; padding: 7px 10px; background: #1e1c1a; border-radius: 4px; overflow-x: auto; }
+.nbody pre { margin: .45em 0; padding: 7px 10px; background: #1e1c1a; border-radius: 4px; overflow-x: auto; position: relative; }
 .nbody pre code { background: none; padding: 0; font-size: 12px; }
+math[data-raw] { cursor: copy; }
+math.copied { background: #2c2825; border-radius: 3px; }
+math.copyfail { outline: 1px dashed #b08a8a; }
+.copybtn {
+  position: absolute; top: 4px; right: 4px;
+  padding: 1px 6px; border: 1px solid #3a3531; border-radius: 4px;
+  background: #262220; color: #a39c95;
+  font: 500 11px/1.4 "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  cursor: copy; opacity: 0;
+}
+pre:hover .copybtn, .copybtn:focus-visible { opacity: 1; }
 .nbody table { border-collapse: collapse; margin: .45em 0; font-size: 12.5px; }
 .nbody th, .nbody td { border: 1px solid #2e2a28; padding: 3px 9px; }
 .nbody th { color: #b3aca6; background: #1e1c1a; }
@@ -2367,15 +2425,21 @@ mod tests {
             "growth $x^2+1$ and $$\\frac{a}{b}$$ and script $\\mathcal{L}[f]$ and $a < b$ and a miss $\\notacommand{x}$",
         ));
         // every dollar form renders MathML, inline by the absent display attribute
-        assert_eq!(html.matches("<math>").count(), 4, "{html}");
+        assert_eq!(html.matches("<math data-raw=").count(), 4, "{html}");
         assert!(!html.contains("display=\"block\""), "{html}");
         assert!(html.contains("<msup>"), "{html}");
         assert!(html.contains("<mfrac>"), "{html}");
+        // the copy substrate: each formula carries its exact source bytes
+        assert!(
+            html.contains("<math data-raw=\"x^2+1\" title=\"x^2+1\">"),
+            "{html}"
+        );
         // working vocabulary: script letters and escaped comparisons render
         assert!(html.contains("ℒ"), "{html}");
         assert!(html.contains("<mo>&lt;</mo>"), "{html}");
-        // the failed parse keeps its literal source
+        // the failed parse keeps its literal source and carries no copy substrate
         assert!(html.contains("$\\notacommand{x}$"), "{html}");
+        assert!(!html.contains("notacommand{x}\""), "{html}");
     }
 
     #[test]
@@ -2396,6 +2460,20 @@ mod tests {
             "{html}"
         );
         assert_eq!(html.matches("/t/0#c-1").count(), 1, "{html}");
+    }
+
+    #[test]
+    fn code_blocks_carry_their_bytes_for_copy() {
+        let html = prose_html_of(&prose_world(
+            "build it:\n\n```\ncargo test --lib\nweb::tests\n```\n",
+        ));
+        // the block renders verbatim inside a pre that carries the exact bytes
+        assert!(
+            html.contains("<pre data-raw=\"cargo test --lib\nweb::tests\n\"><code>"),
+            "{html}"
+        );
+        // an inline code span stays a span: no copy substrate, no button home
+        assert!(!html.contains("span data-raw"), "{html}");
     }
 
     #[test]
