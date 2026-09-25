@@ -1107,9 +1107,24 @@ if (saved !== null) {
 // get a corner button — clicks inside code stay free to anchor partial
 // selections. Nothing is sent anywhere; the clipboard is the only exit.
 function sacCopy(text, done) {
+  // the legacy door: plain http off localhost has no async clipboard,
+  // and some engines refuse writeText even in a gesture — the
+  // synchronous path still works there
+  const legacy = () => {
+    const t = document.createElement('textarea');
+    t.value = text;
+    t.setAttribute('readonly', '');
+    t.style.position = 'fixed';
+    t.style.opacity = '0';
+    document.body.appendChild(t);
+    t.select();
+    const ok = document.execCommand('copy');
+    t.remove();
+    done(ok);
+  };
   if (navigator.clipboard && navigator.clipboard.writeText)
-    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
-  else done(false);
+    navigator.clipboard.writeText(text).then(() => done(true), legacy);
+  else legacy();
 }
 document.addEventListener('click', (e) => {
   const m = e.target.closest && e.target.closest('math[data-raw]');
