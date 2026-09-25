@@ -19,6 +19,7 @@ use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::store::{Context, RecordId, Tier, World};
 use crate::supervisor;
+use crate::web;
 use crate::{Command, Reject};
 
 enum ServerState {
@@ -45,6 +46,9 @@ pub struct AppState {
     /// The artifact store the bytes door serves from; a server that
     /// was not told a repo root has none.
     artifacts: Option<std::path::PathBuf>,
+    /// The serving repo's name, when boot resolved a root; the
+    /// console's chrome names its instance by it.
+    repo_name: Option<web::RepoName>,
 }
 
 pub struct Snapshot {
@@ -78,6 +82,7 @@ impl AppState {
             runs: supervisor::LiveRuns::default(),
             attempts: Attempts::beside(db_path),
             artifacts: None,
+            repo_name: None,
         })
     }
 
@@ -96,6 +101,18 @@ impl AppState {
     pub fn with_artifacts(mut self, dir: std::path::PathBuf) -> Self {
         self.artifacts = Some(dir);
         self
+    }
+
+    /// Name the serving repo; the console's chrome names its
+    /// instance by it.
+    pub fn with_repo_name(mut self, name: web::RepoName) -> Self {
+        self.repo_name = Some(name);
+        self
+    }
+
+    /// The serving repo's name, when a serve resolved one.
+    pub fn repo_name(&self) -> Option<&web::RepoName> {
+        self.repo_name.as_ref()
     }
 
     /// The artifact store's home, when this server knows one.

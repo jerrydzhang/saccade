@@ -42,19 +42,21 @@ pub async fn run(
         other => other,
     };
     let server_url = format!("http://{host}:{port}");
+    let repo_name = web::RepoName::of(&repo_root);
     let state = match crate::supervisor::RunnerConfig::serving(
         repo_root.clone(),
         actor,
         &server_url,
     ) {
         Some(runner) => {
-            let state = AppState::with_runner(db_path, runner)?;
+            let state = AppState::with_runner(db_path, runner)?.with_repo_name(repo_name);
             info!(%server_url, "demands will fire runs; boot scan next");
             state
         }
         None => {
-            let state =
-                AppState::open(db_path)?.with_artifacts(crate::paths::artifacts_at(&repo_root));
+            let state = AppState::open(db_path)?
+                .with_artifacts(crate::paths::artifacts_at(&repo_root))
+                .with_repo_name(repo_name);
             warn!(
                 "no pinned executor: SACCADE_PI_PATH was not baked at build and SACCADE_PI is unset; \
                  demands queue but never fire"
@@ -199,7 +201,7 @@ fn respond_get(req: &Req, app: &AppState) -> Response {
         Route::Home => console(req, app, None),
         Route::Task(n) => console(req, app, Some(n)),
         Route::Artifact(hash) => artifact_bytes(app, &hash),
-        Route::NotFound => page(404, "nothing here — try /"),
+        Route::NotFound => page(app, 404, "nothing here — try /"),
     }
 }
 
@@ -209,14 +211,14 @@ fn respond_get(req: &Req, app: &AppState) -> Response {
 fn artifact_bytes(app: &AppState, hash: &str) -> Response {
     let valid = hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !valid {
-        return page(404, "nothing here — try /");
+        return page(app, 404, "nothing here — try /");
     }
     let Some(dir) = app.artifacts_dir() else {
-        return page(404, "artifact unavailable");
+        return page(app, 404, "artifact unavailable");
     };
     let path = dir.join(hash);
     let Ok(bytes) = std::fs::read(&path) else {
-        return page(404, "artifact unavailable");
+        return page(app, 404, "artifact unavailable");
     };
     let content_type = web::sniff_image(&bytes).unwrap_or("application/octet-stream");
     let mut response = (StatusCode::OK, bytes).into_response();
@@ -235,6 +237,7 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
         Ok(s) => s,
         Err(degraded) => {
             return page(
+                app,
                 503,
                 &format!("world projection unavailable: {}", degraded.reason),
             );
@@ -243,7 +246,13 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
     let now = db::now_epoch();
     let focused = match focus_id.map(|n| focus(&snapshot.world, n)) {
         Some(Some(f)) => Some(f),
-        Some(None) => return page(404, &format!("no task t-{n}", n = focus_id.unwrap_or(0))),
+        Some(None) => {
+            return page(
+                app,
+                404,
+                &format!("no task t-{n}", n = focus_id.unwrap_or(0)),
+            );
+        }
         None => None,
     };
     let store = match app.artifacts_dir() {
@@ -262,6 +271,7 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
             ..Default::default()
         },
         store,
+        repo_name: app.repo_name().cloned(),
         now,
     };
     html(200, &web::page(&c))
@@ -285,20 +295,20 @@ fn focus(world: &crate::store::World, n: usize) -> Option<web::Focus> {
 
 fn respond_post(req: &Req, app: &AppState) -> Response {
     if cross_site(req.sec_fetch_site.as_deref()) {
-        return page(403, "cross-site POST refused");
+        return page(app, 403, "cross-site POST refused");
     }
     let fields = parse_form(&req.body);
     match parse_post(&req.url) {
         PostRoute::Compose => match form_field(&fields, "task").parse::<usize>() {
             Ok(n) => compose(req, app, n, &fields),
-            Err(_) => page(404, "no task named"),
+            Err(_) => page(app, 404, "no task named"),
         },
         PostRoute::Ruling(seq) => match proposal_task(app, seq) {
             Some(n) => rule(req, app, n, &fields, seq),
-            None => page(404, &format!("no open proposal #{seq}")),
+            None => page(app, 404, &format!("no open proposal #{seq}")),
         },
         PostRoute::Accept(n) => accept(req, app, n, &fields),
-        PostRoute::NotFound => page(404, "nothing here — try /"),
+        PostRoute::NotFound => page(app, 404, "nothing here — try /"),
     }
 }
 
@@ -348,7 +358,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
                         }
                         response
                     }
-                    None => page(404, &format!("no task t-{root}")),
+                    None => page(app, 404, &format!("no task t-{root}")),
                 }
             } else {
                 redirect(&format!("/t/{root}#c-{seq}"), first_claim.as_deref())
@@ -356,9 +366,9 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
         }
         Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
-            page(503, &format!("world projection unavailable: {reason}"))
+            page(app, 503, &format!("world projection unavailable: {reason}"))
         }
-        Err(ExecuteFail::Db(e)) => page(500, &format!("database: {e}")),
+        Err(ExecuteFail::Db(e)) => page(app, 500, &format!("database: {e}")),
     }
 }
 
@@ -394,9 +404,9 @@ fn rule(req: &Req, app: &AppState, n: usize, fields: &[(String, String)], seq: u
         }
         Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
-            page(503, &format!("world projection unavailable: {reason}"))
+            page(app, 503, &format!("world projection unavailable: {reason}"))
         }
-        Err(ExecuteFail::Db(e)) => page(500, &format!("database: {e}")),
+        Err(ExecuteFail::Db(e)) => page(app, 500, &format!("database: {e}")),
     }
 }
 
@@ -417,9 +427,9 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
         }
         Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
-            page(503, &format!("world projection unavailable: {reason}"))
+            page(app, 503, &format!("world projection unavailable: {reason}"))
         }
-        Err(ExecuteFail::Db(e)) => page(500, &format!("database: {e}")),
+        Err(ExecuteFail::Db(e)) => page(app, 500, &format!("database: {e}")),
     }
 }
 
@@ -483,7 +493,7 @@ fn console_reject(
     }
     let snapshot = match app.snapshot() {
         Ok(s) => s,
-        Err(_) => return page(503, "world projection unavailable"),
+        Err(_) => return page(app, 503, "world projection unavailable"),
     };
     let now = db::now_epoch();
     let c = web::Console {
@@ -503,6 +513,7 @@ fn console_reject(
             Some(dir) => web::ArtifactStore::at(dir.to_path_buf()),
             None => web::ArtifactStore::default(),
         },
+        repo_name: app.repo_name().cloned(),
         now,
     };
     html(400, &web::page(&c))
@@ -690,13 +701,20 @@ fn html(status: u16, body: &str) -> Response {
     response(status, body)
 }
 
-fn page(status: u16, msg: &str) -> Response {
+fn page(app: &AppState, status: u16, msg: &str) -> Response {
+    let title = app
+        .repo_name()
+        .map(|n| n.tab_title())
+        .unwrap_or_else(|| "saccade".to_string());
+    let favicon = app.repo_name().map(|n| web::favicon_link(n.hue));
     response(
         status,
         &format!(
-            "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade</title><style>{}</style></head>\n<body>\n<div class=\"err\">{} · <a href=\"/\">console</a></div>\n</body></html>\n",
+            "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{}</style></head>\n<body>\n<div class=\"err\">{} · <a href=\"/\">console</a></div>\n</body></html>\n",
             web::STYLE,
-            esc(msg)
+            esc(msg),
+            title = title,
+            favicon = favicon.unwrap_or_default(),
         ),
     )
 }
