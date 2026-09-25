@@ -298,6 +298,7 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
             None => page(404, &format!("no open proposal #{seq}")),
         },
         PostRoute::Accept(n) => accept(req, app, n, &fields),
+        PostRoute::Revise(seq) => revise(req, app, seq, &fields),
         PostRoute::NotFound => page(404, "nothing here — try /"),
     }
 }
@@ -421,6 +422,47 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
         }
         Err(ExecuteFail::Db(e)) => page(500, &format!("database: {e}")),
     }
+}
+
+/// The revise door: one comment, one body, one name. Identity is
+/// claimed at the act, the tier pinned human — the console revises
+/// any comment — and the 303 returns to the comment's home thread.
+fn revise(req: &Req, app: &AppState, seq: usize, fields: &[(String, String)]) -> Response {
+    let Some(root) = comment_root(app, seq) else {
+        return page(404, &format!("no comment #{}", seq));
+    };
+    let body = form_field(fields, "body");
+    if Prose::new(body.to_string()).is_err() {
+        return console_reject(req, app, root, fields, "a comment needs words");
+    }
+    let (context, first_claim) = match identity(req, fields) {
+        Ok(ok) => ok,
+        Err(msg) => return console_reject(req, app, root, fields, &msg),
+    };
+    let command = Command::ReviseComment {
+        id: crate::CommentId(RecordId(seq)),
+        body: Prose::new(body.to_string()).unwrap(),
+    };
+    match app.execute(&context, command, None, console_request(req)) {
+        Ok(_) => redirect(&format!("/t/{root}#c-{seq}"), first_claim.as_deref()),
+        Err(ExecuteFail::Reject(r)) => console_reject(req, app, root, fields, &reject_text(&r)),
+        Err(ExecuteFail::Degraded(reason)) => {
+            page(503, &format!("world projection unavailable: {reason}"))
+        }
+        Err(ExecuteFail::Db(e)) => page(500, &format!("database: {e}")),
+    }
+}
+
+/// The thread a comment lives on, for routing the revise door's
+/// redirect back to the comment's home.
+fn comment_root(app: &AppState, seq: usize) -> Option<usize> {
+    let snapshot = app.snapshot().ok()?;
+    snapshot
+        .world
+        .comments
+        .get(&crate::CommentId(RecordId(seq)))
+        .map(|c| c.comment.root)
+        .map(|root| root.0)
 }
 
 /// The thread section alone, for the fetch swap, naming the comment
@@ -617,6 +659,7 @@ fn reject_text(r: &Reject) -> String {
         ProposalAlreadyOpen => "that task already has an open proposal".into(),
         InvalidCommentId => "no comment with that id".into(),
         NotBirthAttribution => "only the task's birth attribution or a human may accept".into(),
+        NotCommentAuthor => "only the comment's author or a human may revise".into(),
         InvalidParentTaskId => "no such parent task".into(),
         other => format!("{other:?}"),
     }
@@ -644,6 +687,7 @@ enum PostRoute {
     Compose,
     Ruling(usize),
     Accept(usize),
+    Revise(usize),
     NotFound,
 }
 
@@ -682,6 +726,13 @@ fn parse_post(url: &str) -> PostRoute {
         .and_then(num)
     {
         return PostRoute::Accept(n);
+    }
+    if let Some(seq) = path
+        .strip_prefix("/c/")
+        .and_then(|rest| rest.strip_suffix("/revise"))
+        .and_then(num)
+    {
+        return PostRoute::Revise(seq);
     }
     PostRoute::NotFound
 }
@@ -747,8 +798,10 @@ mod tests {
         assert!(matches!(parse_post("/compose"), PostRoute::Compose));
         assert!(matches!(parse_post("/p/9/ruling"), PostRoute::Ruling(9)));
         assert!(matches!(parse_post("/t/3/accept"), PostRoute::Accept(3)));
+        assert!(matches!(parse_post("/c/7/revise"), PostRoute::Revise(7)));
         assert!(matches!(parse_post("/t/3/comment"), PostRoute::NotFound));
         assert!(matches!(parse_post("/t/3"), PostRoute::NotFound));
+        assert!(matches!(parse_post("/c/7/edit"), PostRoute::NotFound));
         let fields = parse_form("body=hello+world%3C1%3E&task=12&who=jerry");
         assert_eq!(form_field(&fields, "body"), "hello world<1>");
         assert_eq!(form_field(&fields, "task"), "12");

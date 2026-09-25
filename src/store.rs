@@ -44,6 +44,8 @@ pub enum Reason {
     InvalidTaskId,
     InvalidProposalId,
     InvalidCommentId,
+    /// The reviser is neither the comment's birth author nor human tier.
+    NotCommentAuthor,
     /// The accept door refuses: the invocation is not the task's birth
     /// attribution and not human tier.
     NotBirthAttribution,
@@ -65,6 +67,7 @@ impl From<Reason> for Reject {
             Reason::InvalidTaskId => Reject::InvalidTaskId,
             Reason::InvalidProposalId => Reject::InvalidProposalId,
             Reason::InvalidCommentId => Reject::InvalidCommentId,
+            Reason::NotCommentAuthor => Reject::NotCommentAuthor,
             Reason::NotBirthAttribution => Reject::NotBirthAttribution,
             Reason::InvalidParentTaskId => Reject::InvalidParentTaskId,
             Reason::InvalidStateTransition => Reject::InvalidStateTransition,
@@ -571,6 +574,7 @@ impl World {
                         tier: record.context.tier,
                         state,
                         born_at: record.timestamp,
+                        revised: None,
                         refusal: None,
                     },
                 );
@@ -596,6 +600,20 @@ impl World {
                     task_ctx.last_updated = record.id;
                 }
                 task_ctx.thread.push(CommentId(record.id));
+                task_ctx.last_record_at = record.timestamp;
+            }
+            // A content act, not a transition: the body swaps and the
+            // pointer moves to this record — the state machines never
+            // see the event, and the birth bytes stay in their own row
+            Event::CommentRevised { id, ref body } => {
+                let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
+                if record.context.tier != Tier::Human && comment_ctx.actor != record.context.actor {
+                    return Err(Reason::NotCommentAuthor);
+                }
+                comment_ctx.comment.body = body.clone();
+                comment_ctx.revised = Some(record.id);
+                let root = comment_ctx.comment.root;
+                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_record_at = record.timestamp;
             }
             // The refusal fact: a demand the machinery would not run,
@@ -805,6 +823,10 @@ mod test {
         assert!(matches!(
             Reject::from(Reason::InvalidCommentId),
             Reject::InvalidCommentId
+        ));
+        assert!(matches!(
+            Reject::from(Reason::NotCommentAuthor),
+            Reject::NotCommentAuthor
         ));
         assert!(matches!(
             Reject::from(Reason::InvalidParentTaskId),
@@ -1858,6 +1880,94 @@ mod test {
         )
         .unwrap();
         assert_eq!(log.world().tasks[2].artifacts.len(), 1);
+    }
+
+    #[test]
+    fn revision_swaps_the_body_under_author_or_human() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: Prose::new("migrate floop".into()).unwrap(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("run the sweep on the old door".into()).unwrap(),
+                kind: CommentKind::Demand,
+            },
+            2,
+        )
+        .unwrap();
+        let note = CommentId(RecordId(1));
+
+        // the author revises: the body swaps and the pointer names the record
+        log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: note,
+                body: Prose::new("run the sweep on the new door".into()).unwrap(),
+            },
+            3,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&note];
+        assert_eq!(ctx.comment.body.as_str(), "run the sweep on the new door");
+        assert_eq!(ctx.revised, Some(RecordId(2)));
+        // a content act, not a transition: the demand keeps its state
+        assert!(matches!(&ctx.state, CommentState::Demand { .. }));
+
+        // another agent is refused, writing nothing
+        let other = Context {
+            actor: ActorName::new("other agent".into()).unwrap(),
+            tier: Tier::Agent,
+        };
+        let before = log.records().len();
+        let refused = log.execute(
+            other,
+            Command::ReviseComment {
+                id: note,
+                body: Prose::new("not mine to touch".into()).unwrap(),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::NotCommentAuthor)));
+        assert_eq!(log.records().len(), before);
+
+        // a human revises any comment, and a second revision moves the
+        // pointer to the latest record
+        log.execute(
+            human(),
+            Command::ReviseComment {
+                id: note,
+                body: Prose::new("the sweep covers both doors".into()).unwrap(),
+            },
+            5,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&note];
+        assert_eq!(ctx.comment.body.as_str(), "the sweep covers both doors");
+        assert_eq!(ctx.revised, Some(RecordId(3)));
+
+        // the addressed position must be a comment's birth: a task birth
+        // is not one, and an unknown seq is not either
+        for id in [CommentId(RecordId(0)), CommentId(RecordId(99))] {
+            let refused = log.execute(
+                human(),
+                Command::ReviseComment {
+                    id,
+                    body: Prose::new("addresses nothing".into()).unwrap(),
+                },
+                6,
+            );
+            assert!(matches!(refused, Err(Reject::InvalidCommentId)));
+        }
+        assert_eq!(log.records().len(), before + 1);
     }
 
     #[test]

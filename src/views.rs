@@ -139,6 +139,8 @@ pub struct CommentLine {
     pub kind: &'static str,
     pub body: String,
     pub state: Option<String>,
+    /// The descriptive mark: the fold presents a revised body
+    pub revised: bool,
     pub born_at: u64,
     /// The machinery's refusal to run this demand, when it refused
     pub refusal: Option<RefusalView>,
@@ -241,6 +243,7 @@ fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
         kind: kind_of(&cctx.state),
         body: cctx.comment.body.as_str().to_string(),
         state: state_tag(&cctx.state, cctx.refusal.as_ref()),
+        revised: cctx.revised.is_some(),
         born_at: cctx.born_at,
         refusal: cctx.refusal.as_ref().map(|r| RefusalView {
             reason: r.reason.as_str().to_string(),
@@ -1889,6 +1892,53 @@ mod panels {
     }
 
     #[test]
+    fn a_revised_body_renders_with_the_mark() {
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                2,
+                Tier::Agent,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
+            record(
+                3,
+                3,
+                Tier::Agent,
+                Event::CommentRevised {
+                    id: CommentId(RecordId(2)),
+                    body: Prose::new("a body worth keeping, corrected".into()).unwrap(),
+                },
+            ),
+            comment_at(
+                4,
+                4,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
+        ])
+        .unwrap();
+        let v = thread_view(&world, TaskId(0)).unwrap();
+        match &v.items[0] {
+            ThreadItem::Note(line) => {
+                assert_eq!(line.seq, 2);
+                // the fold presents the latest body, marked revised
+                assert_eq!(line.body, "a body worth keeping, corrected");
+                assert!(line.revised);
+                // the mark is not a state: a note still carries none
+                assert_eq!(line.state, None);
+            }
+            other => panic!("expected a note, got {other:?}"),
+        }
+        match &v.items[1] {
+            ThreadItem::Note(line) => assert!(!line.revised, "never revised, never marked"),
+            other => panic!("expected a note, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn asked_of_you_scans_awaiting_human_demands() {
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
@@ -2285,6 +2335,37 @@ mod search {
             pointers(&search(&world, &q(&["t-0"])).unwrap()),
             vec![(1, vec!["#1".into(), "#5".into()]), (0, vec!["#2".into()])]
         );
+    }
+
+    #[test]
+    fn a_revised_body_is_what_search_reads() {
+        let jerry = ctx(Tier::Human, "jerry");
+        let world = World::replay(vec![
+            task(0, 0, &jerry, "hold the verdict", None),
+            note(
+                2,
+                2,
+                &jerry,
+                Target::Task(TaskId(0)),
+                "the floop verdict lands",
+            ),
+            record(
+                3,
+                3,
+                &jerry,
+                Event::CommentRevised {
+                    id: CommentId(RecordId(2)),
+                    body: Prose::new("the blorp verdict lands".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        // the fold's latest body matches, the orphaned original does not
+        assert_eq!(
+            pointers(&search(&world, &q(&["blorp"])).unwrap()),
+            vec![(0, vec!["#2".into()])]
+        );
+        assert!(search(&world, &q(&["floop"])).unwrap().is_empty());
     }
 
     #[test]

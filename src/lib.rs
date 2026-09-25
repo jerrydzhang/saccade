@@ -48,6 +48,8 @@ pub enum Reject {
     ProposalAlreadyOpen,
     #[error("no comment with that id")]
     InvalidCommentId,
+    #[error("not the comment's author")]
+    NotCommentAuthor,
     #[error("not the task's birth attribution")]
     NotBirthAttribution,
     // Permissions
@@ -92,6 +94,7 @@ impl Reject {
             Reject::InvalidProposalId => "invalid_proposal_id",
             Reject::ProposalAlreadyOpen => "proposal_already_open",
             Reject::InvalidCommentId => "invalid_comment_id",
+            Reject::NotCommentAuthor => "not_comment_author",
             Reject::NotBirthAttribution => "not_birth_attribution",
             Reject::HumanOnly => "human_only",
             Reject::NotClaimHolder => "not_claim_holder",
@@ -125,6 +128,7 @@ mod test {
             Reject::InvalidProposalId,
             Reject::ProposalAlreadyOpen,
             Reject::InvalidCommentId,
+            Reject::NotCommentAuthor,
             Reject::NotBirthAttribution,
             Reject::HumanOnly,
             Reject::NotClaimHolder,

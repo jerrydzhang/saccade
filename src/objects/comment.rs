@@ -191,6 +191,9 @@ pub struct CommentContext {
     pub state: CommentState,
     /// Event time of the comment's birth record
     pub born_at: u64,
+    /// The latest revision record's position, when the body was ever
+    /// revised — a pointer, never the payload it swapped in
+    pub revised: Option<RecordId>,
     /// The machinery's refusal to run this demand, when it refused
     pub refusal: Option<Refusal>,
 }

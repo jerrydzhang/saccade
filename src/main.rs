@@ -132,6 +132,9 @@ enum Cmd {
     /// Steer a task's live run at its next turn boundary; with no run
     /// living, the steer stands on the thread as intent
     Steer { id: String, body: String },
+    /// Revise a comment's body (the birth author or a human); the fold
+    /// presents the latest, the log keeps the original
+    Revise { id: String, body: String },
     /// Park an artifact on a task's thread: hash the file into the
     /// store, record the pointer — the bytes never ride the wire
     Artifact {
@@ -404,6 +407,10 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             target: Target::Task(parse_task_id(id)?),
             body: Prose::new(body.clone())?,
             kind: CommentKind::Steer,
+        },
+        Cmd::Revise { id, body } => Command::ReviseComment {
+            id: parse_revision_id(id)?,
+            body: Prose::new(body.clone())?,
         },
         Cmd::Artifact { task, path, name } => {
             let id = parse_task_id(task)?;
@@ -860,6 +867,25 @@ fn parse_proposal_id(token: &str) -> Result<ProposalId, Fail> {
     Ok(ProposalId(RecordId(n)))
 }
 
+/// The '#<seq>' face the revise door takes; a 'c-' prefix learns the
+/// bare form, the demand's grammar never applies here.
+fn parse_revision_id(token: &str) -> Result<CommentId, Fail> {
+    let rest = token.strip_prefix('#').ok_or_else(|| {
+        let note = token
+            .strip_prefix("c-")
+            .filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+            .map(|d| format!("; drop the 'c-': the comment is addressed as #{d}"))
+            .unwrap_or_default();
+        Fail::Usage(format!(
+            "'{token}' is not a comment id (expected #<seq>){note}"
+        ))
+    })?;
+    let n: usize = rest
+        .parse()
+        .map_err(|_| Fail::Usage(format!("'{token}' is not a comment id")))?;
+    Ok(CommentId(RecordId(n)))
+}
+
 /// The reference a create reply names: the task whose birth record just
 /// landed, resolved against the post-write fold.
 fn born_of(stored: &[StoredRecord], world: &World) -> Option<String> {
@@ -996,11 +1022,15 @@ fn artifact_block(line: &ArtifactLine) -> Vec<String> {
 /// same block whether it rides a thread or a pointer opened it.
 fn comment_block(line: &CommentLine) -> Vec<String> {
     let indent = "  ".repeat(line.depth.saturating_sub(1));
-    let state = line
-        .state
-        .as_ref()
-        .map(|s| format!("  ({s})"))
-        .unwrap_or_default();
+    // the revised mark rides the state's parenthetical: descriptive,
+    // beside the comment, never a narrative of its own
+    let marks = match (&line.state, line.revised) {
+        (Some(state), true) => Some(format!("{state}, revised")),
+        (Some(state), false) => Some(state.clone()),
+        (None, true) => Some("revised".to_string()),
+        (None, false) => None,
+    };
+    let state = marks.map(|m| format!("  ({m})")).unwrap_or_default();
     let mut out = vec![format!("{indent}#{}  {}{state}", line.seq, line.actor)];
     out.push(wrap(
         &line.body,
@@ -1438,6 +1468,20 @@ mod test {
         );
         assert_eq!(
             parse_comment_id("c-7").unwrap_or_else(|f| panic!("{f}")),
+            CommentId(RecordId(7))
+        );
+
+        // the revise door takes the '#' face; a 'c-' prefix learns the form
+        let refused = parse_revision_id("c-7")
+            .map_err(|f| f.to_string())
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            "'c-7' is not a comment id (expected #<seq>); \
+             drop the 'c-': the comment is addressed as #7"
+        );
+        assert_eq!(
+            parse_revision_id("#7").unwrap_or_else(|f| panic!("{f}")),
             CommentId(RecordId(7))
         );
     }

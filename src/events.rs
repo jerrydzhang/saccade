@@ -67,6 +67,13 @@ pub enum Event {
         body: Prose,
         kind: CommentKind,
     },
+    /// A content act, not a transition: the fold swaps the body and
+    /// keeps a pointer at the latest revision record — the original
+    /// bytes stay in their own birth event.
+    CommentRevised {
+        id: CommentId,
+        body: Prose,
+    },
     /// The refusal fact: a demand the machinery would not run, landed
     /// where the asker reads.
     DemandRefused {
@@ -175,6 +182,10 @@ pub enum Command {
         target: Target,
         body: Prose,
         kind: CommentKind,
+    },
+    ReviseComment {
+        id: CommentId,
+        body: Prose,
     },
     RefuseDemand {
         demand: CommentId,

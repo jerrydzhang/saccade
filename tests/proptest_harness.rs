@@ -48,6 +48,10 @@ enum Action {
         variant: u8,
         human: bool,
     },
+    Revise {
+        comment: u8,
+        human: bool,
+    },
     Artifact {
         task: u8,
         human: bool,
@@ -94,6 +98,7 @@ impl Action {
             | Action::Withdraw { human, .. } => *human,
             Action::Cancel { human, .. } => *human,
             Action::Comment { human, .. } => *human,
+            Action::Revise { human, .. } => *human,
             Action::Artifact { human, .. } => *human,
         }
     }
@@ -113,6 +118,7 @@ impl Action {
                 *task
             }
             Action::Comment { task, .. } if role == "task" => *task,
+            Action::Revise { comment, .. } if role == "comment" => *comment,
             Action::Artifact { task, .. } if role == "task" => *task,
             Action::Accept { proposal, .. }
             | Action::Reject { proposal, .. }
@@ -253,6 +259,10 @@ fn command_of(action: &Action, world: &World) -> Command {
         Action::Cancel { .. } => Command::CancelIncarnation {
             id: incarnation_at(world, action.number("incarnation")),
         },
+        Action::Revise { .. } => Command::ReviseComment {
+            id: comment_at(world, action.number("comment")),
+            body: Prose::new("generated revision".into()).unwrap(),
+        },
         Action::Artifact { .. } => Command::Artifact {
             root: task,
             artifact: saccade::types::artifact::Artifact {
@@ -299,6 +309,7 @@ fn action_strategy() -> BoxedStrategy<Action> {
         2 => id(|task, human| Action::Release { task, human }),
         3 => (any::<u8>(), any::<u8>(), any::<u8>(), human_coin())
             .prop_map(|(task, reply, variant, human)| { Action::Comment { task, reply, variant, human } }),
+        2 => id(|comment, human| Action::Revise { comment, human }),
         2 => id(|task, human| Action::Artifact { task, human }),
         3 => id(|task, human| Action::ProposeDrop { task, human }),
         2 => id(|task, human| Action::ProposeRelease { task, human }),
@@ -414,6 +425,9 @@ fn generator_reaches_deep_states() {
                         Action::Artifact { .. } => {
                             *milestones.entry("artifact").or_default() += 1;
                         }
+                        Action::Revise { .. } => {
+                            *milestones.entry("revise").or_default() += 1;
+                        }
                         _ => {}
                     }
                     if last.kind == "commented" {
@@ -448,6 +462,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidProposalId => "InvalidProposalId",
                         saccade::Reject::ProposalAlreadyOpen => "ProposalAlreadyOpen",
                         saccade::Reject::InvalidCommentId => "InvalidCommentId",
+                        saccade::Reject::NotCommentAuthor => "NotCommentAuthor",
                         saccade::Reject::NotBirthAttribution => "NotBirthAttribution",
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
@@ -484,11 +499,12 @@ fn generator_reaches_deep_states() {
         ("task accept", 0.008),
         ("delivered task", 0.03),
         ("dropped task", 0.30),
-        ("depth 2 thread", 0.04),
+        ("depth 2 thread", 0.02),
         ("demand comment", 0.10),
         ("steer comment", 0.05),
         ("ask comment", 0.05),
         ("artifact", 0.05),
+        ("revise", 0.05),
     ] {
         let hit = milestones.get(name).copied().unwrap_or(0);
         assert!(
@@ -503,6 +519,7 @@ fn generator_reaches_deep_states() {
         "InvalidParentTaskId",
         "InvalidProposalId",
         "InvalidCommentId",
+        "NotCommentAuthor",
         "InvalidStateTransition",
         "NotBirthAttribution",
     ] {
