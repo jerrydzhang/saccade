@@ -100,9 +100,45 @@ pub struct Console {
     pub form: FormState,
     /// The artifact bytes door's store, for rendering at position.
     pub store: ArtifactStore,
+    /// The serving repo's name, when serve resolved a root; the
+    /// chrome names its instance by it, and pages built without one
+    /// render the unnamed chrome of before.
+    pub repo_name: Option<RepoName>,
     /// The read's now, in epoch seconds; the ages and the ribbon window
     /// hang off it.
     pub now: u64,
+}
+
+/// The serving repo's name: the basename names the tab title and the
+/// header mark, and the hue — the same root hash the state-dir slug
+/// tails — dots the favicon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepoName {
+    pub basename: String,
+    pub hue: u32,
+}
+
+impl RepoName {
+    pub fn of(repo_root: &std::path::Path) -> Self {
+        RepoName {
+            basename: crate::paths::repo_basename(repo_root),
+            hue: crate::paths::repo_hue(repo_root),
+        }
+    }
+
+    /// The tab title a full document carries under this name.
+    pub fn tab_title(&self) -> String {
+        format!("{} · saccade", esc(&self.basename))
+    }
+}
+
+/// The favicon: a dot in the repo's hue, inline as an SVG data URI.
+pub fn favicon_link(hue: u32) -> String {
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='hsl({hue},60%,55%)'/></svg>"
+    );
+    let uri = svg.replace('<', "%3C").replace('>', "%3E");
+    format!("<link rel=\"icon\" href=\"data:image/svg+xml,{uri}\">")
 }
 
 pub struct Focus {
@@ -282,8 +318,25 @@ pub fn page(c: &Console) -> String {
         ),
         None => "<div class=\"thead\"></div>\n<section id=\"thread\"><div class=\"nempty\">no task focused</div></section>\n".to_string(),
     };
+    let title = c
+        .repo_name
+        .as_ref()
+        .map(|n| n.tab_title())
+        .unwrap_or_else(|| "saccade · console".into());
+    let favicon = c
+        .repo_name
+        .as_ref()
+        .map(|n| favicon_link(n.hue))
+        .unwrap_or_default();
+    let header = match &c.repo_name {
+        Some(n) => format!(
+            "<header><span class=\"hgroup\"><span class=\"brand\">SACCADE · CONSOLE</span><span class=\"rname\">{name}</span></span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>",
+            name = esc(&n.basename)
+        ),
+        None => "<header><span class=\"brand\">SACCADE · CONSOLE</span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>".into(),
+    };
     format!(
-        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade · console</title><style>{STYLE}</style></head>\n<body>\n<header><span class=\"brand\">SACCADE · CONSOLE</span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>\n<input type=\"checkbox\" id=\"nav\">\n<div class=\"if\">\n{strip}\n<div class=\"cols withforest\">\n{forest}\n<div class=\"tpanel\">\n{panel}\n</div>\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{STYLE}</style></head>\n<body>\n{header}\n<input type=\"checkbox\" id=\"nav\">\n<div class=\"if\">\n{strip}\n<div class=\"cols withforest\">\n{forest}\n<div class=\"tpanel\">\n{panel}\n</div>\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
     )
 }
 
@@ -1179,6 +1232,11 @@ header .brand {
   border: 1px solid #2e2a28; padding: 2px 9px; border-radius: 3px;
 }
 .fbtn:hover { color: #e8e2dd; }
+.hgroup { display: flex; gap: 12px; align-items: baseline; }
+header .rname {
+  font: 500 11px "JetBrains Mono", ui-monospace, monospace;
+  color: #6d6562;
+}
 
 /* full-height frame: strip over (rail | thread) */
 .if { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 41px); }
@@ -1693,6 +1751,7 @@ mod tests {
             focus,
             form: FormState::default(),
             store: ArtifactStore::default(),
+            repo_name: None,
             now: NOW,
         }
     }
@@ -1707,6 +1766,7 @@ mod tests {
             focus: None,
             form: FormState::default(),
             store: ArtifactStore::default(),
+            repo_name: None,
             now,
         }
     }
@@ -1880,6 +1940,61 @@ mod tests {
         assert!(
             page.contains("class=\"frow sel\""),
             "the forest marks focus"
+        );
+    }
+
+    #[test]
+    fn the_named_page_names_title_header_and_favicon() {
+        let world = fixture();
+        let mut console = console_of(&world, None);
+        console.repo_name = Some(RepoName::of(std::path::Path::new("/srv/hornet")));
+        let page = page(&console);
+        assert!(page.contains("<title>hornet · saccade</title>"));
+        assert!(
+            page.contains(
+                "<span class=\"hgroup\"><span class=\"brand\">SACCADE · CONSOLE</span><span class=\"rname\">hornet</span></span>"
+            ),
+            "the name sits beside the brand"
+        );
+        assert!(page.contains("tasks ▸"), "the toggle keeps its place");
+        assert!(
+            page.contains(&favicon_link(324)),
+            "the favicon dots the repo's hue"
+        );
+    }
+
+    #[test]
+    fn the_unnamed_page_keeps_the_chrome_of_before() {
+        let world = fixture();
+        let page = page(&console_of(&world, None));
+        assert!(
+            page.starts_with(
+                "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>saccade · console</title><style>"
+            ),
+            "no name held, no head bytes change"
+        );
+        assert!(
+            page.contains(
+                "<header><span class=\"brand\">SACCADE · CONSOLE</span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>"
+            ),
+            "no name held, no header bytes change"
+        );
+        assert!(!page.contains("class=\"rname\""));
+        assert!(!page.contains("rel=\"icon\""));
+    }
+
+    #[test]
+    fn the_favicon_hue_follows_the_root_hash() {
+        assert_eq!(RepoName::of(std::path::Path::new("/srv/hornet")).hue, 324);
+        assert_eq!(
+            RepoName::of(std::path::Path::new("/srv/hornet")),
+            RepoName::of(std::path::Path::new("/srv/hornet")),
+            "same root, same hue"
+        );
+        assert_ne!(
+            RepoName::of(std::path::Path::new("/srv/hornet")).hue,
+            RepoName::of(std::path::Path::new("/home/j/hornet")).hue,
+            "same basename, different roots, different hues"
         );
     }
 

@@ -29,15 +29,27 @@ fn fnv1a(bytes: &[u8]) -> u32 {
     hash
 }
 
+/// The repo's basename: the state-dir slug and the console's
+/// instance name share this one extraction.
+pub fn repo_basename(repo_root: &Path) -> String {
+    repo_root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repo".into())
+}
+
+/// The favicon's hue for a repo: the same root hash the state-dir
+/// slug tails, reduced to degrees — one hash, two faces.
+pub fn repo_hue(repo_root: &Path) -> u32 {
+    fnv1a(repo_root.to_string_lossy().as_bytes()) % 360
+}
+
 /// The per-repo state directory: repo basename plus a short hash of the
 /// resolved root, so same-named repos on one machine never collide.
 pub fn state_dir(repo_root: &Path) -> PathBuf {
-    let name = repo_root
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "repo".into());
     let slug = format!(
-        "{name}-{:06x}",
+        "{}-{:06x}",
+        repo_basename(repo_root),
         fnv1a(repo_root.to_string_lossy().as_bytes())
     );
     state_parent().join("saccade").join(slug)
@@ -123,5 +135,12 @@ mod test {
         assert_eq!(a, b, "same root, same slug");
         assert_ne!(a, other, "same basename, different roots, different slugs");
         assert!(a.starts_with(state_parent().join("saccade")));
+    }
+
+    #[test]
+    fn the_hue_is_the_slug_hash_reduced() {
+        assert_eq!(repo_hue(Path::new("/srv/hornet")), 324);
+        // same basename, different roots: the hues split where the slugs do
+        assert_eq!(repo_hue(Path::new("/home/j/hornet")), 153);
     }
 }
