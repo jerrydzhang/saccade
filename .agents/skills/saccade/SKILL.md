@@ -18,6 +18,10 @@ unset means human. There is no tier argument, and actor names never carry
 authority. Mutating commands record your identity from possession; reads
 need none. A run's derived name (`pi/t-75-2`) is an incarnation, not an
 actor — it never equals a birth attribution, so a run can never self-accept.
+An unnamed write is guarded: with `SACCADE_ACTOR` unset and no `--actor`, a
+mutation from a keyboard proceeds on one notice line, and the same mutation
+without a tty refuses (`identity_fallback`) — export
+`SACCADE_ACTOR=<name>` or pass `--actor`.
 
 ## The record is the reasoning cache
 
@@ -170,6 +174,21 @@ one comment per idea; the formal reply or receipt indexes them, never
 contains them. This is practice, not machinery: the reply door stays
 single, and the day a reviewed blob survives this law anyway is the day
 the door itself changes.
+
+## Prose
+
+Comment bodies and receipts are CommonMark — tables and math included —
+and the console renders them, math and code click-to-copy. Write LaTeX
+for math, never unicode approximations. Dollars are the only math
+delimiters, and they are exact:
+
+- inline: `$x^2+1$`, `$\mathcal{L}[f]$` — one dollar each side
+- display: `$$\frac{a}{b}$$` — two dollars each side
+
+`\(...\)` and `\[...\]` are not the door — they stay literal
+backslashes. A formula the renderer cannot parse keeps its source bytes
+(`$\notacommand{x}$` renders as itself), so a wrong delimiter is visible
+as the wrong characters.
 
 ## Searching
 

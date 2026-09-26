@@ -280,6 +280,12 @@ enum Fail {
         code: &'static str,
         text: String,
     },
+    /// The account-name identity fallback refused a non-tty write:
+    /// identity is possessed or named, never inherited from the shell.
+    IdentityFallback {
+        actor: String,
+        tier: &'static str,
+    },
     Usage(String),
     Client(client::ClientFail),
 }
@@ -307,6 +313,7 @@ impl Fail {
             Fail::Degraded(_) => "degraded",
             Fail::Reject(r) => r.code(),
             Fail::Taught { code, .. } => code,
+            Fail::IdentityFallback { .. } => "identity_fallback",
             Fail::Usage(_) => "usage",
             Fail::Client(c) => c.code(),
         }
@@ -323,6 +330,11 @@ impl std::fmt::Display for Fail {
             ),
             Fail::Reject(r) => write!(f, "rejected: {}", r.code()),
             Fail::Taught { code, text } => write!(f, "rejected: {code} — {text}"),
+            Fail::IdentityFallback { actor, tier } => write!(
+                f,
+                "this write would record {actor}/{tier} from the identity fallback \
+                 (no SACCADE_ACTOR, no --actor); export SACCADE_ACTOR=<name> or pass --actor"
+            ),
             Fail::Usage(m) => write!(f, "{m}"),
             Fail::Client(c) => write!(f, "{c}"),
         }
@@ -553,6 +565,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
 
     // Identity is required only where it is recorded: mutating commands.
     let context = context_of(cli)?;
+    identity_fallback_guard(cli, &context)?;
     let creates = matches!(command, Command::CreateTask { .. });
     let mut born: Option<String> = None;
     let stored = if cli.offline {
@@ -750,6 +763,35 @@ fn context_of(cli: &Cli) -> Result<Context, Fail> {
         actor: ActorName::new(actor)?,
         tier,
     })
+}
+
+/// The write door's fallback guard: an identity that came from the
+/// account-name fallback is a human at a keyboard or it is nothing.
+/// A tty earns one notice line and the write; every non-tty caller
+/// (scripts, spawned agents) is refused before any write, taught the fix.
+fn identity_fallback_guard(cli: &Cli, context: &Context) -> Result<(), Fail> {
+    if cli.actor.is_some() {
+        return Ok(());
+    }
+    if std::io::stdin().is_terminal() {
+        eprintln!("{}", identity_fallback_notice(context));
+        return Ok(());
+    }
+    Err(Fail::IdentityFallback {
+        actor: context.actor.as_str().to_owned(),
+        tier: saccade::wire::tier_of(&context.tier),
+    })
+}
+
+/// The keyboard's one notice line: the identity this write records,
+/// and how an agent under this account names itself instead.
+fn identity_fallback_notice(context: &Context) -> String {
+    format!(
+        "note: this write records {}/{} from the identity fallback \
+         (no SACCADE_ACTOR, no --actor); agents export SACCADE_ACTOR=<name>",
+        context.actor.as_str(),
+        saccade::wire::tier_of(&context.tier)
+    )
 }
 fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
     let conn = db::open_read(db_path).map_err(Fail::Db)?;
@@ -1389,6 +1431,49 @@ mod test {
         let ctx = context_of(&named).unwrap_or_else(|f| panic!("{f}"));
         assert_eq!((ctx.tier, ctx.actor.as_str()), (Tier::Human, "saccade bot"));
         unsafe { std::env::remove_var("SACCADE_ACTOR") };
+    }
+
+    /// The fallback guards the write door: a named identity passes
+    /// untouched, the suite's non-tty condition refuses before any write,
+    /// and the keyboard's notice line is exact. Built from literals, never
+    /// the env — the tier test above owns SACCADE_ACTOR process-wide.
+    #[test]
+    fn the_identity_fallback_guards_the_write_door() {
+        let jerry = Context {
+            actor: ActorName::new("jerry".into()).unwrap(),
+            tier: Tier::Human,
+        };
+        let cli_of = |actor: Option<&str>| Cli {
+            db: None,
+            repo: None,
+            actor: actor.map(str::to_owned),
+            json: false,
+            at: None,
+            offline: true,
+            server: String::new(),
+            command: Cmd::Log,
+        };
+        let unnamed = cli_of(None);
+        let named = cli_of(Some("saccade bot"));
+
+        // no tty in the suite: the fallback refuses, code and line exact
+        let refused = identity_fallback_guard(&unnamed, &jerry).unwrap_err();
+        assert_eq!(refused.code(), "identity_fallback");
+        assert_eq!(
+            refused.to_string(),
+            "this write would record jerry/human from the identity fallback \
+             (no SACCADE_ACTOR, no --actor); export SACCADE_ACTOR=<name> or pass --actor"
+        );
+
+        // a named identity passes at the same tier: --actor never re-tiers
+        assert!(identity_fallback_guard(&named, &jerry).is_ok());
+
+        // the keyboard arm's one line: identity named, agent fix taught
+        assert_eq!(
+            identity_fallback_notice(&jerry),
+            "note: this write records jerry/human from the identity fallback \
+             (no SACCADE_ACTOR, no --actor); agents export SACCADE_ACTOR=<name>"
+        );
     }
 
     /// Hashed tokens learn their bare doors at the parse door: a hashed
