@@ -697,6 +697,24 @@ pub fn ref_index(world: &World) -> BTreeMap<usize, RefTarget> {
     index
 }
 
+/// Each record's home thread, where the fold gives it one: a task by
+/// its birth, a comment by its root — replies included — an artifact
+/// by the thread it rides. Records about a member, a revision or a
+/// refusal, carry none: they fold into the member, not the thread.
+pub fn thread_index(world: &World) -> BTreeMap<usize, TaskId> {
+    let mut index = BTreeMap::new();
+    for (i, ctx) in world.tasks.iter().enumerate() {
+        index.insert(ctx.birth.0, TaskId(i));
+        for cid in &ctx.thread {
+            index.insert(cid.0.0, TaskId(i));
+        }
+        for (rid, _) in &ctx.artifacts {
+            index.insert(rid.0, TaskId(i));
+        }
+    }
+    index
+}
+
 /// A run, as the strip and an exchange card name it.
 #[derive(Debug)]
 pub struct RunView {
@@ -1231,6 +1249,7 @@ mod test {
     use crate::objects::task::Task;
     use crate::store::{Context, Record, RecordId, Tier, World};
     use crate::types::actor::ActorName;
+    use crate::types::artifact::{Artifact, ContentHash};
 
     fn ctx_of(state: TaskState) -> TaskContext {
         TaskContext {
@@ -1382,6 +1401,91 @@ mod test {
             ]
         );
         assert_eq!(comment_thread(&world.comments, &world.tasks[1]).len(), 1);
+    }
+
+    /// Thread membership follows the fold: a reply belongs to its root's
+    /// thread whatever it addressed, an artifact to the thread that holds
+    /// it, a task to its birth — and a revision folds into its comment,
+    /// claiming no membership of its own.
+    #[test]
+    fn thread_index_places_records_on_their_home_threads() {
+        let human = human();
+        let agent = agent();
+        let record = |id: usize, ctx: &Context, event: Event| Record {
+            id: RecordId(id),
+            timestamp: id as u64,
+            context: ctx.clone(),
+            event,
+        };
+        let note = |id: usize, ctx: &Context, target: Target, body: &str| {
+            record(
+                id,
+                ctx,
+                Event::Commented {
+                    target,
+                    body: Prose::new(body.into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            )
+        };
+        let world = World::replay(vec![
+            record(
+                0,
+                &human,
+                Event::TaskCreated {
+                    name: Prose::new("migrate floop".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                &human,
+                Event::TaskCreated {
+                    name: Prose::new("guard the door".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            note(2, &agent, Target::Task(TaskId(0)), "the migration starts"),
+            note(
+                3,
+                &human,
+                Target::Comment(CommentId(RecordId(2))),
+                "the answer rides the same thread",
+            ),
+            note(4, &agent, Target::Task(TaskId(1)), "the other thread"),
+            record(
+                5,
+                &human,
+                Event::CommentRevised {
+                    id: CommentId(RecordId(2)),
+                    body: Prose::new("the migration starts, revised".into()).unwrap(),
+                },
+            ),
+            record(
+                6,
+                &agent,
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: Artifact {
+                        name: Prose::new("floop report".into()).unwrap(),
+                        hash: ContentHash::of(b"floop"),
+                    },
+                },
+            ),
+        ])
+        .unwrap();
+
+        let threads = thread_index(&world);
+        let home = |seq: usize| threads.get(&seq).copied();
+        assert_eq!(home(0), Some(TaskId(0)));
+        assert_eq!(home(1), Some(TaskId(1)));
+        assert_eq!(home(2), Some(TaskId(0)));
+        // the reply addressed a comment and still belongs to t-0's thread
+        assert_eq!(home(3), Some(TaskId(0)));
+        assert_eq!(home(4), Some(TaskId(1)));
+        // the revision folds into its comment, claiming no thread of its own
+        assert_eq!(home(5), None);
+        assert_eq!(home(6), Some(TaskId(0)));
     }
 }
 

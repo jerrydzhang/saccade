@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -10,7 +11,7 @@ use saccade::objects::task::TaskId;
 use saccade::views::{
     ArtifactLine, CommentLine, ProposalView, SearchGroup, SearchQuery, TaskView, Term, ThreadEntry,
     artifact_line, comment_line, matched_line, proposal_view, search, show_view, task_view,
-    thread_entries,
+    thread_entries, thread_index,
 };
 use saccade::{
     ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, GitCommit,
@@ -808,7 +809,11 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
             if let LoadState::Degraded(reason) = &loadout.state {
                 eprintln!("warning: world projection unavailable: {reason}");
             }
-            Ok(render_log(cli, &loadout.rows))
+            let threads = match &loadout.state {
+                LoadState::Full(world) => thread_index(world),
+                LoadState::Degraded(_) => BTreeMap::new(),
+            };
+            Ok(render_log(cli, &loadout.rows, &threads))
         }
         Cmd::List { .. } => match loadout.state {
             LoadState::Full(world) => Ok(render_tasks(cli, &world)),
@@ -821,7 +826,16 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
         Cmd::Show { ids, stdin } => match loadout.state {
             LoadState::Full(world) => {
                 if *stdin {
-                    return show_stdin(&world, &loadout.rows, ids);
+                    return show_stdin(cli, &world, &loadout.rows, ids);
+                }
+                if cli.json {
+                    let blocks: Vec<serde_json::Value> = ids
+                        .iter()
+                        .map(|token| show_value(&world, &loadout.rows, token))
+                        .collect::<Result<_, _>>()?;
+                    return Ok(
+                        serde_json::to_string_pretty(&blocks).expect("blocks are plain data")
+                    );
                 }
                 let mut blocks = Vec::new();
                 for token in ids {
@@ -955,9 +969,22 @@ fn render_records(cli: &Cli, stored: &[StoredRecord], born: Option<&str>) -> Str
     lines.join("\n")
 }
 
-fn render_log(cli: &Cli, rows: &[StoredRecord]) -> String {
+fn render_log(cli: &Cli, rows: &[StoredRecord], threads: &BTreeMap<usize, TaskId>) -> String {
     if cli.json {
-        return serde_json::to_string_pretty(rows).expect("records are plain data");
+        // the log row's own grammar, plus the fold's thread membership:
+        // a row with no home thread carries null, never absence
+        let out: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                let mut row = serde_json::to_value(r).expect("records are plain data");
+                row["thread"] = match threads.get(&r.seq) {
+                    Some(task) => serde_json::json!(format!("t-{}", task.0)),
+                    None => serde_json::Value::Null,
+                };
+                row
+            })
+            .collect();
+        return serde_json::to_string_pretty(&out).expect("records are plain data");
     }
     rows.iter().map(record_line).collect::<Vec<_>>().join("\n")
 }
@@ -1172,9 +1199,107 @@ fn render_id(world: &World, rows: &[db::StoredRecord], token: &str) -> Result<St
     }
 }
 
+/// One id as the json face shows it: the text door's same walk with
+/// bodies byte-exact — no wrap, no elision — and the fold's facts as
+/// fields. One requested id, one array element; the caller assembles.
+fn show_value(
+    world: &World,
+    rows: &[db::StoredRecord],
+    token: &str,
+) -> Result<serde_json::Value, Fail> {
+    match parse_show_id(token)? {
+        ShowId::Thread(id) => {
+            let view =
+                show_view(world, id).ok_or_else(|| Fail::Usage(format!("no task t-{}", id.0)))?;
+            let entries: Vec<serde_json::Value> =
+                thread_entries(&world.comments, &world.tasks[id.0])
+                    .into_iter()
+                    .map(|entry| match entry {
+                        ThreadEntry::Comment(line) => comment_value(&line),
+                        ThreadEntry::Artifact(line) => artifact_value(&line),
+                    })
+                    .collect();
+            Ok(serde_json::json!({
+                "id": view.id,
+                "state": view.state,
+                "parent": view.parent,
+                "name": view.name,
+                "receipt": view.receipt,
+                "entries": entries,
+            }))
+        }
+        ShowId::Record(id) => {
+            if let Some(line) = comment_line(world, id) {
+                return Ok(comment_value(&line));
+            }
+            if let Some(line) = artifact_line(world, id.0) {
+                return Ok(artifact_value(&line));
+            }
+            if let Some(task) = world.task_born_at(id.0) {
+                let ctx = &world.tasks[task.0];
+                let parent = task_view(world, task).and_then(|v| v.parent);
+                return Ok(serde_json::json!({
+                    "kind": "task",
+                    "seq": id.0.0,
+                    "actor": ctx.birth_actor.as_str(),
+                    "task": format!("t-{}", task.0),
+                    "parent": parent,
+                }));
+            }
+            // the raw-id door's machine face: the log row's own grammar
+            if let Some(row) = rows.get(id.0.0) {
+                return Ok(serde_json::to_value(row).expect("records are plain data"));
+            }
+            Err(Fail::Usage(format!(
+                "no record #{}; the log holds {} records, #0 through #{}",
+                id.0.0,
+                rows.len(),
+                rows.len().saturating_sub(1)
+            )))
+        }
+    }
+}
+
+/// A comment as the json face renders it: the thread line's facts with
+/// the body whole — the folded bytes, never the wrapped ones.
+fn comment_value(line: &CommentLine) -> serde_json::Value {
+    serde_json::json!({
+        "kind": line.kind,
+        "seq": line.seq,
+        "depth": line.depth,
+        "actor": line.actor,
+        "tier": line.tier,
+        "body": line.body,
+        "state": line.state,
+        "revised": line.revised,
+        "born_at": line.born_at,
+        "refusal": line.refusal.as_ref().map(|r| serde_json::json!({
+            "reason": r.reason,
+            "at": r.at,
+        })),
+    })
+}
+
+/// An artifact as the json face renders it: the pointer's facts, the
+/// hash whole.
+fn artifact_value(line: &ArtifactLine) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "artifact",
+        "seq": line.seq,
+        "name": line.name,
+        "hash": line.hash,
+    })
+}
+
 /// The piped face: one id per line, every failure a skip with a note,
-/// never a broken chain. Empty input is silence.
-fn show_stdin(world: &World, rows: &[db::StoredRecord], ids: &[String]) -> Result<String, Fail> {
+/// never a broken chain. Empty input is silence. The json face skips
+/// as an {"id", "error"} row, so the array holds every line's outcome.
+fn show_stdin(
+    cli: &Cli,
+    world: &World,
+    rows: &[db::StoredRecord],
+    ids: &[String],
+) -> Result<String, Fail> {
     if !ids.is_empty() {
         return Err(Fail::Usage("ids as arguments or --stdin, not both".into()));
     }
@@ -1182,6 +1307,20 @@ fn show_stdin(world: &World, rows: &[db::StoredRecord], ids: &[String]) -> Resul
         return Err(Fail::Usage(
             "nothing piped: --stdin reads ids one per line".into(),
         ));
+    }
+    if cli.json {
+        let mut blocks: Vec<serde_json::Value> = Vec::new();
+        for line in std::io::stdin().lines() {
+            let line = line.map_err(|e| Fail::Usage(format!("stdin: {e}")))?;
+            let token = line.trim();
+            if token.is_empty() {
+                continue;
+            }
+            let block = show_value(world, rows, token)
+                .unwrap_or_else(|f| serde_json::json!({"id": token, "error": f.to_string()}));
+            blocks.push(block);
+        }
+        return Ok(serde_json::to_string_pretty(&blocks).expect("blocks are plain data"));
     }
     let mut blocks = Vec::new();
     for line in std::io::stdin().lines() {

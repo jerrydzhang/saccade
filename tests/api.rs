@@ -1387,6 +1387,127 @@ fn search_reads_the_record_through_the_cli_face() {
 }
 
 #[test]
+fn show_and_log_json_read_byte_exact_through_the_cli_face() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = scratch_db("json-read-door");
+    let sac = |args: &[&str]| {
+        let out = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .arg("--offline")
+            .env("SACCADE_ACTOR", "pi")
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // the body no honest wrapper survives: quotes, backslashes, a line
+    // far past the width, more lines behind it
+    let body = format!(
+        "first: \"quoted\" and back\\slashed\n{}\nthird line $x^2+1$",
+        "word ".repeat(40) + "tail"
+    );
+    let answer = "the reply rides the thread its root holds";
+    assert!(sac(&["create", "task", "byte door"]).0);
+    assert!(sac(&["comment", "t-0", &body]).0);
+    assert!(sac(&["comment", "#1", answer]).0);
+    assert!(sac(&["comment", "t-0", "a short third note"]).0);
+    assert!(sac(&["revise", "#3", "revised bytes"]).0);
+
+    // the thread's json face: bodies byte-exact, replies folded in
+    let (ok, out, _) = sac(&["show", "--json", "t-0"]);
+    assert!(ok, "{out}");
+    let json: Value = serde_json::from_str(&out).expect("the json face parses");
+    let thread = &json[0];
+    assert_eq!(thread["id"], json!("t-0"));
+    assert_eq!(thread["name"], json!("byte door"));
+    let entries = thread["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0]["seq"], json!(1));
+    assert_eq!(entries[0]["kind"], json!("note"));
+    assert_eq!(entries[0]["body"], json!(body));
+    assert_eq!(entries[1]["seq"], json!(2));
+    assert_eq!(entries[1]["depth"], json!(2));
+    assert_eq!(entries[1]["body"], json!(answer));
+    // the fold presents the latest revision, byte-exact too
+    assert_eq!(entries[2]["seq"], json!(3));
+    assert_eq!(entries[2]["body"], json!("revised bytes"));
+    assert_eq!(entries[2]["revised"], json!(true));
+
+    // the record door answers with the same block, alone
+    let (ok, out, _) = sac(&["show", "--json", "#2"]);
+    assert!(ok, "{out}");
+    let json: Value = serde_json::from_str(&out).expect("the json face parses");
+    assert_eq!(json[0]["body"], json!(answer));
+    assert_eq!(json[0]["depth"], json!(2));
+
+    // the log's json face carries folded thread membership: a reply's
+    // target is its comment, its thread is still t-0 — the filter that
+    // lost answers to payload.target.task now keeps them
+    let (ok, out, _) = sac(&["log", "--json"]);
+    assert!(ok, "{out}");
+    let rows: Vec<Value> = serde_json::from_str(&out).expect("the json face parses");
+    let kept: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r["thread"] == json!("t-0"))
+        .collect();
+    let seqs: Vec<usize> = kept
+        .iter()
+        .filter_map(|r| r["seq"].as_u64().map(|s| s as usize))
+        .collect();
+    assert!(seqs.contains(&0), "the birth rides its thread: {seqs:?}");
+    assert!(seqs.contains(&2), "the reply rides its thread: {seqs:?}");
+    // the revision folds into its comment and claims no thread
+    let revised = rows
+        .iter()
+        .find(|r| r["kind"] == json!("comment_revised"))
+        .expect("the revision row");
+    assert_eq!(revised["thread"], Value::Null);
+
+    // the pipe's json face: every line's outcome, skips included
+    let pipe = |input: &str, args: &[&str]| {
+        use std::io::Write as _;
+        use std::process::Stdio;
+        let mut child = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .arg("--offline")
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn sac");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin pipes")
+            .write_all(input.as_bytes())
+            .expect("feed stdin");
+        let out = child.wait_with_output().expect("wait sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (ok, out, _) = pipe("bogus\n#1\n", &["show", "--stdin", "--json"]);
+    assert!(ok, "{out}");
+    let json: Vec<Value> = serde_json::from_str(&out).expect("the json face parses");
+    assert_eq!(json.len(), 2);
+    assert_eq!(json[0]["id"], json!("bogus"));
+    assert!(json[0]["error"].is_string());
+    assert_eq!(json[1]["body"], json!(body));
+
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn create_reply_names_the_born_task() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("create-reply");
