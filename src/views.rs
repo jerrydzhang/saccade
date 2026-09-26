@@ -141,6 +141,9 @@ pub struct CommentLine {
     pub state: Option<String>,
     /// The descriptive mark: the fold presents a revised body
     pub revised: bool,
+    /// The reviser's name, when the body was revised by an actor who
+    /// is not the birth author — a record fact, never a judgment
+    pub reviser: Option<String>,
     pub born_at: u64,
     /// The machinery's refusal to run this demand, when it refused
     pub refusal: Option<RefusalView>,
@@ -244,6 +247,11 @@ fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
         body: cctx.comment.body.as_str().to_string(),
         state: state_tag(&cctx.state, cctx.refusal.as_ref()),
         revised: cctx.revised.is_some(),
+        reviser: cctx
+            .revised
+            .as_ref()
+            .filter(|revision| revision.reviser != cctx.actor)
+            .map(|revision| revision.reviser.as_str().to_string()),
         born_at: cctx.born_at,
         refusal: cctx.refusal.as_ref().map(|r| RefusalView {
             reason: r.reason.as_str().to_string(),
@@ -1918,6 +1926,23 @@ mod panels {
                 Target::Task(TaskId(0)),
                 CommentKind::Note,
             ),
+            // an agent revises the human's comment: the reviser is named
+            record(
+                5,
+                5,
+                Tier::Agent,
+                Event::CommentRevised {
+                    id: CommentId(RecordId(4)),
+                    body: Prose::new("a body worth keeping, repaired".into()).unwrap(),
+                },
+            ),
+            comment_at(
+                6,
+                6,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
         ])
         .unwrap();
         let v = thread_view(&world, TaskId(0)).unwrap();
@@ -1927,13 +1952,27 @@ mod panels {
                 // the fold presents the latest body, marked revised
                 assert_eq!(line.body, "a body worth keeping, corrected");
                 assert!(line.revised);
+                // the reviser is the birth author: the plain mark, no name
+                assert_eq!(line.reviser, None);
                 // the mark is not a state: a note still carries none
                 assert_eq!(line.state, None);
             }
             other => panic!("expected a note, got {other:?}"),
         }
         match &v.items[1] {
-            ThreadItem::Note(line) => assert!(!line.revised, "never revised, never marked"),
+            ThreadItem::Note(line) => {
+                // a reviser who differs from the birth author is named
+                assert_eq!(line.body, "a body worth keeping, repaired");
+                assert!(line.revised);
+                assert_eq!(line.reviser.as_deref(), Some("pi"));
+            }
+            other => panic!("expected a note, got {other:?}"),
+        }
+        match &v.items[2] {
+            ThreadItem::Note(line) => {
+                assert!(!line.revised, "never revised, never marked");
+                assert_eq!(line.reviser, None);
+            }
             other => panic!("expected a note, got {other:?}"),
         }
     }

@@ -452,7 +452,7 @@ mod test {
     use super::*;
     use crate::events::{Command, Event};
     use crate::objects::comment::CommentKind;
-    use crate::objects::comment::{AgentAttemptState, CommentState, ResponseState};
+    use crate::objects::comment::{AgentAttemptState, CommentState, ResponseState, Revision};
     use crate::objects::incarnation::{IncarnationId, IncarnationState};
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
@@ -925,7 +925,10 @@ mod test {
         );
         assert_eq!(
             world.comments[&CommentId(RecordId(39))].revised,
-            Some(RecordId(40))
+            Some(Revision {
+                record: RecordId(40),
+                reviser: agent().actor,
+            })
         );
         assert!(loadout.rows[39].payload.contains("post-fold receipt"));
         // the artifact family rides the same columns: pointer only

@@ -183,6 +183,15 @@ impl CommentState {
     }
 }
 
+/// The latest revision of a folded comment's body: the record that
+/// swapped it in and the actor who did — disclosure is a fold fact,
+/// named whenever the reviser differs from the birth author.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Revision {
+    pub record: RecordId,
+    pub reviser: ActorName,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommentContext {
     pub comment: Comment,
@@ -191,9 +200,9 @@ pub struct CommentContext {
     pub state: CommentState,
     /// Event time of the comment's birth record
     pub born_at: u64,
-    /// The latest revision record's position, when the body was ever
-    /// revised — a pointer, never the payload it swapped in
-    pub revised: Option<RecordId>,
+    /// The latest revision of the body, when it was ever revised —
+    /// a pointer with its reviser, never the payload it swapped in
+    pub revised: Option<Revision>,
     /// The machinery's refusal to run this demand, when it refused
     pub refusal: Option<Refusal>,
 }

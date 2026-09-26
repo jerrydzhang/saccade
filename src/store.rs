@@ -6,7 +6,7 @@ use crate::decide::{decide, enforce_tier, expand};
 use crate::events::{Command, Event};
 use crate::objects::comment::{
     AgentAttemptState, Comment, CommentContext, CommentId, CommentKind, CommentState, Refusal,
-    ResponseState, SteerDelivery,
+    ResponseState, Revision, SteerDelivery,
 };
 use crate::objects::incarnation::{IncarnationContext, IncarnationId, IncarnationState};
 use crate::objects::proposal::{Proposal, ProposalContext, ProposalId, ProposalState};
@@ -44,8 +44,6 @@ pub enum Reason {
     InvalidTaskId,
     InvalidProposalId,
     InvalidCommentId,
-    /// The reviser is neither the comment's birth author nor human tier.
-    NotCommentAuthor,
     /// The accept door refuses: the invocation is not the task's birth
     /// attribution and not human tier.
     NotBirthAttribution,
@@ -67,7 +65,6 @@ impl From<Reason> for Reject {
             Reason::InvalidTaskId => Reject::InvalidTaskId,
             Reason::InvalidProposalId => Reject::InvalidProposalId,
             Reason::InvalidCommentId => Reject::InvalidCommentId,
-            Reason::NotCommentAuthor => Reject::NotCommentAuthor,
             Reason::NotBirthAttribution => Reject::NotBirthAttribution,
             Reason::InvalidParentTaskId => Reject::InvalidParentTaskId,
             Reason::InvalidStateTransition => Reject::InvalidStateTransition,
@@ -604,14 +601,15 @@ impl World {
             }
             // A content act, not a transition: the body swaps and the
             // pointer moves to this record — the state machines never
-            // see the event, and the birth bytes stay in their own row
+            // see the event, and the birth bytes stay in their own row.
+            // Any tier revises; the fold keeps the reviser for disclosure
             Event::CommentRevised { id, ref body } => {
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
-                if record.context.tier != Tier::Human && comment_ctx.actor != record.context.actor {
-                    return Err(Reason::NotCommentAuthor);
-                }
                 comment_ctx.comment.body = body.clone();
-                comment_ctx.revised = Some(record.id);
+                comment_ctx.revised = Some(Revision {
+                    record: record.id,
+                    reviser: record.context.actor.clone(),
+                });
                 let root = comment_ctx.comment.root;
                 let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_record_at = record.timestamp;
@@ -823,10 +821,6 @@ mod test {
         assert!(matches!(
             Reject::from(Reason::InvalidCommentId),
             Reject::InvalidCommentId
-        ));
-        assert!(matches!(
-            Reject::from(Reason::NotCommentAuthor),
-            Reject::NotCommentAuthor
         ));
         assert!(matches!(
             Reject::from(Reason::InvalidParentTaskId),
@@ -1883,7 +1877,7 @@ mod test {
     }
 
     #[test]
-    fn revision_swaps_the_body_under_author_or_human() {
+    fn revision_swaps_the_body_at_any_tier_and_keeps_the_reviser() {
         let mut log = Log::new();
         log.execute(
             human(),
@@ -1918,26 +1912,42 @@ mod test {
         .unwrap();
         let ctx = &log.world().comments[&note];
         assert_eq!(ctx.comment.body.as_str(), "run the sweep on the new door");
-        assert_eq!(ctx.revised, Some(RecordId(2)));
+        assert_eq!(
+            ctx.revised,
+            Some(Revision {
+                record: RecordId(2),
+                reviser: agent().actor,
+            })
+        );
         // a content act, not a transition: the demand keeps its state
         assert!(matches!(&ctx.state, CommentState::Demand { .. }));
 
-        // another agent is refused, writing nothing
+        // any tier revises any comment: another agent's revision lands
         let other = Context {
             actor: ActorName::new("other agent".into()).unwrap(),
             tier: Tier::Agent,
         };
-        let before = log.records().len();
-        let refused = log.execute(
-            other,
+        log.execute(
+            other.clone(),
             Command::ReviseComment {
                 id: note,
-                body: Prose::new("not mine to touch".into()).unwrap(),
+                body: Prose::new("not mine, but the door is free".into()).unwrap(),
             },
             4,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&note];
+        assert_eq!(ctx.comment.body.as_str(), "not mine, but the door is free");
+        assert_eq!(
+            ctx.revised,
+            Some(Revision {
+                record: RecordId(3),
+                reviser: other.actor,
+            })
         );
-        assert!(matches!(refused, Err(Reject::NotCommentAuthor)));
-        assert_eq!(log.records().len(), before);
+        // the birth attribution never moves: the words are still the
+        // author's record, only the swap is the reviser's
+        assert_eq!(ctx.actor, agent().actor);
 
         // a human revises any comment, and a second revision moves the
         // pointer to the latest record
@@ -1952,7 +1962,13 @@ mod test {
         .unwrap();
         let ctx = &log.world().comments[&note];
         assert_eq!(ctx.comment.body.as_str(), "the sweep covers both doors");
-        assert_eq!(ctx.revised, Some(RecordId(3)));
+        assert_eq!(
+            ctx.revised,
+            Some(Revision {
+                record: RecordId(4),
+                reviser: human().actor,
+            })
+        );
 
         // the addressed position must be a comment's birth: a task birth
         // is not one, and an unknown seq is not either
@@ -1967,7 +1983,9 @@ mod test {
             );
             assert!(matches!(refused, Err(Reject::InvalidCommentId)));
         }
-        assert_eq!(log.records().len(), before + 1);
+        // the two refusals wrote nothing: the log holds exactly the
+        // create, the comment, and the three landed revisions
+        assert_eq!(log.records().len(), 5);
     }
 
     #[test]

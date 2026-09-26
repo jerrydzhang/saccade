@@ -23,8 +23,7 @@ fn required_tier(event: &Event) -> Authority {
         | Event::IncarnationCancelled { .. }
         | Event::TaskWorkspaceCheckpointed { .. } => Authority::AnyTier,
         // accept's door reads the world's birth attribution, so its
-        // authority lives in the fold, not in a tier cell; revise's
-        // author-or-human door reads the fold the same way
+        // authority lives in the fold, not in a tier cell
         Event::TaskAccepted { .. } | Event::CommentRevised { .. } => Authority::AnyTier,
         Event::TaskDropped { .. }
         | Event::ProposalRejected { .. }

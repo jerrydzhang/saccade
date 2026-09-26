@@ -82,19 +82,6 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 "#{seq} names no comment; a reply addresses a comment record as #<seq>, a task's thread as t-<n>"
             ))
         }
-        Reject::NotCommentAuthor => {
-            let Command::ReviseComment { id, .. } = command else {
-                return None;
-            };
-            let author = world.comments.get(id).map(|c| c.actor.as_str().to_string());
-            Some(match author {
-                Some(name) => format!(
-                    "#{seq} is {name}'s comment; its author revises, or a human does",
-                    seq = id.0.0
-                ),
-                None => format!("#{seq} names no comment", seq = id.0.0),
-            })
-        }
         Reject::InvalidStateTransition => match command {
             Command::ClaimTask { id } => need(world, *id, "a claim needs an open task"),
             Command::CompleteTask { id, .. } => need(world, *id, "done needs the holder's claim"),
@@ -320,33 +307,9 @@ mod test {
     }
 
     #[test]
-    fn revision_refusals_teach_the_door() {
-        // t-0 born at #0, the agent's note at #1
-        let world = World::replay(vec![
-            task(0, "migrate floop"),
-            record(
-                1,
-                1,
-                &agent(),
-                Event::Commented {
-                    target: Target::Task(TaskId(0)),
-                    body: Prose::new("parked mid-flight".into()).unwrap(),
-                    kind: CommentKind::Note,
-                },
-            ),
-        ])
-        .unwrap();
-        // the human revising the agent's comment learns whose it is
-        let command = Command::ReviseComment {
-            id: CommentId(RecordId(1)),
-            body: Prose::new("not mine to touch".into()).unwrap(),
-        };
-        let taught = teach(&world, &command, &Reject::NotCommentAuthor).unwrap();
-        assert!(taught.contains("#1 is saccade bot's comment"), "{taught}");
-        assert!(
-            taught.contains("its author revises, or a human does"),
-            "{taught}"
-        );
+    fn a_revision_refusal_on_a_birth_record_teaches_the_thread_door() {
+        // t-0 born at #0
+        let world = World::replay(vec![task(0, "migrate floop")]).unwrap();
         // a birth record addressed for revision learns the thread door
         let command = Command::ReviseComment {
             id: CommentId(RecordId(0)),
