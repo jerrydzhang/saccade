@@ -670,7 +670,6 @@ fn reject_text(r: &Reject) -> String {
         ProposalAlreadyOpen => "that task already has an open proposal".into(),
         InvalidCommentId => "no comment with that id".into(),
         NotBirthAttribution => "only the task's birth attribution or a human may accept".into(),
-        NotCommentAuthor => "only the comment's author or a human may revise".into(),
         InvalidParentTaskId => "no such parent task".into(),
         other => format!("{other:?}"),
     }

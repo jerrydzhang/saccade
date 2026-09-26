@@ -133,9 +133,21 @@ enum Cmd {
     /// Steer a task's live run at its next turn boundary; with no run
     /// living, the steer stands on the thread as intent
     Steer { id: String, body: String },
-    /// Revise a comment's body (the birth author or a human); the fold
-    /// presents the latest, the log keeps the original
-    Revise { id: String, body: String },
+    /// Revise a comment's body: the fold presents the latest and names
+    /// a reviser who differs from the birth author, the log keeps the
+    /// original
+    Revise {
+        id: String,
+        /// The revised body, as an argument
+        #[arg(required_unless_present_any = ["stdin", "body_file"])]
+        body: Option<String>,
+        /// Read the revised body from stdin instead of an argument
+        #[arg(long, conflicts_with_all = ["body", "body_file"])]
+        stdin: bool,
+        /// Read the revised body from a file instead of an argument
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["body", "stdin"])]
+        body_file: Option<PathBuf>,
+    },
     /// Park an artifact on a task's thread: hash the file into the
     /// store, record the pointer — the bytes never ride the wire
     Artifact {
@@ -421,9 +433,14 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             body: Prose::new(body.clone())?,
             kind: CommentKind::Steer,
         },
-        Cmd::Revise { id, body } => Command::ReviseComment {
+        Cmd::Revise {
+            id,
+            body,
+            stdin,
+            body_file,
+        } => Command::ReviseComment {
             id: parse_revision_id(id)?,
-            body: Prose::new(body.clone())?,
+            body: Prose::new(revise_body(body.clone(), *stdin, body_file.clone())?)?,
         },
         Cmd::Artifact { task, path, name } => {
             let id = parse_task_id(task)?;
@@ -923,6 +940,23 @@ fn parse_proposal_id(token: &str) -> Result<ProposalId, Fail> {
     Ok(ProposalId(RecordId(n)))
 }
 
+/// The revise door's body sources: the argument, the pipe, or the file
+/// — one of the three, the bytes landing verbatim.
+fn revise_body(body: Option<String>, stdin: bool, file: Option<PathBuf>) -> Result<String, Fail> {
+    if stdin {
+        if std::io::stdin().is_terminal() {
+            return Err(Fail::Usage("nothing piped: --stdin reads the body".into()));
+        }
+        return std::io::read_to_string(std::io::stdin())
+            .map_err(|e| Fail::Usage(format!("stdin: {e}")));
+    }
+    if let Some(path) = file {
+        return std::fs::read_to_string(&path)
+            .map_err(|e| Fail::Usage(format!("cannot read {}: {e}", path.display())));
+    }
+    body.ok_or_else(|| Fail::Usage("the body comes by argument, --stdin, or --body-file".into()))
+}
+
 /// The '#<seq>' face the revise door takes; a 'c-' prefix learns the
 /// bare form, the demand's grammar never applies here.
 fn parse_revision_id(token: &str) -> Result<CommentId, Fail> {
@@ -1092,12 +1126,18 @@ fn artifact_block(line: &ArtifactLine) -> Vec<String> {
 fn comment_block(line: &CommentLine) -> Vec<String> {
     let indent = "  ".repeat(line.depth.saturating_sub(1));
     // the revised mark rides the state's parenthetical: descriptive,
-    // beside the comment, never a narrative of its own
-    let marks = match (&line.state, line.revised) {
-        (Some(state), true) => Some(format!("{state}, revised")),
-        (Some(state), false) => Some(state.clone()),
-        (None, true) => Some("revised".to_string()),
-        (None, false) => None,
+    // beside the comment, never a narrative of its own — and a reviser
+    // who differs from the birth author is named
+    let revised = match (line.revised, line.reviser.as_deref()) {
+        (true, Some(who)) => format!("revised by {who}"),
+        (true, None) => "revised".to_string(),
+        _ => String::new(),
+    };
+    let marks = match (&line.state, revised.is_empty()) {
+        (Some(state), false) => Some(format!("{state}, {revised}")),
+        (Some(state), true) => Some(state.clone()),
+        (None, false) => Some(revised),
+        (None, true) => None,
     };
     let state = marks.map(|m| format!("  ({m})")).unwrap_or_default();
     let mut out = vec![format!("{indent}#{}  {}{state}", line.seq, line.actor)];
@@ -1708,5 +1748,38 @@ mod test {
             parse_revision_id("#7").unwrap_or_else(|f| panic!("{f}")),
             CommentId(RecordId(7))
         );
+    }
+
+    /// The revise door's body lands verbatim: the argument as given, the
+    /// file's bytes exact — quotes, backslashes, newlines and all.
+    #[test]
+    fn the_revise_body_lands_verbatim_from_its_sources() {
+        assert_eq!(
+            revise_body(Some("plain argument".into()), false, None)
+                .map_err(|f| f.to_string())
+                .unwrap(),
+            "plain argument"
+        );
+        let dir = std::env::temp_dir().join(format!("sac-revise-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("body.md");
+        std::fs::write(
+            &file,
+            "a body with \"quotes\", \\backslashes\\, and\nlines\n",
+        )
+        .unwrap();
+        assert_eq!(
+            revise_body(None, false, Some(file.clone()))
+                .map_err(|f| f.to_string())
+                .unwrap(),
+            "a body with \"quotes\", \\backslashes\\, and\nlines\n"
+        );
+        assert!(
+            revise_body(None, false, None).is_err(),
+            "no source, no body"
+        );
+        let missing = dir.join("absent.md");
+        assert!(revise_body(None, false, Some(missing)).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

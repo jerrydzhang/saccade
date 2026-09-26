@@ -462,7 +462,6 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidProposalId => "InvalidProposalId",
                         saccade::Reject::ProposalAlreadyOpen => "ProposalAlreadyOpen",
                         saccade::Reject::InvalidCommentId => "InvalidCommentId",
-                        saccade::Reject::NotCommentAuthor => "NotCommentAuthor",
                         saccade::Reject::NotBirthAttribution => "NotBirthAttribution",
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
@@ -519,7 +518,6 @@ fn generator_reaches_deep_states() {
         "InvalidParentTaskId",
         "InvalidProposalId",
         "InvalidCommentId",
-        "NotCommentAuthor",
         "InvalidStateTransition",
         "NotBirthAttribution",
     ] {

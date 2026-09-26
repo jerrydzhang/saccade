@@ -759,11 +759,12 @@ fn node_html(
         .as_deref()
         .map(|s| format!("<span class=\"nseq\">{}</span>", esc(s)))
         .unwrap_or_default();
-    // the descriptive mark: the fold presents a revised body
-    let revised = if line.revised {
-        "<span class=\"nseq\">revised</span>".to_string()
-    } else {
-        String::new()
+    // the descriptive mark: the fold presents a revised body, and a
+    // reviser who differs from the birth author is named
+    let revised = match (line.revised, line.reviser.as_deref()) {
+        (true, Some(who)) => format!("<span class=\"nseq\">revised by {}</span>", esc(who)),
+        (true, None) => "<span class=\"nseq\">revised</span>".to_string(),
+        _ => String::new(),
     };
     let extra = tag
         .map(|t| format!("<span class=\"nseq\">{}</span>", esc(t)))
@@ -2416,6 +2417,26 @@ mod tests {
                     body: Prose::new("parked, then corrected".into()).unwrap(),
                 },
             ),
+            // a second note, revised by an actor who is not its author
+            record(
+                3,
+                3,
+                agent(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("second note, parked".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+            record(
+                4,
+                4,
+                human(),
+                Event::CommentRevised {
+                    id: CommentId(RecordId(3)),
+                    body: Prose::new("second note, repaired".into()).unwrap(),
+                },
+            ),
         ])
         .unwrap();
         let html = thread_section(
@@ -2424,7 +2445,8 @@ mod tests {
             None,
             &ArtifactStore::default(),
         );
-        // the fold's latest body renders, the descriptive mark beside it
+        // the fold's latest body renders, the descriptive mark beside it;
+        // the reviser is the birth author, so the mark stays plain
         assert!(html.contains("parked, then corrected"), "{html}");
         assert!(
             html.contains("#1</span><span class=\"nseq\">revised</span>"),
@@ -2436,6 +2458,12 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("parked mid-flight"), "{html}");
+        // the reviser who differs from the birth author is named
+        assert!(
+            html.contains("#3</span><span class=\"nseq\">revised by jerry</span>"),
+            "{html}"
+        );
+        assert!(html.contains("second note, repaired"), "{html}");
     }
 
     #[test]

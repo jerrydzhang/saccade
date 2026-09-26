@@ -1997,11 +1997,11 @@ async fn an_ask_round_trips_through_the_comment_door() {
 
 // ---- the revise door: the wire's authority law ----
 
-/// The revise verb round-trips over the wire: the author revises at
-/// agent tier, another agent is refused with the named code, a human
-/// revises any comment, and the fold presents the latest body.
+/// The revise verb round-trips over the wire: any tier revises any
+/// comment, the fold presents the latest body, and a reviser who
+/// differs from the birth author is named.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_revision_round_trips_and_authority_holds_through_the_wire() {
+async fn a_revision_round_trips_and_discloses_through_the_wire() {
     let db = scratch_db("revise-wire");
     let base_url = spawn_server(&db).await;
     post_command(
@@ -2035,26 +2035,20 @@ async fn a_revision_round_trips_and_authority_holds_through_the_wire() {
     assert_eq!(status, 200);
     assert_eq!(json_of(&body)["records"][0]["kind"], "comment_revised");
 
-    // another agent is refused, writing nothing
+    // another agent revises the same comment: the door is free
     let (status, body) = post_command(
         &base_url,
         &envelope(
             "other agent",
             "agent",
-            json!({"revise_comment": {"id": seq, "body": "not mine to touch"}}),
+            json!({"revise_comment": {"id": seq, "body": "not mine, but the door is free"}}),
         ),
     );
-    assert_eq!(status, 400);
-    let error = &json_of(&body)["error"];
-    assert_eq!(error["code"], "not_comment_author");
-    // the refusal teaches whose comment it is
-    assert!(
-        error["detail"].as_str().unwrap().contains("pi's comment"),
-        "{}",
-        error["detail"]
-    );
+    assert_eq!(status, 200);
+    assert_eq!(json_of(&body)["records"][0]["kind"], "comment_revised");
 
-    // a human revises any comment
+    // a human revises any comment, and a second revision moves the
+    // pointer to the latest record
     let (status, _) = post_command(
         &base_url,
         &envelope(
@@ -2075,6 +2069,9 @@ async fn a_revision_round_trips_and_authority_holds_through_the_wire() {
     .expect("the comment folds");
     assert_eq!(revised.body, "the sweep covers both doors");
     assert!(revised.revised);
+    // the latest reviser differs from the birth author: the fold names them
+    assert_eq!(revised.reviser.as_deref(), Some("human person"));
+    assert_eq!(revised.actor, "pi");
     let bodies: Vec<&str> = snapshot.rows.iter().map(|r| r.payload.as_str()).collect();
     assert!(
         bodies
@@ -2090,6 +2087,11 @@ async fn a_revision_round_trips_and_authority_holds_through_the_wire() {
         bodies
             .iter()
             .any(|p| p.contains("the sweep covers both doors"))
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|p| p.contains("not mine, but the door is free"))
     );
 
     // an unknown comment names the id; the birth record is not a comment
