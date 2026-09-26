@@ -212,6 +212,7 @@ The power tail is unchanged: `sac log | grep` reads the raw record.
 | `sac accept t-N` | birth attribution, or human | the only door from delivered to done |
 | `sac accept <seq>` / `sac reject <seq> --note` | **human only** | ruling acts on proposals |
 | `sac comment t-N "…"` / `sac comment #<seq> "…"` | any tier | park or reply — a note; `--demand` fires a run |
+| `sac revise #<seq> "…"` | the comment's author, or human | swap a comment's body; the mark reads `revised`, the original stays in `sac log` |
 | `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only; bytes never ride the wire, the db, or the server |
 | `sac steer t-N "…"` | any tier | reach the task's live run at its next turn boundary; with no run it stands as intent on the thread |
 | `sac wait c-<seq>` | any tier | blocks on the demand's outcome, never replies |

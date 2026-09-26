@@ -1874,6 +1874,215 @@ async fn an_ask_round_trips_through_the_comment_door() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
+// ---- the revise door: the wire's authority law ----
+
+/// The revise verb round-trips over the wire: the author revises at
+/// agent tier, another agent is refused with the named code, a human
+/// revises any comment, and the fold presents the latest body.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revision_round_trips_and_authority_holds_through_the_wire() {
+    let db = scratch_db("revise-wire");
+    let base_url = spawn_server(&db).await;
+    post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+        ),
+    );
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 0}, "body": "run the sweep on the old door", "kind": "note"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let seq = json_of(&body)["records"][0]["seq"].as_u64().unwrap();
+
+    // the author revises its own comment
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"revise_comment": {"id": seq, "body": "run the sweep on the new door"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(json_of(&body)["records"][0]["kind"], "comment_revised");
+
+    // another agent is refused, writing nothing
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "other agent",
+            "agent",
+            json!({"revise_comment": {"id": seq, "body": "not mine to touch"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    let error = &json_of(&body)["error"];
+    assert_eq!(error["code"], "not_comment_author");
+    // the refusal teaches whose comment it is
+    assert!(
+        error["detail"].as_str().unwrap().contains("pi's comment"),
+        "{}",
+        error["detail"]
+    );
+
+    // a human revises any comment
+    let (status, _) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"revise_comment": {"id": seq, "body": "the sweep covers both doors"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+
+    // the fold presents the latest body; the log keeps every byte
+    let state = AppState::open(&db).unwrap();
+    let snapshot = state.snapshot().unwrap();
+    let revised = saccade::views::comment_line(
+        &snapshot.world,
+        saccade::CommentId(saccade::RecordId(seq as usize)),
+    )
+    .expect("the comment folds");
+    assert_eq!(revised.body, "the sweep covers both doors");
+    assert!(revised.revised);
+    let bodies: Vec<&str> = snapshot.rows.iter().map(|r| r.payload.as_str()).collect();
+    assert!(
+        bodies
+            .iter()
+            .any(|p| p.contains("run the sweep on the old door"))
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|p| p.contains("run the sweep on the new door"))
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|p| p.contains("the sweep covers both doors"))
+    );
+
+    // an unknown comment names the id; the birth record is not a comment
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"revise_comment": {"id": 99, "body": "addresses nothing"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_comment_id");
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"revise_comment": {"id": 0, "body": "addresses a birth"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    let error = &json_of(&body)["error"];
+    assert_eq!(error["code"], "invalid_comment_id");
+    assert!(
+        error["detail"]
+            .as_str()
+            .unwrap()
+            .contains("birth record of task t-0")
+    );
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The console's revise door: the reveal posts inline on every
+/// comment, claims the actor at the act at human tier, and the mark
+/// renders beside the revised body.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_console_revise_door_posts_and_marks() {
+    let db = scratch_db("revise-console");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "migrate floop");
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("parked mid-flight".into()).unwrap(),
+                kind: CommentKind::Note,
+            },
+            None,
+            bare_request(),
+        )
+        .unwrap();
+
+    // the focused page carries the reveal, prefilled with the current body
+    let (status, html) = get_html(&format!("{base}/t/0"));
+    assert_eq!(status, 200);
+    assert!(html.contains("action=\"/c/1/revise\""), "{html}");
+    assert!(
+        html.contains("<textarea name=\"body\" rows=\"2\">parked mid-flight</textarea>"),
+        "{html}"
+    );
+
+    // the post lands at human tier under the claimed name, 303 home
+    let (status, _, loc, cookie) = post_form_ck(
+        &format!("{base}/c/1/revise"),
+        &[],
+        "body=parked,+then+corrected&who=jerry",
+    );
+    assert_eq!(status, 303);
+    assert_eq!(loc.as_deref(), Some("/t/0#c-1"));
+    assert!(
+        cookie
+            .as_deref()
+            .is_some_and(|c| c.starts_with("actor=jerry")),
+        "the first claim claims the cookie: {cookie:?}"
+    );
+    let world = world_of(&state);
+    let revised =
+        saccade::views::comment_line(&world, CommentId(RecordId(1))).expect("the comment folds");
+    assert_eq!(revised.body, "parked, then corrected");
+    assert!(revised.revised);
+    let snap = match state.snapshot() {
+        Ok(s) => s,
+        Err(_) => panic!("the snapshot refused"),
+    };
+    let landed = snap.rows.last().expect("the revision landed");
+    assert_eq!(landed.kind, "comment_revised");
+    assert_eq!(landed.actor, "jerry");
+    assert_eq!(landed.tier, "human");
+
+    // the mark renders beside the revised body; the original stays in log
+    let (status, html) = get_html(&format!("{base}/t/0"));
+    assert_eq!(status, 200);
+    assert!(html.contains("parked, then corrected"), "{html}");
+    assert!(
+        html.contains("<span class=\"nseq\">revised</span>"),
+        "{html}"
+    );
+    let snap = match state.snapshot() {
+        Ok(s) => s,
+        Err(_) => panic!("the snapshot refused"),
+    };
+    assert!(snap.rows[1].payload.contains("parked mid-flight"));
+
+    // the comment door refuses what is not a comment: a clean 404
+    let (status, body, _) = post_form(&format!("{base}/c/99/revise"), &[], "body=x&who=jerry");
+    assert_eq!(status, 404);
+    assert!(body.contains("no comment #99"), "{body}");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
 // ---- artifacts: the wire, the bytes door, the console render ----
 
 /// A console whose state also serves an artifact store.

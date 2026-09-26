@@ -582,7 +582,7 @@ pub fn thread_section(
         // artifacts carry no time in the fold; they ride beside the
         // utterances, never opening a gap
         if matches!(item, ThreadItem::Artifacts(_)) {
-            s.push_str(&item_html(item, &f.refs, store));
+            s.push_str(&item_html(item, &f.refs, &form.who, store));
             continue;
         }
         let (first_at, last_at) = item_span(item);
@@ -595,7 +595,7 @@ pub fn thread_section(
             ));
         }
         last_time = Some(last_at);
-        s.push_str(&item_html(item, &f.refs, store));
+        s.push_str(&item_html(item, &f.refs, &form.who, store));
     }
     if f.thread.items.is_empty() && f.show.receipt.is_none() && f.proposals.is_empty() {
         s.push_str("<div class=\"nempty\">no comments yet</div>\n");
@@ -619,6 +619,7 @@ fn item_span(item: &ThreadItem) -> (u64, u64) {
 fn item_html(
     item: &ThreadItem,
     refs: &BTreeMap<usize, RefTarget>,
+    who: &str,
     store: &ArtifactStore,
 ) -> String {
     match item {
@@ -652,6 +653,7 @@ fn item_html(
                     Some(("DEMAND", "#dac09a")),
                     None,
                     refs,
+                    who,
                     store,
                 ));
                 s.push_str(&format!(
@@ -666,6 +668,7 @@ fn item_html(
                         Some(("REPLY", "#a2c4a3")),
                         None,
                         refs,
+                        who,
                         store,
                     ));
                 }
@@ -679,7 +682,15 @@ fn item_html(
                 } else {
                     "awaiting incarnation"
                 };
-                let mut s = node_html(root, 0, Some(("DEMAND", "#dac09a")), Some(tag), refs, store);
+                let mut s = node_html(
+                    root,
+                    0,
+                    Some(("DEMAND", "#dac09a")),
+                    Some(tag),
+                    refs,
+                    who,
+                    store,
+                );
                 // the refusal fact, where the run row would sit: reason and time
                 if let Some(r) = &root.refusal {
                     s.push_str(&format!(
@@ -695,6 +706,7 @@ fn item_html(
                         Some(("REPLY", "#a2c4a3")),
                         None,
                         refs,
+                        who,
                         store,
                     ));
                 }
@@ -708,7 +720,7 @@ fn item_html(
                 "ask" => Some(("ASK", "#dac09a")),
                 _ => None,
             };
-            s.push_str(&node_html(root, 0, chip, None, refs, store));
+            s.push_str(&node_html(root, 0, chip, None, refs, who, store));
             for r in replies {
                 s.push_str(&node_html(
                     r,
@@ -716,24 +728,27 @@ fn item_html(
                     None,
                     None,
                     refs,
+                    who,
                     store,
                 ));
             }
             s.push_str("</div>\n");
             s
         }
-        ThreadItem::Note(line) => node_html(line, 0, None, None, refs, store),
+        ThreadItem::Note(line) => node_html(line, 0, None, None, refs, who, store),
     }
 }
 
 /// One comment row: kind chip, whisper mono meta (actor, seq, time),
-/// full body. Body renders through the reading-side resolver.
+/// full body. Body renders through the reading-side resolver; every
+/// row carries the revise reveal — the human surface's inline door.
 fn node_html(
     line: &CommentLine,
     indent: usize,
     kind: Option<(&str, &str)>,
     tag: Option<&str>,
     refs: &BTreeMap<usize, RefTarget>,
+    who: &str,
     store: &ArtifactStore,
 ) -> String {
     let chip = kind
@@ -744,17 +759,25 @@ fn node_html(
         .as_deref()
         .map(|s| format!("<span class=\"nseq\">{}</span>", esc(s)))
         .unwrap_or_default();
+    // the descriptive mark: the fold presents a revised body
+    let revised = if line.revised {
+        "<span class=\"nseq\">revised</span>".to_string()
+    } else {
+        String::new()
+    };
     let extra = tag
         .map(|t| format!("<span class=\"nseq\">{}</span>", esc(t)))
         .unwrap_or_default();
     format!(
-        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">#{seq}</span>{state}{extra}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody\">{body}</div>\n</div>\n",
+        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">#{seq}</span>{state}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody\">{body}</div>\n<details class=\"revise\"><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{current}</textarea>\n<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n</div>\n",
         seq = line.seq,
         pad = 26 + indent * 22,
         tier = esc(&line.tier),
         actor = esc(&line.actor),
         time = esc(&fmt_t(line.born_at)),
         body = prose_html(&line.body, refs, store),
+        current = esc(&line.body),
+        who_input = who_input(who),
     )
 }
 
@@ -1448,6 +1471,22 @@ input.who:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
   font: 500 12px "JetBrains Mono", ui-monospace, monospace;
   overflow-wrap: anywhere;
 }
+
+/* the revise reveal: a whisper door on every comment */
+.revise { margin-top: 3px; }
+.revise summary {
+  cursor: pointer; color: #4a4543; width: fit-content;
+  font: 500 10px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .08em;
+}
+.revise summary:hover { color: #6d6562; }
+.rform { margin-top: 4px; }
+.rform textarea {
+  width: 100%; background: #100f0e; color: #d4ceca;
+  border: 1px solid #100f0e; border-radius: 4px;
+  font: 500 12.5px "Noto Sans", system-ui, sans-serif; padding: 6px 9px; resize: vertical;
+}
+.rform textarea:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
+.rform .jbtns { display: flex; gap: 8px; align-items: flex-end; margin-top: 6px; }
 
 /* narrow: the rail collapses behind the mode-line toggle */
 @media (max-width: 1100px) {
@@ -2321,6 +2360,85 @@ mod tests {
     }
 
     #[test]
+    fn the_revise_reveal_renders_on_every_comment() {
+        let world = fixture();
+        let html = thread_section(
+            &focus_of(&world, 1),
+            &FormState {
+                who: "jerry".into(),
+                ..Default::default()
+            },
+            None,
+            &ArtifactStore::default(),
+        );
+        // the reveal posts inline at the comment, prefilled with the
+        // fold's latest body and the actor name every act form carries
+        assert!(
+            html.contains("<details class=\"revise\"><summary>revise</summary>"),
+            "{html}"
+        );
+        assert!(html.contains("action=\"/c/5/revise\""), "{html}");
+        assert!(
+            html.contains("<textarea name=\"body\" rows=\"2\">demand body</textarea>"),
+            "{html}"
+        );
+        assert!(html.contains("value=\"jerry\""), "{html}");
+    }
+
+    #[test]
+    fn a_revised_comment_renders_its_mark() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                1,
+                agent(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("parked mid-flight".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+            record(
+                2,
+                2,
+                agent(),
+                Event::CommentRevised {
+                    id: CommentId(RecordId(1)),
+                    body: Prose::new("parked, then corrected".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        let html = thread_section(
+            &focus_of(&world, 0),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
+        // the fold's latest body renders, the descriptive mark beside it
+        assert!(html.contains("parked, then corrected"), "{html}");
+        assert!(
+            html.contains("#1</span><span class=\"nseq\">revised</span>"),
+            "{html}"
+        );
+        // the reveal prefills the latest body, never the original
+        assert!(
+            html.contains("<textarea name=\"body\" rows=\"2\">parked, then corrected</textarea>"),
+            "{html}"
+        );
+        assert!(!html.contains("parked mid-flight"), "{html}");
+    }
+
+    #[test]
     fn the_judgment_form_carries_one_name() {
         let world = fixture();
         let html = thread_section(
@@ -2329,10 +2447,18 @@ mod tests {
             None,
             &ArtifactStore::default(),
         );
+        // the ruling form itself carries exactly one name; the revise
+        // reveals carry their own, one per comment
+        let ruling = html
+            .split("action=\"/p/4/ruling\"")
+            .nth(1)
+            .and_then(|rest| rest.split("</form>").next())
+            .expect("the ruling form renders");
+        assert_eq!(ruling.matches("name=\"who\"").count(), 1);
         assert_eq!(
-            html.matches("name=\"who\"").count(),
-            1,
-            "one ruling, one name"
+            html.matches("action=\"/c/").count(),
+            3,
+            "a door per comment"
         );
         let prefilled = thread_section(
             &focus_of(&world, 1),
@@ -2343,7 +2469,7 @@ mod tests {
             None,
             &ArtifactStore::default(),
         );
-        assert_eq!(prefilled.matches("value=\"jerry\"").count(), 1);
+        assert_eq!(prefilled.matches("value=\"jerry\"").count(), 4);
     }
 
     #[test]
@@ -2620,10 +2746,17 @@ mod tests {
             html.contains("<a href=\"https://plain.example\" rel=\"noopener\">"),
             "{html}"
         );
-        // every other scheme stays words: no anchor, no url in the page
-        assert!(html.contains("not trap nor file and"), "{html}");
-        assert!(!html.contains("javascript:"), "{html}");
-        assert!(!html.contains("ftp://"), "{html}");
+        // every other scheme stays words in the rendered body: no
+        // anchor, no url — the revise reveal's textarea is the editor,
+        // not a render, and carries the raw bytes like a compose draft
+        let body = html
+            .split("<div class=\"nbody\">")
+            .nth(1)
+            .and_then(|rest| rest.split("<details").next())
+            .unwrap_or_default();
+        assert!(body.contains("not trap nor file and"), "{html}");
+        assert!(!body.contains("javascript:"), "{html}");
+        assert!(!body.contains("ftp://"), "{html}");
         assert_eq!(html.matches("rel=\"noopener\"").count(), 2, "{html}");
     }
 

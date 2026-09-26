@@ -180,10 +180,12 @@ Rules:
   their births, with no counter.
 - Open proposals are inert: they never block their target. Rejecting locks
   was deliberate.
-- Validation depends on tier, never actor identity — the one exception is
+- Validation depends on tier, never actor identity — the exceptions are
   accept's birth-attribution door (t-75): an agent accepts only where its
   attribution is the task's birth attribution, and a run's derived name
-  (`pi/t-75-2`) never equals one. The CLI has no tier
+  (`pi/t-75-2`) never equals one; and revise's author door (t-108): an
+  agent revises only comments it authored, a human revises any. The CLI
+  has no tier
   argument: `SACCADE_ACTOR` presence is agent tier, its absence human.
   Judgment acts are proposed (`sac propose drop t-N --name`), not executed.
 - Comments carry a variant — note, demand, steer, ask — never an

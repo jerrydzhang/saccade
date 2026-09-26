@@ -875,8 +875,9 @@ mod test {
         )
         .unwrap();
 
-        // the returned world is the one a full reload produces
-        let (_, returned) = record(
+        // the returned world is the one a full reload produces: the
+        // revision is the last write, so its world carries the swap
+        record(
             &mut conn,
             &agent(),
             Command::Comment {
@@ -888,12 +889,45 @@ mod test {
         )
         .unwrap();
 
+        // the revision swaps the body the fold presents; the pointer
+        // names the record that did it, the birth bytes stay in their row
+        let (_, returned) = record(
+            &mut conn,
+            &agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(39)),
+                body: Prose::new("post-fold receipt, corrected".into()).unwrap(),
+            },
+            36,
+        )
+        .unwrap();
+
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 40);
+        assert_eq!(loadout.rows.len(), 41);
+        // the revision family rides the same columns: pointer only
+        assert_eq!(loadout.rows[40].kind, "comment_revised");
+        assert!(
+            loadout.rows[40]
+                .payload
+                .contains("post-fold receipt, corrected")
+        );
+        // the fold presents the revised body, the birth row keeps the original
+        assert_eq!(
+            world.comments[&CommentId(RecordId(39))]
+                .comment
+                .body
+                .as_str(),
+            "post-fold receipt, corrected"
+        );
+        assert_eq!(
+            world.comments[&CommentId(RecordId(39))].revised,
+            Some(RecordId(40))
+        );
+        assert!(loadout.rows[39].payload.contains("post-fold receipt"));
         // the artifact family rides the same columns: pointer only
         assert_eq!(loadout.rows[38].kind, "artifact_added");
         assert!(loadout.rows[38].payload.contains("sweep figure"));
