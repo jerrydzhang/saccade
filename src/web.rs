@@ -66,7 +66,7 @@ pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// The task state's chip color, one per state out of the #522 palette:
+/// The task state's chip color, one per state out of the c-522 palette:
 /// open whispers, claimed is gold like the work it holds, delivered is
 /// the link tone like the hand-off it awaits, done is green like a
 /// settled run, dropped is rose like the human act it was.
@@ -470,7 +470,7 @@ fn ribbon_section(c: &Console) -> String {
         };
         let top = row as f64 * ROW_HEIGHT_PX + 1.0;
         s.push_str(&format!(
-            "<a class=\"mrk {class}\" style=\"left:{left:.1}%;top:{top:.0}px\" href=\"/t/{}#c-{}\" title=\"t-{} · {label} #{} · {}\"></a>\n",
+            "<a class=\"mrk {class}\" style=\"left:{left:.1}%;top:{top:.0}px\" href=\"/t/{}#c-{}\" title=\"t-{} · {label} c-{} · {}\"></a>\n",
             m.task, m.seq, m.task, m.seq, esc(&fmt_t(m.at)),
         ));
     }
@@ -506,7 +506,7 @@ fn forest_section(
     s.push_str("<div class=\"fsect\">GATE · JUDGMENT</div>\n");
     for p in gate {
         s.push_str(&format!(
-            "<a class=\"frow\" href=\"/t/{}\"><span class=\"fid mono\">#{}</span><span class=\"fname\">{} {} · {}</span></a>\n",
+            "<a class=\"frow\" href=\"/t/{}\"><span class=\"fid mono\">c-{}</span><span class=\"fname\">{} {} · {}</span></a>\n",
             task_num(&p.task).unwrap_or(0),
             p.id,
             esc(p.action),
@@ -551,7 +551,7 @@ pub fn thread_section(
     };
     for p in &f.proposals {
         s.push_str(&format!(
-            "<div class=\"judge\"><span class=\"jhead mono\">#{}</span> <span class=\"jname\">{} {} · {}</span>\n<form class=\"jform\" method=\"post\" action=\"/p/{}/ruling\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"ruling\" value=\"accept\" type=\"submit\">accept</button>\n<button class=\"sendbtn\" name=\"ruling\" value=\"reject\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
+            "<div class=\"judge\"><span class=\"jhead mono\">c-{}</span> <span class=\"jname\">{} {} · {}</span>\n<form class=\"jform\" method=\"post\" action=\"/p/{}/ruling\">\n<textarea name=\"note\" rows=\"2\" placeholder=\"ruling note\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"ruling\" value=\"accept\" type=\"submit\">accept</button>\n<button class=\"sendbtn\" name=\"ruling\" value=\"reject\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
             p.id,
             esc(p.action),
             esc(&p.task),
@@ -641,7 +641,7 @@ fn item_html(
                     None => format!("{}– in flight", fmt_t(run.born_at)),
                 };
                 let mut s = format!(
-                    "<div class=\"xg{}\">\n<div class=\"xhead\"><span class=\"xk\">EXCHANGE</span><span class=\"xd mono\">#{}</span><span class=\"xmeta mono\">{} · {}</span></div>\n<div class=\"xbody\">\n",
+                    "<div class=\"xg{}\">\n<div class=\"xhead\"><span class=\"xk\">EXCHANGE</span><span class=\"xd mono\">c-{}</span><span class=\"xmeta mono\">{} · {}</span></div>\n<div class=\"xbody\">\n",
                     if open { " open" } else { "" },
                     root.seq,
                     esc(&window),
@@ -770,7 +770,7 @@ fn node_html(
         .map(|t| format!("<span class=\"nseq\">{}</span>", esc(t)))
         .unwrap_or_default();
     format!(
-        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">#{seq}</span>{state}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody\">{body}</div>\n<details class=\"revise\"><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{current}</textarea>\n<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n</div>\n",
+        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{state}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody\">{body}</div>\n<details class=\"revise\"><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{current}</textarea>\n<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n</div>\n",
         seq = line.seq,
         pad = 26 + indent * 22,
         tier = esc(&line.tier),
@@ -801,7 +801,7 @@ fn artifact_html(line: &ArtifactLine, indent: usize, store: &ArtifactStore) -> S
         None => format!("<span class=\"acap\">{name} · unavailable</span>\n"),
     };
     format!(
-        "<div class=\"nrow2 arow\" id=\"a-{seq}\" style=\"padding-left:{pad}px\">\n{figure}<div class=\"nmeta\"><span class=\"xk\" style=\"color:#a2c3c4\">ARTIFACT</span><span class=\"nseq mono\">#{seq}</span></div>\n</div>\n",
+        "<div class=\"nrow2 arow\" id=\"a-{seq}\" style=\"padding-left:{pad}px\">\n{figure}<div class=\"nmeta\"><span class=\"xk\" style=\"color:#a2c3c4\">ARTIFACT</span><span class=\"nseq mono\">c-{seq}</span></div>\n</div>\n",
         seq = line.seq,
     )
 }
@@ -826,7 +826,7 @@ fn mention_card(seq: usize, task: usize, name: &str, hash: &str, store: &Artifac
     }
 }
 
-/// The reading-side resolver over escaped text: a '#N' token the fold
+/// The reading-side resolver over escaped text: a 'c-N' token the fold
 /// holds as a comment becomes a pure link to its home anchor, as an
 /// artifact becomes the card linking home; every other token stays
 /// the words it was. The parse lives here, never in the record.
@@ -836,26 +836,26 @@ fn linkify(escaped: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactSto
     let mut out = String::with_capacity(escaped.len());
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == '#' && (i == 0 || !word(chars[i - 1])) {
-            let digits: String = chars[i + 1..]
+        if chars[i] == 'c' && chars.get(i + 1) == Some(&'-') && (i == 0 || !word(chars[i - 1])) {
+            let digits: String = chars[i + 2..]
                 .iter()
                 .take_while(|c| c.is_ascii_digit())
                 .collect();
             let n = digits.len();
-            let bounded = i + 1 + n >= chars.len() || !word(chars[i + 1 + n]);
+            let bounded = i + 2 + n >= chars.len() || !word(chars[i + 2 + n]);
             if n > 0
                 && bounded
                 && let Ok(seq) = digits.parse::<usize>()
             {
                 match refs.get(&seq) {
                     Some(RefTarget::Comment { task }) => {
-                        out.push_str(&format!("<a href=\"/t/{task}#c-{seq}\">#{seq}</a>"));
-                        i += 1 + n;
+                        out.push_str(&format!("<a href=\"/t/{task}#c-{seq}\">c-{seq}</a>"));
+                        i += 2 + n;
                         continue;
                     }
                     Some(RefTarget::Artifact { task, name, hash }) => {
                         out.push_str(&mention_card(seq, *task, name, hash, store));
-                        i += 1 + n;
+                        i += 2 + n;
                         continue;
                     }
                     None => {}
@@ -950,7 +950,7 @@ fn crate_authored(mathml: &str) -> bool {
 
 /// The prose renderer over raw bytes: CommonMark with tables and
 /// math, the same law as the @-compiler and linkify — the parse lives
-/// here, never in the record. Text events escape and resolve '#N'
+/// here, never in the record. Text events escape and resolve 'c-N'
 /// mentions; code spans and code blocks are verbatim; raw HTML never
 /// passes, rendering as the words it was; a link renders only on the
 /// http(s) schemes with rel=noopener; soft breaks are whitespace and
@@ -1954,7 +1954,7 @@ mod tests {
             &ArtifactStore::default(),
         );
         assert!(html.contains("EXCHANGE"));
-        assert!(html.contains("#5"));
+        assert!(html.contains("c-5"));
         assert!(html.contains("settled"), "the run's window closed");
         assert!(html.contains("DEMAND"));
         assert!(html.contains("REPLY"));
@@ -2449,7 +2449,7 @@ mod tests {
         // the reviser is the birth author, so the mark stays plain
         assert!(html.contains("parked, then corrected"), "{html}");
         assert!(
-            html.contains("#1</span><span class=\"nseq\">revised</span>"),
+            html.contains("c-1</span><span class=\"nseq\">revised</span>"),
             "{html}"
         );
         // the reveal prefills the latest body, never the original
@@ -2460,7 +2460,7 @@ mod tests {
         assert!(!html.contains("parked mid-flight"), "{html}");
         // the reviser who differs from the birth author is named
         assert!(
-            html.contains("#3</span><span class=\"nseq\">revised by jerry</span>"),
+            html.contains("c-3</span><span class=\"nseq\">revised by jerry</span>"),
             "{html}"
         );
         assert!(html.contains("second note, repaired"), "{html}");
@@ -2525,7 +2525,7 @@ mod tests {
     }
 
     /// t-0 delivered with a receipt citing its artifact; t-1's comment
-    /// mentions both the comment #3 and the artifact #4, beside a birth
+    /// mentions both the comment c-3 and the artifact c-4, beside a birth
     /// reference and an unresolved token.
     fn resolver_world() -> World {
         World::replay(vec![
@@ -2545,7 +2545,7 @@ mod tests {
                 human(),
                 Event::TaskDelivered {
                     id: TaskId(0),
-                    receipt: Prose::new("suite green, per #4".into()).unwrap(),
+                    receipt: Prose::new("suite green, per c-4".into()).unwrap(),
                 },
             ),
             record(
@@ -2586,7 +2586,7 @@ mod tests {
                 Event::Commented {
                     target: task(1),
                     body: Prose::new(
-                        "see #3 and #4 — birth #0 stays words, pi#3 stays words, #99 unresolved"
+                        "see c-3 and c-4 — birth c-0 stays words, pic-3 stays words, c-99 unresolved"
                             .into(),
                     )
                     .unwrap(),
@@ -2605,7 +2605,7 @@ mod tests {
 
         // the foreign body: a comment mention is a pure link
         let html = thread_section(&focus_of(&world, 1), &Default::default(), None, &store);
-        assert!(html.contains("<a href=\"/t/0#c-3\">#3</a>"), "{html}");
+        assert!(html.contains("<a href=\"/t/0#c-3\">c-3</a>"), "{html}");
         // an artifact mention is the card linking home
         assert!(
             html.contains(&format!(
@@ -2614,11 +2614,11 @@ mod tests {
             "{html}"
         );
         // unresolved tokens stay the words they were
-        assert!(html.contains("birth #0 stays words"), "{html}");
-        assert!(html.contains("pi#3 stays words"), "{html}");
-        assert!(html.contains("#99 unresolved"), "{html}");
-        assert!(!html.contains("#0</a>"), "{html}");
-        assert!(!html.contains("#99</a>"), "{html}");
+        assert!(html.contains("birth c-0 stays words"), "{html}");
+        assert!(html.contains("pic-3 stays words"), "{html}");
+        assert!(html.contains("c-99 unresolved"), "{html}");
+        assert!(!html.contains("c-0</a>"), "{html}");
+        assert!(!html.contains("c-99</a>"), "{html}");
         assert!(!html.contains("pi<a"), "{html}");
 
         // the receipt resolves through the same rule
@@ -2649,7 +2649,7 @@ mod tests {
                 human(),
                 Event::Commented {
                     target: task(0),
-                    body: Prose::new("the <b>bold</b> verdict & #1".into()).unwrap(),
+                    body: Prose::new("the <b>bold</b> verdict & c-1".into()).unwrap(),
                     kind: CommentKind::Note,
                 },
             ),
@@ -2659,7 +2659,7 @@ mod tests {
         let html = thread_section(&focus_of(&world, 0), &Default::default(), None, &store);
         // the words escaped, and the bounded token still resolved
         assert!(
-            html.contains("the &lt;b&gt;bold&lt;/b&gt; verdict &amp; <a href=\"/t/0#c-1\">#1</a>"),
+            html.contains("the &lt;b&gt;bold&lt;/b&gt; verdict &amp; <a href=\"/t/0#c-1\">c-1</a>"),
             "{html}"
         );
         assert!(!html.contains("<b>"), "{html}");
@@ -2728,19 +2728,19 @@ mod tests {
 
     #[test]
     fn mentions_resolve_inside_emphasis() {
-        let html = prose_html_of(&prose_world("the verdict, *per #1*, stands"));
+        let html = prose_html_of(&prose_world("the verdict, *per c-1*, stands"));
         assert!(
-            html.contains("<em>per <a href=\"/t/0#c-1\">#1</a></em>"),
+            html.contains("<em>per <a href=\"/t/0#c-1\">c-1</a></em>"),
             "{html}"
         );
     }
 
     #[test]
     fn code_spans_stay_verbatim() {
-        let html = prose_html_of(&prose_world("the token `#1` stays put, but #1 resolves"));
-        assert!(html.contains("<code>#1</code>"), "{html}");
+        let html = prose_html_of(&prose_world("the token `c-1` stays put, but c-1 resolves"));
+        assert!(html.contains("<code>c-1</code>"), "{html}");
         assert!(
-            html.contains("but <a href=\"/t/0#c-1\">#1</a> resolves"),
+            html.contains("but <a href=\"/t/0#c-1\">c-1</a> resolves"),
             "{html}"
         );
         assert_eq!(html.matches("/t/0#c-1").count(), 1, "{html}");

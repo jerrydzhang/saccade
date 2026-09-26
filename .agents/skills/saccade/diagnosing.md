@@ -22,7 +22,7 @@ and server binary versions, duration.
   malformed_request from a working client is a pair mismatch, not
   corruption.
 - **Storage seq is not the record id**: `events.seq` is the storage
-  cursor; `#N` record ids are fold positions — two series, never
+  cursor; `c-N` record ids are fold positions — two series, never
   interchangeable.
 - **Door-level refusals write no line** (cross-site, nameless forms,
   unknown routes): no code vocabulary exists for them; none is invented.

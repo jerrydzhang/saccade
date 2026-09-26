@@ -301,7 +301,7 @@ fn the_pointer_prompt_names_the_work_and_the_reply_door() {
     let prompt = pointer_prompt(&prepared, "/bin/sac");
     assert!(prompt.contains("c-1"), "{prompt}");
     assert!(prompt.contains("t-0"), "{prompt}");
-    assert!(prompt.contains("/bin/sac comment '#1'"), "{prompt}");
+    assert!(prompt.contains("/bin/sac comment c-1"), "{prompt}");
     // the reply door names the run's derived attribution
     assert!(prompt.contains("'pi/t-0-1'"), "{prompt}");
     std::fs::remove_dir_all(db_path.parent().unwrap()).unwrap();

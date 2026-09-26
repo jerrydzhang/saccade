@@ -293,7 +293,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         ClientFail::Refused { code, detail } => {
             assert_eq!(code, "invalid_comment_id");
             assert!(
-                detail.contains("#0 is the birth record of task t-0"),
+                detail.contains("c-0 is the birth record of task t-0"),
                 "{detail}"
             );
             assert!(detail.contains("address its thread as t-0"), "{detail}");
@@ -1200,8 +1200,8 @@ fn search_reads_the_record_through_the_cli_face() {
         .iter()
         .position(|l| *l == "t-0  migrate floop")
         .expect("the owning thread groups first");
-    assert_eq!(lines[t0 + 1], "  #0  pi  migrate floop");
-    assert_eq!(lines[t0 + 2], "  #1  pi  the floop migration proceeds");
+    assert_eq!(lines[t0 + 1], "  c-0  pi  migrate floop");
+    assert_eq!(lines[t0 + 2], "  c-1  pi  the floop migration proceeds");
     assert_eq!(lines[t0 + 3], "  t-0 receipt  floop landed; suite green");
     assert!(lines.contains(&"t-1  floop guard"), "{out}");
 
@@ -1228,20 +1228,27 @@ fn search_reads_the_record_through_the_cli_face() {
         "floop guards the door\nthe second line holds the detail"
     );
 
-    // total zero says so in one line and exits clean, terms or facets
-    let (ok, out, _) = sac(&["search", "#99999"]);
+    // total zero says so in one line and exits clean, terms or facets;
+    // the retired '#' term learns the c- form instead of matching words
+    let (ok, out, _) = sac(&["search", "c-99999"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "no matches (#99999)");
+    assert_eq!(out.trim_end(), "no matches (c-99999)");
+    let (ok, _, err) = sac(&["search", "#99999"]);
+    assert!(!ok, "{err}");
+    assert!(
+        err.contains("drop the '#': the reference search is c-99999"),
+        "{err}"
+    );
     let (ok, out, _) = sac(&["search", "by:nobody"]);
     assert!(ok, "{out}");
     assert_eq!(out.trim_end(), "no matches (by:nobody)");
 
     // the anchor window reads the log's own rows
-    let (ok, out, _) = sac(&["search", "#1", "-C", "1"]);
+    let (ok, out, _) = sac(&["search", "c-1", "-C", "1"]);
     assert!(ok, "{out}");
-    assert!(out.contains("#0  task_created  pi/agent"), "{out}");
+    assert!(out.contains("c-0  task_created  pi/agent"), "{out}");
     assert!(
-        out.contains("#1  commented  pi/agent  the floop migration"),
+        out.contains("c-1  commented  pi/agent  the floop migration"),
         "{out}"
     );
 
@@ -1250,59 +1257,77 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(!ok);
     assert!(err.contains("give at least one term"), "{err}");
     assert!(err.contains("the moves"), "{err}");
-    assert!(err.contains("'#907' -C 3"), "{err}");
+    assert!(err.contains("c-907 -C 3"), "{err}");
 
     // show opens records in the thread view's body format, either face;
-    // the whole body renders, reflowed at the thread's width
-    let (ok, out, _) = sac(&["show", "#5"]);
+    // the whole body renders, reflowed at the thread's width — while
+    // the bare position shows the raw event, header and payload
+    let (ok, out, _) = sac(&["show", "c-5"]);
     assert!(ok, "{out}");
     assert_eq!(
         out.trim_end(),
-        "#5  pi\n  floop guards the door the second line holds the detail"
+        "c-5  pi\n  floop guards the door the second line holds the detail"
     );
-    let (ok, out, _) = sac(&["show", "c-5"]);
+    let (ok, out, _) = sac(&["show", "5"]);
     assert!(ok, "{out}");
-    assert!(out.starts_with("#5  pi"), "{out}");
+    assert!(
+        out.starts_with("c-5  commented  pi\n"),
+        "the raw event rides whole: {out}"
+    );
+    assert!(out.contains("floop guards the door"), "{out}");
+    // the retired '#' id refuses, naming the c- form
+    let (ok, _, err) = sac(&["show", "#5"]);
+    assert!(!ok, "{err}");
+    assert!(
+        err.contains("drop the '#': the record is addressed as c-5"),
+        "{err}"
+    );
 
     // a birth renders as itself: header and relation, never the thread
     // behind it — the relation names t-N, t-N opens the thread
     assert!(sac(&["create", "task", "guard child", "--parent", "t-1"]).0);
-    let (ok, out, _) = sac(&["show", "#6"]);
+    let (ok, out, _) = sac(&["show", "c-6"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "#6  task  pi\nbirth of t-2 (parent t-1)");
-    let (ok, out, _) = sac(&["show", "#0"]);
+    assert_eq!(out.trim_end(), "c-6  task  pi\nbirth of t-2 (parent t-1)");
+    let (ok, out, _) = sac(&["show", "c-0"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "#0  task  pi\nbirth of t-0");
+    assert_eq!(out.trim_end(), "c-0  task  pi\nbirth of t-0");
 
     // several ids render each, threads and records in one call
-    let (ok, out, _) = sac(&["show", "t-1", "#1"]);
+    let (ok, out, _) = sac(&["show", "t-1", "c-1"]);
     assert!(ok, "{out}");
     assert!(out.contains("t-1  open  floop guard"), "{out}");
-    assert!(out.contains("#1  pi"), "{out}");
+    assert!(out.contains("c-1  pi"), "{out}");
 
     // a positional id that parses but names nothing the log holds
-    // refuses with the log's own extent
-    let (ok, _, err) = sac(&["show", "#99999"]);
+    // refuses with the log's own extent, typed or bare
+    let (ok, _, err) = sac(&["show", "c-99999"]);
     assert!(!ok);
     assert!(
-        err.contains("no record #99999; the log holds 7 records, #0 through #6"),
+        err.contains("no record c-99999; the log holds 7 records, 0 through 6"),
         "{err}"
     );
-    // the raw-id door opens any record: a machinery event renders as
+    let (ok, _, err) = sac(&["show", "99999"]);
+    assert!(!ok);
+    assert!(
+        err.contains("no record 99999; the log holds 7 records, 0 through 6"),
+        "{err}"
+    );
+    // the typed door opens any record: a machinery event renders as
     // the log renders it, header and payload
-    let (ok, out, _) = sac(&["show", "#3"]);
+    let (ok, out, _) = sac(&["show", "c-3"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "#3  task_claimed  pi\n{\"id\":0}");
-    let (ok, out, _) = sac(&["show", "#4"]);
+    assert_eq!(out.trim_end(), "c-3  task_claimed  pi\n{\"id\":0}");
+    let (ok, out, _) = sac(&["show", "c-4"]);
     assert!(ok, "{out}");
     assert!(
-        out.starts_with("#4  task_delivered  pi\n{\"id\":0,"),
+        out.starts_with("c-4  task_delivered  pi\n{\"id\":0,"),
         "the accept-family payload rides whole: {out}"
     );
     let (ok, _, err) = sac(&["show", "bogus"]);
     assert!(!ok);
     assert!(
-        err.contains("'bogus' is not an id (expected t-<n>, #<seq>, or c-<seq>)"),
+        err.contains("'bogus' is not an id (expected c-<seq>, t-<n>, or a bare <seq>)"),
         "{err}"
     );
 
@@ -1346,13 +1371,14 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(ok, "{out}");
     assert_eq!(out, "");
 
-    // blank lines skip silently; bad ids skip with a note; good ids render
-    let (ok, out, _) = pipe("\n\nbogus\nt-0 receipt\n#1\n", &["show", "--stdin"]);
+    // blank lines skip silently; bad ids skip with a note; the retired
+    // '#' learns the c- form and the pipe moves on; good ids render
+    let (ok, out, _) = pipe("\n\nbogus\nt-0 receipt\nc-1\n#1\n", &["show", "--stdin"]);
     assert!(ok, "{out}");
     let lines: Vec<&str> = out.lines().collect();
     assert!(
         lines.contains(
-            &"skipped 'bogus': 'bogus' is not an id (expected t-<n>, #<seq>, or c-<seq>)"
+            &"skipped 'bogus': 'bogus' is not an id (expected c-<seq>, t-<n>, or a bare <seq>)"
         ),
         "{out}"
     );
@@ -1361,7 +1387,12 @@ fn search_reads_the_record_through_the_cli_face() {
         out.contains("skipped 't-0 receipt': 't-0 receipt' is not a task id"),
         "{out}"
     );
-    assert!(lines.contains(&"#1  pi"), "{out}");
+    assert!(out.contains("skipped '#1': '#1' is not an id"), "{out}");
+    assert!(
+        out.contains("drop the '#': the record is addressed as c-1"),
+        "{out}"
+    );
+    assert!(lines.contains(&"c-1  pi"), "{out}");
     assert!(lines.contains(&"  the floop migration proceeds"), "{out}");
 
     // the pipe chain runs end to end: json pointers feed show
@@ -1380,9 +1411,9 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(ok, "{out}");
     let lines: Vec<&str> = out.lines().collect();
     // birth pointers render their event; the thread stays behind t-N
-    assert!(lines.contains(&"#0  task  pi"), "{out}");
+    assert!(lines.contains(&"c-0  task  pi"), "{out}");
     assert!(lines.contains(&"birth of t-0"), "{out}");
-    assert!(lines.contains(&"#1  pi"), "{out}");
+    assert!(lines.contains(&"c-1  pi"), "{out}");
     assert!(out.contains("skipped 't-0 receipt'"), "{out}");
 }
 
@@ -1415,9 +1446,9 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     let answer = "the reply rides the thread its root holds";
     assert!(sac(&["create", "task", "byte door"]).0);
     assert!(sac(&["comment", "t-0", &body]).0);
-    assert!(sac(&["comment", "#1", answer]).0);
+    assert!(sac(&["comment", "c-1", answer]).0);
     assert!(sac(&["comment", "t-0", "a short third note"]).0);
-    assert!(sac(&["revise", "#3", "revised bytes"]).0);
+    assert!(sac(&["revise", "c-3", "revised bytes"]).0);
 
     // the thread's json face: bodies byte-exact, replies folded in
     let (ok, out, _) = sac(&["show", "--json", "t-0"]);
@@ -1438,13 +1469,21 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     assert_eq!(entries[2]["seq"], json!(3));
     assert_eq!(entries[2]["body"], json!("revised bytes"));
     assert_eq!(entries[2]["revised"], json!(true));
+    assert_eq!(entries[2]["reviser"], json!(null));
 
     // the record door answers with the same block, alone
-    let (ok, out, _) = sac(&["show", "--json", "#2"]);
+    let (ok, out, _) = sac(&["show", "--json", "c-2"]);
     assert!(ok, "{out}");
     let json: Value = serde_json::from_str(&out).expect("the json face parses");
     assert_eq!(json[0]["body"], json!(answer));
     assert_eq!(json[0]["depth"], json!(2));
+
+    // the bare position on the json face: the raw log row, no fold
+    let (ok, out, _) = sac(&["show", "--json", "2"]);
+    assert!(ok, "{out}");
+    let json: Value = serde_json::from_str(&out).expect("the json face parses");
+    assert_eq!(json[0]["seq"], json!(2));
+    assert_eq!(json[0]["payload"]["target"], json!({"comment": 1}));
 
     // the log's json face carries folded thread membership: a reply's
     // target is its comment, its thread is still t-0 — the filter that
@@ -1496,7 +1535,7 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
             String::from_utf8_lossy(&out.stderr).into_owned(),
         )
     };
-    let (ok, out, _) = pipe("bogus\n#1\n", &["show", "--stdin", "--json"]);
+    let (ok, out, _) = pipe("bogus\nc-1\n", &["show", "--stdin", "--json"]);
     assert!(ok, "{out}");
     let json: Vec<Value> = serde_json::from_str(&out).expect("the json face parses");
     assert_eq!(json.len(), 2);
@@ -2201,7 +2240,7 @@ async fn the_console_revise_door_posts_and_marks() {
     // the comment door refuses what is not a comment: a clean 404
     let (status, body, _) = post_form(&format!("{base}/c/99/revise"), &[], "body=x&who=jerry");
     assert_eq!(status, 404);
-    assert!(body.contains("no comment #99"), "{body}");
+    assert!(body.contains("no comment c-99"), "{body}");
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -2353,7 +2392,7 @@ async fn artifacts_park_over_the_wire_and_the_door_serves_bytes() {
 }
 
 /// The console renders the artifact at its home position and resolves
-/// a later '#N' mention into the card linking home.
+/// a later 'c-N' mention into the card linking home.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_console_renders_artifacts_and_their_mentions() {
     let db = scratch_db("artifact-console");
@@ -2396,7 +2435,7 @@ async fn the_console_renders_artifacts_and_their_mentions() {
             &human_ctx(),
             Command::Comment {
                 target: Target::Task(TaskId(0)),
-                body: Prose::new(format!("citing #{seq} from the verdict")).unwrap(),
+                body: Prose::new(format!("citing c-{seq} from the verdict")).unwrap(),
                 kind: CommentKind::Note,
             },
             None,

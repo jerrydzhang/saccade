@@ -61,7 +61,7 @@ Derivations:
 - Claims are held by names, not processes. A promise held by a session
   would be state outside the record.
 - Attribution is record-side. Even a live agent forgets; the fold may
-  summarize, never anonymize (#33 is this rule violated today).
+  summarize, never anonymize (c-33 is this rule violated today).
 - Receipts are written at done-time, at the peak of the writer's knowledge —
   it is all decay afterward.
 - Documentation follows this axiom: a doc is never a second source of truth.
