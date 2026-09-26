@@ -70,16 +70,16 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             let seq = command_comment(command)?;
             if let Some(i) = world.tasks.iter().position(|ctx| ctx.birth.0 == seq) {
                 return Some(format!(
-                    "#{seq} is the birth record of task t-{i}; address its thread as t-{i}"
+                    "c-{seq} is the birth record of task t-{i}; address its thread as t-{i}"
                 ));
             }
             if world.proposals.contains_key(&ProposalId(RecordId(seq))) {
                 return Some(format!(
-                    "#{seq} is the birth record of a proposal; rule it by its bare log position (e.g. accept {seq})"
+                    "c-{seq} is the birth record of a proposal; rule it by its bare log position (e.g. accept {seq})"
                 ));
             }
             Some(format!(
-                "#{seq} names no comment; a reply addresses a comment record as #<seq>, a task's thread as t-<n>"
+                "c-{seq} names no comment; a reply addresses a comment record as c-<seq>, a task's thread as t-<n>"
             ))
         }
         Reject::InvalidStateTransition => match command {
@@ -241,7 +241,7 @@ mod test {
         )
     }
 
-    /// t-0 born at #0 and claimed by the agent; t-1 born at #3.
+    /// t-0 born at c-0 and claimed by the agent; t-1 born at c-3.
     fn claimed_world() -> World {
         World::replay(vec![
             task(0, "migrate floop"),
@@ -261,7 +261,7 @@ mod test {
         };
         let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
         assert!(
-            taught.contains("#0 is the birth record of task t-0"),
+            taught.contains("c-0 is the birth record of task t-0"),
             "{taught}"
         );
         assert!(taught.contains("address its thread as t-0"), "{taught}");
@@ -273,8 +273,8 @@ mod test {
             kind: CommentKind::Note,
         };
         let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
-        assert!(taught.contains("#99 names no comment"), "{taught}");
-        assert!(taught.contains("#<seq>"), "{taught}");
+        assert!(taught.contains("c-99 names no comment"), "{taught}");
+        assert!(taught.contains("c-<seq>"), "{taught}");
         assert!(taught.contains("t-<n>"), "{taught}");
     }
 
@@ -300,7 +300,7 @@ mod test {
         };
         let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
         assert!(
-            taught.contains("#1 is the birth record of a proposal"),
+            taught.contains("c-1 is the birth record of a proposal"),
             "{taught}"
         );
         assert!(taught.contains("bare log position"), "{taught}");
@@ -308,7 +308,7 @@ mod test {
 
     #[test]
     fn a_revision_refusal_on_a_birth_record_teaches_the_thread_door() {
-        // t-0 born at #0
+        // t-0 born at c-0
         let world = World::replay(vec![task(0, "migrate floop")]).unwrap();
         // a birth record addressed for revision learns the thread door
         let command = Command::ReviseComment {
@@ -317,7 +317,7 @@ mod test {
         };
         let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
         assert!(
-            taught.contains("#0 is the birth record of task t-0"),
+            taught.contains("c-0 is the birth record of task t-0"),
             "{taught}"
         );
     }

@@ -441,7 +441,7 @@ fn prompt_text(task: TaskId, demand: CommentId, actor: &ActorName, sac: &str) ->
         "Serve tracked demand c-{demand} on task t-{task} of this repository; you are working in its prepared worktree. \
 Read it: {sac} show t-{task}. Do the work in this directory. \
 Reply when done, as '{actor}': \
-{sac} comment '#{demand}' '<your answer>'. \
+{sac} comment c-{demand} '<your answer>'. \
 Let other tasks' runs settle on their own; cancel only what you started \
 ({sac} cancel t-<task> stops a runaway). \
 The .agents/skills/saccade skill in this repo documents the tracker.",
@@ -839,7 +839,7 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
                         .map(|p| p.to_string_lossy().into_owned())
                         .unwrap_or_else(|_| "sac".into());
                     return Ok(Some(format!(
-                        "c-{}: i-{} asks (c-{}):\n{}\nanswer: {sac} comment '#{}' '<your answer>', then re-arm sac wait c-{}",
+                        "c-{}: i-{} asks (c-{}):\n{}\nanswer: {sac} comment c-{} '<your answer>', then re-arm sac wait c-{}",
                         comment.0.0,
                         id.0.0,
                         id.0.0,

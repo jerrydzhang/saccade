@@ -661,7 +661,7 @@ pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
 
 // -- the reading-side reference resolver's index --------------------
 
-/// What a '#N' mention resolves to on the reading side: a comment's
+/// What a 'c-N' mention resolves to on the reading side: a comment's
 /// home anchor, or an artifact's home card. The mention parse itself
 /// lives in the view, never in the record.
 #[derive(Clone, Debug, PartialEq)]
@@ -880,7 +880,7 @@ pub const SEARCH_KINDS: [&str; 7] = [
 pub enum Term {
     /// Matches as a whole, word-bounded token, case-folded
     Plain(String),
-    /// #N: prose citations of the comment, and replies addressing it
+    /// c-N: prose citations of the comment, and replies addressing it
     Comment(RecordId),
     /// t-N: prose namings of the task, births under it, comments
     /// addressing it
@@ -892,7 +892,7 @@ impl Term {
     fn canonical(&self) -> String {
         match self {
             Term::Plain(s) => s.clone(),
-            Term::Comment(id) => format!("#{}", id.0),
+            Term::Comment(id) => format!("c-{}", id.0),
             Term::Task(id) => format!("t-{}", id.0),
         }
     }
@@ -975,6 +975,10 @@ impl SearchQuery {
                 };
                 query.facets.push(Facet::Kind(kind));
             } else if let Some(n) = token.strip_prefix('#').filter(|n| numeric(n)) {
+                return Err(SearchFail::Usage(format!(
+                    "drop the '#': the reference search is c-{n}"
+                )));
+            } else if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
                 query
                     .terms
                     .push(Term::Comment(RecordId(n.parse().expect("digits checked"))));
@@ -990,7 +994,7 @@ impl SearchQuery {
         }
         if query.terms.is_empty() && query.facets.is_empty() {
             return Err(SearchFail::Usage(
-                "give at least one term or a facet (in:, by:, kind:, under:); the moves:\n  sac search telemetry      find where it was decided\n  sac search '#907'         follow a reference (quote the hash)\n  sac search floop in:t-0   narrow with facets\n  sac search '#907' -C 3    read the neighborhood".into(),
+                "give at least one term or a facet (in:, by:, kind:, under:); the moves:\n  sac search telemetry      find where it was decided\n  sac search c-907         follow a reference\n  sac search floop in:t-0   narrow with facets\n  sac search c-907 -C 3    read the neighborhood".into(),
             ));
         }
         Ok(query)
@@ -1061,7 +1065,7 @@ pub fn matched_line(terms: &[Term], text: &str) -> String {
 /// matched; the rendered face cuts that to the matched line.
 #[derive(Debug, PartialEq)]
 pub struct SearchRecord {
-    /// "#907" for a comment or a birth; "t-90 receipt" — the fold keeps
+    /// "c-907" for a comment or a birth; "t-90 receipt" — the fold keeps
     /// no delivery seq, so the task is the receipt's address
     pub pointer: String,
     pub kind: &'static str,
@@ -1112,7 +1116,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
             matches.push((
                 i,
                 SearchRecord {
-                    pointer: format!("#{}", ctx.birth.0),
+                    pointer: format!("c-{}", ctx.birth.0),
                     kind: "task",
                     actor: Some(ctx.birth_actor.as_str().to_string()),
                     body: title.to_string(),
@@ -1142,7 +1146,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                 matches.push((
                     i,
                     SearchRecord {
-                        pointer: format!("#{}", rid.0),
+                        pointer: format!("c-{}", rid.0),
                         kind: "artifact",
                         actor: None,
                         body: name.to_string(),
@@ -1162,7 +1166,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
             matches.push((
                 cctx.comment.root.0,
                 SearchRecord {
-                    pointer: format!("#{}", id.0.0),
+                    pointer: format!("c-{}", id.0.0),
                     kind: kind_of(&cctx.state),
                     actor: Some(cctx.actor.as_str().to_string()),
                     body: body.to_string(),
@@ -2180,11 +2184,11 @@ mod search {
         )
     }
 
-    /// t-0 "implement foo" holds the demand #2, its reply #3 (pi), and
-    /// the later answer #9 (bot, citing #2 by address alone); t-1
-    /// "migrate floop" is born under t-0, named in prose by #5, carried
-    /// a run-name line in #6, and was delivered by the bot with a
-    /// receipt citing #2; t-2's title guards the id boundary.
+    /// t-0 "implement foo" holds the demand c-2, its reply c-3 (pi), and
+    /// the later answer c-9 (bot, citing c-2 by address alone); t-1
+    /// "migrate floop" is born under t-0, named in prose by c-5, carried
+    /// a run-name line in c-6, and was delivered by the bot with a
+    /// receipt citing c-2; t-2's title guards the id boundary.
     fn story() -> World {
         let jerry = ctx(Tier::Human, "jerry");
         let bot = ctx(Tier::Agent, "saccade bot");
@@ -2219,7 +2223,7 @@ mod search {
                 60,
                 &pi,
                 Target::Task(TaskId(1)),
-                "the run pi/t-90-1 answered\nsee #123 for the trail",
+                "the run pi/t-90-1 answered\nsee c-123 for the trail",
             ),
             record(7, 70, &bot, Event::TaskClaimed { id: TaskId(1) }),
             record(
@@ -2228,7 +2232,7 @@ mod search {
                 &bot,
                 Event::TaskDelivered {
                     id: TaskId(1),
-                    receipt: Prose::new("suite 9 green; the floop migration landed per #2".into())
+                    receipt: Prose::new("suite 9 green; the floop migration landed per c-2".into())
                         .unwrap(),
                 },
             ),
@@ -2285,34 +2289,34 @@ mod search {
                 2,
                 &jerry,
                 Target::Task(TaskId(0)),
-                "the verdict cites #1 above",
+                "the verdict cites c-1 above",
             ),
         ])
         .unwrap();
         // the name matches as a whole token; the title's "sweep" does not
         let groups = search(&world, &q(&["sweep-overview"])).unwrap();
-        assert_eq!(pointers(&groups), vec![(0, vec!["#1".into()])]);
+        assert_eq!(pointers(&groups), vec![(0, vec!["c-1".into()])]);
         let groups = &groups[0];
         assert_eq!(groups.records[0].kind, "artifact");
         assert_eq!(groups.records[0].actor, None);
         assert_eq!(groups.records[0].body, "sweep-overview");
         // the kind facet narrows to artifacts alone
         let groups = search(&world, &q(&["sweep-overview", "kind:artifact"])).unwrap();
-        assert_eq!(pointers(&groups), vec![(0, vec!["#1".into()])]);
+        assert_eq!(pointers(&groups), vec![(0, vec!["c-1".into()])]);
         // and the mention is a reference search finding its namer
-        let groups = search(&world, &q(&["#1"])).unwrap();
-        assert_eq!(pointers(&groups), vec![(0, vec!["#2".into()])]);
+        let groups = search(&world, &q(&["c-1"])).unwrap();
+        assert_eq!(pointers(&groups), vec![(0, vec!["c-2".into()])]);
     }
 
     #[test]
     fn a_plain_term_reads_titles_bodies_and_receipts() {
         let groups = search(&story(), &q(&["floop"])).unwrap();
-        // threads enter by first match: t-1's title at #1 before t-0's #3
+        // threads enter by first match: t-1's title at c-1 before t-0's c-3
         assert_eq!(
             pointers(&groups),
             vec![
-                (1, vec!["#1".into(), "t-1 receipt".into()]),
-                (0, vec!["#3".into()])
+                (1, vec!["c-1".into(), "t-1 receipt".into()]),
+                (0, vec!["c-3".into()])
             ]
         );
         let title = &groups[0].records[0];
@@ -2325,7 +2329,7 @@ mod search {
         assert_eq!((receipt.kind, receipt.actor.as_deref()), ("receipt", None));
         assert_eq!(
             receipt.body,
-            "suite 9 green; the floop migration landed per #2"
+            "suite 9 green; the floop migration landed per c-2"
         );
         assert_eq!(groups[0].title, "migrate floop");
     }
@@ -2338,41 +2342,44 @@ mod search {
         assert!(search(&world, &q(&["telemetry"])).unwrap().is_empty());
         assert!(search(&world, &q(&["t-49"])).unwrap().is_empty());
         assert!(search(&world, &q(&["t-90"])).unwrap().is_empty());
-        assert!(search(&world, &q(&["#12"])).unwrap().is_empty());
+        assert!(search(&world, &q(&["c-12"])).unwrap().is_empty());
         // the tokens themselves do
         assert_eq!(
             pointers(&search(&world, &q(&["t-490"])).unwrap()),
-            vec![(2, vec!["#4".into()])]
+            vec![(2, vec!["c-4".into()])]
         );
-        let groups = search(&world, &q(&["#123"])).unwrap();
-        assert_eq!(pointers(&groups), vec![(1, vec!["#6".into()])]);
+        let groups = search(&world, &q(&["c-123"])).unwrap();
+        assert_eq!(pointers(&groups), vec![(1, vec!["c-6".into()])]);
         // the record carries the field whole; the matched line is a
         // render cut of it
         assert_eq!(
             groups[0].records[0].body,
-            "the run pi/t-90-1 answered\nsee #123 for the trail"
+            "the run pi/t-90-1 answered\nsee c-123 for the trail"
         );
         assert_eq!(
-            matched_line(&q(&["#123"]).terms, &groups[0].records[0].body),
-            "see #123 for the trail"
+            matched_line(&q(&["c-123"]).terms, &groups[0].records[0].body),
+            "see c-123 for the trail"
         );
     }
 
     #[test]
     fn an_id_term_is_a_reference_search() {
         let world = story();
-        // '#2': the receipt cites it in prose, #3 and #9 address it by reply
+        // 'c-2': the receipt cites it in prose, c-3 and c-9 address it by reply
         assert_eq!(
-            pointers(&search(&world, &q(&["#2"])).unwrap()),
+            pointers(&search(&world, &q(&["c-2"])).unwrap()),
             vec![
-                (0, vec!["#3".into(), "#9".into()]),
+                (0, vec!["c-3".into(), "c-9".into()]),
                 (1, vec!["t-1 receipt".into()])
             ]
         );
-        // 't-0': #1 names it as parent, #5 in prose, #2 by address
+        // 't-0': c-1 names it as parent, c-5 in prose, c-2 by address
         assert_eq!(
             pointers(&search(&world, &q(&["t-0"])).unwrap()),
-            vec![(1, vec!["#1".into(), "#5".into()]), (0, vec!["#2".into()])]
+            vec![
+                (1, vec!["c-1".into(), "c-5".into()]),
+                (0, vec!["c-2".into()])
+            ]
         );
     }
 
@@ -2402,7 +2409,7 @@ mod search {
         // the fold's latest body matches, the orphaned original does not
         assert_eq!(
             pointers(&search(&world, &q(&["blorp"])).unwrap()),
-            vec![(0, vec!["#2".into()])]
+            vec![(0, vec!["c-2".into()])]
         );
         assert!(search(&world, &q(&["floop"])).unwrap().is_empty());
     }
@@ -2473,7 +2480,7 @@ mod search {
                 .collect::<Vec<_>>(),
             vec![(
                 0,
-                vec!["#0".into(), "#2".into(), "#3".into(), "#9".into()],
+                vec!["c-0".into(), "c-2".into(), "c-3".into(), "c-9".into()],
                 4
             )]
         );
@@ -2522,7 +2529,7 @@ mod search {
             Err(SearchFail::Usage(_))
         ));
         assert_eq!(
-            q(&["#2", "t-3", "Floop"]),
+            q(&["c-2", "t-3", "Floop"]),
             SearchQuery {
                 terms: vec![
                     Term::Comment(RecordId(2)),
@@ -2531,6 +2538,13 @@ mod search {
                 ],
                 facets: Vec::new()
             }
+        );
+        // the retired '#' id term refuses, naming the c- form
+        assert!(
+            SearchQuery::parse(&owned("#2"))
+                .unwrap_err()
+                .to_string()
+                .contains("drop the '#': the reference search is c-2")
         );
     }
 }

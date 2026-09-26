@@ -121,7 +121,7 @@ enum Cmd {
     Log,
     /// List proposals (the ruling queue)
     Proposals,
-    /// Attach a comment to a task (t-<n>) or reply to a comment (#<seq>)
+    /// Attach a comment to a task (t-<n>) or reply to a comment (c-<seq>)
     Comment {
         target: String,
         body: String,
@@ -158,12 +158,12 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Everything about tasks and records, many at once; raw ids show
-    /// the event, t-<n> shows the task plus its thread
+    /// Everything about tasks and records, many at once; bare seqs show
+    /// the raw event, t-<n> shows the task plus its thread
     Show {
-        /// Ids in any mix: #<seq> or c-<seq> a record — comments and
-        /// artifacts as their blocks, every other event as itself —
-        /// t-<n> a whole thread
+        /// Ids in any mix: c-<seq> a record — comments and artifacts as
+        /// their blocks, every other event as itself — bare <seq> the
+        /// raw event at that position — t-<n> a whole thread
         #[arg(required_unless_present = "stdin")]
         ids: Vec<String>,
         /// Read one id per line from stdin instead of arguments; blank
@@ -181,8 +181,8 @@ enum Cmd {
         ///   kind:K     task, note, demand, steer, ask, receipt, artifact
         ///   under:t-N  the task's thread and its descendants' threads
         ///
-        /// An id term — '#907' or 't-49' — is a reference search: every
-        /// record citing it or addressing it; quote the hash in shells
+        /// An id term — 'c-907' or 't-49' — is a reference search: every
+        /// record citing it or addressing it
         #[arg(verbatim_doc_comment)]
         terms: Vec<String>,
         /// With one id term: that record plus N before and after
@@ -892,14 +892,21 @@ fn hashed_task_note(token: &str) -> String {
 }
 
 fn parse_target(token: &str) -> Result<Target, Fail> {
+    let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
+        return Ok(Target::Comment(CommentId(RecordId(
+            n.parse().expect("digits checked"),
+        ))));
+    }
     if let Some(rest) = token.strip_prefix('#') {
-        let n: usize = rest.parse().map_err(|_| {
-            Fail::Usage(format!(
-                "'{token}' is not a comment id (expected #<seq>){}",
-                hashed_record_note(rest)
-            ))
-        })?;
-        return Ok(Target::Comment(CommentId(RecordId(n))));
+        let note = if numeric(rest) {
+            format!("; drop the '#': the comment is addressed as c-{rest}")
+        } else {
+            hashed_record_note(rest)
+        };
+        return Err(Fail::Usage(format!(
+            "'{token}' is not a comment id (expected c-<seq>){note}"
+        )));
     }
     Ok(Target::Task(parse_task_id(token)?))
 }
@@ -912,7 +919,7 @@ fn hashed_record_note(rest: &str) -> String {
         return format!("; drop the '#': the thread is addressed as t-{n}");
     }
     if let Some(n) = rest.strip_prefix("c-").filter(|n| numeric(n)) {
-        return format!("; drop the 'c-': the comment is addressed as #{n}");
+        return format!("; drop the '#': the comment is addressed as c-{n}");
     }
     String::new()
 }
@@ -943,17 +950,17 @@ fn revise_body(body: Option<String>, stdin: bool, file: Option<PathBuf>) -> Resu
     body.ok_or_else(|| Fail::Usage("the body comes by argument, --stdin, or --body-file".into()))
 }
 
-/// The '#<seq>' face the revise door takes; a 'c-' prefix learns the
-/// bare form, the demand's grammar never applies here.
+/// The 'c-<seq>' face the revise door takes; the retired '#' prefix
+/// learns its replacement.
 fn parse_revision_id(token: &str) -> Result<CommentId, Fail> {
-    let rest = token.strip_prefix('#').ok_or_else(|| {
+    let rest = token.strip_prefix("c-").ok_or_else(|| {
         let note = token
-            .strip_prefix("c-")
+            .strip_prefix('#')
             .filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
-            .map(|d| format!("; drop the 'c-': the comment is addressed as #{d}"))
+            .map(|d| format!("; drop the '#': the comment is addressed as c-{d}"))
             .unwrap_or_default();
         Fail::Usage(format!(
-            "'{token}' is not a comment id (expected #<seq>){note}"
+            "'{token}' is not a comment id (expected c-<seq>){note}"
         ))
     })?;
     let n: usize = rest
@@ -998,7 +1005,7 @@ fn render_log(cli: &Cli, rows: &[StoredRecord]) -> String {
 
 fn record_line(r: &StoredRecord) -> String {
     format!(
-        "#{} {} {}/{} et={} lt={} {}",
+        "c-{} {} {}/{} et={} lt={} {}",
         r.seq, r.kind, r.actor, r.tier, r.event_time, r.logged_time, r.payload
     )
 }
@@ -1045,7 +1052,7 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
                 v.name,
                 v.proposal
                     .as_ref()
-                    .map(|m| format!("{}#{}", m.verb, m.seq))
+                    .map(|m| format!("{} c-{}", m.verb, m.seq))
                     .unwrap_or_else(|| "-".into()),
                 if v.n_comments > 0 { "#" } else { "-" }
             )
@@ -1088,7 +1095,7 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
 /// An artifact's body format: the pointer line — name and short hash.
 fn artifact_block(line: &ArtifactLine) -> Vec<String> {
     vec![
-        format!("#{}  artifact", line.seq),
+        format!("c-{}  artifact", line.seq),
         format!("  {} · {}", line.name, line.short_hash()),
     ]
 }
@@ -1113,7 +1120,7 @@ fn comment_block(line: &CommentLine) -> Vec<String> {
         (None, true) => None,
     };
     let state = marks.map(|m| format!("  ({m})")).unwrap_or_default();
-    let mut out = vec![format!("{indent}#{}  {}{state}", line.seq, line.actor)];
+    let mut out = vec![format!("{indent}c-{}  {}{state}", line.seq, line.actor)];
     out.push(wrap(
         &line.body,
         WIDTH,
@@ -1131,31 +1138,26 @@ fn comment_block(line: &CommentLine) -> Vec<String> {
     out
 }
 
-/// One id as show sees it: a whole thread or a single record.
+/// One id as show sees it: a whole thread, a record's folded form,
+/// or the raw event at a bare position.
 #[derive(Clone, Copy, Debug)]
 enum ShowId {
     Thread(TaskId),
+    /// c-<seq>: the presentation the record's kind earns
     Record(CommentId),
+    /// bare <seq>: the raw event at that position
+    Position(RecordId),
 }
 
 fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
-    let not_an_id = || {
-        Fail::Usage(format!(
-            "'{token}' is not an id (expected t-<n>, #<seq>, or c-<seq>)"
-        ))
-    };
-    if let Some(rest) = token
-        .strip_prefix('#')
-        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-    {
-        return Ok(ShowId::Record(CommentId(RecordId(
-            rest.parse().expect("digits checked"),
-        ))));
+    let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    if let Some(rest) = token.strip_prefix('#').filter(|n| numeric(n)) {
+        return Err(Fail::Usage(format!(
+            "'{token}' is not an id (expected c-<seq>, t-<n>, or a bare <seq>); \
+             drop the '#': the record is addressed as c-{rest}"
+        )));
     }
-    if let Some(rest) = token
-        .strip_prefix("c-")
-        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-    {
+    if let Some(rest) = token.strip_prefix("c-").filter(|n| numeric(n)) {
         return Ok(ShowId::Record(CommentId(RecordId(
             rest.parse().expect("digits checked"),
         ))));
@@ -1163,7 +1165,14 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
     if token.starts_with("t-") {
         return Ok(ShowId::Thread(parse_task_id(token)?));
     }
-    Err(not_an_id())
+    if numeric(token) {
+        return Ok(ShowId::Position(RecordId(
+            token.parse().expect("digits checked"),
+        )));
+    }
+    Err(Fail::Usage(format!(
+        "'{token}' is not an id (expected c-<seq>, t-<n>, or a bare <seq>)"
+    )))
 }
 
 /// Render one id: a thread whole, or a record as itself — a comment
@@ -1172,6 +1181,13 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
 /// the relation names t-N, and the taught law does the rest), and
 /// every other record as the log renders it, header and payload.
 fn render_id(world: &World, rows: &[db::StoredRecord], token: &str) -> Result<String, Fail> {
+    let no_record = |typed: &str| {
+        Fail::Usage(format!(
+            "no record {typed}; the log holds {} records, 0 through {}",
+            rows.len(),
+            rows.len().saturating_sub(1)
+        ))
+    };
     match parse_show_id(token)? {
         ShowId::Thread(id) => render_show(world, id),
         ShowId::Record(id) => {
@@ -1188,28 +1204,32 @@ fn render_id(world: &World, rows: &[db::StoredRecord], token: &str) -> Result<St
                     .map(|p| format!(" (parent {p})"))
                     .unwrap_or_default();
                 return Ok(format!(
-                    "#{}  task  {}\nbirth of t-{}{parent}",
+                    "c-{}  task  {}\nbirth of t-{}{parent}",
                     ctx.birth.0,
                     ctx.birth_actor.as_str(),
                     task.0
                 ));
             }
-            // the raw-id door opens any record the log holds: the
-            // event itself, header and payload
+            // the typed door still opens any record the log holds:
+            // the event itself, header and payload
             if let Some(row) = rows.get(id.0.0) {
-                return Ok(format!(
-                    "#{}  {}  {}\n{}",
-                    row.seq, row.kind, row.actor, row.payload
-                ));
+                return Ok(raw_event(row));
             }
-            Err(Fail::Usage(format!(
-                "no record #{}; the log holds {} records, #0 through #{}",
-                id.0.0,
-                rows.len(),
-                rows.len().saturating_sub(1)
-            )))
+            Err(no_record(token))
         }
+        ShowId::Position(id) => match rows.get(id.0) {
+            Some(row) => Ok(raw_event(row)),
+            None => Err(no_record(token)),
+        },
     }
+}
+
+/// The raw event as itself: header and payload, no fold.
+fn raw_event(row: &db::StoredRecord) -> String {
+    format!(
+        "c-{}  {}  {}\n{}",
+        row.seq, row.kind, row.actor, row.payload
+    )
 }
 
 /// The piped face: one id per line, every failure a skip with a note,
@@ -1373,13 +1393,13 @@ fn render_search(
     out.join("\n")
 }
 
-/// The anchor query names one record: #N itself, or t-N's birth.
+/// The anchor query names one record: c-N itself, or t-N's birth.
 fn anchor_seq(loadout: &db::Loadout, query: &SearchQuery) -> Result<usize, Fail> {
     match query.terms.as_slice() {
         [Term::Comment(id)] => {
             if id.0 >= loadout.rows.len() {
                 return Err(Fail::Usage(format!(
-                    "no record #{}; the log holds {} records, #0 through #{}",
+                    "no record c-{}; the log holds {} records, 0 through {}",
                     id.0,
                     loadout.rows.len(),
                     loadout.rows.len().saturating_sub(1)
@@ -1400,7 +1420,7 @@ fn anchor_seq(loadout: &db::Loadout, query: &SearchQuery) -> Result<usize, Fail>
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
         },
         _ => Err(Fail::Usage(
-            "-C anchors on one record: give a single id term (#seq or t-N) and no facets".into(),
+            "-C anchors on one record: give a single id term (c-<seq> or t-N) and no facets".into(),
         )),
     }
 }
@@ -1432,7 +1452,7 @@ fn render_anchor(cli: &Cli, rows: &[StoredRecord], anchor: usize, around: usize)
     window
         .iter()
         .map(|row| {
-            let prefix = format!("#{}  {}  {}/{}", row.seq, row.kind, row.actor, row.tier);
+            let prefix = format!("c-{}  {}  {}/{}", row.seq, row.kind, row.actor, row.tier);
             let budget = WIDTH.saturating_sub(prefix.chars().count() + 2);
             format!("{prefix}  {}", glimpse(&row_line(row), budget))
         })
@@ -1547,8 +1567,8 @@ mod test {
     }
 
     /// Hashed tokens learn their bare doors at the parse door: a hashed
-    /// task id wants the bare thread, a hashed c-N wants the bare record,
-    /// a hashed demand wants the c- door.
+    /// task id wants the bare thread, a hashed record id wants the
+    /// bare c-N, a hashed demand wants the c- door.
     #[test]
     fn hashed_tokens_learn_their_bare_doors() {
         let refused = parse_task_id("#t-3")
@@ -1563,15 +1583,22 @@ mod test {
         let refused = parse_target("#t-3").map_err(|f| f.to_string()).unwrap_err();
         assert_eq!(
             refused,
-            "'#t-3' is not a comment id (expected #<seq>); \
+            "'#t-3' is not a comment id (expected c-<seq>); \
              drop the '#': the thread is addressed as t-3"
         );
 
         let refused = parse_target("#c-7").map_err(|f| f.to_string()).unwrap_err();
         assert_eq!(
             refused,
-            "'#c-7' is not a comment id (expected #<seq>); \
-             drop the 'c-': the comment is addressed as #7"
+            "'#c-7' is not a comment id (expected c-<seq>); \
+             drop the '#': the comment is addressed as c-7"
+        );
+
+        let refused = parse_target("#7").map_err(|f| f.to_string()).unwrap_err();
+        assert_eq!(
+            refused,
+            "'#7' is not a comment id (expected c-<seq>); \
+             drop the '#': the comment is addressed as c-7"
         );
 
         let refused = parse_comment_id("#7")
@@ -1588,7 +1615,7 @@ mod test {
             TaskId(3)
         );
         assert_eq!(
-            parse_target("#7").unwrap_or_else(|f| panic!("{f}")),
+            parse_target("c-7").unwrap_or_else(|f| panic!("{f}")),
             Target::Comment(CommentId(RecordId(7)))
         );
         assert_eq!(
@@ -1596,18 +1623,39 @@ mod test {
             CommentId(RecordId(7))
         );
 
-        // the revise door takes the '#' face; a 'c-' prefix learns the form
-        let refused = parse_revision_id("c-7")
+        // the revise door takes the c- face; the retired '#' learns it
+        let refused = parse_revision_id("#7")
             .map_err(|f| f.to_string())
             .unwrap_err();
         assert_eq!(
             refused,
-            "'c-7' is not a comment id (expected #<seq>); \
-             drop the 'c-': the comment is addressed as #7"
+            "'#7' is not a comment id (expected c-<seq>); \
+             drop the '#': the comment is addressed as c-7"
         );
         assert_eq!(
-            parse_revision_id("#7").unwrap_or_else(|f| panic!("{f}")),
+            parse_revision_id("c-7").unwrap_or_else(|f| panic!("{f}")),
             CommentId(RecordId(7))
+        );
+
+        // the show door: typed ids, the bare position, and the retired
+        // '#' learns the c- form
+        assert!(matches!(
+            parse_show_id("c-7").unwrap_or_else(|f| panic!("{f}")),
+            ShowId::Record(CommentId(RecordId(7)))
+        ));
+        assert!(matches!(
+            parse_show_id("7").unwrap_or_else(|f| panic!("{f}")),
+            ShowId::Position(RecordId(7))
+        ));
+        assert!(matches!(
+            parse_show_id("t-3").unwrap_or_else(|f| panic!("{f}")),
+            ShowId::Thread(TaskId(3))
+        ));
+        let refused = parse_show_id("#7").map_err(|f| f.to_string()).unwrap_err();
+        assert_eq!(
+            refused,
+            "'#7' is not an id (expected c-<seq>, t-<n>, or a bare <seq>); \
+             drop the '#': the record is addressed as c-7"
         );
     }
 

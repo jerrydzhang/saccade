@@ -194,7 +194,7 @@ def post_comment(body, kind):
 
 
 def reply_to_demand(demand, body):
-    run(SAC, "comment", f"#{demand}", body)
+    run(SAC, "comment", f"c-{demand}", body)
 
 
 def handle(line):

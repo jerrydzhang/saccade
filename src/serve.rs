@@ -305,7 +305,7 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
         },
         PostRoute::Ruling(seq) => match proposal_task(app, seq) {
             Some(n) => rule(req, app, n, &fields, seq),
-            None => page(app, 404, &format!("no open proposal #{seq}")),
+            None => page(app, 404, &format!("no open proposal c-{seq}")),
         },
         PostRoute::Accept(n) => accept(req, app, n, &fields),
         PostRoute::Revise(seq) => revise(req, app, seq, &fields),
@@ -439,7 +439,7 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
 /// any comment — and the 303 returns to the comment's home thread.
 fn revise(req: &Req, app: &AppState, seq: usize, fields: &[(String, String)]) -> Response {
     let Some(root) = comment_root(app, seq) else {
-        return page(app, 404, &format!("no comment #{}", seq));
+        return page(app, 404, &format!("no comment c-{}", seq));
     };
     let body = form_field(fields, "body");
     if Prose::new(body.to_string()).is_err() {
