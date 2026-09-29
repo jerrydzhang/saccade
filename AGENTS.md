@@ -24,7 +24,7 @@ discipline.
   type distinctions, event payload meaning, authority and transitions,
   cross-object invariants, what effects may claim, view statements, and
   behavioral acceptance assertions. Agents draft codecs and DB plumbing,
-  HTTP/CLI adapters, process/Git/Telegram mechanics, formatting and CSS,
+  HTTP/CLI adapters, process/Git mechanics, formatting and CSS,
   fake-process harnesses, and repetitive registration of already-ratified
   variants. A file may mix both: task briefs name the ratified semantic
   interface and the exact delegated mechanics; ambiguity returns to the
@@ -35,7 +35,7 @@ discipline.
 
 ## Vocabulary discipline
 
-- Doc vocabulary and code vocabulary must consolidate (three incidents:
+- Doc vocabulary and code vocabulary must consolidate (incidents:
   RecordId/seq, accept/ratify, an invented "learns"). If a term appears in one
   place, sweep the other in the same change.
 - Do not import conversational coinage into code or docs. A term earns its
@@ -46,12 +46,11 @@ discipline.
 
 ## Standing law
 
-Law that binds the not-yet-built. These survived the DESIGN.md deletion
-(2026-09-10) because nothing else carries them: code enforces only what
-exists, and `AXIOMS.md` carries world belief, not tracker law. Everything
-else in that file was derivable or outdated; git history holds the rest.
-Admission bar: rules name kinds, never task ids — instance facts belong to
-the tracker, which ages with them.
+Law that binds the not-yet-built: code enforces only what exists, and
+`AXIOMS.md` carries world belief, not tracker law; git history holds the
+rest. Admission bar: rules name kinds; no task ids, dates, counts, or
+names of unborn doors; instance facts belong to the tracker, which ages
+with them.
 
 - Prescriptions live in code, never configuration; there is no plugin surface.
 - Objects earn residency by being addressed after birth; only a rule change
@@ -87,8 +86,8 @@ the tracker, which ages with them.
 - Every telemetry emit names its reader and the moment they read it, the
   way comments earn bytes; lines duplicating the record or outliving
   their consumer are cut in the same change that notices them. The
-  destination story (and any spans) waits for the consumer — serve as a
-  service, rung 5 — not before.
+  destination story (and any spans) waits for the consumer — a standing
+  service, not before.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes — accepted).
 - The executor is pi, pinned as a flake input — never the ambient
@@ -132,8 +131,7 @@ Placement is a contract:
   shared `populate_log` story; plus every `Reason` pinned and the command
   translation table.
 - `src/views.rs` tests: view derivations over folded worlds, including the
-  shared Human-demand candidate and staleness projection that signal and
-  views both consume (`asked_of_you`).
+  shared Human-demand candidate and staleness projection (`asked_of_you`).
 - `src/db.rs` tests: the persistence layer — one all-event round-trip; new
   event families ride the existing round-trip, they don't get their own.
 - `tests/proptest_harness.rs`: random legal sequences never panic the fold,
@@ -152,7 +150,7 @@ Placement is a contract:
 Rules:
 
 - New family, same contract → grow the existing test. New contract → new
-  test. Four agent-written tests were deleted in one review round by this
+  test. Agent-written tests were deleted in one review round by this
   rule; consolidation is a win, bloat is watched.
 - Exhaustive contract tests (authority table, transition tables) are
   inventories: new event kinds register in them, never in sibling tests.
@@ -165,8 +163,7 @@ Rules:
   the record, not `///` blocks; narration of the next ten lines gets removed.
 - Fixture data reads as narrative: `implement foo`, `migrate floop`, not
   `test task 2`. The log is a story even in tests.
-- Keep the suite green (123 unit + 64 integration at time of writing) and
-  honest:
+- Keep the suite green and honest:
   a failing suite from a fixture change means the fixture changed a contract
   — find out which before editing assertions.
 
@@ -181,9 +178,9 @@ Rules:
 - Open proposals are inert: they never block their target. Rejecting locks
   was deliberate.
 - Validation depends on tier, never actor identity — the exception is
-  accept's birth-attribution door (t-75): an agent accepts only where its
+  accept's birth-attribution door: an agent accepts only where its
   attribution is the task's birth attribution, and a run's derived name
-  (`pi/t-75-2`) never equals one. The CLI has no tier argument:
+  (`pi/t-N-M`) never equals one. The CLI has no tier argument:
   `SACCADE_ACTOR` presence is agent tier, its absence human.
   Judgment acts are proposed (`sac propose drop t-N --name`), not executed.
 - Comments carry a variant — note, demand, steer, ask — never an
