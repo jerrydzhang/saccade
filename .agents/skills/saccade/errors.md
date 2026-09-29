@@ -6,9 +6,9 @@ resolving an error requires violating any law of this skill, that is a
 finding — name it on the thread before proceeding.
 
 - `human_only` — you attempted a judgment act. Stop; escalate.
-- `identity_fallback` — a non-tty write with no `SACCADE_ACTOR` and no
-  `--actor` would record the account name; export
-  `SACCADE_ACTOR=<name>` or pass `--actor`.
+- `identity_fallback` — a non-tty write with no `SACCADE_ACTOR` refuses
+  before any write lands (`--actor` rides the keyboard arm, so it is no
+  fix here); export `SACCADE_ACTOR=<name>`.
 - `invalid_task_id` / `invalid_parent_task_id` — no such task; ids are exact
   `t-N` tokens, not searches.
 - `invalid_proposal_id` — no proposal was born at that seq; proposal ids are

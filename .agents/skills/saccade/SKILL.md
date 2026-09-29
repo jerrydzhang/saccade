@@ -18,10 +18,11 @@ unset means human. There is no tier argument, and actor names never carry
 authority. Mutating commands record your identity from possession; reads
 need none. A run's derived name (`pi/t-75-2`) is an incarnation, not an
 actor — it never equals a birth attribution, so a run can never self-accept.
-An unnamed write is guarded: with `SACCADE_ACTOR` unset and no `--actor`, a
-mutation from a keyboard proceeds on one notice line, and the same mutation
-without a tty refuses (`identity_fallback`) — export
-`SACCADE_ACTOR=<name>` or pass `--actor`.
+An unpossessed write is guarded: with `SACCADE_ACTOR` unset, a mutation
+from a keyboard proceeds on one notice line (a named `--actor` passes
+silently), and the same mutation without a tty refuses
+(`identity_fallback`), `--actor` notwithstanding — export
+`SACCADE_ACTOR=<name>`, as `--actor` rides the keyboard arm.
 
 ## The record is the reasoning cache
 
