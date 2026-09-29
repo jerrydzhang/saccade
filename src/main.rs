@@ -348,8 +348,8 @@ impl std::fmt::Display for Fail {
             Fail::Taught { code, text } => write!(f, "rejected: {code} — {text}"),
             Fail::IdentityFallback { actor, tier } => write!(
                 f,
-                "this write would record {actor}/{tier} from the identity fallback \
-                 (no SACCADE_ACTOR, no --actor); export SACCADE_ACTOR=<name> or pass --actor"
+                "this write would record {actor}/{tier} with no SACCADE_ACTOR and no tty \
+                 (--actor rides the keyboard arm); export SACCADE_ACTOR=<name>"
             ),
             Fail::Usage(m) => write!(f, "{m}"),
             Fail::Client(c) => write!(f, "{c}"),
@@ -790,16 +790,21 @@ fn context_of(cli: &Cli) -> Result<Context, Fail> {
     })
 }
 
-/// The write door's fallback guard: an identity that came from the
-/// account-name fallback is a human at a keyboard or it is nothing.
-/// A tty earns one notice line and the write; every non-tty caller
-/// (scripts, spawned agents) is refused before any write, taught the fix.
+/// The write door's guard: possession passes any context; without it,
+/// a keyboard or nothing. A tty earns the write — the unnamed fallback
+/// on one notice line, a named --actor silently — and every non-tty
+/// caller (scripts, spawned agents) refuses before any write, taught
+/// the fix. Possession is read from the context's tier, never the
+/// --actor flag: clap binds SACCADE_ACTOR into that flag, so it cannot
+/// tell possession from a passed name.
 fn identity_fallback_guard(cli: &Cli, context: &Context) -> Result<(), Fail> {
-    if cli.actor.is_some() {
+    if matches!(context.tier, Tier::Agent) {
         return Ok(());
     }
     if std::io::stdin().is_terminal() {
-        eprintln!("{}", identity_fallback_notice(context));
+        if cli.actor.is_none() {
+            eprintln!("{}", identity_fallback_notice(context));
+        }
         return Ok(());
     }
     Err(Fail::IdentityFallback {
@@ -1671,15 +1676,21 @@ mod test {
         unsafe { std::env::remove_var("SACCADE_ACTOR") };
     }
 
-    /// The fallback guards the write door: a named identity passes
-    /// untouched, the suite's non-tty condition refuses before any write,
-    /// and the keyboard's notice line is exact. Built from literals, never
-    /// the env — the tier test above owns SACCADE_ACTOR process-wide.
+    /// The write door's matrix: possession passes any context, and
+    /// without it a non-tty call refuses, --actor notwithstanding. The
+    /// keyboard arms are the pty smoke's (the suite has no tty); built
+    /// from literals, never the env — the tier test above owns
+    /// SACCADE_ACTOR process-wide, so possession rides the context's
+    /// tier, never a fresh env read.
     #[test]
     fn the_identity_fallback_guards_the_write_door() {
         let jerry = Context {
             actor: ActorName::new("jerry".into()).unwrap(),
             tier: Tier::Human,
+        };
+        let pi = Context {
+            actor: ActorName::new("pi".into()).unwrap(),
+            tier: Tier::Agent,
         };
         let cli_of = |actor: Option<&str>| Cli {
             db: None,
@@ -1694,17 +1705,19 @@ mod test {
         let unnamed = cli_of(None);
         let named = cli_of(Some("saccade bot"));
 
-        // no tty in the suite: the fallback refuses, code and line exact
+        // possession passes any context, flag or none
+        assert!(identity_fallback_guard(&unnamed, &pi).is_ok());
+        assert!(identity_fallback_guard(&named, &pi).is_ok());
+
+        // no tty in the suite: unpossessed refuses, --actor notwithstanding
         let refused = identity_fallback_guard(&unnamed, &jerry).unwrap_err();
         assert_eq!(refused.code(), "identity_fallback");
         assert_eq!(
             refused.to_string(),
-            "this write would record jerry/human from the identity fallback \
-             (no SACCADE_ACTOR, no --actor); export SACCADE_ACTOR=<name> or pass --actor"
+            "this write would record jerry/human with no SACCADE_ACTOR and no tty \
+             (--actor rides the keyboard arm); export SACCADE_ACTOR=<name>"
         );
-
-        // a named identity passes at the same tier: --actor never re-tiers
-        assert!(identity_fallback_guard(&named, &jerry).is_ok());
+        assert!(identity_fallback_guard(&named, &jerry).is_err());
 
         // the keyboard arm's one line: identity named, agent fix taught
         assert_eq!(
