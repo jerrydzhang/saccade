@@ -36,10 +36,14 @@ that skips it burns its reasoning on re-derivation or acts on guesses.
    Deep-first reasoning is the failure mode, not a style.
 2. **Park conclusions at altitude** as they form (`sac comment t-N "…"`) —
    parking is durability: an unparked conclusion dies with your context, a
-   parked one survives reboot, handoff, and the next incarnation. A cache
-   entry is semantic content that survives rewording: the verdict, the why,
-   the dead end, the deviation. Narration of the next ten lines is not a
-   conclusion; a write that cannot name its next reader doesn't earn bytes.
+   parked one survives reboot, handoff, and the next incarnation. Park each
+   conclusion when it forms, never batched at delivery — a crash between
+   formation and park loses it. A cache entry is semantic content that
+   survives rewording: the verdict, the why, the dead end, the deviation.
+   What a maintainer would need to re-derive is a conclusion; code comments
+   and commit messages are not the record. Narration of the next ten lines
+   is not a conclusion; a write that cannot name its next reader doesn't
+   earn bytes.
 3. **Disagreement is a finding.** When the record, the skill, and the
    code disagree — with each other or with what you observe — stop and
    name the conflict on the thread and route it to your asker — the
@@ -68,19 +72,24 @@ outcome, not the goal.
    spec, prior verdicts, dead ends, parked working state — then the code
    and record it names. Followed honestly, this is resuming the work, not
    starting it.
-2. **Size the work.** After retrieval — or after the reasoning an
-   ambiguous spec demanded, whichever road produced your understanding —
-   answer the sizing question explicitly: one acceptable sitting, or
-   several tasks. Labels like CHANGE ONE, CHANGE TWO are task boundaries
-   wearing phase names: a change that could land and be accepted on its
-   own is a task. Several parks the split on the thread (`sac create
-   task --parent`) with its shape named — a chain fires one child at a
-   time, each demand when its upstream lands; a fan-out fires together
-   when the changes share nothing. The question is never skipped, only
-   answered: a spec you have already called large is the signal, and
-   naming its size while executing it whole is the failure this step
-   exists to stop. Crash resume is never a reason to keep a too-large
-   shape.
+2. **Size the work — a procedure, not a judgment.** After retrieval — or
+   after the reasoning an ambiguous spec demanded, whichever road produced
+   your understanding — list the spec's independently acceptable landings:
+   the changes that could each be committed, receipted, and accepted alone.
+   Exactly one → execute it whole and say so on the thread. Several sharing
+   structures → a chain: park the children (`sac create task --parent`),
+   fire the first, fire each next when its upstream lands. Several sharing
+   nothing → a fan, and only when the parallel or context gain clears the
+   per-child ritual (spec, receipt, verify, accept) — children are standing
+   board objects; their cost is permanent, not transient. A split demand
+   delivers once, at the top: children accept to their supervisor, the
+   parent delivers to the asker, and delivering the first slice while
+   supervising the rest is completing the demand, not deferring it. Labels
+   like CHANGE ONE, CHANGE TWO are task boundaries wearing phase names. The
+   question is never skipped, only answered: a spec you have already called
+   large is the signal, and naming its size while executing it whole is the
+   failure this step exists to stop. Crash resume is never a reason to keep
+   a too-large shape.
 3. **Work in the task's worktree** — its branch `saccade/t-N`, prepared
    from the recorded checkpoint. The runner owns it (see Runner-owned
    state); park what you learn as you learn it.
@@ -170,11 +179,16 @@ outcome and the evidence: what changed, which tests ran and their counts,
 which commands were exercised, which files were touched. "done", "fixed",
 "implemented" are not receipts.
 
-One idea per comment, at every door. A multi-idea answer forks into
-one comment per idea; the formal reply or receipt indexes them, never
-contains them. This is practice, not machinery: the reply door stays
-single, and the day a reviewed blob survives this law anyway is the day
-the door itself changes.
+One idea per comment, at every door. When you compose a comment, count its
+ideas; more than one forks into one comment per idea, and the formal reply
+or receipt indexes them, never contains them. This is practice, not
+machinery: the reply door stays single, and the day a reviewed blob
+survives this law anyway is the day the door itself changes.
+
+Addressing is content, not packaging. A comment that answers, resolves, or
+corrects a specific record replies to it (`sac comment c-<seq>`); a comment
+that parks a new conclusion addresses the thread. A `c-N` mention as
+citation is fine; a mention doing an address's job is the door left open.
 
 ## Prose
 
