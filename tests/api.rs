@@ -443,9 +443,7 @@ async fn a_refused_writes_line_replays_against_a_cursor_clone() {
 
 use saccade::CommentKind;
 use saccade::api::AppState as ConsoleState;
-use saccade::objects::comment::{
-    AgentAttemptState, CommentId, CommentState, ResponseState, Target,
-};
+use saccade::objects::comment::{CommentId, CommentState, ResponseState, Target};
 use saccade::store::{Context, RecordId, Tier};
 use saccade::types::actor::ActorName;
 use saccade::views::task_view;
@@ -615,14 +613,13 @@ async fn compose_agent_demand_lands_authorized() {
     let world = world_of(&state);
     let c = &world.comments[&CommentId(RecordId(1))];
     assert_eq!(
-        c.state,
+        c.comment.state,
         CommentState::Demand {
             response: ResponseState::Awaiting,
-            attempt: AgentAttemptState::Authorized {
-                trigger: RecordId(1)
-            },
         }
     );
+    assert_eq!(c.bound, None);
+    assert_eq!(c.refusal, None);
     // the thread carries the stripped body on the composer's task
     let lines = lines_of(&world, 0);
     assert_eq!(lines.len(), 1);
@@ -1506,8 +1503,12 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     assert_eq!(entries[0]["seq"], json!(1));
     assert_eq!(entries[0]["kind"], json!("note"));
     assert_eq!(entries[0]["body"], json!(body));
+    // the entries carry the target edge: roots name the task, replies
+    // the comment they address
+    assert_eq!(entries[0]["target"], json!({"task": 0}));
     assert_eq!(entries[1]["seq"], json!(2));
     assert_eq!(entries[1]["depth"], json!(2));
+    assert_eq!(entries[1]["target"], json!({"comment": 1}));
     assert_eq!(entries[1]["body"], json!(answer));
     // the fold presents the latest revision, byte-exact too
     assert_eq!(entries[2]["seq"], json!(3));
@@ -1521,6 +1522,7 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     let json: Value = serde_json::from_str(&out).expect("the json face parses");
     assert_eq!(json[0]["body"], json!(answer));
     assert_eq!(json[0]["depth"], json!(2));
+    assert_eq!(json[0]["target"], json!({"comment": 1}));
 
     // the bare position on the json face: the raw log row, no fold
     let (ok, out, _) = sac(&["show", "--json", "2"]);
@@ -1959,15 +1961,16 @@ async fn the_comment_kinds_land_their_states_through_the_wire() {
     let snapshot = state.snapshot().unwrap();
     let demand = &snapshot.world.comments[&saccade::CommentId(saccade::RecordId(2))];
     assert!(matches!(
-        &demand.state,
+        &demand.comment.state,
         CommentState::Demand {
-            attempt: saccade::objects::comment::AgentAttemptState::Authorized { .. },
-            ..
+            response: saccade::objects::comment::ResponseState::Awaiting,
         }
     ));
+    assert_eq!(demand.bound, None);
+    assert_eq!(demand.refusal, None);
     let steer = &snapshot.world.comments[&saccade::CommentId(saccade::RecordId(3))];
     assert_eq!(
-        steer.state,
+        steer.comment.state,
         CommentState::Steer {
             delivery: SteerDelivery::Standing
         }
@@ -2020,7 +2023,7 @@ async fn an_ask_round_trips_through_the_comment_door() {
     let ask = &state.snapshot().unwrap().world.comments
         [&saccade::CommentId(saccade::RecordId(seq as usize))];
     assert_eq!(
-        ask.state,
+        ask.comment.state,
         CommentState::Ask {
             response: saccade::objects::comment::ResponseState::Awaiting,
         }
@@ -2052,7 +2055,7 @@ async fn an_ask_round_trips_through_the_comment_door() {
     };
     let ask = &world.comments[&saccade::CommentId(saccade::RecordId(seq as usize))];
     assert!(matches!(
-        &ask.state,
+        &ask.comment.state,
         CommentState::Ask {
             response: saccade::objects::comment::ResponseState::Responded { .. },
         }

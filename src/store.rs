@@ -5,13 +5,15 @@ use serde::{Deserialize, Serialize};
 use crate::decide::{decide, enforce_tier, expand};
 use crate::events::{Command, Event};
 use crate::objects::comment::{
-    AgentAttemptState, Comment, CommentContext, CommentId, CommentKind, CommentState, ContentAct,
-    Refusal, ResponseState, Revision, SteerDelivery, Withdrawal,
+    Comment, CommentContext, CommentId, CommentKind, CommentState, Refusal, ResponseState,
+    Revision, SteerDelivery, Withdrawal,
 };
-use crate::objects::incarnation::{IncarnationContext, IncarnationId, IncarnationState};
-use crate::objects::proposal::{Proposal, ProposalContext, ProposalId, ProposalState};
+use crate::objects::incarnation::{
+    Incarnation, IncarnationContext, IncarnationId, IncarnationState,
+};
+use crate::objects::proposal::{Proposal, ProposalId, ProposalState};
 use crate::objects::task::{Task, TaskContext, TaskId, TaskState};
-use crate::objects::workspace::{WorkspaceContext, WorktreeState};
+use crate::objects::workspace::{Workspace, WorkspaceContext, WorktreeState};
 use crate::types::actor::ActorName;
 use crate::{ProposalAction, Prose, Reject, Target};
 
@@ -121,7 +123,7 @@ pub struct Record {
 #[derive(Clone, Debug, PartialEq)]
 pub struct World {
     pub tasks: Vec<TaskContext>,
-    pub proposals: BTreeMap<ProposalId, ProposalContext>,
+    pub proposals: BTreeMap<ProposalId, Proposal>,
     pub comments: BTreeMap<CommentId, CommentContext>,
     pub incarnations: BTreeMap<IncarnationId, IncarnationContext>,
 }
@@ -165,17 +167,12 @@ impl World {
     fn terminalize(&mut self, id: IncarnationId, record: &Record) {
         if let Some(run) = self.incarnations.get_mut(&id) {
             run.done_at = Some(record.timestamp);
-            if let Some(task_ctx) = self.tasks.get_mut(run.task_id.0)
+            if let Some(task_ctx) = self.tasks.get_mut(run.incarnation.task_id.0)
                 && task_ctx.active_incarnation == Some(id)
             {
                 task_ctx.active_incarnation = None;
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
-            }
-            if let Some(demand) = self.comments.get_mut(&run.response_target)
-                && let Some(next) = demand.state.transition(&record.event, record)
-            {
-                demand.state = next;
             }
         }
     }
@@ -301,7 +298,7 @@ impl World {
                     .ok_or(Reason::InvalidStateTransition)?;
             }
             // Incarnation events
-            ref event @ Event::IncarnationBound {
+            Event::IncarnationBound {
                 ref task_id,
                 ref response_target,
                 ref trigger,
@@ -320,21 +317,34 @@ impl World {
                 if demand.comment.root != *task_id {
                     return Err(Reason::DemandNotOnTask);
                 }
-                demand.state = demand
-                    .state
-                    .transition(event, &record)
-                    .ok_or(Reason::InvalidStateTransition)?;
+                // the bind consumes a live authorization: the trigger
+                // names the demand's own birth, and a bound, refused,
+                // or answered demand holds nothing to bind
+                if *trigger != response_target.0
+                    || demand.bound.is_some()
+                    || demand.refusal.is_some()
+                    || !matches!(
+                        demand.comment.state,
+                        CommentState::Demand {
+                            response: ResponseState::Awaiting
+                        }
+                    )
+                {
+                    return Err(Reason::InvalidStateTransition);
+                }
+                demand.bound = Some(IncarnationId(record.id));
                 self.incarnations.insert(
                     IncarnationId(record.id),
                     IncarnationContext {
-                        task_id: *task_id,
-                        response_target: *response_target,
-                        trigger: *trigger,
-                        actor: actor.clone(),
-                        session: session.clone(),
-                        state: IncarnationState::Bound,
+                        incarnation: Incarnation {
+                            task_id: *task_id,
+                            response_target: *response_target,
+                            trigger: *trigger,
+                            actor: actor.clone(),
+                            session: session.clone(),
+                            state: IncarnationState::Bound,
+                        },
                         produced: Vec::new(),
-                        rejection: None,
                         born_at: record.timestamp,
                         done_at: None,
                     },
@@ -348,21 +358,22 @@ impl World {
                     .incarnations
                     .get_mut(&id)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                run.state = run
+                run.incarnation.state = run
+                    .incarnation
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
             }
-            ref event @ Event::IncarnationPromptRejected { id, ref evidence } => {
+            ref event @ Event::IncarnationPromptRejected { id, .. } => {
                 let run = self
                     .incarnations
                     .get_mut(&id)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                run.state = run
+                run.incarnation.state = run
+                    .incarnation
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
-                run.rejection = Some(evidence.clone());
                 self.terminalize(id, &record);
             }
             ref event @ Event::IncarnationSettled { id } => {
@@ -370,7 +381,8 @@ impl World {
                     .incarnations
                     .get_mut(&id)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                run.state = run
+                run.incarnation.state = run
+                    .incarnation
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
@@ -381,7 +393,8 @@ impl World {
                     .incarnations
                     .get_mut(&id)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                run.state = run
+                run.incarnation.state = run
+                    .incarnation
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
@@ -395,7 +408,8 @@ impl World {
                     .incarnations
                     .get_mut(&incarnation_id)
                     .ok_or(Reason::InvalidIncarnationId)?;
-                run.state = run
+                run.incarnation.state = run
+                    .incarnation
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
@@ -416,22 +430,25 @@ impl World {
                     return Err(Reason::WorkspaceAlreadyExists);
                 }
                 task_ctx.workspace = Some(WorkspaceContext {
-                    base: base.clone(),
-                    branch: branch.clone(),
-                    checkpoint: base.clone(),
+                    workspace: Workspace {
+                        base: base.clone(),
+                        branch: branch.clone(),
+                        checkpoint: base.clone(),
+                        worktree: WorktreeState::Absent,
+                    },
                     heads: vec![base.clone()],
-                    worktree: WorktreeState::Absent,
                 });
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
-            ref event @ Event::TaskWorktreeCreated { task_id, .. } => {
+            ref event @ Event::TaskWorkspaceMaterialized { task_id, .. } => {
                 let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
                 let workspace = task_ctx
                     .workspace
                     .as_mut()
                     .ok_or(Reason::WorkspaceMissing)?;
-                workspace.worktree = workspace
+                workspace.workspace.worktree = workspace
+                    .workspace
                     .worktree
                     .transition(event)
                     .ok_or(Reason::WorktreeAlreadyPresent)?;
@@ -451,14 +468,14 @@ impl World {
                 // checkpoint; the explicit door never
                 // returns to a head the record left
                 if record.context.tier != Tier::System
-                    && *checkpoint != workspace.checkpoint
+                    && *checkpoint != workspace.workspace.checkpoint
                     && workspace.heads.contains(checkpoint)
                 {
                     return Err(Reason::CheckpointRewind);
                 }
-                if *checkpoint != workspace.checkpoint {
+                if *checkpoint != workspace.workspace.checkpoint {
                     workspace.heads.push(checkpoint.clone());
-                    workspace.checkpoint = checkpoint.clone();
+                    workspace.workspace.checkpoint = checkpoint.clone();
                 }
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
@@ -493,29 +510,26 @@ impl World {
 
                 self.proposals.insert(
                     proposal_id,
-                    ProposalContext {
-                        proposal: Proposal {
-                            state: ProposalState::Open,
-                            name: proposal_name,
-                            action,
-                        },
+                    Proposal {
+                        state: ProposalState::Open,
+                        name: proposal_name,
+                        action,
                     },
                 );
             }
             ref event @ (Event::ProposalWithdrawn { id, .. }
             | Event::ProposalRejected { id, .. }
-            | Event::ProposalAccepted { id, .. }) => {
-                let proposal_ctx = self
+            | Event::ProposalAccepted { id }) => {
+                let proposal = self
                     .proposals
                     .get_mut(&id)
                     .ok_or(Reason::InvalidProposalId)?;
-                proposal_ctx.proposal.state = proposal_ctx
-                    .proposal
+                proposal.state = proposal
                     .state
                     .transition(event)
                     .ok_or(Reason::InvalidStateTransition)?;
 
-                match &proposal_ctx.proposal.action {
+                match &proposal.action {
                     ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
                         self.tasks
                             .get_mut(task_id.0)
@@ -549,7 +563,6 @@ impl World {
                     CommentKind::Note => CommentState::Note,
                     CommentKind::Demand => CommentState::Demand {
                         response: ResponseState::Awaiting,
-                        attempt: AgentAttemptState::Authorized { trigger: record.id },
                     },
                     CommentKind::Steer => CommentState::Steer {
                         delivery: SteerDelivery::Standing,
@@ -566,14 +579,15 @@ impl World {
                             target: *target,
                             body: body.clone(),
                             root: root_task_id,
+                            state,
                         },
                         actor: record.context.actor.clone(),
                         tier: record.context.tier,
-                        state,
                         born_at: record.timestamp,
                         revised: None,
                         withdrawn: None,
                         refusal: None,
+                        bound: None,
                     },
                 );
 
@@ -582,9 +596,13 @@ impl World {
                         .comments
                         .get_mut(parent)
                         .expect("apply validated the parent above");
-
-                    if let Some(next) = parent_ctx.state.transition(&record.event, &record) {
-                        parent_ctx.state = next;
+                    // the reply's tier gates the answer doors: the
+                    // machinery never answers, and the reply pointer is
+                    // this record's position, which only the fold knows
+                    if matches!(record.context.tier, Tier::Agent | Tier::Human)
+                        && let Some(next) = parent_ctx.comment.state.answered(CommentId(record.id))
+                    {
+                        parent_ctx.comment.state = next;
                     }
                 }
 
@@ -592,7 +610,6 @@ impl World {
                     .tasks
                     .get_mut(root_task_id.0)
                     .ok_or(Reason::InvalidTaskId)?;
-                // a demand reopens done, through the task transition table
                 if let Some(next) = task_ctx.task.state.transition(&record.event) {
                     task_ctx.task.state = next;
                     task_ctx.last_updated = record.id;
@@ -600,13 +617,10 @@ impl World {
                 task_ctx.thread.push(CommentId(record.id));
                 task_ctx.last_record_at = record.timestamp;
             }
-            // A content act, not a transition: the body swaps and the
-            // pointer moves to this record — the state machines never
-            // see the event, and the birth bytes stay in their own row.
-            // Any tier revises; the fold keeps the reviser for disclosure
             Event::CommentRevised { id, ref body } => {
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
-                if !comment_ctx.admits(ContentAct::Revise) {
+                // the gate is the state: a withdrawn deposit admits no repair
+                if matches!(comment_ctx.comment.state, CommentState::Withdrawn(_)) {
                     return Err(Reason::InvalidStateTransition);
                 }
                 comment_ctx.comment.body = body.clone();
@@ -618,35 +632,39 @@ impl World {
                 let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_record_at = record.timestamp;
             }
-            // The standing-error repair: the body leaves the fold's
-            // presentation, the tombstone stays, the log is untouched.
-            // Any tier withdraws; the fold keeps the withdrawer for
-            // disclosure, and the door is terminal
-            Event::CommentWithdrawn { id, ref note } => {
+            ref event @ Event::CommentWithdrawn { id, .. } => {
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
-                if !comment_ctx.admits(ContentAct::Withdraw) {
-                    return Err(Reason::InvalidStateTransition);
-                }
+                comment_ctx.comment.state = comment_ctx
+                    .comment
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
                 comment_ctx.withdrawn = Some(Withdrawal {
                     record: record.id,
                     withdrawer: record.context.actor.clone(),
-                    note: note.clone(),
                 });
                 let root = comment_ctx.comment.root;
                 let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_record_at = record.timestamp;
             }
-            // The refusal fact: a demand the machinery would not run,
-            // recorded where the asker reads
-            ref event @ Event::DemandRefused { demand, ref reason } => {
+            Event::DemandRefused { demand, ref reason } => {
                 let demand_ctx = self
                     .comments
                     .get_mut(&demand)
                     .ok_or(Reason::InvalidCommentId)?;
-                demand_ctx.state = demand_ctx
-                    .state
-                    .transition(event, &record)
-                    .ok_or(Reason::InvalidStateTransition)?;
+                // the refusal spends a live authorization: a bound,
+                // refused, or answered demand holds nothing to refuse
+                if demand_ctx.bound.is_some()
+                    || demand_ctx.refusal.is_some()
+                    || !matches!(
+                        demand_ctx.comment.state,
+                        CommentState::Demand {
+                            response: ResponseState::Awaiting
+                        }
+                    )
+                {
+                    return Err(Reason::InvalidStateTransition);
+                }
                 demand_ctx.refusal = Some(Refusal {
                     reason: reason.clone(),
                     at: record.timestamp,
@@ -656,8 +674,7 @@ impl World {
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
-            // The delivery fact: the live run consumed this steer; the
-            // send preceded the record, so a crash between them may
+            // the send preceded the record: a crash between them may
             // duplicate delivery, never lose it
             ref event @ Event::SteerForwarded { steer } => {
                 let root = {
@@ -674,17 +691,15 @@ impl World {
                     return Err(Reason::NoActiveIncarnation);
                 }
                 let steer_ctx = self.comments.get_mut(&steer).expect("validated above");
-                steer_ctx.state = steer_ctx
+                steer_ctx.comment.state = steer_ctx
+                    .comment
                     .state
-                    .transition(event, &record)
+                    .transition(event)
                     .ok_or(Reason::SteerNotStanding)?;
                 let task_ctx = self.tasks.get_mut(root.0).expect("validated above");
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
-            // A thread holding an artifact: the record parks the pointer,
-            // the bytes already sit in the store. Bookkeeping follows the
-            // Commented precedent — the thread moved, the state did not.
             Event::ArtifactAdded { root, ref artifact } => {
                 let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.artifacts.push((record.id, artifact.clone()));
@@ -751,9 +766,7 @@ mod test {
     use super::*;
     use crate::ContentHash;
     use crate::Event;
-    use crate::objects::comment::{
-        AgentAttemptState, CommentId, CommentKind, CommentState, ResponseState, Target,
-    };
+    use crate::objects::comment::{CommentId, CommentKind, CommentState, ResponseState, Target};
     use crate::objects::incarnation::{IncarnationId, IncarnationState};
     use crate::objects::proposal::{ProposalAction, ProposalId, ProposalState};
     use crate::objects::task::{TaskId, TaskState};
@@ -1369,9 +1382,7 @@ mod test {
         assert_eq!(note.as_str(), "this is a duplicated task");
         assert_eq!(log.world().tasks[0].task.state, TaskState::Dropped);
         assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))]
-                .proposal
-                .state,
+            log.world().proposals[&ProposalId(RecordId(1))].state,
             ProposalState::Accepted
         );
     }
@@ -1409,9 +1420,7 @@ mod test {
         assert_eq!(log.records().len(), 2);
         assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
         assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))]
-                .proposal
-                .state,
+            log.world().proposals[&ProposalId(RecordId(1))].state,
             ProposalState::Open
         );
     }
@@ -1454,9 +1463,7 @@ mod test {
         assert_eq!(log.records().len(), 3);
         assert_eq!(log.world().tasks[0].task.state, TaskState::Claimed);
         assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))]
-                .proposal
-                .state,
+            log.world().proposals[&ProposalId(RecordId(1))].state,
             ProposalState::Open
         );
     }
@@ -1508,15 +1515,15 @@ mod test {
         .unwrap();
         let run = IncarnationId(RecordId(17));
         assert_eq!(
-            log.world().incarnations[&run].state,
+            log.world().incarnations[&run].incarnation.state,
             IncarnationState::Bound
         );
         assert_eq!(log.world().tasks[0].active_incarnation, Some(run));
+        assert_eq!(log.world().comments[&demand].bound, Some(run));
         assert_eq!(
-            log.world().comments[&demand].state,
+            log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::InFlight { incarnation: run }
             }
         );
 
@@ -1540,7 +1547,7 @@ mod test {
         log.execute_system(Command::AcceptPrompt { id: run }, 24)
             .unwrap();
         assert_eq!(
-            log.world().incarnations[&run].state,
+            log.world().incarnations[&run].incarnation.state,
             IncarnationState::PromptAccepted
         );
 
@@ -1557,10 +1564,9 @@ mod test {
         .unwrap();
         let reply = CommentId(RecordId(19));
         assert_eq!(
-            log.world().comments[&demand].state,
+            log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
-                attempt: AgentAttemptState::InFlight { incarnation: run }
             }
         );
 
@@ -1576,16 +1582,15 @@ mod test {
         log.execute_system(Command::SettleIncarnation { id: run }, 27)
             .unwrap();
         assert_eq!(
-            log.world().incarnations[&run].state,
+            log.world().incarnations[&run].incarnation.state,
             IncarnationState::Settled
         );
         assert_eq!(log.world().tasks[0].active_incarnation, None);
         assert_eq!(log.world().incarnations[&run].produced, vec![RecordId(19)]);
         assert_eq!(
-            log.world().comments[&demand].state,
+            log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
-                attempt: AgentAttemptState::Spent
             }
         );
     }
@@ -1630,24 +1635,18 @@ mod test {
         .unwrap();
         let run = IncarnationId(RecordId(17));
         assert_eq!(
-            log.world().incarnations[&run].state,
-            IncarnationState::Interrupted
-        );
-        // the fold carries the recorded cause for the surfaces that
-        // release on it
-        assert_eq!(
-            log.world().incarnations[&run].rejection,
-            Some(FailureEvidence::new(
+            log.world().incarnations[&run].incarnation.state,
+            IncarnationState::Interrupted(FailureEvidence::new(
                 FailureCode::PromptRejected,
                 Some("session refused the pointer prompt".into()),
             ))
         );
         assert_eq!(log.world().tasks[0].active_incarnation, None);
+        assert_eq!(log.world().comments[&demand].bound, Some(run));
         assert_eq!(
-            log.world().comments[&demand].state,
+            log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::Spent
             }
         );
 
@@ -1688,15 +1687,14 @@ mod test {
         log.execute(agent(), Command::CancelIncarnation { id: run }, 22)
             .unwrap();
         assert_eq!(
-            log.world().incarnations[&run].state,
+            log.world().incarnations[&run].incarnation.state,
             IncarnationState::Cancelled
         );
         assert_eq!(log.world().tasks[0].active_incarnation, None);
         assert_eq!(
-            log.world().comments[&demand].state,
+            log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::Spent
             }
         );
 
@@ -1727,17 +1725,15 @@ mod test {
         .unwrap();
         let demand = CommentId(RecordId(before));
         assert_eq!(
-            log.world().comments[&demand].state,
+            log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::Authorized {
-                    trigger: RecordId(before)
-                }
             }
         );
+        assert_eq!(log.world().comments[&demand].bound, None);
 
-        // the human's reply answers regardless of addressee and spends
-        // the attempt, so the sweep never fires the demand again
+        // the human's reply answers regardless of addressee, so the
+        // sweep never fires the demand again
         log.execute(
             human(),
             Command::Comment {
@@ -1750,10 +1746,9 @@ mod test {
         .unwrap();
         let reply = CommentId(RecordId(before + 1));
         assert_eq!(
-            log.world().comments[&demand].state,
+            log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
-                attempt: AgentAttemptState::Spent,
             }
         );
 
@@ -1769,10 +1764,9 @@ mod test {
         )
         .unwrap();
         assert_eq!(
-            log.world().comments[&demand].state,
+            log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
-                attempt: AgentAttemptState::Spent,
             }
         );
 
@@ -1790,7 +1784,7 @@ mod test {
         .unwrap();
         let ask = CommentId(RecordId(before + 3));
         assert_eq!(
-            log.world().comments[&ask].state,
+            log.world().comments[&ask].comment.state,
             CommentState::Ask {
                 response: ResponseState::Awaiting,
             }
@@ -1807,7 +1801,7 @@ mod test {
         )
         .unwrap();
         assert_eq!(
-            log.world().comments[&ask].state,
+            log.world().comments[&ask].comment.state,
             CommentState::Ask {
                 response: ResponseState::Responded { reply: mid },
             }
@@ -1825,7 +1819,7 @@ mod test {
         )
         .unwrap();
         assert_eq!(
-            log.world().comments[&ask].state,
+            log.world().comments[&ask].comment.state,
             CommentState::Ask {
                 response: ResponseState::Responded { reply: mid },
             }
@@ -1942,7 +1936,7 @@ mod test {
             })
         );
         // a content act, not a transition: the demand keeps its state
-        assert!(matches!(&ctx.state, CommentState::Demand { .. }));
+        assert!(matches!(&ctx.comment.state, CommentState::Demand { .. }));
 
         // any tier revises any comment: another agent's revision lands
         let other = Context {
@@ -2081,11 +2075,13 @@ mod test {
             Some(Withdrawal {
                 record: RecordId(5),
                 withdrawer: human().actor,
-                note: Prose::new("the parking was premature".into()).unwrap(),
             })
         );
-        // the withdrawal moves no state: the note is still a note
-        assert!(matches!(&ctx.state, CommentState::Note));
+        // the tombstone's note rides the terminal state
+        assert!(matches!(
+            &ctx.comment.state,
+            CommentState::Withdrawn(note) if note.as_str() == "the parking was premature"
+        ));
 
         // terminal: a second withdrawal and a revision both refuse
         for command in [
@@ -2224,7 +2220,7 @@ mod test {
         let branch = GitBranch::new("saccade/t-0".into()).unwrap();
         let worktree = WorktreePath::new("/repo/wt/t-0".into()).unwrap();
         let refused = log.execute_system(
-            Command::CreateWorktree {
+            Command::MaterializeWorkspace {
                 task_id: TaskId(0),
                 worktree: worktree.clone(),
             },
@@ -2243,9 +2239,9 @@ mod test {
         )
         .unwrap();
         let ctx = &log.world().tasks[0];
-        assert_eq!(ctx.workspace.as_ref().unwrap().checkpoint, base);
+        assert_eq!(ctx.workspace.as_ref().unwrap().workspace.checkpoint, base);
         assert!(matches!(
-            ctx.workspace.as_ref().unwrap().worktree,
+            ctx.workspace.as_ref().unwrap().workspace.worktree,
             WorktreeState::Absent
         ));
 
@@ -2262,7 +2258,7 @@ mod test {
 
         // the physical creation is recorded, once
         log.execute_system(
-            Command::CreateWorktree {
+            Command::MaterializeWorkspace {
                 task_id: TaskId(0),
                 worktree: worktree.clone(),
             },
@@ -2270,7 +2266,7 @@ mod test {
         )
         .unwrap();
         let refused = log.execute_system(
-            Command::CreateWorktree {
+            Command::MaterializeWorkspace {
                 task_id: TaskId(0),
                 worktree: worktree.clone(),
             },
@@ -2278,7 +2274,12 @@ mod test {
         );
         assert!(matches!(refused, Err(Reject::WorktreeAlreadyPresent)));
         assert!(matches!(
-            log.world().tasks[0].workspace.as_ref().unwrap().worktree,
+            log.world().tasks[0]
+                .workspace
+                .as_ref()
+                .unwrap()
+                .workspace
+                .worktree,
             WorktreeState::Present(_)
         ));
 
@@ -2293,7 +2294,12 @@ mod test {
         )
         .unwrap();
         assert_eq!(
-            log.world().tasks[0].workspace.as_ref().unwrap().checkpoint,
+            log.world().tasks[0]
+                .workspace
+                .as_ref()
+                .unwrap()
+                .workspace
+                .checkpoint,
             head
         );
     }
@@ -2347,7 +2353,12 @@ mod test {
             .unwrap();
         }
         assert_eq!(
-            log.world().tasks[0].workspace.as_ref().unwrap().checkpoint,
+            log.world().tasks[0]
+                .workspace
+                .as_ref()
+                .unwrap()
+                .workspace
+                .checkpoint,
             merged
         );
 
@@ -2364,7 +2375,12 @@ mod test {
         .unwrap();
         assert_eq!(log.records().len(), before + 1);
         assert_eq!(
-            log.world().tasks[0].workspace.as_ref().unwrap().checkpoint,
+            log.world().tasks[0]
+                .workspace
+                .as_ref()
+                .unwrap()
+                .workspace
+                .checkpoint,
             merged
         );
 
@@ -2423,10 +2439,9 @@ mod test {
         .unwrap();
         let ctx = &log.world().comments[&demand];
         assert_eq!(
-            ctx.state,
+            ctx.comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::Spent,
             }
         );
         let refusal = ctx.refusal.as_ref().expect("the refusal landed");
@@ -2456,10 +2471,9 @@ mod test {
         .unwrap();
         let ctx = &log.world().comments[&demand];
         assert!(matches!(
-            &ctx.state,
+            &ctx.comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { .. },
-                attempt: AgentAttemptState::Spent,
             }
         ));
         assert!(ctx.refusal.is_some());

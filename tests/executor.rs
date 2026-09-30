@@ -263,8 +263,20 @@ for line in sys.stdin:
 
 /// The task's thread lines: bodies without reaching into the fold.
 fn thread_bodies(world: &World) -> Vec<String> {
-    saccade::views::comment_thread(&world.comments, &world.tasks[0])
+    saccade::views::thread_view(world, saccade::TaskId(0))
+        .expect("the thread folds")
+        .items
         .into_iter()
+        .flat_map(|item| match item {
+            saccade::views::ThreadItem::Exchange { root, replies, .. }
+            | saccade::views::ThreadItem::Group { root, replies } => {
+                let mut all = vec![root];
+                all.extend(replies);
+                all
+            }
+            saccade::views::ThreadItem::Note(line) => vec![line],
+            saccade::views::ThreadItem::Artifacts(_) => Vec::new(),
+        })
         .map(|l| l.body)
         .collect()
 }
@@ -357,7 +369,7 @@ async fn the_stub_contract_answers_a_demand_over_rpc() {
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
     // the stub's reply carries the run's derived attribution
-    match &world.comments[&demand].state {
+    match &world.comments[&demand].comment.state {
         CommentState::Demand { response, .. } => {
             let reply = match response {
                 saccade::objects::comment::ResponseState::Responded { reply } => *reply,
@@ -394,29 +406,21 @@ async fn a_refused_prompt_records_its_rejection_with_the_executors_string() {
     assert_eq!(world.tasks[0].active_incarnation, None);
     let run = world
         .incarnations
-        .values()
-        .find(|r| r.response_target == demand)
+        .iter()
+        .find_map(|(id, r)| (r.incarnation.response_target == demand).then_some(*id))
         .expect("the refused run is in the fold");
-    assert_eq!(
-        run.state,
-        saccade::objects::incarnation::IncarnationState::Interrupted
-    );
-    assert!(
-        run.rejection
-            .as_ref()
-            .and_then(|e| e.detail.as_deref())
-            .unwrap_or_default()
-            .contains("the model catalog is empty")
-    );
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(
-                attempt,
-                saccade::objects::comment::AgentAttemptState::Spent
-            ));
-        }
-        other => panic!("demand spent: {other:?}"),
-    }
+    let ctx = &world.incarnations[&run];
+    assert!(matches!(
+        &ctx.incarnation.state,
+        saccade::objects::incarnation::IncarnationState::Interrupted(evidence)
+            if evidence
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("the model catalog is empty")
+    ));
+    assert_eq!(world.comments[&demand].bound, Some(run));
+
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -435,12 +439,12 @@ async fn an_ask_round_trips_through_the_stub() {
     let world = await_world(&db_path, "the ask", 30, |w| {
         w.comments
             .values()
-            .any(|c| matches!(c.state, CommentState::Ask { .. }))
+            .any(|c| matches!(c.comment.state, CommentState::Ask { .. }))
     });
     let (ask, asker) = world
         .comments
         .iter()
-        .find(|(_, c)| matches!(c.state, CommentState::Ask { .. }))
+        .find(|(_, c)| matches!(c.comment.state, CommentState::Ask { .. }))
         .map(|(id, c)| (*id, c.actor.clone()))
         .unwrap();
     assert_eq!(asker.as_str(), "pi/t-0-1");
@@ -484,7 +488,7 @@ async fn an_ask_round_trips_through_the_stub() {
     assert!(said.contains("wait: c-"), "{said}");
     // the ask holds its answer on the thread
     assert!(matches!(
-        world.comments[&ask].state,
+        world.comments[&ask].comment.state,
         CommentState::Ask {
             response: saccade::objects::comment::ResponseState::Responded { .. },
         }
@@ -514,7 +518,7 @@ async fn a_standing_steer_reaches_the_live_session_once() {
     .unwrap();
     let steer = CommentId(saccade::RecordId(2));
     assert_eq!(
-        world_of(&db_path).comments[&steer].state,
+        world_of(&db_path).comments[&steer].comment.state,
         CommentState::Steer {
             delivery: SteerDelivery::Standing
         }
@@ -527,7 +531,7 @@ async fn a_standing_steer_reaches_the_live_session_once() {
 
     await_world(&db_path, "the steer's consumption", 30, |w| {
         matches!(
-            w.comments.get(&steer).map(|c| &c.state),
+            w.comments.get(&steer).map(|c| &c.comment.state),
             Some(CommentState::Steer {
                 delivery: SteerDelivery::Forwarded
             })
@@ -586,7 +590,7 @@ async fn a_midrun_steer_reaches_the_open_turn() {
     assert!(seen.contains("settled"), "{seen}");
     let world = world_of(&db_path);
     let consumed = world.comments.values().any(|c| {
-        matches!(c.state, CommentState::Steer { .. })
+        matches!(c.comment.state, CommentState::Steer { .. })
             && thread_bodies(&world).contains(&"stop early and report".to_string())
     });
     assert!(consumed, "the steer stands consumed");
@@ -625,7 +629,7 @@ async fn a_cancel_aborts_the_session_through_the_protocol() {
         w.tasks[0].active_incarnation.is_none()
     });
     assert_eq!(
-        world.incarnations[&incarnation].state,
+        world.incarnations[&incarnation].incarnation.state,
         saccade::objects::incarnation::IncarnationState::Cancelled
     );
     // the abort reached the session as a protocol act, not a signal:

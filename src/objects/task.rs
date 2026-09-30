@@ -61,9 +61,9 @@ impl TaskState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Task {
-    pub(crate) state: TaskState,
-    pub(crate) name: Prose,
-    pub(crate) parent_id: Option<TaskId>,
+    pub state: TaskState,
+    pub name: Prose,
+    pub parent_id: Option<TaskId>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskContext {

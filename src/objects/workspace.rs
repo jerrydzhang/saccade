@@ -12,7 +12,7 @@ impl WorktreeState {
     /// The state machine table, all state transitions must go through this
     pub fn transition(&self, event: &Event) -> Option<WorktreeState> {
         match (self, event) {
-            (WorktreeState::Absent, Event::TaskWorktreeCreated { worktree, .. }) => {
+            (WorktreeState::Absent, Event::TaskWorkspaceMaterialized { worktree, .. }) => {
                 Some(WorktreeState::Present(worktree.clone()))
             }
             _ => None,
@@ -21,17 +21,22 @@ impl WorktreeState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct WorkspaceContext {
+pub struct Workspace {
     /// The immutable commit the workspace was cut from
     pub base: GitCommit,
     /// The branch preserving advancement between checkpoints
     pub branch: GitBranch,
     /// The latest recorded clean head; born at base
     pub checkpoint: GitCommit,
+    pub worktree: WorktreeState,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkspaceContext {
+    pub workspace: Workspace,
     /// Every head the record has named, base first; the explicit
     /// checkpoint door returns to none of them
     pub heads: Vec<GitCommit>,
-    pub worktree: WorktreeState,
 }
 
 #[cfg(test)]
@@ -51,7 +56,7 @@ mod test {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("saccade/t-0".into()).unwrap(),
             },
-            Event::TaskWorktreeCreated {
+            Event::TaskWorkspaceMaterialized {
                 task_id: TaskId(0),
                 worktree: WorktreePath::new("/wt".into()).unwrap(),
             },
@@ -65,7 +70,10 @@ mod test {
             for event in &events {
                 let legal = matches!(
                     (state, event),
-                    (WorktreeState::Absent, Event::TaskWorktreeCreated { .. })
+                    (
+                        WorktreeState::Absent,
+                        Event::TaskWorkspaceMaterialized { .. }
+                    )
                 );
                 assert_eq!(
                     state.transition(event).is_some(),

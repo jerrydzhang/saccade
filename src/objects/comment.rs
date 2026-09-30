@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::events::Event;
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::TaskId;
-use crate::store::{Record, RecordId, Tier};
+use crate::store::{RecordId, Tier};
 use crate::types::actor::ActorName;
 use crate::types::prose::Prose;
 
@@ -31,10 +31,11 @@ pub enum CommentKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
-    pub(crate) target: Target,
-    pub(crate) body: Prose,
+    pub target: Target,
+    pub body: Prose,
     /// The task this comment lives on, derived from its target chain
-    pub(crate) root: TaskId,
+    pub root: TaskId,
+    pub state: CommentState,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -51,67 +52,12 @@ pub enum SteerDelivery {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum AgentAttemptState {
-    Authorized { trigger: RecordId },
-    InFlight { incarnation: IncarnationId },
-    Spent,
-}
-
-impl AgentAttemptState {
-    /// The attempt state machine table, all transitions must go through
-    /// this. The event names the transition; the record supplies the
-    /// record positions the event does not carry.
-    pub fn transition(&self, event: &Event, record: &Record) -> Option<AgentAttemptState> {
-        match (self, event) {
-            // binding consumes the demand's live authorization, exactly
-            (
-                AgentAttemptState::Authorized { trigger },
-                Event::IncarnationBound {
-                    trigger: binding, ..
-                },
-            ) if trigger == binding => Some(AgentAttemptState::InFlight {
-                incarnation: IncarnationId(record.id),
-            }),
-            // a reply consumes a pre-bind authorization
-            (AgentAttemptState::Authorized { .. }, Event::Commented { .. }) => {
-                Some(AgentAttemptState::Spent)
-            }
-            // a prepare refusal consumes the demand's live authorization:
-            // re-asking is a new comment
-            (AgentAttemptState::Authorized { .. }, Event::DemandRefused { .. }) => {
-                Some(AgentAttemptState::Spent)
-            }
-            // a reply on an in-flight demand: the slot holds until the run ends
-            (AgentAttemptState::InFlight { .. }, Event::Commented { .. }) => Some(self.clone()),
-            // a terminal run frees the slot
-            (
-                AgentAttemptState::InFlight { .. },
-                Event::IncarnationSettled { .. }
-                | Event::IncarnationPromptRejected { .. }
-                | Event::IncarnationCancelled { .. },
-            ) => Some(AgentAttemptState::Spent),
-            // an answered demand's run may still be settling, and a late
-            // reply answers an ended run's demand
-            (
-                spent @ AgentAttemptState::Spent,
-                Event::Commented { .. }
-                | Event::IncarnationSettled { .. }
-                | Event::IncarnationPromptRejected { .. }
-                | Event::IncarnationCancelled { .. },
-            ) => Some(spent.clone()),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub enum CommentState {
     Note,
     /// The demand: fires a run when the task is free, queues while
-    /// busy. The attempt is the run machinery's slot on it.
+    /// busy. The bound run and the refusal are the context's facts.
     Demand {
         response: ResponseState,
-        attempt: AgentAttemptState,
     },
     /// The steer: forwarded to the live run at the turn boundary,
     /// consumed by it, never re-fired.
@@ -123,60 +69,49 @@ pub enum CommentState {
     Ask {
         response: ResponseState,
     },
+    /// The standing-error repair, terminal: the deposit's body left
+    /// the fold's presentation, the tombstone holds its place.
+    Withdrawn(Prose),
 }
 
 impl CommentState {
-    /// The comment state machine table, all transitions must go through
-    /// this. The replying tier is a cell guard for demands — the human's
-    /// word ends any demand — and asks answer at any judgment tier;
-    /// notes and steers never transition on replies. A steer moves only
-    /// on its own forward event.
-    pub fn transition(&self, event: &Event, record: &Record) -> Option<CommentState> {
+    /// The comment state machine table, all event-named transitions
+    /// must go through this. The event alone names the transition;
+    /// the reply's tier gate and its record position are the store
+    /// arm's facts.
+    pub fn transition(&self, event: &Event) -> Option<CommentState> {
         match (self, event) {
             (
-                CommentState::Demand {
-                    response: ResponseState::Awaiting,
-                    attempt,
+                CommentState::Steer {
+                    delivery: SteerDelivery::Standing,
                 },
-                Event::Commented { .. },
-            ) if matches!(record.context.tier, Tier::Agent | Tier::Human) => {
-                Some(CommentState::Demand {
-                    response: ResponseState::Responded {
-                        reply: CommentId(record.id),
-                    },
-                    attempt: attempt.transition(event, record)?,
-                })
-            }
-            (
-                CommentState::Demand { response, attempt },
-                Event::IncarnationBound { .. }
-                | Event::IncarnationSettled { .. }
-                // only a rejected prompt, a cancel, or a refusal is
-                // demand-ending; acceptance changes the run, never the demand
-                | Event::IncarnationPromptRejected { .. }
-                | Event::IncarnationCancelled { .. }
-                | Event::DemandRefused { .. },
-            ) => Some(CommentState::Demand {
-                response: response.clone(),
-                attempt: attempt.transition(event, record)?,
+                Event::SteerForwarded { .. },
+            ) => Some(CommentState::Steer {
+                delivery: SteerDelivery::Forwarded,
             }),
-            // the run consumed the steer: standing intent, delivered once
-            (CommentState::Steer { delivery: SteerDelivery::Standing }, Event::SteerForwarded { .. }) => {
-                Some(CommentState::Steer {
-                    delivery: SteerDelivery::Forwarded,
-                })
+            (CommentState::Note, Event::CommentWithdrawn { note, .. }) => {
+                Some(CommentState::Withdrawn(note.clone()))
             }
-            // the first reply answers the ask; an answered ask holds —
-            // later replies are ordinary notes
-            (
-                CommentState::Ask {
-                    response: ResponseState::Awaiting,
-                },
-                Event::Commented { .. },
-            ) if matches!(record.context.tier, Tier::Agent | Tier::Human) => Some(CommentState::Ask {
-                response: ResponseState::Responded {
-                    reply: CommentId(record.id),
-                },
+            _ => None,
+        }
+    }
+
+    /// The reply door: the first reply answers an awaiting demand or
+    /// ask; every other state holds, and later replies are ordinary
+    /// notes. The reply pointer is the answering record's position,
+    /// which only the fold knows; the reply's tier gate lives in the
+    /// store arm.
+    pub fn answered(&self, reply: CommentId) -> Option<CommentState> {
+        match self {
+            CommentState::Demand {
+                response: ResponseState::Awaiting,
+            } => Some(CommentState::Demand {
+                response: ResponseState::Responded { reply },
+            }),
+            CommentState::Ask {
+                response: ResponseState::Awaiting,
+            } => Some(CommentState::Ask {
+                response: ResponseState::Responded { reply },
             }),
             _ => None,
         }
@@ -192,25 +127,13 @@ pub struct Revision {
     pub reviser: ActorName,
 }
 
-/// The standing-error repair: the deposit's body left the fold's
-/// presentation and a tombstone holds its place. The pointer names the
-/// record that withdrew, the withdrawer is disclosed whenever they
-/// differ from the birth author, and the note says why.
+/// The withdrawal's disclosure pointer: the record that withdrew and
+/// the actor who did. The note itself rides the state, the way a
+/// receipt rides a done task.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Withdrawal {
     pub record: RecordId,
     pub withdrawer: ActorName,
-    pub note: Prose,
-}
-
-/// The content acts a folded comment still admits. Withdrawal is
-/// terminal — no undelete — and only a note deposit passes its door:
-/// demand, steer, and ask keep their own lifecycles and are never
-/// retractable through this one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ContentAct {
-    Revise,
-    Withdraw,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -218,31 +141,19 @@ pub struct CommentContext {
     pub comment: Comment,
     pub actor: ActorName,
     pub tier: Tier,
-    pub state: CommentState,
     /// Event time of the comment's birth record
     pub born_at: u64,
     /// The latest revision of the body, when it was ever revised —
     /// a pointer with its reviser, never the payload it swapped in
     pub revised: Option<Revision>,
-    /// The standing-error repair, when the deposit was withdrawn —
-    /// the tombstone beside the pointer, never the body it evicted
+    /// The standing-error repair's pointer, when the deposit was
+    /// withdrawn — beside the revised pointer it mirrors
     pub withdrawn: Option<Withdrawal>,
     /// The machinery's refusal to run this demand, when it refused
     pub refusal: Option<Refusal>,
-}
-
-impl CommentContext {
-    /// The content-act gate: which repairs this folded comment still
-    /// admits. Every content act refuses once withdrawn; withdrawal
-    /// itself is a note deposit's door alone.
-    pub fn admits(&self, act: ContentAct) -> bool {
-        match act {
-            ContentAct::Revise => self.withdrawn.is_none(),
-            ContentAct::Withdraw => {
-                matches!(self.state, CommentState::Note) && self.withdrawn.is_none()
-            }
-        }
-    }
+    /// The run this demand bound, when it bound one: written by the
+    /// bind arm, never cleared — re-asking is a new comment
+    pub bound: Option<IncarnationId>,
 }
 
 /// Why the machinery refused to run a demand, and when: the asker's
@@ -257,354 +168,171 @@ pub struct Refusal {
 #[cfg(test)]
 mod tables {
     use super::*;
-    use crate::store::{Context, Record};
+    use crate::types::actor::ActorName;
     use crate::types::failure::{FailureCode, FailureEvidence};
     use crate::types::pointers::SessionPointer;
 
-    fn at(tier: Tier, event: Event) -> Record {
-        Record {
-            id: RecordId(9),
-            timestamp: 1,
-            context: Context {
-                actor: ActorName::new("saccade bot".into()).unwrap(),
-                tier,
-            },
-            event,
+    fn comment_event(kind: CommentKind) -> Event {
+        Event::Commented {
+            target: Target::Task(TaskId(0)),
+            body: Prose::new("filler".into()).unwrap(),
+            kind,
         }
     }
 
-    fn reply(tier: Tier) -> Record {
-        at(
-            tier,
-            Event::Commented {
-                target: Target::Task(TaskId(0)),
+    fn withdrawn_event() -> Event {
+        Event::CommentWithdrawn {
+            id: CommentId(RecordId(1)),
+            note: Prose::new("parked in the wrong place".into()).unwrap(),
+        }
+    }
+
+    fn forwarded_event() -> Event {
+        Event::SteerForwarded {
+            steer: CommentId(RecordId(1)),
+        }
+    }
+
+    fn bind(trigger: RecordId) -> Event {
+        Event::IncarnationBound {
+            task_id: TaskId(0),
+            response_target: CommentId(RecordId(1)),
+            trigger,
+            actor: ActorName::new("pi".into()).unwrap(),
+            session: SessionPointer::new("/tmp/session".into()).unwrap(),
+        }
+    }
+
+    fn demand(response: ResponseState) -> CommentState {
+        CommentState::Demand { response }
+    }
+
+    fn ask(response: ResponseState) -> CommentState {
+        CommentState::Ask { response }
+    }
+
+    fn steer(delivery: SteerDelivery) -> CommentState {
+        CommentState::Steer { delivery }
+    }
+
+    fn withdrawn() -> CommentState {
+        CommentState::Withdrawn(Prose::new("parked in the wrong place".into()).unwrap())
+    }
+
+    fn replied(response: CommentId) -> ResponseState {
+        ResponseState::Responded { reply: response }
+    }
+
+    #[test]
+    fn withdrawal_is_a_note_deposits_terminal_door() {
+        assert_eq!(
+            CommentState::Note.transition(&withdrawn_event()),
+            Some(withdrawn())
+        );
+        let others = [
+            demand(ResponseState::Awaiting),
+            demand(replied(CommentId(RecordId(9)))),
+            ask(ResponseState::Awaiting),
+            ask(replied(CommentId(RecordId(9)))),
+            steer(SteerDelivery::Standing),
+            steer(SteerDelivery::Forwarded),
+            withdrawn(),
+        ];
+        for state in &others {
+            assert_eq!(state.transition(&withdrawn_event()), None, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn a_steer_moves_only_on_its_own_forward() {
+        assert_eq!(
+            steer(SteerDelivery::Standing).transition(&forwarded_event()),
+            Some(steer(SteerDelivery::Forwarded))
+        );
+        let others = [
+            CommentState::Note,
+            demand(ResponseState::Awaiting),
+            ask(ResponseState::Awaiting),
+            steer(SteerDelivery::Forwarded),
+            withdrawn(),
+        ];
+        for state in &others {
+            assert_eq!(state.transition(&forwarded_event()), None, "{state:?}");
+        }
+    }
+
+    /// Replies, bindings, terminals, and refusals move no comment
+    /// state: the reply door answers, the context records the rest.
+    #[test]
+    fn replies_and_machinery_events_move_no_state() {
+        let states = [
+            CommentState::Note,
+            demand(ResponseState::Awaiting),
+            demand(replied(CommentId(RecordId(9)))),
+            ask(ResponseState::Awaiting),
+            ask(replied(CommentId(RecordId(9)))),
+            steer(SteerDelivery::Standing),
+            steer(SteerDelivery::Forwarded),
+            withdrawn(),
+        ];
+        let events = [
+            comment_event(CommentKind::Note),
+            comment_event(CommentKind::Demand),
+            comment_event(CommentKind::Steer),
+            comment_event(CommentKind::Ask),
+            Event::CommentRevised {
+                id: CommentId(RecordId(1)),
                 body: Prose::new("filler".into()).unwrap(),
-                kind: CommentKind::Note,
             },
-        )
-    }
-
-    fn bind(trigger: RecordId) -> Record {
-        at(
-            Tier::System,
-            Event::IncarnationBound {
-                task_id: TaskId(0),
-                response_target: CommentId(RecordId(1)),
-                trigger,
-                actor: ActorName::new("pi".into()).unwrap(),
-                session: SessionPointer::new("/tmp/session".into()).unwrap(),
-            },
-        )
-    }
-
-    fn settled() -> Record {
-        at(
-            Tier::System,
-            Event::IncarnationSettled {
-                id: IncarnationId(RecordId(3)),
-            },
-        )
-    }
-
-    fn forwarded() -> Record {
-        at(
-            Tier::System,
-            Event::SteerForwarded {
-                steer: CommentId(RecordId(1)),
-            },
-        )
-    }
-
-    fn prompt_accepted() -> Record {
-        at(
-            Tier::System,
+            bind(RecordId(1)),
             Event::IncarnationPromptAccepted {
-                id: IncarnationId(RecordId(3)),
+                id: crate::objects::incarnation::IncarnationId(RecordId(3)),
             },
-        )
-    }
-
-    fn prompt_rejected() -> Record {
-        at(
-            Tier::System,
             Event::IncarnationPromptRejected {
-                id: IncarnationId(RecordId(3)),
+                id: crate::objects::incarnation::IncarnationId(RecordId(3)),
                 evidence: FailureEvidence::new(FailureCode::PromptRejected, None),
             },
-        )
-    }
-
-    fn cancelled() -> Record {
-        at(
-            Tier::Human,
-            Event::IncarnationCancelled {
-                id: IncarnationId(RecordId(3)),
+            Event::IncarnationSettled {
+                id: crate::objects::incarnation::IncarnationId(RecordId(3)),
             },
-        )
-    }
-
-    fn refused() -> Record {
-        at(
-            Tier::System,
+            Event::IncarnationCancelled {
+                id: crate::objects::incarnation::IncarnationId(RecordId(3)),
+            },
             Event::DemandRefused {
                 demand: CommentId(RecordId(1)),
                 reason: Prose::new("the worktree is a disk-only leftover".into()).unwrap(),
             },
-        )
-    }
-
-    #[test]
-    fn attempt_table_admits_exactly_the_legal_cells() {
-        let trigger = RecordId(1);
-        let states = [
-            AgentAttemptState::Authorized { trigger },
-            AgentAttemptState::InFlight {
-                incarnation: IncarnationId(RecordId(3)),
-            },
-            AgentAttemptState::Spent,
         ];
-        let records = [
-            reply(Tier::Human),
-            reply(Tier::Agent),
-            // a stale correlation must not bind
-            bind(RecordId(2)),
-            bind(trigger),
-            settled(),
-            prompt_accepted(),
-            prompt_rejected(),
-            cancelled(),
-            refused(),
-        ];
-
         for state in &states {
-            for record in &records {
-                let legal = match (state, &record.event) {
-                    (
-                        AgentAttemptState::Authorized { trigger },
-                        Event::IncarnationBound {
-                            trigger: binding, ..
-                        },
-                    ) => trigger == binding,
-                    (AgentAttemptState::Authorized { .. }, Event::Commented { .. }) => true,
-                    (AgentAttemptState::Authorized { .. }, Event::DemandRefused { .. }) => true,
-                    (AgentAttemptState::InFlight { .. }, Event::Commented { .. }) => true,
-                    (
-                        AgentAttemptState::InFlight { .. },
-                        Event::IncarnationSettled { .. } | Event::IncarnationPromptRejected { .. },
-                    ) => true,
-                    (AgentAttemptState::InFlight { .. }, Event::IncarnationCancelled { .. }) => {
-                        true
-                    }
-                    (
-                        AgentAttemptState::Spent,
-                        Event::Commented { .. }
-                        | Event::IncarnationSettled { .. }
-                        | Event::IncarnationPromptRejected { .. }
-                        | Event::IncarnationCancelled { .. },
-                    ) => true,
-                    _ => false,
-                };
-                assert_eq!(
-                    state.transition(&record.event, record).is_some(),
-                    legal,
-                    "table disagrees at ({state:?}, {:?})",
-                    record.event
-                );
+            for event in &events {
+                assert_eq!(state.transition(event), None, "table moved {state:?}");
             }
         }
     }
 
+    /// The reply door answers an awaiting demand or ask and nothing
+    /// else: an answered one holds, the other variants never had one.
     #[test]
-    fn demand_table_admits_exactly_the_legal_cells() {
-        let answered = CommentId(RecordId(9));
-        let trigger = RecordId(1);
-        let states = [
+    fn the_reply_door_answers_awaiting_demands_and_asks_alone() {
+        let reply = CommentId(RecordId(9));
+        assert_eq!(
+            demand(ResponseState::Awaiting).answered(reply),
+            Some(demand(replied(reply)))
+        );
+        assert_eq!(
+            ask(ResponseState::Awaiting).answered(reply),
+            Some(ask(replied(reply)))
+        );
+        let others = [
             CommentState::Note,
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::Authorized { trigger },
-            },
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::InFlight {
-                    incarnation: IncarnationId(RecordId(3)),
-                },
-            },
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::Spent,
-            },
-            CommentState::Demand {
-                response: ResponseState::Responded { reply: answered },
-                attempt: AgentAttemptState::Spent,
-            },
+            demand(replied(CommentId(RecordId(2)))),
+            ask(replied(CommentId(RecordId(2)))),
+            steer(SteerDelivery::Standing),
+            steer(SteerDelivery::Forwarded),
+            withdrawn(),
         ];
-        let records = [
-            reply(Tier::Human),
-            reply(Tier::Agent),
-            reply(Tier::System),
-            bind(trigger),
-            bind(RecordId(2)),
-            settled(),
-            prompt_accepted(),
-            prompt_rejected(),
-            cancelled(),
-            refused(),
-            forwarded(),
-        ];
-
-        for state in &states {
-            for record in &records {
-                let legal = match (state, &record.event) {
-                    (CommentState::Note, _) => false,
-                    (CommentState::Demand { response, attempt }, Event::Commented { .. }) => {
-                        *response == ResponseState::Awaiting
-                            && matches!(record.context.tier, Tier::Agent | Tier::Human)
-                            && attempt.transition(&record.event, record).is_some()
-                    }
-                    (
-                        CommentState::Demand { attempt, .. },
-                        Event::IncarnationBound { .. }
-                        | Event::IncarnationSettled { .. }
-                        | Event::IncarnationPromptRejected { .. }
-                        | Event::IncarnationCancelled { .. }
-                        | Event::DemandRefused { .. },
-                    ) => attempt.transition(&record.event, record).is_some(),
-                    _ => false,
-                };
-                assert_eq!(
-                    state.transition(&record.event, record).is_some(),
-                    legal,
-                    "table disagrees at ({state:?}, {:?})",
-                    record.event
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn steer_and_ask_tables_admit_exactly_the_legal_cells() {
-        let states = [
-            CommentState::Steer {
-                delivery: SteerDelivery::Standing,
-            },
-            CommentState::Steer {
-                delivery: SteerDelivery::Forwarded,
-            },
-            CommentState::Ask {
-                response: ResponseState::Awaiting,
-            },
-            CommentState::Ask {
-                response: ResponseState::Responded {
-                    reply: CommentId(RecordId(9)),
-                },
-            },
-        ];
-        let records = [
-            reply(Tier::Human),
-            reply(Tier::Agent),
-            reply(Tier::System),
-            forwarded(),
-            settled(),
-            bind(RecordId(1)),
-        ];
-
-        for state in &states {
-            for record in &records {
-                let legal = match (state, &record.event) {
-                    (
-                        CommentState::Steer {
-                            delivery: SteerDelivery::Standing,
-                        },
-                        Event::SteerForwarded { .. },
-                    ) => true,
-                    (
-                        CommentState::Ask {
-                            response: ResponseState::Awaiting,
-                        },
-                        Event::Commented { .. },
-                    ) => matches!(record.context.tier, Tier::Agent | Tier::Human),
-                    _ => false,
-                };
-                assert_eq!(
-                    state.transition(&record.event, record).is_some(),
-                    legal,
-                    "table disagrees at ({state:?}, {:?})",
-                    record.event
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn content_act_gate_admits_exactly_the_legal_cells() {
-        let withdrawal = Withdrawal {
-            record: RecordId(9),
-            withdrawer: ActorName::new("human person".into()).unwrap(),
-            note: Prose::new("parked in the wrong place".into()).unwrap(),
-        };
-        let states = [
-            CommentState::Note,
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::Authorized {
-                    trigger: RecordId(1),
-                },
-            },
-            CommentState::Demand {
-                response: ResponseState::Responded {
-                    reply: CommentId(RecordId(9)),
-                },
-                attempt: AgentAttemptState::Spent,
-            },
-            CommentState::Steer {
-                delivery: SteerDelivery::Standing,
-            },
-            CommentState::Steer {
-                delivery: SteerDelivery::Forwarded,
-            },
-            CommentState::Ask {
-                response: ResponseState::Awaiting,
-            },
-            CommentState::Ask {
-                response: ResponseState::Responded {
-                    reply: CommentId(RecordId(9)),
-                },
-            },
-        ];
-        for state in &states {
-            for withdrawn in [None, Some(withdrawal.clone())] {
-                let ctx = CommentContext {
-                    comment: Comment {
-                        target: Target::Task(TaskId(0)),
-                        body: Prose::new("parked in the wrong place".into()).unwrap(),
-                        root: TaskId(0),
-                    },
-                    actor: ActorName::new("pi".into()).unwrap(),
-                    tier: Tier::Agent,
-                    state: state.clone(),
-                    born_at: 1,
-                    revised: None,
-                    withdrawn: withdrawn.clone(),
-                    refusal: None,
-                };
-                let legal = |act| match act {
-                    // every content act refuses a withdrawn deposit
-                    ContentAct::Revise => withdrawn.is_none(),
-                    // withdrawal is a note deposit's door, taken once
-                    ContentAct::Withdraw => {
-                        matches!(state, CommentState::Note) && withdrawn.is_none()
-                    }
-                };
-                for act in [ContentAct::Revise, ContentAct::Withdraw] {
-                    assert_eq!(
-                        ctx.admits(act),
-                        legal(act),
-                        "gate disagrees at ({state:?}, withdrawn={}), {act:?}",
-                        withdrawn.is_some()
-                    );
-                }
-            }
+        for state in &others {
+            assert_eq!(state.answered(reply), None, "{state:?}");
         }
     }
 }

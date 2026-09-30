@@ -38,7 +38,7 @@ fn required_tier(event: &Event) -> Authority {
         | Event::IncarnationSettled { .. }
         | Event::RecordProducedBy { .. }
         | Event::TaskWorkspaceCreated { .. }
-        | Event::TaskWorktreeCreated { .. } => Authority::Require(Tier::System),
+        | Event::TaskWorkspaceMaterialized { .. } => Authority::Require(Tier::System),
     }
 }
 
@@ -62,13 +62,8 @@ pub(crate) fn expand(world: &World, events: &[Event]) -> Result<Vec<Event>, Reje
         expanded.push(event.clone());
         // NOTE: switch this to a match statement if we add more events that need expansion
         if let Event::ProposalAccepted { id } = event {
-            let proposal_ctx = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
-            expanded.push(
-                proposal_ctx
-                    .proposal
-                    .action
-                    .target_event(&proposal_ctx.proposal.name),
-            );
+            let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
+            expanded.push(proposal.action.target_event(&proposal.name));
         }
     }
     Ok(expanded)
@@ -132,8 +127,8 @@ pub fn decide(command: Command) -> Vec<Event> {
             base,
             branch,
         }],
-        Command::CreateWorktree { task_id, worktree } => {
-            vec![Event::TaskWorktreeCreated { task_id, worktree }]
+        Command::MaterializeWorkspace { task_id, worktree } => {
+            vec![Event::TaskWorkspaceMaterialized { task_id, worktree }]
         }
         Command::CheckpointWorkspace {
             task_id,
@@ -264,7 +259,7 @@ mod test {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("saccade/t-0".into()).unwrap(),
             },
-            Event::TaskWorktreeCreated {
+            Event::TaskWorkspaceMaterialized {
                 task_id: TaskId(0),
                 worktree: WorktreePath::new("/wt".into()).unwrap(),
             },

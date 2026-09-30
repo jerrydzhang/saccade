@@ -217,7 +217,7 @@ pub fn prepare(
         .comments
         .get(&demand)
         .ok_or_else(|| RunnerFail::Usage(format!("no comment c-{} in this tracker", demand.0.0)))?;
-    match &demand_ctx.state {
+    match &demand_ctx.comment.state {
         CommentState::Demand { .. } => {}
         _ => {
             return Err(RunnerFail::Usage(format!(
@@ -226,7 +226,6 @@ pub fn prepare(
             )));
         }
     }
-    // the demand's own root names the task; a mismatch is unrepresentable
     let task = demand_ctx.comment.root;
     let ctx = task_ctx(&world, task)?;
     if ctx.active_incarnation.is_some() {
@@ -255,17 +254,13 @@ pub fn prepare(
         // advancement between checkpoints, so the second run continues
         // from the last one instead of refusing.
         Some(workspace) => {
-            let checkpoint = workspace.checkpoint.as_str().to_string();
-            let branch: String = workspace.branch.clone().into();
+            let checkpoint = workspace.workspace.checkpoint.as_str().to_string();
+            let branch: String = workspace.workspace.branch.clone().into();
             let refs = format!("refs/heads/{branch}");
             if let Some(tip) = branch_tip(repo_root, &refs) {
-                // the branch tip and the recorded checkpoint reconcile
-                // before any git effect, so a refused run moves nothing
                 let target = if tip == checkpoint {
                     checkpoint.clone()
                 } else if is_ancestor(repo_root, &checkpoint, &tip) {
-                    // the refusal text names task, branch, and the door; it
-                    // rides the error into the sweep's own log line
                     return Err(refuse(
                         conn,
                         demand,
@@ -381,7 +376,7 @@ pub fn prepare(
             db::record(
                 conn,
                 &system,
-                Command::CreateWorktree {
+                Command::MaterializeWorkspace {
                     task_id: task,
                     worktree: WorktreePath::new(worktree.clone())
                         .map_err(|e| RunnerFail::Usage(format!("worktree path: {e:?}")))?,
@@ -395,7 +390,7 @@ pub fn prepare(
     let ordinal = world
         .incarnations
         .values()
-        .filter(|run| run.task_id == task)
+        .filter(|run| run.incarnation.task_id == task)
         .count()
         + 1;
     let session_actor = ActorName::new(format!("{}/t-{}-{}", actor.as_str(), task.0, ordinal))
@@ -535,9 +530,6 @@ pub fn execute_session(
         message: prompt.to_string(),
     });
 
-    // the read loop: events until the session settles or its stream
-    // ends. The prompt's response is the one truth the runner records:
-    // acceptance lands here or the run stays Bound.
     let mut stdout = child.stdout.take().expect("stdout was piped");
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 8192];
@@ -561,8 +553,6 @@ pub fn execute_session(
                 } if command == "prompt" => {
                     answered = true;
                     if success {
-                        // acceptance at the executor's own word, never
-                        // ahead of it
                         if let Err(e) = record(Command::AcceptPrompt {
                             id: run.incarnation,
                         }) {
@@ -596,8 +586,6 @@ pub fn execute_session(
         )));
     }
     if !answered {
-        // the stream ended without a word on the prompt: the run died
-        // before accepting it, a pre-acceptance failure like any other
         runs.unregister(run.incarnation);
         handle.close();
         let status = match child.wait() {
@@ -629,13 +617,13 @@ enum FoundWork {
 
 fn found_work(repo_root: &Path, ctx: &TaskContext) -> Result<FoundWork, RunnerFail> {
     let workspace = ctx.workspace.as_ref().expect("a bound run has a workspace");
-    match &workspace.worktree {
+    match &workspace.workspace.worktree {
         WorktreeState::Present(worktree) if worktree.as_path().exists() => {
             let head = git(worktree.as_path(), &["rev-parse", "HEAD"])?;
             Ok(FoundWork::Head(commit(head)?))
         }
         _ => {
-            let checkpoint = workspace.checkpoint.clone();
+            let checkpoint = workspace.workspace.checkpoint.clone();
             if commit_exists(repo_root, checkpoint.as_str()).is_some() {
                 Ok(FoundWork::Checkpoint(checkpoint))
             } else {
@@ -652,8 +640,8 @@ pub fn close(conn: &mut Connection, repo_root: &Path, task: TaskId) -> Result<St
         .active_incarnation
         .ok_or_else(|| RunnerFail::Usage(format!("t-{} has no incarnation to settle", task.0)))?;
     let run = &world.incarnations[&incarnation];
-    let demand = run.response_target;
-    let reply = match &world.comments[&demand].state {
+    let demand = run.incarnation.response_target;
+    let reply = match &world.comments[&demand].comment.state {
         CommentState::Demand { response, .. } => match response {
             ResponseState::Responded { reply } => Some(*reply),
             ResponseState::Awaiting => None,
@@ -664,8 +652,6 @@ pub fn close(conn: &mut Connection, repo_root: &Path, task: TaskId) -> Result<St
 
     let system = Context::system();
     let now = db::now_epoch();
-    // a gone worktree's finding is the checkpoint the record already
-    // names: there is no new head to record
     if let FoundWork::Head(checkpoint) = &found {
         db::record(
             conn,
@@ -754,8 +740,8 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
     let ctx = world.comments.get(&comment).ok_or_else(|| {
         RunnerFail::Usage(format!("no comment c-{} in this tracker", comment.0.0))
     })?;
-    match &ctx.state {
-        CommentState::Note => {
+    match &ctx.comment.state {
+        CommentState::Note | CommentState::Withdrawn(_) => {
             return Err(RunnerFail::Usage(format!(
                 "c-{} is a note; it addresses nobody and will never respond",
                 comment.0.0
@@ -791,20 +777,17 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
             refusal.reason.as_str()
         )));
     }
-    // binding consumes the authorization, so a demand names at most one
-    // run; the last bound is the run in question
-    let bound = world
-        .incarnations
-        .iter()
-        .rfind(|(_, run)| run.response_target == comment);
-    if let Some((id, run)) = bound {
-        match run.state {
+    // binding consumes the authorization, so a demand names at most
+    // one run; the context's pointer is that run
+    if let Some(id) = ctx.bound {
+        let run = &world.incarnations[&id];
+        match &run.incarnation.state {
             IncarnationState::Settled => {
-                let receipt = match &world.tasks[run.task_id.0].task.state {
+                let receipt = match &world.tasks[run.incarnation.task_id.0].task.state {
                     TaskState::Delivered(receipt) | TaskState::Done(receipt) => {
                         format!("; receipt: {}", receipt.as_str())
                     }
-                    _ => format!("; t-{} holds no receipt", run.task_id.0),
+                    _ => format!("; t-{} holds no receipt", run.incarnation.task_id.0),
                 };
                 return Ok(Some(format!(
                     "c-{}: i-{} settled{receipt}",
@@ -821,15 +804,14 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
             IncarnationState::Bound => {
                 return Ok(None);
             }
-            // accepted work has not ended
             IncarnationState::PromptAccepted => {
                 // the run suspends on a question it authored: every
                 // waiter on the task releases to answer it
                 if let Some((id, ask)) = world.comments.iter().find(|(_, c)| {
-                    c.comment.root == run.task_id
-                        && c.actor == run.actor
+                    c.comment.root == run.incarnation.task_id
+                        && c.actor == run.incarnation.actor
                         && matches!(
-                            c.state,
+                            c.comment.state,
                             CommentState::Ask {
                                 response: ResponseState::Awaiting,
                             }
@@ -850,12 +832,9 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
                 }
                 return Ok(None);
             }
-            IncarnationState::Interrupted => {
-                // the run died before accepting its prompt: the
-                // recorded rejection releases the wait carrying its
-                // cause, the same shape as the refusal door
+            IncarnationState::Interrupted(evidence) => {
                 let mut said = format!("c-{}: i-{} rejected the prompt", comment.0.0, id.0.0);
-                if let Some(cause) = run.rejection.as_ref().and_then(|e| e.detail.as_deref()) {
+                if let Some(cause) = evidence.detail.as_deref() {
                     said.push_str("; ");
                     said.push_str(cause);
                 }
@@ -863,11 +842,12 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
             }
         }
     }
-    let response = match &ctx.state {
-        CommentState::Demand { response, .. } => response,
+    let response = match &ctx.comment.state {
+        CommentState::Demand { response } => response,
         CommentState::Note | CommentState::Steer { .. } | CommentState::Ask { .. } => {
             unreachable!("the variant doors returned above")
         }
+        CommentState::Withdrawn(_) => unreachable!("the variant doors returned above"),
     };
     match response {
         ResponseState::Responded { reply } => {
@@ -899,7 +879,7 @@ pub fn close_as_found(
             task.0
         )));
     };
-    match world.incarnations[&incarnation].state.clone() {
+    match world.incarnations[&incarnation].incarnation.state.clone() {
         IncarnationState::PromptAccepted => close(conn, repo_root, task),
         IncarnationState::Bound => {
             let system = Context::system();
