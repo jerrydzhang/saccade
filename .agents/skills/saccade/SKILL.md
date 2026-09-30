@@ -76,7 +76,10 @@ outcome, not the goal.
    after the reasoning an ambiguous spec demanded, whichever road produced
    your understanding — list the spec's independently acceptable landings:
    the changes that could each be committed, receipted, and accepted alone.
-   Exactly one → execute it whole and say so on the thread. Several sharing
+   Park the sizing answer on the thread before your first code edit: a
+   thread with no sizing answer ahead of the work is this step skipped, not
+   answered. Exactly one → execute it whole and say so on the thread.
+   Several sharing
    structures → a chain: park the children (`sac create task --parent`),
    fire the first, fire each next when its upstream lands. Several sharing
    nothing → a fan, and only when the parallel or context gain clears the
