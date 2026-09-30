@@ -144,6 +144,14 @@ pub struct CommentLine {
     /// The reviser's name, when the body was revised by an actor who
     /// is not the birth author — a record fact, never a judgment
     pub reviser: Option<String>,
+    /// The standing-error repair: the body left the fold's default
+    /// presentation, the tombstone holds its place
+    pub withdrawn: bool,
+    /// The withdrawer's name, when the withdrawal was by an actor who
+    /// is not the birth author — a record fact, never a judgment
+    pub withdrawer: Option<String>,
+    /// The tombstone's note
+    pub withdrawal_note: Option<String>,
     pub born_at: u64,
     /// The machinery's refusal to run this demand, when it refused
     pub refusal: Option<RefusalView>,
@@ -252,6 +260,16 @@ fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
             .as_ref()
             .filter(|revision| revision.reviser != cctx.actor)
             .map(|revision| revision.reviser.as_str().to_string()),
+        withdrawn: cctx.withdrawn.is_some(),
+        withdrawer: cctx
+            .withdrawn
+            .as_ref()
+            .filter(|withdrawal| withdrawal.withdrawer != cctx.actor)
+            .map(|withdrawal| withdrawal.withdrawer.as_str().to_string()),
+        withdrawal_note: cctx
+            .withdrawn
+            .as_ref()
+            .map(|withdrawal| withdrawal.note.as_str().to_string()),
         born_at: cctx.born_at,
         refusal: cctx.refusal.as_ref().map(|r| RefusalView {
             reason: r.reason.as_str().to_string(),
@@ -921,6 +939,9 @@ impl Term {
 pub struct SearchQuery {
     pub terms: Vec<Term>,
     pub facets: Vec<Facet>,
+    /// Withdrawn bodies join the match set — they are omitted by
+    /// default, the tombstone never speaks for the body it evicted
+    pub withdrawn: bool,
 }
 
 /// The grammar is strict so a mistyped facet never becomes a quiet term.
@@ -1175,6 +1196,11 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
         }
     }
     for (id, cctx) in &world.comments {
+        // a withdrawn deposit's body left the fold's default
+        // presentation: it joins only behind the flag
+        if cctx.withdrawn.is_some() && !query.withdrawn {
+            continue;
+        }
         let body = cctx.comment.body.as_str();
         let refs = [match cctx.comment.target {
             Target::Task(t) => Ref::Task(t),
@@ -2086,6 +2112,94 @@ mod panels {
     }
 
     #[test]
+    fn a_withdrawn_note_renders_its_tombstone() {
+        let world = World::replay(vec![
+            task_at(0, 0, "real work"),
+            comment_at(
+                2,
+                2,
+                Tier::Agent,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
+            // a human withdraws the agent's note: the withdrawer is named
+            record(
+                3,
+                3,
+                Tier::Human,
+                Event::CommentWithdrawn {
+                    id: CommentId(RecordId(2)),
+                    note: Prose::new("parked in the wrong place".into()).unwrap(),
+                },
+            ),
+            // the author withdraws their own: the plain mark, no name
+            comment_at(
+                4,
+                4,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
+            record(
+                5,
+                5,
+                Tier::Human,
+                Event::CommentWithdrawn {
+                    id: CommentId(RecordId(4)),
+                    note: Prose::new("said better in the receipt".into()).unwrap(),
+                },
+            ),
+            comment_at(
+                6,
+                6,
+                Tier::Human,
+                Target::Task(TaskId(0)),
+                CommentKind::Note,
+            ),
+        ])
+        .unwrap();
+        let v = thread_view(&world, TaskId(0)).unwrap();
+        match &v.items[0] {
+            ThreadItem::Note(line) => {
+                assert_eq!(line.seq, 2);
+                assert!(line.withdrawn);
+                assert_eq!(line.withdrawer.as_deref(), Some("jerry"));
+                assert_eq!(
+                    line.withdrawal_note.as_deref(),
+                    Some("parked in the wrong place")
+                );
+                // the body stays in the line: the flag-guarded doors read
+                // it, the default surfaces never present it
+                assert_eq!(line.body, "a body worth keeping");
+                // the tombstone is not a state: a withdrawn note still
+                // carries none
+                assert_eq!(line.state, None);
+            }
+            other => panic!("expected a note, got {other:?}"),
+        }
+        match &v.items[1] {
+            ThreadItem::Note(line) => {
+                assert!(line.withdrawn);
+                // the withdrawer is the birth author: the plain mark
+                assert_eq!(line.withdrawer, None);
+                assert_eq!(
+                    line.withdrawal_note.as_deref(),
+                    Some("said better in the receipt")
+                );
+            }
+            other => panic!("expected a note, got {other:?}"),
+        }
+        match &v.items[2] {
+            ThreadItem::Note(line) => {
+                assert!(!line.withdrawn, "never withdrawn, no tombstone");
+                assert_eq!(line.withdrawer, None);
+                assert_eq!(line.withdrawal_note, None);
+            }
+            other => panic!("expected a note, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn asked_of_you_scans_awaiting_human_demands() {
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
@@ -2519,6 +2633,58 @@ mod search {
     }
 
     #[test]
+    fn a_withdrawn_body_is_omitted_until_the_flag_lets_it_back() {
+        let jerry = ctx(Tier::Human, "jerry");
+        let pi = ctx(Tier::Agent, "pi");
+        let world = World::replay(vec![
+            task(0, 0, &jerry, "hold the verdict", None),
+            note(
+                2,
+                2,
+                &pi,
+                Target::Task(TaskId(0)),
+                "the floop verdict lands",
+            ),
+            record(
+                3,
+                3,
+                &jerry,
+                Event::CommentWithdrawn {
+                    id: CommentId(RecordId(2)),
+                    note: Prose::new("parked in the wrong place".into()).unwrap(),
+                },
+            ),
+            // a later record still cites the withdrawn comment: the
+            // reference must never dangle
+            note(
+                4,
+                4,
+                &jerry,
+                Target::Comment(CommentId(RecordId(2))),
+                "the verdict lives on per c-2",
+            ),
+        ])
+        .unwrap();
+        // the withdrawn body matches nothing by default — and the
+        // tombstone's note never speaks for the body it evicted
+        assert!(search(&world, &q(&["floop"])).unwrap().is_empty());
+        assert!(search(&world, &q(&["parked"])).unwrap().is_empty());
+        // the flag lets the body back in
+        let mut flagged = q(&["floop"]);
+        flagged.withdrawn = true;
+        assert_eq!(
+            pointers(&search(&world, &flagged).unwrap()),
+            vec![(0, vec!["c-2".into()])]
+        );
+        // the citation still resolves: c-2's reference search finds the
+        // record that cites it, withdrawn or not
+        assert_eq!(
+            pointers(&search(&world, &q(&["c-2"])).unwrap()),
+            vec![(0, vec!["c-4".into()])]
+        );
+    }
+
+    #[test]
     fn facets_narrow_with_visible_counts() {
         let world = story();
         // in: only t-0's records show; t-1 stays visible as a count row
@@ -2640,7 +2806,8 @@ mod search {
                     Term::Task(TaskId(3)),
                     Term::Plain("floop".into())
                 ],
-                facets: Vec::new()
+                facets: Vec::new(),
+                withdrawn: false
             }
         );
         // the retired '#' id term refuses, naming the c- form

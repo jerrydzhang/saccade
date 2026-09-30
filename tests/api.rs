@@ -1395,6 +1395,50 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(lines.contains(&"c-1  pi"), "{out}");
     assert!(lines.contains(&"  the floop migration proceeds"), "{out}");
 
+    // the withdrawal door through the same face: a note retires, its
+    // tombstone renders, search omits the body until the flag, and the
+    // refusals teach at the CLI door as they do over the wire
+    assert!(sac(&["comment", "t-1", "floop parked in the wrong place"]).0);
+    let (ok, out, _) = sac(&["withdraw", "c-7", "--note", "the parking was premature"]);
+    assert!(ok, "{out}");
+    let (ok, out, _) = sac(&["show", "c-7"]);
+    assert!(ok, "{out}");
+    assert_eq!(
+        out.trim_end(),
+        "c-7  pi  (withdrawn)\n  withdrawn: the parking was premature"
+    );
+    let (ok, out, _) = sac(&["show", "c-7", "--withdrawn"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("withdrawn: the parking was premature"),
+        "{out}"
+    );
+    assert!(
+        out.contains("body: floop parked in the wrong place"),
+        "{out}"
+    );
+    // the body sits out of search until the flag lets it back
+    let (ok, out, _) = sac(&["search", "parked"]);
+    assert!(ok, "{out}");
+    assert!(!out.contains("floop parked"), "{out}");
+    let (ok, out, _) = sac(&["search", "parked", "--withdrawn"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("floop parked in the wrong place"), "{out}");
+    // the anchor window crosses the tombstone on the log's own rows
+    let (ok, out, _) = sac(&["search", "c-8", "-C", "0"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("c-8  comment_withdrawn  pi/agent  the parking was premature"),
+        "{out}"
+    );
+    // the terminal and note-required refusals exit 1
+    let (ok, _, err) = sac(&["withdraw", "c-7", "--note", "again"]);
+    assert!(!ok, "{err}");
+    assert!(err.contains("terminal"), "{err}");
+    let (ok, _, err) = sac(&["withdraw", "c-7", "--note", ""]);
+    assert!(!ok, "{err}");
+    assert!(err.contains("reason_required"), "{err}");
+
     // the pipe chain runs end to end: json pointers feed show
     let (ok, out, _) = sac(&["search", "--json", "floop"]);
     assert!(ok, "{out}");
@@ -2161,6 +2205,171 @@ async fn a_revision_round_trips_and_discloses_through_the_wire() {
             .unwrap()
             .contains("birth record of task t-0")
     );
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The withdrawal family through the wire: the tombstone folds with
+/// its withdrawer named, the door is terminal, note-kind gated, and
+/// the empty note refuses where the wire meets the fold.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_withdrawal_round_trips_and_tombstones_through_the_wire() {
+    let db = scratch_db("withdraw-wire");
+    let base_url = spawn_server(&db).await;
+    post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+        ),
+    );
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 0}, "body": "parked mid-flight on the wrong thread", "kind": "note"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let note = json_of(&body)["records"][0]["seq"].as_u64().unwrap();
+    // a demand keeps its own lifecycle: the gate refuses it
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 0}, "body": "run the sweep", "kind": "demand"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let demand = json_of(&body)["records"][0]["seq"].as_u64().unwrap();
+
+    // a human withdraws the agent's note: the door is free, the fold
+    // names the withdrawer
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"withdraw_comment": {"id": note, "note": "the parking was premature"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(json_of(&body)["records"][0]["kind"], "comment_withdrawn");
+
+    let state = AppState::open(&db).unwrap();
+    let snapshot = state.snapshot().unwrap();
+    let line = saccade::views::comment_line(
+        &snapshot.world,
+        saccade::CommentId(saccade::RecordId(note as usize)),
+    )
+    .expect("the comment folds");
+    assert!(line.withdrawn);
+    assert_eq!(line.withdrawer.as_deref(), Some("human person"));
+    assert_eq!(
+        line.withdrawal_note.as_deref(),
+        Some("the parking was premature")
+    );
+    assert_eq!(line.actor, "pi");
+    // the birth bytes stay in their own row
+    assert!(
+        snapshot.rows[note as usize]
+            .payload
+            .contains("parked mid-flight on the wrong thread")
+    );
+
+    // terminal: a second withdrawal refuses, taught the terminal door
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"withdraw_comment": {"id": note, "note": "changed my mind again"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    let error = &json_of(&body)["error"];
+    assert_eq!(error["code"], "invalid_state_transition");
+    assert!(error["detail"].as_str().unwrap().contains("terminal"));
+
+    // revise-of-withdrawn refuses at the same gate, taught the terminal
+    // door
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"revise_comment": {"id": note, "body": "repair in place"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    let error = &json_of(&body)["error"];
+    assert_eq!(error["code"], "invalid_state_transition");
+    assert!(error["detail"].as_str().unwrap().contains("terminal"));
+
+    // the variant kinds keep their own lifecycles, taught by name
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"withdraw_comment": {"id": demand, "note": "not a note deposit"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    let error = &json_of(&body)["error"];
+    assert_eq!(error["code"], "invalid_state_transition");
+    assert!(
+        error["detail"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("c-{demand} is a demand")),
+        "{}",
+        error["detail"]
+    );
+
+    // an unknown comment and a birth record teach the same grammar the
+    // reply door teaches
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"withdraw_comment": {"id": 99, "note": "addresses nothing"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_comment_id");
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"withdraw_comment": {"id": 0, "note": "addresses a birth"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("birth record of task t-0")
+    );
+
+    // the empty note refuses where the wire meets the fold: a note
+    // that says nothing is not a withdrawal
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"withdraw_comment": {"id": note, "note": ""}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "malformed_request");
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }

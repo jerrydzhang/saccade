@@ -87,6 +87,30 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             Command::CompleteTask { id, .. } => need(world, *id, "done needs the holder's claim"),
             Command::DropTask { id, .. } => need(world, *id, "a drop needs an open or done task"),
             Command::ReleaseTask { id, .. } => need(world, *id, "a release needs a claimed task"),
+            Command::WithdrawComment { id, .. } => {
+                let ctx = world.comments.get(id)?;
+                if ctx.withdrawn.is_some() {
+                    Some(format!(
+                        "c-{} is withdrawn; the door is terminal — a reached conclusion is a new deposit",
+                        id.0.0
+                    ))
+                } else {
+                    Some(format!(
+                        "c-{} is a {}; withdrawal repairs a note deposit — the other variants keep their own lifecycles",
+                        id.0.0,
+                        crate::views::kind_of(&ctx.state)
+                    ))
+                }
+            }
+            Command::ReviseComment { id, .. } => {
+                let ctx = world.comments.get(id)?;
+                (ctx.withdrawn.is_some()).then(|| {
+                    format!(
+                        "c-{} is withdrawn; the door is terminal — a reached conclusion is a new deposit",
+                        id.0.0
+                    )
+                })
+            }
             Command::CreateProposal { action, .. } => {
                 let (id, what) = match action {
                     ProposalAction::Drop { task_id } => {
@@ -163,6 +187,7 @@ fn command_comment(command: &Command) -> Option<usize> {
             ..
         }
         | Command::ReviseComment { id, .. }
+        | Command::WithdrawComment { id, .. }
         | Command::BindIncarnation {
             response_target: id,
             ..
@@ -314,6 +339,82 @@ mod test {
         let command = Command::ReviseComment {
             id: CommentId(RecordId(0)),
             body: Prose::new("addresses a birth".into()).unwrap(),
+        };
+        let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
+        assert!(
+            taught.contains("c-0 is the birth record of task t-0"),
+            "{taught}"
+        );
+    }
+
+    #[test]
+    fn withdrawal_refusals_name_the_kind_or_the_terminal_door() {
+        let note = |seq: usize, body: &str| {
+            record(
+                seq,
+                seq as u64,
+                &agent(),
+                Event::Commented {
+                    target: Target::Task(TaskId(0)),
+                    body: Prose::new(body.into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            )
+        };
+        let world = World::replay(vec![
+            task(0, "migrate floop"),
+            note(1, "parked mid-flight"),
+            record(
+                2,
+                2,
+                &human(),
+                Event::Commented {
+                    target: Target::Task(TaskId(0)),
+                    body: Prose::new("run the sweep".into()).unwrap(),
+                    kind: CommentKind::Demand,
+                },
+            ),
+            record(
+                3,
+                3,
+                &human(),
+                Event::CommentWithdrawn {
+                    id: CommentId(RecordId(1)),
+                    note: Prose::new("the parking was premature".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+
+        // the variant kind is named, with the note-only law
+        let command = Command::WithdrawComment {
+            id: CommentId(RecordId(2)),
+            note: Prose::new("not a note deposit".into()).unwrap(),
+        };
+        let taught = teach(&world, &command, &Reject::InvalidStateTransition).unwrap();
+        assert!(taught.contains("c-2 is a demand"), "{taught}");
+        assert!(taught.contains("note deposit"), "{taught}");
+
+        // the terminal door is named for both takers: a second withdrawal
+        // and a revision of the withdrawn
+        let command = Command::WithdrawComment {
+            id: CommentId(RecordId(1)),
+            note: Prose::new("changed my mind".into()).unwrap(),
+        };
+        let taught = teach(&world, &command, &Reject::InvalidStateTransition).unwrap();
+        assert!(taught.contains("c-1 is withdrawn"), "{taught}");
+        assert!(taught.contains("terminal"), "{taught}");
+        let command = Command::ReviseComment {
+            id: CommentId(RecordId(1)),
+            body: Prose::new("repair in place".into()).unwrap(),
+        };
+        let taught = teach(&world, &command, &Reject::InvalidStateTransition).unwrap();
+        assert!(taught.contains("terminal"), "{taught}");
+
+        // the id grammar teaches through the withdraw door too
+        let command = Command::WithdrawComment {
+            id: CommentId(RecordId(0)),
+            note: Prose::new("addresses a birth".into()).unwrap(),
         };
         let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
         assert!(

@@ -192,6 +192,27 @@ pub struct Revision {
     pub reviser: ActorName,
 }
 
+/// The standing-error repair: the deposit's body left the fold's
+/// presentation and a tombstone holds its place. The pointer names the
+/// record that withdrew, the withdrawer is disclosed whenever they
+/// differ from the birth author, and the note says why.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Withdrawal {
+    pub record: RecordId,
+    pub withdrawer: ActorName,
+    pub note: Prose,
+}
+
+/// The content acts a folded comment still admits. Withdrawal is
+/// terminal — no undelete — and only a note deposit passes its door:
+/// demand, steer, and ask keep their own lifecycles and are never
+/// retractable through this one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentAct {
+    Revise,
+    Withdraw,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommentContext {
     pub comment: Comment,
@@ -203,8 +224,25 @@ pub struct CommentContext {
     /// The latest revision of the body, when it was ever revised —
     /// a pointer with its reviser, never the payload it swapped in
     pub revised: Option<Revision>,
+    /// The standing-error repair, when the deposit was withdrawn —
+    /// the tombstone beside the pointer, never the body it evicted
+    pub withdrawn: Option<Withdrawal>,
     /// The machinery's refusal to run this demand, when it refused
     pub refusal: Option<Refusal>,
+}
+
+impl CommentContext {
+    /// The content-act gate: which repairs this folded comment still
+    /// admits. Every content act refuses once withdrawn; withdrawal
+    /// itself is a note deposit's door alone.
+    pub fn admits(&self, act: ContentAct) -> bool {
+        match act {
+            ContentAct::Revise => self.withdrawn.is_none(),
+            ContentAct::Withdraw => {
+                matches!(self.state, CommentState::Note) && self.withdrawn.is_none()
+            }
+        }
+    }
 }
 
 /// Why the machinery refused to run a demand, and when: the asker's
@@ -494,6 +532,78 @@ mod tables {
                     "table disagrees at ({state:?}, {:?})",
                     record.event
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn content_act_gate_admits_exactly_the_legal_cells() {
+        let withdrawal = Withdrawal {
+            record: RecordId(9),
+            withdrawer: ActorName::new("human person".into()).unwrap(),
+            note: Prose::new("parked in the wrong place".into()).unwrap(),
+        };
+        let states = [
+            CommentState::Note,
+            CommentState::Demand {
+                response: ResponseState::Awaiting,
+                attempt: AgentAttemptState::Authorized {
+                    trigger: RecordId(1),
+                },
+            },
+            CommentState::Demand {
+                response: ResponseState::Responded {
+                    reply: CommentId(RecordId(9)),
+                },
+                attempt: AgentAttemptState::Spent,
+            },
+            CommentState::Steer {
+                delivery: SteerDelivery::Standing,
+            },
+            CommentState::Steer {
+                delivery: SteerDelivery::Forwarded,
+            },
+            CommentState::Ask {
+                response: ResponseState::Awaiting,
+            },
+            CommentState::Ask {
+                response: ResponseState::Responded {
+                    reply: CommentId(RecordId(9)),
+                },
+            },
+        ];
+        for state in &states {
+            for withdrawn in [None, Some(withdrawal.clone())] {
+                let ctx = CommentContext {
+                    comment: Comment {
+                        target: Target::Task(TaskId(0)),
+                        body: Prose::new("parked in the wrong place".into()).unwrap(),
+                        root: TaskId(0),
+                    },
+                    actor: ActorName::new("pi".into()).unwrap(),
+                    tier: Tier::Agent,
+                    state: state.clone(),
+                    born_at: 1,
+                    revised: None,
+                    withdrawn: withdrawn.clone(),
+                    refusal: None,
+                };
+                let legal = |act| match act {
+                    // every content act refuses a withdrawn deposit
+                    ContentAct::Revise => withdrawn.is_none(),
+                    // withdrawal is a note deposit's door, taken once
+                    ContentAct::Withdraw => {
+                        matches!(state, CommentState::Note) && withdrawn.is_none()
+                    }
+                };
+                for act in [ContentAct::Revise, ContentAct::Withdraw] {
+                    assert_eq!(
+                        ctx.admits(act),
+                        legal(act),
+                        "gate disagrees at ({state:?}, withdrawn={}), {act:?}",
+                        withdrawn.is_some()
+                    );
+                }
             }
         }
     }

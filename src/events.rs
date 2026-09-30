@@ -74,6 +74,15 @@ pub enum Event {
         id: CommentId,
         body: Prose,
     },
+    /// The standing-error repair: the deposit's implicit claim — this
+    /// is reached, this earns residency — was false. The body leaves
+    /// the fold's presentation, a tombstone stays; the log is untouched.
+    /// Note deposits only; the demand/steer/ask lifecycles are not
+    /// retractable through this door.
+    CommentWithdrawn {
+        id: CommentId,
+        note: Prose,
+    },
     /// The refusal fact: a demand the machinery would not run, landed
     /// where the asker reads.
     DemandRefused {
@@ -186,6 +195,10 @@ pub enum Command {
     ReviseComment {
         id: CommentId,
         body: Prose,
+    },
+    WithdrawComment {
+        id: CommentId,
+        note: Prose,
     },
     RefuseDemand {
         demand: CommentId,

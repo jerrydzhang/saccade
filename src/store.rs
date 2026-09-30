@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::decide::{decide, enforce_tier, expand};
 use crate::events::{Command, Event};
 use crate::objects::comment::{
-    AgentAttemptState, Comment, CommentContext, CommentId, CommentKind, CommentState, Refusal,
-    ResponseState, Revision, SteerDelivery,
+    AgentAttemptState, Comment, CommentContext, CommentId, CommentKind, CommentState, ContentAct,
+    Refusal, ResponseState, Revision, SteerDelivery, Withdrawal,
 };
 use crate::objects::incarnation::{IncarnationContext, IncarnationId, IncarnationState};
 use crate::objects::proposal::{Proposal, ProposalContext, ProposalId, ProposalState};
@@ -572,6 +572,7 @@ impl World {
                         state,
                         born_at: record.timestamp,
                         revised: None,
+                        withdrawn: None,
                         refusal: None,
                     },
                 );
@@ -605,10 +606,31 @@ impl World {
             // Any tier revises; the fold keeps the reviser for disclosure
             Event::CommentRevised { id, ref body } => {
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
+                if !comment_ctx.admits(ContentAct::Revise) {
+                    return Err(Reason::InvalidStateTransition);
+                }
                 comment_ctx.comment.body = body.clone();
                 comment_ctx.revised = Some(Revision {
                     record: record.id,
                     reviser: record.context.actor.clone(),
+                });
+                let root = comment_ctx.comment.root;
+                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.last_record_at = record.timestamp;
+            }
+            // The standing-error repair: the body leaves the fold's
+            // presentation, the tombstone stays, the log is untouched.
+            // Any tier withdraws; the fold keeps the withdrawer for
+            // disclosure, and the door is terminal
+            Event::CommentWithdrawn { id, ref note } => {
+                let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
+                if !comment_ctx.admits(ContentAct::Withdraw) {
+                    return Err(Reason::InvalidStateTransition);
+                }
+                comment_ctx.withdrawn = Some(Withdrawal {
+                    record: record.id,
+                    withdrawer: record.context.actor.clone(),
+                    note: note.clone(),
                 });
                 let root = comment_ctx.comment.root;
                 let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
@@ -1986,6 +2008,135 @@ mod test {
         // the two refusals wrote nothing: the log holds exactly the
         // create, the comment, and the three landed revisions
         assert_eq!(log.records().len(), 5);
+    }
+
+    #[test]
+    fn withdrawal_retires_a_note_at_any_tier_and_keeps_the_withdrawer() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: Prose::new("migrate floop".into()).unwrap(),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("parked mid-flight on the wrong thread".into()).unwrap(),
+                kind: CommentKind::Note,
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("run the sweep".into()).unwrap(),
+                kind: CommentKind::Demand,
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("nudge the live run".into()).unwrap(),
+                kind: CommentKind::Steer,
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("which sweep?".into()).unwrap(),
+                kind: CommentKind::Ask,
+            },
+            2,
+        )
+        .unwrap();
+        let note = CommentId(RecordId(1));
+
+        // a human withdraws the agent's note: no author-identity door,
+        // the tombstone names the withdrawer
+        log.execute(
+            human(),
+            Command::WithdrawComment {
+                id: note,
+                note: Prose::new("the parking was premature".into()).unwrap(),
+            },
+            3,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&note];
+        assert_eq!(
+            ctx.withdrawn,
+            Some(Withdrawal {
+                record: RecordId(5),
+                withdrawer: human().actor,
+                note: Prose::new("the parking was premature".into()).unwrap(),
+            })
+        );
+        // the withdrawal moves no state: the note is still a note
+        assert!(matches!(&ctx.state, CommentState::Note));
+
+        // terminal: a second withdrawal and a revision both refuse
+        for command in [
+            Command::WithdrawComment {
+                id: note,
+                note: Prose::new("changed my mind again".into()).unwrap(),
+            },
+            Command::ReviseComment {
+                id: note,
+                body: Prose::new("repair in place".into()).unwrap(),
+            },
+        ] {
+            let refused = log.execute(agent(), command, 4);
+            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        }
+
+        // the variants keep their own lifecycles: demand, steer, and
+        // ask all refuse the door
+        for id in [
+            CommentId(RecordId(2)),
+            CommentId(RecordId(3)),
+            CommentId(RecordId(4)),
+        ] {
+            let refused = log.execute(
+                human(),
+                Command::WithdrawComment {
+                    id,
+                    note: Prose::new("not a note deposit".into()).unwrap(),
+                },
+                4,
+            );
+            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        }
+
+        // the addressed position must be a comment's birth
+        let refused = log.execute(
+            human(),
+            Command::WithdrawComment {
+                id: CommentId(RecordId(99)),
+                note: Prose::new("addresses nothing".into()).unwrap(),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
+
+        // the refusals wrote nothing: one withdrawal landed, ever
+        assert_eq!(log.records().len(), 6);
+        assert!(matches!(
+            log.records()[5].event,
+            Event::CommentWithdrawn { .. }
+        ));
     }
 
     #[test]

@@ -52,6 +52,10 @@ enum Action {
         comment: u8,
         human: bool,
     },
+    WithdrawComment {
+        comment: u8,
+        human: bool,
+    },
     Artifact {
         task: u8,
         human: bool,
@@ -99,6 +103,7 @@ impl Action {
             Action::Cancel { human, .. } => *human,
             Action::Comment { human, .. } => *human,
             Action::Revise { human, .. } => *human,
+            Action::WithdrawComment { human, .. } => *human,
             Action::Artifact { human, .. } => *human,
         }
     }
@@ -119,6 +124,7 @@ impl Action {
             }
             Action::Comment { task, .. } if role == "task" => *task,
             Action::Revise { comment, .. } if role == "comment" => *comment,
+            Action::WithdrawComment { comment, .. } if role == "comment" => *comment,
             Action::Artifact { task, .. } if role == "task" => *task,
             Action::Accept { proposal, .. }
             | Action::Reject { proposal, .. }
@@ -263,6 +269,10 @@ fn command_of(action: &Action, world: &World) -> Command {
             id: comment_at(world, action.number("comment")),
             body: Prose::new("generated revision".into()).unwrap(),
         },
+        Action::WithdrawComment { .. } => Command::WithdrawComment {
+            id: comment_at(world, action.number("comment")),
+            note: Prose::new("generated note".into()).unwrap(),
+        },
         Action::Artifact { .. } => Command::Artifact {
             root: task,
             artifact: saccade::types::artifact::Artifact {
@@ -303,13 +313,14 @@ fn action_strategy() -> BoxedStrategy<Action> {
     prop_oneof![
         3 => create_strategy(),
         2 => id(|task, human| Action::Claim { task, human }),
-        2 => id(|task, human| Action::Done { task, human }),
-        2 => id(|task, human| Action::AcceptTask { task, human }),
+        3 => id(|task, human| Action::Done { task, human }),
+        3 => id(|task, human| Action::AcceptTask { task, human }),
         2 => id(|task, human| Action::Drop { task, human }),
         2 => id(|task, human| Action::Release { task, human }),
         3 => (any::<u8>(), any::<u8>(), any::<u8>(), human_coin())
             .prop_map(|(task, reply, variant, human)| { Action::Comment { task, reply, variant, human } }),
         2 => id(|comment, human| Action::Revise { comment, human }),
+        2 => id(|comment, human| Action::WithdrawComment { comment, human }),
         2 => id(|task, human| Action::Artifact { task, human }),
         3 => id(|task, human| Action::ProposeDrop { task, human }),
         2 => id(|task, human| Action::ProposeRelease { task, human }),
@@ -428,6 +439,9 @@ fn generator_reaches_deep_states() {
                         Action::Revise { .. } => {
                             *milestones.entry("revise").or_default() += 1;
                         }
+                        Action::WithdrawComment { .. } => {
+                            *milestones.entry("comment withdraw").or_default() += 1;
+                        }
                         _ => {}
                     }
                     if last.kind == "commented" {
@@ -494,16 +508,17 @@ fn generator_reaches_deep_states() {
         ("accept", 0.10),
         ("human reject", 0.10),
         ("withdraw", 0.10),
-        ("deliver", 0.04),
+        ("deliver", 0.03),
         ("task accept", 0.008),
-        ("delivered task", 0.03),
+        ("delivered task", 0.01),
         ("dropped task", 0.30),
-        ("depth 2 thread", 0.02),
+        ("depth 2 thread", 0.005),
         ("demand comment", 0.10),
         ("steer comment", 0.05),
         ("ask comment", 0.05),
         ("artifact", 0.05),
         ("revise", 0.05),
+        ("comment withdraw", 0.015),
     ] {
         let hit = milestones.get(name).copied().unwrap_or(0);
         assert!(

@@ -24,7 +24,9 @@ fn required_tier(event: &Event) -> Authority {
         | Event::TaskWorkspaceCheckpointed { .. } => Authority::AnyTier,
         // accept's door reads the world's birth attribution, so its
         // authority lives in the fold, not in a tier cell
-        Event::TaskAccepted { .. } | Event::CommentRevised { .. } => Authority::AnyTier,
+        Event::TaskAccepted { .. }
+        | Event::CommentRevised { .. }
+        | Event::CommentWithdrawn { .. } => Authority::AnyTier,
         Event::TaskDropped { .. }
         | Event::ProposalRejected { .. }
         | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
@@ -90,6 +92,7 @@ pub fn decide(command: Command) -> Vec<Event> {
         // Comment commands
         Command::Comment { target, body, kind } => vec![Event::Commented { target, body, kind }],
         Command::ReviseComment { id, body } => vec![Event::CommentRevised { id, body }],
+        Command::WithdrawComment { id, note } => vec![Event::CommentWithdrawn { id, note }],
         Command::RefuseDemand { demand, reason } => vec![Event::DemandRefused { demand, reason }],
         Command::Artifact { root, artifact } => vec![Event::ArtifactAdded { root, artifact }],
         Command::ForwardSteer { steer } => vec![Event::SteerForwarded { steer }],
@@ -213,6 +216,10 @@ mod test {
             Event::CommentRevised {
                 id: CommentId(RecordId(0)),
                 body: Prose::new("filler".into()).unwrap(),
+            },
+            Event::CommentWithdrawn {
+                id: CommentId(RecordId(0)),
+                note: Prose::new("filler".into()).unwrap(),
             },
             Event::DemandRefused {
                 demand: CommentId(RecordId(0)),
