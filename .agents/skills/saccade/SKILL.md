@@ -207,6 +207,8 @@ thread-grouped pointers with one matched line each, in record order.
 - **Narrow**: `in:` `by:` `kind:` `under:` — only-show-me filters;
   every narrowing prints visible counts, and a query that matches
   nothing prints one honest line. `sac search --help` owns the grammar.
+  A withdrawn comment's body sits out by default — `--withdrawn`
+  includes it.
 - **Read the neighborhood**: `sac search c-907 -C 3` anchors on that
   record and shows its window.
 - **Read whole records**: bare seqs show the raw event at that position,
@@ -234,6 +236,7 @@ The power tail is unchanged: `sac log | grep` reads the raw record.
 | `sac accept <seq>` / `sac reject <seq> --note` | **human only** | ruling acts on proposals |
 | `sac comment t-N "…"` / `sac comment c-<seq> "…"` | any tier | park or reply — a note; `--demand` fires a run |
 | `sac revise c-<seq> "…"` (body also by `--stdin` or `--body-file`) | any tier | repairs mechanics only — formatting, rendering, delimiters, wrapping; a substantive error is answered by a comment, the mistake is record; any tier revises any comment, the fold names a reviser who differs from the birth author, and `sac log` keeps the original |
+| `sac withdraw c-<seq> --note "…"` | any tier | revise's sibling, the standing-error repair: the deposit's residency claim was false, so the body leaves the fold and a one-line tombstone with the note stays — terminal, note deposits only (demand/steer/ask keep their own lifecycles); any tier withdraws any note, the tombstone names a withdrawer who differs from the birth author, `c-<seq>` stays resolvable, and `sac show c-<seq> --withdrawn` / `sac search --withdrawn` are the doors back to the body; `sac log` keeps every byte |
 | `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only; bytes never ride the wire, the db, or the server |
 | `sac steer t-N "…"` | any tier | reach the task's live run at its next turn boundary; with no run it stands as intent on the thread |
 | `sac wait c-<seq>` | any tier | blocks on the demand's outcome, never replies |

@@ -107,7 +107,9 @@ enum Cmd {
         #[arg(long)]
         note: String,
     },
-    /// Withdraw a proposal with a note
+    /// Withdraw a proposal (bare log position) or a comment note
+    /// (c-<seq>) with a note: the proposal leaves the ruling queue;
+    /// the comment's body leaves the fold, a tombstone stays
     Withdraw {
         id: String,
         #[arg(long)]
@@ -171,6 +173,9 @@ enum Cmd {
         /// and invalid lines are skipped with a note
         #[arg(long)]
         stdin: bool,
+        /// Show a withdrawn comment's body beside its tombstone
+        #[arg(long)]
+        withdrawn: bool,
     },
     /// Search the folded record: exact terms over task titles, comment
     /// bodies, and receipts; an id term is a reference search
@@ -189,6 +194,9 @@ enum Cmd {
         /// With one id term: that record plus N before and after
         #[arg(short = 'C', long)]
         context: Option<usize>,
+        /// Match withdrawn comment bodies too; they are omitted by default
+        #[arg(long)]
+        withdrawn: bool,
     },
     /// Serve the read-only canvas over HTTP (127.0.0.1 by default)
     Serve {
@@ -411,10 +419,21 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             id: parse_proposal_id(id)?,
             note: Prose::new(note.clone())?,
         },
-        Cmd::Withdraw { id, note } => Command::WithdrawProposal {
-            id: parse_proposal_id(id)?,
-            note: Prose::new(note.clone())?,
-        },
+        Cmd::Withdraw { id, note } => {
+            // one verb, two objects: c-N withdraws a comment note, a
+            // bare log position a proposal
+            if id.starts_with("c-") {
+                Command::WithdrawComment {
+                    id: parse_comment_id(id)?,
+                    note: Prose::new(note.clone())?,
+                }
+            } else {
+                Command::WithdrawProposal {
+                    id: parse_proposal_id(id)?,
+                    note: Prose::new(note.clone())?,
+                }
+            }
+        }
         Cmd::Comment {
             target,
             body,
@@ -845,15 +864,19 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
             LoadState::Full(world) => Ok(render_proposals(cli, &world)),
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
-        Cmd::Show { ids, stdin } => match loadout.state {
+        Cmd::Show {
+            ids,
+            stdin,
+            withdrawn,
+        } => match loadout.state {
             LoadState::Full(world) => {
                 if *stdin {
-                    return show_stdin(cli, &world, &loadout.rows, ids);
+                    return show_stdin(cli, &world, &loadout.rows, ids, *withdrawn);
                 }
                 if cli.json {
                     let blocks: Vec<serde_json::Value> = ids
                         .iter()
-                        .map(|token| show_value(&world, &loadout.rows, token))
+                        .map(|token| show_value(&world, &loadout.rows, token, *withdrawn))
                         .collect::<Result<_, _>>()?;
                     return Ok(
                         serde_json::to_string_pretty(&blocks).expect("blocks are plain data")
@@ -861,14 +884,19 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
                 }
                 let mut blocks = Vec::new();
                 for token in ids {
-                    blocks.push(render_id(&world, &loadout.rows, token)?);
+                    blocks.push(render_id(&world, &loadout.rows, token, *withdrawn)?);
                 }
                 Ok(blocks.join("\n\n"))
             }
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
-        Cmd::Search { terms, context } => {
-            let query = SearchQuery::parse(terms).map_err(|f| Fail::Usage(f.to_string()))?;
+        Cmd::Search {
+            terms,
+            context,
+            withdrawn,
+        } => {
+            let mut query = SearchQuery::parse(terms).map_err(|f| Fail::Usage(f.to_string()))?;
+            query.withdrawn = *withdrawn;
             if let Some(around) = context {
                 let anchor = anchor_seq(&loadout, &query)?;
                 return Ok(render_anchor(cli, &loadout.rows, anchor, *around));
@@ -1117,7 +1145,7 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     for entry in thread_entries(&world.comments, ctx) {
         out.push(String::new());
         match entry {
-            ThreadEntry::Comment(line) => out.extend(comment_block(&line)),
+            ThreadEntry::Comment(line) => out.extend(comment_block(&line, false)),
             ThreadEntry::Artifact(line) => out.extend(artifact_block(&line)),
         }
     }
@@ -1134,25 +1162,52 @@ fn artifact_block(line: &ArtifactLine) -> Vec<String> {
 
 /// A thread view's body format for one comment: its header line, the
 /// wrapped body, and the machinery's refusal when it refused — the
-/// same block whether it rides a thread or a pointer opened it.
-fn comment_block(line: &CommentLine) -> Vec<String> {
+/// same block whether it rides a thread or a pointer opened it. A
+/// withdrawn note renders its tombstone, the body only when revealed.
+fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
     let indent = "  ".repeat(line.depth.saturating_sub(1));
-    // the revised mark rides the state's parenthetical: descriptive,
-    // beside the comment, never a narrative of its own — and a reviser
-    // who differs from the birth author is named
-    let revised = match (line.revised, line.reviser.as_deref()) {
-        (true, Some(who)) => format!("revised by {who}"),
-        (true, None) => "revised".to_string(),
-        _ => String::new(),
+    // the withdrawal is terminal, so its mark replaces the revised one:
+    // the body is gone, its provenance mark would narrate absence —
+    // and a withdrawer who differs from the birth author is named
+    let mark = if line.withdrawn {
+        match line.withdrawer.as_deref() {
+            Some(who) => format!("withdrawn by {who}"),
+            None => "withdrawn".to_string(),
+        }
+    } else {
+        match (line.revised, line.reviser.as_deref()) {
+            (true, Some(who)) => format!("revised by {who}"),
+            (true, None) => "revised".to_string(),
+            _ => String::new(),
+        }
     };
-    let marks = match (&line.state, revised.is_empty()) {
-        (Some(state), false) => Some(format!("{state}, {revised}")),
+    let marks = match (&line.state, mark.is_empty()) {
+        (Some(state), false) => Some(format!("{state}, {mark}")),
         (Some(state), true) => Some(state.clone()),
-        (None, false) => Some(revised),
+        (None, false) => Some(mark),
         (None, true) => None,
     };
     let state = marks.map(|m| format!("  ({m})")).unwrap_or_default();
     let mut out = vec![format!("{indent}c-{}  {}{state}", line.seq, line.actor)];
+    if line.withdrawn {
+        // the tombstone: one line, the note
+        let note = line.withdrawal_note.as_deref().unwrap_or_default();
+        out.push(wrap(
+            &format!("withdrawn: {note}"),
+            WIDTH,
+            &format!("{indent}  "),
+            &format!("{indent}  "),
+        ));
+        if reveal {
+            out.push(wrap(
+                &format!("body: {}", line.body),
+                WIDTH,
+                &format!("{indent}  "),
+                &format!("{indent}  "),
+            ));
+        }
+        return out;
+    }
     out.push(wrap(
         &line.body,
         WIDTH,
@@ -1212,7 +1267,12 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
 /// the literal event (header and relation, no thread substitution:
 /// the relation names t-N, and the taught law does the rest), and
 /// every other record as the log renders it, header and payload.
-fn render_id(world: &World, rows: &[db::StoredRecord], token: &str) -> Result<String, Fail> {
+fn render_id(
+    world: &World,
+    rows: &[db::StoredRecord],
+    token: &str,
+    withdrawn_bodies: bool,
+) -> Result<String, Fail> {
     let no_record = |typed: &str| {
         Fail::Usage(format!(
             "no record {typed}; the log holds {} records, 0 through {}",
@@ -1224,7 +1284,7 @@ fn render_id(world: &World, rows: &[db::StoredRecord], token: &str) -> Result<St
         ShowId::Thread(id) => render_show(world, id),
         ShowId::Record(id) => {
             if let Some(line) = comment_line(world, id) {
-                return Ok(comment_block(&line).join("\n"));
+                return Ok(comment_block(&line, withdrawn_bodies).join("\n"));
             }
             if let Some(line) = artifact_line(world, id.0) {
                 return Ok(artifact_block(&line).join("\n"));
@@ -1263,6 +1323,7 @@ fn show_value(
     world: &World,
     rows: &[db::StoredRecord],
     token: &str,
+    withdrawn_bodies: bool,
 ) -> Result<serde_json::Value, Fail> {
     match parse_show_id(token)? {
         ShowId::Thread(id) => {
@@ -1272,7 +1333,7 @@ fn show_value(
                 thread_entries(&world.comments, &world.tasks[id.0])
                     .into_iter()
                     .map(|entry| match entry {
-                        ThreadEntry::Comment(line) => comment_value(&line),
+                        ThreadEntry::Comment(line) => comment_value(&line, false),
                         ThreadEntry::Artifact(line) => artifact_value(&line),
                     })
                     .collect();
@@ -1287,7 +1348,7 @@ fn show_value(
         }
         ShowId::Record(id) => {
             if let Some(line) = comment_line(world, id) {
-                return Ok(comment_value(&line));
+                return Ok(comment_value(&line, withdrawn_bodies));
             }
             if let Some(line) = artifact_line(world, id.0) {
                 return Ok(artifact_value(&line));
@@ -1326,18 +1387,28 @@ fn show_value(
 }
 
 /// A comment as the json face renders it: the thread line's facts with
-/// the body whole — the folded bytes, never the wrapped ones.
-fn comment_value(line: &CommentLine) -> serde_json::Value {
+/// the body whole — the folded bytes, never the wrapped ones. A
+/// withdrawn note's body is null unless revealed; the tombstone's
+/// facts ride beside it.
+fn comment_value(line: &CommentLine, reveal: bool) -> serde_json::Value {
+    let body = if line.withdrawn && !reveal {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(line.body)
+    };
     serde_json::json!({
         "kind": line.kind,
         "seq": line.seq,
         "depth": line.depth,
         "actor": line.actor,
         "tier": line.tier,
-        "body": line.body,
+        "body": body,
         "state": line.state,
         "revised": line.revised,
         "reviser": line.reviser,
+        "withdrawn": line.withdrawn,
+        "withdrawer": line.withdrawer,
+        "withdrawal_note": line.withdrawal_note,
         "born_at": line.born_at,
         "refusal": line.refusal.as_ref().map(|r| serde_json::json!({
             "reason": r.reason,
@@ -1373,6 +1444,7 @@ fn show_stdin(
     world: &World,
     rows: &[db::StoredRecord],
     ids: &[String],
+    withdrawn_bodies: bool,
 ) -> Result<String, Fail> {
     if !ids.is_empty() {
         return Err(Fail::Usage("ids as arguments or --stdin, not both".into()));
@@ -1390,7 +1462,7 @@ fn show_stdin(
             if token.is_empty() {
                 continue;
             }
-            let block = show_value(world, rows, token)
+            let block = show_value(world, rows, token, withdrawn_bodies)
                 .unwrap_or_else(|f| serde_json::json!({"id": token, "error": f.to_string()}));
             blocks.push(block);
         }
@@ -1403,7 +1475,7 @@ fn show_stdin(
         if token.is_empty() {
             continue;
         }
-        match render_id(world, rows, token) {
+        match render_id(world, rows, token, withdrawn_bodies) {
             Ok(block) => blocks.push(block),
             Err(f) => blocks.push(format!("skipped '{token}': {f}")),
         }

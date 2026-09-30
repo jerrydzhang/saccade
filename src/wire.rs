@@ -27,7 +27,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 25] = [
+const KINDS: [&str; 26] = [
     "task_created",
     "task_claimed",
     "task_done",
@@ -41,6 +41,7 @@ const KINDS: [&str; 25] = [
     "proposal_withdrawn",
     "commented",
     "comment_revised",
+    "comment_withdrawn",
     "demand_refused",
     "steer_forwarded",
     "artifact_added",
@@ -184,6 +185,10 @@ mod test {
             Event::CommentRevised {
                 id: CommentId(RecordId(6)),
                 body: Prose::new("which way do you want it, exactly?".into()).unwrap(),
+            },
+            Event::CommentWithdrawn {
+                id: CommentId(RecordId(6)),
+                note: Prose::new("parked in the wrong place".into()).unwrap(),
             },
             Event::SteerForwarded {
                 steer: CommentId(RecordId(6)),

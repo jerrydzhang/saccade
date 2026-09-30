@@ -452,7 +452,9 @@ mod test {
     use super::*;
     use crate::events::{Command, Event};
     use crate::objects::comment::CommentKind;
-    use crate::objects::comment::{AgentAttemptState, CommentState, ResponseState, Revision};
+    use crate::objects::comment::{
+        AgentAttemptState, CommentState, ResponseState, Revision, Withdrawal,
+    };
     use crate::objects::incarnation::{IncarnationId, IncarnationState};
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
@@ -891,7 +893,7 @@ mod test {
 
         // the revision swaps the body the fold presents; the pointer
         // names the record that did it, the birth bytes stay in their row
-        let (_, returned) = record(
+        record(
             &mut conn,
             &agent(),
             Command::ReviseComment {
@@ -902,12 +904,38 @@ mod test {
         )
         .unwrap();
 
+        // the withdrawal family rides the same columns: a fresh note,
+        // then the repair — the fold keeps the tombstone, the log keeps
+        // the bytes. The withdrawal is the last write, so its world is
+        // the one a full reload must produce
+        record(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                body: Prose::new("parked mid-flight".into()).unwrap(),
+                kind: CommentKind::Note,
+            },
+            36,
+        )
+        .unwrap();
+        let (_, returned) = record(
+            &mut conn,
+            &human(),
+            Command::WithdrawComment {
+                id: CommentId(RecordId(41)),
+                note: Prose::new("the parking was premature".into()).unwrap(),
+            },
+            36,
+        )
+        .unwrap();
+
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 41);
+        assert_eq!(loadout.rows.len(), 43);
         // the revision family rides the same columns: pointer only
         assert_eq!(loadout.rows[40].kind, "comment_revised");
         assert!(
@@ -931,6 +959,27 @@ mod test {
             })
         );
         assert!(loadout.rows[39].payload.contains("post-fold receipt"));
+        // the withdrawal family rides the same columns: the note and
+        // the tombstone's pointer; the birth bytes stay in their row
+        assert_eq!(loadout.rows[42].kind, "comment_withdrawn");
+        assert!(
+            loadout.rows[42]
+                .payload
+                .contains("the parking was premature")
+        );
+        assert_eq!(
+            world.comments[&CommentId(RecordId(41))].withdrawn,
+            Some(Withdrawal {
+                record: RecordId(42),
+                withdrawer: human().actor,
+                note: Prose::new("the parking was premature".into()).unwrap(),
+            })
+        );
+        assert!(matches!(
+            world.comments[&CommentId(RecordId(41))].state,
+            CommentState::Note
+        ));
+        assert!(loadout.rows[41].payload.contains("parked mid-flight"));
         // the artifact family rides the same columns: pointer only
         assert_eq!(loadout.rows[38].kind, "artifact_added");
         assert!(loadout.rows[38].payload.contains("sweep figure"));

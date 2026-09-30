@@ -741,7 +741,9 @@ fn item_html(
 
 /// One comment row: kind chip, whisper mono meta (actor, seq, time),
 /// full body. Body renders through the reading-side resolver; every
-/// row carries the revise reveal — the human surface's inline door.
+/// live row carries the revise reveal — the human surface's inline
+/// door — and a withdrawn note renders its tombstone instead, with
+/// no door: repair of a withdrawn deposit is a new deposit.
 fn node_html(
     line: &CommentLine,
     indent: usize,
@@ -759,6 +761,23 @@ fn node_html(
         .as_deref()
         .map(|s| format!("<span class=\"nseq\">{}</span>", esc(s)))
         .unwrap_or_default();
+    if line.withdrawn {
+        // the tombstone: one line, the note — and a withdrawer who
+        // differs from the birth author is named
+        let withdrawn = match line.withdrawer.as_deref() {
+            Some(who) => format!("<span class=\"nseq\">withdrawn by {}</span>", esc(who)),
+            None => "<span class=\"nseq\">withdrawn</span>".to_string(),
+        };
+        let note = esc(line.withdrawal_note.as_deref().unwrap_or_default());
+        return format!(
+            "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{state}{withdrawn}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody tomb\">withdrawn: {note}</div>\n</div>\n",
+            seq = line.seq,
+            pad = 26 + indent * 22,
+            tier = esc(&line.tier),
+            actor = esc(&line.actor),
+            time = esc(&fmt_t(line.born_at)),
+        );
+    }
     // the descriptive mark: the fold presents a revised body, and a
     // reviser who differs from the birth author is named
     let revised = match (line.revised, line.reviser.as_deref()) {
@@ -1473,8 +1492,10 @@ input.who:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
   overflow-wrap: anywhere;
 }
 
-/* the revise reveal: a whisper door on every comment */
+/* the revise reveal: a whisper door on every live comment */
 .revise { margin-top: 3px; }
+/* the tombstone: a withdrawn note's one line, quieter than a body */
+.nbody.tomb { color: #6d6562; font-style: italic; }
 .revise summary {
   cursor: pointer; color: #4a4543; width: fit-content;
   font: 500 10px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .08em;
@@ -2464,6 +2485,89 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("second note, repaired"), "{html}");
+    }
+
+    #[test]
+    fn a_withdrawn_comment_renders_its_tombstone() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                    parent_id: None,
+                },
+            ),
+            record(
+                1,
+                1,
+                agent(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("parked mid-flight".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+            // a human withdraws the agent's note: the withdrawer is named
+            record(
+                2,
+                2,
+                human(),
+                Event::CommentWithdrawn {
+                    id: CommentId(RecordId(1)),
+                    note: Prose::new("parked in the wrong place".into()).unwrap(),
+                },
+            ),
+            // the author withdraws their own: the plain mark
+            record(
+                3,
+                3,
+                human(),
+                Event::Commented {
+                    target: task(0),
+                    body: Prose::new("second note".into()).unwrap(),
+                    kind: CommentKind::Note,
+                },
+            ),
+            record(
+                4,
+                4,
+                human(),
+                Event::CommentWithdrawn {
+                    id: CommentId(RecordId(3)),
+                    note: Prose::new("said better next door".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        let html = thread_section(
+            &focus_of(&world, 0),
+            &Default::default(),
+            None,
+            &ArtifactStore::default(),
+        );
+        // the tombstone replaces the body: the note renders, the body
+        // never does
+        assert!(
+            html.contains("withdrawn: parked in the wrong place"),
+            "{html}"
+        );
+        assert!(!html.contains("parked mid-flight"), "{html}");
+        // the withdrawer who differs from the birth author is named;
+        // the author's own withdrawal stays plain
+        assert!(
+            html.contains("c-1</span><span class=\"nseq\">withdrawn by jerry</span>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("c-3</span><span class=\"nseq\">withdrawn</span>"),
+            "{html}"
+        );
+        // a withdrawn deposit carries no revise door: the reveal would
+        // only ever refuse
+        assert!(!html.contains("action=\"/c/1/revise\""), "{html}");
+        assert!(!html.contains("action=\"/c/3/revise\""), "{html}");
     }
 
     #[test]
