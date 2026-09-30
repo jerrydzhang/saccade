@@ -17,8 +17,9 @@ pub enum IncarnationState {
     Bound,
     PromptAccepted,
     Settled,
-    /// A rejected prompt terminalizes the run: nothing accepted the work.
-    Interrupted,
+    /// A rejected prompt terminalizes the run: nothing accepted the
+    /// work. The recorded cause rides the terminal.
+    Interrupted(FailureEvidence),
     Cancelled,
 }
 
@@ -31,8 +32,8 @@ impl IncarnationState {
             (IncarnationState::Bound, Event::IncarnationPromptAccepted { .. }) => {
                 Some(IncarnationState::PromptAccepted)
             }
-            (IncarnationState::Bound, Event::IncarnationPromptRejected { .. }) => {
-                Some(IncarnationState::Interrupted)
+            (IncarnationState::Bound, Event::IncarnationPromptRejected { evidence, .. }) => {
+                Some(IncarnationState::Interrupted(evidence.clone()))
             }
             (IncarnationState::PromptAccepted, Event::IncarnationSettled { .. }) => {
                 Some(IncarnationState::Settled)
@@ -51,34 +52,36 @@ impl IncarnationState {
             _ => None,
         }
     }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            IncarnationState::Settled
+                | IncarnationState::Interrupted(_)
+                | IncarnationState::Cancelled
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct IncarnationContext {
+pub struct Incarnation {
     pub task_id: TaskId,
     pub response_target: CommentId,
     pub trigger: RecordId,
     pub actor: ActorName,
     pub session: SessionPointer,
     pub state: IncarnationState,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IncarnationContext {
+    pub incarnation: Incarnation,
     /// Agent records this run produced, in birth order.
     pub produced: Vec<RecordId>,
-    /// The recorded cause of the rejected prompt that interrupted the
-    /// run, present once a never-accepted run terminalized
-    pub rejection: Option<FailureEvidence>,
     /// Event time of the bind record
     pub born_at: u64,
     /// Event time of the terminal record, present once the run ended
     pub done_at: Option<u64>,
-}
-
-impl IncarnationContext {
-    pub fn is_terminal(&self) -> bool {
-        matches!(
-            self.state,
-            IncarnationState::Settled | IncarnationState::Interrupted | IncarnationState::Cancelled
-        )
-    }
 }
 
 #[cfg(test)]
@@ -90,13 +93,17 @@ mod test {
     use crate::types::failure::{FailureCode, FailureEvidence};
     use crate::types::pointers::SessionPointer;
 
+    fn evidence() -> FailureEvidence {
+        FailureEvidence::new(FailureCode::PromptRejected, Some("session refused".into()))
+    }
+
     #[test]
     fn lifecycle_table_admits_exactly_the_legal_cells() {
         let states = [
             IncarnationState::Bound,
             IncarnationState::PromptAccepted,
             IncarnationState::Settled,
-            IncarnationState::Interrupted,
+            IncarnationState::Interrupted(evidence()),
             IncarnationState::Cancelled,
         ];
         let events = [
@@ -105,7 +112,7 @@ mod test {
             },
             Event::IncarnationPromptRejected {
                 id: IncarnationId(RecordId(0)),
-                evidence: FailureEvidence::new(FailureCode::PromptRejected, None),
+                evidence: evidence(),
             },
             Event::IncarnationSettled {
                 id: IncarnationId(RecordId(0)),
@@ -152,5 +159,18 @@ mod test {
                 );
             }
         }
+    }
+
+    /// The rejected prompt's recorded cause rides the terminal state.
+    #[test]
+    fn a_rejected_prompt_carries_its_evidence() {
+        let next = IncarnationState::Bound
+            .transition(&Event::IncarnationPromptRejected {
+                id: IncarnationId(RecordId(0)),
+                evidence: evidence(),
+            })
+            .unwrap();
+        assert_eq!(next, IncarnationState::Interrupted(evidence()));
+        assert!(next.is_terminal());
     }
 }

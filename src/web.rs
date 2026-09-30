@@ -756,6 +756,14 @@ fn node_html(
     let chip = kind
         .map(|(k, color)| format!("<span class=\"xk\" style=\"color:{color}\">{k}</span>"))
         .unwrap_or_default();
+    // the target edge, carried explicitly: a reply names the comment
+    // it addresses
+    let target = match line.target {
+        crate::Target::Comment(parent) => {
+            format!("<span class=\"nseq mono\">→c-{}</span>", parent.0.0)
+        }
+        crate::Target::Task(_) => String::new(),
+    };
     let state = line
         .state
         .as_deref()
@@ -770,7 +778,7 @@ fn node_html(
         };
         let note = esc(line.withdrawal_note.as_deref().unwrap_or_default());
         return format!(
-            "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{state}{withdrawn}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody tomb\">withdrawn: {note}</div>\n</div>\n",
+            "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{target}{state}{withdrawn}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody tomb\">withdrawn: {note}</div>\n</div>\n",
             seq = line.seq,
             pad = 26 + indent * 22,
             tier = esc(&line.tier),
@@ -789,7 +797,7 @@ fn node_html(
         .map(|t| format!("<span class=\"nseq\">{}</span>", esc(t)))
         .unwrap_or_default();
     format!(
-        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{state}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody\">{body}</div>\n<details class=\"revise\"><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{current}</textarea>\n<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n</div>\n",
+        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{target}{state}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody\">{body}</div>\n<details class=\"revise\"><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{current}</textarea>\n<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n</div>\n",
         seq = line.seq,
         pad = 26 + indent * 22,
         tier = esc(&line.tier),

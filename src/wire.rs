@@ -52,7 +52,7 @@ const KINDS: [&str; 26] = [
     "incarnation_cancelled",
     "record_produced_by",
     "task_workspace_created",
-    "task_worktree_created",
+    "task_workspace_materialized",
     "task_workspace_checkpointed",
 ];
 
@@ -70,6 +70,12 @@ pub fn disassemble(event: &Event) -> (String, String) {
 }
 
 pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
+    // the workspace rename's ratified migration: logs written before
+    // it carry the worktree kind and load unchanged behind this map
+    let kind = match kind {
+        "task_worktree_created" => "task_workspace_materialized",
+        kind => kind,
+    };
     if !KINDS.contains(&kind) {
         return Err(ParseFail::UnknownKind(kind.to_string()));
     }
@@ -212,7 +218,7 @@ mod test {
             Event::IncarnationCancelled {
                 id: IncarnationId(RecordId(0)),
             },
-            Event::TaskWorktreeCreated {
+            Event::TaskWorkspaceMaterialized {
                 task_id: TaskId(0),
                 worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
             },
@@ -227,6 +233,22 @@ mod test {
             let back = assemble(&kind, &payload).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
             assert_eq!(&back, event, "different: {kind}");
         }
+    }
+
+    /// The workspace rename's migration: an old log's worktree kind
+    /// loads as the materialized-workspace event, payload untouched.
+    #[test]
+    fn the_old_worktree_kind_loads_as_the_workspace_event() {
+        let event = assemble(
+            "task_worktree_created",
+            r#"{"task_id":0,"worktree":"/repo/wt/t-0"}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(&event, Event::TaskWorkspaceMaterialized { worktree, .. }
+                if worktree.as_path() == std::path::Path::new("/repo/wt/t-0")),
+            "{event:?}"
+        );
     }
 
     #[test]

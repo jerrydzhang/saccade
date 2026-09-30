@@ -452,9 +452,7 @@ mod test {
     use super::*;
     use crate::events::{Command, Event};
     use crate::objects::comment::CommentKind;
-    use crate::objects::comment::{
-        AgentAttemptState, CommentState, ResponseState, Revision, Withdrawal,
-    };
+    use crate::objects::comment::{CommentState, ResponseState, Revision, Withdrawal};
     use crate::objects::incarnation::{IncarnationId, IncarnationState};
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
@@ -702,7 +700,7 @@ mod test {
         record(
             &mut conn,
             &system,
-            Command::CreateWorktree {
+            Command::MaterializeWorkspace {
                 task_id: TaskId(0),
                 worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
             },
@@ -972,12 +970,11 @@ mod test {
             Some(Withdrawal {
                 record: RecordId(42),
                 withdrawer: human().actor,
-                note: Prose::new("the parking was premature".into()).unwrap(),
             })
         );
         assert!(matches!(
-            world.comments[&CommentId(RecordId(41))].state,
-            CommentState::Note
+            world.comments[&CommentId(RecordId(41))].comment.state,
+            CommentState::Withdrawn(_)
         ));
         assert!(loadout.rows[41].payload.contains("parked mid-flight"));
         // the artifact family rides the same columns: pointer only
@@ -1013,7 +1010,7 @@ mod test {
         assert_eq!(loadout.rows[28].kind, "task_delivered");
         assert_eq!(loadout.rows[29].kind, "task_accepted");
         assert_eq!(loadout.rows[22].kind, "task_workspace_created");
-        assert_eq!(loadout.rows[23].kind, "task_worktree_created");
+        assert_eq!(loadout.rows[23].kind, "task_workspace_materialized");
         assert_eq!(loadout.rows[24].kind, "task_workspace_checkpointed");
         assert_eq!(loadout.rows[22].actor.as_str(), "saccade");
         // the variant cycle round-trips: the steer's consumption and the
@@ -1021,13 +1018,13 @@ mod test {
         assert_eq!(loadout.rows[34].kind, "steer_forwarded");
         assert_eq!(loadout.rows[34].actor.as_str(), "saccade");
         assert!(matches!(
-            world.comments[&CommentId(RecordId(33))].state,
+            world.comments[&CommentId(RecordId(33))].comment.state,
             crate::objects::comment::CommentState::Steer {
                 delivery: crate::objects::comment::SteerDelivery::Forwarded,
             }
         ));
         assert!(matches!(
-            world.comments[&CommentId(RecordId(35))].state,
+            world.comments[&CommentId(RecordId(35))].comment.state,
             crate::objects::comment::CommentState::Ask {
                 response: ResponseState::Responded {
                     reply: CommentId(RecordId(36))
@@ -1036,7 +1033,10 @@ mod test {
         ));
         assert_eq!(world.tasks[0].active_incarnation, None);
         assert!(matches!(
-            world.tasks[0].workspace.as_ref().map(|w| &w.checkpoint),
+            world.tasks[0]
+                .workspace
+                .as_ref()
+                .map(|w| &w.workspace.checkpoint),
             Some(checkpoint) if *checkpoint == GitCommit::new("def456".into()).unwrap()
         ));
         assert_eq!(world.tasks.len(), 3);
@@ -1046,7 +1046,7 @@ mod test {
         assert!(matches!(world.tasks[1].task.state, TaskState::Dropped));
         assert!(matches!(world.tasks[2].task.state, TaskState::Done(_)));
         assert_eq!(
-            world.proposals[&ProposalId(RecordId(5))].proposal.state,
+            world.proposals[&ProposalId(RecordId(5))].state,
             ProposalState::Accepted
         );
         let reply = &world.comments[&CommentId(RecordId(9))];
@@ -1055,29 +1055,32 @@ mod test {
         assert_eq!(reply.actor.as_str(), "human person");
         let demand = &world.comments[&CommentId(RecordId(13))];
         assert_eq!(
-            demand.state,
+            demand.comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded {
                     reply: CommentId(RecordId(16))
                 },
-                attempt: AgentAttemptState::Spent,
             }
         );
         let run = &world.incarnations[&IncarnationId(RecordId(14))];
-        assert_eq!(run.state, IncarnationState::Settled);
+        assert_eq!(run.incarnation.state, IncarnationState::Settled);
         assert_eq!(run.produced, vec![RecordId(16)]);
+        assert_eq!(
+            world.comments[&CommentId(RecordId(13))].bound,
+            Some(IncarnationId(RecordId(14)))
+        );
         assert_eq!(world.tasks[0].active_incarnation, None);
         // the refusal round-trips through the wire columns
         assert_eq!(loadout.rows[26].kind, "demand_refused");
         assert_eq!(loadout.rows[26].actor.as_str(), "saccade");
         let refused = &world.comments[&CommentId(RecordId(25))];
         assert_eq!(
-            refused.state,
+            refused.comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                attempt: AgentAttemptState::Spent,
             }
         );
+        assert!(refused.bound.is_none());
         let refusal = refused.refusal.as_ref().expect("the refusal fact folded");
         assert!(refusal.reason.as_str().contains("diverged"));
         assert_eq!(refusal.at, 33);

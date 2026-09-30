@@ -4,9 +4,9 @@
 use std::collections::BTreeMap;
 
 use crate::objects::comment::{
-    AgentAttemptState, CommentContext, CommentId, CommentState, Refusal, ResponseState, Target,
+    CommentContext, CommentId, CommentState, Refusal, ResponseState, Target,
 };
-use crate::objects::proposal::{ProposalAction, ProposalContext, ProposalId, ProposalState};
+use crate::objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
 use crate::objects::task::{TaskContext, TaskId, TaskState};
 use crate::store::{RecordId, Tier, World};
 use crate::types::artifact::Artifact;
@@ -46,7 +46,7 @@ fn state_str(state: &TaskState) -> &'static str {
 }
 
 impl TaskView {
-    pub fn of(id: TaskId, ctx: &TaskContext, proposal: Option<&ProposalContext>) -> TaskView {
+    pub fn of(id: TaskId, ctx: &TaskContext, proposal: Option<&Proposal>) -> TaskView {
         TaskView {
             id: format!("t-{}", id.0),
             state: state_str(&ctx.task.state),
@@ -60,7 +60,7 @@ impl TaskView {
                     .0;
                 ProposalMark {
                     seq,
-                    verb: match p.proposal.action {
+                    verb: match p.action {
                         ProposalAction::Drop { .. } => "drop",
                         ProposalAction::Release { .. } => "release",
                     },
@@ -82,34 +82,30 @@ pub struct ProposalView {
 impl ProposalView {
     /// `target_state` is the state of the task this proposal acts on; a
     /// missing target reads as stale — the act would be refused today.
-    pub fn of(
-        id: ProposalId,
-        ctx: &ProposalContext,
-        target_state: Option<&TaskState>,
-    ) -> ProposalView {
-        let stale = match ctx.proposal.state {
+    pub fn of(id: ProposalId, ctx: &Proposal, target_state: Option<&TaskState>) -> ProposalView {
+        let stale = match ctx.state {
             ProposalState::Open => is_stale(ctx, target_state),
             _ => false,
         };
         ProposalView {
             id: id.0.0,
-            state: match (&ctx.proposal.state, stale) {
+            state: match (&ctx.state, stale) {
                 (ProposalState::Open, true) => "stale",
                 (ProposalState::Open, false) => "open",
                 (ProposalState::Accepted, _) => "accepted",
                 (ProposalState::Rejected(_), _) => "rejected",
                 (ProposalState::Withdrawn(_), _) => "withdrawn",
             },
-            action: match ctx.proposal.action {
+            action: match ctx.action {
                 ProposalAction::Drop { .. } => "drop",
                 ProposalAction::Release { .. } => "release",
             },
-            task: match ctx.proposal.action {
+            task: match ctx.action {
                 ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
                     format!("t-{}", task_id.0)
                 }
             },
-            name: ctx.proposal.name.as_str().to_string(),
+            name: ctx.name.as_str().to_string(),
         }
     }
 }
@@ -117,21 +113,22 @@ impl ProposalView {
 /// Derived staleness: would the embedded act be refused today?
 /// The same probe decide uses at propose time — the quiet consumer to
 /// accept's loud one.
-fn is_stale(ctx: &ProposalContext, target_state: Option<&TaskState>) -> bool {
+fn is_stale(ctx: &Proposal, target_state: Option<&TaskState>) -> bool {
     let probe = Prose::new("probe".into()).expect("probe is non-empty");
     match target_state {
         None => true,
-        Some(state) => state
-            .transition(&ctx.proposal.action.target_event(&probe))
-            .is_none(),
+        Some(state) => state.transition(&ctx.action.target_event(&probe)).is_none(),
     }
 }
 
 /// A row of the task's thread view. Depth is position in the rendered
-/// thread — the task is the root, so a comment addressing it sits at 1.
+/// thread — the task is the root, so a comment addressing it sits at
+/// 1 — and target is the edge the comment carries: the task it
+/// addresses or the comment it replies to.
 #[derive(Debug)]
 pub struct CommentLine {
     pub seq: usize,
+    pub target: Target,
     pub depth: usize,
     pub actor: String,
     pub tier: String,
@@ -181,13 +178,6 @@ impl ArtifactLine {
     }
 }
 
-/// One position in a flattened thread: a comment or an artifact.
-#[derive(Debug)]
-pub enum ThreadEntry {
-    Comment(CommentLine),
-    Artifact(ArtifactLine),
-}
-
 /// One conversation: a comment plus every reply hanging off it, in
 /// record order. Bounded by the reply links, never by the renderer.
 pub struct Conversation {
@@ -222,38 +212,46 @@ pub struct ThreadView {
     pub items: Vec<ThreadItem>,
 }
 
-/// The variant a comment state carries — the kind never moves.
+/// The variant a comment state carries — the kind never moves; a
+/// withdrawn deposit is still the note it was born.
 pub fn kind_of(state: &CommentState) -> &'static str {
     match state {
-        CommentState::Note => "note",
+        CommentState::Note | CommentState::Withdrawn(_) => "note",
         CommentState::Demand { .. } => "demand",
         CommentState::Steer { .. } => "steer",
         CommentState::Ask { .. } => "ask",
     }
 }
 
-fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> CommentLine {
-    let cctx = comments
+fn line_of(world: &World, cid: CommentId) -> CommentLine {
+    let cctx = world
+        .comments
         .get(&cid)
         .expect("apply guarantees thread members are resident");
     let mut depth = 1;
     let mut up = cctx.comment.target;
     while let Target::Comment(parent) = up {
         depth += 1;
-        up = comments
+        up = world
+            .comments
             .get(&parent)
             .expect("apply received a dangling comment target")
             .comment
             .target;
     }
+    // in flight derives by dereferencing the bound run's own state
+    let in_flight = cctx
+        .bound
+        .is_some_and(|id| !world.incarnations[&id].incarnation.state.is_terminal());
     CommentLine {
         seq: cid.0.0,
+        target: cctx.comment.target,
         depth,
         actor: cctx.actor.as_str().to_string(),
         tier: format!("{:?}", cctx.tier).to_lowercase(),
-        kind: kind_of(&cctx.state),
+        kind: kind_of(&cctx.comment.state),
         body: cctx.comment.body.as_str().to_string(),
-        state: state_tag(&cctx.state, cctx.refusal.as_ref()),
+        state: state_tag(&cctx.comment.state, cctx.refusal.as_ref(), in_flight),
         revised: cctx.revised.is_some(),
         reviser: cctx
             .revised
@@ -266,49 +264,16 @@ fn line_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
             .as_ref()
             .filter(|withdrawal| withdrawal.withdrawer != cctx.actor)
             .map(|withdrawal| withdrawal.withdrawer.as_str().to_string()),
-        withdrawal_note: cctx
-            .withdrawn
-            .as_ref()
-            .map(|withdrawal| withdrawal.note.as_str().to_string()),
+        withdrawal_note: match &cctx.comment.state {
+            CommentState::Withdrawn(note) => Some(note.as_str().to_string()),
+            _ => None,
+        },
         born_at: cctx.born_at,
         refusal: cctx.refusal.as_ref().map(|r| RefusalView {
             reason: r.reason.as_str().to_string(),
             at: r.at,
         }),
     }
-}
-
-/// The task's thread as a view: the context's pointer index, followed.
-/// Membership is fixed at birth, so this walks pointers, never scans.
-pub fn comment_thread(
-    comments: &BTreeMap<CommentId, CommentContext>,
-    ctx: &TaskContext,
-) -> Vec<CommentLine> {
-    ctx.thread
-        .iter()
-        .map(|cid| line_of(comments, *cid))
-        .collect()
-}
-
-/// The thread flat in record order: comments and artifacts merged by
-/// position — the show shape.
-pub fn thread_entries(
-    comments: &BTreeMap<CommentId, CommentContext>,
-    ctx: &TaskContext,
-) -> Vec<ThreadEntry> {
-    let mut entries: Vec<(usize, ThreadEntry)> = ctx
-        .thread
-        .iter()
-        .map(|cid| (cid.0.0, ThreadEntry::Comment(line_of(comments, *cid))))
-        .collect();
-    entries.extend(ctx.artifacts.iter().map(|(rid, artifact)| {
-        (
-            rid.0,
-            ThreadEntry::Artifact(artifact_line_of(rid.0, artifact)),
-        )
-    }));
-    entries.sort_by_key(|(seq, _)| *seq);
-    entries.into_iter().map(|(_, entry)| entry).collect()
 }
 
 fn artifact_line_of(seq: usize, artifact: &Artifact) -> ArtifactLine {
@@ -333,10 +298,7 @@ pub fn artifact_line(world: &World, id: RecordId) -> Option<ArtifactLine> {
 /// One comment as the thread view renders it, whatever thread it lives
 /// on — the body format `show` prints for a pointer.
 pub fn comment_line(world: &World, id: CommentId) -> Option<CommentLine> {
-    world
-        .comments
-        .contains_key(&id)
-        .then(|| line_of(&world.comments, id))
+    world.comments.contains_key(&id).then(|| line_of(world, id))
 }
 
 pub struct ShowView {
@@ -374,7 +336,7 @@ pub fn task_view(world: &World, id: TaskId) -> Option<TaskView> {
 
 pub fn proposal_view(world: &World, id: ProposalId) -> Option<ProposalView> {
     let ctx = world.proposals.get(&id)?;
-    let target = match ctx.proposal.action {
+    let target = match ctx.action {
         ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
             world.tasks.get(task_id.0).map(|t| &t.task.state)
         }
@@ -387,11 +349,11 @@ pub fn show_view(world: &World, id: TaskId) -> Option<ShowView> {
 }
 
 /// The tag a thread row carries: its variant and where the response
-/// stands. Notes carry nothing.
-fn state_tag(state: &CommentState, refusal: Option<&Refusal>) -> Option<String> {
+/// stands. Notes and tombstones carry nothing.
+fn state_tag(state: &CommentState, refusal: Option<&Refusal>, in_flight: bool) -> Option<String> {
     match state {
-        CommentState::Note => None,
-        CommentState::Demand { response, attempt } => {
+        CommentState::Note | CommentState::Withdrawn(_) => None,
+        CommentState::Demand { response } => {
             if refusal.is_some() {
                 return Some("demand, refused".into());
             }
@@ -399,11 +361,7 @@ fn state_tag(state: &CommentState, refusal: Option<&Refusal>) -> Option<String> 
                 ResponseState::Awaiting => "awaiting",
                 ResponseState::Responded { .. } => "responded",
             };
-            let attempt = match attempt {
-                AgentAttemptState::Authorized { .. } => "",
-                AgentAttemptState::InFlight { .. } => ", in flight",
-                AgentAttemptState::Spent => "",
-            };
+            let attempt = if in_flight { ", in flight" } else { "" };
             Some(format!("demand, {response}{attempt}"))
         }
         CommentState::Steer { delivery } => Some(match delivery {
@@ -476,7 +434,7 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
                 }
                 let root = root_of(&world.comments, cid);
                 if root == cid {
-                    let line = line_of(&world.comments, cid);
+                    let line = line_of(world, cid);
                     root_index.insert(cid, groups.len());
                     if line.kind == "demand" {
                         groups.push(Building::Exchange {
@@ -494,7 +452,7 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
                         .get(&root)
                         .copied()
                         .expect("a reply's root is resident and earlier");
-                    let line = line_of(&world.comments, cid);
+                    let line = line_of(world, cid);
                     match &mut groups[g] {
                         Building::Exchange { replies, .. } | Building::Group { replies, .. } => {
                             replies.push(line)
@@ -515,21 +473,19 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
         clusters.push(cluster);
     }
 
-    // items enter by their first record, clusters and groups alike
     let group_items: Vec<(usize, ThreadItem)> = groups
         .into_iter()
         .map(|g| match g {
             Building::Exchange { root, replies } => {
-                // the run that answered this demand, if one did
                 let run = world
                     .incarnations
                     .iter()
-                    .find(|(_, r)| r.response_target.0.0 == root.seq)
+                    .find(|(_, r)| r.incarnation.response_target.0.0 == root.seq)
                     .map(|(id, r)| RunView {
                         incarnation: id.0.0,
-                        task: r.task_id.0,
-                        demand: r.response_target.0.0,
-                        actor: r.actor.as_str().to_string(),
+                        task: r.incarnation.task_id.0,
+                        demand: r.incarnation.response_target.0.0,
+                        actor: r.incarnation.actor.as_str().to_string(),
                         born_at: r.born_at,
                         done_at: r.done_at,
                     });
@@ -662,7 +618,7 @@ pub fn asked_of_you(world: &World) -> Vec<AskedOfYou> {
         .iter()
         .filter(|(_, c)| {
             matches!(
-                c.state,
+                c.comment.state,
                 CommentState::Ask {
                     response: ResponseState::Awaiting,
                 }
@@ -781,9 +737,9 @@ pub fn next_panel(world: &World, now: u64) -> NextPanel {
             let run = &world.incarnations[&id];
             runs.push(RunView {
                 incarnation: id.0.0,
-                task: run.task_id.0,
-                demand: run.response_target.0.0,
-                actor: run.actor.as_str().to_string(),
+                task: run.incarnation.task_id.0,
+                demand: run.incarnation.response_target.0.0,
+                actor: run.incarnation.actor.as_str().to_string(),
                 born_at: run.born_at,
                 done_at: run.done_at,
             });
@@ -862,8 +818,8 @@ pub fn ribbon_marks(world: &World, now: u64) -> Vec<RibbonMark> {
         if c.born_at < from || c.born_at > now {
             continue;
         }
-        let kind = match c.state {
-            CommentState::Note => MarkKind::Note {
+        let kind = match c.comment.state {
+            CommentState::Note | CommentState::Withdrawn(_) => MarkKind::Note {
                 human: c.tier == Tier::Human,
             },
             CommentState::Demand { .. } => MarkKind::Demand,
@@ -882,8 +838,8 @@ pub fn ribbon_marks(world: &World, now: u64) -> Vec<RibbonMark> {
             marks.push(RibbonMark {
                 kind: MarkKind::Run,
                 at: run.born_at,
-                seq: run.response_target.0.0,
-                task: run.task_id.0,
+                seq: run.incarnation.response_target.0.0,
+                task: run.incarnation.task_id.0,
             });
         }
     }
@@ -1211,7 +1167,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                 cctx.comment.root.0,
                 SearchRecord {
                     pointer: format!("c-{}", id.0.0),
-                    kind: kind_of(&cctx.state),
+                    kind: kind_of(&cctx.comment.state),
                     actor: Some(cctx.actor.as_str().to_string()),
                     body: body.to_string(),
                     order: id.0.0,
@@ -1361,10 +1317,10 @@ mod test {
         }
     }
 
-    /// The thread is a walk: targets are stored, depth and membership are
-    /// derived, and each task owns exactly its own thread.
+    /// The forest is a walk: targets are stored, depth and membership
+    /// are derived, and each task owns exactly its own thread.
     #[test]
-    fn comment_thread_is_derived_from_addresses() {
+    fn the_forest_is_derived_from_addresses() {
         let human = human();
         let agent = agent();
         let record = |id: usize, ctx: &Context, target: Target, body: &str| Record {
@@ -1426,19 +1382,22 @@ mod test {
             Target::Comment(CommentId(RecordId(2)))
         );
 
-        let thread = comment_thread(&world.comments, &world.tasks[0]);
-        assert_eq!(
-            thread
-                .iter()
-                .map(|l| (l.seq, l.depth, l.actor.as_str()))
-                .collect::<Vec<_>>(),
-            vec![
-                (2, 1, "saccade bot"),
-                (3, 2, "human person"),
-                (4, 3, "saccade bot")
-            ]
-        );
-        assert_eq!(comment_thread(&world.comments, &world.tasks[1]).len(), 1);
+        let thread = thread_view(&world, TaskId(0)).unwrap();
+        match &thread.items[0] {
+            ThreadItem::Group { root, replies } => {
+                assert_eq!(root.seq, 2);
+                assert_eq!(root.depth, 1);
+                assert_eq!(root.target, Target::Task(TaskId(0)));
+                assert_eq!(replies[0].seq, 3);
+                assert_eq!(replies[0].depth, 2);
+                assert_eq!(replies[0].target, Target::Comment(CommentId(RecordId(2))));
+                assert_eq!(replies[1].seq, 4);
+                assert_eq!(replies[1].depth, 3);
+                assert_eq!(replies[1].target, Target::Comment(CommentId(RecordId(3))));
+            }
+            other => panic!("expected a group, got {other:?}"),
+        }
+        assert_eq!(thread_view(&world, TaskId(1)).unwrap().items.len(), 1);
     }
 
     /// Thread membership follows the fold: a reply belongs to its root's
@@ -1645,10 +1604,13 @@ mod panels {
         )
     }
 
-    fn entry_shape(entry: &ThreadEntry) -> (&'static str, usize) {
+    fn entry_shape(entry: &ThreadItem) -> (&'static str, usize) {
         match entry {
-            ThreadEntry::Comment(c) => ("comment", c.seq),
-            ThreadEntry::Artifact(a) => ("artifact", a.seq),
+            ThreadItem::Note(c) => ("comment", c.seq),
+            ThreadItem::Group { root, .. } | ThreadItem::Exchange { root, .. } => {
+                ("comment", root.seq)
+            }
+            ThreadItem::Artifacts(a) => ("artifact", a[0].seq),
         }
     }
 
@@ -1707,17 +1669,12 @@ mod panels {
             }
             other => panic!("expected the trailing cluster, got {other:?}"),
         }
-        // the flat show stream still merges by position
-        let flat = thread_entries(&world.comments, &world.tasks[0]);
+        // the item order the surfaces render: first records, comments
+        // and clusters alike
+        let flat = thread_view(&world, TaskId(0)).unwrap();
         assert_eq!(
-            flat.iter().map(entry_shape).collect::<Vec<_>>(),
-            [
-                ("comment", 2),
-                ("artifact", 3),
-                ("artifact", 4),
-                ("comment", 5),
-                ("artifact", 6),
-            ]
+            flat.items.iter().map(entry_shape).collect::<Vec<_>>(),
+            [("comment", 2), ("artifact", 3), ("artifact", 6),]
         );
 
         // artifacts before any comment: the thread-top cluster, the
@@ -2168,11 +2125,9 @@ mod panels {
                     line.withdrawal_note.as_deref(),
                     Some("parked in the wrong place")
                 );
-                // the body stays in the line: the flag-guarded doors read
-                // it, the default surfaces never present it
+                // the body stays readable behind the reveal flag
                 assert_eq!(line.body, "a body worth keeping");
-                // the tombstone is not a state: a withdrawn note still
-                // carries none
+                // the tombstone is not a state
                 assert_eq!(line.state, None);
             }
             other => panic!("expected a note, got {other:?}"),

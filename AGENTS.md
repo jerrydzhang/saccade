@@ -53,6 +53,11 @@ names of unborn doors; instance facts belong to the tracker, which ages
 with them.
 
 - Prescriptions live in code, never configuration; there is no plugin surface.
+- Objects carry their own stages, identity, and born content; indexes over
+  records, accumulations, and provenance facts live on the context.
+- Transition tables are pure over the event: state variants carry event
+  payloads, never envelope facts; who acted is a context's disclosure
+  cache; identity and tier guards live in store arms.
 - Objects earn residency by being addressed after birth; only a rule change
   is an ontology change.
 - No learn semantics anywhere: the system never infers from use; standing

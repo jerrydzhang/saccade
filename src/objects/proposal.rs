@@ -56,14 +56,9 @@ impl ProposalAction {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proposal {
-    pub(crate) state: ProposalState,
-    pub(crate) name: Prose,
-    pub(crate) action: ProposalAction,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ProposalContext {
-    pub proposal: Proposal,
+    pub state: ProposalState,
+    pub name: Prose,
+    pub action: ProposalAction,
 }
 
 #[cfg(test)]

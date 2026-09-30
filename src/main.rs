@@ -9,9 +9,9 @@ use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{
-    ArtifactLine, CommentLine, ProposalView, SearchGroup, SearchQuery, TaskView, Term, ThreadEntry,
+    ArtifactLine, CommentLine, ProposalView, SearchGroup, SearchQuery, TaskView, Term, ThreadItem,
     artifact_line, comment_line, matched_line, proposal_view, search, show_view, task_view,
-    thread_entries, thread_index,
+    thread_index, thread_view,
 };
 use saccade::{
     ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, GitCommit,
@@ -584,13 +584,13 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             };
             let ctx = world.tasks.get(task.0).ok_or(Reject::InvalidTaskId)?;
             let workspace = ctx.workspace.as_ref().ok_or(Reject::WorkspaceMissing)?;
-            let branch: String = workspace.branch.clone().into();
+            let branch: String = workspace.workspace.branch.clone().into();
             let tip = sh_git(
                 &repo_root,
                 &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
             )
             .map_err(Fail::Usage)?;
-            let recorded = workspace.checkpoint.as_str();
+            let recorded = workspace.workspace.checkpoint.as_str();
             if tip == recorded {
                 return Ok(format!("t-{} checkpoint unchanged at {tip}", task.0));
             }
@@ -1122,8 +1122,12 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
 }
 
 const WIDTH: usize = 80;
+/// The thread header's indent ceiling: deep chains stop marching right.
+const HEADER_INDENT_CAP: usize = 4;
 
-/// The inspector dock as text: everything about the one thing.
+/// The inspector dock as text: everything about the one thing. The
+/// thread renders the addressed forest — items in first-record order,
+/// replies carrying their target chip, bodies at one constant margin.
 fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     let view =
         show_view(world, task_id).ok_or_else(|| Fail::Usage(format!("no task t-{}", task_id.0)))?;
@@ -1141,12 +1145,22 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
         out.push("receipt".to_string());
         out.push(wrap(receipt, WIDTH, "  ", "  "));
     }
-    let ctx = &world.tasks[task_id.0];
-    for entry in thread_entries(&world.comments, ctx) {
+    let thread = thread_view(world, task_id).expect("a task with a show view holds its thread");
+    for item in &thread.items {
         out.push(String::new());
-        match entry {
-            ThreadEntry::Comment(line) => out.extend(comment_block(&line, false)),
-            ThreadEntry::Artifact(line) => out.extend(artifact_block(&line)),
+        match item {
+            ThreadItem::Note(line) => out.extend(comment_block(line, false)),
+            ThreadItem::Group { root, replies } | ThreadItem::Exchange { root, replies, .. } => {
+                out.extend(comment_block(root, false));
+                for line in replies {
+                    out.extend(comment_block(line, false));
+                }
+            }
+            ThreadItem::Artifacts(lines) => {
+                for line in lines {
+                    out.extend(artifact_block(line));
+                }
+            }
         }
     }
     Ok(out.join("\n"))
@@ -1160,12 +1174,17 @@ fn artifact_block(line: &ArtifactLine) -> Vec<String> {
     ]
 }
 
-/// A thread view's body format for one comment: its header line, the
-/// wrapped body, and the machinery's refusal when it refused — the
-/// same block whether it rides a thread or a pointer opened it. A
-/// withdrawn note renders its tombstone, the body only when revealed.
+/// A thread view's body format for one comment: its header line —
+/// indent capped by depth, a reply's target chip naming the comment
+/// it addresses — the wrapped body at a constant margin, and the
+/// machinery's refusal when it refused. A withdrawn note renders its
+/// tombstone, the body only when revealed.
 fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
-    let indent = "  ".repeat(line.depth.saturating_sub(1));
+    let indent = "  ".repeat(line.depth.saturating_sub(1).min(HEADER_INDENT_CAP));
+    let chip = match line.target {
+        Target::Comment(parent) => format!("→c-{}  ", parent.0.0),
+        Target::Task(_) => String::new(),
+    };
     // the withdrawal is terminal, so its mark replaces the revised one:
     // the body is gone, its provenance mark would narrate absence —
     // and a withdrawer who differs from the birth author is named
@@ -1188,38 +1207,26 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
         (None, true) => None,
     };
     let state = marks.map(|m| format!("  ({m})")).unwrap_or_default();
-    let mut out = vec![format!("{indent}c-{}  {}{state}", line.seq, line.actor)];
+    let mut out = vec![format!(
+        "{indent}c-{}  {chip}{}{state}",
+        line.seq, line.actor
+    )];
     if line.withdrawn {
         // the tombstone: one line, the note
         let note = line.withdrawal_note.as_deref().unwrap_or_default();
-        out.push(wrap(
-            &format!("withdrawn: {note}"),
-            WIDTH,
-            &format!("{indent}  "),
-            &format!("{indent}  "),
-        ));
+        out.push(wrap(&format!("withdrawn: {note}"), WIDTH, "  ", "  "));
         if reveal {
-            out.push(wrap(
-                &format!("body: {}", line.body),
-                WIDTH,
-                &format!("{indent}  "),
-                &format!("{indent}  "),
-            ));
+            out.push(wrap(&format!("body: {}", line.body), WIDTH, "  ", "  "));
         }
         return out;
     }
-    out.push(wrap(
-        &line.body,
-        WIDTH,
-        &format!("{indent}  "),
-        &format!("{indent}  "),
-    ));
+    out.push(wrap(&line.body, WIDTH, "  ", "  "));
     if let Some(refusal) = &line.refusal {
         out.push(wrap(
             &format!("refused {}: {}", fmt_when(refusal.at), refusal.reason),
             WIDTH,
-            &format!("{indent}  "),
-            &format!("{indent}  "),
+            "  ",
+            "  ",
         ));
     }
     out
@@ -1329,14 +1336,22 @@ fn show_value(
         ShowId::Thread(id) => {
             let view =
                 show_view(world, id).ok_or_else(|| Fail::Usage(format!("no task t-{}", id.0)))?;
-            let entries: Vec<serde_json::Value> =
-                thread_entries(&world.comments, &world.tasks[id.0])
-                    .into_iter()
-                    .map(|entry| match entry {
-                        ThreadEntry::Comment(line) => comment_value(&line, false),
-                        ThreadEntry::Artifact(line) => artifact_value(&line),
-                    })
-                    .collect();
+            let thread = thread_view(world, id).expect("a task with a show view holds its thread");
+            let entries: Vec<serde_json::Value> = thread
+                .items
+                .iter()
+                .flat_map(|item| match item {
+                    ThreadItem::Note(line) => vec![comment_value(line, false)],
+                    ThreadItem::Group { root, replies }
+                    | ThreadItem::Exchange { root, replies, .. } => std::iter::once(root)
+                        .chain(replies.iter())
+                        .map(|line| comment_value(line, false))
+                        .collect::<Vec<_>>(),
+                    ThreadItem::Artifacts(lines) => {
+                        lines.iter().map(artifact_value).collect::<Vec<_>>()
+                    }
+                })
+                .collect();
             Ok(serde_json::json!({
                 "id": view.id,
                 "state": view.state,
@@ -1399,6 +1414,7 @@ fn comment_value(line: &CommentLine, reveal: bool) -> serde_json::Value {
     serde_json::json!({
         "kind": line.kind,
         "seq": line.seq,
+        "target": serde_json::to_value(line.target).expect("targets are plain data"),
         "depth": line.depth,
         "actor": line.actor,
         "tier": line.tier,

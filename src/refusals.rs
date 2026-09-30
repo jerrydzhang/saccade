@@ -47,7 +47,7 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             let open: Vec<usize> = world
                 .proposals
                 .iter()
-                .filter(|(_, p)| matches!(p.proposal.state, ProposalState::Open))
+                .filter(|(_, p)| matches!(p.state, ProposalState::Open))
                 .map(|(id, _)| id.0.0)
                 .collect();
             Some(if open.is_empty() {
@@ -98,7 +98,7 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                     Some(format!(
                         "c-{} is a {}; withdrawal repairs a note deposit — the other variants keep their own lifecycles",
                         id.0.0,
-                        crate::views::kind_of(&ctx.state)
+                        crate::views::kind_of(&ctx.comment.state)
                     ))
                 }
             }
@@ -125,12 +125,11 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             Command::AcceptProposal { id } => {
                 // only an open proposal's refusal is about the task; a
                 // withdrawn or rejected one refuses for itself
-                let ctx = world.proposals.get(id)?;
-                if !matches!(ctx.proposal.state, ProposalState::Open) {
+                let proposal = world.proposals.get(id)?;
+                if !matches!(proposal.state, ProposalState::Open) {
                     return None;
                 }
-                let action = &ctx.proposal.action;
-                let (task_id, what) = match action {
+                let (task_id, what) = match &proposal.action {
                     ProposalAction::Drop { task_id } => {
                         (*task_id, "the proposal's drop needs an open or done task")
                     }
@@ -157,7 +156,7 @@ fn command_task(command: &Command) -> Option<TaskId> {
         | Command::ReleaseTask { id, .. }
         | Command::BindIncarnation { task_id: id, .. }
         | Command::CreateWorkspace { task_id: id, .. }
-        | Command::CreateWorktree { task_id: id, .. }
+        | Command::MaterializeWorkspace { task_id: id, .. }
         | Command::CheckpointWorkspace { task_id: id, .. } => Some(*id),
         Command::Comment {
             target: Target::Task(id),

@@ -13,9 +13,7 @@ use tracing::{info, warn};
 
 use crate::api::AppState;
 use crate::db;
-use crate::objects::comment::{
-    AgentAttemptState, CommentId, CommentState, ResponseState, SteerDelivery,
-};
+use crate::objects::comment::{CommentId, CommentState, ResponseState, SteerDelivery};
 use crate::objects::incarnation::{IncarnationId, IncarnationState};
 use crate::objects::task::{TaskId, TaskState};
 use crate::paths;
@@ -236,21 +234,21 @@ pub fn runnable_demands(world: &World) -> Vec<CommentId> {
             continue;
         }
         let task = TaskId(i);
+        // only a live authorization fires: a bound run held the slot
+        // and a refusal or an answer spent it — re-asking is a new comment
         let oldest = world
             .comments
             .iter()
             .find(|(_, c)| {
                 c.comment.root == task
                     && matches!(
-                        &c.state,
+                        c.comment.state,
                         CommentState::Demand {
-                            response: ResponseState::Awaiting,
-                            // only live authorization fires: a spent
-                            // attempt on an unanswered demand is dead —
-                            // re-asking is a new comment
-                            attempt: AgentAttemptState::Authorized { .. },
+                            response: ResponseState::Awaiting
                         }
                     )
+                    && c.bound.is_none()
+                    && c.refusal.is_none()
             })
             .map(|(id, _)| *id);
         if let Some(demand) = oldest {
@@ -307,7 +305,7 @@ pub fn sweep(app: &AppState) {
         if world
             .incarnations
             .get(&id)
-            .is_some_and(|run| run.is_terminal())
+            .is_some_and(|run| run.incarnation.state.is_terminal())
         {
             // the record already ended this run: the protocol abort is
             // the first act, the kill the last resort — a session with
@@ -501,7 +499,7 @@ fn reject_unaccepted(app: &AppState, incarnation: IncarnationId, failure: &Runne
             s.world
                 .incarnations
                 .get(&incarnation)
-                .is_some_and(|run| run.state == IncarnationState::Bound)
+                .is_some_and(|run| run.incarnation.state == IncarnationState::Bound)
         })
         .unwrap_or(false);
     if !bound {
@@ -576,7 +574,7 @@ fn deliver_standing_steers(app: &AppState, task: TaskId, incarnation: Incarnatio
         return;
     };
     for (id, c) in &snapshot.world.comments {
-        let body = match (&c.state, c.comment.root) {
+        let body = match (&c.comment.state, c.comment.root) {
             (
                 CommentState::Steer {
                     delivery: SteerDelivery::Standing,

@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use saccade::api::AppState;
 use saccade::db::{self, LoadState};
-use saccade::objects::comment::AgentAttemptState;
 use saccade::objects::comment::CommentState;
 use saccade::objects::incarnation::{IncarnationId, IncarnationState};
 use saccade::runner::{
@@ -151,7 +150,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
         Some(prepared.incarnation)
     );
     assert_eq!(
-        world.incarnations[&prepared.incarnation].state,
+        world.incarnations[&prepared.incarnation].incarnation.state,
         IncarnationState::Bound
     );
     accepted(&db_path, prepared.incarnation);
@@ -159,7 +158,7 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     // the run is accepted and holding the demand's attempt
     let world = world_of(&db_path);
     assert_eq!(
-        world.incarnations[&prepared.incarnation].state,
+        world.incarnations[&prepared.incarnation].incarnation.state,
         IncarnationState::PromptAccepted
     );
 
@@ -194,11 +193,11 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
     assert_eq!(
-        world.incarnations[&prepared.incarnation].state,
+        world.incarnations[&prepared.incarnation].incarnation.state,
         IncarnationState::Settled
     );
     // the produced pointer names exactly the demand's reply
-    let reply = match &world.comments[&demand].state {
+    let reply = match &world.comments[&demand].comment.state {
         CommentState::Demand { response, .. } => match response {
             saccade::objects::comment::ResponseState::Responded { reply } => *reply,
             _ => panic!("the reply landed"),
@@ -209,18 +208,10 @@ fn a_demand_runs_its_course_through_worktree_and_checkpoint() {
         world.incarnations[&prepared.incarnation].produced,
         vec![reply.0]
     );
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(
-                attempt,
-                saccade::objects::comment::AgentAttemptState::Spent
-            ));
-        }
-        other => panic!("demand spent: {other:?}"),
-    }
+    assert_eq!(world.comments[&demand].bound, Some(prepared.incarnation));
     let workspace = world.tasks[0].workspace.as_ref().unwrap();
     let head = sh(&worktree, &["rev-parse", "HEAD"]);
-    assert_eq!(workspace.checkpoint.as_str(), head);
+    assert_eq!(workspace.workspace.checkpoint.as_str(), head);
 
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
@@ -482,15 +473,7 @@ fn fake_session_for(db: PathBuf) -> SessionDriver {
             let demand = world
                 .comments
                 .iter()
-                .find(|(_, c)| {
-                    matches!(
-                        &c.state,
-                        CommentState::Demand {
-                            attempt: AgentAttemptState::InFlight { .. },
-                            ..
-                        }
-                    )
-                })
+                .find(|(_, c)| c.bound.is_some())
                 .map(|(id, _)| *id)
                 .expect("the bound demand is in flight");
             db::record(
@@ -529,7 +512,7 @@ fn a_write_that_lands_a_demand_fires_a_run_that_answers_it() {
     assert!(seen.contains("settled"), "{seen}");
     // the session's write carries the derived attribution
     let world = world_of(&db_path);
-    match &world.comments[&demand].state {
+    match &world.comments[&demand].comment.state {
         CommentState::Demand { response, .. } => match response {
             saccade::objects::comment::ResponseState::Responded { reply } => {
                 assert_eq!(world.comments[reply].actor.as_str(), "pi/t-0-1");
@@ -539,12 +522,7 @@ fn a_write_that_lands_a_demand_fires_a_run_that_answers_it() {
         other => panic!("demand answered: {other:?}"),
     }
     assert_eq!(world.tasks[0].active_incarnation, None);
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(attempt, AgentAttemptState::Spent));
-        }
-        other => panic!("demand spent: {other:?}"),
-    }
+    assert!(world.comments[&demand].bound.is_some());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -578,16 +556,11 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
     // both demands spent, in order
     let world = world_of(&db_path);
     for demand in [first, second] {
-        match &world.comments[&demand].state {
-            CommentState::Demand { attempt, .. } => {
-                assert!(
-                    matches!(attempt, AgentAttemptState::Spent),
-                    "c-{} spent",
-                    demand.0.0
-                );
-            }
-            other => panic!("demand spent: {other:?}"),
-        }
+        assert!(
+            world.comments[&demand].bound.is_some(),
+            "c-{} spent",
+            demand.0.0
+        );
     }
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
@@ -627,24 +600,20 @@ fn a_spawn_that_dies_before_acceptance_records_its_rejection() {
     let run = world
         .incarnations
         .values()
-        .find(|r| r.response_target == demand)
+        .find(|r| r.incarnation.response_target == demand)
         .expect("the stillborn run is in the fold");
-    assert_eq!(run.state, IncarnationState::Interrupted);
-    assert!(
-        run.rejection
-            .as_ref()
-            .and_then(|e| e.detail.as_deref())
-            .unwrap_or_default()
-            .contains("spawning the executor")
-    );
+    assert!(matches!(
+        &run.incarnation.state,
+        IncarnationState::Interrupted(evidence)
+            if evidence
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("spawning the executor")
+    ));
     // the demand slot freed: re-asking is a new comment, the spent ask
     // never re-fires
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(attempt, AgentAttemptState::Spent));
-        }
-        other => panic!("demand spent: {other:?}"),
-    }
+    assert!(world.comments[&demand].bound.is_some());
     assert!(supervisor::runnable_demands(&world).is_empty());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
@@ -742,12 +711,8 @@ fn a_demand_on_a_dropped_task_fires_nothing() {
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
     assert!(supervisor::runnable_demands(&world).is_empty());
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(attempt, AgentAttemptState::Authorized { .. }));
-        }
-        other => panic!("demand still awaiting: {other:?}"),
-    }
+    assert!(world.comments[&demand].bound.is_none());
+    assert!(world.comments[&demand].refusal.is_none());
 
     // prepare refuses too: the sweep's snapshot can race a landing drop,
     // and the refusal lands where the asker reads
@@ -763,12 +728,7 @@ fn a_demand_on_a_dropped_task_fires_nothing() {
     };
     assert!(refusal_text.contains("dropped"), "{refusal_text}");
     let world = world_of(&db_path);
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(attempt, AgentAttemptState::Spent));
-        }
-        other => panic!("demand spent: {other:?}"),
-    }
+    assert!(world.comments[&demand].bound.is_none());
     let refusal = world.comments[&demand]
         .refusal
         .as_ref()
@@ -934,15 +894,10 @@ fn a_cancel_kills_the_run_and_frees_the_task() {
     assert!(cancelled, "the cancel terminalized the run");
     let world = world_of(&db_path);
     assert_eq!(
-        world.incarnations[&incarnation].state,
+        world.incarnations[&incarnation].incarnation.state,
         IncarnationState::Cancelled
     );
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(attempt, AgentAttemptState::Spent));
-        }
-        other => panic!("demand spent: {other:?}"),
-    }
+    assert!(world.comments[&demand].bound.is_some());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -962,22 +917,17 @@ fn boot_recovery_interrupts_an_orphaned_run_that_never_accepted() {
 
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
-    let run = world.incarnations.values().last().unwrap();
-    assert_eq!(run.state, IncarnationState::Interrupted);
-    // the fold carries the recorded cause
-    assert!(
-        run.rejection
-            .as_ref()
-            .and_then(|e| e.detail.as_deref())
-            .unwrap_or_default()
-            .contains("the run never accepted")
-    );
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(attempt, AgentAttemptState::Spent));
-        }
-        other => panic!("demand spent: {other:?}"),
-    }
+    let (run_id, run) = world.incarnations.last_key_value().unwrap();
+    assert!(matches!(
+        &run.incarnation.state,
+        IncarnationState::Interrupted(evidence)
+            if evidence
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("the run never accepted")
+    ));
+    assert_eq!(world.comments[&demand].bound, Some(*run_id));
     // the interrupted orphan leaves its workspace for the next run's reuse
     assert!(world.tasks[0].workspace.is_some());
     // the spent unanswered demand is dead: no live authorization, the
@@ -1041,19 +991,23 @@ fn boot_recovery_settles_a_gone_worktree_at_its_recorded_checkpoint() {
 
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
-    assert_eq!(world.incarnations[&run].state, IncarnationState::Settled);
+    assert_eq!(
+        world.incarnations[&run].incarnation.state,
+        IncarnationState::Settled
+    );
     // the settle invented no new head: the record still names the checkpoint
     assert_eq!(
         world.tasks[0]
             .workspace
             .as_ref()
             .unwrap()
+            .workspace
             .checkpoint
             .as_str(),
         checkpoint
     );
     // the parked reply is the run's produced record
-    let reply = match &world.comments[&demand].state {
+    let reply = match &world.comments[&demand].comment.state {
         CommentState::Demand { response, .. } => match response {
             saccade::objects::comment::ResponseState::Responded { reply } => *reply,
             _ => panic!("the parked reply landed"),
@@ -1114,13 +1068,17 @@ fn boot_recovery_settles_naming_the_loss_when_nothing_retains_the_work() {
 
     let world = world_of(&db_path);
     assert_eq!(world.tasks[0].active_incarnation, None);
-    assert_eq!(world.incarnations[&run].state, IncarnationState::Settled);
+    assert_eq!(
+        world.incarnations[&run].incarnation.state,
+        IncarnationState::Settled
+    );
     // the record keeps naming the checkpoint nothing retains
     assert_eq!(
         world.tasks[0]
             .workspace
             .as_ref()
             .unwrap()
+            .workspace
             .checkpoint
             .as_str(),
         checkpoint
@@ -1176,12 +1134,15 @@ fn a_severed_branch_rebuilds_at_the_recorded_checkpoint() {
             .workspace
             .as_ref()
             .unwrap()
+            .workspace
             .checkpoint
             .as_str(),
         checkpoint
     );
     assert_eq!(
-        world.incarnations[&world.tasks[0].active_incarnation.unwrap()].state,
+        world.incarnations[&world.tasks[0].active_incarnation.unwrap()]
+            .incarnation
+            .state,
         IncarnationState::PromptAccepted
     );
     assert_eq!(second.worktree, worktree);
@@ -1304,10 +1265,15 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
     assert_eq!(sh(&repo, &["rev-parse", "saccade/t-1"]), child_checkpoint);
     let world = world_of(&db_path);
     let child_workspace = world.tasks[1].workspace.as_ref().unwrap();
-    assert_eq!(child_workspace.checkpoint.as_str(), child_checkpoint);
-    assert_ne!(child_workspace.checkpoint.as_str(), parent_tip);
     assert_eq!(
-        world.incarnations[&world.tasks[1].active_incarnation.unwrap()].state,
+        child_workspace.workspace.checkpoint.as_str(),
+        child_checkpoint
+    );
+    assert_ne!(child_workspace.workspace.checkpoint.as_str(), parent_tip);
+    assert_eq!(
+        world.incarnations[&world.tasks[1].active_incarnation.unwrap()]
+            .incarnation
+            .state,
         IncarnationState::PromptAccepted
     );
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
@@ -1382,7 +1348,7 @@ fn a_never_run_tasks_canvas_rebuilds_at_base() {
     assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), base);
     let world = world_of(&db_path);
     let workspace = world.tasks[0].workspace.as_ref().unwrap();
-    assert_eq!(workspace.checkpoint.as_str(), base);
+    assert_eq!(workspace.workspace.checkpoint.as_str(), base);
     assert!(world.tasks[0].active_incarnation.is_some());
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
@@ -1522,7 +1488,13 @@ fn prepare_births_the_task_branch_from_main_even_when_head_elsewhere() {
     assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), main_head);
     let world = world_of(&db_path);
     assert_eq!(
-        world.tasks[0].workspace.as_ref().unwrap().base.as_str(),
+        world.tasks[0]
+            .workspace
+            .as_ref()
+            .unwrap()
+            .workspace
+            .base
+            .as_str(),
         main_head
     );
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
@@ -1757,12 +1729,7 @@ fn prepare_refuses_a_disk_only_leftover_without_prescribing_git() {
     // on the thread, and the sweep will not re-fire the spent ask
     let world = world_of(&db_path);
     let demand = CommentId(saccade::RecordId(1));
-    match &world.comments[&demand].state {
-        CommentState::Demand { attempt, .. } => {
-            assert!(matches!(attempt, AgentAttemptState::Spent));
-        }
-        other => panic!("the refused ask spent its authorization: {other:?}"),
-    }
+    assert!(world.comments[&demand].bound.is_none());
     let refusal = world.comments[&demand]
         .refusal
         .as_ref()

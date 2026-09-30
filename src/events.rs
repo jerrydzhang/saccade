@@ -133,7 +133,9 @@ pub enum Event {
         base: GitCommit,
         branch: GitBranch,
     },
-    TaskWorktreeCreated {
+    /// The workspace's physical creation: the worktree exists on
+    /// disk, at the path named.
+    TaskWorkspaceMaterialized {
         task_id: TaskId,
         worktree: WorktreePath,
     },
@@ -244,7 +246,7 @@ pub enum Command {
         base: GitCommit,
         branch: GitBranch,
     },
-    CreateWorktree {
+    MaterializeWorkspace {
         task_id: TaskId,
         worktree: WorktreePath,
     },
