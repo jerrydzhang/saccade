@@ -14,6 +14,7 @@ use tracing::{info, warn};
 
 use crate::api::AppState;
 use crate::db::{self, ExecuteFail};
+use crate::objects::comment::CommentKind;
 use crate::objects::comment::Target;
 use crate::objects::proposal::ProposalId;
 use crate::objects::task::TaskId;
@@ -49,14 +50,17 @@ pub async fn run(
         &server_url,
     ) {
         Some(runner) => {
-            let state = AppState::with_runner(db_path, runner)?.with_repo_name(repo_name);
+            let state = AppState::with_runner(db_path, runner)?
+                .with_repo_name(repo_name)
+                .with_repo_root(repo_root.clone());
             info!(%server_url, "demands will fire runs; boot scan next");
             state
         }
         None => {
             let state = AppState::open(db_path)?
                 .with_artifacts(crate::paths::artifacts_at(&repo_root))
-                .with_repo_name(repo_name);
+                .with_repo_name(repo_name)
+                .with_repo_root(repo_root.clone());
             warn!(
                 "no pinned executor: SACCADE_PI_PATH was not baked at build and SACCADE_PI is unset; \
                  demands queue but never fire"
@@ -326,10 +330,27 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
         Ok(ok) => ok,
         Err(msg) => return console_reject(req, app, n, fields, &msg),
     };
+    let kind = if addr.demand {
+        let sighted = app
+            .repo_root()
+            .map(crate::runner::firing_base)
+            .unwrap_or_else(|| {
+                Err(
+                    "this console sees no repository; a demand records the main checkout's tip"
+                        .into(),
+                )
+            });
+        match sighted {
+            Ok(base) => CommentKind::Demand { base },
+            Err(reason) => return console_reject(req, app, n, fields, &reason),
+        }
+    } else {
+        CommentKind::Note
+    };
     let command = Command::Comment {
         target: addr.target,
         body: Prose::new(addr.body.clone()).unwrap(),
-        kind: addr.kind,
+        kind,
     };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(stored) => {

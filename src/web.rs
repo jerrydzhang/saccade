@@ -10,7 +10,7 @@ use crate::views::{
     ArtifactLine, CommentLine, ForestRow, MarkKind, NextPanel, ProposalView, RIBBON_WINDOW_SECS,
     RefTarget, RibbonMark, ShowView, ThreadItem, ThreadView,
 };
-use crate::{CommentId, CommentKind, RecordId, Target, TaskId};
+use crate::{CommentId, RecordId, Target, TaskId};
 use math_core::{LatexToMathML, MathDisplay};
 use pulldown_cmark::{Alignment, Event as MdEvent, Options, Parser, Tag, TagEnd};
 use std::collections::BTreeMap;
@@ -162,7 +162,8 @@ pub struct FormState {
 
 pub struct Address {
     pub body: String,
-    pub kind: CommentKind,
+    /// The grammar's verdict that `@agent` stood in the body
+    pub demand: bool,
     pub target: Target,
 }
 
@@ -176,11 +177,13 @@ enum Tok {
 /// ids and `@human` stay prose. A token must stand alone (the char
 /// before `@` is not alphanumeric, the char after is neither
 /// alphanumeric nor `-`). The first target token wins; later target
-/// tokens stay prose. Consumed tokens leave the body.
+/// tokens stay prose. Consumed tokens leave the body. The grammar
+/// never constructs a demand kind: it names the intent, and the
+/// compose door resolves the base.
 pub(crate) fn compile(body: &str, fallback: Target) -> Address {
     let chars: Vec<char> = body.chars().collect();
     let mut out = String::with_capacity(body.len());
-    let mut kind = CommentKind::Note;
+    let mut demand = false;
     let mut target = fallback;
     let mut target_taken = false;
     let mut i = 0;
@@ -193,7 +196,7 @@ pub(crate) fn compile(body: &str, fallback: Target) -> Address {
         };
         match token {
             Some((Tok::Agent, end)) => {
-                kind = CommentKind::Demand;
+                demand = true;
                 i = skip_space(&chars, end, &out);
             }
             Some((Tok::Target(t), end)) if !target_taken => {
@@ -214,7 +217,7 @@ pub(crate) fn compile(body: &str, fallback: Target) -> Address {
     }
     Address {
         body: out.trim().to_string(),
-        kind,
+        demand,
         target,
     }
 }
@@ -1535,6 +1538,7 @@ input.who:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
 mod tests {
 
     use super::*;
+    use crate::CommentKind;
     use crate::Prose;
     use crate::events::Event;
     use crate::objects::comment::Target;
@@ -1542,7 +1546,7 @@ mod tests {
     use crate::objects::proposal::ProposalAction;
     use crate::store::{Context, Record, Tier, World};
     use crate::types::actor::ActorName;
-    use crate::types::pointers::SessionPointer;
+    use crate::types::pointers::{GitCommit, SessionPointer};
     use crate::views::{
         ADRIFT_AFTER_SECS, closed_tasks, forest, next_panel, open_proposals, ribbon_marks,
         show_view, thread_view,
@@ -1565,6 +1569,12 @@ mod tests {
         })
     }
 
+    fn demand() -> CommentKind {
+        CommentKind::Demand {
+            base: GitCommit::new("a1b2c3".into()).unwrap(),
+        }
+    }
+
     fn record(seq: usize, at: u64, ctx: &Context, event: Event) -> Record {
         Record {
             id: RecordId(seq),
@@ -1584,7 +1594,7 @@ mod tests {
     fn bare_body_passes_through() {
         let a = compile("look at t-1 and c-2", task(7));
         assert_eq!(a.body, "look at t-1 and c-2");
-        assert_eq!(a.kind, CommentKind::Note);
+        assert!(!a.demand);
         assert_eq!(a.target, task(7));
     }
 
@@ -1592,7 +1602,7 @@ mod tests {
     fn agent_makes_the_demand() {
         let a = compile("@agent build the thing", task(7));
         assert_eq!(a.body, "build the thing");
-        assert_eq!(a.kind, CommentKind::Demand);
+        assert!(a.demand);
         assert_eq!(a.target, task(7));
     }
 
@@ -1600,14 +1610,14 @@ mod tests {
     fn trailing_agent_leaves_the_words() {
         let a = compile("do it @agent", task(7));
         assert_eq!(a.body, "do it");
-        assert_eq!(a.kind, CommentKind::Demand);
+        assert!(a.demand);
     }
 
     #[test]
     fn comment_token_parents() {
         let a = compile("saw it @c-19", task(7));
         assert_eq!(a.body, "saw it");
-        assert_eq!(a.kind, CommentKind::Note);
+        assert!(!a.demand);
         assert_eq!(a.target, Target::Comment(CommentId(RecordId(19))));
     }
 
@@ -1622,7 +1632,7 @@ mod tests {
     fn demand_and_rehome_combine() {
         let a = compile("@agent @t-3 fix it there", task(7));
         assert_eq!(a.body, "fix it there");
-        assert_eq!(a.kind, CommentKind::Demand);
+        assert!(a.demand);
         assert_eq!(a.target, task(3));
     }
 
@@ -1637,14 +1647,14 @@ mod tests {
     fn at_human_is_not_console_grammar() {
         let a = compile("ask @human to rule", task(7));
         assert_eq!(a.body, "ask @human to rule");
-        assert_eq!(a.kind, CommentKind::Note);
+        assert!(!a.demand);
     }
 
     #[test]
     fn tokens_must_stand_alone() {
         let a = compile("mail me@agent now", task(7));
         assert_eq!(a.body, "mail me@agent now");
-        assert_eq!(a.kind, CommentKind::Note);
+        assert!(!a.demand);
         let a = compile("see x@t-1", task(7));
         assert_eq!(a.body, "see x@t-1");
         assert_eq!(a.target, task(7));
@@ -1655,7 +1665,7 @@ mod tests {
         for body in ["@agentx", "@c-1x", "@t-", "@c- 5", "@agent-3", "@c-x"] {
             let a = compile(body, task(7));
             assert_eq!(a.body, body, "{body}");
-            assert_eq!(a.kind, CommentKind::Note, "{body}");
+            assert!(!a.demand, "{body}");
             assert_eq!(a.target, task(7), "{body}");
         }
     }
@@ -1719,7 +1729,7 @@ mod tests {
                 Event::Commented {
                     target: task(1),
                     body: Prose::new("demand body".into()).unwrap(),
-                    kind: CommentKind::Demand,
+                    kind: demand(),
                 },
             ),
             record(
@@ -2100,7 +2110,7 @@ mod tests {
                 Event::Commented {
                     target: task(0),
                     body: Prose::new("run it again".into()).unwrap(),
-                    kind: CommentKind::Demand,
+                    kind: demand(),
                 },
             ),
             record(

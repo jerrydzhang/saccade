@@ -240,7 +240,9 @@ fn command_of(action: &Action, world: &World) -> Command {
             body: Prose::new("generated comment".into()).unwrap(),
             kind: match variant % 4 {
                 0 => CommentKind::Note,
-                1 => CommentKind::Demand,
+                1 => CommentKind::Demand {
+                    base: saccade::GitCommit::new("a1b2c3".into()).unwrap(),
+                },
                 2 => CommentKind::Steer,
                 _ => CommentKind::Ask,
             },

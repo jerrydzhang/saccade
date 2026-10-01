@@ -5,6 +5,7 @@ use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::TaskId;
 use crate::store::{RecordId, Tier};
 use crate::types::actor::ActorName;
+use crate::types::pointers::GitCommit;
 use crate::types::prose::Prose;
 
 #[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
@@ -20,11 +21,11 @@ pub enum Target {
 /// What a comment is for. No variant carries an address: routing is
 /// structural — the note pulls, the demand fires a run, the steer
 /// reaches the live run, the ask holds a wait for its answer.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CommentKind {
     Note,
-    Demand,
+    Demand { base: GitCommit },
     Steer,
     Ask,
 }
@@ -58,6 +59,7 @@ pub enum CommentState {
     /// busy. The bound run and the refusal are the context's facts.
     Demand {
         response: ResponseState,
+        base: GitCommit,
     },
     /// The steer: forwarded to the live run at the turn boundary,
     /// consumed by it, never re-fired.
@@ -105,8 +107,10 @@ impl CommentState {
         match self {
             CommentState::Demand {
                 response: ResponseState::Awaiting,
+                base,
             } => Some(CommentState::Demand {
                 response: ResponseState::Responded { reply },
+                base: base.clone(),
             }),
             CommentState::Ask {
                 response: ResponseState::Awaiting,
@@ -204,7 +208,10 @@ mod tables {
     }
 
     fn demand(response: ResponseState) -> CommentState {
-        CommentState::Demand { response }
+        CommentState::Demand {
+            response,
+            base: GitCommit::new("a1b2c3".into()).unwrap(),
+        }
     }
 
     fn ask(response: ResponseState) -> CommentState {
@@ -277,7 +284,9 @@ mod tables {
         ];
         let events = [
             comment_event(CommentKind::Note),
-            comment_event(CommentKind::Demand),
+            comment_event(CommentKind::Demand {
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
+            }),
             comment_event(CommentKind::Steer),
             comment_event(CommentKind::Ask),
             Event::CommentRevised {

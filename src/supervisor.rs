@@ -244,7 +244,8 @@ pub fn runnable_demands(world: &World) -> Vec<CommentId> {
                     && matches!(
                         c.comment.state,
                         CommentState::Demand {
-                            response: ResponseState::Awaiting
+                            response: ResponseState::Awaiting,
+                            ..
                         }
                     )
                     && c.bound.is_none()

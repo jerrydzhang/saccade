@@ -450,7 +450,17 @@ use saccade::views::task_view;
 use saccade::{Command, Prose, TaskId};
 
 async fn spawn_console(db_path: &std::path::Path) -> (String, ConsoleState) {
-    let state = ConsoleState::open(db_path).expect("the scratch tracker opens");
+    // the console's demand door sights a repo: a one-commit checkout
+    // stands behind every spawned console
+    let repo = db_path.parent().unwrap().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    sh(&repo, &["init", "--initial-branch=main"]);
+    std::fs::write(repo.join("readme"), "the project\n").unwrap();
+    sh(&repo, &["add", "."]);
+    sh(&repo, &["commit", "-m", "base"]);
+    let state = ConsoleState::open(db_path)
+        .expect("the scratch tracker opens")
+        .with_repo_root(repo);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let router = saccade::serve::router(state.clone());
@@ -458,6 +468,25 @@ async fn spawn_console(db_path: &std::path::Path) -> (String, ConsoleState) {
         axum::serve(listener, router).await.unwrap();
     });
     (format!("http://{addr}"), state)
+}
+
+fn sh(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 /// A judged request with no client binary to name and no restatable
@@ -516,6 +545,15 @@ fn world_of(state: &ConsoleState) -> saccade::World {
         Ok(s) => s.world,
         Err(_) => panic!("the snapshot refused"),
     }
+}
+
+/// The console's sighted checkout's tip: the repo spawn_console stood
+/// behind the state.
+fn tip_of_the_repo(state: &ConsoleState) -> String {
+    sh(
+        state.repo_root().expect("the console sights a repo"),
+        &["rev-parse", "HEAD"],
+    )
 }
 
 /// The task's thread lines, oldest first.
@@ -616,6 +654,7 @@ async fn compose_agent_demand_lands_authorized() {
         c.comment.state,
         CommentState::Demand {
             response: ResponseState::Awaiting,
+            base: saccade::GitCommit::new(tip_of_the_repo(&state)).unwrap(),
         }
     );
     assert_eq!(c.bound, None);
@@ -1932,19 +1971,20 @@ async fn the_comment_kinds_land_their_states_through_the_wire() {
         );
     }
 
-    // a demand: authorized on its birth record, reopening done work
+    // a demand: authorized on its birth record, reopening done work —
+    // the wire carries the caller's claimed base
     let (status, body) = post_command(
         &base_url,
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"task": 0}, "body": "run the migration", "kind": "demand"}}),
+            json!({"comment": {"target": {"task": 0}, "body": "run the migration", "kind": {"demand": {"base": "a1b2c3"}}}}),
         ),
     );
     assert_eq!(status, 200);
     let records = json_of(&body)["records"].as_array().unwrap().clone();
     assert_eq!(records[0]["kind"], "commented");
-    assert!(records[0]["payload"].to_string().contains("\"demand\""));
+    assert!(records[0]["payload"].to_string().contains("a1b2c3"));
 
     // a steer: standing intent on the thread
     let (status, _) = post_command(
@@ -1964,7 +2004,8 @@ async fn the_comment_kinds_land_their_states_through_the_wire() {
         &demand.comment.state,
         CommentState::Demand {
             response: saccade::objects::comment::ResponseState::Awaiting,
-        }
+            base: commit,
+        } if commit.as_str() == "a1b2c3"
     ));
     assert_eq!(demand.bound, None);
     assert_eq!(demand.refusal, None);
@@ -2243,7 +2284,7 @@ async fn a_withdrawal_round_trips_and_tombstones_through_the_wire() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"task": 0}, "body": "run the sweep", "kind": "demand"}}),
+            json!({"comment": {"target": {"task": 0}, "body": "run the sweep", "kind": {"demand": {"base": "a1b2c3"}}}}),
         ),
     );
     assert_eq!(status, 200);

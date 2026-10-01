@@ -491,6 +491,12 @@ mod test {
         }
     }
 
+    fn demand() -> CommentKind {
+        CommentKind::Demand {
+            base: GitCommit::new("a1b2c3".into()).unwrap(),
+        }
+    }
+
     #[test]
     fn execute_then_load_round_trips_the_world() {
         let mut conn = memory_db();
@@ -599,7 +605,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("who folded the receipt?".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             31,
         )
@@ -726,7 +732,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("one more round".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             33,
         )
@@ -780,7 +786,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("serve the re-cut".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             34,
         )
@@ -1007,6 +1013,10 @@ mod test {
         assert_eq!(loadout.rows[12].kind, "task_done");
         assert_eq!(loadout.rows[26].kind, "demand_refused");
         assert_eq!(loadout.rows[26].actor.as_str(), "saccade");
+        // the demand's payload carries its firing's base through the
+        // columns
+        assert_eq!(loadout.rows[13].kind, "commented");
+        assert!(loadout.rows[13].payload.contains("a1b2c3"));
         assert_eq!(loadout.rows[28].kind, "task_delivered");
         assert_eq!(loadout.rows[29].kind, "task_accepted");
         assert_eq!(loadout.rows[22].kind, "task_workspace_created");
@@ -1060,6 +1070,7 @@ mod test {
                 response: ResponseState::Responded {
                     reply: CommentId(RecordId(16))
                 },
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
         let run = &world.incarnations[&IncarnationId(RecordId(14))];
@@ -1078,6 +1089,7 @@ mod test {
             refused.comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
         assert!(refused.bound.is_none());
@@ -1142,6 +1154,36 @@ mod test {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    /// The live log predates the demand's base field: its rows carry
+    /// the bare string kind, and the fold still loads them as demands
+    /// whose base is the reserved word.
+    #[test]
+    fn legacy_demand_rows_load_with_the_reserved_word() {
+        let mut conn = memory_db();
+        record(&mut conn, &agent(), create("fire the old way"), 10).unwrap();
+        conn.execute(
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
+             VALUES (1, 11, 11, 'human person', 'human', 'commented',
+                     '{\"target\":{\"task\":0},\"body\":\"fired before bases\",\"kind\":\"demand\"}')",
+            [],
+        )
+        .unwrap();
+        let loadout = load(&conn).unwrap();
+        let LoadState::Full(world) = loadout.state else {
+            panic!("the legacy row folds");
+        };
+        assert!(
+            matches!(
+                &world.comments[&CommentId(RecordId(1))].comment.state,
+                CommentState::Demand {
+                    response: ResponseState::Awaiting,
+                    base,
+                } if base.as_str() == "unrecorded"
+            ),
+            "the pre-base demand loads as a demand whose base is unrecorded"
+        );
     }
 
     #[test]

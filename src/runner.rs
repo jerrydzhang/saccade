@@ -92,6 +92,20 @@ fn commit(hash: String) -> Result<GitCommit, RunnerFail> {
     GitCommit::new(hash).map_err(|e| RunnerFail::Usage(format!("git gave no commit: {e:?}")))
 }
 
+/// The commit a demand's firing stands on: the main checkout's checked-out branch tip — a detached checkout sights no branch.
+pub fn firing_base(repo_root: &Path) -> Result<GitCommit, String> {
+    let branch = git(repo_root, &["symbolic-ref", "--quiet", "HEAD"]).map_err(|_| {
+        format!(
+            "the checkout at {} is detached: a demand records the checked-out \
+             branch's tip, so fire it from a branch",
+            repo_root.display()
+        )
+    })?;
+    let tip = branch_tip(repo_root, &branch)
+        .ok_or_else(|| format!("{branch} does not resolve to a commit"))?;
+    GitCommit::new(tip).map_err(|e| format!("git gave no commit: {e:?}"))
+}
+
 /// The commit an object database still holds: `Some` when the sha
 /// resolves as a commit, `None` when nothing retains it.
 fn commit_exists(repo_root: &Path, sha: &str) -> Option<String> {
@@ -217,15 +231,15 @@ pub fn prepare(
         .comments
         .get(&demand)
         .ok_or_else(|| RunnerFail::Usage(format!("no comment c-{} in this tracker", demand.0.0)))?;
-    match &demand_ctx.comment.state {
-        CommentState::Demand { .. } => {}
+    let demand_base = match &demand_ctx.comment.state {
+        CommentState::Demand { base, .. } => base.clone(),
         _ => {
             return Err(RunnerFail::Usage(format!(
                 "c-{} is not a demand",
                 demand.0.0
             )));
         }
-    }
+    };
     let task = demand_ctx.comment.root;
     let ctx = task_ctx(&world, task)?;
     if ctx.active_incarnation.is_some() {
@@ -340,7 +354,30 @@ pub fn prepare(
             }
         }
         None => {
-            let base = git(repo_root, &["rev-parse", "main"])?;
+            if demand_base.as_str() == GitCommit::UNRECORDED {
+                return Err(refuse(
+                    conn,
+                    demand,
+                    format!(
+                        "c-{} was fired before demands carried bases: downgrade to finish \
+                         pending pre-bases demands, or re-ask on a fresh demand",
+                        demand.0.0
+                    ),
+                ));
+            }
+            let base = &demand_base;
+            if commit_exists(repo_root, base.as_str()).is_none() {
+                return Err(refuse(
+                    conn,
+                    demand,
+                    format!(
+                        "c-{}'s base commit {} is unreachable; nothing retains the commit \
+                         the firing stood on. Re-ask on a fresh demand",
+                        demand.0.0,
+                        base.as_str()
+                    ),
+                ));
+            }
             if worktree.exists() {
                 return Err(refuse(
                     conn,
@@ -359,7 +396,7 @@ pub fn prepare(
                     "-b",
                     &branch,
                     &worktree.to_string_lossy(),
-                    &base,
+                    base.as_str(),
                 ],
             )?;
             db::record(
@@ -367,7 +404,7 @@ pub fn prepare(
                 &system,
                 Command::CreateWorkspace {
                     task_id: task,
-                    base: commit(base)?,
+                    base: base.clone(),
                     branch: GitBranch::new(branch)
                         .map_err(|e| RunnerFail::Usage(format!("bad branch: {e:?}")))?,
                 },
@@ -843,7 +880,7 @@ fn release_of(world: &World, comment: CommentId) -> Result<Option<String>, Runne
         }
     }
     let response = match &ctx.comment.state {
-        CommentState::Demand { response } => response,
+        CommentState::Demand { response, .. } => response,
         CommentState::Note | CommentState::Steer { .. } | CommentState::Ask { .. } => {
             unreachable!("the variant doors returned above")
         }

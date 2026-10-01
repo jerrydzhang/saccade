@@ -9,6 +9,11 @@ finding — name it on the thread before proceeding.
 - `identity_fallback` — a non-tty write with no `SACCADE_ACTOR` refuses
   before any write lands (`--actor` rides the keyboard arm); export
   `SACCADE_ACTOR=<name>`.
+- `unsighted_demand` — a `--demand` comment refused to fire: no
+  repository resolves (pass `--repo`), or the main checkout is
+  detached. A demand records the main checkout's checked-out branch tip
+  at fire time — the commit the task's branch will be cut from — so a
+  context that cannot see it cannot fire one.
 - `invalid_task_id` / `invalid_parent_task_id` — no such task; ids are exact
   `t-N` tokens, not searches.
 - `invalid_proposal_id` — no proposal was born at that seq; proposal ids are
