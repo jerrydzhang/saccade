@@ -22,13 +22,12 @@ pub enum Target {
 /// structural — the note pulls, the demand fires a run, the steer
 /// reaches the live run, the ask holds a wait for its answer. The
 /// demand carries its firing's base — the commit the main checkout
-/// stood on — which is absent only on demands fired before the field
-/// existed.
+/// stood on, `unrecorded` on demands fired before bases were.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CommentKind {
     Note,
-    Demand { base: Option<GitCommit> },
+    Demand { base: GitCommit },
     Steer,
     Ask,
 }
@@ -61,10 +60,10 @@ pub enum CommentState {
     /// The demand: fires a run when the task is free, queues while
     /// busy. The bound run and the refusal are the context's facts;
     /// the base is the commit the firing stood on, carried from the
-    /// event, absent on demands older than the field.
+    /// event — `unrecorded` on demands older than the field.
     Demand {
         response: ResponseState,
-        base: Option<GitCommit>,
+        base: GitCommit,
     },
     /// The steer: forwarded to the live run at the turn boundary,
     /// consumed by it, never re-fired.
@@ -215,7 +214,7 @@ mod tables {
     fn demand(response: ResponseState) -> CommentState {
         CommentState::Demand {
             response,
-            base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+            base: GitCommit::new("a1b2c3".into()).unwrap(),
         }
     }
 
@@ -290,7 +289,7 @@ mod tables {
         let events = [
             comment_event(CommentKind::Note),
             comment_event(CommentKind::Demand {
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }),
             comment_event(CommentKind::Steer),
             comment_event(CommentKind::Ask),

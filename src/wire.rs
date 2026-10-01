@@ -1,6 +1,10 @@
-use crate::events::Event;
+use serde::Deserialize;
 
+use crate::events::Event;
+use crate::objects::comment::{CommentKind, Target};
 use crate::store::Tier;
+use crate::types::pointers::GitCommit;
+use crate::types::prose::Prose;
 
 #[derive(Debug, PartialEq)]
 pub enum ParseFail {
@@ -79,38 +83,58 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
     if !KINDS.contains(&kind) {
         return Err(ParseFail::UnknownKind(kind.to_string()));
     }
-    let payload = if kind == "commented" {
-        migrate_commented(payload).map_err(|e| malformed(kind, e))?
-    } else {
-        payload.to_string()
-    };
-    let inner: serde_json::Value =
-        serde_json::from_str(&payload).map_err(|e| malformed(kind, e))?;
+    if kind == "commented" {
+        return decode_commented(payload);
+    }
+    let inner: serde_json::Value = serde_json::from_str(payload).map_err(|e| malformed(kind, e))?;
     let mut tagged = serde_json::Map::new();
     tagged.insert(kind.to_string(), inner);
     serde_json::from_value(serde_json::Value::Object(tagged)).map_err(|e| malformed(kind, e))
 }
 
-/// Old logs carry shapes newer writes never make. The maps are the
-/// ratified migrations: to:agent becomes a demand, everything else a
-/// note; the bare string kind "demand" predates the base field and
-/// loads as a demand with no base.
-fn migrate_commented(payload: &str) -> Result<String, serde_json::Error> {
-    let mut value: serde_json::Value = serde_json::from_str(payload)?;
-    if let Some(object) = value.as_object_mut() {
-        if !object.contains_key("kind") {
-            let kind = match object.get("addressee").and_then(|a| a.as_str()) {
-                Some("agent") => "demand",
-                _ => "note",
-            };
-            object.remove("addressee");
-            object.insert("kind".into(), kind.into());
-        }
-        if object.get("kind").and_then(|k| k.as_str()) == Some("demand") {
-            object.insert("kind".into(), serde_json::json!({"demand": {"base": null}}));
-        }
+/// The commented decode. Two migrations for shapes newer writes never
+/// make: the addressee field becomes a kind (to:agent a demand,
+/// everything else a note), and the bare string kind "demand" — which
+/// predates the base field — becomes a demand whose base is the
+/// reserved word, minted here at the word's sole origin. An object
+/// form claiming the word never reaches this arm: serde hands it to
+/// `GitCommit::new`, which rejects it.
+fn decode_commented(payload: &str) -> Result<Event, ParseFail> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(payload).map_err(|e| malformed("commented", e))?;
+    if let Some(object) = value.as_object_mut()
+        && !object.contains_key("kind")
+    {
+        let kind = match object.get("addressee").and_then(|a| a.as_str()) {
+            Some("agent") => "demand",
+            _ => "note",
+        };
+        object.remove("addressee");
+        object.insert("kind".into(), kind.into());
     }
-    Ok(value.to_string())
+    if value.get("kind").and_then(|k| k.as_str()) == Some("demand") {
+        #[derive(Deserialize)]
+        struct Shell {
+            target: Target,
+            body: Prose,
+        }
+        let mut object = value;
+        object
+            .as_object_mut()
+            .expect("the kind read above saw an object")
+            .remove("kind");
+        let shell: Shell = serde_json::from_value(object).map_err(|e| malformed("commented", e))?;
+        return Ok(Event::Commented {
+            target: shell.target,
+            body: shell.body,
+            kind: CommentKind::Demand {
+                base: GitCommit::unrecorded(),
+            },
+        });
+    }
+    let mut tagged = serde_json::Map::new();
+    tagged.insert("commented".to_string(), value);
+    serde_json::from_value(serde_json::Value::Object(tagged)).map_err(|e| malformed("commented", e))
 }
 
 fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
@@ -181,7 +205,7 @@ mod test {
                 target: Target::Comment(CommentId(RecordId(6))),
                 body: Prose::new("no - pure tree, here is why".into()).unwrap(),
                 kind: CommentKind::Demand {
-                    base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                    base: GitCommit::new("a1b2c3".into()).unwrap(),
                 },
             },
             Event::Commented {
@@ -285,7 +309,7 @@ mod test {
     /// to:agent becomes a demand, everything else a note; a payload
     /// that already carries kind passes through untouched, and the
     /// bare "demand" string predating the base field loads as a
-    /// demand with no base.
+    /// demand whose base is the reserved word.
     #[test]
     fn old_addressee_payloads_load_as_their_kinds() {
         let agent = assemble(
@@ -297,9 +321,9 @@ mod test {
             matches!(
                 &agent,
                 Event::Commented {
-                    kind: CommentKind::Demand { base: None },
+                    kind: CommentKind::Demand { base },
                     ..
-                }
+                } if base.as_str() == "unrecorded"
             ),
             "{agent:?}"
         );
@@ -320,11 +344,13 @@ mod test {
                 "{note:?}"
             );
         }
-        // the new shape round-trips through the same door
-        let (kind, payload) = disassemble(&agent);
-        assert_eq!(kind, "commented");
+        // the migration consumed the addressee field; the object form
+        // it re-serializes to claims the reserved word, which only the
+        // decoder's bare-string map mints — its re-assembly is the
+        // malformed pin at this test's tail
+        let (_, payload) = disassemble(&agent);
         assert!(!payload.contains("addressee"), "{payload}");
-        assert_eq!(&assemble(&kind, &payload).unwrap(), &agent);
+        assert!(payload.contains("unrecorded"), "{payload}");
 
         // the base-bearing kind keeps its commit through the same door
         let sighted = assemble(
@@ -336,9 +362,7 @@ mod test {
             matches!(
                 &sighted,
                 Event::Commented {
-                    kind: CommentKind::Demand {
-                        base: Some(commit)
-                    },
+                    kind: CommentKind::Demand { base: commit },
                     ..
                 } if commit.as_str() == "a1b2c3"
             ),
@@ -348,7 +372,7 @@ mod test {
         assert_eq!(&assemble(&kind, &payload).unwrap(), &sighted);
 
         // the bare string kind is the pre-base log shape: it loads as a
-        // demand that carried no base
+        // demand whose base is the reserved word
         let bare = assemble(
             "commented",
             r#"{"target":{"task":0},"body":"fired before bases","kind":"demand"}"#,
@@ -358,11 +382,22 @@ mod test {
             matches!(
                 &bare,
                 Event::Commented {
-                    kind: CommentKind::Demand { base: None },
+                    kind: CommentKind::Demand { base },
                     ..
-                }
+                } if base.as_str() == "unrecorded"
             ),
             "{bare:?}"
         );
+
+        // an object form claiming the reserved word is malformed by
+        // `new`'s own rejection: the word enters only through the
+        // decoder's bare-string map
+        assert!(matches!(
+            assemble(
+                "commented",
+                r#"{"target":{"task":0},"body":"hand-made","kind":{"demand":{"base":"unrecorded"}}}"#,
+            ),
+            Err(ParseFail::Malformed { .. })
+        ));
     }
 }

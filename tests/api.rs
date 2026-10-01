@@ -654,7 +654,7 @@ async fn compose_agent_demand_lands_authorized() {
         c.comment.state,
         CommentState::Demand {
             response: ResponseState::Awaiting,
-            base: Some(saccade::GitCommit::new(tip_of_the_repo(&state)).unwrap()),
+            base: saccade::GitCommit::new(tip_of_the_repo(&state)).unwrap(),
         }
     );
     assert_eq!(c.bound, None);
@@ -2004,7 +2004,7 @@ async fn the_comment_kinds_land_their_states_through_the_wire() {
         &demand.comment.state,
         CommentState::Demand {
             response: saccade::objects::comment::ResponseState::Awaiting,
-            base: Some(commit),
+            base: commit,
         } if commit.as_str() == "a1b2c3"
     ));
     assert_eq!(demand.bound, None);

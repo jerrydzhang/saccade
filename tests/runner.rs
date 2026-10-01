@@ -67,7 +67,7 @@ fn agent() -> Context {
 /// moment of firing.
 fn demand_at(repo: &Path) -> CommentKind {
     CommentKind::Demand {
-        base: Some(GitCommit::new(sh(repo, &["rev-parse", "HEAD"])).unwrap()),
+        base: GitCommit::new(sh(repo, &["rev-parse", "HEAD"])).unwrap(),
     }
 }
 
@@ -1552,21 +1552,28 @@ fn a_stalled_demand_cuts_at_the_commit_it_was_fired_at() {
 }
 
 #[test]
-fn a_demand_without_a_base_refuses_rather_than_cutting_from_the_checkout() {
+fn a_pre_bases_demand_refuses_with_the_migration_path() {
     let (repo, db_path, _demand) = scaffold("legacy");
-    // a demand fired before bases were recorded carries none
-    db::record(
-        &mut db::open(&db_path).unwrap(),
-        &human(),
-        Command::Comment {
-            target: Target::Task(TaskId(0)),
-            body: Prose::new("fired before the snapshot law".into()).unwrap(),
-            kind: CommentKind::Demand { base: None },
-        },
-        3,
-    )
-    .unwrap();
+    // a demand fired before bases were recorded: the row the old door
+    // wrote, the bare string kind, lands as the live log holds it
+    db::open(&db_path)
+        .unwrap()
+        .execute(
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
+             VALUES (2, 3, 3, 'human person', 'human', 'commented',
+                     '{\"target\":{\"task\":0},\"body\":\"fired before bases\",\"kind\":\"demand\"}')",
+            [],
+        )
+        .unwrap();
     let legacy = CommentId(saccade::RecordId(2));
+    // the decoder maps the bare string to the reserved word
+    assert_eq!(
+        match &world_of(&db_path).comments[&legacy].comment.state {
+            CommentState::Demand { base, .. } => base.as_str(),
+            other => panic!("a demand: {other:?}"),
+        },
+        "unrecorded"
+    );
 
     let refusal = match prepare(
         &mut db::open(&db_path).unwrap(),
@@ -1576,9 +1583,17 @@ fn a_demand_without_a_base_refuses_rather_than_cutting_from_the_checkout() {
     ) {
         Err(RunnerFail::Refused { reason }) => reason,
         Err(other) => panic!("expected a refusal, got {other:?}"),
-        Ok(_) => panic!("the base-less demand refused prepare"),
+        Ok(_) => panic!("the pre-bases demand refused prepare"),
     };
-    assert!(refusal.contains("records no base"), "{refusal}");
+    assert!(
+        refusal.contains("fired before demands carried bases"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("downgrade to finish pending pre-bases demands"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("re-ask on a fresh demand"), "{refusal}");
     // nothing was cut and the refusal is a fact on the thread; the
     // scaffold's own sighted demand is unaffected
     assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).is_empty());

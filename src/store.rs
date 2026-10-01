@@ -849,7 +849,7 @@ mod test {
     /// A demand that carries its firing's base, as every new demand does.
     fn demand() -> CommentKind {
         CommentKind::Demand {
-            base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+            base: GitCommit::new("a1b2c3".into()).unwrap(),
         }
     }
 
@@ -1534,7 +1534,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
 
@@ -1578,7 +1578,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
 
@@ -1603,7 +1603,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
     }
@@ -1660,7 +1660,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
 
@@ -1709,7 +1709,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
 
@@ -1743,7 +1743,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
         assert_eq!(log.world().comments[&demand].bound, None);
@@ -1765,7 +1765,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
 
@@ -1784,7 +1784,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
 
@@ -2460,7 +2460,7 @@ mod test {
             ctx.comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
         let refusal = ctx.refusal.as_ref().expect("the refusal landed");
@@ -2493,7 +2493,7 @@ mod test {
             &ctx.comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { .. },
-                base: Some(_),
+                base: _,
             }
         ));
         assert!(ctx.refusal.is_some());

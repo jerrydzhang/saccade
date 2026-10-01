@@ -359,18 +359,22 @@ pub fn prepare(
         None => {
             // the cut is the demand's snapshot, never the checkout's
             // current state: a stall between firing and prepare leaks
-            // nothing
-            let Some(base) = demand_base else {
+            // nothing. The reserved word is the one reader's refusal:
+            // a pre-bases demand reaches here only through the
+            // decoder's map, so it refuses with the migration path
+            // rather than cutting from anywhere
+            if demand_base.as_str() == GitCommit::UNRECORDED {
                 return Err(refuse(
                     conn,
                     demand,
                     format!(
-                        "c-{} records no base commit; it was fired before demands carried one, \
-                         and t-{} has no workspace to continue from. Re-ask on a fresh demand",
-                        demand.0.0, task.0
+                        "c-{} was fired before demands carried bases: downgrade to finish \
+                         pending pre-bases demands, or re-ask on a fresh demand",
+                        demand.0.0
                     ),
                 ));
-            };
+            }
+            let base = &demand_base;
             if commit_exists(repo_root, base.as_str()).is_none() {
                 return Err(refuse(
                     conn,

@@ -228,6 +228,7 @@ mod test {
     use crate::objects::comment::CommentId;
     use crate::store::{Context, Record, Tier};
     use crate::types::actor::ActorName;
+    use crate::types::pointers::GitCommit;
     use crate::{CommentKind, Prose, Target};
 
     fn human() -> Context {
@@ -370,7 +371,9 @@ mod test {
                 Event::Commented {
                     target: Target::Task(TaskId(0)),
                     body: Prose::new("run the sweep".into()).unwrap(),
-                    kind: CommentKind::Demand { base: None },
+                    kind: CommentKind::Demand {
+                        base: GitCommit::new("a1b2c3".into()).unwrap(),
+                    },
                 },
             ),
             record(

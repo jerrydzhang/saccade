@@ -333,23 +333,22 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     // the demand is a snapshot of the compose moment: the console's
     // sight is the serving repo's checkout, and an unsighted firing
     // refuses at this door
-    let kind = match addr.kind {
-        CommentKind::Demand { .. } => {
-            let sighted = app
-                .repo_root()
-                .map(crate::runner::firing_base)
-                .unwrap_or_else(|| {
-                    Err(
-                        "this console sees no repository; a demand records the main checkout's tip"
-                            .into(),
-                    )
-                });
-            match sighted {
-                Ok(base) => CommentKind::Demand { base: Some(base) },
-                Err(reason) => return console_reject(req, app, n, fields, &reason),
-            }
+    let kind = if addr.demand {
+        let sighted = app
+            .repo_root()
+            .map(crate::runner::firing_base)
+            .unwrap_or_else(|| {
+                Err(
+                    "this console sees no repository; a demand records the main checkout's tip"
+                        .into(),
+                )
+            });
+        match sighted {
+            Ok(base) => CommentKind::Demand { base },
+            Err(reason) => return console_reject(req, app, n, fields, &reason),
         }
-        plain => plain,
+    } else {
+        CommentKind::Note
     };
     let command = Command::Comment {
         target: addr.target,

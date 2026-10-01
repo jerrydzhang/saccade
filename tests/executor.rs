@@ -55,7 +55,7 @@ fn human() -> Context {
 /// moment of firing.
 fn demand_at(repo: &Path) -> CommentKind {
     CommentKind::Demand {
-        base: Some(saccade::GitCommit::new(sh(repo, &["rev-parse", "HEAD"])).unwrap()),
+        base: saccade::GitCommit::new(sh(repo, &["rev-parse", "HEAD"])).unwrap(),
     }
 }
 

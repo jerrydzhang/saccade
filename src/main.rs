@@ -465,7 +465,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 };
                 let base =
                     saccade::runner::firing_base(&repo_root).map_err(Fail::UnsightedDemand)?;
-                CommentKind::Demand { base: Some(base) }
+                CommentKind::Demand { base }
             } else {
                 CommentKind::Note
             };

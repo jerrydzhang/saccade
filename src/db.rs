@@ -494,7 +494,7 @@ mod test {
     /// A demand that carries its firing's base, as every new demand does.
     fn demand() -> CommentKind {
         CommentKind::Demand {
-            base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+            base: GitCommit::new("a1b2c3".into()).unwrap(),
         }
     }
 
@@ -1071,7 +1071,7 @@ mod test {
                 response: ResponseState::Responded {
                     reply: CommentId(RecordId(16))
                 },
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
         let run = &world.incarnations[&IncarnationId(RecordId(14))];
@@ -1090,7 +1090,7 @@ mod test {
             refused.comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
-                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                base: GitCommit::new("a1b2c3".into()).unwrap(),
             }
         );
         assert!(refused.bound.is_none());
@@ -1159,9 +1159,9 @@ mod test {
 
     /// The live log predates the demand's base field: its rows carry
     /// the bare string kind, and the fold still loads them as demands
-    /// that record no base.
+    /// whose base is the reserved word.
     #[test]
-    fn legacy_demand_rows_load_without_a_base() {
+    fn legacy_demand_rows_load_with_the_reserved_word() {
         let mut conn = memory_db();
         record(&mut conn, &agent(), create("fire the old way"), 10).unwrap();
         conn.execute(
@@ -1177,13 +1177,13 @@ mod test {
         };
         assert!(
             matches!(
-                world.comments[&CommentId(RecordId(1))].comment.state,
+                &world.comments[&CommentId(RecordId(1))].comment.state,
                 CommentState::Demand {
                     response: ResponseState::Awaiting,
-                    base: None,
-                }
+                    base,
+                } if base.as_str() == "unrecorded"
             ),
-            "the pre-base demand loads as a demand with no base"
+            "the pre-base demand loads as a demand whose base is unrecorded"
         );
     }
 

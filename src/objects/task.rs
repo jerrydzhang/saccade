@@ -96,6 +96,7 @@ pub struct TaskContext {
 mod test {
     use super::*;
     use crate::objects::comment::{CommentKind, Target};
+    use crate::types::pointers::GitCommit;
     use crate::types::prose::Prose;
 
     #[test]
@@ -133,7 +134,9 @@ mod test {
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
-                kind: CommentKind::Demand { base: None },
+                kind: CommentKind::Demand {
+                    base: GitCommit::new("a1b2c3".into()).unwrap(),
+                },
             },
             Event::Commented {
                 target: Target::Task(TaskId(0)),

@@ -7,6 +7,9 @@ pub enum PointerError {
     /// Session and worktree paths are absolute when first recorded.
     Relative,
     Empty,
+    /// The pre-bases demand marker: `unrecorded` is never a commit a
+    /// git context would produce, so any leak self-diagnoses.
+    Reserved,
 }
 
 macro_rules! pointer {
@@ -123,11 +126,26 @@ impl WorktreePath {
 }
 
 impl GitCommit {
+    /// The pre-bases marker is a plain word, deliberately not all-zeros:
+    /// the null sha has legal git meaning, a plain word is illegal in
+    /// every git context, so any leak self-diagnoses.
+    pub(crate) const UNRECORDED: &'static str = "unrecorded";
+
     pub fn new(value: String) -> Result<Self, PointerError> {
         if value.is_empty() {
             return Err(PointerError::Empty);
         }
+        if value == Self::UNRECORDED {
+            return Err(PointerError::Reserved);
+        }
         Ok(Self(value))
+    }
+
+    /// The decoder's bare-string map is this constructor's sole
+    /// caller; every door constructs through `new`, which rejects
+    /// the word.
+    pub fn unrecorded() -> Self {
+        Self(Self::UNRECORDED.to_string())
     }
 
     /// Views and tests state the hash a checkpoint recorded.
@@ -166,6 +184,13 @@ mod test {
             GitCommit::new(String::new()),
             Err(PointerError::Empty)
         ));
+        // the reserved word never enters through a door: only the
+        // decoder's constructor mints it
+        assert!(matches!(
+            GitCommit::new("unrecorded".into()),
+            Err(PointerError::Reserved)
+        ));
+        assert_eq!(GitCommit::unrecorded().as_str(), "unrecorded");
         assert!(GitBranch::new("refs/heads/main".into()).is_ok());
         assert!(matches!(
             GitBranch::new(String::new()),

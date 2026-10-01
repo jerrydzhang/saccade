@@ -1502,7 +1502,7 @@ mod panels {
     /// A demand that carries its firing's base, as every new demand does.
     fn demand() -> CommentKind {
         CommentKind::Demand {
-            base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+            base: GitCommit::new("a1b2c3".into()).unwrap(),
         }
     }
 
