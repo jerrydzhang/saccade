@@ -51,6 +51,14 @@ fn human() -> Context {
     }
 }
 
+/// The demand a sighted door records: the main checkout's tip at the
+/// moment of firing.
+fn demand_at(repo: &Path) -> CommentKind {
+    CommentKind::Demand {
+        base: Some(saccade::GitCommit::new(sh(repo, &["rev-parse", "HEAD"])).unwrap()),
+    }
+}
+
 /// A fresh repo with one commit, a tracker with one task and one
 /// demand on it.
 fn scaffold(tag: &str) -> (PathBuf, PathBuf, CommentId) {
@@ -82,7 +90,7 @@ fn scaffold(tag: &str) -> (PathBuf, PathBuf, CommentId) {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("write the receipt".into()).unwrap(),
-            kind: CommentKind::Demand,
+            kind: demand_at(&repo),
         },
         2,
     )

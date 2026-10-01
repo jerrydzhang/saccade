@@ -370,7 +370,7 @@ mod test {
                 Event::Commented {
                     target: Target::Task(TaskId(0)),
                     body: Prose::new("run the sweep".into()).unwrap(),
-                    kind: CommentKind::Demand,
+                    kind: CommentKind::Demand { base: None },
                 },
             ),
             record(

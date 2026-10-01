@@ -176,7 +176,9 @@ enum Tok {
 /// ids and `@human` stay prose. A token must stand alone (the char
 /// before `@` is not alphanumeric, the char after is neither
 /// alphanumeric nor `-`). The first target token wins; later target
-/// tokens stay prose. Consumed tokens leave the body.
+/// tokens stay prose. Consumed tokens leave the body. The grammar
+/// names the kind only: a demand's base is the compose door's to
+/// resolve, so it leaves here absent.
 pub(crate) fn compile(body: &str, fallback: Target) -> Address {
     let chars: Vec<char> = body.chars().collect();
     let mut out = String::with_capacity(body.len());
@@ -193,7 +195,7 @@ pub(crate) fn compile(body: &str, fallback: Target) -> Address {
         };
         match token {
             Some((Tok::Agent, end)) => {
-                kind = CommentKind::Demand;
+                kind = CommentKind::Demand { base: None };
                 i = skip_space(&chars, end, &out);
             }
             Some((Tok::Target(t), end)) if !target_taken => {
@@ -1542,7 +1544,7 @@ mod tests {
     use crate::objects::proposal::ProposalAction;
     use crate::store::{Context, Record, Tier, World};
     use crate::types::actor::ActorName;
-    use crate::types::pointers::SessionPointer;
+    use crate::types::pointers::{GitCommit, SessionPointer};
     use crate::views::{
         ADRIFT_AFTER_SECS, closed_tasks, forest, next_panel, open_proposals, ribbon_marks,
         show_view, thread_view,
@@ -1563,6 +1565,13 @@ mod tests {
             actor: ActorName::new("pi".into()).unwrap(),
             tier: Tier::Agent,
         })
+    }
+
+    /// A demand that carries its firing's base, as every new demand does.
+    fn demand() -> CommentKind {
+        CommentKind::Demand {
+            base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+        }
     }
 
     fn record(seq: usize, at: u64, ctx: &Context, event: Event) -> Record {
@@ -1592,7 +1601,7 @@ mod tests {
     fn agent_makes_the_demand() {
         let a = compile("@agent build the thing", task(7));
         assert_eq!(a.body, "build the thing");
-        assert_eq!(a.kind, CommentKind::Demand);
+        assert_eq!(a.kind, CommentKind::Demand { base: None });
         assert_eq!(a.target, task(7));
     }
 
@@ -1600,7 +1609,7 @@ mod tests {
     fn trailing_agent_leaves_the_words() {
         let a = compile("do it @agent", task(7));
         assert_eq!(a.body, "do it");
-        assert_eq!(a.kind, CommentKind::Demand);
+        assert_eq!(a.kind, CommentKind::Demand { base: None });
     }
 
     #[test]
@@ -1622,7 +1631,7 @@ mod tests {
     fn demand_and_rehome_combine() {
         let a = compile("@agent @t-3 fix it there", task(7));
         assert_eq!(a.body, "fix it there");
-        assert_eq!(a.kind, CommentKind::Demand);
+        assert_eq!(a.kind, CommentKind::Demand { base: None });
         assert_eq!(a.target, task(3));
     }
 
@@ -1719,7 +1728,7 @@ mod tests {
                 Event::Commented {
                     target: task(1),
                     body: Prose::new("demand body".into()).unwrap(),
-                    kind: CommentKind::Demand,
+                    kind: demand(),
                 },
             ),
             record(
@@ -2100,7 +2109,7 @@ mod tests {
                 Event::Commented {
                     target: task(0),
                     body: Prose::new("run it again".into()).unwrap(),
-                    kind: CommentKind::Demand,
+                    kind: demand(),
                 },
             ),
             record(

@@ -353,7 +353,7 @@ pub fn show_view(world: &World, id: TaskId) -> Option<ShowView> {
 fn state_tag(state: &CommentState, refusal: Option<&Refusal>, in_flight: bool) -> Option<String> {
     match state {
         CommentState::Note | CommentState::Withdrawn(_) => None,
-        CommentState::Demand { response } => {
+        CommentState::Demand { response, .. } => {
             if refusal.is_some() {
                 return Some("demand, refused".into());
             }
@@ -1495,9 +1495,16 @@ mod panels {
     use crate::objects::incarnation::IncarnationId;
     use crate::store::{Context, Record, RecordId, Tier, World};
     use crate::types::actor::ActorName;
-    use crate::types::pointers::SessionPointer;
+    use crate::types::pointers::{GitCommit, SessionPointer};
 
     const HOUR: u64 = 3600;
+
+    /// A demand that carries its firing's base, as every new demand does.
+    fn demand() -> CommentKind {
+        CommentKind::Demand {
+            base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+        }
+    }
 
     fn ctx(tier: Tier) -> Context {
         Context {
@@ -1550,13 +1557,7 @@ mod panels {
     fn clustered() -> World {
         World::replay(vec![
             task_at(0, 0, "real work"),
-            comment_at(
-                2,
-                2,
-                Tier::Human,
-                Target::Task(TaskId(0)),
-                CommentKind::Demand,
-            ),
+            comment_at(2, 2, Tier::Human, Target::Task(TaskId(0)), demand()),
             comment_at(
                 3,
                 3,
@@ -1622,13 +1623,7 @@ mod panels {
         // the demand, a run of two figures, the reply, a trailing figure
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
-            comment_at(
-                2,
-                2,
-                Tier::Human,
-                Target::Task(TaskId(0)),
-                CommentKind::Demand,
-            ),
+            comment_at(2, 2, Tier::Human, Target::Task(TaskId(0)), demand()),
             artifact_record(3, 3, "sweep figure"),
             artifact_record(4, 4, "spread figure"),
             comment_at(
@@ -1717,13 +1712,7 @@ mod panels {
     fn an_interleaved_artifact_exits_the_exchange() {
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
-            comment_at(
-                2,
-                2,
-                Tier::Human,
-                Target::Task(TaskId(0)),
-                CommentKind::Demand,
-            ),
+            comment_at(2, 2, Tier::Human, Target::Task(TaskId(0)), demand()),
             artifact_record(3, 3, "mid-run figure"),
             comment_at(
                 4,
@@ -1807,13 +1796,7 @@ mod panels {
         };
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
-            comment_at(
-                2,
-                2 * HOUR,
-                Tier::Human,
-                Target::Task(TaskId(0)),
-                CommentKind::Demand,
-            ),
+            comment_at(2, 2 * HOUR, Tier::Human, Target::Task(TaskId(0)), demand()),
             bind(3, 3 * HOUR),
             record(
                 4,
@@ -1920,13 +1903,7 @@ mod panels {
         };
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
-            comment_at(
-                2,
-                2 * HOUR,
-                Tier::Human,
-                Target::Task(TaskId(0)),
-                CommentKind::Demand,
-            ),
+            comment_at(2, 2 * HOUR, Tier::Human, Target::Task(TaskId(0)), demand()),
             bind(3, 3 * HOUR),
             record(
                 4,
@@ -1953,13 +1930,7 @@ mod panels {
     fn a_refused_demand_carries_its_refusal_on_the_thread() {
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
-            comment_at(
-                2,
-                2 * HOUR,
-                Tier::Human,
-                Target::Task(TaskId(0)),
-                CommentKind::Demand,
-            ),
+            comment_at(2, 2 * HOUR, Tier::Human, Target::Task(TaskId(0)), demand()),
             record(
                 3,
                 3 * HOUR,
@@ -2240,13 +2211,7 @@ mod panels {
         };
         let world = World::replay(vec![
             task_at(0, 0, "real work"),
-            comment_at(
-                2,
-                10 * HOUR,
-                Tier::Human,
-                Target::Task(TaskId(0)),
-                CommentKind::Demand,
-            ),
+            comment_at(2, 10 * HOUR, Tier::Human, Target::Task(TaskId(0)), demand()),
             bind(3, 11 * HOUR, RecordId(2)),
             comment_at(
                 4,
@@ -2276,13 +2241,7 @@ mod panels {
 
         let fresh = World::replay(vec![
             task_at(0, 0, "real work"),
-            comment_at(
-                2,
-                10 * HOUR,
-                Tier::Human,
-                Target::Task(TaskId(0)),
-                CommentKind::Demand,
-            ),
+            comment_at(2, 10 * HOUR, Tier::Human, Target::Task(TaskId(0)), demand()),
             bind(3, 11 * HOUR, RecordId(2)),
             comment_at(
                 4,

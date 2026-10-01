@@ -50,7 +50,7 @@ impl TaskState {
             (
                 TaskState::Done(_),
                 Event::Commented {
-                    kind: CommentKind::Demand,
+                    kind: CommentKind::Demand { .. },
                     ..
                 },
             ) => Some(TaskState::Open),
@@ -133,7 +133,7 @@ mod test {
             Event::Commented {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("filler".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: CommentKind::Demand { base: None },
             },
             Event::Commented {
                 target: Target::Task(TaskId(0)),
@@ -168,7 +168,7 @@ mod test {
                     | (
                         TaskState::Done(_),
                         Event::Commented {
-                            kind: CommentKind::Demand,
+                            kind: CommentKind::Demand { .. },
                             ..
                         }
                     )

@@ -17,7 +17,9 @@ use saccade::runner::{
 use saccade::supervisor::{self, LiveRuns, RunHandle, RunnerConfig, SessionDriver};
 use saccade::types::actor::ActorName;
 use saccade::types::pointers::SessionPointer;
-use saccade::{Command, CommentId, CommentKind, Context, Prose, Target, TaskId, Tier, World};
+use saccade::{
+    Command, CommentId, CommentKind, Context, GitCommit, Prose, Target, TaskId, Tier, World,
+};
 
 fn sh(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
@@ -61,6 +63,14 @@ fn agent() -> Context {
     }
 }
 
+/// The demand a sighted door records: the main checkout's tip at the
+/// moment of firing.
+fn demand_at(repo: &Path) -> CommentKind {
+    CommentKind::Demand {
+        base: Some(GitCommit::new(sh(repo, &["rev-parse", "HEAD"])).unwrap()),
+    }
+}
+
 /// A fresh repo with one commit, a tracker with one task and one
 /// agent-addressed demand on it.
 fn scaffold(tag: &str) -> (PathBuf, PathBuf, CommentId) {
@@ -92,7 +102,7 @@ fn scaffold(tag: &str) -> (PathBuf, PathBuf, CommentId) {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("write the receipt".into()).unwrap(),
-            kind: CommentKind::Demand,
+            kind: demand_at(&repo),
         },
         2,
     )
@@ -536,7 +546,7 @@ fn a_demand_queued_behind_an_incarnation_fires_when_the_task_frees() {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("and then this one".into()).unwrap(),
-            kind: CommentKind::Demand,
+            kind: demand_at(&repo),
         },
         3,
     )
@@ -655,7 +665,7 @@ fn a_demand_on_a_delivered_task_fires_its_round() {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("one more finding on the delivered work".into()).unwrap(),
-            kind: CommentKind::Demand,
+            kind: demand_at(&repo),
         },
         4,
     )
@@ -1114,7 +1124,7 @@ fn a_severed_branch_rebuilds_at_the_recorded_checkpoint() {
     let second = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        follow_up_demand(&db_path),
+        follow_up_demand(&repo, &db_path),
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
@@ -1200,7 +1210,7 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
         Command::Comment {
             target: Target::Task(TaskId(1)),
             body: Prose::new("write the child receipt".into()).unwrap(),
-            kind: CommentKind::Demand,
+            kind: demand_at(&repo),
         },
         5,
     )
@@ -1247,7 +1257,7 @@ fn a_severed_child_branch_rebuilds_at_its_own_checkpoint() {
         Command::Comment {
             target: Target::Task(TaskId(1)),
             body: Prose::new("one more round".into()).unwrap(),
-            kind: CommentKind::Demand,
+            kind: demand_at(&repo),
         },
         7,
     )
@@ -1293,7 +1303,7 @@ fn a_deleted_canvas_rebuilds_calmly_under_its_live_branch() {
     let second = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        follow_up_demand(&db_path),
+        follow_up_demand(&repo, &db_path),
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
@@ -1337,7 +1347,7 @@ fn a_never_run_tasks_canvas_rebuilds_at_base() {
     let second = prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        follow_up_demand(&db_path),
+        follow_up_demand(&repo, &db_path),
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
@@ -1377,7 +1387,7 @@ fn an_unreachable_checkpoint_refuses_naming_lost_work() {
     let refusal = match prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        follow_up_demand(&db_path),
+        follow_up_demand(&repo, &db_path),
         ActorName::new("pi".into()).unwrap(),
     ) {
         Err(RunnerFail::Refused { reason }) => reason,
@@ -1436,7 +1446,7 @@ fn a_dropped_tasks_demand_arriving_to_no_canvas_refuses_calmly() {
     let refusal = match prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        follow_up_demand(&db_path),
+        follow_up_demand(&repo, &db_path),
         ActorName::new("pi".into()).unwrap(),
     ) {
         Err(RunnerFail::Refused { reason }) => reason,
@@ -1466,16 +1476,59 @@ fn a_dropped_tasks_demand_arriving_to_no_canvas_refuses_calmly() {
 }
 
 #[test]
-fn prepare_births_the_task_branch_from_main_even_when_head_elsewhere() {
-    let (repo, db_path, demand) = scaffold("birth");
+fn a_detached_checkout_refuses_the_demand_at_the_door_and_cuts_nothing() {
+    let (repo, db_path, _demand) = scaffold("detached-fire");
 
-    // the repo's HEAD leaves main before the first run
+    // the main checkout detaches: a demand fired here can sight no branch
     sh(&repo, &["checkout", "--detach"]);
-    std::fs::write(repo.join("readme"), "work off main\n").unwrap();
-    sh(&repo, &["add", "."]);
-    sh(&repo, &["commit", "-m", "detached work"]);
-    let main_head = sh(&repo, &["rev-parse", "main"]);
 
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sac"))
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--repo")
+        .arg(&repo)
+        .arg("--offline")
+        .arg("--json")
+        .env("SACCADE_ACTOR", "pi")
+        .arg("comment")
+        .arg("t-0")
+        .arg("run it from a detached checkout")
+        .arg("--demand")
+        .output()
+        .expect("spawn sac");
+    assert!(!out.status.success(), "the detached firing refused");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unsighted_demand"), "{stderr}");
+    assert!(stderr.contains("detached"), "{stderr}");
+
+    // nothing was cut and nothing landed: no branch, no worktree, no
+    // new record in the log
+    assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).is_empty());
+    assert!(!saccade::paths::worktree_at(&repo, 0).exists());
+    let rows = db::load(&db::open_read(&db_path).unwrap()).unwrap().rows;
+    assert_eq!(rows.len(), 2);
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_stalled_demand_cuts_at_the_commit_it_was_fired_at() {
+    let (repo, db_path, demand) = scaffold("stall");
+    let fired_at = sh(&repo, &["rev-parse", "main"]);
+
+    // the runner stalls; review parking moves the checkout onto a
+    // review branch that advances far past the firing
+    sh(&repo, &["checkout", "-b", "review/sweep"]);
+    std::fs::write(repo.join("readme"), "review parking\n").unwrap();
+    sh(&repo, &["add", "."]);
+    sh(&repo, &["commit", "-m", "park the review"]);
+    std::fs::write(repo.join("notes"), "more review\n").unwrap();
+    sh(&repo, &["add", "."]);
+    sh(&repo, &["commit", "-m", "park it further"]);
+    let parked = sh(&repo, &["rev-parse", "HEAD"]);
+    assert_ne!(parked, fired_at);
+
+    // hours later the runner frees: the cut is the demand's recorded
+    // base, not the checkout the review left behind
     prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
@@ -1483,9 +1536,7 @@ fn prepare_births_the_task_branch_from_main_even_when_head_elsewhere() {
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
-
-    // the task branch was cut from main, not from the detached HEAD
-    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), main_head);
+    assert_eq!(sh(&repo, &["rev-parse", "saccade/t-0"]), fired_at);
     let world = world_of(&db_path);
     assert_eq!(
         world.tasks[0]
@@ -1495,8 +1546,45 @@ fn prepare_births_the_task_branch_from_main_even_when_head_elsewhere() {
             .workspace
             .base
             .as_str(),
-        main_head
+        fired_at
     );
+    std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_demand_without_a_base_refuses_rather_than_cutting_from_the_checkout() {
+    let (repo, db_path, _demand) = scaffold("legacy");
+    // a demand fired before bases were recorded carries none
+    db::record(
+        &mut db::open(&db_path).unwrap(),
+        &human(),
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            body: Prose::new("fired before the snapshot law".into()).unwrap(),
+            kind: CommentKind::Demand { base: None },
+        },
+        3,
+    )
+    .unwrap();
+    let legacy = CommentId(saccade::RecordId(2));
+
+    let refusal = match prepare(
+        &mut db::open(&db_path).unwrap(),
+        &repo,
+        legacy,
+        ActorName::new("pi".into()).unwrap(),
+    ) {
+        Err(RunnerFail::Refused { reason }) => reason,
+        Err(other) => panic!("expected a refusal, got {other:?}"),
+        Ok(_) => panic!("the base-less demand refused prepare"),
+    };
+    assert!(refusal.contains("records no base"), "{refusal}");
+    // nothing was cut and the refusal is a fact on the thread; the
+    // scaffold's own sighted demand is unaffected
+    assert!(sh(&repo, &["branch", "--list", "saccade/t-0"]).is_empty());
+    let world = world_of(&db_path);
+    assert!(world.comments[&legacy].refusal.is_some());
+    assert!(!supervisor::runnable_demands(&world).contains(&legacy));
     std::fs::remove_dir_all(repo.parent().unwrap()).unwrap();
 }
 
@@ -1531,14 +1619,14 @@ fn run_one_course(repo: &Path, db_path: &Path, demand: CommentId) -> String {
 }
 
 /// A follow-up demand on the settled task, returning its id.
-fn follow_up_demand(db_path: &Path) -> CommentId {
+fn follow_up_demand(repo: &Path, db_path: &Path) -> CommentId {
     db::record(
         &mut db::open(db_path).unwrap(),
         &human(),
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("one more round".into()).unwrap(),
-            kind: CommentKind::Demand,
+            kind: demand_at(repo),
         },
         4,
     )
@@ -1561,7 +1649,7 @@ fn a_merged_branch_refuses_until_the_verb_records_the_new_head() {
     assert_ne!(merged, checkpoint);
 
     // the next demand refuses: the tip is unrecorded advancement
-    let second = follow_up_demand(&db_path);
+    let second = follow_up_demand(&repo, &db_path);
     let refusal = match prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
@@ -1613,7 +1701,7 @@ fn a_merged_branch_refuses_until_the_verb_records_the_new_head() {
         Command::Comment {
             target: Target::Task(TaskId(0)),
             body: Prose::new("re-ask: the head is recorded now".into()).unwrap(),
-            kind: CommentKind::Demand,
+            kind: demand_at(&repo),
         },
         5,
     )
@@ -1657,7 +1745,7 @@ fn a_rewound_branch_restores_its_recorded_work() {
     prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        follow_up_demand(&db_path),
+        follow_up_demand(&repo, &db_path),
         ActorName::new("pi".into()).unwrap(),
     )
     .unwrap();
@@ -1686,7 +1774,7 @@ fn a_diverged_branch_refuses_naming_both_doors() {
     let refusal = match prepare(
         &mut db::open(&db_path).unwrap(),
         &repo,
-        follow_up_demand(&db_path),
+        follow_up_demand(&repo, &db_path),
         ActorName::new("pi".into()).unwrap(),
     ) {
         Err(RunnerFail::Refused { reason }) => reason,

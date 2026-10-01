@@ -326,7 +326,8 @@ impl World {
                     || !matches!(
                         demand.comment.state,
                         CommentState::Demand {
-                            response: ResponseState::Awaiting
+                            response: ResponseState::Awaiting,
+                            ..
                         }
                     )
                 {
@@ -542,7 +543,7 @@ impl World {
             Event::Commented {
                 ref target,
                 ref body,
-                kind,
+                ref kind,
             } => {
                 let mut up = *target;
                 let root_task_id = loop {
@@ -561,8 +562,9 @@ impl World {
 
                 let state = match kind {
                     CommentKind::Note => CommentState::Note,
-                    CommentKind::Demand => CommentState::Demand {
+                    CommentKind::Demand { base } => CommentState::Demand {
                         response: ResponseState::Awaiting,
+                        base: base.clone(),
                     },
                     CommentKind::Steer => CommentState::Steer {
                         delivery: SteerDelivery::Standing,
@@ -659,7 +661,8 @@ impl World {
                     || !matches!(
                         demand_ctx.comment.state,
                         CommentState::Demand {
-                            response: ResponseState::Awaiting
+                            response: ResponseState::Awaiting,
+                            ..
                         }
                     )
                 {
@@ -840,6 +843,13 @@ mod test {
         Context {
             actor: ActorName::new("saccade bot".into()).unwrap(),
             tier: Tier::Agent,
+        }
+    }
+
+    /// A demand that carries its firing's base, as every new demand does.
+    fn demand() -> CommentKind {
+        CommentKind::Demand {
+            base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
         }
     }
 
@@ -1148,7 +1158,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("one more finding".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             4,
         )
@@ -1480,7 +1490,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("run the suite".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             20,
         )
@@ -1524,6 +1534,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
 
@@ -1567,6 +1578,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
 
@@ -1591,6 +1603,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
     }
@@ -1605,7 +1618,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("run the flaky one".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             20,
         )
@@ -1647,6 +1660,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
 
@@ -1664,7 +1678,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("run the flaky one".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             20,
         )
@@ -1695,6 +1709,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
 
@@ -1718,7 +1733,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("what is the fold count?".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             20,
         )
@@ -1728,6 +1743,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
         assert_eq!(log.world().comments[&demand].bound, None);
@@ -1749,6 +1765,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
 
@@ -1767,6 +1784,7 @@ mod test {
             log.world().comments[&demand].comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { reply },
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
 
@@ -1909,7 +1927,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("run the sweep on the old door".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             2,
         )
@@ -2031,7 +2049,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("run the sweep".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             2,
         )
@@ -2411,7 +2429,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(4)),
                 body: Prose::new("run the sweep once more".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             20,
         )
@@ -2442,6 +2460,7 @@ mod test {
             ctx.comment.state,
             CommentState::Demand {
                 response: ResponseState::Awaiting,
+                base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
             }
         );
         let refusal = ctx.refusal.as_ref().expect("the refusal landed");
@@ -2474,6 +2493,7 @@ mod test {
             &ctx.comment.state,
             CommentState::Demand {
                 response: ResponseState::Responded { .. },
+                base: Some(_),
             }
         ));
         assert!(ctx.refusal.is_some());
@@ -2516,7 +2536,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 body: Prose::new("one more round: check the edge case".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             16,
         )
@@ -2553,7 +2573,7 @@ mod test {
             Command::Comment {
                 target: Target::Task(TaskId(1)),
                 body: Prose::new("never mind, one more look".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: demand(),
             },
             19,
         )

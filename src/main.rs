@@ -310,6 +310,10 @@ enum Fail {
         actor: String,
         tier: &'static str,
     },
+    /// The demand door's sight guard: a demand records the main
+    /// checkout's tip at fire time, so a firing context that cannot
+    /// see it refuses before any command exists.
+    UnsightedDemand(String),
     Usage(String),
     Client(client::ClientFail),
 }
@@ -338,6 +342,7 @@ impl Fail {
             Fail::Reject(r) => r.code(),
             Fail::Taught { code, .. } => code,
             Fail::IdentityFallback { .. } => "identity_fallback",
+            Fail::UnsightedDemand(_) => "unsighted_demand",
             Fail::Usage(_) => "usage",
             Fail::Client(c) => c.code(),
         }
@@ -359,6 +364,9 @@ impl std::fmt::Display for Fail {
                 "this write would record {actor}/{tier} with no SACCADE_ACTOR and no tty \
                  (--actor rides the keyboard arm); export SACCADE_ACTOR=<name>"
             ),
+            Fail::UnsightedDemand(detail) => {
+                write!(f, "the demand did not fire: {detail}")
+            }
             Fail::Usage(m) => write!(f, "{m}"),
             Fail::Client(c) => write!(f, "{c}"),
         }
@@ -438,15 +446,35 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             target,
             body,
             demand,
-        } => Command::Comment {
-            target: parse_target(target)?,
-            body: Prose::new(body.clone())?,
-            kind: if *demand {
-                CommentKind::Demand
+        } => {
+            let kind = if *demand {
+                // a demand is a snapshot of its firing moment: the base
+                // resolves before the command exists, so no arm downstream
+                // of this door can fire an unsighted demand
+                let repo_root = match &cli.repo {
+                    Some(repo) => repo
+                        .canonicalize()
+                        .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display())))?,
+                    None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(|_| {
+                        Fail::UnsightedDemand(
+                            "no git repository resolves from the working directory; \
+                                 pass --repo so the demand can sight the main checkout"
+                                .into(),
+                        )
+                    })?,
+                };
+                let base =
+                    saccade::runner::firing_base(&repo_root).map_err(Fail::UnsightedDemand)?;
+                CommentKind::Demand { base: Some(base) }
             } else {
                 CommentKind::Note
-            },
-        },
+            };
+            Command::Comment {
+                target: parse_target(target)?,
+                body: Prose::new(body.clone())?,
+                kind,
+            }
+        }
         Cmd::Steer { id, body } => Command::Comment {
             target: Target::Task(parse_task_id(id)?),
             body: Prose::new(body.clone())?,

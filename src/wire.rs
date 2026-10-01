@@ -91,20 +91,24 @@ pub fn assemble(kind: &str, payload: &str) -> Result<Event, ParseFail> {
     serde_json::from_value(serde_json::Value::Object(tagged)).map_err(|e| malformed(kind, e))
 }
 
-/// Old logs carry the addressee field; the tagged union carries kind.
-/// The map is the ratified migration: to:agent becomes a demand,
-/// everything else a note.
+/// Old logs carry shapes newer writes never make. The maps are the
+/// ratified migrations: to:agent becomes a demand, everything else a
+/// note; the bare string kind "demand" predates the base field and
+/// loads as a demand with no base.
 fn migrate_commented(payload: &str) -> Result<String, serde_json::Error> {
     let mut value: serde_json::Value = serde_json::from_str(payload)?;
-    if let Some(object) = value.as_object_mut()
-        && !object.contains_key("kind")
-    {
-        let kind = match object.get("addressee").and_then(|a| a.as_str()) {
-            Some("agent") => "demand",
-            _ => "note",
-        };
-        object.remove("addressee");
-        object.insert("kind".into(), kind.into());
+    if let Some(object) = value.as_object_mut() {
+        if !object.contains_key("kind") {
+            let kind = match object.get("addressee").and_then(|a| a.as_str()) {
+                Some("agent") => "demand",
+                _ => "note",
+            };
+            object.remove("addressee");
+            object.insert("kind".into(), kind.into());
+        }
+        if object.get("kind").and_then(|k| k.as_str()) == Some("demand") {
+            object.insert("kind".into(), serde_json::json!({"demand": {"base": null}}));
+        }
     }
     Ok(value.to_string())
 }
@@ -176,7 +180,9 @@ mod test {
             Event::Commented {
                 target: Target::Comment(CommentId(RecordId(6))),
                 body: Prose::new("no - pure tree, here is why".into()).unwrap(),
-                kind: CommentKind::Demand,
+                kind: CommentKind::Demand {
+                    base: Some(GitCommit::new("a1b2c3".into()).unwrap()),
+                },
             },
             Event::Commented {
                 target: Target::Comment(CommentId(RecordId(6))),
@@ -275,9 +281,11 @@ mod test {
         ));
     }
 
-    /// The ratified migration: old addressee payloads load unchanged —
+    /// The ratified migrations: old addressee payloads load unchanged —
     /// to:agent becomes a demand, everything else a note; a payload
-    /// that already carries kind passes through untouched.
+    /// that already carries kind passes through untouched, and the
+    /// bare "demand" string predating the base field loads as a
+    /// demand with no base.
     #[test]
     fn old_addressee_payloads_load_as_their_kinds() {
         let agent = assemble(
@@ -289,7 +297,7 @@ mod test {
             matches!(
                 &agent,
                 Event::Commented {
-                    kind: CommentKind::Demand,
+                    kind: CommentKind::Demand { base: None },
                     ..
                 }
             ),
@@ -317,5 +325,44 @@ mod test {
         assert_eq!(kind, "commented");
         assert!(!payload.contains("addressee"), "{payload}");
         assert_eq!(&assemble(&kind, &payload).unwrap(), &agent);
+
+        // the base-bearing kind keeps its commit through the same door
+        let sighted = assemble(
+            "commented",
+            r#"{"target":{"task":0},"body":"cut at the tip","kind":{"demand":{"base":"a1b2c3"}}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                &sighted,
+                Event::Commented {
+                    kind: CommentKind::Demand {
+                        base: Some(commit)
+                    },
+                    ..
+                } if commit.as_str() == "a1b2c3"
+            ),
+            "{sighted:?}"
+        );
+        let (kind, payload) = disassemble(&sighted);
+        assert_eq!(&assemble(&kind, &payload).unwrap(), &sighted);
+
+        // the bare string kind is the pre-base log shape: it loads as a
+        // demand that carried no base
+        let bare = assemble(
+            "commented",
+            r#"{"target":{"task":0},"body":"fired before bases","kind":"demand"}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                &bare,
+                Event::Commented {
+                    kind: CommentKind::Demand { base: None },
+                    ..
+                }
+            ),
+            "{bare:?}"
+        );
     }
 }

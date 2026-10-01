@@ -240,7 +240,12 @@ fn command_of(action: &Action, world: &World) -> Command {
             body: Prose::new("generated comment".into()).unwrap(),
             kind: match variant % 4 {
                 0 => CommentKind::Note,
-                1 => CommentKind::Demand,
+                // both demand shapes ride the generated sequences: a
+                // recorded base and the legacy absence
+                1 => CommentKind::Demand {
+                    base: (variant % 8 < 4)
+                        .then(|| saccade::GitCommit::new("a1b2c3".into()).unwrap()),
+                },
                 2 => CommentKind::Steer,
                 _ => CommentKind::Ask,
             },
