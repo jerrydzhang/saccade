@@ -448,9 +448,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             demand,
         } => {
             let kind = if *demand {
-                // a demand is a snapshot of its firing moment: the base
-                // resolves before the command exists, so no arm downstream
-                // of this door can fire an unsighted demand
                 let repo_root = match &cli.repo {
                     Some(repo) => repo
                         .canonicalize()

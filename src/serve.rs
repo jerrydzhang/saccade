@@ -330,9 +330,6 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
         Ok(ok) => ok,
         Err(msg) => return console_reject(req, app, n, fields, &msg),
     };
-    // the demand is a snapshot of the compose moment: the console's
-    // sight is the serving repo's checkout, and an unsighted firing
-    // refuses at this door
     let kind = if addr.demand {
         let sighted = app
             .repo_root()

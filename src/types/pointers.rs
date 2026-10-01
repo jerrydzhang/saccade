@@ -184,8 +184,6 @@ mod test {
             GitCommit::new(String::new()),
             Err(PointerError::Empty)
         ));
-        // the reserved word never enters through a door: only the
-        // decoder's constructor mints it
         assert!(matches!(
             GitCommit::new("unrecorded".into()),
             Err(PointerError::Reserved)

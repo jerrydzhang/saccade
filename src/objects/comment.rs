@@ -20,9 +20,7 @@ pub enum Target {
 
 /// What a comment is for. No variant carries an address: routing is
 /// structural — the note pulls, the demand fires a run, the steer
-/// reaches the live run, the ask holds a wait for its answer. The
-/// demand carries its firing's base — the commit the main checkout
-/// stood on, `unrecorded` on demands fired before bases were.
+/// reaches the live run, the ask holds a wait for its answer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CommentKind {
@@ -58,9 +56,7 @@ pub enum SteerDelivery {
 pub enum CommentState {
     Note,
     /// The demand: fires a run when the task is free, queues while
-    /// busy. The bound run and the refusal are the context's facts;
-    /// the base is the commit the firing stood on, carried from the
-    /// event — `unrecorded` on demands older than the field.
+    /// busy. The bound run and the refusal are the context's facts.
     Demand {
         response: ResponseState,
         base: GitCommit,

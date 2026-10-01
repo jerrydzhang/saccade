@@ -162,9 +162,7 @@ pub struct FormState {
 
 pub struct Address {
     pub body: String,
-    /// The grammar's verdict that `@agent` stood in the body; the
-    /// demand's base is the compose door's to resolve — only the door
-    /// constructs the kind, through `GitCommit::new`
+    /// The grammar's verdict that `@agent` stood in the body
     pub demand: bool,
     pub target: Target,
 }
@@ -1571,7 +1569,6 @@ mod tests {
         })
     }
 
-    /// A demand that carries its firing's base, as every new demand does.
     fn demand() -> CommentKind {
         CommentKind::Demand {
             base: GitCommit::new("a1b2c3".into()).unwrap(),

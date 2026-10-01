@@ -1499,7 +1499,6 @@ mod panels {
 
     const HOUR: u64 = 3600;
 
-    /// A demand that carries its firing's base, as every new demand does.
     fn demand() -> CommentKind {
         CommentKind::Demand {
             base: GitCommit::new("a1b2c3".into()).unwrap(),

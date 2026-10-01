@@ -92,10 +92,7 @@ fn commit(hash: String) -> Result<GitCommit, RunnerFail> {
     GitCommit::new(hash).map_err(|e| RunnerFail::Usage(format!("git gave no commit: {e:?}")))
 }
 
-/// The commit a demand's firing stands on: the main checkout's
-/// checked-out branch tip. The error names the condition — a detached
-/// checkout sights no branch — because the demand records this commit
-/// on itself at fire time.
+/// The commit a demand's firing stands on: the main checkout's checked-out branch tip — a detached checkout sights no branch.
 pub fn firing_base(repo_root: &Path) -> Result<GitCommit, String> {
     let branch = git(repo_root, &["symbolic-ref", "--quiet", "HEAD"]).map_err(|_| {
         format!(
@@ -357,12 +354,6 @@ pub fn prepare(
             }
         }
         None => {
-            // the cut is the demand's snapshot, never the checkout's
-            // current state: a stall between firing and prepare leaks
-            // nothing. The reserved word is the one reader's refusal:
-            // a pre-bases demand reaches here only through the
-            // decoder's map, so it refuses with the migration path
-            // rather than cutting from anywhere
             if demand_base.as_str() == GitCommit::UNRECORDED {
                 return Err(refuse(
                     conn,
