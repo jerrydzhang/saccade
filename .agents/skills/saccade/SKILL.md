@@ -149,8 +149,10 @@ superseding cleanly on re-cut.
    never releases on replies: acks hold, and a run still being born
    holds the wait too.
 5. **Verify the claims** — that is what makes them knowledge. Clean
-   checkout, suite counts, a live smoke on a scratch db. Cheap verification
-   is why receipts name evidence.
+   checkout, suite counts, a live smoke on a scratch db, and the diff's
+   added comments read against the comment law: narration is deleted
+   before accept, the non-obvious whys stay. Cheap verification is why
+   receipts name evidence.
 6. **Accept or route.** `sac accept t-N` is yours if you are the birth
    attribution; otherwise it goes to a human. Merging follows your
    project's own release flow — the tracker holds the thread, not the

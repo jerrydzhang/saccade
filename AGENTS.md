@@ -159,6 +159,14 @@ Rules:
   rule; consolidation is a win, bloat is watched.
 - Exhaustive contract tests (authority table, transition tables) are
   inventories: new event kinds register in them, never in sibling tests.
+- Fixture data reads as narrative: `implement foo`, `migrate floop`, not
+  `test task 2`. The log is a story even in tests.
+- Keep the suite green and honest:
+  a failing suite from a fixture change means the fixture changed a contract
+  — find out which before editing assertions.
+
+## Comment law
+
 - Test comments: one line, plain, self-contained. Say what the assertion
   pins ("the proposal's id is 1"). No citations of other docs, no
   design-history narration, no vocabulary that isn't in the code.
@@ -166,11 +174,6 @@ Rules:
   A comment earns its bytes only by saying what the code cannot (a
   non-obvious why, like ProposalCreated's missing id). Rationale lives in
   the record, not `///` blocks; narration of the next ten lines gets removed.
-- Fixture data reads as narrative: `implement foo`, `migrate floop`, not
-  `test task 2`. The log is a story even in tests.
-- Keep the suite green and honest:
-  a failing suite from a fixture change means the fixture changed a contract
-  — find out which before editing assertions.
 
 ## Semantic trip-wires (look wrong, are right)
 
