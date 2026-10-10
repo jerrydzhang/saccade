@@ -1646,28 +1646,44 @@ fn glimpse(line: &str, budget: usize) -> String {
 mod test {
     use super::*;
 
-    /// Possession is the only tier door: SACCADE_ACTOR's presence records
-    /// agent, its absence human, and --actor names at either tier without
-    /// re-tiering.
+    /// The identity and scope inventory, one test owning every env
+    /// mutation: possession fixes the tier, --actor names without
+    /// re-tiering, and the declared scope reads SACCADE_TASK with its
+    /// riders — original values restored on the way out.
     #[test]
-    fn possession_fixes_the_tier_and_actor_never_re_tiers() {
-        // env is process-global; this is the only test in this binary
-        // that touches SACCADE_ACTOR
-        unsafe { std::env::remove_var("SACCADE_ACTOR") };
+    fn possession_fixes_the_tier_and_the_scope_reads_the_environment() {
+        let saved_actor = std::env::var("SACCADE_ACTOR").ok();
+        let saved_task = std::env::var("SACCADE_TASK").ok();
+        let saved_incarnation = std::env::var("SACCADE_INCARNATION").ok();
+        let saved_workspace = std::env::var("SACCADE_WORKSPACE").ok();
+        let restore = || {
+            for (key, saved) in [
+                ("SACCADE_ACTOR", &saved_actor),
+                ("SACCADE_TASK", &saved_task),
+                ("SACCADE_INCARNATION", &saved_incarnation),
+                ("SACCADE_WORKSPACE", &saved_workspace),
+            ] {
+                match saved {
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
+                }
+            }
+        };
+
+        unsafe {
+            std::env::remove_var("SACCADE_ACTOR");
+            std::env::remove_var("SACCADE_TASK");
+            std::env::remove_var("SACCADE_INCARNATION");
+            std::env::remove_var("SACCADE_WORKSPACE");
+        }
         let bare = Cli::try_parse_from(["sac", "list"]).unwrap();
-        assert_eq!(
-            context_of(&bare).unwrap_or_else(|f| panic!("{f}")).tier,
-            Tier::Human
-        );
+        let ctx = context_of(&bare).unwrap_or_else(|f| panic!("{f}"));
+        assert_eq!((ctx.tier, ctx.scope.is_none()), (Tier::Human, true));
 
         unsafe { std::env::set_var("SACCADE_ACTOR", "pi") };
         let possessed = Cli::try_parse_from(["sac", "list"]).unwrap();
-        assert_eq!(
-            context_of(&possessed)
-                .unwrap_or_else(|f| panic!("{f}"))
-                .tier,
-            Tier::Agent
-        );
+        let ctx = context_of(&possessed).unwrap_or_else(|f| panic!("{f}"));
+        assert_eq!(ctx.tier, Tier::Agent);
 
         let named = Cli::try_parse_from(["sac", "--actor", "jerry", "list"]).unwrap();
         let ctx = context_of(&named).unwrap_or_else(|f| panic!("{f}"));
@@ -1677,31 +1693,19 @@ mod test {
         let named = Cli::try_parse_from(["sac", "--actor", "saccade bot", "list"]).unwrap();
         let ctx = context_of(&named).unwrap_or_else(|f| panic!("{f}"));
         assert_eq!((ctx.tier, ctx.actor.as_str()), (Tier::Human, "saccade bot"));
-        unsafe { std::env::remove_var("SACCADE_ACTOR") };
-    }
 
-    /// The declared scope: the task anchor alone yields a scope with no
-    /// incarnation; a malformed anchor is loud; the keys ride only with
-    /// the anchor.
-    #[test]
-    fn the_declared_scope_reads_the_environment() {
-        unsafe {
-            std::env::remove_var("SACCADE_TASK");
-            std::env::remove_var("SACCADE_INCARNATION");
-            std::env::remove_var("SACCADE_WORKSPACE");
-        }
-        assert!(context_scope().unwrap().is_none());
-
-        // an incarnation key without the anchor rides nothing
+        // the scope: no anchor yields none, and the riders ride only
+        // with the anchor
         unsafe { std::env::set_var("SACCADE_INCARNATION", "c-9") };
         assert!(context_scope().unwrap().is_none());
         unsafe { std::env::remove_var("SACCADE_INCARNATION") };
 
         unsafe { std::env::set_var("SACCADE_TASK", "t-125") };
         let scope = context_scope().unwrap().expect("the anchor yields a scope");
-        assert_eq!(scope.task, TaskId(125));
-        assert_eq!(scope.incarnation, None);
-        assert_eq!(scope.workspace, None);
+        assert_eq!(
+            (scope.task, scope.incarnation, scope.workspace),
+            (TaskId(125), None, None)
+        );
 
         unsafe {
             std::env::set_var("SACCADE_INCARNATION", "c-9");
@@ -1717,7 +1721,8 @@ mod test {
         // malformed values are loud, never silently dropped
         unsafe { std::env::set_var("SACCADE_TASK", "t-one") };
         assert!(context_scope().is_err());
-        unsafe { std::env::remove_var("SACCADE_TASK") };
+
+        restore();
     }
 
     /// The write door's matrix: possession passes any context, and

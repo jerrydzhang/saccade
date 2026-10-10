@@ -572,7 +572,6 @@ mod test {
     #[test]
     fn execute_then_load_round_trips_the_world() {
         let mut conn = memory_db();
-        // seq 0: t-0 born, claimed, scoped note, offered, accepted
         record(&mut conn, &human(), create("implement foo"), 10).unwrap();
         record(
             &mut conn,
@@ -587,7 +586,6 @@ mod test {
         record(&mut conn, &scoped_agent(), note("mid-flight finding"), 11).unwrap();
         record(&mut conn, &agent(), offer(0, "suite green, 55 tests"), 12).unwrap();
         record(&mut conn, &human(), accept(3), 12).unwrap();
-        // seq 5..9: t-1 offered, rejected on grounds, offered anew, accepted
         record(&mut conn, &human(), create("fix bar"), 13).unwrap();
         record(&mut conn, &agent(), offer(1, "bar fixed the quick way"), 14).unwrap();
         record(
@@ -599,7 +597,6 @@ mod test {
         .unwrap();
         record(&mut conn, &agent(), offer(1, "edge case held"), 16).unwrap();
         record(&mut conn, &human(), accept(8), 16).unwrap();
-        // seq 10..13: t-2 cancelled, reopened, requested on the thread
         record(&mut conn, &human(), create("migrate floop"), 17).unwrap();
         record(
             &mut conn,
@@ -633,7 +630,6 @@ mod test {
             20,
         )
         .unwrap();
-        // seq 14..15: t-3 records its use of foo's account
         record(&mut conn, &human(), create("adopt foo's account"), 21).unwrap();
         record(
             &mut conn,
@@ -648,7 +644,6 @@ mod test {
             21,
         )
         .unwrap();
-        // seq 16..19: the artifact pointer and the workspace lineage
         record(
             &mut conn,
             &agent(),
@@ -694,7 +689,6 @@ mod test {
             22,
         )
         .unwrap();
-        // seq 20..21: a mixed-context batch appends atomically
         let batch = AtomicBatch {
             drafts: vec![
                 RecordDraft {
@@ -715,7 +709,6 @@ mod test {
         };
         let batched = execute_batch(&mut conn, batch, 24).unwrap();
         assert_eq!(batched.len(), 2);
-        // seq 22..23: the revision swaps the prose the fold presents
         record(&mut conn, &agent(), note("post-fold receipt"), 25).unwrap();
         record(
             &mut conn,
@@ -727,9 +720,6 @@ mod test {
             26,
         )
         .unwrap();
-        // seq 24..25: the withdrawal — the fold keeps the tombstone,
-        // the log keeps the bytes; the last write's world is the one a
-        // full reload must produce
         record(&mut conn, &agent(), note("parked mid-flight"), 27).unwrap();
         let (_, returned) = record(
             &mut conn,

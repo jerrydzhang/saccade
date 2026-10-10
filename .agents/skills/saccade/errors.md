@@ -18,7 +18,11 @@ finding — name it on the thread before proceeding.
   comment that is not an offer.
 - `not_current_offer` — that offer is not the task's standing one (it
   was superseded or consumed). To replace an account, reject it while
-  it stands, then offer anew.
+  it stands, then offer anew. A use names the source task's standing
+  Offered or Concluded account; a superseded source is not usable for
+  new reliance.
+- `self_reliance` — the use names its own task's conclusion: use
+  records reliance between different internal undertakings.
 - `self_acceptance` — your declared task scope covers the offered task:
   a task-bound producer cannot accept its own conclusion. Acceptance
   is an outside consumer's act.

@@ -507,13 +507,14 @@ pub fn thread_section(
             prose_html(why, &f.refs, store),
         ));
     }
-    // an offered task renders its decision doors: accept the standing
-    // offer, or reject it with grounds — both naming the offer
+    // an offered task renders its decision doors; each form carries the
+    // offer it was rendered against, so a stale page cannot decide an
+    // account it never showed
     if f.show.state == "offered"
         && let (Some(n), Some(offer)) = (task_num(&f.show.id), f.show.offer)
     {
         s.push_str(&format!(
-            "<div class=\"judge\"><span class=\"jhead mono\">DECIDE</span> <span class=\"jname\">the standing offer c-{offer}</span>\n<form class=\"jform\" method=\"post\" action=\"/t/{n}/accept\">\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"accept\" value=\"1\" type=\"submit\">accept</button></div>\n</form>\n<form class=\"jform\" method=\"post\" action=\"/t/{n}/reject\">\n<textarea name=\"grounds\" rows=\"2\" placeholder=\"grounds — what needs reconsideration\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"reject\" value=\"1\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
+            "<div class=\"judge\"><span class=\"jhead mono\">DECIDE</span> <span class=\"jname\">the standing offer c-{offer}</span>\n<form class=\"jform\" method=\"post\" action=\"/t/{n}/accept\">\n<input type=\"hidden\" name=\"offer\" value=\"{offer}\">\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"accept\" value=\"1\" type=\"submit\">accept</button></div>\n</form>\n<form class=\"jform\" method=\"post\" action=\"/t/{n}/reject\">\n<input type=\"hidden\" name=\"offer\" value=\"{offer}\">\n<textarea name=\"grounds\" rows=\"2\" placeholder=\"grounds — what needs reconsideration\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"reject\" value=\"1\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
             who_input(&form.who),
             esc(&form.note),
             who_input(&form.who),

@@ -104,83 +104,156 @@ mod test {
 
     #[test]
     fn authority_table_gates_exactly_the_gated_events() {
-        let events = [
-            Event::TaskCreated {
-                name: prose(),
-                parent_id: None,
-            },
-            Event::TaskClaimed {
-                id: TaskId(0),
-                incarnation: None,
-            },
-            Event::TaskCancelled {
-                id: TaskId(0),
-                explanation: prose(),
-            },
-            Event::TaskReopened {
-                id: TaskId(0),
-                explanation: prose(),
-            },
-            Event::Commented {
-                target: Target::Task(TaskId(0)),
-                kind: CommentKind::Note { body: prose() },
-            },
-            Event::Commented {
-                target: Target::Comment(CommentId(RecordId(0))),
-                kind: CommentKind::Accept {
-                    offer: CommentId(RecordId(0)),
-                },
-            },
-            Event::CommentRevised {
-                id: CommentId(RecordId(0)),
-                body: prose(),
-            },
-            Event::CommentWithdrawn {
-                id: CommentId(RecordId(0)),
-                note: prose(),
-            },
-            Event::ArtifactAdded {
-                root: TaskId(0),
-                artifact: Artifact {
+        // the ratified cells, stated independently of required_tier so a
+        // permission change cannot pass against itself
+        use Authority::*;
+        let events: [(Event, Authority); 16] = [
+            (
+                Event::TaskCreated {
                     name: prose(),
-                    hash: ContentHash::of(b"bytes"),
+                    parent_id: None,
                 },
-            },
-            Event::TaskWorkspaceCreated {
-                task_id: TaskId(0),
-                base: GitCommit::new("abc123".into()).unwrap(),
-                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-            },
-            Event::TaskWorkspaceMaterialized {
-                task_id: TaskId(0),
-                worktree: WorktreePath::new("/wt".into()).unwrap(),
-            },
-            Event::TaskWorkspaceCheckpointed {
-                task_id: TaskId(0),
-                checkpoint: GitCommit::new("abc123".into()).unwrap(),
-            },
+                AnyTier,
+            ),
+            (
+                Event::TaskClaimed {
+                    id: TaskId(0),
+                    incarnation: None,
+                },
+                AnyTier,
+            ),
+            // the human-authored judgment acts
+            (
+                Event::TaskCancelled {
+                    id: TaskId(0),
+                    explanation: prose(),
+                },
+                Require(Tier::Human),
+            ),
+            (
+                Event::TaskReopened {
+                    id: TaskId(0),
+                    explanation: prose(),
+                },
+                Require(Tier::Human),
+            ),
+            // all six comment payload cases author at any tier
+            (
+                Event::Commented {
+                    target: Target::Task(TaskId(0)),
+                    kind: CommentKind::Note { body: prose() },
+                },
+                AnyTier,
+            ),
+            (
+                Event::Commented {
+                    target: Target::Task(TaskId(0)),
+                    kind: CommentKind::Request { body: prose() },
+                },
+                AnyTier,
+            ),
+            (
+                Event::Commented {
+                    target: Target::Task(TaskId(0)),
+                    kind: CommentKind::Offer { body: prose() },
+                },
+                AnyTier,
+            ),
+            (
+                Event::Commented {
+                    target: Target::Comment(CommentId(RecordId(0))),
+                    kind: CommentKind::Accept {
+                        offer: CommentId(RecordId(0)),
+                    },
+                },
+                AnyTier,
+            ),
+            (
+                Event::Commented {
+                    target: Target::Comment(CommentId(RecordId(0))),
+                    kind: CommentKind::Reject {
+                        offer: CommentId(RecordId(0)),
+                        grounds: prose(),
+                    },
+                },
+                AnyTier,
+            ),
+            (
+                Event::Commented {
+                    target: Target::Task(TaskId(0)),
+                    kind: CommentKind::Use {
+                        offer: CommentId(RecordId(0)),
+                        reason: prose(),
+                    },
+                },
+                AnyTier,
+            ),
+            (
+                Event::CommentRevised {
+                    id: CommentId(RecordId(0)),
+                    body: prose(),
+                },
+                AnyTier,
+            ),
+            (
+                Event::CommentWithdrawn {
+                    id: CommentId(RecordId(0)),
+                    note: prose(),
+                },
+                AnyTier,
+            ),
+            (
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: Artifact {
+                        name: prose(),
+                        hash: ContentHash::of(b"bytes"),
+                    },
+                },
+                AnyTier,
+            ),
+            // provisioning stays machine-authored; the checkpoint door
+            // is the explicit exception
+            (
+                Event::TaskWorkspaceCreated {
+                    task_id: TaskId(0),
+                    base: GitCommit::new("abc123".into()).unwrap(),
+                    branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                },
+                Require(Tier::System),
+            ),
+            (
+                Event::TaskWorkspaceMaterialized {
+                    task_id: TaskId(0),
+                    worktree: WorktreePath::new("/wt".into()).unwrap(),
+                },
+                Require(Tier::System),
+            ),
+            (
+                Event::TaskWorkspaceCheckpointed {
+                    task_id: TaskId(0),
+                    checkpoint: GitCommit::new("abc123".into()).unwrap(),
+                },
+                AnyTier,
+            ),
         ];
 
-        for event in &events {
-            let expectation = |ctx: &Context| match required_tier(event) {
-                Authority::AnyTier => true,
-                Authority::Require(tier) => ctx.tier == tier,
-            };
-            for (name, ctx) in [("agent", agent()), ("human", human())] {
+        for (event, expected) in &events {
+            for (name, ctx) in [
+                ("agent", agent()),
+                ("human", human()),
+                ("system", Context::system()),
+            ] {
                 let passed = enforce_tier(&ctx, std::slice::from_ref(event)).is_ok();
+                let wanted = match expected {
+                    AnyTier => true,
+                    Require(tier) => ctx.tier == *tier,
+                };
                 assert_eq!(
-                    passed,
-                    expectation(&ctx),
+                    passed, wanted,
                     "{name} wrong at the authority table: {event:?}"
                 );
             }
-            let ctx = Context::system();
-            let passed = enforce_tier(&ctx, std::slice::from_ref(event)).is_ok();
-            assert_eq!(
-                passed,
-                expectation(&ctx),
-                "system wrong at the authority table: {event:?}"
-            );
         }
     }
 

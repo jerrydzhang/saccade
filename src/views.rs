@@ -18,9 +18,7 @@ pub struct TaskView {
     pub state: &'static str,
     pub parent: Option<String>,
     pub name: String,
-    /// The standing offer's seq, while one stands or the concluded one holds
     pub offer: Option<usize>,
-    /// The current owner's render, when a claim has landed
     pub owner: Option<String>,
     /// Size of the attached comment thread; renders as a mere pointer (`#`).
     pub n_comments: usize,
@@ -73,12 +71,8 @@ pub struct CommentLine {
     pub depth: usize,
     pub actor: String,
     pub tier: String,
-    /// The variant the comment carries: note, request, offer, accept,
-    /// reject, or use
     pub kind: &'static str,
-    /// The prose the variant carries; the bodyless Accept carries none
     pub body: String,
-    /// The offer a decision or reliance names, when it names one
     pub offer: Option<usize>,
     /// The descriptive mark: the fold presents a revised body
     pub revised: bool,
@@ -240,9 +234,7 @@ pub struct ShowView {
     pub name: String,
     /// The cancellation's recorded explanation, on a cancelled task
     pub explanation: Option<String>,
-    /// The current owner's render, when a claim has landed
     pub owner: Option<String>,
-    /// The standing offer's seq, while one stands or the concluded one holds
     pub offer: Option<usize>,
 }
 

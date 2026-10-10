@@ -282,12 +282,12 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     }
 }
 
-/// The reject door: one form, one name, the required grounds. The
-/// offer rejected is the task's standing one; identity is claimed at
-/// the act; execute and 303 back to the focused task.
+/// The reject door: the form names the offer it was rendered against,
+/// the grounds are required, identity is claimed at the act. A stale
+/// form's offer meets the fold's stale-offer guard.
 fn reject(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
-    let Some(offer) = standing_offer(app, n) else {
-        return page(app, 404, &format!("t-{n} holds no standing offer"));
+    let Some(offer) = submitted_offer(n, fields) else {
+        return console_reject(req, app, n, fields, "the decision names no offer");
     };
     let grounds = form_field(fields, "grounds");
     if Prose::new(grounds.to_string()).is_err() {
@@ -314,19 +314,19 @@ fn reject(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
     }
 }
 
-/// The task's standing offer, when one stands.
-fn standing_offer(app: &AppState, n: usize) -> Option<crate::CommentId> {
-    let snapshot = app.snapshot().ok()?;
-    let ctx = snapshot.world.tasks.get(n)?;
-    ctx.current_offer
+/// The offer a decision form names — the one its page rendered, never
+/// silently the currently standing one.
+fn submitted_offer(n: usize, fields: &[(String, String)]) -> Option<crate::CommentId> {
+    let seq = form_field(fields, "offer").parse::<usize>().ok()?;
+    (seq != usize::MAX && n != usize::MAX).then_some(crate::CommentId(RecordId(seq)))
 }
 
-/// The accept door: one form, one name, one button. The offer accepted
-/// is the task's standing one; identity is claimed at the act; execute
-/// and 303 back to the focused task.
+/// The accept door: the form names the offer it was rendered against;
+/// identity is claimed at the act; execute and 303 back to the focused
+/// task. A stale form's offer meets the fold's stale-offer guard.
 fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
-    let Some(offer) = standing_offer(app, n) else {
-        return page(app, 404, &format!("t-{n} holds no standing offer"));
+    let Some(offer) = submitted_offer(n, fields) else {
+        return console_reject(req, app, n, fields, "the decision names no offer");
     };
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
@@ -581,6 +581,8 @@ fn reject_text(r: &Reject) -> String {
         InvalidCommentId => "no comment with that id".into(),
         NotAnOffer => "that comment is not an offer".into(),
         NotCurrentOffer => "that offer is not the task's standing one".into(),
+        SelfReliance => "a task cannot rely on its own conclusion".into(),
+
         SelfAcceptance => {
             "the declared task scope covers this task: a task-bound producer cannot accept its \
              own conclusion"

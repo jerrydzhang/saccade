@@ -121,14 +121,20 @@ fn standing_offer_at(world: &World, n: u8) -> Option<CommentId> {
     ids.get(slot).copied()
 }
 
-/// Any offer the record holds — a use names its source addressably,
-/// current or superseded.
-fn offer_at(world: &World, n: u8) -> Option<CommentId> {
+/// A use's source: mostly the standing Offered or Concluded accounts —
+/// the only ones new reliance may name — with the modulo slot landing
+/// one-past-the-end as a guaranteed-absent id.
+fn reliable_offer_at(world: &World, n: u8) -> Option<CommentId> {
     let ids: Vec<CommentId> = world
-        .comments
+        .tasks
         .iter()
-        .filter(|(_, c)| matches!(c.comment.kind, CommentKind::Offer { .. }))
-        .map(|(id, _)| *id)
+        .filter(|ctx| {
+            matches!(
+                ctx.task.state,
+                saccade::TaskState::Offered | saccade::TaskState::Concluded
+            )
+        })
+        .filter_map(|ctx| ctx.current_offer)
         .collect();
     let slot = n as usize % (ids.len() + 1);
     ids.get(slot).copied()
@@ -201,7 +207,8 @@ fn command_of(action: &Action, world: &World) -> Command {
                         grounds: Prose::new("generated grounds".into()).unwrap(),
                     },
                     _ => CommentKind::Use {
-                        offer: offer_at(world, *reply).unwrap_or(CommentId(RecordId(usize::MAX))),
+                        offer: reliable_offer_at(world, *reply)
+                            .unwrap_or(CommentId(RecordId(usize::MAX))),
                         reason: Prose::new("generated reliance".into()).unwrap(),
                     },
                 },
@@ -422,6 +429,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidCommentId => "InvalidCommentId",
                         saccade::Reject::NotAnOffer => "NotAnOffer",
                         saccade::Reject::NotCurrentOffer => "NotCurrentOffer",
+                        saccade::Reject::SelfReliance => "SelfReliance",
                         saccade::Reject::SelfAcceptance => "SelfAcceptance",
                         saccade::Reject::InvalidIncarnationId => "InvalidIncarnationId",
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
@@ -484,6 +492,7 @@ fn generator_reaches_deep_states() {
         "InvalidCommentId",
         "NotAnOffer",
         "NotCurrentOffer",
+        "SelfReliance",
         "InvalidStateTransition",
     ] {
         assert!(

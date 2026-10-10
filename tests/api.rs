@@ -933,14 +933,17 @@ async fn decision_forms_carry_the_actor_name() {
     assert!(html.contains("action=\"/t/0/reject\""));
 
     // a cookieless accept without a name refuses, naming the fix
-    let (status, body, _) = post_form(&format!("{base}/t/0/accept"), &[], "accept=1");
+    let (status, body, _) = post_form(&format!("{base}/t/0/accept"), &[], "accept=1&offer=2");
     assert_eq!(status, 400);
     assert!(body.contains("a name is required to record the act"));
 
     // a cookieless accept with who records human tier under that name,
     // and the first claim sets the cookie like compose does
-    let (status, _, loc, cookie) =
-        post_form_ck(&format!("{base}/t/0/accept"), &[], "accept=1&who=jerry");
+    let (status, _, loc, cookie) = post_form_ck(
+        &format!("{base}/t/0/accept"),
+        &[],
+        "accept=1&who=jerry&offer=2",
+    );
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/0"));
     assert!(
@@ -984,9 +987,9 @@ async fn decision_forms_carry_the_actor_name() {
         .unwrap();
     // grounds are required: the empty form refuses at the console door
     let (status, body, _) = post_form(
-        &format!("{base}/t/0/reject"),
+        &format!("{base}/t/1/reject"),
         &[],
-        "reject=1&who=jerry&grounds=+",
+        "reject=1&who=jerry&grounds=+&offer=5",
     );
     assert_eq!(status, 400);
     assert!(body.contains("a rejection needs grounds"), "{body}");
@@ -994,7 +997,7 @@ async fn decision_forms_carry_the_actor_name() {
     let (status, _, loc, _) = post_form_ck(
         &format!("{base}/t/1/reject"),
         &[],
-        "reject=1&who=jerry&grounds=the+edge+case+still+fails",
+        "reject=1&who=jerry&grounds=the+edge+case+still+fails&offer=5",
     );
     assert_eq!(status, 303, "the named rejection lands");
     assert_eq!(loc.as_deref(), Some("/t/1"));
@@ -1067,7 +1070,10 @@ async fn decision_forms_carry_the_actor_name() {
 }
 
 /// A console refusal through judgment leaves its fat line: the raw form
-/// body, the code, and no client binary to name.
+/// body, the code, and no client binary to name. The stale-form
+/// scenario rides here: a page rendered for one offer cannot decide its
+/// replacement — the form names the offer it showed, and the fold's
+/// stale-offer guard refuses it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refused_console_decision_leaves_its_line() {
     let db = scratch_db("console-refused");
@@ -1079,19 +1085,84 @@ async fn a_refused_console_decision_leaves_its_line() {
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 kind: CommentKind::Offer {
-                    body: Prose::new("the standing account".into()).unwrap(),
+                    body: Prose::new("the first account".into()).unwrap(),
                 },
             },
             None,
             bare_request(),
         )
         .unwrap();
-    // the named accept concludes the task
-    let (status, _, _, _) = post_form_ck(&format!("{base}/t/0/accept"), &[], "accept=1&who=jerry");
+
+    // the rendered decision forms carry the offer they were drawn against
+    let (_, html) = get_html(&format!("{base}/t/0"));
+    assert!(html.contains("name=\"offer\" value=\"1\""), "{html}");
+
+    // the page's reject form rejects offer 1, opening the task again
+    let (status, _, _) = post_form(
+        &format!("{base}/t/0/reject"),
+        &[],
+        "reject=1&who=jerry&grounds=the+edge+case+fails&offer=1",
+    );
     assert_eq!(status, 303);
 
-    // the second accept on the concluded task refuses
-    let (status, body, _) = post_form(&format!("{base}/t/0/accept"), &[], "accept=1&who=jerry");
+    // a replacement offer stands
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                kind: CommentKind::Offer {
+                    body: Prose::new("the replacement account".into()).unwrap(),
+                },
+            },
+            None,
+            bare_request(),
+        )
+        .unwrap();
+
+    // the stale page's accept form names offer 1: refused, never
+    // silently redirected at the replacement
+    let (status, body, _) = post_form(
+        &format!("{base}/t/0/accept"),
+        &[],
+        "accept=1&who=jerry&offer=1",
+    );
+    assert_eq!(status, 400);
+    assert!(
+        body.contains("that offer is not the task's standing one"),
+        "{body}"
+    );
+
+    // the stale reject form meets the same guard
+    let (status, body, _) = post_form(
+        &format!("{base}/t/0/reject"),
+        &[],
+        "reject=1&who=jerry&grounds=changed+my+mind&offer=1",
+    );
+    assert_eq!(status, 400);
+    assert!(
+        body.contains("that offer is not the task's standing one"),
+        "{body}"
+    );
+
+    // the fresh form decides the standing offer
+    let (status, _, _, _) = post_form_ck(
+        &format!("{base}/t/0/accept"),
+        &[],
+        "accept=1&who=jerry&offer=3",
+    );
+    assert_eq!(status, 303);
+    assert_eq!(
+        task_view(&world_of(&state), TaskId(0)).unwrap().state,
+        "concluded"
+    );
+
+    // the decided task's second accept refuses
+    let (status, body, _) = post_form(
+        &format!("{base}/t/0/accept"),
+        &[],
+        "accept=1&who=jerry&offer=3",
+    );
     assert_eq!(status, 400);
     assert!(body.contains("InvalidStateTransition"), "{body}");
     let lines = attempts_lines(&db);
@@ -1100,7 +1171,7 @@ async fn a_refused_console_decision_leaves_its_line() {
     assert_eq!(refused["code"], "invalid_state_transition");
     assert_eq!(refused["actor"], "jerry");
     assert_eq!(refused["client"], Value::Null);
-    assert_eq!(refused["request"], "accept=1&who=jerry");
+    assert_eq!(refused["request"], "accept=1&who=jerry&offer=3");
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 

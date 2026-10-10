@@ -3,6 +3,7 @@
 //! The world is consulted on the error path only; the Reject codes
 //! stay the wire's vocabulary, the teaching rides as prose.
 
+use crate::objects::comment::CommentKind;
 use crate::objects::comment::Target;
 use crate::objects::task::TaskContext;
 use crate::store::World;
@@ -62,9 +63,14 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             let offer = command_offer(command)?;
             let ctx = world.comments.get(&offer)?;
             let task = &world.tasks[ctx.comment.root.0];
+            let what = if matches!(command, Command::Comment { kind: CommentKind::Use { .. }, .. }) {
+                "a use names the source task's standing Offered or Concluded account"
+            } else {
+                "stale decisions cannot move the task"
+            };
             match task.current_offer {
                 Some(current) => Some(format!(
-                    "c-{} is no longer current on t-{}; the standing offer is c-{} — stale decisions cannot move the task",
+                    "c-{} is no longer current on t-{}; the standing offer is c-{} — {what}",
                     offer.0 .0,
                     ctx.comment.root.0,
                     current.0 .0
@@ -76,6 +82,9 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 )),
             }
         }
+        Reject::SelfReliance => Some(
+            "a task cannot rely on its own conclusion: use names another internal task's account".into(),
+        ),
         Reject::SelfAcceptance => {
             let offer = command_offer(command)?;
             let ctx = world.comments.get(&offer)?;

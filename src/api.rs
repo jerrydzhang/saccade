@@ -41,8 +41,7 @@ pub struct AppState {
     /// The artifact store the bytes door serves from; a server that
     /// was not told a repo root has none.
     artifacts: Option<std::path::PathBuf>,
-    /// The serving repo's root, when boot resolved one: the demand
-    /// door sights the main checkout through it.
+    /// The serving repo's root, when boot resolved one.
     repo_root: Option<std::path::PathBuf>,
     /// The serving repo's name, when boot resolved a root; the
     /// console's chrome names its instance by it.
@@ -89,8 +88,7 @@ impl AppState {
         self
     }
 
-    /// Name the serving repo's root: the console's demand door sights
-    /// the main checkout through it.
+    /// Name the serving repo's root.
     pub fn with_repo_root(mut self, root: std::path::PathBuf) -> Self {
         self.repo_root = Some(root);
         self

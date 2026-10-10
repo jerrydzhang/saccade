@@ -42,8 +42,10 @@ pub enum Reject {
     InvalidCommentId,
     #[error("the referenced comment is not an offer")]
     NotAnOffer,
-    #[error("that offer is not the task's current one")]
+    #[error("that offer is not the task's standing Offered or Concluded account")]
     NotCurrentOffer,
+    #[error("a task cannot rely on its own conclusion")]
+    SelfReliance,
     #[error(
         "the declared task scope covers this task: a task-bound producer cannot accept its own conclusion"
     )]
@@ -81,6 +83,7 @@ impl Reject {
             Reject::InvalidCommentId => "invalid_comment_id",
             Reject::NotAnOffer => "not_an_offer",
             Reject::NotCurrentOffer => "not_current_offer",
+            Reject::SelfReliance => "self_reliance",
             Reject::SelfAcceptance => "self_acceptance",
             Reject::InvalidIncarnationId => "invalid_incarnation_id",
             Reject::HumanOnly => "human_only",
@@ -109,6 +112,7 @@ mod test {
             Reject::InvalidCommentId,
             Reject::NotAnOffer,
             Reject::NotCurrentOffer,
+            Reject::SelfReliance,
             Reject::SelfAcceptance,
             Reject::InvalidIncarnationId,
             Reject::HumanOnly,

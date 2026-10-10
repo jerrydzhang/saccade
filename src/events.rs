@@ -30,14 +30,11 @@ pub enum Event {
     /// with the explanation of why it is pursued again.
     TaskReopened { id: TaskId, explanation: Prose },
     // Comment events
-    /// A comment birth: the payload is its variant, body included —
-    /// the bodyless Accept carries none.
+    /// The payload is its variant, body included; Accept carries none.
     Commented { target: Target, kind: CommentKind },
     /// A presentation repair, not a transition: the fold swaps the
-    /// prose of a prose-carrying variant and keeps a pointer at the
-    /// latest revision record — the original bytes stay in their own
-    /// birth event. A bodyless Accept admits no repair; references
-    /// never change through this door.
+    /// variant's prose and points at the latest revision record — the
+    /// original bytes stay in their birth event, references never change.
     CommentRevised { id: CommentId, body: Prose },
     /// The standing-error repair: the deposit's implicit claim — this
     /// is reached, this earns residency — was false. The body leaves

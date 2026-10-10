@@ -50,8 +50,7 @@ pub enum CommentKind {
 }
 
 impl CommentKind {
-    /// The prose the revision door may swap: the body a variant
-    /// carries, none for the bodyless Accept.
+    /// None for the bodyless Accept, which the revision door refuses.
     pub fn prose(&self) -> Option<&Prose> {
         match self {
             CommentKind::Note { body }
@@ -63,7 +62,6 @@ impl CommentKind {
         }
     }
 
-    /// The offer a decision or reliance names, when it names one.
     pub fn offer(&self) -> Option<CommentId> {
         match self {
             CommentKind::Accept { offer }
@@ -83,9 +81,8 @@ pub struct Comment {
     pub state: CommentState,
 }
 
-/// A comment's own lifecycle, born mirroring its variant: the note
-/// deposits alone carry a door, the verdict-carrying variants keep
-/// their verdicts.
+/// A comment's own lifecycle, born mirroring its variant; only the
+/// note carries a door.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommentState {
     Note,
@@ -112,7 +109,6 @@ impl CommentState {
         }
     }
 
-    /// The state a variant's birth folds to.
     pub fn of(kind: &CommentKind) -> CommentState {
         match kind {
             CommentKind::Note { .. } => CommentState::Note,
@@ -148,7 +144,6 @@ pub struct CommentContext {
     pub comment: Comment,
     pub actor: ActorName,
     pub tier: Tier,
-    /// The environment-declared scope the birth record carried
     pub scope: Option<crate::store::Scope>,
     /// Event time of the comment's birth record
     pub born_at: u64,

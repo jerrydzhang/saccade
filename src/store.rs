@@ -28,9 +28,12 @@ pub enum Reason {
     InvalidCommentId,
     /// A decision or reliance names a comment that is not an offer.
     NotAnOffer,
-    /// A decision names an offer that is not its task's current one:
-    /// stale decisions cannot affect current state.
+    /// A decision or reliance names an offer that is not its task's
+    /// standing Offered or Concluded account.
     NotCurrentOffer,
+    /// The reliance names its own task's conclusion: a task cannot
+    /// consume itself.
+    SelfReliance,
     /// The actor's declared task scope covers the offered task: a
     /// task-bound producer cannot accept its own conclusion.
     SelfAcceptance,
@@ -59,6 +62,7 @@ impl From<Reason> for Reject {
             Reason::InvalidCommentId => Reject::InvalidCommentId,
             Reason::NotAnOffer => Reject::NotAnOffer,
             Reason::NotCurrentOffer => Reject::NotCurrentOffer,
+            Reason::SelfReliance => Reject::SelfReliance,
             Reason::SelfAcceptance => Reject::SelfAcceptance,
             Reason::InvalidIncarnationId => Reject::InvalidIncarnationId,
             Reason::InvalidStateTransition => Reject::InvalidStateTransition,
@@ -92,8 +96,6 @@ pub struct Scope {
 pub struct Context {
     pub actor: ActorName,
     pub tier: Tier,
-    /// The environment-declared scope, present when the session's
-    /// environment names its task binding
     pub scope: Option<Scope>,
 }
 
@@ -163,9 +165,8 @@ impl World {
         Ok(self)
     }
 
-    /// The owner a claim in this context records: the tier names the
-    /// kind, the incarnation reference — never the declared scope —
-    /// names a task-bound worker.
+    /// The incarnation reference — never the declared scope — names a
+    /// task-bound worker.
     fn owner_of(context: &Context, incarnation: Option<IncarnationId>) -> Result<Owner, Reason> {
         match context.tier {
             Tier::Human => Ok(Owner::Human(context.actor.clone())),
@@ -300,6 +301,19 @@ impl World {
                         let offer_ctx = self.comments.get(offer).ok_or(Reason::InvalidCommentId)?;
                         if !matches!(offer_ctx.comment.kind, CommentKind::Offer { .. }) {
                             return Err(Reason::NotAnOffer);
+                        }
+                        let source = offer_ctx.comment.root;
+                        if source == root_task_id {
+                            return Err(Reason::SelfReliance);
+                        }
+                        let src_ctx = self.tasks.get(source.0).ok_or(Reason::InvalidTaskId)?;
+                        if src_ctx.current_offer != Some(*offer)
+                            || !matches!(
+                                src_ctx.task.state,
+                                TaskState::Offered | TaskState::Concluded
+                            )
+                        {
+                            return Err(Reason::NotCurrentOffer);
                         }
                     }
                 }
@@ -644,9 +658,8 @@ mod test {
 
     const RECORD_COUNT: usize = 18;
 
-    /// The shared story: foo offered and accepted; bar rejected then
-    /// accepted on a fresh offer; floop cancelled and reopened; a
-    /// consumer task using foo's account.
+    /// foo offered and accepted; bar rejected then re-offered; floop
+    /// cancelled and reopened; a consumer task using foo's account.
     fn populate_log(log: &mut Log) {
         let human_ctx = human();
         let agent_ctx = agent();
@@ -789,6 +802,37 @@ mod test {
     }
 
     #[test]
+    fn authority_supersedes_existence_in_rejections() {
+        let mut log = Log::new();
+        let cancel = || Command::CancelTask {
+            id: TaskId(0),
+            explanation: prose("stop nothing"),
+        };
+        let provision = || Command::CreateWorkspace {
+            task_id: TaskId(0),
+            base: GitCommit::new("abc123".into()).unwrap(),
+            branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+        };
+        // the tier gate fires before the fold ever reads existence
+        assert!(matches!(
+            log.execute(agent(), cancel(), 1),
+            Err(Reject::HumanOnly)
+        ));
+        assert!(matches!(
+            log.execute(human(), cancel(), 1),
+            Err(Reject::InvalidTaskId)
+        ));
+        assert!(matches!(
+            log.execute(human(), provision(), 1),
+            Err(Reject::HumanOnly)
+        ));
+        assert!(matches!(
+            log.execute_system(provision(), 1),
+            Err(Reject::InvalidTaskId)
+        ));
+    }
+
+    #[test]
     fn command_translation_maps_every_reachable_reason() {
         assert!(matches!(
             Reject::from(Reason::InvalidTaskId),
@@ -809,6 +853,10 @@ mod test {
         assert!(matches!(
             Reject::from(Reason::NotCurrentOffer),
             Reject::NotCurrentOffer
+        ));
+        assert!(matches!(
+            Reject::from(Reason::SelfReliance),
+            Reject::SelfReliance
         ));
         assert!(matches!(
             Reject::from(Reason::SelfAcceptance),
@@ -926,9 +974,7 @@ mod test {
         }
     }
 
-    /// The lifecycle the story holds: offer moves open to offered,
-    /// accept concludes, reject returns open, and the story's tasks
-    /// land where their threads say.
+    /// The story folds the ratified lifecycle.
     #[test]
     fn the_story_folds_the_ratified_lifecycle() {
         let mut log = Log::new();
@@ -941,7 +987,7 @@ mod test {
         assert_eq!(world.tasks[1].current_offer, Some(CommentId(RecordId(9))));
         assert_eq!(world.tasks[2].task.state, TaskState::Open);
         assert_eq!(world.tasks[3].task.state, TaskState::Open);
-        // the reopen cleared floop's pointer; the use moved no state
+        // the reopen cleared the standing pointer
         assert_eq!(world.tasks[2].current_offer, None);
 
         // the create-reply query: births resolve, non-births don't
@@ -1011,7 +1057,6 @@ mod test {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        // the story's claims: agent external claims on t-0, t-1, t-3
         assert_eq!(
             log.world().tasks[0].ownership,
             vec![OwnerEntry {
@@ -1157,17 +1202,17 @@ mod test {
     }
 
     #[test]
-    fn use_records_the_reliance_without_deciding() {
+    fn use_guards_its_source_reference() {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        // the story's use names foo's accepted offer from t-3's thread
+        // the story's use names foo's accepted account from t-3's thread
         let used = &log.world().comments[&CommentId(RecordId(17))];
         assert_eq!(used.comment.root, TaskId(3));
         assert!(matches!(used.comment.kind, CommentKind::Use { .. }));
         assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
 
-        // a use naming a non-offer refuses, writing nothing
+        // a non-offer refuses
         let refused = log.execute(
             agent(),
             Command::Comment {
@@ -1180,7 +1225,51 @@ mod test {
             99,
         );
         assert!(matches!(refused, Err(Reject::NotAnOffer)));
-        assert_eq!(log.records().len(), RECORD_COUNT);
+
+        // a rejected account is not a standing one
+        let refused = log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(3)),
+                kind: CommentKind::Use {
+                    offer: CommentId(RecordId(7)),
+                    reason: prose("bar's rejected account"),
+                },
+            },
+            100,
+        );
+        assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
+
+        // t-3 stands offered on c-18: a use from its own thread refuses
+        log.execute(agent(), offer(TaskId(3), "the consumer's account"), 18)
+            .unwrap();
+        let refused = log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(3)),
+                kind: CommentKind::Use {
+                    offer: CommentId(RecordId(18)),
+                    reason: prose("relying on myself"),
+                },
+            },
+            101,
+        );
+        assert!(matches!(refused, Err(Reject::SelfReliance)));
+
+        // a standing Offered account on another task lands
+        log.execute(
+            human(),
+            Command::Comment {
+                target: Target::Task(TaskId(2)),
+                kind: CommentKind::Use {
+                    offer: CommentId(RecordId(18)),
+                    reason: prose("floop builds on the consumer's account"),
+                },
+            },
+            102,
+        )
+        .unwrap();
+        assert_eq!(log.records().len(), RECORD_COUNT + 2);
     }
 
     #[test]

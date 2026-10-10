@@ -62,15 +62,15 @@ with them.
   is an ontology change.
 - No learn semantics anywhere: the system never infers from use; standing
   things are admitted by ratification, never by recurrence.
-- Pointers, never payloads: artifacts live with executors; the tracker stores
-  claims, pointers, and outcome summaries.
+- Pointers, never payloads: artifact bytes live outside the record; the
+  tracker stores claims, pointers, and outcome summaries.
 - No LLM calls in any read path; no LLM classification at capture or import.
 - The journal stays agent-free; the tracker sees only operationalized
   instances, never theory.
 - Workflow fires on triggers, not clocks.
 - Identity follows reference: dense ids for things cited daily by humans
-  (tasks); record-derived identity for things born once (proposals,
-  comments).
+  (tasks); record-derived identity for things born once (comments,
+  incarnations).
 - Breaking payload changes are allowed while this repo is the sole consumer;
   the promise that old logs always load begins at external adoption or
   painful volume, whichever comes first.
@@ -80,9 +80,9 @@ with them.
   internal modules are never breaking alone. 1.0.0 is the external-adoption
   line above.
 - Rendering is descriptive, never persuasive: deterministic grouping,
-  ordering, staleness, and demand projection present record facts — neutral
-  local cardinality included. No unread or aggregate counts of demands,
-  tasks, states, incarnations, or records; no detached badges, urgency
+  ordering, staleness, and standing-offer projection present record
+  facts — neutral local cardinality included. No unread or aggregate
+  counts of tasks, states, or records; no detached badges, urgency
   emphasis, inferred priority/progress/success/correctness, or narrative
   annotations. Outreach is an attending actor's judgment, never a
   projection; the pull UI never competes or coerces.
@@ -95,28 +95,20 @@ with them.
   service, not before.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes — accepted).
-- The executor is pi, pinned as a flake input — never the ambient
-  binary; SACCADE_PI overrides for development only. The runner speaks
-  pi's RPC protocol (JSONL over stdio, strict LF framing; subset:
-  prompt, steer, abort, agent_start/turn/agent_settled events). The
-  fake-Pi stub speaking that subset is the contract; pi is an
-  implementation of it.
-- An incarnation's role is spawn-time composition of pi's levers —
-  prompt, tool set, context files in the worktree, model/provider —
-  never a saccade-built harness. The agent loop stays pi's; saccade
-  delivers messages, never owns turns. Ambient pi config is not a
-  lever: spawn disables discovery, runs under a saccade-composed
-  agent dir, and the ask extension passed explicitly is the whole
-  extension surface — credentials and model catalogs cross as data,
-  the model choice as three explicit keys, nothing else.
+- Native pi stays the pinned harness, a flake input — never the
+  ambient binary. The tracker launches and supervises nothing: no
+  managed RPC, no session ownership, no spawn-time lever composition.
+  An incarnation is a record-derived identity (its birth record, one
+  task, one workspace address) with no lifecycle and no session
+  pointer; native attachment and its effects are the next slice's
+  doors, not standing machinery.
 - Attention routes through declared dependency and chain judgment,
   never addressing. No comment names a recipient. The human is reached
-  by waits held, derived residuals (unrooted asks, accepts pending),
-  and the descriptive pull surface.
+  by the descriptive pull surface; waits and push signals are unbuilt.
 - Comments land at the tier they describe: work facts on the work thread,
   episode facts on the episode's container, direction facts on the direction
-  home; session-shaped work writes no thread receipts unless it changed law —
-  the commit is the record.
+  home; session-shaped work writes no thread summary unless it changed
+  law — the commit is the record.
 
 ## Test philosophy
 
@@ -128,26 +120,21 @@ Placement is a contract:
 
 - `src/objects/*.rs` tests: pure exhaustive transition inventory for the
   object the module defines.
-- `src/decide.rs` tests: pure command expansion and authority; fixtures are
-  constructed events and `World::new()` — never a `Log`.
+- `src/decide.rs` tests: pure command translation and authority; the
+  authority inventory states its expected cells independently of the
+  table it pins; fixtures are constructed events and `World::new()` —
+  never a `Log`.
 - `src/store.rs` tests: the law's contracts over `store::execute` — cross-object
-  invariants, authority ordering, demand and run lifecycles — driven through
-  the in-memory `Log` fixture (test-private, no storage layer) against the
-  shared `populate_log` story; plus every `Reason` pinned and the command
-  translation table.
-- `src/views.rs` tests: view derivations over folded worlds, including the
-  shared Human-demand candidate and staleness projection (`asked_of_you`).
+  invariants, authority ordering, the lifecycle and reliance guards — driven
+  through the in-memory `Log` fixture (test-private, no storage layer)
+  against the shared `populate_log` story; plus every `Reason` pinned
+  and the command translation table.
+- `src/views.rs` tests: view derivations over folded worlds, including
+  the ownership and standing-offer panels.
 - `src/db.rs` tests: the persistence layer — one all-event round-trip; new
   event families ride the existing round-trip, they don't get their own.
 - `tests/proptest_harness.rs`: random legal sequences never panic the fold,
   and the world `db::record` returns equals replay and reload.
-- `tests/runner.rs`: the runner end to end — real temp Git, real db,
-  and the supervision contract: a landed demand fires a run, a queued
-  demand fires when the task frees, no runner means no firing.
-- `tests/executor.rs`: the executor contract — the fake-Pi stub speaks
-  the protocol subset (fire, ask, steer, abort through the real RPC
-  driver), and the real-pi smoke validates the pin against the same
-  subset at pin and bump time.
 - `tests/api.rs`: server, wire, and console contracts over HTTP — command
   round-trips, the tier law through the wire, malformed bodies, client send,
   and the CLI face through a real subprocess.
@@ -168,34 +155,35 @@ Rules:
 ## Comment law
 
 - Test comments: one line, plain, self-contained. Say what the assertion
-  pins ("the proposal's id is 1"). No citations of other docs, no
-  design-history narration, no vocabulary that isn't in the code.
+  pins ("the claim is the ownership ledger's last entry"). No citations of
+  other docs, no design-history narration, no vocabulary that isn't in
+  the code.
 - Source comments: the repo is self-documenting, enforced by deletion.
   A comment earns its bytes only by saying what the code cannot (a
-  non-obvious why, like ProposalCreated's missing id). Rationale lives in
+  non-obvious why, like Accept's missing prose). Rationale lives in
   the record, not `///` blocks; narration of the next ten lines gets removed.
 
 ## Semantic trip-wires (look wrong, are right)
 
 - decide is structurally stateless: it has no world and cannot see existence,
-  so authority always precedes it. expand reads the record only after the tier
-  gate. Do not give decide a world "for convenience."
+  so authority always precedes it, and every command is its events with no
+  expansion. Do not give decide a world "for convenience."
 - No birth event carries its id; references do. Task ids are fold-derived push
-  positions, dense by construction; proposal ids are the record positions of
-  their births, with no counter.
-- Open proposals are inert: they never block their target. Rejecting locks
-  was deliberate.
-- Validation depends on tier, never actor identity — the exception is
-  accept's birth-attribution door: an agent accepts only where its
-  attribution is the task's birth attribution, and a run's derived name
-  (`pi/t-N-M`) never equals one. The CLI has no tier argument:
-  `SACCADE_ACTOR` presence is agent tier, its absence human.
-  Judgment acts are proposed (`sac propose drop t-N --name`), not executed.
-- Comments carry a variant — note, demand, steer, ask — never an
-  address. The demand fires and queues; the steer reaches the live run
-  and is consumed once; the ask blocks its run on the thread's answer.
-  The ask variant has no CLI door: it rides the wire's comment door,
-  and the in-tree extension is its sole caller.
+  positions, dense by construction; comment and incarnation ids are the
+  record positions of their births, with no counter.
+- Validation depends on tier, never actor identity — the exception is the
+  self-acceptance door: an agent whose environment-declared task scope
+  covers the offered task cannot accept it. Scope is disclosure riding
+  the record, never ownership or incarnation identity. The CLI has no
+  tier argument: `SACCADE_ACTOR` presence is agent tier, its absence
+  human. Judgment acts (cancel, reopen) are human-only and executed
+  with an explanation, never proposed.
+- Comments carry a payload variant — note, request, offer, accept,
+  reject, use — never an address. Offer addresses its whole task;
+  accept and reject address the offer they name and refuse a stale
+  one; use lives on the consuming task, names another task's standing
+  Offered or Concluded account, and never creates the acceptance;
+  acceptance never creates the use.
 
 ## Edit mechanics (scar tissue)
 
