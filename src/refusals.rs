@@ -94,7 +94,7 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             ))
         }
         Reject::InvalidIncarnationId => {
-            Some("no incarnation the record birthed carries that reference; a claim names one by its birth record, never by task scope alone".into())
+            Some("no incarnation the record birthed carries that reference; a claim names one by its birth record (i-N), never by task scope alone".into())
         }
         Reject::InvalidStateTransition => match command {
             Command::Comment { kind, target } => match kind {

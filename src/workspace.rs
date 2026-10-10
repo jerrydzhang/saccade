@@ -98,7 +98,7 @@ fn branch_exists(root: &Path, branch: &GitBranch) -> bool {
         .unwrap_or(false)
 }
 
-/// The task's default branch name; the unratified scheme sweeps here.
+/// The task's default branch name.
 pub fn branch_name(task: TaskId) -> GitBranch {
     GitBranch::new(format!("saccade/t-{}", task.0)).expect("the scheme names a valid branch")
 }

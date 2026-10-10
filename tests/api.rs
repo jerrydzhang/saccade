@@ -2095,7 +2095,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     );
     assert!(ok, "stdout: {out}\nstderr: {err}");
     assert!(out.contains("workspace established"), "{out}");
-    assert!(out.contains("c-1"), "{out}");
+    assert!(out.contains("ownership names i-1"), "{out}");
     assert!(
         out.contains("term_actual_shape_1"),
         "the host's handle: {out}"
@@ -2125,8 +2125,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         "the request survives verbatim: {typed}"
     );
 
-    // the typed command runs in a scrubbed environment through the
-    // worktree's authorized dev-environment layer
+    // the typed command runs through the worktree's authorized dev-env layer
     let allowed = std::process::Command::new("direnv")
         .arg("allow")
         .arg(&worktree)
@@ -2181,7 +2180,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     assert_eq!(line("SACCADE_ACTOR"), "SACCADE_ACTOR=pi dump");
     assert_eq!(line("SACCADE_ENVRC_LAYER"), "SACCADE_ENVRC_LAYER=envrc");
     assert_eq!(line("SACCADE_TASK"), "SACCADE_TASK=t-0");
-    assert_eq!(line("SACCADE_INCARNATION"), "SACCADE_INCARNATION=c-1");
+    assert_eq!(line("SACCADE_INCARNATION"), "SACCADE_INCARNATION=i-1");
     assert_eq!(
         line("SACCADE_WORKSPACE"),
         format!("SACCADE_WORKSPACE={}", worktree.display())
@@ -2260,7 +2259,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         &[
             ("SACCADE_ACTOR", "pi"),
             ("SACCADE_TASK", "t-99"),
-            ("SACCADE_INCARNATION", "c-999"),
+            ("SACCADE_INCARNATION", "i-999"),
             ("SACCADE_WORKSPACE", "/nowhere"),
         ],
     );
@@ -2270,7 +2269,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     let env_run = |actor: Option<&str>| {
         let mut envs: Vec<(&str, &str)> = vec![
             ("SACCADE_TASK", "t-99"),
-            ("SACCADE_INCARNATION", "c-999"),
+            ("SACCADE_INCARNATION", "i-999"),
             ("SACCADE_WORKSPACE", "/nowhere"),
         ];
         if let Some(actor) = actor {
@@ -2295,7 +2294,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         &[
             ("SACCADE_ACTOR", "pi"),
             ("SACCADE_TASK", "t-99"),
-            ("SACCADE_INCARNATION", "c-999"),
+            ("SACCADE_INCARNATION", "i-999"),
             ("SACCADE_WORKSPACE", "/nowhere"),
         ],
     );
@@ -2309,7 +2308,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     assert_eq!(env_line(&out, "SACCADE_TASK"), "SACCADE_TASK=t-0");
     assert_eq!(
         env_line(&out, "SACCADE_INCARNATION"),
-        "SACCADE_INCARNATION=c-1"
+        "SACCADE_INCARNATION=i-1"
     );
     assert_eq!(
         env_line(&out, "SACCADE_WORKSPACE"),
@@ -2388,7 +2387,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         &[
             ("SACCADE_ACTOR", "pi"),
             ("SACCADE_TASK", "t-0"),
-            ("SACCADE_INCARNATION", "c-1"),
+            ("SACCADE_INCARNATION", "i-1"),
             ("SACCADE_WORKSPACE", worktree.to_str().unwrap()),
         ],
     );
@@ -2397,7 +2396,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     assert_eq!(identity["actor"], "pi");
     assert_eq!(identity["tier"], "agent");
     assert_eq!(identity["task"], "t-0");
-    assert_eq!(identity["incarnation"], "c-1");
+    assert_eq!(identity["incarnation"], "i-1");
     assert_eq!(identity["workspace"], worktree.display().to_string());
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();

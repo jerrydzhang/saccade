@@ -775,9 +775,10 @@ fn context_of(cli: &Cli) -> Result<Context, Fail> {
 
 /// The environment-declared scope: SACCADE_TASK anchors it
 /// ("t-<n>"), SACCADE_INCARNATION names a record-derived worker
-/// ("c-<seq>"), SACCADE_WORKSPACE names the workspace address (an
-/// absolute path). Disclosure riding every record, never proof; the
-/// incarnation and workspace keys ride only with the task anchor.
+/// ("i-<seq>", the establishment birth's position), SACCADE_WORKSPACE
+/// names the workspace address (an absolute path). Disclosure riding
+/// every record, never proof; the incarnation and workspace keys ride
+/// only with the task anchor.
 fn context_scope() -> Result<Option<Scope>, Fail> {
     let Some(task) = std::env::var("SACCADE_TASK").ok().filter(|t| !t.is_empty()) else {
         return Ok(None);
@@ -785,12 +786,12 @@ fn context_scope() -> Result<Option<Scope>, Fail> {
     let task = parse_task_id(&task)?;
     let incarnation = match std::env::var("SACCADE_INCARNATION") {
         Ok(value) if !value.is_empty() => {
-            let id = parse_comment_id(&value).map_err(|_| {
+            let id = parse_incarnation_ref(&value).map_err(|_| {
                 Fail::Usage(format!(
-                    "SACCADE_INCARNATION='{value}' is not a c-<seq> reference"
+                    "SACCADE_INCARNATION='{value}' is not an i-<seq> reference"
                 ))
             })?;
-            Some(IncarnationId(id.0))
+            Some(id)
         }
         _ => None,
     };
@@ -993,7 +994,7 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
             "actor": context.actor.as_str(),
             "tier": saccade::wire::tier_of(&context.tier),
             "task": scope.as_ref().map(|s| format!("t-{}", s.task.0)),
-            "incarnation": scope.as_ref().and_then(|s| s.incarnation.map(|i| format!("c-{}", i.0 .0))),
+            "incarnation": scope.as_ref().and_then(|s| s.incarnation.map(|i| format!("i-{}", i.0 .0))),
             "workspace": scope.as_ref().and_then(|s| s.workspace.as_ref().map(|w| w.as_path().display().to_string())),
             "repo": repo.map(|p| p.display().to_string()),
             "db": db_path.map(|p| p.display().to_string()),
@@ -1010,7 +1011,7 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
         Some(scope) => {
             out.push(format!("task  t-{}", scope.task.0));
             if let Some(incarnation) = scope.incarnation {
-                out.push(format!("incarnation  c-{}", incarnation.0.0));
+                out.push(format!("incarnation  i-{}", incarnation.0.0));
             }
             if let Some(workspace) = &scope.workspace {
                 out.push(format!("workspace  {}", workspace.as_path().display()));
@@ -1043,7 +1044,7 @@ fn injected_environment(
         ("SACCADE_TASK".into(), format!("t-{}", task.0)),
         (
             "SACCADE_INCARNATION".into(),
-            format!("c-{}", workspace.birth.0),
+            format!("i-{}", workspace.birth.0),
         ),
         (
             "SACCADE_WORKSPACE".into(),
@@ -1332,7 +1333,7 @@ fn render_workspace_reply(
     let claimed = reply.records.iter().any(|r| r.kind == "task_claimed");
     if reply.established && requested && claimed {
         out.push(format!(
-            "t-{} workspace established — request recorded, ownership names c-{}",
+            "t-{} workspace established — request recorded, ownership names i-{}",
             reply.workspace.task, reply.incarnation
         ));
     } else if reply.established {
@@ -1443,6 +1444,19 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
         }
         _ => unreachable!("read_only reached from a mutating command"),
     }
+}
+
+/// The 'i-<seq>' face the incarnation reference carries.
+fn parse_incarnation_ref(token: &str) -> Result<IncarnationId, Fail> {
+    let n = token.strip_prefix("i-").ok_or_else(|| {
+        Fail::Usage(format!(
+            "'{token}' is not an incarnation reference (expected i-<seq>)"
+        ))
+    })?;
+    let n: usize = n
+        .parse()
+        .map_err(|_| Fail::Usage(format!("'{token}' is not an incarnation reference")))?;
+    Ok(IncarnationId(RecordId(n)))
 }
 
 fn parse_task_id(token: &str) -> Result<TaskId, Fail> {
@@ -2271,7 +2285,7 @@ mod test {
 
         // the scope: no anchor yields none, and the riders ride only
         // with the anchor
-        unsafe { std::env::set_var("SACCADE_INCARNATION", "c-9") };
+        unsafe { std::env::set_var("SACCADE_INCARNATION", "i-9") };
         assert!(context_scope().unwrap().is_none());
         unsafe { std::env::remove_var("SACCADE_INCARNATION") };
 
@@ -2283,7 +2297,7 @@ mod test {
         );
 
         unsafe {
-            std::env::set_var("SACCADE_INCARNATION", "c-9");
+            std::env::set_var("SACCADE_INCARNATION", "i-9");
             std::env::set_var("SACCADE_WORKSPACE", "/repo/wt/t-125");
         }
         let scope = context_scope().unwrap().expect("the anchor yields a scope");

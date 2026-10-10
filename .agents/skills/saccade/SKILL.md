@@ -21,7 +21,7 @@ carry authority. Mutating commands record your identity from possession;
 reads need none.
 
 A session's environment may declare a **scope**: `SACCADE_TASK` (its task
-binding, `t-N`) anchors it, `SACCADE_INCARNATION` (a `c-N` birth reference)
+binding, `t-N`) anchors it, `SACCADE_INCARNATION` (an `i-N` birth reference)
 and `SACCADE_WORKSPACE` (an absolute path) ride with it. The scope is
 disclosure riding every record you write — never proof, never ownership.
 It feeds exactly one gate: an agent whose declared scope covers a task
@@ -222,9 +222,10 @@ machinery-authored establishment record carries the task reference,
 the canonical base commit (the primary checkout's current HEAD, or
 `--base <ref>`), the branch (`saccade/t-<n>`), and the worktree's
 absolute path — beside the tracker's db, under `worktrees/t-<n>`. That
-record's position is the **shared workspace/incarnation identity**:
-claims and `SACCADE_INCARNATION` reference it, and first start's
-ownership names it while the request keeps its caller's authorship.
+record's position is the **shared workspace/incarnation identity**,
+referenced `i-N`: claims and `SACCADE_INCARNATION` carry it, and first
+start's ownership names it while the request keeps its caller's
+authorship.
 
 The record holds establishment facts, not liveness: a checkout can go
 missing while its association stands. `sac open` (and a repeat start)

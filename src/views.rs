@@ -56,7 +56,7 @@ pub fn current_owner(ctx: &TaskContext) -> Option<&OwnerEntry> {
 fn owner_str(owner: &Owner) -> String {
     match owner {
         Owner::Human(actor) | Owner::External(actor) => actor.as_str().to_string(),
-        Owner::Incarnation(id) => format!("c-{}", id.0.0),
+        Owner::Incarnation(id) => format!("i-{}", id.0.0),
     }
 }
 
