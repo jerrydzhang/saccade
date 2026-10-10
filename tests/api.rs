@@ -476,6 +476,7 @@ fn scratch_repo(dir: &std::path::Path) -> (std::path::PathBuf, String, String) {
     std::fs::create_dir_all(&root).unwrap();
     sh(&root, &["init", "-q", "--initial-branch=main"]);
     std::fs::write(root.join("readme"), "the project\n").unwrap();
+    std::fs::write(root.join(".envrc"), "export SACCADE_ENVRC_LAYER=envrc\n").unwrap();
     sh(&root, &["add", "."]);
     sh(&root, &["commit", "-qm", "base"]);
     let first = sh(&root, &["rev-parse", "HEAD"]);
@@ -2106,8 +2107,11 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     let worktree = db.parent().unwrap().join("worktrees").join("t-0");
     let typed = command_of(&host_log, &format!("path:{}", worktree.display()));
     assert!(
-        typed.starts_with("SACCADE_ACTOR='pi dump' "),
-        "the assignment quotes the value, not the word: {typed}"
+        typed.starts_with(&format!(
+            "SACCADE_ACTOR='pi dump' direnv exec {} ",
+            worktree.display()
+        )),
+        "the assignment leads, the dev environment wraps the command: {typed}"
     );
     assert!(
         typed.contains(&format!(
@@ -2121,7 +2125,18 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         "the request survives verbatim: {typed}"
     );
 
-    // the typed command runs in a scrubbed environment: only the injection answers
+    // the typed command runs in a scrubbed environment through the
+    // worktree's authorized dev-environment layer
+    let allowed = std::process::Command::new("direnv")
+        .arg("allow")
+        .arg(&worktree)
+        .output()
+        .expect("direnv runs");
+    assert!(
+        allowed.status.success(),
+        "direnv allow: {}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
     let dump = db.parent().unwrap().join("pi-dump-run");
     let fresh = std::process::Command::new("bash")
         .arg("-c")
@@ -2164,6 +2179,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         "{injected}"
     );
     assert_eq!(line("SACCADE_ACTOR"), "SACCADE_ACTOR=pi dump");
+    assert_eq!(line("SACCADE_ENVRC_LAYER"), "SACCADE_ENVRC_LAYER=envrc");
     assert_eq!(line("SACCADE_TASK"), "SACCADE_TASK=t-0");
     assert_eq!(line("SACCADE_INCARNATION"), "SACCADE_INCARNATION=c-1");
     assert_eq!(

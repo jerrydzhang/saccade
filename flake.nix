@@ -92,9 +92,10 @@
           src = ./.;
           buildInputs = [];
           # the api tests exercise real git worktrees under a
-          # writable home
+          # writable home, through a real direnv layer
           nativeBuildInputs = [
             pkgs.git
+            pkgs.direnv
           ];
           # the pinned native pi this binary's start door launches;
           # SACCADE_PI remains the development override

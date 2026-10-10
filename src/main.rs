@@ -1281,10 +1281,10 @@ fn launch_harness(
     let worktree = &reply.workspace.path;
     let direnv = std::path::Path::new(worktree).join(".envrc");
     if direnv.is_file() {
-        // the assignment leads the typed line: the shell exports it into
-        // the command it prefixes, direnv included
+        // the assignment leads the typed line and the dev environment
+        // wraps the command: SACCADE_ACTOR=… direnv exec <wt> <sac> …
         argv.splice(
-            1..1,
+            0..0,
             ["direnv".to_string(), "exec".to_string(), worktree.clone()],
         );
     }
