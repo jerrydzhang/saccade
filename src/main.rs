@@ -1114,10 +1114,11 @@ enum HostOpen {
     Launched { terminal: String, command: String },
     /// A new shell terminal in the worktree (a birth's open).
     Created { terminal: String },
-    /// A live terminal already in the worktree, switched to the front.
+    /// A live terminal the host confirmed it brought to the front.
     Revealed { terminal: String },
-    /// No live terminal; the workspace's address stands as the report.
-    Reported { path: String },
+    /// The workspace's address stands as the report; `live` names a
+    /// terminal the host holds but would not bring forward.
+    Reported { path: String, live: Option<String> },
 }
 
 fn orca(args: &[&str]) -> Result<std::process::Output, String> {
@@ -1178,6 +1179,20 @@ fn live_terminal(path: &str) -> Result<Option<String>, String> {
     Ok(parsed)
 }
 
+/// Whether the host confirmed it brought the terminal to the front:
+/// its pinned answer is result.focus.navigated.
+fn switch_navigated(out: &std::process::Output) -> bool {
+    serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&out.stdout))
+        .ok()
+        .and_then(|v| {
+            v.get("result")
+                .and_then(|r| r.get("focus"))
+                .and_then(|f| f.get("navigated"))
+                .and_then(|n| n.as_bool())
+        })
+        .unwrap_or(false)
+}
+
 /// The created terminal's handle from the host's pinned response shape.
 fn terminal_handle(stdout: &str) -> Result<String, String> {
     serde_json::from_str::<serde_json::Value>(stdout)
@@ -1192,22 +1207,25 @@ fn terminal_handle(stdout: &str) -> Result<String, String> {
         .ok_or_else(|| "the terminal was created but the host named no handle".into())
 }
 
-/// Open a workspace through the host: a live terminal is revealed, and
-/// only a birth's open creates one — a standing workspace without a
-/// live terminal is reported, never grown another tab.
+/// Open a workspace through the host: a live terminal is brought
+/// forward only on the host's confirmed navigation, and only a birth's
+/// open creates one — a standing workspace is reported, never grown
+/// another tab.
 fn open_through_host(path: &str, create_when_none: bool) -> Result<HostOpen, String> {
     if let Some(handle) = live_terminal(path)? {
-        let out = orca(&["terminal", "switch", "--terminal", &handle])?;
-        if out.status.success() {
+        let out = orca(&["terminal", "switch", "--terminal", &handle, "--json"])?;
+        if out.status.success() && switch_navigated(&out) {
             return Ok(HostOpen::Revealed { terminal: handle });
         }
         return Ok(HostOpen::Reported {
             path: path.to_string(),
+            live: Some(handle),
         });
     }
     if !create_when_none {
         return Ok(HostOpen::Reported {
             path: path.to_string(),
+            live: None,
         });
     }
     orca_await_worktree(path)?;
@@ -1243,8 +1261,10 @@ fn launch_harness(
     let label = command_label(&pi.display().to_string());
     let repo = resolve_repo(cli)?;
     let sac = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("sac"));
-    let mut argv = vec![format!("SACCADE_ACTOR={label}")];
-    argv.push(sac.display().to_string());
+    // an assignment is not a word: its value is quoted here, and it
+    // never passes through the word quoting below
+    let assignment = format!("SACCADE_ACTOR={}", shell_quote(&label));
+    let mut argv = vec![sac.display().to_string()];
     argv.extend([
         "--server".to_string(),
         cli.server.clone(),
@@ -1268,9 +1288,8 @@ fn launch_harness(
             ["direnv".to_string(), "exec".to_string(), worktree.clone()],
         );
     }
-    let command = argv
-        .iter()
-        .map(|w| shell_quote(w))
+    let command = std::iter::once(assignment)
+        .chain(argv.iter().map(|w| shell_quote(w)))
         .collect::<Vec<_>>()
         .join(" ");
     orca_await_worktree(worktree).map_err(Fail::Usage)?;
@@ -1345,8 +1364,14 @@ fn render_workspace_reply(
         HostOpen::Revealed { terminal } => {
             out.push(format!("  host terminal {terminal} · revealed"))
         }
-        HostOpen::Reported { path } => out.push(format!(
+        HostOpen::Reported { path, live: None } => out.push(format!(
             "  host · no live terminal; the workspace stands at {path}"
+        )),
+        HostOpen::Reported {
+            path,
+            live: Some(handle),
+        } => out.push(format!(
+            "  host · terminal {handle} stands at {path}; the host would not bring it forward"
         )),
     }
     out.extend(reply.records.iter().map(record_line));
@@ -2275,9 +2300,7 @@ mod test {
         restore();
     }
 
-    /// The write door's unit matrix, terminal-free by construction; the
-    /// pty arms live in the api suite. Possession rides the context's
-    /// tier, never a fresh env read.
+    /// Possession passes any context; the terminal-free matrix refuses.
     #[test]
     fn the_identity_fallback_guards_the_write_door() {
         let jerry = Context {
@@ -2325,8 +2348,7 @@ mod test {
         );
     }
 
-    /// The typed command survives the shell that types it: the quoting
-    /// keeps argument boundaries across arbitrary request prose.
+    /// The quoting keeps argument boundaries across arbitrary prose.
     #[test]
     fn shell_quoting_keeps_word_boundaries() {
         assert_eq!(shell_quote("sac"), "sac");

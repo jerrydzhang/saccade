@@ -1969,7 +1969,14 @@ if [ "$1" = terminal ] && [ "$2" = list ]; then
   printf ']}}\n'
   exit 0
 fi
-if [ "$1" = terminal ] && [ "$2" = switch ]; then exit 0; fi
+if [ "$1" = terminal ] && [ "$2" = switch ]; then
+  if [ "${FAKE_ORCA_NAVIGATE:-1}" = "1" ]; then
+    printf '{"ok":true,"result":{"focus":{"navigated":true}}}\n'
+  else
+    printf '{"ok":true,"result":{"focus":{"navigated":false,"reason":"no renderer"}}}\n'
+  fi
+  exit 0
+fi
 exit 1
 "#,
     )
@@ -1980,7 +1987,7 @@ exit 1
 
 /// A stub harness: one dump of argv, cwd, and the saccade environment.
 fn stub_pi(dir: &std::path::Path) -> std::path::PathBuf {
-    let pi = dir.join("pi");
+    let pi = dir.join("pi dump");
     std::fs::write(
         &pi,
         r#"#!/usr/bin/env bash
@@ -2099,8 +2106,8 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     let worktree = db.parent().unwrap().join("worktrees").join("t-0");
     let typed = command_of(&host_log, &format!("path:{}", worktree.display()));
     assert!(
-        typed.starts_with("SACCADE_ACTOR=pi "),
-        "the launch supplies the harness label: {typed}"
+        typed.starts_with("SACCADE_ACTOR='pi dump' "),
+        "the assignment quotes the value, not the word: {typed}"
     );
     assert!(
         typed.contains(&format!(
@@ -2156,7 +2163,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
             .any(|l| l == format!("pwd: {}", worktree.display())),
         "{injected}"
     );
-    assert_eq!(line("SACCADE_ACTOR"), "SACCADE_ACTOR=pi");
+    assert_eq!(line("SACCADE_ACTOR"), "SACCADE_ACTOR=pi dump");
     assert_eq!(line("SACCADE_TASK"), "SACCADE_TASK=t-0");
     assert_eq!(line("SACCADE_INCARNATION"), "SACCADE_INCARNATION=c-1");
     assert_eq!(
@@ -2179,6 +2186,24 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     let asked = std::fs::read_to_string(&host_log).unwrap();
     assert!(
         asked.contains("terminal\nswitch\n--terminal\nterm_actual_shape_1"),
+        "{asked}"
+    );
+    assert!(!asked.contains("create"), "{asked}");
+
+    // an unconfirmed navigation reports the terminal it found, never a reveal
+    std::fs::write(&host_log, b"").unwrap();
+    let (ok, out, err) = run(
+        &routed(&["open", "t-0"]),
+        &[("SACCADE_ACTOR", "pi"), ("FAKE_ORCA_NAVIGATE", "0")],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert!(out.contains("term_actual_shape_1"), "{out}");
+    assert!(out.contains("would not bring it forward"), "{out}");
+    assert!(!out.contains("revealed"), "{out}");
+    assert!(!out.contains("no live terminal"), "{out}");
+    let asked = std::fs::read_to_string(&host_log).unwrap();
+    assert!(
+        asked.contains("terminal\nswitch\n--terminal\nterm_actual_shape_1\n--json"),
         "{asked}"
     );
     assert!(!asked.contains("create"), "{asked}");
@@ -2426,8 +2451,7 @@ fn open_pty() -> (i32, std::path::PathBuf) {
 
 use std::os::unix::ffi::OsStrExt;
 
-/// A slave fd as spawnable stdio; the master stays open in this process
-/// so the slave keeps reporting a terminal.
+/// A pty slave as spawnable stdio; the master stays open for the terminal read.
 fn pty_stdio(masters: &mut Vec<i32>) -> std::process::Stdio {
     use std::os::unix::io::FromRawFd;
     let (master, slave) = open_pty();
@@ -2437,8 +2461,7 @@ fn pty_stdio(masters: &mut Vec<i32>) -> std::process::Stdio {
     std::process::Stdio::from(unsafe { std::fs::File::from_raw_fd(fd) })
 }
 
-/// Run sac with piped stdin and each of stdout/stderr either a pipe or
-/// a pty slave; the bytes written to stdin land before the wait.
+/// Run sac with piped stdin and stdout/stderr each a pipe or a pty slave.
 fn run_with_terminals(
     bin: &str,
     args: &[String],

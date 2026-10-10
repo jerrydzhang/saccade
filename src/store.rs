@@ -1516,9 +1516,7 @@ mod test {
         );
         assert!(matches!(refused, Err(Reject::WorkspaceMissing)));
 
-        // the establishment births the lineage at the record's position:
-        // checkpoint starts at the base, and the same position names the
-        // task-bound worker
+        // the establishment births the lineage; the same position names the worker
         log.execute_system(
             Command::EstablishWorkspace {
                 task_id: TaskId(0),
@@ -1552,8 +1550,7 @@ mod test {
         );
         assert!(matches!(refused, Err(Reject::WorkspaceAlreadyExists)));
 
-        // the establishment verb rejects judgment tiers: the role is
-        // the only door
+        // the establishment verb rejects judgment tiers
         let refused = log.execute(
             human(),
             Command::EstablishWorkspace {
@@ -1567,9 +1564,7 @@ mod test {
         assert!(matches!(refused, Err(Reject::HumanOnly)));
     }
 
-    /// The claim that names the incarnation reference holds as the
-    /// incarnation at every judgment tier: a human requesting the
-    /// start does not manufacture a human owner.
+    /// An incarnation claim names the incarnation at every judgment tier.
     #[test]
     fn an_incarnation_claim_names_the_incarnation_whoever_requests_it() {
         let mut log = Log::new();
