@@ -21,6 +21,7 @@ use crate::events::Event;
 use crate::objects::comment::{CommentKind, Target};
 use crate::objects::task::TaskId;
 use crate::store::{Context, RecordId, Scope, Tier, World};
+use crate::views::{self, WorkspaceFacts};
 use crate::web;
 use crate::workspace::{self, Established, WorkspaceFail};
 use crate::{Command, Reject};
@@ -393,6 +394,26 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                     .expect("the birth record folds into its task");
                 reply["id"] = json!(format!("t-{}", born.0));
             }
+            // a request reply carries its record position, the root
+            // task, and the recorded workspace when one stands
+            if matches!(
+                &command,
+                Command::Comment {
+                    kind: CommentKind::Request { .. },
+                    ..
+                }
+            ) {
+                let request = stored.first().expect("a comment lands its one record");
+                let facts = app
+                    .snapshot()
+                    .expect("a landed write leaves a foldable world")
+                    .world;
+                let facts = views::request_facts(&facts, RecordId(request.seq))
+                    .expect("the landed comment folds in");
+                reply["seq"] = json!(facts.seq);
+                reply["task"] = json!(facts.task);
+                reply["workspace"] = json!(facts.workspace);
+            }
             (StatusCode::OK, Json(reply)).into_response()
         }
         Err(e) => {
@@ -423,16 +444,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/workspace/start", post(workspace_start))
         .route("/api/v1/workspace/open", post(workspace_open))
         .route("/api/v1/version", get(version))
-}
-
-/// The workspace facts an operation reply carries: record facts, never
-/// a liveness claim.
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
-pub struct WorkspaceFacts {
-    pub task: usize,
-    pub base: String,
-    pub branch: String,
-    pub path: String,
 }
 
 impl WorkspaceFacts {

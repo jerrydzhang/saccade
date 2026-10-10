@@ -3,15 +3,128 @@
 
 use std::collections::BTreeMap;
 
+use crate::events::Event;
 use crate::objects::comment::{CommentContext, CommentId, CommentKind, CommentState, Target};
 use crate::objects::task::{Owner, OwnerEntry, TaskContext, TaskId, TaskState};
 use crate::store::{RecordId, Tier, World};
 use crate::types::artifact::Artifact;
+use serde::{Deserialize, Serialize};
 
 /// An owned task with no record movement for this long renders adrift.
 pub const ADRIFT_AFTER_SECS: u64 = 24 * 3600;
 /// The movement ribbon carries this much history, nothing older.
 pub const RIBBON_WINDOW_SECS: u64 = 72 * 3600;
+
+/// The recorded workspace facts one operation reply carries: record
+/// facts, never a liveness claim.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceFacts {
+    pub task: usize,
+    pub base: String,
+    pub branch: String,
+    pub path: String,
+}
+
+/// A request write's reply facts: the request's record position, its
+/// root task, and the task's recorded workspace when one stands.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequestFacts {
+    pub seq: usize,
+    pub task: usize,
+    pub workspace: Option<WorkspaceFacts>,
+}
+
+/// The destination facts recording a request returns: the request's
+/// own record position, the root task its target resolves through,
+/// and the recorded workspace address when the task holds one. A task
+/// with no recorded workspace returns none — nothing is provisioned.
+pub fn request_facts(world: &World, position: RecordId) -> Option<RequestFacts> {
+    let comment = world.comments.get(&CommentId(position))?;
+    let task = comment.comment.root.0;
+    let workspace = world.tasks[task]
+        .workspace
+        .as_ref()
+        .map(|w| WorkspaceFacts {
+            task,
+            base: w.workspace.base.as_str().to_string(),
+            branch: w.workspace.branch.as_str().to_string(),
+            path: w.workspace.worktree.as_path().display().to_string(),
+        });
+    Some(RequestFacts {
+        seq: position.0,
+        task,
+        workspace,
+    })
+}
+
+/// Whether one record answers a wait: a task wait matches every record
+/// folding into that task — its birth, its claims and state acts, its
+/// comments and artifacts, revisions and withdrawals of its comments,
+/// its workspace records; a comment wait matches activity on that
+/// comment's chain — a birth targeting into it (replies and decisions
+/// alike) or a revision/withdrawal of a chain member. Everything is
+/// structural from recorded references; prose citations never match,
+/// and a use never matches a comment wait (it targets the consuming
+/// task, not the comment).
+pub fn wait_matches(world: &World, at: RecordId, event: &Event, target: &Target) -> bool {
+    match event {
+        Event::TaskCreated { .. } => match target {
+            Target::Task(task) => world.task_born_at(at) == Some(*task),
+            Target::Comment(_) => false,
+        },
+        Event::TaskClaimed { id, .. }
+        | Event::TaskCancelled { id, .. }
+        | Event::TaskReopened { id, .. } => *target == Target::Task(*id),
+        Event::Commented { target: born, .. } => match target {
+            Target::Task(task) => born_task(world, at) == Some(*task),
+            Target::Comment(watched) => chain_contains(world, *born, *watched),
+        },
+        Event::CommentRevised { id, .. } | Event::CommentWithdrawn { id, .. } => match target {
+            Target::Task(task) => world
+                .comments
+                .get(id)
+                .is_some_and(|c| c.comment.root == *task),
+            Target::Comment(watched) => {
+                *id == *watched || chain_contains(world, target_of(world, *id), *watched)
+            }
+        },
+        Event::ArtifactAdded { root, .. } => *target == Target::Task(*root),
+        Event::WorkspaceEstablished { task_id, .. }
+        | Event::TaskWorkspaceCheckpointed { task_id, .. } => *target == Target::Task(*task_id),
+    }
+}
+
+/// The task a comment born at this position lives on, by its root.
+fn born_task(world: &World, at: RecordId) -> Option<TaskId> {
+    world.comments.get(&CommentId(at)).map(|c| c.comment.root)
+}
+
+/// The target one resident comment carries.
+fn target_of(world: &World, id: CommentId) -> Target {
+    world
+        .comments
+        .get(&id)
+        .expect("a chain member is resident")
+        .comment
+        .target
+}
+
+/// Whether the chain from `born` up through its targets passes
+/// `watched` — the reply-chain membership a comment wait matches on.
+fn chain_contains(world: &World, born: Target, watched: CommentId) -> bool {
+    let mut up = born;
+    loop {
+        match up {
+            Target::Task(_) => return false,
+            Target::Comment(id) => {
+                if id == watched {
+                    return true;
+                }
+                up = target_of(world, id);
+            }
+        }
+    }
+}
 
 pub struct TaskView {
     pub id: String,
@@ -2030,6 +2143,285 @@ mod test {
             .unwrap();
             let groups = search(&world, &q(&["funding"])).unwrap();
             assert_eq!(pointers(&groups), vec![(0, vec!["t-0 explanation".into()])]);
+        }
+    }
+
+    // -- the wait door's structural matching -------------------------
+
+    mod wait {
+        use super::*;
+
+        fn ctx(name: &str) -> Context {
+            Context {
+                actor: ActorName::new(name.into()).unwrap(),
+                tier: Tier::Human,
+                scope: None,
+            }
+        }
+
+        fn record(seq: usize, event: Event) -> (usize, Event) {
+            (seq, event)
+        }
+
+        fn task(seq: usize, name: &str) -> (usize, Event) {
+            record(
+                seq,
+                Event::TaskCreated {
+                    name: Prose::new(name.into()).unwrap(),
+                    parent_id: None,
+                },
+            )
+        }
+
+        fn comment(seq: usize, target: Target, kind: CommentKind) -> (usize, Event) {
+            record(seq, Event::Commented { target, kind })
+        }
+
+        fn note(seq: usize, target: Target, body: &str) -> (usize, Event) {
+            comment(
+                seq,
+                target,
+                CommentKind::Note {
+                    body: Prose::new(body.into()).unwrap(),
+                },
+            )
+        }
+
+        /// Two tasks; t-0 holds the waited offer, its sibling note, a
+        /// two-link reply chain, revisions, a withdrawal, the decision
+        /// naming the offer, a claim, and an artifact; t-1 holds its
+        /// own note and a use naming t-0's offer.
+        fn story() -> (World, Vec<(usize, Event)>) {
+            let events = vec![
+                task(0, "implement foo"),
+                comment(
+                    1,
+                    Target::Task(TaskId(0)),
+                    CommentKind::Offer {
+                        body: Prose::new("suite green, ready for review".into()).unwrap(),
+                    },
+                ),
+                note(2, Target::Task(TaskId(0)), "sibling chatter"),
+                note(
+                    3,
+                    Target::Comment(CommentId(RecordId(1))),
+                    "one question first",
+                ),
+                task(4, "migrate floop"),
+                note(
+                    5,
+                    Target::Comment(CommentId(RecordId(3))),
+                    "answered in the body; see c-1 for the offer",
+                ),
+                (
+                    6,
+                    Event::CommentRevised {
+                        id: CommentId(RecordId(5)),
+                        body: Prose::new("answered more precisely".into()).unwrap(),
+                    },
+                ),
+                comment(
+                    7,
+                    Target::Comment(CommentId(RecordId(1))),
+                    CommentKind::Accept {
+                        offer: CommentId(RecordId(1)),
+                    },
+                ),
+                note(8, Target::Task(TaskId(1)), "the other thread"),
+                comment(
+                    9,
+                    Target::Task(TaskId(1)),
+                    CommentKind::Use {
+                        offer: CommentId(RecordId(1)),
+                        reason: Prose::new("floop rests on foo".into()).unwrap(),
+                    },
+                ),
+                (
+                    10,
+                    Event::TaskClaimed {
+                        id: TaskId(0),
+                        incarnation: None,
+                    },
+                ),
+                (
+                    11,
+                    Event::ArtifactAdded {
+                        root: TaskId(0),
+                        artifact: Artifact {
+                            name: Prose::new("sweep figure".into()).unwrap(),
+                            hash: ContentHash::of(b"figure bytes"),
+                        },
+                    },
+                ),
+                (
+                    12,
+                    Event::CommentRevised {
+                        id: CommentId(RecordId(1)),
+                        body: Prose::new("the account, restated".into()).unwrap(),
+                    },
+                ),
+                (
+                    13,
+                    Event::CommentWithdrawn {
+                        id: CommentId(RecordId(3)),
+                        note: Prose::new("asked in the wrong place".into()).unwrap(),
+                    },
+                ),
+            ];
+            let records = events
+                .iter()
+                .map(|(seq, event)| Record {
+                    id: RecordId(*seq),
+                    timestamp: *seq as u64,
+                    context: ctx("jerry"),
+                    event: event.clone(),
+                })
+                .collect();
+            (World::replay(records).unwrap(), events)
+        }
+
+        fn matching(world: &World, events: &[(usize, Event)], target: &Target) -> Vec<usize> {
+            events
+                .iter()
+                .filter(|(seq, event)| wait_matches(world, RecordId(*seq), event, target))
+                .map(|(seq, _)| *seq)
+                .collect()
+        }
+
+        /// A task wait matches every record folding into the task and
+        /// nothing folding into another.
+        #[test]
+        fn the_task_wait_matches_exactly_its_own_records() {
+            let (world, events) = story();
+            assert_eq!(
+                matching(&world, &events, &Target::Task(TaskId(0))),
+                vec![0, 1, 2, 3, 5, 6, 7, 10, 11, 12, 13]
+            );
+            assert_eq!(
+                matching(&world, &events, &Target::Task(TaskId(1))),
+                vec![4, 8, 9]
+            );
+        }
+
+        /// A comment wait matches only its reply chain: replies at any
+        /// depth, revisions and withdrawals of chain members, and the
+        /// decision naming it. The offer's own birth, the sibling note
+        /// on the same task, the use naming it, and the prose citation
+        /// inside c-5's body all stay asleep.
+        #[test]
+        fn the_comment_wait_matches_only_its_chain() {
+            let (world, events) = story();
+            let offer = Target::Comment(CommentId(RecordId(1)));
+            assert_eq!(matching(&world, &events, &offer), vec![3, 5, 6, 7, 12, 13]);
+        }
+    }
+
+    // -- the request write's reply facts -----------------------------
+
+    mod request_reply {
+        use super::*;
+        use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
+
+        fn ctx(name: &str) -> Context {
+            Context {
+                actor: ActorName::new(name.into()).unwrap(),
+                tier: Tier::Human,
+                scope: None,
+            }
+        }
+
+        fn record(seq: usize, ctx: &Context, event: Event) -> Record {
+            Record {
+                id: RecordId(seq),
+                timestamp: seq as u64,
+                context: ctx.clone(),
+                event,
+            }
+        }
+
+        fn comment(seq: usize, ctx: &Context, target: Target, kind: CommentKind) -> Record {
+            record(seq, ctx, Event::Commented { target, kind })
+        }
+
+        /// t-0 holds a recorded workspace, t-1 holds none; the last
+        /// request replies into t-1's note, so its root is t-1.
+        #[test]
+        fn the_request_facts_resolve_the_root_and_the_recorded_workspace() {
+            let jerry = ctx("jerry");
+            let world = World::replay(vec![
+                record(
+                    0,
+                    &jerry,
+                    Event::TaskCreated {
+                        name: Prose::new("implement foo".into()).unwrap(),
+                        parent_id: None,
+                    },
+                ),
+                record(
+                    1,
+                    &jerry,
+                    Event::TaskCreated {
+                        name: Prose::new("migrate floop".into()).unwrap(),
+                        parent_id: None,
+                    },
+                ),
+                record(
+                    2,
+                    &jerry,
+                    Event::WorkspaceEstablished {
+                        task_id: TaskId(0),
+                        base: GitCommit::new("abc123".into()).unwrap(),
+                        branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                        worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+                    },
+                ),
+                comment(
+                    3,
+                    &jerry,
+                    Target::Task(TaskId(1)),
+                    CommentKind::Note {
+                        body: Prose::new("context for the migration".into()).unwrap(),
+                    },
+                ),
+                comment(
+                    4,
+                    &jerry,
+                    Target::Task(TaskId(0)),
+                    CommentKind::Request {
+                        body: Prose::new("where do you stand?".into()).unwrap(),
+                    },
+                ),
+                comment(
+                    5,
+                    &jerry,
+                    Target::Comment(CommentId(RecordId(3))),
+                    CommentKind::Request {
+                        body: Prose::new("and on this note?".into()).unwrap(),
+                    },
+                ),
+            ])
+            .unwrap();
+
+            let facts = request_facts(&world, RecordId(4)).expect("the request folds in");
+            assert_eq!(facts.seq, 4);
+            assert_eq!(facts.task, 0);
+            let ws = facts.workspace.expect("the recorded workspace returns");
+            assert_eq!(
+                (ws.task, ws.branch, ws.base, ws.path),
+                (
+                    0,
+                    "saccade/t-0".into(),
+                    "abc123".into(),
+                    "/repo/wt/t-0".into()
+                )
+            );
+
+            // a comment target resolves through its root task, and a
+            // task with no recorded workspace returns none
+            let facts = request_facts(&world, RecordId(5)).expect("the request folds in");
+            assert_eq!(facts.seq, 5);
+            assert_eq!(facts.task, 1);
+            assert!(facts.workspace.is_none());
         }
     }
 }

@@ -10,8 +10,9 @@ One binary over an append-only event log; the world is a fold of that log.
 The record is the reasoning cache: conclusions live on threads so the next
 reader — often you, after a context loss — never re-derives them. There is
 no managed execution in this build: the tracker records undertakings,
-accounts, and decisions — it never waits on or supervises anything, and
-launching asks the host for a terminal, never manages the session.
+accounts, and decisions — it holds no waits and supervises nothing
+(waiting is the caller's temporary read), and launching asks the host for
+a terminal, never manages the session.
 
 ## Identity
 
@@ -139,7 +140,7 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac create task "name" [--parent t-N]` | any tier | the reply names what was born |
 | `sac claim t-N` | any tier | ownership transfer; never a state change |
 | `sac comment t-N "…"` / `sac comment c-<seq> "…"` | any tier | a note, parked or replied |
-| `sac request t-N "…"` / `sac request c-<seq> "…"` | any tier | prose seeking response |
+| `sac request t-N "…"` / `sac request c-<seq> "…"` | any tier | prose seeking response; the reply names the record's position and the destination task's recorded workspace |
 | `sac offer t-N "…"` | any tier | the whole-task closing account |
 | `sac accept c-<offer>` | any tier | conclude through the standing offer |
 | `sac reject c-<offer> --grounds "…"` | any tier | reconsideration with grounds; reopens the task |
@@ -149,6 +150,7 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac revise c-<seq> "…"` (prose also by `--stdin` or `--body-file`) | any tier | presentation repair on prose-carrying variants; the fold names a reviser, `sac log` keeps the original |
 | `sac withdraw c-<seq> --note "…"` | any tier | the note's standing-error repair: body out, tombstone stays |
 | `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
+| `sac wait t-N\|c-N --after <seq> [--timeout <secs>]` | anonymous | block until a record answers the target; matches are strictly after the cursor; nothing is recorded |
 | `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace — none is created by checkpoint |
 | `sac start t-N "initial request"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects, record the request, assign the incarnation ownership, and submit the pinned native Pi into one host terminal with the request as its prompt; a repeat start reveals the standing workspace's live terminal or reports its address — no second launch, request, or ownership change |
 | `sac open t-N` | any tier | ensure the recorded environment exists (a missing checkout is recreated from its branch tip); a fresh association births the establishment alone, a standing one reveals its live terminal or reports its address — never a harness launch, request, or ownership change |
@@ -161,7 +163,7 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
 
 Not in this build (later slices, do not assume them): managed
-completion obligations, generic waits, steering a live session,
+completion obligations, steering a live session,
 proposal machinery of any kind. Launching is the host's: `sac start`
 asks the host (Orca) for one terminal and never supervises it —
 restarting Saccade leaves native sessions alone.
@@ -201,6 +203,33 @@ one matched line each, in record order.
 
 Pointers stay pointers. The power tail is unchanged: `sac log | grep`
 reads the raw record.
+
+## Waiting
+
+`sac wait t-N|c-N --after <seq>` blocks until a record answering the
+target lands. A task wait matches every record folding into the task;
+a comment wait matches its reply chain — replies at any depth,
+revisions and withdrawals of chain members, and decisions targeting
+it. Unrelated activity elsewhere on the task and prose-only citations
+never match. Any matching activity wakes, partial replies included;
+the result never claims the request is answered or the task complete —
+you interpret it and may wait again.
+
+The cursor is a global record position you supply, never defaulted:
+matches are strictly after it. Every `--json` read discloses the
+snapshot's `cursor` (null on an empty log), and a request write names
+its own `seq` — read, ask, wait, in that order, and responses that
+land between the steps are caught, because committed records are
+checked before any blocking. The reply lists matched records in record
+order and the cursor of the snapshot inspected through, for the next
+wait. `--timeout <secs>` answers empty with the cursor instead of
+blocking forever. A wait records nothing and holds nothing: it is a
+read the caller owns, not a registration the tracker keeps.
+
+`sac request`'s reply also names the destination: the record's `seq`,
+its root task (a comment target resolves through the chain), and the
+task's recorded workspace facts — an address, never delivery; no
+recorded workspace means none returned.
 
 ## Hygiene
 

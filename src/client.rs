@@ -5,16 +5,8 @@ use crate::Command;
 use crate::api::{Envelope, WireContext, WireTier};
 use crate::db::StoredRecord;
 use crate::store::{Context, Tier};
+use crate::views::WorkspaceFacts;
 use serde::{Deserialize, Serialize};
-
-/// The workspace facts an operation reply carries.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct WorkspaceFacts {
-    pub task: usize,
-    pub base: String,
-    pub branch: String,
-    pub path: String,
-}
 
 /// One workspace operation's outcome, the wire's shape.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -63,6 +55,16 @@ struct RecordsBody {
     /// that predate it omit the field
     #[serde(default)]
     id: Option<String>,
+    /// A request write's record position, present only on request replies
+    #[serde(default)]
+    seq: Option<usize>,
+    /// The request's root task, present only on request replies
+    #[serde(default)]
+    task: Option<usize>,
+    /// The destination task's recorded workspace, present only on
+    /// request replies; null when the task holds none
+    #[serde(default)]
+    workspace: Option<WorkspaceFacts>,
 }
 
 #[derive(Deserialize)]
@@ -76,12 +78,16 @@ struct ErrorBody {
     error: ErrorDetail,
 }
 
-/// One command's outcome: the records it landed, and the born task's
-/// token when the command created one.
+/// One command's outcome: the records it landed, the born task's
+/// token when the command created one, and the request facts when it
+/// was a request write.
 #[derive(Debug)]
 pub struct Reply {
     pub records: Vec<StoredRecord>,
     pub id: Option<String>,
+    pub seq: Option<usize>,
+    pub task: Option<usize>,
+    pub workspace: Option<WorkspaceFacts>,
 }
 
 /// Sends one command and returns the records it landed
@@ -129,6 +135,9 @@ pub fn send(
         Ok(Reply {
             records: body.records,
             id: body.id,
+            seq: body.seq,
+            task: body.task,
+            workspace: body.workspace,
         })
     } else {
         let body: ErrorBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {

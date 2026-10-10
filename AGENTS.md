@@ -105,7 +105,8 @@ with them.
   launch remain unbuilt.
 - Attention routes through declared dependency and chain judgment,
   never addressing. No comment names a recipient. The human is reached
-  by the descriptive pull surface; waits and push signals are unbuilt.
+  by the descriptive pull surface; blocking CLI waits ride record
+  cursors (read-side, no residency), and push signals are unbuilt.
 - Comments land at the tier they describe: work facts on the work thread,
   episode facts on the episode's container, direction facts on the direction
   home; session-shaped work writes no thread summary unless it changed

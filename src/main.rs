@@ -9,12 +9,13 @@ use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{
-    ArtifactLine, CommentLine, SearchGroup, SearchQuery, TaskView, Term, ThreadItem, artifact_line,
-    comment_line, matched_line, search, show_view, task_view, thread_index, thread_view,
+    ArtifactLine, CommentLine, RequestFacts, SearchGroup, SearchQuery, TaskView, Term, ThreadItem,
+    artifact_line, comment_line, matched_line, search, show_view, task_view, thread_index,
+    thread_view,
 };
 use saccade::{
     ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, GitCommit,
-    IncarnationId, Prose, RecordId, Reject, Scope, Target, Tier, WorktreePath,
+    IncarnationId, Prose, RecordId, Reject, Scope, Target, Tier, WorktreePath, wire,
 };
 
 mod skill;
@@ -240,6 +241,22 @@ enum Cmd {
         /// The artifact's name; defaults to the file's basename
         #[arg(long)]
         name: Option<String>,
+    },
+    /// Block until a record answering the target lands: a task wait
+    /// matches records folding into the task, a comment wait matches
+    /// its reply chain (revisions and decisions included). Matches are
+    /// strictly after the given global position; nothing is recorded
+    Wait {
+        /// The task (t-<n>) or comment (c-<seq>) to wait on
+        target: String,
+        /// The global record position matched strictly after — the
+        /// cursor a read disclosed, never defaulted
+        #[arg(long)]
+        after: u64,
+        /// Answer empty after this many seconds, naming the snapshot's
+        /// cursor; without it the wait is unbounded
+        #[arg(long)]
+        timeout: Option<u64>,
     },
 }
 
@@ -489,6 +506,11 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::List { .. } | Cmd::Log | Cmd::Show { .. } | Cmd::Search { .. } => {
             return read_only(cli, &db_path);
         }
+        Cmd::Wait {
+            target,
+            after,
+            timeout,
+        } => return wait_door(cli, &db_path, target, *after, *timeout),
         Cmd::Start {
             id,
             body,
@@ -584,6 +606,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     identity_fallback_guard(cli, &context)?;
     let creates = matches!(command, Command::CreateTask { .. });
     let mut born: Option<String> = None;
+    let mut request: Option<RequestFacts> = None;
     let stored = if cli.offline {
         let now = cli.at.unwrap_or_else(db::now_epoch);
         let mut conn = db::open(&db_path).map_err(Fail::Db)?;
@@ -592,6 +615,9 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 if creates {
                     born = born_of(&stored, &world);
                 }
+                request = request_of(&command, &stored, |seq| {
+                    saccade::views::request_facts(&world, seq)
+                });
                 stored
             }
             Err(ExecuteFail::Reject(reject)) => return Err(refused(&conn, &command, reject)),
@@ -601,9 +627,41 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         client::handshake(&cli.server);
         let reply = client::send(&cli.server, &context, command, cli.at).map_err(Fail::Client)?;
         born = reply.id;
+        if let Some(seq) = reply.seq {
+            request = Some(RequestFacts {
+                seq,
+                task: reply.task.expect("a request reply names its task"),
+                workspace: reply.workspace,
+            });
+        }
         reply.records
     };
-    Ok(render_records(cli, &stored, born.as_deref()))
+    Ok(render_records(
+        cli,
+        &stored,
+        born.as_deref(),
+        request.as_ref(),
+    ))
+}
+
+/// A request write's reply facts, when the command was one: the
+/// caller resolves the position against its own fold or the server's.
+fn request_of(
+    command: &Command,
+    stored: &[db::StoredRecord],
+    facts: impl FnOnce(RecordId) -> Option<RequestFacts>,
+) -> Option<RequestFacts> {
+    if !matches!(
+        command,
+        Command::Comment {
+            kind: CommentKind::Request { .. },
+            ..
+        }
+    ) {
+        return None;
+    }
+    let record = stored.first()?;
+    facts(RecordId(record.seq))
 }
 
 /// A refusal the world can teach: the expected format and, where the
@@ -1382,6 +1440,7 @@ fn render_workspace_reply(
 fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
     let conn = db::open_read(db_path).map_err(Fail::Db)?;
     let loadout = db::load(&conn).map_err(Fail::Db)?;
+    let cursor = loadout.rows.last().map(|r| r.seq);
     match &cli.command {
         Cmd::Log => {
             if let LoadState::Degraded(reason) = &loadout.state {
@@ -1391,10 +1450,10 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
                 LoadState::Full(world) => thread_index(world),
                 LoadState::Degraded(_) => BTreeMap::new(),
             };
-            Ok(render_log(cli, &loadout.rows, &threads))
+            Ok(render_log(cli, &loadout.rows, &threads, cursor))
         }
         Cmd::List { .. } => match loadout.state {
-            LoadState::Full(world) => Ok(render_tasks(cli, &world)),
+            LoadState::Full(world) => Ok(render_tasks(cli, &world, cursor)),
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
         Cmd::Show {
@@ -1404,16 +1463,18 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
         } => match loadout.state {
             LoadState::Full(world) => {
                 if *stdin {
-                    return show_stdin(cli, &world, &loadout.rows, ids, *withdrawn);
+                    return show_stdin(cli, &world, &loadout.rows, ids, *withdrawn, cursor);
                 }
                 if cli.json {
                     let blocks: Vec<serde_json::Value> = ids
                         .iter()
                         .map(|token| show_value(&world, &loadout.rows, token, *withdrawn))
                         .collect::<Result<_, _>>()?;
-                    return Ok(
-                        serde_json::to_string_pretty(&blocks).expect("blocks are plain data")
-                    );
+                    return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                        "blocks": blocks,
+                        "cursor": cursor,
+                    }))
+                    .expect("blocks are plain data"));
                 }
                 let mut blocks = Vec::new();
                 for token in ids {
@@ -1432,18 +1493,114 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
             query.withdrawn = *withdrawn;
             if let Some(around) = context {
                 let anchor = anchor_seq(&loadout, &query)?;
-                return Ok(render_anchor(cli, &loadout.rows, anchor, *around));
+                return Ok(render_anchor(cli, &loadout.rows, anchor, *around, cursor));
             }
             match loadout.state {
                 LoadState::Full(world) => {
                     let groups = search(&world, &query).map_err(|f| Fail::Usage(f.to_string()))?;
-                    Ok(render_search(cli, &groups, terms, &query))
+                    Ok(render_search(cli, &groups, terms, &query, cursor))
                 }
                 LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
             }
         }
         _ => unreachable!("read_only reached from a mutating command"),
     }
+}
+
+/// The wait door's poll interval: committed records observed, nothing
+/// clock-driven ever fired by it.
+const WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The wait door: blocking read semantics over the log. Already
+/// committed records are checked before any blocking, so responses
+/// that landed between a read and this wait are caught; matches are
+/// strictly after the supplied cursor, ride the target's structure,
+/// and carry no sufficiency verdict. No record lands; the reply names
+/// the cursor the inspected snapshot ends at.
+fn wait_door(
+    cli: &Cli,
+    db_path: &std::path::Path,
+    target: &str,
+    after: u64,
+    timeout: Option<u64>,
+) -> Result<String, Fail> {
+    let target = parse_target(target)?;
+    let conn = db::open_read(db_path).map_err(Fail::Db)?;
+    let deadline =
+        timeout.map(|secs| std::time::Instant::now() + std::time::Duration::from_secs(secs));
+    loop {
+        let loadout = db::load(&conn).map_err(Fail::Db)?;
+        let world = match loadout.state {
+            LoadState::Full(world) => world,
+            LoadState::Degraded(reason) => return Err(Fail::Degraded(reason)),
+        };
+        wait_target_exists(&world, &target, loadout.rows.len())?;
+        let matched: Vec<StoredRecord> = loadout
+            .rows
+            .iter()
+            .filter(|r| r.seq > after as usize)
+            .filter(|r| {
+                let event =
+                    wire::assemble(&r.kind, &r.payload).expect("a full fold assembled every row");
+                saccade::views::wait_matches(&world, RecordId(r.seq), &event, &target)
+            })
+            .cloned()
+            .collect();
+        let cursor = loadout.rows.last().map(|r| r.seq);
+        if !matched.is_empty() || deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            return Ok(render_wait(cli, &matched, cursor));
+        }
+        std::thread::sleep(WAIT_POLL);
+    }
+}
+
+/// The wait's target must exist now: a read-door refusal like any
+/// other read of a missing id.
+fn wait_target_exists(world: &saccade::World, target: &Target, records: usize) -> Result<(), Fail> {
+    match target {
+        Target::Task(task) => {
+            if world.tasks.get(task.0).is_none() {
+                return Err(Fail::Usage(format!(
+                    "no task t-{}; the fold holds {} tasks",
+                    task.0,
+                    world.tasks.len()
+                )));
+            }
+        }
+        Target::Comment(id) => {
+            if !world.comments.contains_key(id) {
+                return Err(Fail::Usage(format!(
+                    "no record c-{}; the log holds {} records, 0 through {}",
+                    id.0.0,
+                    records,
+                    records.saturating_sub(1)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The wait's report: the matched records in record order, then the
+/// cursor for the next wait — the snapshot this wait inspected
+/// through, matched or not.
+fn render_wait(cli: &Cli, matched: &[StoredRecord], cursor: Option<usize>) -> String {
+    if cli.json {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "records": matched,
+            "cursor": cursor,
+        }))
+        .expect("records are plain data");
+    }
+    let mut lines: Vec<String> = matched.iter().map(record_line).collect();
+    if lines.is_empty() {
+        lines.push("no matching record".into());
+    }
+    lines.push(match cursor {
+        Some(c) => format!("cursor {c}"),
+        None => "cursor none".into(),
+    });
+    lines.join("\n")
 }
 
 /// The 'i-<seq>' face the incarnation reference carries.
@@ -1562,28 +1719,50 @@ fn born_of(stored: &[StoredRecord], world: &World) -> Option<String> {
         .map(|id| format!("t-{}", id.0))
 }
 
-fn render_records(cli: &Cli, stored: &[StoredRecord], born: Option<&str>) -> String {
+fn render_records(
+    cli: &Cli,
+    stored: &[StoredRecord],
+    born: Option<&str>,
+    request: Option<&RequestFacts>,
+) -> String {
     if cli.json {
         // the wire's reply shape: records always, the born task's token
-        // only on a create
+        // only on a create, the request facts only on a request write
         let mut reply = serde_json::json!({"records": stored});
         if let Some(id) = born {
             reply["id"] = serde_json::json!(id);
         }
+        if let Some(request) = request {
+            reply["seq"] = serde_json::json!(request.seq);
+            reply["task"] = serde_json::json!(request.task);
+            reply["workspace"] = serde_json::json!(request.workspace);
+        }
         return serde_json::to_string_pretty(&reply).expect("records are plain data");
     }
-    let mut lines = Vec::with_capacity(stored.len() + 1);
+    let mut lines = Vec::with_capacity(stored.len() + 2);
     if let Some(id) = born {
         lines.push(id.to_string());
     }
     lines.extend(stored.iter().map(record_line));
+    if let Some(workspace) = request.and_then(|r| r.workspace.as_ref()) {
+        lines.push(format!(
+            "  workspace t-{} · {} · {}",
+            workspace.task, workspace.branch, workspace.path
+        ));
+    }
     lines.join("\n")
 }
 
-fn render_log(cli: &Cli, rows: &[StoredRecord], threads: &BTreeMap<usize, TaskId>) -> String {
+fn render_log(
+    cli: &Cli,
+    rows: &[StoredRecord],
+    threads: &BTreeMap<usize, TaskId>,
+    cursor: Option<usize>,
+) -> String {
     if cli.json {
         // the log row's own grammar, plus the fold's thread membership:
-        // a row with no home thread carries null, never absence
+        // a row with no home thread carries null, never absence — and
+        // the cursor the read inspected through, for the next wait
         let out: Vec<serde_json::Value> = rows
             .iter()
             .map(|r| {
@@ -1595,7 +1774,11 @@ fn render_log(cli: &Cli, rows: &[StoredRecord], threads: &BTreeMap<usize, TaskId
                 row
             })
             .collect();
-        return serde_json::to_string_pretty(&out).expect("records are plain data");
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "records": out,
+            "cursor": cursor,
+        }))
+        .expect("records are plain data");
     }
     rows.iter().map(record_line).collect::<Vec<_>>().join("\n")
 }
@@ -1607,7 +1790,7 @@ fn record_line(r: &StoredRecord) -> String {
     )
 }
 
-fn render_tasks(cli: &Cli, world: &World) -> String {
+fn render_tasks(cli: &Cli, world: &World, cursor: Option<usize>) -> String {
     let views: Vec<TaskView> = (0..world.tasks.len())
         .map(|i| task_view(world, TaskId(i)))
         .collect::<Option<_>>()
@@ -1633,7 +1816,11 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
                 })
             })
             .collect();
-        return serde_json::to_string_pretty(&rows).expect("views are plain data");
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "tasks": rows,
+            "cursor": cursor,
+        }))
+        .expect("views are plain data");
     }
 
     views
@@ -1997,6 +2184,7 @@ fn show_stdin(
     rows: &[db::StoredRecord],
     ids: &[String],
     withdrawn_bodies: bool,
+    cursor: Option<usize>,
 ) -> Result<String, Fail> {
     if !ids.is_empty() {
         return Err(Fail::Usage("ids as arguments or --stdin, not both".into()));
@@ -2018,7 +2206,11 @@ fn show_stdin(
                 .unwrap_or_else(|f| serde_json::json!({"id": token, "error": f.to_string()}));
             blocks.push(block);
         }
-        return Ok(serde_json::to_string_pretty(&blocks).expect("blocks are plain data"));
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "blocks": blocks,
+            "cursor": cursor,
+        }))
+        .expect("blocks are plain data"));
     }
     let mut blocks = Vec::new();
     for line in std::io::stdin().lines() {
@@ -2076,6 +2268,7 @@ fn render_search(
     groups: &[SearchGroup],
     tokens: &[String],
     query: &SearchQuery,
+    cursor: Option<usize>,
 ) -> String {
     let counts = !query.facets.is_empty();
     if cli.json {
@@ -2099,8 +2292,11 @@ fn render_search(
                 row
             })
             .collect();
-        return serde_json::to_string_pretty(&serde_json::json!({ "groups": rows }))
-            .expect("results are plain data");
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "groups": rows,
+            "cursor": cursor,
+        }))
+        .expect("results are plain data");
     }
     if groups.is_empty() {
         return format!("no matches ({})", tokens.join(" "));
@@ -2162,7 +2358,13 @@ fn anchor_seq(loadout: &db::Loadout, query: &SearchQuery) -> Result<usize, Fail>
 
 /// The anchor's window: the record, N before, N after — one line each,
 /// straight off the log's own rows.
-fn render_anchor(cli: &Cli, rows: &[StoredRecord], anchor: usize, around: usize) -> String {
+fn render_anchor(
+    cli: &Cli,
+    rows: &[StoredRecord],
+    anchor: usize,
+    around: usize,
+    cursor: Option<usize>,
+) -> String {
     let from = anchor.saturating_sub(around);
     let to = (anchor + around).min(rows.len().saturating_sub(1));
     let window = &rows[from..=to];
@@ -2180,7 +2382,8 @@ fn render_anchor(cli: &Cli, rows: &[StoredRecord], anchor: usize, around: usize)
             .collect();
         return serde_json::to_string_pretty(&serde_json::json!({
             "anchor": anchor,
-            "records": records
+            "records": records,
+            "cursor": cursor,
         }))
         .expect("rows are plain data");
     }

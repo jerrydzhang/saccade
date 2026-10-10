@@ -202,6 +202,88 @@ async fn the_tier_law_holds_through_http() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_request_reply_names_its_position_and_the_recorded_workspace() {
+    let db = scratch_db("request-reply");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "hold the request door", "parent_id": null}}),
+        ),
+    );
+
+    // no recorded workspace: the request returns its position, its
+    // root task, and no workspace — none is provisioned
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 0}, "kind": {"request": {"body": "status?"}}}}),
+        ),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["seq"], reply["records"][0]["seq"]);
+    assert_eq!(reply["task"], 0);
+    assert_eq!(reply["workspace"], Value::Null);
+
+    // the workspace stands: the same request names the recorded facts
+    let (_, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/start",
+        &json!({
+            "context": {"actor": "jerry", "tier": "human"},
+            "task": 0,
+            "base": null,
+            "request": "begin the work"
+        }),
+    );
+    let expected = json_of(&body)["workspace"].clone();
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"task": 0}, "kind": {"request": {"body": "where do you stand?"}}}}),
+        ),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["task"], 0);
+    assert_eq!(reply["workspace"], expected);
+
+    // a comment target resolves through its root task
+    let (_, body) = post_command(
+        &base_url,
+        &envelope(
+            "jerry",
+            "human",
+            json!({"comment": {"target": {"task": 0}, "kind": {"note": {"body": "context note"}}}}),
+        ),
+    );
+    let note = json_of(&body)["records"][0]["seq"].as_u64().unwrap();
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"target": {"comment": note}, "kind": {"request": {"body": "on the note"}}}}),
+        ),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["task"], 0);
+    assert_eq!(reply["workspace"], expected);
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn malformed_bodies_get_typed_envelopes() {
     let db = scratch_db("malformed");
     let base_url = spawn_server(&db).await;
@@ -1662,11 +1744,13 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     assert!(sac(&["comment", "t-0", "a short third note"]).0);
     assert!(sac(&["revise", "c-3", "revised bytes"]).0);
 
-    // the thread's json face: bodies byte-exact, replies folded in
+    // the thread's json face: bodies byte-exact, replies folded in,
+    // the cursor the read inspected through
     let (ok, out, _) = sac(&["show", "--json", "t-0"]);
     assert!(ok, "{out}");
     let json: Value = serde_json::from_str(&out).expect("the json face parses");
-    let thread = &json[0];
+    assert_eq!(json["cursor"], json!(4));
+    let thread = &json["blocks"][0];
     assert_eq!(thread["id"], json!("t-0"));
     assert_eq!(thread["name"], json!("byte door"));
     let entries = thread["entries"].as_array().expect("entries");
@@ -1691,22 +1775,31 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     let (ok, out, _) = sac(&["show", "--json", "c-2"]);
     assert!(ok, "{out}");
     let json: Value = serde_json::from_str(&out).expect("the json face parses");
-    assert_eq!(json[0]["body"], json!(answer));
-    assert_eq!(json[0]["depth"], json!(2));
-    assert_eq!(json[0]["target"], json!({"comment": 1}));
+    assert_eq!(json["blocks"][0]["body"], json!(answer));
+    assert_eq!(json["blocks"][0]["depth"], json!(2));
+    assert_eq!(json["blocks"][0]["target"], json!({"comment": 1}));
 
     // the bare position on the json face: the raw log row, no fold
     let (ok, out, _) = sac(&["show", "--json", "2"]);
     assert!(ok, "{out}");
     let json: Value = serde_json::from_str(&out).expect("the json face parses");
-    assert_eq!(json[0]["seq"], json!(2));
-    assert_eq!(json[0]["payload"]["target"], json!({"comment": 1}));
+    assert_eq!(json["blocks"][0]["seq"], json!(2));
+    assert_eq!(
+        json["blocks"][0]["payload"]["target"],
+        json!({"comment": 1})
+    );
 
     // the log's json face carries folded thread membership: a reply's
-    // target is its comment, its thread is still t-0
+    // target is its comment, its thread is still t-0 — and the cursor
+    // the read inspected through rides beside the rows
     let (ok, out, _) = sac(&["log", "--json"]);
     assert!(ok, "{out}");
-    let rows: Vec<Value> = serde_json::from_str(&out).expect("the json face parses");
+    let log: Value = serde_json::from_str(&out).expect("the json face parses");
+    assert_eq!(log["cursor"], json!(4));
+    let rows: Vec<Value> = log["records"]
+        .as_array()
+        .expect("the records array")
+        .clone();
     let kept: Vec<&Value> = rows
         .iter()
         .filter(|r| r["thread"] == json!("t-0"))
@@ -1753,11 +1846,13 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     };
     let (ok, out, _) = pipe("bogus\nc-1\n", &["show", "--stdin", "--json"]);
     assert!(ok, "{out}");
-    let json: Vec<Value> = serde_json::from_str(&out).expect("the json face parses");
-    assert_eq!(json.len(), 2);
-    assert_eq!(json[0]["id"], json!("bogus"));
-    assert!(json[0]["error"].is_string());
-    assert_eq!(json[1]["body"], json!(body));
+    let json: Value = serde_json::from_str(&out).expect("the json face parses");
+    let rows = json["blocks"].as_array().expect("the blocks array");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(json["cursor"], json!(4));
+    assert_eq!(rows[0]["id"], json!("bogus"));
+    assert!(rows[0]["error"].is_string());
+    assert_eq!(rows[1]["body"], json!(body));
 
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
@@ -1934,8 +2029,146 @@ async fn offline_replies_match_the_wire() {
     let claimed = offline(&offline_db, &["--json", "claim", "t-0"]);
     assert_eq!(claimed["records"][0]["kind"], "task_claimed");
 
+    // a request names its position and root task on both paths, and
+    // no workspace where none stands
+    let asked = offline(&offline_db, &["--json", "request", "t-0", "status?"]);
+    assert_eq!(asked["seq"], asked["records"][0]["seq"]);
+    assert_eq!(asked["task"], 0);
+    assert_eq!(asked["workspace"], Value::Null);
+    let (_, body) = post_command(
+        &served,
+        &json!({"context": {"actor": "pi", "tier": "agent"},
+                 "command": {"comment": {"target": {"task": 0}, "kind": {"request": {"body": "status?"}}}}}),
+    );
+    let served_asked = json_of(&body);
+    assert_eq!(served_asked["seq"], served_asked["records"][0]["seq"]);
+    assert_eq!(served_asked["task"], 0);
+    assert_eq!(served_asked["workspace"], Value::Null);
+
     std::fs::remove_dir_all(offline_db.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(served_db.parent().unwrap()).unwrap();
+}
+
+// ---- the wait door through the CLI face: committed, delayed, mute ----
+
+#[test]
+fn the_wait_door_answers_committed_and_delayed_writes_and_lands_nothing() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = scratch_db("wait-door");
+    let sac = |args: &[&str]| {
+        let out = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .arg("--offline")
+            .env("SACCADE_ACTOR", "pi")
+            // a working session's declared scope must not leak in
+            .env("SACCADE_TASK", "")
+            .env("SACCADE_INCARNATION", "")
+            .env("SACCADE_WORKSPACE", "")
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let sac_quiet = |args: &[&str]| {
+        let (ok, out, err) = sac(args);
+        assert!(ok, "sac {:?}: {out}{err}", args);
+    };
+    let row_count = || {
+        let (ok, out, err) = sac(&["--json", "log"]);
+        assert!(ok, "{out}{err}");
+        let log: Value = serde_json::from_str(&out).unwrap();
+        log["records"].as_array().unwrap().len()
+    };
+
+    sac_quiet(&["create", "task", "wait for the reply"]); // seq 0
+    sac_quiet(&["comment", "t-0", "the opening note"]); // seq 1 -> c-1
+
+    // a response that committed before the wait: caught, never blocked
+    let (ok, out, _) = sac(&["--json", "wait", "t-0", "--after", "0"]);
+    assert!(ok, "{out}");
+    let wait: Value = serde_json::from_str(&out).unwrap();
+    let seqs: Vec<u64> = wait["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, vec![1]);
+    assert_eq!(wait["cursor"], 1);
+
+    // the cursor a read disclosed: a write landing between the read
+    // and the wait is already committed when the wait checks first
+    sac_quiet(&["comment", "t-0", "the answer"]); // seq 2
+    let (_, out, _) = sac(&["--json", "log"]);
+    let log: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(log["cursor"], 2);
+    sac_quiet(&["comment", "t-0", "a late addition"]); // seq 3
+    let (ok, out, _) = sac(&["--json", "wait", "t-0", "--after", "2"]);
+    assert!(ok, "{out}");
+    let wait: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(wait["records"][0]["seq"], 3);
+    assert_eq!(wait["cursor"], 3);
+
+    // the delayed response: the wait blocks on a comment chain until
+    // another process's write commits the waking record
+    let mut child = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&path)
+        .arg("--offline")
+        .env("SACCADE_ACTOR", "pi")
+        .env("SACCADE_TASK", "")
+        .env("SACCADE_INCARNATION", "")
+        .env("SACCADE_WORKSPACE", "")
+        .args(["--json", "wait", "c-1", "--after", "3", "--timeout", "20"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the waiting sac");
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the wait woke with nothing to wake on"
+    );
+    sac_quiet(&["comment", "c-1", "the reply on the note"]); // seq 4
+    let out = child.wait_with_output().expect("the wait answers");
+    assert!(out.status.success());
+    let wait: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(wait["records"][0]["seq"], 4);
+    assert_eq!(wait["cursor"], 4);
+
+    // the timed-out wait answers empty, names the cursor, lands nothing
+    let before = row_count();
+    let (ok, out, _) = sac(&["--json", "wait", "t-0", "--after", "100", "--timeout", "1"]);
+    assert!(ok, "{out}");
+    let wait: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(wait["records"].as_array().unwrap().len(), 0);
+    assert_eq!(wait["cursor"], 4);
+    assert_eq!(row_count(), before, "the wait landed nothing");
+
+    // unrelated activity on the task does not wake a comment wait
+    sac_quiet(&["comment", "t-0", "an unrelated sibling"]); // seq 5
+    let (ok, out, _) = sac(&["--json", "wait", "c-1", "--after", "4", "--timeout", "1"]);
+    assert!(ok, "{out}");
+    let wait: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(wait["records"].as_array().unwrap().len(), 0);
+
+    // the text face: matched record lines, then the cursor for the
+    // next wait — the snapshot inspected through, matched or not
+    let (ok, out, _) = sac(&["wait", "t-0", "--after", "4"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("c-5"), "{out}");
+    assert!(out.trim_end().ends_with("cursor 5"), "{out}");
+
+    // a missing target refuses at the read door
+    let (ok, _, stderr) = sac(&["wait", "t-9", "--after", "0"]);
+    assert!(!ok);
+    assert!(stderr.contains("no task t-9"), "{stderr}");
+
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
 // ---- the workspace doors through the CLI face: a fake host, real exec ----
