@@ -1646,10 +1646,7 @@ fn glimpse(line: &str, budget: usize) -> String {
 mod test {
     use super::*;
 
-    /// The identity and scope inventory, one test owning every env
-    /// mutation: possession fixes the tier, --actor names without
-    /// re-tiering, and the declared scope reads SACCADE_TASK with its
-    /// riders — original values restored on the way out.
+    /// Possession, --actor, and the declared scope, one test owning every env mutation.
     #[test]
     fn possession_fixes_the_tier_and_the_scope_reads_the_environment() {
         let saved_actor = std::env::var("SACCADE_ACTOR").ok();

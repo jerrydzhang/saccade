@@ -104,8 +104,7 @@ mod test {
 
     #[test]
     fn authority_table_gates_exactly_the_gated_events() {
-        // the ratified cells, stated independently of required_tier so a
-        // permission change cannot pass against itself
+        // Expected cells stated independently of required_tier.
         use Authority::*;
         let events: [(Event, Authority); 16] = [
             (
@@ -122,7 +121,6 @@ mod test {
                 },
                 AnyTier,
             ),
-            // the human-authored judgment acts
             (
                 Event::TaskCancelled {
                     id: TaskId(0),
@@ -137,7 +135,6 @@ mod test {
                 },
                 Require(Tier::Human),
             ),
-            // all six comment payload cases author at any tier
             (
                 Event::Commented {
                     target: Target::Task(TaskId(0)),
@@ -212,8 +209,7 @@ mod test {
                 },
                 AnyTier,
             ),
-            // provisioning stays machine-authored; the checkpoint door
-            // is the explicit exception
+            // Provisioning stays machine-authored; checkpoint is the exception.
             (
                 Event::TaskWorkspaceCreated {
                     task_id: TaskId(0),
@@ -257,8 +253,7 @@ mod test {
         }
     }
 
-    /// The command translation is the identity: every command is its
-    /// events, one record each, no expansion left.
+    /// Every command is its single event.
     #[test]
     fn every_command_expands_to_its_single_event() {
         let commands = [

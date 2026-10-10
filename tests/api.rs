@@ -888,9 +888,7 @@ async fn every_task_href_the_console_emits_resolves() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// Identity is claimed at the act, on every act form: a cookieless
-/// browser decides by typing its name into the decision form; the forms
-/// carry the field prefilled from the actor cookie when one exists.
+/// Identity is claimed at the act, on every decision form.
 #[tokio::test(flavor = "multi_thread")]
 async fn decision_forms_carry_the_actor_name() {
     let db = scratch_db("console-identity");
@@ -969,8 +967,7 @@ async fn decision_forms_carry_the_actor_name() {
         "concluded"
     );
 
-    // the reject door on a fresh task's standing offer: a producer may
-    // reject its own account with grounds
+    // a producer may reject its own account with grounds
     seed_task(&state, "other work");
     state
         .execute(
@@ -1093,7 +1090,7 @@ async fn a_refused_console_decision_leaves_its_line() {
         )
         .unwrap();
 
-    // the rendered decision forms carry the offer they were drawn against
+    // the decision forms carry the offer they rendered
     let (_, html) = get_html(&format!("{base}/t/0"));
     assert!(html.contains("name=\"offer\" value=\"1\""), "{html}");
 
@@ -1120,8 +1117,7 @@ async fn a_refused_console_decision_leaves_its_line() {
         )
         .unwrap();
 
-    // the stale page's accept form names offer 1: refused, never
-    // silently redirected at the replacement
+    // the stale accept form names offer 1 and refuses
     let (status, body, _) = post_form(
         &format!("{base}/t/0/accept"),
         &[],
@@ -1133,19 +1129,23 @@ async fn a_refused_console_decision_leaves_its_line() {
         "{body}"
     );
 
-    // the stale reject form meets the same guard
+    // the stale reject form meets the same guard, its grounds kept
+    // verbatim as an editable draft
     let (status, body, _) = post_form(
         &format!("{base}/t/0/reject"),
         &[],
-        "reject=1&who=jerry&grounds=changed+my+mind&offer=1",
+        "reject=1&who=jerry&grounds=SPECIFIC_DRAFT_LOSS_CHECK&offer=1",
     );
     assert_eq!(status, 400);
     assert!(
         body.contains("that offer is not the task's standing one"),
         "{body}"
     );
+    assert!(
+        body.contains(">SPECIFIC_DRAFT_LOSS_CHECK</textarea>"),
+        "the refused grounds ride back inside the textarea: {body}"
+    );
 
-    // the fresh form decides the standing offer
     let (status, _, _, _) = post_form_ck(
         &format!("{base}/t/0/accept"),
         &[],

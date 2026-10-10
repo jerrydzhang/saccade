@@ -658,8 +658,7 @@ mod test {
 
     const RECORD_COUNT: usize = 18;
 
-    /// foo offered and accepted; bar rejected then re-offered; floop
-    /// cancelled and reopened; a consumer task using foo's account.
+    /// foo accepted; bar re-offered; floop reopened; a consumer uses foo.
     fn populate_log(log: &mut Log) {
         let human_ctx = human();
         let agent_ctx = agent();

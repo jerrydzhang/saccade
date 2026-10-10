@@ -82,7 +82,7 @@ with them.
 - Rendering is descriptive, never persuasive: deterministic grouping,
   ordering, staleness, and standing-offer projection present record
   facts — neutral local cardinality included. No unread or aggregate
-  counts of tasks, states, or records; no detached badges, urgency
+  counts of tasks, states, incarnations, or records; no detached badges, urgency
   emphasis, inferred priority/progress/success/correctness, or narrative
   annotations. Outreach is an attending actor's judgment, never a
   projection; the pull UI never competes or coerces.

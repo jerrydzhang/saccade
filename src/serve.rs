@@ -441,7 +441,9 @@ fn console_reject(
         let form = web::FormState {
             error: Some(msg.to_string()),
             draft: form_field(fields, "body").to_string(),
-            note: form_field(fields, "note").to_string(),
+            // the reject door's grounds ride the note draft verbatim:
+            // refused wording stays editable, never re-authored
+            note: form_field(fields, "grounds").to_string(),
             who: req.actor.clone().unwrap_or_default(),
         };
         return html(400, &web::compose_section(n, &form));
@@ -460,7 +462,7 @@ fn console_reject(
         form: web::FormState {
             error: Some(msg.to_string()),
             draft: form_field(fields, "body").to_string(),
-            note: form_field(fields, "note").to_string(),
+            note: form_field(fields, "grounds").to_string(),
             who: req.actor.clone().unwrap_or_default(),
         },
         store: match app.artifacts_dir() {

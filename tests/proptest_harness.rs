@@ -121,9 +121,7 @@ fn standing_offer_at(world: &World, n: u8) -> Option<CommentId> {
     ids.get(slot).copied()
 }
 
-/// A use's source: mostly the standing Offered or Concluded accounts —
-/// the only ones new reliance may name — with the modulo slot landing
-/// one-past-the-end as a guaranteed-absent id.
+/// The standing Offered or Concluded accounts, with a one-past-the-end sentinel.
 fn reliable_offer_at(world: &World, n: u8) -> Option<CommentId> {
     let ids: Vec<CommentId> = world
         .tasks
@@ -166,8 +164,7 @@ fn command_of(action: &Action, world: &World) -> Command {
             explanation: Prose::new("generated explanation".into()).unwrap(),
         },
         Action::Comment { reply, variant, .. } => {
-            // a third of decision draws name a plain comment instead of
-            // an offer: the NotAnOffer rejects stay exercised
+            // a third of decisions name a plain comment (NotAnOffer stays exercised)
             let decision_ref = if reply % 3 == 0 {
                 comment_at(world, *reply)
             } else {

@@ -1543,9 +1543,7 @@ mod tests {
 
     const NOW: u64 = 3_210 * 3600;
 
-    /// t-0 concluded through offer c-2 and accept c-3; t-1 open under
-    /// t-0 with a request conversation (request c-5, reply c-6) and an
-    /// orphan note c-7; t-2 offered and owned, long adrift.
+    /// t-0 concluded; t-1 conversing; t-2 offered and long adrift.
     fn fixture() -> World {
         World::replay(vec![
             record(
@@ -2028,9 +2026,7 @@ mod tests {
         (ArtifactStore::at(dir.clone()), dir)
     }
 
-    /// t-0 concluded with an offer citing its artifact; t-1's comment
-    /// mentions both the comment c-3 and the artifact c-4, beside a
-    /// birth reference and an unresolved token.
+    /// t-0 concluded citing its artifact; t-1 mentions both.
     fn resolver_world() -> World {
         World::replay(vec![
             record(

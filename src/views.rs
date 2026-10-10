@@ -1628,8 +1628,7 @@ mod test {
             assert_eq!(marks[0].kind, MarkKind::Accept);
         }
 
-        /// The self-acceptance scope is disclosure on the fold's
-        /// contexts, never an owner.
+        /// The declared scope never makes an owner.
         #[test]
         fn scope_rides_the_comment_context_as_disclosure() {
             let scoped = Context {

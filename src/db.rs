@@ -507,8 +507,7 @@ mod test {
         }
     }
 
-    /// A task-bound session's context: the environment-declared scope
-    /// rides every record it authors.
+    /// A task-bound session's context.
     fn scoped_agent() -> Context {
         Context {
             actor: ActorName::new("pi".into()).unwrap(),
