@@ -1039,7 +1039,7 @@ fn injected_environment(
     db_path: &std::path::Path,
     server: &str,
 ) -> Vec<(String, String)> {
-    let mut env = vec![
+    vec![
         ("SACCADE_ACTOR".into(), actor.to_string()),
         ("SACCADE_TASK".into(), format!("t-{}", task.0)),
         (
@@ -1053,18 +1053,7 @@ fn injected_environment(
         ("SACCADE_REPO".into(), repo.display().to_string()),
         ("SACCADE_DB".into(), db_path.display().to_string()),
         ("SACCADE_SERVER".into(), server.to_string()),
-    ];
-    // the wrapper's own build leads the child's PATH — a bare sac in a
-    // spawned session resolves the binaries the record's events demand
-    if let (Some(dir), Some(path)) = (
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.display().to_string())),
-        std::env::var_os("PATH"),
-    ) {
-        env.push(("PATH".into(), format!("{dir}:{}", path.to_string_lossy())));
-    }
-    env
+    ]
 }
 
 /// The start door's body source: the quoted argument or the pipe.
