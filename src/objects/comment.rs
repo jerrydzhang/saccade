@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Event;
-use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::TaskId;
 use crate::store::{RecordId, Tier};
 use crate::types::actor::ActorName;
-use crate::types::pointers::GitCommit;
 use crate::types::prose::Prose;
 
 #[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
@@ -18,59 +16,84 @@ pub enum Target {
     Comment(CommentId),
 }
 
-/// What a comment is for. No variant carries an address: routing is
-/// structural — the note pulls, the demand fires a run, the steer
-/// reaches the live run, the ask holds a wait for its answer.
+/// The payload a comment carries. Notes and Requests keep the
+/// task-or-comment targets; an Offer addresses its whole task;
+/// Accept and Reject address the offer they name; a Use lives on the
+/// consuming task and names the source offer. No variant carries an
+/// address beyond its target: routing is structural.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum CommentKind {
-    Note,
-    Demand { base: GitCommit },
-    Steer,
-    Ask,
+    Note {
+        body: Prose,
+    },
+    Request {
+        body: Prose,
+    },
+    /// The whole-task closing account: broadcast, never a point reply
+    Offer {
+        body: Prose,
+    },
+    /// Bodyless by law: acceptance is the reference, never prose
+    Accept {
+        offer: CommentId,
+    },
+    Reject {
+        offer: CommentId,
+        grounds: Prose,
+    },
+    /// The consuming task's declared reliance on a source offer
+    Use {
+        offer: CommentId,
+        reason: Prose,
+    },
+}
+
+impl CommentKind {
+    /// The prose the revision door may swap: the body a variant
+    /// carries, none for the bodyless Accept.
+    pub fn prose(&self) -> Option<&Prose> {
+        match self {
+            CommentKind::Note { body }
+            | CommentKind::Request { body }
+            | CommentKind::Offer { body } => Some(body),
+            CommentKind::Accept { .. } => None,
+            CommentKind::Reject { grounds, .. } => Some(grounds),
+            CommentKind::Use { reason, .. } => Some(reason),
+        }
+    }
+
+    /// The offer a decision or reliance names, when it names one.
+    pub fn offer(&self) -> Option<CommentId> {
+        match self {
+            CommentKind::Accept { offer }
+            | CommentKind::Reject { offer, .. }
+            | CommentKind::Use { offer, .. } => Some(*offer),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
     pub target: Target,
-    pub body: Prose,
+    pub kind: CommentKind,
     /// The task this comment lives on, derived from its target chain
     pub root: TaskId,
     pub state: CommentState,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum ResponseState {
-    Awaiting,
-    Responded { reply: CommentId },
-}
-
-/// A steer's delivery: standing intent until the live run consumes it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SteerDelivery {
-    Standing,
-    Forwarded,
-}
-
+/// A comment's own lifecycle, born mirroring its variant: the note
+/// deposits alone carry a door, the verdict-carrying variants keep
+/// their verdicts.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommentState {
     Note,
-    /// The demand: fires a run when the task is free, queues while
-    /// busy. The bound run and the refusal are the context's facts.
-    Demand {
-        response: ResponseState,
-        base: GitCommit,
-    },
-    /// The steer: forwarded to the live run at the turn boundary,
-    /// consumed by it, never re-fired.
-    Steer {
-        delivery: SteerDelivery,
-    },
-    /// The ask: a blocking question; the first reply answers it and
-    /// resumes the run, later replies are ordinary notes.
-    Ask {
-        response: ResponseState,
-    },
+    Request,
+    Offer,
+    Accept,
+    Reject,
+    Use,
     /// The standing-error repair, terminal: the deposit's body left
     /// the fold's presentation, the tombstone holds its place.
     Withdrawn(Prose),
@@ -78,19 +101,10 @@ pub enum CommentState {
 
 impl CommentState {
     /// The comment state machine table, all event-named transitions
-    /// must go through this. The event alone names the transition;
-    /// the reply's tier gate and its record position are the store
-    /// arm's facts.
+    /// must go through this: withdrawal is the note deposits' door
+    /// alone, every other variant holds.
     pub fn transition(&self, event: &Event) -> Option<CommentState> {
         match (self, event) {
-            (
-                CommentState::Steer {
-                    delivery: SteerDelivery::Standing,
-                },
-                Event::SteerForwarded { .. },
-            ) => Some(CommentState::Steer {
-                delivery: SteerDelivery::Forwarded,
-            }),
             (CommentState::Note, Event::CommentWithdrawn { note, .. }) => {
                 Some(CommentState::Withdrawn(note.clone()))
             }
@@ -98,31 +112,20 @@ impl CommentState {
         }
     }
 
-    /// The reply door: the first reply answers an awaiting demand or
-    /// ask; every other state holds, and later replies are ordinary
-    /// notes. The reply pointer is the answering record's position,
-    /// which only the fold knows; the reply's tier gate lives in the
-    /// store arm.
-    pub fn answered(&self, reply: CommentId) -> Option<CommentState> {
-        match self {
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                base,
-            } => Some(CommentState::Demand {
-                response: ResponseState::Responded { reply },
-                base: base.clone(),
-            }),
-            CommentState::Ask {
-                response: ResponseState::Awaiting,
-            } => Some(CommentState::Ask {
-                response: ResponseState::Responded { reply },
-            }),
-            _ => None,
+    /// The state a variant's birth folds to.
+    pub fn of(kind: &CommentKind) -> CommentState {
+        match kind {
+            CommentKind::Note { .. } => CommentState::Note,
+            CommentKind::Request { .. } => CommentState::Request,
+            CommentKind::Offer { .. } => CommentState::Offer,
+            CommentKind::Accept { .. } => CommentState::Accept,
+            CommentKind::Reject { .. } => CommentState::Reject,
+            CommentKind::Use { .. } => CommentState::Use,
         }
     }
 }
 
-/// The latest revision of a folded comment's body: the record that
+/// The latest revision of a folded comment's prose: the record that
 /// swapped it in and the actor who did — disclosure is a fold fact,
 /// named whenever the reviser differs from the birth author.
 #[derive(Clone, Debug, PartialEq)]
@@ -132,8 +135,8 @@ pub struct Revision {
 }
 
 /// The withdrawal's disclosure pointer: the record that withdrew and
-/// the actor who did. The note itself rides the state, the way a
-/// receipt rides a done task.
+/// the actor who did. The note itself rides the state, the way an
+/// explanation rides a cancelled task.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Withdrawal {
     pub record: RecordId,
@@ -145,41 +148,26 @@ pub struct CommentContext {
     pub comment: Comment,
     pub actor: ActorName,
     pub tier: Tier,
+    /// The environment-declared scope the birth record carried
+    pub scope: Option<crate::store::Scope>,
     /// Event time of the comment's birth record
     pub born_at: u64,
-    /// The latest revision of the body, when it was ever revised —
+    /// The latest revision of the prose, when it was ever revised —
     /// a pointer with its reviser, never the payload it swapped in
     pub revised: Option<Revision>,
     /// The standing-error repair's pointer, when the deposit was
     /// withdrawn — beside the revised pointer it mirrors
     pub withdrawn: Option<Withdrawal>,
-    /// The machinery's refusal to run this demand, when it refused
-    pub refusal: Option<Refusal>,
-    /// The run this demand bound, when it bound one: written by the
-    /// bind arm, never cleared — re-asking is a new comment
-    pub bound: Option<IncarnationId>,
-}
-
-/// Why the machinery refused to run a demand, and when: the asker's
-/// fact, rendered on the thread the demand lives on.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Refusal {
-    pub reason: Prose,
-    /// Event time of the refusal record
-    pub at: u64,
 }
 
 #[cfg(test)]
 mod tables {
     use super::*;
-    use crate::types::actor::ActorName;
-    use crate::types::failure::{FailureCode, FailureEvidence};
-    use crate::types::pointers::SessionPointer;
+    use crate::types::prose::Prose;
 
     fn comment_event(kind: CommentKind) -> Event {
         Event::Commented {
-            target: Target::Task(TaskId(0)),
-            body: Prose::new("filler".into()).unwrap(),
+            target: Target::Task(crate::TaskId(0)),
             kind,
         }
     }
@@ -191,45 +179,50 @@ mod tables {
         }
     }
 
-    fn forwarded_event() -> Event {
-        Event::SteerForwarded {
-            steer: CommentId(RecordId(1)),
+    fn note() -> CommentKind {
+        CommentKind::Note {
+            body: Prose::new("filler".into()).unwrap(),
         }
     }
 
-    fn bind(trigger: RecordId) -> Event {
-        Event::IncarnationBound {
-            task_id: TaskId(0),
-            response_target: CommentId(RecordId(1)),
-            trigger,
-            actor: ActorName::new("pi".into()).unwrap(),
-            session: SessionPointer::new("/tmp/session".into()).unwrap(),
+    fn offer() -> CommentKind {
+        CommentKind::Offer {
+            body: Prose::new("filler".into()).unwrap(),
         }
     }
 
-    fn demand(response: ResponseState) -> CommentState {
-        CommentState::Demand {
-            response,
-            base: GitCommit::new("a1b2c3".into()).unwrap(),
+    fn accept() -> CommentKind {
+        CommentKind::Accept {
+            offer: CommentId(RecordId(1)),
         }
     }
 
-    fn ask(response: ResponseState) -> CommentState {
-        CommentState::Ask { response }
+    fn reject() -> CommentKind {
+        CommentKind::Reject {
+            offer: CommentId(RecordId(1)),
+            grounds: Prose::new("filler".into()).unwrap(),
+        }
     }
 
-    fn steer(delivery: SteerDelivery) -> CommentState {
-        CommentState::Steer { delivery }
+    fn use_of() -> CommentKind {
+        CommentKind::Use {
+            offer: CommentId(RecordId(1)),
+            reason: Prose::new("filler".into()).unwrap(),
+        }
+    }
+
+    fn request() -> CommentKind {
+        CommentKind::Request {
+            body: Prose::new("filler".into()).unwrap(),
+        }
     }
 
     fn withdrawn() -> CommentState {
         CommentState::Withdrawn(Prose::new("parked in the wrong place".into()).unwrap())
     }
 
-    fn replied(response: CommentId) -> ResponseState {
-        ResponseState::Responded { reply: response }
-    }
-
+    /// Withdrawal is the note deposits' terminal door alone: every
+    /// other variant holds, at the table.
     #[test]
     fn withdrawal_is_a_note_deposits_terminal_door() {
         assert_eq!(
@@ -237,12 +230,11 @@ mod tables {
             Some(withdrawn())
         );
         let others = [
-            demand(ResponseState::Awaiting),
-            demand(replied(CommentId(RecordId(9)))),
-            ask(ResponseState::Awaiting),
-            ask(replied(CommentId(RecordId(9)))),
-            steer(SteerDelivery::Standing),
-            steer(SteerDelivery::Forwarded),
+            CommentState::Request,
+            CommentState::Offer,
+            CommentState::Accept,
+            CommentState::Reject,
+            CommentState::Use,
             withdrawn(),
         ];
         for state in &others {
@@ -250,66 +242,38 @@ mod tables {
         }
     }
 
+    /// No comment's state moves on a comment birth, a revision, or a
+    /// task event: births and revisions are content, task events
+    /// belong to the task's table.
     #[test]
-    fn a_steer_moves_only_on_its_own_forward() {
-        assert_eq!(
-            steer(SteerDelivery::Standing).transition(&forwarded_event()),
-            Some(steer(SteerDelivery::Forwarded))
-        );
-        let others = [
-            CommentState::Note,
-            demand(ResponseState::Awaiting),
-            ask(ResponseState::Awaiting),
-            steer(SteerDelivery::Forwarded),
-            withdrawn(),
-        ];
-        for state in &others {
-            assert_eq!(state.transition(&forwarded_event()), None, "{state:?}");
-        }
-    }
-
-    /// Replies, bindings, terminals, and refusals move no comment
-    /// state: the reply door answers, the context records the rest.
-    #[test]
-    fn replies_and_machinery_events_move_no_state() {
+    fn births_revisions_and_task_events_move_no_comment_state() {
         let states = [
             CommentState::Note,
-            demand(ResponseState::Awaiting),
-            demand(replied(CommentId(RecordId(9)))),
-            ask(ResponseState::Awaiting),
-            ask(replied(CommentId(RecordId(9)))),
-            steer(SteerDelivery::Standing),
-            steer(SteerDelivery::Forwarded),
+            CommentState::Request,
+            CommentState::Offer,
+            CommentState::Accept,
+            CommentState::Reject,
+            CommentState::Use,
             withdrawn(),
         ];
         let events = [
-            comment_event(CommentKind::Note),
-            comment_event(CommentKind::Demand {
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }),
-            comment_event(CommentKind::Steer),
-            comment_event(CommentKind::Ask),
+            comment_event(note()),
+            comment_event(request()),
+            comment_event(offer()),
+            comment_event(accept()),
+            comment_event(reject()),
+            comment_event(use_of()),
             Event::CommentRevised {
                 id: CommentId(RecordId(1)),
                 body: Prose::new("filler".into()).unwrap(),
             },
-            bind(RecordId(1)),
-            Event::IncarnationPromptAccepted {
-                id: crate::objects::incarnation::IncarnationId(RecordId(3)),
+            Event::TaskClaimed {
+                id: crate::TaskId(0),
+                incarnation: None,
             },
-            Event::IncarnationPromptRejected {
-                id: crate::objects::incarnation::IncarnationId(RecordId(3)),
-                evidence: FailureEvidence::new(FailureCode::PromptRejected, None),
-            },
-            Event::IncarnationSettled {
-                id: crate::objects::incarnation::IncarnationId(RecordId(3)),
-            },
-            Event::IncarnationCancelled {
-                id: crate::objects::incarnation::IncarnationId(RecordId(3)),
-            },
-            Event::DemandRefused {
-                demand: CommentId(RecordId(1)),
-                reason: Prose::new("the worktree is a disk-only leftover".into()).unwrap(),
+            Event::TaskCancelled {
+                id: crate::TaskId(0),
+                explanation: Prose::new("filler".into()).unwrap(),
             },
         ];
         for state in &states {
@@ -319,29 +283,35 @@ mod tables {
         }
     }
 
-    /// The reply door answers an awaiting demand or ask and nothing
-    /// else: an answered one holds, the other variants never had one.
+    /// The birth state mirrors the variant, one for one.
     #[test]
-    fn the_reply_door_answers_awaiting_demands_and_asks_alone() {
-        let reply = CommentId(RecordId(9));
-        assert_eq!(
-            demand(ResponseState::Awaiting).answered(reply),
-            Some(demand(replied(reply)))
-        );
-        assert_eq!(
-            ask(ResponseState::Awaiting).answered(reply),
-            Some(ask(replied(reply)))
-        );
-        let others = [
-            CommentState::Note,
-            demand(replied(CommentId(RecordId(2)))),
-            ask(replied(CommentId(RecordId(2)))),
-            steer(SteerDelivery::Standing),
-            steer(SteerDelivery::Forwarded),
-            withdrawn(),
-        ];
-        for state in &others {
-            assert_eq!(state.answered(reply), None, "{state:?}");
+    fn the_birth_state_mirrors_the_variant() {
+        for (kind, state) in [
+            (note(), CommentState::Note),
+            (request(), CommentState::Request),
+            (offer(), CommentState::Offer),
+            (accept(), CommentState::Accept),
+            (reject(), CommentState::Reject),
+            (use_of(), CommentState::Use),
+        ] {
+            assert_eq!(&CommentState::of(&kind), &state);
         }
+    }
+
+    /// Accept carries no prose; every other variant's prose is the
+    /// revision door's swap surface, and the naming variants name
+    /// exactly the offer they reference.
+    #[test]
+    fn prose_and_offer_surface_of_each_variant() {
+        assert!(accept().prose().is_none());
+        for kind in [note(), request(), offer(), reject(), use_of()] {
+            assert!(kind.prose().is_some(), "{kind:?} carries prose");
+        }
+        assert_eq!(accept().offer(), Some(CommentId(RecordId(1))));
+        assert_eq!(reject().offer(), Some(CommentId(RecordId(1))));
+        assert_eq!(use_of().offer(), Some(CommentId(RecordId(1))));
+        assert_eq!(note().offer(), None);
+        assert_eq!(request().offer(), None);
+        assert_eq!(offer().offer(), None);
     }
 }

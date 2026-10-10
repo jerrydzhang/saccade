@@ -1,132 +1,52 @@
 use crate::objects::comment::{CommentId, CommentKind, Target};
 use crate::objects::incarnation::IncarnationId;
-use crate::objects::proposal::{ProposalAction, ProposalId};
 use crate::objects::task::TaskId;
-use crate::store::RecordId;
-use crate::types::actor::ActorName;
 use crate::types::artifact::Artifact;
-use crate::types::failure::FailureEvidence;
-use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
+use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 use crate::types::prose::Prose;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Event {
-    // Task Events
+    // Task events
     TaskCreated {
         name: Prose,
         parent_id: Option<TaskId>,
     },
+    /// A transfer of whole-task responsibility: never a state
+    /// transition, never a permission grant. The claim history
+    /// accumulates on the context.
     TaskClaimed {
         id: TaskId,
+        /// The record-derived incarnation claiming, when the claim
+        /// rides one; absent means the named actor claims directly
+        incarnation: Option<IncarnationId>,
     },
-    TaskDone {
-        id: TaskId,
-        receipt: Prose,
-    },
-    /// The old law's close: replay-only. Logs written before the receipts
-    /// law record done here and stay done; new closes write TaskDelivered.
-    TaskDelivered {
-        id: TaskId,
-        receipt: Prose,
-    },
-    /// The only door from delivered to done; the receipt rides through.
-    TaskAccepted {
-        id: TaskId,
-    },
-    TaskDropped {
-        id: TaskId,
-        note: Prose,
-    },
-    TaskReleased {
-        id: TaskId,
-        note: Prose,
-    },
-    // Proposal Events
-    ProposalCreated {
-        // No birth event carries its id: a task's id is its push position in
-        // the fold, a proposal's id is the record position of its birth
-        name: Prose,
-        action: ProposalAction,
-    },
-    ProposalWithdrawn {
-        id: ProposalId,
-        note: Prose,
-    },
-    ProposalRejected {
-        id: ProposalId,
-        note: Prose,
-    },
-    ProposalAccepted {
-        id: ProposalId,
-    },
-    // Comment Events
-    Commented {
-        target: Target,
-        body: Prose,
-        kind: CommentKind,
-    },
-    /// A content act, not a transition: the fold swaps the body and
-    /// keeps a pointer at the latest revision record — the original
-    /// bytes stay in their own birth event.
-    CommentRevised {
-        id: CommentId,
-        body: Prose,
-    },
+    /// The human's stop of an unfinished undertaking, with the
+    /// explanation that survives in the record.
+    TaskCancelled { id: TaskId, explanation: Prose },
+    /// The human's explicit resumption of a cancelled undertaking,
+    /// with the explanation of why it is pursued again.
+    TaskReopened { id: TaskId, explanation: Prose },
+    // Comment events
+    /// A comment birth: the payload is its variant, body included —
+    /// the bodyless Accept carries none.
+    Commented { target: Target, kind: CommentKind },
+    /// A presentation repair, not a transition: the fold swaps the
+    /// prose of a prose-carrying variant and keeps a pointer at the
+    /// latest revision record — the original bytes stay in their own
+    /// birth event. A bodyless Accept admits no repair; references
+    /// never change through this door.
+    CommentRevised { id: CommentId, body: Prose },
     /// The standing-error repair: the deposit's implicit claim — this
     /// is reached, this earns residency — was false. The body leaves
-    /// the fold's presentation, a tombstone stays; the log is untouched.
-    /// Note deposits only; the demand/steer/ask lifecycles are not
-    /// retractable through this door.
-    CommentWithdrawn {
-        id: CommentId,
-        note: Prose,
-    },
-    /// The refusal fact: a demand the machinery would not run, landed
-    /// where the asker reads.
-    DemandRefused {
-        demand: CommentId,
-        reason: Prose,
-    },
-    /// A steer delivered to the live run that consumed it. Machinery
-    /// verb, System-authored by role.
-    SteerForwarded {
-        steer: CommentId,
-    },
+    /// the fold's presentation, a tombstone stays; the log is
+    /// untouched. Note deposits only.
+    CommentWithdrawn { id: CommentId, note: Prose },
     /// A thread holding an artifact: name and content identity, the
     /// bytes stay in the store. Authored like a comment, any tier.
-    ArtifactAdded {
-        root: TaskId,
-        artifact: Artifact,
-    },
-    // Incarnation events: machinery verbs, System-authored by role
-    IncarnationBound {
-        task_id: TaskId,
-        response_target: CommentId,
-        trigger: RecordId,
-        actor: ActorName,
-        session: SessionPointer,
-    },
-    IncarnationPromptAccepted {
-        id: IncarnationId,
-    },
-    IncarnationPromptRejected {
-        id: IncarnationId,
-        evidence: FailureEvidence,
-    },
-    IncarnationSettled {
-        id: IncarnationId,
-    },
-    /// A wish any principal may hold: stop this run. Ungated because it
-    /// asserts no machine-established fact, unlike its System siblings.
-    IncarnationCancelled {
-        id: IncarnationId,
-    },
-    RecordProducedBy {
-        record_id: RecordId,
-        incarnation_id: IncarnationId,
-    },
+    ArtifactAdded { root: TaskId, artifact: Artifact },
     // Workspace events: machinery verbs, System-authored by role
     TaskWorkspaceCreated {
         task_id: TaskId,
@@ -155,43 +75,19 @@ pub enum Command {
     },
     ClaimTask {
         id: TaskId,
+        incarnation: Option<IncarnationId>,
     },
-    CompleteTask {
+    CancelTask {
         id: TaskId,
-        receipt: Prose,
+        explanation: Prose,
     },
-    AcceptTask {
+    ReopenTask {
         id: TaskId,
-    },
-    DropTask {
-        id: TaskId,
-        note: Prose,
-    },
-    ReleaseTask {
-        id: TaskId,
-        note: Prose,
-    },
-    // Proposal commands
-    CreateProposal {
-        // See note above about why proposals don't have an id at command time
-        name: Prose,
-        action: ProposalAction,
-    },
-    WithdrawProposal {
-        id: ProposalId,
-        note: Prose,
-    },
-    RejectProposal {
-        id: ProposalId,
-        note: Prose,
-    },
-    AcceptProposal {
-        id: ProposalId,
+        explanation: Prose,
     },
     // Comment commands
     Comment {
         target: Target,
-        body: Prose,
         kind: CommentKind,
     },
     ReviseComment {
@@ -202,45 +98,11 @@ pub enum Command {
         id: CommentId,
         note: Prose,
     },
-    RefuseDemand {
-        demand: CommentId,
-        reason: Prose,
-    },
     Artifact {
         root: TaskId,
         artifact: Artifact,
     },
-    // Machinery verbs: the runner forwards standing steers to the run
-    // that consumed them
-    ForwardSteer {
-        steer: CommentId,
-    },
-    // Machinery verbs: the executor side acts through the same pipeline
-    BindIncarnation {
-        task_id: TaskId,
-        response_target: CommentId,
-        trigger: RecordId,
-        actor: ActorName,
-        session: SessionPointer,
-    },
-    AcceptPrompt {
-        id: IncarnationId,
-    },
-    RejectPrompt {
-        id: IncarnationId,
-        evidence: FailureEvidence,
-    },
-    SettleIncarnation {
-        id: IncarnationId,
-    },
-    CancelIncarnation {
-        id: IncarnationId,
-    },
-    MarkRecord {
-        record_id: RecordId,
-        incarnation_id: IncarnationId,
-    },
-    // Machinery verbs: workspace records follow provisioning and checkpoints
+    // Machinery verbs: System authorship comes from the role, never input
     CreateWorkspace {
         task_id: TaskId,
         base: GitCommit,

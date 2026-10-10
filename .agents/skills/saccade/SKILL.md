@@ -1,6 +1,6 @@
 ---
 name: saccade
-description: Use when running the `sac` CLI — working tasks, claiming, delivering with receipts, waiting on runs, firing demands, or any question about the tracker's events, task states, tiers, or proposals.
+description: Use when running the `sac` CLI — working tasks, claiming ownership, offering and reviewing conclusions, or any question about the tracker's events, task states, tiers, or comments.
   - ".agents/**"
 ---
 
@@ -8,16 +8,25 @@ description: Use when running the `sac` CLI — working tasks, claiming, deliver
 
 One binary over an append-only event log; the world is a fold of that log.
 The record is the reasoning cache: conclusions live on threads so the next
-reader — often you, after a context loss — never re-derives them. Judgment
-acts (drop, release, ruling on proposals) are human-only; agents propose.
+reader — often you, after a context loss — never re-derives them. There is
+no managed execution in this build: the tracker records undertakings,
+accounts, and decisions — nothing launches, waits, or supervises anything.
 
 ## Identity
 
 Tier is **possessed, never passed**. `SACCADE_ACTOR` set means agent tier;
-unset means human. There is no tier argument, and actor names never carry
-authority. Mutating commands record your identity from possession; reads
-need none. A run's derived name (`pi/t-75-2`) is an incarnation, not an
-actor — it never equals a birth attribution, so a run can never self-accept.
+unset means human tier. There is no tier argument, and actor names never
+carry authority. Mutating commands record your identity from possession;
+reads need none.
+
+A session's environment may declare a **scope**: `SACCADE_TASK` (its task
+binding, `t-N`) anchors it, `SACCADE_INCARNATION` (a `c-N` birth reference)
+and `SACCADE_WORKSPACE` (an absolute path) ride with it. The scope is
+disclosure riding every record you write — never proof, never ownership.
+It feeds exactly one gate: an agent whose declared scope covers a task
+cannot **accept** that task's offer (`self_acceptance`). Humans are never
+scope-gated.
+
 An unpossessed write is guarded: with `SACCADE_ACTOR` unset, a mutation
 from a keyboard proceeds on one notice line (a named `--actor` passes
 silently), and the same mutation without a tty refuses
@@ -36,7 +45,7 @@ that skips it burns its reasoning on re-derivation or acts on guesses.
    Deep-first reasoning is the failure mode, not a style.
 2. **Park conclusions at altitude** as they form (`sac comment t-N "…"`) —
    parking is durability: an unparked conclusion dies with your context, a
-   parked one survives reboot, handoff, and the next incarnation. Park each
+   parked one survives reboot, handoff, and the next session. Park each
    conclusion when it forms, never batched at delivery — a crash between
    formation and park loses it. A cache entry is semantic content that
    survives rewording: the verdict, the why, the dead end, the deviation.
@@ -50,220 +59,140 @@ that skips it burns its reasoning on re-derivation or acts on guesses.
    asker carries it to the skill's author. Never resolve it silently.
    Hidden staleness poisons the cache for every later reader.
 
-## Workflow
+## The model
 
-Two ways work executes, decided by how you arrived — and one role that
-belongs to whoever delegates:
-- **A demand summoned you** — your prompt names a task thread and you work
-  as a spawned run → *Executing a demand*. Nobody else receives that
-  prompt; if it addressed you, you are the run.
-- **Nobody summoned you** — you read the board and chose the work →
-  *Manual pickup*.
-- **Supervising is a role, not a third path**: whoever fires a demand
-  supervises it — a human, an external agent, or a run whose scope
-  outgrew its context and splits.
+Tasks are named undertakings: `open → offered → concluded`, with
+`cancelled` as the human's stop. Ownership is separate from state — a
+claim records whole-task responsibility (human, task-bound incarnation,
+or named external agent), transfers freely, and never gates anything.
 
-### Executing a demand (a run)
+Work concludes through accounts and decisions, all of them comments:
 
-Your deliverable is the **honest presentation** — completing the ask is an
-outcome, not the goal.
+- **Offer** — the whole-task closing account. Moves `open → offered`.
+  Any tier may offer; offering is not owner-gated.
+- **Accept** — names the offer (`c-N`), no prose. Moves `offered →
+  concluded`. Accept when the work is actually relied on, not when it
+  is merely finished. A task-bound producer cannot accept its own
+  task's offer.
+- **Reject** — names the offer with required grounds. Moves `offered →
+  open`, asking reconsideration; it does not establish wrongness. Any
+  participant may reject, including the producer. To replace an
+  account, reject it while it stands, then offer anew — there is no
+  separate withdrawal door, and a second offer on an offered task
+  refuses.
+- **Use** — lives on the consuming task, names a source offer and a
+  reason. Records reliance between internal tasks; creates no
+  acceptance, and acceptance creates no use.
+- **Request** — prose seeking response, recording why work happened.
+  Never reopens anything by itself.
+- **Note** — everything else that parks on a thread or replies to a
+  record.
 
-1. **Retrieve first** (the protocol above): read your thread whole — the
-   spec, prior verdicts, dead ends, parked working state — then the code
-   and record it names. Followed honestly, this is resuming the work, not
-   starting it.
-2. **Size the work — a procedure, not a judgment.** After retrieval — or
-   after the reasoning an ambiguous spec demanded, whichever road produced
-   your understanding — list the spec's independently acceptable landings:
-   the changes that could each be committed, receipted, and accepted alone.
-   Park the sizing answer on the thread before your first code edit: a
-   thread with no sizing answer ahead of the work is this step skipped, not
-   answered. Exactly one → execute it whole and say so on the thread.
-   Several sharing
-   structures → a chain: park the children (`sac create task --parent`),
-   fire the first, fire each next when its upstream lands. Several sharing
-   nothing → a fan, and only when the parallel or context gain clears the
-   per-child ritual (spec, receipt, verify, accept) — children are standing
-   board objects; their cost is permanent, not transient. A split demand
-   delivers once, at the top: children accept to their supervisor, the
-   parent delivers to the asker, and delivering the first slice while
-   supervising the rest is completing the demand, not deferring it. Labels
-   like CHANGE ONE, CHANGE TWO are task boundaries wearing phase names. The
-   question is never skipped, only answered: a spec you have already called
-   large is the signal, and naming its size while executing it whole is the
-   failure this step exists to stop. Crash resume is never a reason to keep
-   a too-large shape.
-3. **Work in the task's worktree** — its branch `saccade/t-N`, prepared
-   from the recorded checkpoint. The runner owns it (see Runner-owned
-   state); park what you learn as you learn it.
-4. **Ask when blocked.** Your session carries an `ask` tool: a blocking
-   question to the human. The question lands on the task's thread; the
-   tool returns when the human answers; the answer is the tool result.
-   Observations that don't block the work are notes on the thread, not
-   asks.
-5. **Deviate openly.** If the spec cannot be followed as written, say so
-   on the thread with evidence — a narrowed scope silently executed is a
-   failure; a deviation announced is a finding.
-6. **Deliver**: commit your work to the task branch, `sac checkpoint
-   t-N`, claim, then `sac done t-N --receipt "…"`. The claim is the door
-   key `done` requires — it is not an in-flight signal (the demand
-   carries in-flight); take it at delivery, never before. Delivery is not
-   closure. The receipt deposits this round's honest account — outcome,
-   evidence, omissions, deviations — and the asker either accepts it as
-   done or answers with findings; iteration continues: findings on a
-   delivered task fire in-thread rounds, and a fresh demand reopens a
-   done task. Park dead ends and deviations on the thread before you
-   deliver. Failure honestly reported is success.
+Older offers stay addressable; decisions naming a superseded offer
+refuse (`not_current_offer`). A concluded task never reopens — later
+faults belong in new tasks. Human cancellation of an unfinished task
+requires an explanation; human reopening of a cancelled one does too.
+`offered` is a normal persistent state, not a queue to clear.
 
-### Supervising (the asker)
+Revision repairs presentation only: the prose-carrying variants
+(note, request, offer, grounds, reason) can be revised — the fold
+presents the latest and names a reviser; the bodyless accept refuses
+the door, references never change, and a substantive change is a
+reject and a fresh offer. Withdrawal is the note's standing-error
+repair alone: the body leaves the fold, a tombstone stays.
 
-**When to dispatch.** The unit is the acceptor's sitting: a task is the
-largest unit one accept can honestly review in one sitting — not what the
-builder believes it can deliver. If the deliverable statement contains an
-"and," it is two tasks; if no single receipt would be checkable in one
-sitting, it is many. Dispatch when you hold the spec but not the
-mechanics; do the work yourself when you hold both, or when it is smaller
-than the dispatch ritual. When you cannot yet write the spec, dispatch a
-research round — bounded, read-only, its deliverable the spec material
-parked as conclusions. You will be wrong about scope; the design does not
-ask you to be right. Work in rounds small enough that a wrong cut costs
-one round, read receipts for strain — context pressure, under-delivery,
-deviations outnumbering confirmations are the record saying the task was
-really two — and let the cut be a proposal the level above sees,
-superseding cleanly on re-cut.
+## Working a task
 
-1. **Create with shape.** `sac create task "name"` — the reply names what
-   was born (`t-N`, both faces). Specs ride a comment on the thread.
-2. **Spec at altitude.** Ratified decisions, constraints, and the
-   verification door — not step-by-step recipes. Every claim in a spec is
-   sourced — read this session from the record or the tree — or
-   explicitly marked open for the executor to resolve; a belief costumed
-   as a source is the failure carrier.
-3. **Fire the demand**: `sac comment t-N "spec…" --demand`.
-4. **Wait by outcome**: `sac wait c-<seq>` — the seq is your demand's own,
-   printed in its reply. It releases when the run asks something of you —
-   it settles (the receipt is named), cancels, rejects its prompt before
-   accepting (the cause is carried), refuses (the reason is carried), is
-   answered with no run behind it, or asks a blocking question (the
-   release carries it; answer on the thread, then re-arm the wait). It
-   never releases on replies: acks hold, and a run still being born
-   holds the wait too.
-5. **Verify the claims** — that is what makes them knowledge. Clean
-   checkout, suite counts, a live smoke on a scratch db, and the diff's
-   added comments read against the comment law: narration is deleted
-   before accept, the non-obvious whys stay. Cheap verification is why
-   receipts name evidence.
-6. **Accept or route.** `sac accept t-N` is yours if you are the birth
-   attribution; otherwise it goes to a human. Merging follows your
-   project's own release flow — the tracker holds the thread, not the
-   train.
+There is no runner in this build. You arrive at a task through whatever
+launched you — a human, a coordinating agent — working in a worktree
+someone established. The tracker's part of the loop:
 
-### Manual pickup
+1. **Retrieve first** (the protocol above): read your thread whole —
+   the spec, prior verdicts, dead ends, parked working state — then the
+   code and record it names.
+2. **Claim if you own it** (`sac claim t-N`): whole-task
+   responsibility, recorded on the ledger, transferring on the next
+   claim. A task-scoped helper can contribute without claiming; a
+   claim without an incarnation reference is a named external agent's
+   claim.
+3. **Work and park** conclusions as comments as they form. Deviate
+   openly: if the spec cannot be followed as written, say so on the
+   thread with evidence.
+4. **Offer** the whole-task account (`sac offer t-N "…"`): outcome,
+   evidence — what changed, which tests ran with counts, which
+   commands were exercised, which files were touched, omissions and
+   deviations. The offer is what a consumer reviews.
+5. **The consumer decides.** A reviewer accepts (`sac accept c-N`) or
+   rejects with grounds (`sac reject c-N --grounds "…"`); the producer
+   may reject its own offer to reopen for a fix. Failure honestly
+   reported is success.
 
-For work you take under your own identity, in your own session — an agent
-executing directly rather than by demand, a human holding a task while
-thinking it through, a supervisor doing the small task it fully holds.
-This is the only workflow where claiming belongs.
-
-1. `sac list` at session start — that's the board.
-2. Claim what you will actually finish: `sac claim t-N`. Claims are
-   reservations, not progress reports; do not stockpile them, and never
-   sit silently on one.
-3. Do the work; park what you learn mid-flight as comments — never a side
-   file. If your observation changes the *what*, that is supersession:
-   propose the drop, naming the successor.
-4. `sac done t-N --receipt "…"` when the work lands.
-
-### Receipts — the protocol both roles share
-
-The receipt is written by the executor at deliver and read by the
-acceptor at verify — it is the shared artifact of claim-and-verify, not
-an addendum. It is the deposit the delivered state guards; the accept
-reviews it, and whoever reads the thread later inherits it. Name the
-outcome and the evidence: what changed, which tests ran and their counts,
-which commands were exercised, which files were touched. "done", "fixed",
-"implemented" are not receipts.
-
-One idea per comment, at every door. When you compose a comment, count its
-ideas; more than one forks into one comment per idea, and the formal reply
-or receipt indexes them, never contains them. This is practice, not
-machinery: the reply door stays single, and the day a reviewed blob
-survives this law anyway is the day the door itself changes.
-
-Addressing is content, not packaging. A comment that answers, resolves, or
-corrects a specific record replies to it (`sac comment c-<seq>`); a comment
-that parks a new conclusion addresses the thread. A `c-N` mention as
-citation is fine; a mention doing an address's job is the door left open.
-
-## Prose
-
-Comment bodies and receipts are CommonMark — tables and math included —
-and the console renders them, math and code click-to-copy. Write LaTeX
-for math, never unicode approximations. Dollars are the only math
-delimiters, and they are exact:
-
-- inline: `$x^2+1$`, `$\mathcal{L}[f]$` — one dollar each side
-- display: `$$\frac{a}{b}$$` — two dollars each side
-
-`\(...\)` and `\[...\]` are not the door — they stay literal
-backslashes. A formula the renderer cannot parse keeps its source bytes
-(`$\notacommand{x}$` renders as itself), so a wrong delimiter is visible
-as the wrong characters.
-
-## Searching
-
-`sac search` finds records by exact terms over the folded text fields —
-task titles, comment bodies, receipts, and artifact names. No ranking, no relevance, no
-fuzzy: a term matches as a whole, word-bounded, case-folded, or it
-doesn't match — inflections do not match, so try each form. Results are
-thread-grouped pointers with one matched line each, in record order.
-
-- **Find where something was decided**: `sac search telemetry`. The
-  groups are the threads that hold matches.
-- **Follow a reference**: an id term is a reference search — `c-907`
-  finds every record citing that comment, `t-49` everything naming that
-  task.
-- **Narrow**: `in:` `by:` `kind:` `under:` — only-show-me filters;
-  every narrowing prints visible counts, and a query that matches
-  nothing prints one honest line. `sac search --help` owns the grammar.
-  A withdrawn comment's body sits out by default — `--withdrawn`
-  includes it.
-- **Read the neighborhood**: `sac search c-907 -C 3` anchors on that
-  record and shows its window.
-- **Read whole records**: bare seqs show the raw event at that position,
-  `c-N` the record's folded form, `t-N` the task plus thread; several
-  ids in one call, or one per line through
-  `--stdin`. The pipe reads end to end:
-  `sac search telemetry --json | jq -r '.groups[].records[].pointer' | sac show --stdin`.
-
-Pointers stay pointers: a receipt's address is its task (`t-90
-receipt` — the fold keeps no delivery seq), and a receipt carries no
-author in the fold, so `by:` narrows receipts out; the counts say so.
-The power tail is unchanged: `sac log | grep` reads the raw record.
+Human judgment acts: cancellation (`sac cancel t-N --explanation "…"`)
+and reopening (`sac reopen t-N --explanation "…"`).
 
 ## Commands
 
 | Command | Who | Notes |
 |---|---|---|
 | `sac create task "name" [--parent t-N]` | any tier | the reply names what was born |
-| `sac claim t-N` | any tier | a reservation, not a progress report |
-| `sac done t-N --receipt "…"` | any tier | delivers; the receipt is the deposit the accept reviews |
-| `sac drop t-N [--note]` | **human only** | judgment act; agents propose |
-| `sac release t-N [--note]` | **human only** | judgment act; agents propose |
-| `sac propose <drop\|release> t-N --name "…"` | any tier | the gate queue: your evidence, the human's call |
-| `sac accept t-N` | birth attribution, or human | the only door from delivered to done |
-| `sac accept <seq>` / `sac reject <seq> --note` | **human only** | ruling acts on proposals |
-| `sac comment t-N "…"` / `sac comment c-<seq> "…"` | any tier | park or reply — a note; `--demand` fires a run |
-| `sac revise c-<seq> "…"` (body also by `--stdin` or `--body-file`) | any tier | repairs mechanics only — formatting, rendering, delimiters, wrapping; a substantive error is answered by a comment, the mistake is record; any tier revises any comment, the fold names a reviser who differs from the birth author, and `sac log` keeps the original |
-| `sac withdraw c-<seq> --note "…"` | any tier | revise's sibling, the standing-error repair: the deposit's residency claim was false, so the body leaves the fold and a one-line tombstone with the note stays — terminal, note deposits only (demand/steer/ask keep their own lifecycles); any tier withdraws any note, the tombstone names a withdrawer who differs from the birth author, `c-<seq>` stays resolvable, and `sac show c-<seq> --withdrawn` / `sac search --withdrawn` are the doors back to the body; `sac log` keeps every byte |
-| `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only; bytes never ride the wire, the db, or the server |
-| `sac steer t-N "…"` | any tier | reach the task's live run at its next turn boundary; with no run it stands as intent on the thread |
-| `sac wait c-<seq>` | any tier | blocks on the demand's outcome, never replies |
-| `sac cancel t-N` | any tier | the kill request for a task's active run |
-| `sac checkpoint t-N` | any tier | records the branch tip as the task's checkpoint |
-| `sac list` / `sac show <ids…>` / `sac log` / `sac proposals` | anonymous | the board, threads and records, raw events, the ruling queue |
-| `sac search <terms…> [in:t-N by:NAME kind:K under:t-N] [-C N]` | anonymous | exact terms over titles, comment bodies, receipts; id terms are reference searches; facets only-show-me with visible counts; `-C N` anchors on one record |
+| `sac claim t-N` | any tier | ownership transfer; never a state change |
+| `sac comment t-N "…"` / `sac comment c-<seq> "…"` | any tier | a note, parked or replied |
+| `sac request t-N "…"` / `sac request c-<seq> "…"` | any tier | prose seeking response |
+| `sac offer t-N "…"` | any tier | the whole-task closing account |
+| `sac accept c-<offer>` | any tier | conclude through the standing offer |
+| `sac reject c-<offer> --grounds "…"` | any tier | reconsideration with grounds; reopens the task |
+| `sac use t-<consumer> c-<offer> --reason "…"` | any tier | record reliance on a source offer |
+| `sac cancel t-N --explanation "…"` | **human only** | stop an unfinished undertaking |
+| `sac reopen t-N --explanation "…"` | **human only** | resume a cancelled undertaking |
+| `sac revise c-<seq> "…"` (prose also by `--stdin` or `--body-file`) | any tier | presentation repair on prose-carrying variants; the fold names a reviser, `sac log` keeps the original |
+| `sac withdraw c-<seq> --note "…"` | any tier | the note's standing-error repair: body out, tombstone stays |
+| `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
+| `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace — none is created in this build |
+| `sac list` / `sac show <ids…>` / `sac log` | anonymous | the board, threads and records, raw events |
+| `sac search <terms…> [in:t-N by:NAME kind:K under:t-N] [-C N]` | anonymous | exact terms over titles, comment prose, explanations; kinds: task, note, request, offer, accept, reject, use, artifact, explanation |
+| `sac serve [--bind] [--port]` | — | the sole-writer HTTP server and console |
+| `sac clone --at <seq> --out <path>` | anonymous | copy the log's prefix into a fresh tracker |
 | `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
+
+Not in this build (later slices, do not assume them): launching agents
+or workspaces from the tracker, generic waits, steering a live session,
+proposal machinery of any kind.
+
+## Prose
+
+Comment prose is CommonMark — tables and math included — and the
+console renders them, math and code click-to-copy. Write LaTeX for
+math, never unicode approximations. Dollars are the only math
+delimiters, and they are exact:
+
+- inline: `$x^2+1$`, `$\mathcal{L}[f]$` — one dollar each side
+- display: `$$\frac{a}{b}$$` — two dollars each side
+
+`\(...\)` and `\[...\]` are not the door — they stay literal
+backslashes. A formula the renderer cannot parse keeps its source bytes.
+
+## Searching
+
+`sac search` finds records by exact terms over the folded text fields —
+task titles, comment prose, cancellation explanations, and artifact
+names. No ranking, no fuzzy: a term matches as a whole, word-bounded,
+case-folded, or it doesn't. Results are thread-grouped pointers with
+one matched line each, in record order.
+
+- **Find where something was decided**: `sac search telemetry`.
+- **Follow a reference**: an id term is a reference search — `c-907`
+  finds every record citing that comment, `t-49` everything naming
+  that task.
+- **Narrow**: `in:` `by:` `kind:` `under:` — only-show-me filters;
+  every narrowing prints visible counts. `sac search --help` owns the
+  grammar.
+- **Read the neighborhood**: `sac search c-907 -C 3`.
+- **Read whole records**: bare seqs show the raw event at that
+  position, `c-N` the record's folded form, `t-N` the task plus
+  thread. The pipe reads end to end.
+
+Pointers stay pointers. The power tail is unchanged: `sac log | grep`
+reads the raw record.
 
 ## Hygiene
 
@@ -273,46 +202,27 @@ The power tail is unchanged: `sac log | grep` reads the raw record.
 
 ## Event times
 
-`--at <epoch-seconds>` backdates an event. Use it only with a **sourced**
-measurement (a timestamp from a log, an import, a CI run). Never invent or
-eyeball a time; omit `--at` and the event stamps honestly as "now".
+`--at <epoch-seconds>` backdates an event. Use it only with a
+**sourced** measurement (a timestamp from a log, an import, a CI run).
+Never invent or eyeball a time; omit `--at` and the event stamps
+honestly as "now".
 
-## Runner-owned state
+## Workspaces
 
-Task worktrees (`<state dir>/worktrees/t-N`), task branches (`saccade/t-N`),
-and session files belong to the runner — system property, not yours to
-manage by hand. Task workspaces are best-effort and ephemeral: the
-record governs, the workspace is a cache. The lifecycle:
-
-- **Prepare rebuilds what is missing.** A workspace expected but missing is
-  re-cut at the recorded checkpoint — or the task's base when no
-  checkpoint exists — so absence never refuses. Recreation covers
-  absence only, never divergence: a branch that disagrees with the
-  recorded checkpoint still refuses, and a checkpoint nothing retains is
-  lost work; prepare refuses, naming it. That state is human-made —
-  deletion stays manual, there is no collector, no sweep.
-- **The record is the demand door.** While a task lives — open, claimed,
-  delivered, or done (done is reopenable) — its recorded workspace names
-  the branch and checkpoint the next demand rebuilds from. Merging a
-  task branch into your mainline is normal review flow; the branch
-  itself stays.
-- **Deletion is manual hygiene**, under one rule: never delete the sole
-  holder of recorded work. The record names the checkpoint, so
-
-  sole-holder is checkable before deleting — a branch merged into the
-  mainline is not sole holder, an unmerged branch usually is, and a
-  worktree's uncommitted files are never recorded work.
-- **A dropped task has no door.** Its worktree and branch are residue —
-  collectable, but still not by your hand: cleanup is a proposal to the
-  human (the tracker has no collection verb yet), naming the workspaces
-  and their tasks.
+Task worktrees, branches, and workspaces are established outside the
+tracker in this build — the record's workspace lineage is written by
+machinery events (`sac log` shows them) and `sac checkpoint t-N`
+records a branch tip against a recorded workspace. There is no
+provisioning door yet: a fresh tracker holds no workspace records, and
+checkpoint refuses (`workspace_missing`) until the native-workspace
+slice lands. The record governs; the workspace is a cache.
 
 ## Errors and degraded mode
 
 Failures exit 1 with a named variant on stderr (`--json` emits
-`{"error": "<variant>", "detail": "…"}`). If resolving an error requires
-violating any law of this skill, that is a finding — name it on the
-thread before proceeding.
+`{"error": "<variant>", "detail": "…"}`). If resolving an error
+requires violating any law of this skill, that is a finding — name it
+on the thread before proceeding.
 
 The variant table and degraded mode live in `errors.md` beside this
 skill — read it when a command names a variant. When the tracker
@@ -321,26 +231,21 @@ the conditions from the attempts log.
 
 ## Semantics worth knowing
 
-- Task states: `open → claimed → delivered → done`. `sac done` delivers,
-  never deems done; `accept` is the only door from delivered to done; a
-  demand reopens done (never delivered — findings on delivered fire
-  in-thread rounds instead). `dropped` is the sole terminal state and
-  human-only, reachable from `open` or `done` — a running task must be
-  cancelled first.
-- "Claimed" means reserved by someone — possibly a human claiming to
-  prevent agents from taking it while they think. It does not mean work is
-  happening; in-flight lives on the demand.
-- Proposals are seq-addressed (`sac accept 614`): the id is the birth
-  event's log position. They are inert while open (never block their
-  target), show `stale` in the queue when the embedded act goes illegal,
-  and re-proposing after a rejection is free — the rejection note names
-  the missing evidence.
+- Task states: `open → offered → concluded`; `cancelled` is the
+  human's stop with a recorded explanation, reopenable only by a human
+  with another explanation. Concluded is final — later faults open new
+  tasks.
+- Ownership is the ledger on the task's context: every claim appends
+  (who, when, which record), the last entry is the current owner, and
+  no state gates a claim.
+- The offer that stands is the task's *current offer*: decisions name
+  it by id, stale decisions refuse, and a reject clears it so a new
+  offer can stand.
 - Artifacts are pointers, never payloads — the record holds name+hash,
   the bytes live content-addressed under the state root, an artifact
   renders at its home position (CLI pointer line, console inline image
-  via `/a/<hash>`), a `c-N` mention resolving to an artifact renders as
-  the card, and the store write precedes the record so a crash orphans
-  content, never points at absence.
+  via `/a/<hash>`), and the store write precedes the record so a crash
+  orphans content, never points at absence.
 - Each repo has one tracker, served locally (`--server`, or
   `SACCADE_SERVER`; default `127.0.0.1:8811`); its state root derives
   from the repo path, never from your working directory — `--repo` or

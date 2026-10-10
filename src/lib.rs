@@ -9,11 +9,9 @@ pub mod events;
 pub mod objects;
 pub mod paths;
 pub mod refusals;
-pub mod rpc;
-pub mod runner;
 pub mod serve;
+pub mod skill;
 pub mod store;
-pub mod supervisor;
 pub mod types;
 pub mod views;
 pub mod web;
@@ -23,14 +21,13 @@ use serde::{Deserialize, Serialize};
 
 pub use decide::decide;
 pub use events::{Command, Event};
-pub use objects::comment::{Comment, CommentId, CommentKind, Target};
-pub use objects::proposal::{Proposal, ProposalAction, ProposalId, ProposalState};
-pub use objects::task::{Task, TaskId, TaskState};
-pub use store::{Context, Record, RecordId, Tier, World};
+pub use objects::comment::{Comment, CommentId, CommentKind, CommentState, Target};
+pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
+pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
+pub use store::{Context, Record, RecordId, Scope, Tier, World};
 pub use types::actor::ActorName;
 pub use types::artifact::{Artifact, ContentHash};
-pub use types::failure::{FailureCode, FailureEvidence};
-pub use types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
+pub use types::pointers::{GitBranch, GitCommit, WorktreePath};
 pub use types::prose::Prose;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, thiserror::Error)]
@@ -41,26 +38,22 @@ pub enum Reject {
     InvalidTaskId,
     #[error("no such parent task")]
     InvalidParentTaskId,
-    // Proposal
-    #[error("no open proposal with that id")]
-    InvalidProposalId,
-    #[error("that task already holds an open judgment proposal")]
-    ProposalAlreadyOpen,
     #[error("no comment with that id")]
     InvalidCommentId,
-    #[error("not the task's birth attribution")]
-    NotBirthAttribution,
+    #[error("the referenced comment is not an offer")]
+    NotAnOffer,
+    #[error("that offer is not the task's current one")]
+    NotCurrentOffer,
+    #[error(
+        "the declared task scope covers this task: a task-bound producer cannot accept its own conclusion"
+    )]
+    SelfAcceptance,
+    #[error("no such incarnation")]
+    InvalidIncarnationId,
     // Permissions
     #[error("human-only act")]
     HumanOnly,
-    #[error("not the claim holder")]
-    NotClaimHolder,
-    #[error("no such incarnation")]
-    InvalidIncarnationId,
-    #[error("the task's run slot is taken")]
-    IncarnationAlreadyActive,
-    #[error("the demand lives on another task")]
-    DemandNotOnTask,
+    // Workspace
     #[error("the task already holds a workspace")]
     WorkspaceAlreadyExists,
     #[error("the task has no workspace")]
@@ -69,10 +62,6 @@ pub enum Reject {
     WorktreeAlreadyPresent,
     #[error("the tip rewinds the recorded checkpoint")]
     CheckpointRewind,
-    #[error("the steer is not standing intent")]
-    SteerNotStanding,
-    #[error("the task runs no incarnation")]
-    NoActiveIncarnation,
     // Misc
     #[error("invalid actor name")]
     InvalidActor,
@@ -89,21 +78,16 @@ impl Reject {
         match self {
             Reject::InvalidTaskId => "invalid_task_id",
             Reject::InvalidParentTaskId => "invalid_parent_task_id",
-            Reject::InvalidProposalId => "invalid_proposal_id",
-            Reject::ProposalAlreadyOpen => "proposal_already_open",
             Reject::InvalidCommentId => "invalid_comment_id",
-            Reject::NotBirthAttribution => "not_birth_attribution",
-            Reject::HumanOnly => "human_only",
-            Reject::NotClaimHolder => "not_claim_holder",
+            Reject::NotAnOffer => "not_an_offer",
+            Reject::NotCurrentOffer => "not_current_offer",
+            Reject::SelfAcceptance => "self_acceptance",
             Reject::InvalidIncarnationId => "invalid_incarnation_id",
-            Reject::IncarnationAlreadyActive => "incarnation_already_active",
-            Reject::DemandNotOnTask => "demand_not_on_task",
+            Reject::HumanOnly => "human_only",
             Reject::WorkspaceAlreadyExists => "workspace_already_exists",
             Reject::WorkspaceMissing => "workspace_missing",
             Reject::WorktreeAlreadyPresent => "worktree_already_present",
             Reject::CheckpointRewind => "checkpoint_rewind",
-            Reject::SteerNotStanding => "steer_not_standing",
-            Reject::NoActiveIncarnation => "no_active_incarnation",
             Reject::InvalidActor => "invalid_actor",
             Reject::InvalidStateTransition => "invalid_state_transition",
             Reject::ReasonRequired => "reason_required",
@@ -122,21 +106,16 @@ mod test {
         let every = [
             Reject::InvalidTaskId,
             Reject::InvalidParentTaskId,
-            Reject::InvalidProposalId,
-            Reject::ProposalAlreadyOpen,
             Reject::InvalidCommentId,
-            Reject::NotBirthAttribution,
-            Reject::HumanOnly,
-            Reject::NotClaimHolder,
+            Reject::NotAnOffer,
+            Reject::NotCurrentOffer,
+            Reject::SelfAcceptance,
             Reject::InvalidIncarnationId,
-            Reject::IncarnationAlreadyActive,
-            Reject::DemandNotOnTask,
+            Reject::HumanOnly,
             Reject::WorkspaceAlreadyExists,
             Reject::WorkspaceMissing,
             Reject::WorktreeAlreadyPresent,
             Reject::CheckpointRewind,
-            Reject::SteerNotStanding,
-            Reject::NoActiveIncarnation,
             Reject::InvalidActor,
             Reject::InvalidStateTransition,
             Reject::ReasonRequired,

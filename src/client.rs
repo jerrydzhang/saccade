@@ -80,6 +80,7 @@ pub fn send(
                 Tier::Agent => WireTier::Agent,
                 Tier::System => unreachable!("the API has no system tier"),
             },
+            scope: context.scope.clone(),
         },
         command,
         at,

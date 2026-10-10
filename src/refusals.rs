@@ -4,18 +4,17 @@
 //! stay the wire's vocabulary, the teaching rides as prose.
 
 use crate::objects::comment::Target;
-use crate::objects::proposal::{ProposalAction, ProposalState};
 use crate::objects::task::TaskContext;
 use crate::store::World;
-use crate::{Command, ProposalId, RecordId, Reject, TaskId};
+use crate::{Command, Reject, TaskId};
 
-/// What the refusal should have said: the id space's grammar and the
-/// target the asker probably meant. None when the world has nothing
-/// to add to the brief code.
+/// What the refusal should have said: the id space's grammar and
+/// the target the asker probably meant. None when the world has
+/// nothing to add to the brief code.
 pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String> {
     match reject {
         Reject::InvalidTaskId => {
-            let id = command_task(command)?;
+            let id = command_task(world, command)?;
             Some(match world.tasks.len() {
                 0 => format!("no task t-{} exists; this tracker holds no tasks yet", id.0),
                 1 => format!("no task t-{} exists; this tracker holds 1 task, t-0", id.0),
@@ -37,107 +36,116 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 task_count(world.tasks.len())
             ))
         }
-        Reject::InvalidProposalId => {
-            let id = match command {
-                Command::AcceptProposal { id }
-                | Command::RejectProposal { id, .. }
-                | Command::WithdrawProposal { id, .. } => *id,
-                _ => return None,
-            };
-            let open: Vec<usize> = world
-                .proposals
-                .iter()
-                .filter(|(_, p)| matches!(p.state, ProposalState::Open))
-                .map(|(id, _)| id.0.0)
-                .collect();
-            Some(if open.is_empty() {
-                format!(
-                    "no proposal was born at {}; the ruling queue is empty (ids are bare log positions of proposal_created records)",
-                    id.0.0
-                )
-            } else {
-                format!(
-                    "no proposal was born at {}; the open ones are {}",
-                    id.0.0,
-                    open.iter()
-                        .map(|seq| seq.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            })
-        }
         Reject::InvalidCommentId => {
             let seq = command_comment(command)?;
-            if let Some(i) = world.tasks.iter().position(|ctx| ctx.birth.0 == seq) {
+            if let Some(i) = world.tasks.iter().position(|ctx| ctx.birth == seq.0) {
                 return Some(format!(
-                    "c-{seq} is the birth record of task t-{i}; address its thread as t-{i}"
-                ));
-            }
-            if world.proposals.contains_key(&ProposalId(RecordId(seq))) {
-                return Some(format!(
-                    "c-{seq} is the birth record of a proposal; rule it by its bare log position (e.g. accept {seq})"
+                    "c-{seq} is the birth record of task t-{i}; address its thread as t-{i}",
+                    seq = seq.0.0
                 ));
             }
             Some(format!(
-                "c-{seq} names no comment; a reply addresses a comment record as c-<seq>, a task's thread as t-<n>"
+                "c-{seq} names no comment; a reply addresses a comment record as c-<seq>, a task's thread as t-<n>",
+                seq = seq.0.0
             ))
         }
+        Reject::NotAnOffer => {
+            let offer = command_offer(command)?;
+            let ctx = world.comments.get(&offer)?;
+            Some(format!(
+                "c-{} is a {}, not an offer; accept, reject, and use address an offer",
+                offer.0 .0,
+                crate::views::kind_of(&ctx.comment.kind)
+            ))
+        }
+        Reject::NotCurrentOffer => {
+            let offer = command_offer(command)?;
+            let ctx = world.comments.get(&offer)?;
+            let task = &world.tasks[ctx.comment.root.0];
+            match task.current_offer {
+                Some(current) => Some(format!(
+                    "c-{} is no longer current on t-{}; the standing offer is c-{} — stale decisions cannot move the task",
+                    offer.0 .0,
+                    ctx.comment.root.0,
+                    current.0 .0
+                )),
+                None => Some(format!(
+                    "c-{} was superseded: t-{} holds no standing offer — to replace an account, reject it while it stands, then offer anew",
+                    offer.0 .0,
+                    ctx.comment.root.0
+                )),
+            }
+        }
+        Reject::SelfAcceptance => {
+            let offer = command_offer(command)?;
+            let ctx = world.comments.get(&offer)?;
+            Some(format!(
+                "the declared task scope covers t-{}: a task-bound producer cannot accept its own conclusion — acceptance is an outside consumer's act",
+                ctx.comment.root.0
+            ))
+        }
+        Reject::InvalidIncarnationId => {
+            Some("no incarnation the record birthed carries that reference; a claim names one by its birth record, never by task scope alone".into())
+        }
         Reject::InvalidStateTransition => match command {
-            Command::ClaimTask { id } => need(world, *id, "a claim needs an open task"),
-            Command::CompleteTask { id, .. } => need(world, *id, "done needs the holder's claim"),
-            Command::DropTask { id, .. } => need(world, *id, "a drop needs an open or done task"),
-            Command::ReleaseTask { id, .. } => need(world, *id, "a release needs a claimed task"),
+            Command::Comment { kind, target } => match kind {
+                crate::CommentKind::Offer { .. } => {
+                    let Target::Task(id) = target else {
+                        return None;
+                    };
+                    need(world, *id, "an offer needs an open task and addresses the whole task")
+                }
+                crate::CommentKind::Accept { .. } | crate::CommentKind::Reject { .. } => {
+                    let offer = command_offer(command)?;
+                    let ctx = world.comments.get(&offer)?;
+                    need(
+                        world,
+                        ctx.comment.root,
+                        match kind {
+                            crate::CommentKind::Accept { .. } => {
+                                "an accept needs a task standing offered on that offer"
+                            }
+                            _ => "a reject needs a task standing offered on that offer",
+                        },
+                    )
+                }
+                _ => None,
+            },
+            Command::CancelTask { id, .. } => {
+                need(world, *id, "a cancellation stops an open or offered task")
+            }
+            Command::ReopenTask { id, .. } => {
+                need(world, *id, "only a cancelled task reopens")
+            }
             Command::WithdrawComment { id, .. } => {
                 let ctx = world.comments.get(id)?;
                 if ctx.withdrawn.is_some() {
                     Some(format!(
                         "c-{} is withdrawn; the door is terminal — a reached conclusion is a new deposit",
-                        id.0.0
+                        id.0 .0
                     ))
                 } else {
                     Some(format!(
-                        "c-{} is a {}; withdrawal repairs a note deposit — the other variants keep their own lifecycles",
-                        id.0.0,
-                        crate::views::kind_of(&ctx.comment.state)
+                        "c-{} is a {}; withdrawal repairs a note deposit — the other variants keep their verdicts",
+                        id.0 .0,
+                        crate::views::kind_of(&ctx.comment.kind)
                     ))
                 }
             }
             Command::ReviseComment { id, .. } => {
                 let ctx = world.comments.get(id)?;
-                (ctx.withdrawn.is_some()).then(|| {
-                    format!(
+                if ctx.withdrawn.is_some() {
+                    return Some(format!(
                         "c-{} is withdrawn; the door is terminal — a reached conclusion is a new deposit",
-                        id.0.0
+                        id.0 .0
+                    ));
+                }
+                (ctx.comment.kind.prose().is_none()).then(|| {
+                    format!(
+                        "c-{} is an accept: bodyless by law, no prose to repair",
+                        id.0 .0
                     )
                 })
-            }
-            Command::CreateProposal { action, .. } => {
-                let (id, what) = match action {
-                    ProposalAction::Drop { task_id } => {
-                        (*task_id, "a drop proposal needs an open or done task")
-                    }
-                    ProposalAction::Release { task_id } => {
-                        (*task_id, "a release proposal needs a claimed task")
-                    }
-                };
-                need(world, id, what)
-            }
-            Command::AcceptProposal { id } => {
-                // only an open proposal's refusal is about the task; a
-                // withdrawn or rejected one refuses for itself
-                let proposal = world.proposals.get(id)?;
-                if !matches!(proposal.state, ProposalState::Open) {
-                    return None;
-                }
-                let (task_id, what) = match &proposal.action {
-                    ProposalAction::Drop { task_id } => {
-                        (*task_id, "the proposal's drop needs an open or done task")
-                    }
-                    ProposalAction::Release { task_id } => {
-                        (*task_id, "the proposal's release needs a claimed task")
-                    }
-                };
-                need(world, task_id, what)
             }
             _ => None,
         },
@@ -148,13 +156,11 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
 /// The task a refusal names, when the command carries one — every
 /// command shape that can raise an id-or-state refusal routes here,
 /// so no door escapes the teaching by shape.
-fn command_task(command: &Command) -> Option<TaskId> {
+fn command_task(world: &World, command: &Command) -> Option<TaskId> {
     match command {
-        Command::ClaimTask { id }
-        | Command::CompleteTask { id, .. }
-        | Command::DropTask { id, .. }
-        | Command::ReleaseTask { id, .. }
-        | Command::BindIncarnation { task_id: id, .. }
+        Command::ClaimTask { id, .. }
+        | Command::CancelTask { id, .. }
+        | Command::ReopenTask { id, .. }
         | Command::CreateWorkspace { task_id: id, .. }
         | Command::MaterializeWorkspace { task_id: id, .. }
         | Command::CheckpointWorkspace { task_id: id, .. } => Some(*id),
@@ -162,10 +168,48 @@ fn command_task(command: &Command) -> Option<TaskId> {
             target: Target::Task(id),
             ..
         } => Some(*id),
-        Command::CreateProposal { action, .. } => Some(match action {
-            ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => *task_id,
-        }),
+        // a decision's task lives where its offer does
+        Command::Comment { kind, .. } => {
+            let offer = kind.offer()?;
+            world.comments.get(&offer).map(|c| c.comment.root)
+        }
         _ => None,
+    }
+}
+
+/// The offer a command names, when it names one.
+fn command_offer(command: &Command) -> Option<crate::CommentId> {
+    match command {
+        Command::Comment { kind, .. } => kind.offer(),
+        _ => None,
+    }
+}
+
+/// The comment a command addresses, when the refusal is about one.
+fn command_comment(command: &Command) -> Option<crate::CommentId> {
+    match command {
+        Command::Comment {
+            target: Target::Comment(cid),
+            ..
+        } => Some(*cid),
+        Command::ReviseComment { id, .. } | Command::WithdrawComment { id, .. } => Some(*id),
+        _ => None,
+    }
+}
+
+/// The task's state as the refusal reads it.
+fn need(world: &World, id: TaskId, what: &str) -> Option<String> {
+    let ctx = world.tasks.get(id.0)?;
+    let state = state_word(ctx);
+    Some(format!("t-{} is {state}; {what}", id.0))
+}
+
+fn state_word(ctx: &TaskContext) -> &'static str {
+    match ctx.task.state {
+        crate::TaskState::Open => "open",
+        crate::TaskState::Offered => "offered",
+        crate::TaskState::Concluded => "concluded",
+        crate::TaskState::Cancelled(_) => "cancelled",
     }
 }
 
@@ -175,307 +219,5 @@ fn task_count(n: usize) -> String {
         0 => "no tasks yet".into(),
         1 => "1 task".into(),
         n => format!("{n} tasks"),
-    }
-}
-
-/// The record a comment refusal names, when the command carries one.
-fn command_comment(command: &Command) -> Option<usize> {
-    match command {
-        Command::Comment {
-            target: Target::Comment(id),
-            ..
-        }
-        | Command::ReviseComment { id, .. }
-        | Command::WithdrawComment { id, .. }
-        | Command::BindIncarnation {
-            response_target: id,
-            ..
-        } => Some(id.0.0),
-        Command::Comment {
-            target: Target::Task(_),
-            ..
-        } => None,
-        _ => None,
-    }
-}
-
-/// The state is named: what the task is, and what the act needed.
-fn need(world: &World, id: TaskId, what: &str) -> Option<String> {
-    let ctx = world.tasks.get(id.0)?;
-    Some(format!("t-{} is {}; {what}", id.0, state_of(ctx)))
-}
-
-fn state_of(ctx: &TaskContext) -> String {
-    match &ctx.task.state {
-        crate::TaskState::Open => "open".into(),
-        crate::TaskState::Claimed => format!(
-            "claimed (held by {})",
-            ctx.holder
-                .as_ref()
-                .map(|h| h.as_str().to_string())
-                .unwrap_or_else(|| "someone".into())
-        ),
-        crate::TaskState::Delivered(_) => "delivered (awaiting accept)".into(),
-        crate::TaskState::Done(_) => "done".into(),
-        crate::TaskState::Dropped => "dropped".into(),
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::events::Event;
-    use crate::objects::comment::CommentId;
-    use crate::store::{Context, Record, Tier};
-    use crate::types::actor::ActorName;
-    use crate::types::pointers::GitCommit;
-    use crate::{CommentKind, Prose, Target};
-
-    fn human() -> Context {
-        Context {
-            actor: ActorName::new("jerry".into()).unwrap(),
-            tier: Tier::Human,
-        }
-    }
-
-    fn agent() -> Context {
-        Context {
-            actor: ActorName::new("saccade bot".into()).unwrap(),
-            tier: Tier::Agent,
-        }
-    }
-
-    fn record(seq: usize, at: u64, ctx: &Context, event: Event) -> Record {
-        Record {
-            id: RecordId(seq),
-            timestamp: at,
-            context: ctx.clone(),
-            event,
-        }
-    }
-
-    fn task(seq: usize, name: &str) -> Record {
-        record(
-            seq,
-            seq as u64,
-            &human(),
-            Event::TaskCreated {
-                name: Prose::new(name.into()).unwrap(),
-                parent_id: None,
-            },
-        )
-    }
-
-    /// t-0 born at c-0 and claimed by the agent; t-1 born at c-3.
-    fn claimed_world() -> World {
-        World::replay(vec![
-            task(0, "migrate floop"),
-            record(1, 1, &agent(), Event::TaskClaimed { id: TaskId(0) }),
-            task(3, "other work"),
-        ])
-        .unwrap()
-    }
-
-    #[test]
-    fn a_birth_record_used_as_a_comment_target_names_its_task() {
-        let world = claimed_world();
-        let command = Command::Comment {
-            target: Target::Comment(CommentId(RecordId(0))),
-            body: Prose::new("replying to a birth".into()).unwrap(),
-            kind: CommentKind::Note,
-        };
-        let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
-        assert!(
-            taught.contains("c-0 is the birth record of task t-0"),
-            "{taught}"
-        );
-        assert!(taught.contains("address its thread as t-0"), "{taught}");
-
-        // a seq no comment, task, or proposal answers keeps the grammar
-        let command = Command::Comment {
-            target: Target::Comment(CommentId(RecordId(99))),
-            body: Prose::new("replying to nothing".into()).unwrap(),
-            kind: CommentKind::Note,
-        };
-        let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
-        assert!(taught.contains("c-99 names no comment"), "{taught}");
-        assert!(taught.contains("c-<seq>"), "{taught}");
-        assert!(taught.contains("t-<n>"), "{taught}");
-    }
-
-    #[test]
-    fn a_proposal_birth_used_as_a_comment_target_names_its_door() {
-        let world = World::replay(vec![
-            task(0, "migrate floop"),
-            record(
-                1,
-                1,
-                &agent(),
-                Event::ProposalCreated {
-                    name: Prose::new("drop floop instead".into()).unwrap(),
-                    action: ProposalAction::Drop { task_id: TaskId(0) },
-                },
-            ),
-        ])
-        .unwrap();
-        let command = Command::Comment {
-            target: Target::Comment(CommentId(RecordId(1))),
-            body: Prose::new("replying to a proposal".into()).unwrap(),
-            kind: CommentKind::Note,
-        };
-        let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
-        assert!(
-            taught.contains("c-1 is the birth record of a proposal"),
-            "{taught}"
-        );
-        assert!(taught.contains("bare log position"), "{taught}");
-    }
-
-    #[test]
-    fn a_revision_refusal_on_a_birth_record_teaches_the_thread_door() {
-        // t-0 born at c-0
-        let world = World::replay(vec![task(0, "migrate floop")]).unwrap();
-        // a birth record addressed for revision learns the thread door
-        let command = Command::ReviseComment {
-            id: CommentId(RecordId(0)),
-            body: Prose::new("addresses a birth".into()).unwrap(),
-        };
-        let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
-        assert!(
-            taught.contains("c-0 is the birth record of task t-0"),
-            "{taught}"
-        );
-    }
-
-    #[test]
-    fn withdrawal_refusals_name_the_kind_or_the_terminal_door() {
-        let note = |seq: usize, body: &str| {
-            record(
-                seq,
-                seq as u64,
-                &agent(),
-                Event::Commented {
-                    target: Target::Task(TaskId(0)),
-                    body: Prose::new(body.into()).unwrap(),
-                    kind: CommentKind::Note,
-                },
-            )
-        };
-        let world = World::replay(vec![
-            task(0, "migrate floop"),
-            note(1, "parked mid-flight"),
-            record(
-                2,
-                2,
-                &human(),
-                Event::Commented {
-                    target: Target::Task(TaskId(0)),
-                    body: Prose::new("run the sweep".into()).unwrap(),
-                    kind: CommentKind::Demand {
-                        base: GitCommit::new("a1b2c3".into()).unwrap(),
-                    },
-                },
-            ),
-            record(
-                3,
-                3,
-                &human(),
-                Event::CommentWithdrawn {
-                    id: CommentId(RecordId(1)),
-                    note: Prose::new("the parking was premature".into()).unwrap(),
-                },
-            ),
-        ])
-        .unwrap();
-
-        // the variant kind is named, with the note-only law
-        let command = Command::WithdrawComment {
-            id: CommentId(RecordId(2)),
-            note: Prose::new("not a note deposit".into()).unwrap(),
-        };
-        let taught = teach(&world, &command, &Reject::InvalidStateTransition).unwrap();
-        assert!(taught.contains("c-2 is a demand"), "{taught}");
-        assert!(taught.contains("note deposit"), "{taught}");
-
-        // the terminal door is named for both takers: a second withdrawal
-        // and a revision of the withdrawn
-        let command = Command::WithdrawComment {
-            id: CommentId(RecordId(1)),
-            note: Prose::new("changed my mind".into()).unwrap(),
-        };
-        let taught = teach(&world, &command, &Reject::InvalidStateTransition).unwrap();
-        assert!(taught.contains("c-1 is withdrawn"), "{taught}");
-        assert!(taught.contains("terminal"), "{taught}");
-        let command = Command::ReviseComment {
-            id: CommentId(RecordId(1)),
-            body: Prose::new("repair in place".into()).unwrap(),
-        };
-        let taught = teach(&world, &command, &Reject::InvalidStateTransition).unwrap();
-        assert!(taught.contains("terminal"), "{taught}");
-
-        // the id grammar teaches through the withdraw door too
-        let command = Command::WithdrawComment {
-            id: CommentId(RecordId(0)),
-            note: Prose::new("addresses a birth".into()).unwrap(),
-        };
-        let taught = teach(&world, &command, &Reject::InvalidCommentId).unwrap();
-        assert!(
-            taught.contains("c-0 is the birth record of task t-0"),
-            "{taught}"
-        );
-    }
-
-    #[test]
-    fn a_judgment_refused_by_a_state_names_the_state() {
-        let world = claimed_world();
-        let command = Command::CreateProposal {
-            name: Prose::new("drop floop".into()).unwrap(),
-            action: ProposalAction::Drop { task_id: TaskId(0) },
-        };
-        let taught = teach(&world, &command, &Reject::InvalidStateTransition).unwrap();
-        assert!(
-            taught.contains("t-0 is claimed (held by saccade bot)"),
-            "{taught}"
-        );
-        assert!(
-            taught.contains("a drop proposal needs an open or done task"),
-            "{taught}"
-        );
-
-        // a task id out of range learns the tracker's extent, by routing:
-        // every command shape that names a task flows through the same
-        // cell — the claim door, the comment door, the propose door
-        for command in [
-            Command::ClaimTask { id: TaskId(9) },
-            Command::Comment {
-                target: Target::Task(TaskId(9)),
-                body: Prose::new("a body".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            Command::CreateProposal {
-                name: Prose::new("drop floop".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(9) },
-            },
-        ] {
-            let taught = teach(&world, &command, &Reject::InvalidTaskId)
-                .unwrap_or_else(|| panic!("the door teaches: {command:?}"));
-            assert!(
-                taught.contains("no task t-9 exists; this tracker holds 2 tasks, t-0 through t-1"),
-                "{taught}"
-            );
-        }
-
-        // a one-task tracker counts honestly
-        let single = World::replay(vec![task(0, "only work")]).unwrap();
-        let command = Command::ClaimTask { id: TaskId(9) };
-        let taught = teach(&single, &command, &Reject::InvalidTaskId).unwrap();
-        assert!(
-            taught.contains("this tracker holds 1 task, t-0"),
-            "{taught}"
-        );
-
-        // refusals outside the id-or-state family stay with the brief code
-        let command = Command::ClaimTask { id: TaskId(0) };
-        assert_eq!(teach(&world, &command, &Reject::HumanOnly), None);
     }
 }

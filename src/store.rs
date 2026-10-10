@@ -2,20 +2,17 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::decide::{decide, enforce_tier, expand};
+use crate::Reject;
+use crate::decide::{decide, enforce_tier};
 use crate::events::{Command, Event};
 use crate::objects::comment::{
-    Comment, CommentContext, CommentId, CommentKind, CommentState, Refusal, ResponseState,
-    Revision, SteerDelivery, Withdrawal,
+    Comment, CommentContext, CommentId, CommentKind, CommentState, Revision, Target, Withdrawal,
 };
-use crate::objects::incarnation::{
-    Incarnation, IncarnationContext, IncarnationId, IncarnationState,
-};
-use crate::objects::proposal::{Proposal, ProposalId, ProposalState};
-use crate::objects::task::{Task, TaskContext, TaskId, TaskState};
+use crate::objects::incarnation::{IncarnationContext, IncarnationId};
+use crate::objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 use crate::objects::workspace::{Workspace, WorkspaceContext, WorktreeState};
 use crate::types::actor::ActorName;
-use crate::{ProposalAction, Prose, Reject, Target};
+use crate::types::pointers::WorktreePath;
 
 #[derive(Debug)]
 pub struct FoldError {
@@ -27,13 +24,20 @@ pub struct FoldError {
 pub enum Reason {
     /// The parent task of a TaskCreated event does not exist.
     InvalidParentTaskId,
-    /// The record's author is not the current claim holder.
-    NotClaimHolder,
+    InvalidTaskId,
+    InvalidCommentId,
+    /// A decision or reliance names a comment that is not an offer.
+    NotAnOffer,
+    /// A decision names an offer that is not its task's current one:
+    /// stale decisions cannot affect current state.
+    NotCurrentOffer,
+    /// The actor's declared task scope covers the offered task: a
+    /// task-bound producer cannot accept its own conclusion.
+    SelfAcceptance,
+    /// A claim names an incarnation the record never birthed, or one
+    /// bound to another task.
     InvalidIncarnationId,
-    /// The task's run slot is taken: one live incarnation per task.
-    IncarnationAlreadyActive,
-    /// A binding names a demand that lives on another task.
-    DemandNotOnTask,
+    InvalidStateTransition,
     /// The task already holds a workspace: one lineage per task.
     WorkspaceAlreadyExists,
     /// The event names a task whose workspace was never created.
@@ -43,20 +47,6 @@ pub enum Reason {
     /// An agent- or human-tier checkpoint names a head the workspace
     /// already left; the explicit door never rewinds.
     CheckpointRewind,
-    InvalidTaskId,
-    InvalidProposalId,
-    InvalidCommentId,
-    /// The accept door refuses: the invocation is not the task's birth
-    /// attribution and not human tier.
-    NotBirthAttribution,
-    InvalidStateTransition,
-    /// A task already holds an open judgment proposal
-    ProposalAlreadyOpen,
-    /// A forward names a steer that is not standing intent: wrong kind
-    /// or already consumed by a run.
-    SteerNotStanding,
-    /// A forward names a task whose run slot is empty: nothing consumes it.
-    NoActiveIncarnation,
 }
 
 /// Command-path translation of fold failures into refusals; total over Reason
@@ -65,22 +55,17 @@ impl From<Reason> for Reject {
     fn from(reason: Reason) -> Reject {
         match reason {
             Reason::InvalidTaskId => Reject::InvalidTaskId,
-            Reason::InvalidProposalId => Reject::InvalidProposalId,
-            Reason::InvalidCommentId => Reject::InvalidCommentId,
-            Reason::NotBirthAttribution => Reject::NotBirthAttribution,
             Reason::InvalidParentTaskId => Reject::InvalidParentTaskId,
-            Reason::InvalidStateTransition => Reject::InvalidStateTransition,
-            Reason::NotClaimHolder => Reject::NotClaimHolder,
+            Reason::InvalidCommentId => Reject::InvalidCommentId,
+            Reason::NotAnOffer => Reject::NotAnOffer,
+            Reason::NotCurrentOffer => Reject::NotCurrentOffer,
+            Reason::SelfAcceptance => Reject::SelfAcceptance,
             Reason::InvalidIncarnationId => Reject::InvalidIncarnationId,
-            Reason::IncarnationAlreadyActive => Reject::IncarnationAlreadyActive,
-            Reason::DemandNotOnTask => Reject::DemandNotOnTask,
+            Reason::InvalidStateTransition => Reject::InvalidStateTransition,
             Reason::WorkspaceAlreadyExists => Reject::WorkspaceAlreadyExists,
             Reason::WorkspaceMissing => Reject::WorkspaceMissing,
             Reason::WorktreeAlreadyPresent => Reject::WorktreeAlreadyPresent,
             Reason::CheckpointRewind => Reject::CheckpointRewind,
-            Reason::ProposalAlreadyOpen => Reject::ProposalAlreadyOpen,
-            Reason::SteerNotStanding => Reject::SteerNotStanding,
-            Reason::NoActiveIncarnation => Reject::NoActiveIncarnation,
         }
     }
 }
@@ -93,10 +78,23 @@ pub enum Tier {
     System,
 }
 
+/// An environment-declared binding: what the acting session's
+/// environment claims it is scoped to. Disclosure riding the record,
+/// never proof — the one gate it feeds is the self-acceptance refusal.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Scope {
+    pub task: TaskId,
+    pub incarnation: Option<IncarnationId>,
+    pub workspace: Option<WorktreePath>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Context {
     pub actor: ActorName,
     pub tier: Tier,
+    /// The environment-declared scope, present when the session's
+    /// environment names its task binding
+    pub scope: Option<Scope>,
 }
 
 impl Context {
@@ -105,6 +103,7 @@ impl Context {
         Context {
             actor: ActorName::new("saccade".into()).expect("the fixed system actor name is valid"),
             tier: Tier::System,
+            scope: None,
         }
     }
 }
@@ -123,8 +122,9 @@ pub struct Record {
 #[derive(Clone, Debug, PartialEq)]
 pub struct World {
     pub tasks: Vec<TaskContext>,
-    pub proposals: BTreeMap<ProposalId, Proposal>,
     pub comments: BTreeMap<CommentId, CommentContext>,
+    /// Record-derived worker identities; births are the native-start
+    /// slice's door, so this reads empty until that slice lands
     pub incarnations: BTreeMap<IncarnationId, IncarnationContext>,
 }
 
@@ -132,7 +132,6 @@ impl World {
     pub fn new() -> Self {
         World {
             tasks: Vec::new(),
-            proposals: BTreeMap::new(),
             comments: BTreeMap::new(),
             incarnations: BTreeMap::new(),
         }
@@ -164,16 +163,18 @@ impl World {
         Ok(self)
     }
 
-    fn terminalize(&mut self, id: IncarnationId, record: &Record) {
-        if let Some(run) = self.incarnations.get_mut(&id) {
-            run.done_at = Some(record.timestamp);
-            if let Some(task_ctx) = self.tasks.get_mut(run.incarnation.task_id.0)
-                && task_ctx.active_incarnation == Some(id)
-            {
-                task_ctx.active_incarnation = None;
-                task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-            }
+    /// The owner a claim in this context records: the tier names the
+    /// kind, the incarnation reference — never the declared scope —
+    /// names a task-bound worker.
+    fn owner_of(context: &Context, incarnation: Option<IncarnationId>) -> Result<Owner, Reason> {
+        match context.tier {
+            Tier::Human => Ok(Owner::Human(context.actor.clone())),
+            Tier::Agent => Ok(match incarnation {
+                Some(id) => Owner::Incarnation(id),
+                None => Owner::External(context.actor.clone()),
+            }),
+            // machinery holds no whole-task responsibility
+            Tier::System => Err(Reason::InvalidStateTransition),
         }
     }
 
@@ -196,229 +197,204 @@ impl World {
                     },
                     birth: record.id,
                     last_updated: record.id,
-                    claimed_at: None,
                     last_record_at: record.timestamp,
-                    delivered_at: None,
-                    proposal: None,
+                    offered_at: None,
+                    ownership: Vec::new(),
+                    current_offer: None,
                     thread: Vec::new(),
                     artifacts: Vec::new(),
-                    holder: None,
                     birth_actor: record.context.actor.clone(),
-                    active_incarnation: None,
                     workspace: None,
                 });
             }
-            ref event @ Event::TaskClaimed { id } => {
-                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.last_updated = record.id;
-                task_ctx.claimed_at = Some(record.timestamp);
-                task_ctx.last_record_at = record.timestamp;
-                task_ctx.task.state = task_ctx
-                    .task
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                task_ctx.holder = Some(record.context.actor.clone());
-                // a fresh round spends the delivery the state no longer holds
-                task_ctx.delivered_at = None;
-            }
-            ref event @ Event::TaskDone { id, .. } => {
-                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.task.state = task_ctx
-                    .task
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                if task_ctx.holder.as_ref() != Some(&record.context.actor) {
-                    return Err(Reason::NotClaimHolder);
+            Event::TaskClaimed { id, incarnation } => {
+                let owner = Self::owner_of(&record.context, incarnation)?;
+                if let Some(inc) = incarnation {
+                    let born = self
+                        .incarnations
+                        .get(&inc)
+                        .ok_or(Reason::InvalidIncarnationId)?;
+                    if born.incarnation.task != id {
+                        return Err(Reason::InvalidIncarnationId);
+                    }
                 }
+                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.ownership.push(OwnerEntry {
+                    owner,
+                    record: record.id,
+                    at: record.timestamp,
+                });
                 task_ctx.last_updated = record.id;
-                task_ctx.claimed_at = None;
                 task_ctx.last_record_at = record.timestamp;
-                task_ctx.holder = None;
             }
-            ref event @ Event::TaskDelivered { id, .. } => {
+            Event::TaskCancelled { id, .. } | Event::TaskReopened { id, .. } => {
                 let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.task.state = task_ctx
                     .task
                     .state
-                    .transition(event)
+                    .transition(&record.event)
                     .ok_or(Reason::InvalidStateTransition)?;
-                if task_ctx.holder.as_ref() != Some(&record.context.actor) {
-                    return Err(Reason::NotClaimHolder);
+                task_ctx.last_updated = record.id;
+                task_ctx.last_record_at = record.timestamp;
+                if matches!(record.event, Event::TaskReopened { .. }) {
+                    task_ctx.current_offer = None;
+                    task_ctx.offered_at = None;
                 }
-                task_ctx.last_updated = record.id;
-                task_ctx.claimed_at = None;
-                task_ctx.last_record_at = record.timestamp;
-                task_ctx.delivered_at = Some(record.timestamp);
-                task_ctx.holder = None;
             }
-            ref event @ Event::TaskAccepted { id } => {
-                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.task.state = task_ctx
-                    .task
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                if record.context.tier == Tier::System
-                    || (record.context.tier == Tier::Agent
-                        && task_ctx.birth_actor != record.context.actor)
-                {
-                    return Err(Reason::NotBirthAttribution);
-                }
-                task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-                task_ctx.delivered_at = None;
-            }
-            ref event @ Event::TaskReleased { id, .. } => {
-                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.task.state = task_ctx
-                    .task
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                if record.context.tier != Tier::Human
-                    && task_ctx.holder.as_ref() != Some(&record.context.actor)
-                {
-                    return Err(Reason::NotClaimHolder);
-                }
-                task_ctx.last_updated = record.id;
-                task_ctx.claimed_at = None;
-                task_ctx.last_record_at = record.timestamp;
-                task_ctx.holder = None;
-            }
-            ref event @ Event::TaskDropped { id, .. } => {
-                let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-                task_ctx.task.state = task_ctx
-                    .task
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-            }
-            // Incarnation events
-            Event::IncarnationBound {
-                ref task_id,
-                ref response_target,
-                ref trigger,
-                // ref required since actor and session are not Copy, but we don't want to move them out of the record
-                ref actor,
-                ref session,
+            // Comment events
+            Event::Commented {
+                ref target,
+                ref kind,
             } => {
-                let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
-                if task_ctx.active_incarnation.is_some() {
-                    return Err(Reason::IncarnationAlreadyActive);
-                }
-                let demand = self
-                    .comments
-                    .get_mut(response_target)
-                    .ok_or(Reason::InvalidCommentId)?;
-                if demand.comment.root != *task_id {
-                    return Err(Reason::DemandNotOnTask);
-                }
-                // the bind consumes a live authorization: the trigger
-                // names the demand's own birth, and a bound, refused,
-                // or answered demand holds nothing to bind
-                if *trigger != response_target.0
-                    || demand.bound.is_some()
-                    || demand.refusal.is_some()
-                    || !matches!(
-                        demand.comment.state,
-                        CommentState::Demand {
-                            response: ResponseState::Awaiting,
-                            ..
+                let mut up = *target;
+                let root_task_id = loop {
+                    match up {
+                        Target::Task(t) => break t,
+                        Target::Comment(parent) => {
+                            up = self
+                                .comments
+                                .get(&parent)
+                                .ok_or(Reason::InvalidCommentId)?
+                                .comment
+                                .target;
                         }
-                    )
-                {
-                    return Err(Reason::InvalidStateTransition);
+                    }
+                };
+
+                match kind {
+                    CommentKind::Note { .. } | CommentKind::Request { .. } => {}
+                    // the broadcast addresses its whole task
+                    CommentKind::Offer { .. } => {
+                        if !matches!(target, Target::Task(_)) {
+                            return Err(Reason::InvalidStateTransition);
+                        }
+                    }
+                    CommentKind::Accept { offer } | CommentKind::Reject { offer, .. } => {
+                        // a decision addresses the offer it names
+                        if *target != Target::Comment(*offer) {
+                            return Err(Reason::InvalidStateTransition);
+                        }
+                        let offer_ctx = self.comments.get(offer).ok_or(Reason::InvalidCommentId)?;
+                        if !matches!(offer_ctx.comment.kind, CommentKind::Offer { .. }) {
+                            return Err(Reason::NotAnOffer);
+                        }
+                        if matches!(kind, CommentKind::Accept { .. })
+                            && record.context.tier == Tier::Agent
+                            && record
+                                .context
+                                .scope
+                                .as_ref()
+                                .is_some_and(|scope| scope.task == offer_ctx.comment.root)
+                        {
+                            return Err(Reason::SelfAcceptance);
+                        }
+                        let offered = self
+                            .tasks
+                            .get(offer_ctx.comment.root.0)
+                            .ok_or(Reason::InvalidTaskId)?;
+                        if offered.current_offer != Some(*offer) {
+                            return Err(Reason::NotCurrentOffer);
+                        }
+                    }
+                    CommentKind::Use { offer, .. } => {
+                        let offer_ctx = self.comments.get(offer).ok_or(Reason::InvalidCommentId)?;
+                        if !matches!(offer_ctx.comment.kind, CommentKind::Offer { .. }) {
+                            return Err(Reason::NotAnOffer);
+                        }
+                    }
                 }
-                demand.bound = Some(IncarnationId(record.id));
-                self.incarnations.insert(
-                    IncarnationId(record.id),
-                    IncarnationContext {
-                        incarnation: Incarnation {
-                            task_id: *task_id,
-                            response_target: *response_target,
-                            trigger: *trigger,
-                            actor: actor.clone(),
-                            session: session.clone(),
-                            state: IncarnationState::Bound,
+
+                self.comments.insert(
+                    CommentId(record.id),
+                    CommentContext {
+                        comment: Comment {
+                            target: *target,
+                            kind: kind.clone(),
+                            root: root_task_id,
+                            state: CommentState::of(kind),
                         },
-                        produced: Vec::new(),
+                        actor: record.context.actor.clone(),
+                        tier: record.context.tier,
+                        scope: record.context.scope.clone(),
                         born_at: record.timestamp,
-                        done_at: None,
+                        revised: None,
+                        withdrawn: None,
                     },
                 );
-                task_ctx.active_incarnation = Some(IncarnationId(record.id));
-                task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-            }
-            ref event @ Event::IncarnationPromptAccepted { id } => {
-                let run = self
-                    .incarnations
-                    .get_mut(&id)
-                    .ok_or(Reason::InvalidIncarnationId)?;
-                run.incarnation.state = run
-                    .incarnation
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-            }
-            ref event @ Event::IncarnationPromptRejected { id, .. } => {
-                let run = self
-                    .incarnations
-                    .get_mut(&id)
-                    .ok_or(Reason::InvalidIncarnationId)?;
-                run.incarnation.state = run
-                    .incarnation
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                self.terminalize(id, &record);
-            }
-            ref event @ Event::IncarnationSettled { id } => {
-                let run = self
-                    .incarnations
-                    .get_mut(&id)
-                    .ok_or(Reason::InvalidIncarnationId)?;
-                run.incarnation.state = run
-                    .incarnation
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                self.terminalize(id, &record);
-            }
-            ref event @ Event::IncarnationCancelled { id } => {
-                let run = self
-                    .incarnations
-                    .get_mut(&id)
-                    .ok_or(Reason::InvalidIncarnationId)?;
-                run.incarnation.state = run
-                    .incarnation
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                self.terminalize(id, &record);
-            }
-            ref event @ Event::RecordProducedBy {
-                record_id,
-                incarnation_id,
-            } => {
-                let run = self
-                    .incarnations
-                    .get_mut(&incarnation_id)
-                    .ok_or(Reason::InvalidIncarnationId)?;
-                run.incarnation.state = run
-                    .incarnation
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                // produced pointers point backward, at records already born
-                if record_id.0 >= record.id.0 {
+
+                let task_ctx = self
+                    .tasks
+                    .get_mut(root_task_id.0)
+                    .ok_or(Reason::InvalidTaskId)?;
+                if let Some(next) = task_ctx.task.state.transition(&record.event) {
+                    task_ctx.task.state = next;
+                    task_ctx.last_updated = record.id;
+                } else if matches!(
+                    kind,
+                    CommentKind::Offer { .. }
+                        | CommentKind::Accept { .. }
+                        | CommentKind::Reject { .. }
+                ) {
+                    // the lifecycle kinds must move the task: a second
+                    // offer needs the reject door, a decided task no door
                     return Err(Reason::InvalidStateTransition);
                 }
-                run.produced.push(record_id);
+                match kind {
+                    CommentKind::Offer { .. } => {
+                        task_ctx.current_offer = Some(CommentId(record.id));
+                        task_ctx.offered_at = Some(record.timestamp);
+                    }
+                    CommentKind::Reject { .. } => {
+                        task_ctx.current_offer = None;
+                        task_ctx.offered_at = None;
+                    }
+                    _ => {}
+                }
+                task_ctx.thread.push(CommentId(record.id));
+                task_ctx.last_record_at = record.timestamp;
+            }
+            Event::CommentRevised { id, ref body } => {
+                let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
+                // the gate is the state: a withdrawn deposit admits no repair
+                if matches!(comment_ctx.comment.state, CommentState::Withdrawn(_)) {
+                    return Err(Reason::InvalidStateTransition);
+                }
+                // the bodyless Accept carries no prose to repair
+                match &mut comment_ctx.comment.kind {
+                    CommentKind::Note { body: prose }
+                    | CommentKind::Request { body: prose }
+                    | CommentKind::Offer { body: prose }
+                    | CommentKind::Reject { grounds: prose, .. }
+                    | CommentKind::Use { reason: prose, .. } => *prose = body.clone(),
+                    CommentKind::Accept { .. } => return Err(Reason::InvalidStateTransition),
+                }
+                comment_ctx.revised = Some(Revision {
+                    record: record.id,
+                    reviser: record.context.actor.clone(),
+                });
+                let root = comment_ctx.comment.root;
+                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.last_record_at = record.timestamp;
+            }
+            ref event @ Event::CommentWithdrawn { id, .. } => {
+                let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
+                comment_ctx.comment.state = comment_ctx
+                    .comment
+                    .state
+                    .transition(event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                comment_ctx.withdrawn = Some(Withdrawal {
+                    record: record.id,
+                    withdrawer: record.context.actor.clone(),
+                });
+                let root = comment_ctx.comment.root;
+                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.last_record_at = record.timestamp;
+            }
+            Event::ArtifactAdded { root, ref artifact } => {
+                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.artifacts.push((record.id, artifact.clone()));
+                task_ctx.last_record_at = record.timestamp;
             }
             // Workspace events
             Event::TaskWorkspaceCreated {
@@ -465,9 +441,8 @@ impl World {
                     .workspace
                     .as_mut()
                     .ok_or(Reason::WorkspaceMissing)?;
-                // the machinery (run close, boot recovery) rebases the
-                // checkpoint; the explicit door never
-                // returns to a head the record left
+                // the machinery (boot recovery) rebases the checkpoint;
+                // the explicit door never returns to a head the record left
                 if record.context.tier != Tier::System
                     && *checkpoint != workspace.workspace.checkpoint
                     && workspace.heads.contains(checkpoint)
@@ -479,233 +454,6 @@ impl World {
                     workspace.workspace.checkpoint = checkpoint.clone();
                 }
                 task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-            }
-
-            // Proposal events
-            Event::ProposalCreated {
-                name: proposal_name,
-                action,
-            } => {
-                let proposal_id = ProposalId(record.id);
-
-                match action {
-                    ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
-                        let task_ctx =
-                            self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
-                        if task_ctx.proposal.is_some() {
-                            return Err(Reason::ProposalAlreadyOpen);
-                        }
-                        let probe = Prose::new("probe".into()).expect("probe is non-empty");
-                        if task_ctx
-                            .task
-                            .state
-                            .transition(&action.target_event(&probe))
-                            .is_none()
-                        {
-                            return Err(Reason::InvalidStateTransition);
-                        }
-                        task_ctx.proposal = Some(proposal_id);
-                    }
-                }
-
-                self.proposals.insert(
-                    proposal_id,
-                    Proposal {
-                        state: ProposalState::Open,
-                        name: proposal_name,
-                        action,
-                    },
-                );
-            }
-            ref event @ (Event::ProposalWithdrawn { id, .. }
-            | Event::ProposalRejected { id, .. }
-            | Event::ProposalAccepted { id }) => {
-                let proposal = self
-                    .proposals
-                    .get_mut(&id)
-                    .ok_or(Reason::InvalidProposalId)?;
-                proposal.state = proposal
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-
-                match &proposal.action {
-                    ProposalAction::Drop { task_id } | ProposalAction::Release { task_id } => {
-                        self.tasks
-                            .get_mut(task_id.0)
-                            .ok_or(Reason::InvalidTaskId)?
-                            .proposal = None;
-                    }
-                }
-            }
-            // Comment events
-            Event::Commented {
-                ref target,
-                ref body,
-                ref kind,
-            } => {
-                let mut up = *target;
-                let root_task_id = loop {
-                    match up {
-                        Target::Task(t) => break t,
-                        Target::Comment(parent) => {
-                            up = self
-                                .comments
-                                .get(&parent)
-                                .ok_or(Reason::InvalidCommentId)?
-                                .comment
-                                .target;
-                        }
-                    }
-                };
-
-                let state = match kind {
-                    CommentKind::Note => CommentState::Note,
-                    CommentKind::Demand { base } => CommentState::Demand {
-                        response: ResponseState::Awaiting,
-                        base: base.clone(),
-                    },
-                    CommentKind::Steer => CommentState::Steer {
-                        delivery: SteerDelivery::Standing,
-                    },
-                    CommentKind::Ask => CommentState::Ask {
-                        response: ResponseState::Awaiting,
-                    },
-                };
-
-                self.comments.insert(
-                    CommentId(record.id),
-                    CommentContext {
-                        comment: Comment {
-                            target: *target,
-                            body: body.clone(),
-                            root: root_task_id,
-                            state,
-                        },
-                        actor: record.context.actor.clone(),
-                        tier: record.context.tier,
-                        born_at: record.timestamp,
-                        revised: None,
-                        withdrawn: None,
-                        refusal: None,
-                        bound: None,
-                    },
-                );
-
-                if let Target::Comment(parent) = target {
-                    let parent_ctx = self
-                        .comments
-                        .get_mut(parent)
-                        .expect("apply validated the parent above");
-                    // the reply's tier gates the answer doors: the
-                    // machinery never answers, and the reply pointer is
-                    // this record's position, which only the fold knows
-                    if matches!(record.context.tier, Tier::Agent | Tier::Human)
-                        && let Some(next) = parent_ctx.comment.state.answered(CommentId(record.id))
-                    {
-                        parent_ctx.comment.state = next;
-                    }
-                }
-
-                let task_ctx = self
-                    .tasks
-                    .get_mut(root_task_id.0)
-                    .ok_or(Reason::InvalidTaskId)?;
-                if let Some(next) = task_ctx.task.state.transition(&record.event) {
-                    task_ctx.task.state = next;
-                    task_ctx.last_updated = record.id;
-                }
-                task_ctx.thread.push(CommentId(record.id));
-                task_ctx.last_record_at = record.timestamp;
-            }
-            Event::CommentRevised { id, ref body } => {
-                let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
-                // the gate is the state: a withdrawn deposit admits no repair
-                if matches!(comment_ctx.comment.state, CommentState::Withdrawn(_)) {
-                    return Err(Reason::InvalidStateTransition);
-                }
-                comment_ctx.comment.body = body.clone();
-                comment_ctx.revised = Some(Revision {
-                    record: record.id,
-                    reviser: record.context.actor.clone(),
-                });
-                let root = comment_ctx.comment.root;
-                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.last_record_at = record.timestamp;
-            }
-            ref event @ Event::CommentWithdrawn { id, .. } => {
-                let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
-                comment_ctx.comment.state = comment_ctx
-                    .comment
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::InvalidStateTransition)?;
-                comment_ctx.withdrawn = Some(Withdrawal {
-                    record: record.id,
-                    withdrawer: record.context.actor.clone(),
-                });
-                let root = comment_ctx.comment.root;
-                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.last_record_at = record.timestamp;
-            }
-            Event::DemandRefused { demand, ref reason } => {
-                let demand_ctx = self
-                    .comments
-                    .get_mut(&demand)
-                    .ok_or(Reason::InvalidCommentId)?;
-                // the refusal spends a live authorization: a bound,
-                // refused, or answered demand holds nothing to refuse
-                if demand_ctx.bound.is_some()
-                    || demand_ctx.refusal.is_some()
-                    || !matches!(
-                        demand_ctx.comment.state,
-                        CommentState::Demand {
-                            response: ResponseState::Awaiting,
-                            ..
-                        }
-                    )
-                {
-                    return Err(Reason::InvalidStateTransition);
-                }
-                demand_ctx.refusal = Some(Refusal {
-                    reason: reason.clone(),
-                    at: record.timestamp,
-                });
-                let root = demand_ctx.comment.root;
-                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-            }
-            // the send preceded the record: a crash between them may
-            // duplicate delivery, never lose it
-            ref event @ Event::SteerForwarded { steer } => {
-                let root = {
-                    let ctx = self.comments.get(&steer).ok_or(Reason::InvalidCommentId)?;
-                    ctx.comment.root
-                };
-                if self
-                    .tasks
-                    .get(root.0)
-                    .ok_or(Reason::InvalidTaskId)?
-                    .active_incarnation
-                    .is_none()
-                {
-                    return Err(Reason::NoActiveIncarnation);
-                }
-                let steer_ctx = self.comments.get_mut(&steer).expect("validated above");
-                steer_ctx.comment.state = steer_ctx
-                    .comment
-                    .state
-                    .transition(event)
-                    .ok_or(Reason::SteerNotStanding)?;
-                let task_ctx = self.tasks.get_mut(root.0).expect("validated above");
-                task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-            }
-            Event::ArtifactAdded { root, ref artifact } => {
-                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
-                task_ctx.artifacts.push((record.id, artifact.clone()));
                 task_ctx.last_record_at = record.timestamp;
             }
         }
@@ -760,25 +508,21 @@ pub fn execute(
 ) -> Result<(World, Vec<Record>), Reject> {
     let events = decide(command);
     enforce_tier(context, &events)?;
-    let events = expand(world, &events)?;
     world.stage(base, context, now, &events)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::ContentHash;
     use crate::Event;
-    use crate::objects::comment::{CommentId, CommentKind, CommentState, ResponseState, Target};
-    use crate::objects::incarnation::{IncarnationId, IncarnationState};
-    use crate::objects::proposal::{ProposalAction, ProposalId, ProposalState};
-    use crate::objects::task::{TaskId, TaskState};
+    use crate::objects::comment::{CommentId, CommentKind, CommentState, Target};
+    use crate::objects::task::{Owner, TaskId, TaskState};
     use crate::objects::workspace::WorktreeState;
     use crate::types::actor::ActorName;
     use crate::types::artifact::Artifact;
-    use crate::types::failure::{FailureCode, FailureEvidence};
-    use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
+    use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
     use crate::types::prose::Prose;
+    use crate::{ContentHash, Scope};
 
     /// Test fixture over `execute`: the in-memory records+world pair, for
     /// contract tests that run the law with no storage layer present.
@@ -836,6 +580,7 @@ mod test {
         Context {
             actor: ActorName::new("human person".into()).unwrap(),
             tier: Tier::Human,
+            scope: None,
         }
     }
 
@@ -843,13 +588,204 @@ mod test {
         Context {
             actor: ActorName::new("saccade bot".into()).unwrap(),
             tier: Tier::Agent,
+            scope: None,
         }
     }
 
-    fn demand() -> CommentKind {
-        CommentKind::Demand {
-            base: GitCommit::new("a1b2c3".into()).unwrap(),
+    /// An agent whose environment declares the given task binding.
+    fn scoped_agent(task: usize) -> Context {
+        Context {
+            actor: ActorName::new("pi".into()).unwrap(),
+            tier: Tier::Agent,
+            scope: Some(Scope {
+                task: TaskId(task),
+                incarnation: None,
+                workspace: None,
+            }),
         }
+    }
+
+    fn prose(text: &str) -> Prose {
+        Prose::new(text.into()).unwrap()
+    }
+
+    fn offer(id: TaskId, body: &str) -> Command {
+        Command::Comment {
+            target: Target::Task(id),
+            kind: CommentKind::Offer { body: prose(body) },
+        }
+    }
+
+    fn accept(offer: usize) -> Command {
+        Command::Comment {
+            target: Target::Comment(CommentId(RecordId(offer))),
+            kind: CommentKind::Accept {
+                offer: CommentId(RecordId(offer)),
+            },
+        }
+    }
+
+    fn reject(offer: usize, grounds: &str) -> Command {
+        Command::Comment {
+            target: Target::Comment(CommentId(RecordId(offer))),
+            kind: CommentKind::Reject {
+                offer: CommentId(RecordId(offer)),
+                grounds: prose(grounds),
+            },
+        }
+    }
+
+    fn note(target: Target, body: &str) -> Command {
+        Command::Comment {
+            target,
+            kind: CommentKind::Note { body: prose(body) },
+        }
+    }
+
+    const RECORD_COUNT: usize = 18;
+
+    /// The shared story: foo offered and accepted; bar rejected then
+    /// accepted on a fresh offer; floop cancelled and reopened; a
+    /// consumer task using foo's account.
+    fn populate_log(log: &mut Log) {
+        let human_ctx = human();
+        let agent_ctx = agent();
+
+        log.execute(
+            human_ctx.clone(),
+            Command::CreateTask {
+                name: prose("implement foo"),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: None,
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            note(Target::Task(TaskId(0)), "mid-flight finding parked"),
+            2,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            offer(TaskId(0), "suite green, 55 tests"),
+            3,
+        )
+        .unwrap();
+        log.execute(human_ctx.clone(), accept(3), 4).unwrap();
+
+        log.execute(
+            human_ctx.clone(),
+            Command::CreateTask {
+                name: prose("fix bar"),
+                parent_id: None,
+            },
+            5,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            Command::ClaimTask {
+                id: TaskId(1),
+                incarnation: None,
+            },
+            6,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            offer(TaskId(1), "bar fixed the quick way"),
+            7,
+        )
+        .unwrap();
+        log.execute(human_ctx.clone(), reject(7, "the edge case still fails"), 8)
+            .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            offer(TaskId(1), "edge case held, suite green"),
+            9,
+        )
+        .unwrap();
+        log.execute(human_ctx.clone(), accept(9), 10).unwrap();
+
+        log.execute(
+            human_ctx.clone(),
+            Command::CreateTask {
+                name: prose("migrate floop"),
+                parent_id: Some(TaskId(0)),
+            },
+            11,
+        )
+        .unwrap();
+        log.execute(
+            human_ctx.clone(),
+            Command::CancelTask {
+                id: TaskId(2),
+                explanation: prose("the migration is no longer wanted"),
+            },
+            12,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            Command::Comment {
+                target: Target::Task(TaskId(2)),
+                kind: CommentKind::Request {
+                    body: prose("please resume the migration"),
+                },
+            },
+            13,
+        )
+        .unwrap();
+        log.execute(
+            human_ctx.clone(),
+            Command::ReopenTask {
+                id: TaskId(2),
+                explanation: prose("the blocker cleared"),
+            },
+            14,
+        )
+        .unwrap();
+
+        log.execute(
+            human_ctx.clone(),
+            Command::CreateTask {
+                name: prose("adopt foo's account"),
+                parent_id: None,
+            },
+            15,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            Command::ClaimTask {
+                id: TaskId(3),
+                incarnation: None,
+            },
+            16,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            Command::Comment {
+                target: Target::Task(TaskId(3)),
+                kind: CommentKind::Use {
+                    offer: CommentId(RecordId(3)),
+                    reason: prose("builds on foo's landed account"),
+                },
+            },
+            17,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -859,40 +795,32 @@ mod test {
             Reject::InvalidTaskId
         ));
         assert!(matches!(
-            Reject::from(Reason::InvalidProposalId),
-            Reject::InvalidProposalId
+            Reject::from(Reason::InvalidParentTaskId),
+            Reject::InvalidParentTaskId
         ));
         assert!(matches!(
             Reject::from(Reason::InvalidCommentId),
             Reject::InvalidCommentId
         ));
         assert!(matches!(
-            Reject::from(Reason::InvalidParentTaskId),
-            Reject::InvalidParentTaskId
+            Reject::from(Reason::NotAnOffer),
+            Reject::NotAnOffer
         ));
         assert!(matches!(
-            Reject::from(Reason::InvalidStateTransition),
-            Reject::InvalidStateTransition
+            Reject::from(Reason::NotCurrentOffer),
+            Reject::NotCurrentOffer
         ));
         assert!(matches!(
-            Reject::from(Reason::NotClaimHolder),
-            Reject::NotClaimHolder
+            Reject::from(Reason::SelfAcceptance),
+            Reject::SelfAcceptance
         ));
         assert!(matches!(
             Reject::from(Reason::InvalidIncarnationId),
             Reject::InvalidIncarnationId
         ));
         assert!(matches!(
-            Reject::from(Reason::IncarnationAlreadyActive),
-            Reject::IncarnationAlreadyActive
-        ));
-        assert!(matches!(
-            Reject::from(Reason::ProposalAlreadyOpen),
-            Reject::ProposalAlreadyOpen
-        ));
-        assert!(matches!(
-            Reject::from(Reason::DemandNotOnTask),
-            Reject::DemandNotOnTask
+            Reject::from(Reason::InvalidStateTransition),
+            Reject::InvalidStateTransition
         ));
         assert!(matches!(
             Reject::from(Reason::WorkspaceAlreadyExists),
@@ -918,7 +846,10 @@ mod test {
             id: RecordId(0),
             timestamp: 1,
             context: agent(),
-            event: Event::TaskClaimed { id: TaskId(0) }, // no task exists yet
+            event: Event::TaskClaimed {
+                id: TaskId(0),
+                incarnation: None,
+            },
         };
         let err = World::new().apply(record).unwrap_err();
         assert!(matches!(err.reason, Reason::InvalidTaskId));
@@ -931,7 +862,7 @@ mod test {
             timestamp: 1,
             context: agent(),
             event: Event::TaskCreated {
-                name: Prose::new("orphan task".into()).unwrap(),
+                name: prose("orphan task"),
                 parent_id: Some(TaskId(3)),
             },
         };
@@ -940,79 +871,40 @@ mod test {
     }
 
     #[test]
-    fn second_open_judgment_fails_the_fold() {
-        let created = Record {
-            id: RecordId(0),
-            timestamp: 1,
-            context: agent(),
-            event: Event::TaskCreated {
-                name: Prose::new("migrate floop".into()).unwrap(),
+    fn an_offer_without_a_task_transition_fails_the_fold() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("implement foo"),
                 parent_id: None,
             },
-        };
-        let first = Record {
-            id: RecordId(1),
-            timestamp: 1,
-            context: agent(),
-            event: Event::ProposalCreated {
-                name: Prose::new("drop floop instead".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-        };
-        let second = Record {
-            id: RecordId(2),
-            timestamp: 1,
-            context: agent(),
-            event: Event::ProposalCreated {
-                name: Prose::new("drop floop again".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-        };
-        let err = World::new()
-            .apply(created)
-            .unwrap()
-            .apply(first)
-            .unwrap()
-            .apply(second)
-            .unwrap_err();
-        assert!(matches!(err.reason, Reason::ProposalAlreadyOpen));
+            1,
+        )
+        .unwrap();
+        log.execute(agent(), offer(TaskId(0), "the first account"), 2)
+            .unwrap();
+        // offered tasks admit no second offer: reject, then offer anew
+        let refused = log.execute(agent(), offer(TaskId(0), "a replacement account"), 3);
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        assert_eq!(log.records().len(), 2);
     }
 
-    #[test]
-    fn invalid_task_transition_fails_the_fold() {
-        let created = Record {
-            id: RecordId(0),
-            timestamp: 1,
-            context: agent(),
-            event: Event::TaskCreated {
-                name: Prose::new("new task".into()).unwrap(),
-                parent_id: None,
-            },
-        };
-        let done = Record {
-            id: RecordId(1),
-            timestamp: 1,
-            context: agent(),
-            event: Event::TaskDone {
-                id: TaskId(0),
-                receipt: Prose::new("jumping straight to done".into()).unwrap(),
-            },
-        };
-        let err = World::new()
-            .apply(created)
-            .unwrap()
-            .apply(done)
-            .unwrap_err();
-        assert!(matches!(err.reason, Reason::InvalidStateTransition));
-    }
     #[test]
     fn rejected_command_appends_nothing() {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        // t-3 is dropped: the fold refuses the claim and nothing lands
-        let refused = log.execute(agent(), Command::ClaimTask { id: TaskId(3) }, 99);
-        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        // t-9 names no task: the fold refuses and nothing lands
+        let refused = log.execute(
+            human(),
+            Command::ClaimTask {
+                id: TaskId(9),
+                incarnation: None,
+            },
+            99,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidTaskId)));
         assert_eq!(log.records().len(), RECORD_COUNT);
     }
 
@@ -1034,813 +926,417 @@ mod test {
         }
     }
 
+    /// The lifecycle the story holds: offer moves open to offered,
+    /// accept concludes, reject returns open, and the story's tasks
+    /// land where their threads say.
     #[test]
-    fn done_and_release_are_holder_gated() {
+    fn the_story_folds_the_ratified_lifecycle() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+        let world = log.world();
+
+        assert_eq!(world.tasks[0].task.state, TaskState::Concluded);
+        assert_eq!(world.tasks[0].current_offer, Some(CommentId(RecordId(3))));
+        assert_eq!(world.tasks[1].task.state, TaskState::Concluded);
+        assert_eq!(world.tasks[1].current_offer, Some(CommentId(RecordId(9))));
+        assert_eq!(world.tasks[2].task.state, TaskState::Open);
+        assert_eq!(world.tasks[3].task.state, TaskState::Open);
+        // the reopen cleared floop's pointer; the use moved no state
+        assert_eq!(world.tasks[2].current_offer, None);
+
+        // the create-reply query: births resolve, non-births don't
+        assert_eq!(world.task_born_at(RecordId(0)), Some(TaskId(0)));
+        assert_eq!(world.task_born_at(RecordId(2)), None);
+    }
+
+    #[test]
+    fn stale_decisions_are_refused_not_absorbed() {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        let other_agent = Context {
-            actor: ActorName::new("other agent".into()).unwrap(),
-            tier: Tier::Agent,
-        };
-
-        // t-3 is claimed by the agent: only the holder completes
-        for (ctx, command) in [
-            (
-                other_agent.clone(),
-                Command::CompleteTask {
-                    id: TaskId(3),
-                    receipt: Prose::new("not my claim".into()).unwrap(),
-                },
-            ),
-            (
-                human(),
-                Command::CompleteTask {
-                    id: TaskId(3),
-                    receipt: Prose::new("not my claim".into()).unwrap(),
-                },
-            ),
-            (
-                other_agent.clone(),
-                Command::ReleaseTask {
-                    id: TaskId(3),
-                    note: Prose::new("not my claim".into()).unwrap(),
-                },
-            ),
-        ] {
-            let refused = log.execute(ctx, command, 99);
-            assert!(matches!(refused, Err(Reject::NotClaimHolder)));
+        // t-1's first offer was rejected: neither decision reaches it
+        for command in [accept(7), reject(7, "changed my mind again")] {
+            let refused = log.execute(human(), command, 99);
+            assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
         }
+        // a note is not an offer; an offer on another thread is not
+        // this thread's current one
+        let refused = log.execute(human(), accept(2), 99);
+        assert!(matches!(refused, Err(Reject::NotAnOffer)));
         assert_eq!(log.records().len(), RECORD_COUNT);
 
-        // a human may release any claim
-        log.execute(
-            human(),
-            Command::ReleaseTask {
-                id: TaskId(3),
-                note: Prose::new("reclaiming for the other agent".into()).unwrap(),
-            },
-            20,
-        )
-        .unwrap();
-        assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
-        assert_eq!(log.world().tasks[3].holder, None);
-
-        // an agent may release only its own claim
-        log.execute(
-            other_agent.clone(),
-            Command::ClaimTask { id: TaskId(3) },
-            21,
-        )
-        .unwrap();
-        assert_eq!(log.world().tasks[3].holder, Some(other_agent.actor.clone()));
-        log.execute(
-            other_agent.clone(),
-            Command::ReleaseTask {
-                id: TaskId(3),
-                note: Prose::new("handing back".into()).unwrap(),
-            },
-            22,
-        )
-        .unwrap();
-        assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
+        // t-0 concluded on c-3: its own current offer no longer moves
+        for command in [accept(3), reject(3, "a fault found later")] {
+            let refused = log.execute(human(), command, 99);
+            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        }
+        assert_eq!(log.records().len(), RECORD_COUNT);
     }
 
     #[test]
-    fn accept_reads_the_birth_attribution() {
+    fn declared_scope_refuses_only_the_self_acceptance() {
         let mut log = Log::new();
-        let asker = human();
-        let worker = Context {
-            actor: ActorName::new("pi/t-0-1".into()).unwrap(),
-            tier: Tier::Agent,
-        };
-        let executor = Context {
-            actor: ActorName::new("pi".into()).unwrap(),
-            tier: Tier::Agent,
-        };
+        populate_log(&mut log);
 
-        log.execute(
-            asker.clone(),
-            Command::CreateTask {
-                name: Prose::new("land the receipts law".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        assert_eq!(log.world().tasks[0].birth_actor, asker.actor);
-        // the create-reply query: births resolve, non-birth records don't
-        assert_eq!(log.world().task_born_at(RecordId(0)), Some(TaskId(0)));
-        assert_eq!(log.world().task_born_at(RecordId(2)), None);
+        // the scoped agent accepts its own task's offer: refused
+        let refused = log.execute(scoped_agent(0), accept(3), 99);
+        assert!(matches!(refused, Err(Reject::SelfAcceptance)));
 
-        // the delivered deposit: only the holder delivers
-        log.execute(worker.clone(), Command::ClaimTask { id: TaskId(0) }, 2)
+        // the same agent rejects on grounds: any participant may
+        log.execute(agent(), offer(TaskId(3), "the consumer's account"), 18)
             .unwrap();
         log.execute(
-            worker.clone(),
-            Command::CompleteTask {
-                id: TaskId(0),
-                receipt: Prose::new("suite green".into()).unwrap(),
-            },
-            3,
+            scoped_agent(0),
+            reject(18, "the reason no longer holds"),
+            19,
         )
         .unwrap();
+        assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
+
+        // a scope on another task accepts freely; humans ignore scope
+        log.execute(agent(), offer(TaskId(3), "the second account"), 20)
+            .unwrap();
+        log.execute(scoped_agent(2), accept(20), 21).unwrap();
+        let mut scoped_human = scoped_agent(3);
+        scoped_human.tier = Tier::Human;
+        log.execute(agent(), offer(TaskId(2), "the floop account"), 22)
+            .unwrap();
+        log.execute(scoped_human, accept(22), 23).unwrap();
+        assert_eq!(log.world().tasks[2].task.state, TaskState::Concluded);
+        assert_eq!(log.world().tasks[3].task.state, TaskState::Concluded);
+    }
+
+    #[test]
+    fn claim_transfers_ownership_without_touching_state() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+
+        // the story's claims: agent external claims on t-0, t-1, t-3
         assert_eq!(
-            log.world().tasks[0].task.state,
-            TaskState::Delivered(Prose::new("suite green".into()).unwrap())
+            log.world().tasks[0].ownership,
+            vec![OwnerEntry {
+                owner: Owner::External(agent().actor),
+                record: RecordId(1),
+                at: 2,
+            }]
         );
-        assert_eq!(log.world().tasks[0].delivered_at, Some(3));
 
-        // a demand on delivered never reopens it: delivered is sweep-open
+        // a claim on the cancelled task transfers at any state
+        let before = log.world().tasks[2].task.state.clone();
         log.execute(
-            asker.clone(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("one more finding".into()).unwrap(),
-                kind: demand(),
+            human(),
+            Command::ClaimTask {
+                id: TaskId(2),
+                incarnation: None,
             },
-            4,
+            99,
         )
         .unwrap();
+        assert_eq!(log.world().tasks[2].task.state, before);
+        assert_eq!(log.world().tasks[2].ownership.len(), 1);
         assert!(matches!(
-            log.world().tasks[0].task.state,
-            TaskState::Delivered(_)
+            log.world().tasks[2].ownership[0].owner,
+            Owner::Human(_)
         ));
-        let before_refusals = log.records().len();
 
-        // neither the run's attribution nor the executor's plain name is
-        // the birth attribution; system never accepts
-        for ctx in [
-            worker.clone(),
-            executor.clone(),
-            Context {
-                actor: ActorName::new("saccade".into()).unwrap(),
-                tier: Tier::System,
+        // a second claim transfers and preserves history
+        log.execute(
+            agent(),
+            Command::ClaimTask {
+                id: TaskId(2),
+                incarnation: None,
+            },
+            100,
+        )
+        .unwrap();
+        assert_eq!(log.world().tasks[2].ownership.len(), 2);
+        assert!(matches!(
+            log.world().tasks[2].ownership[1].owner,
+            Owner::External(_)
+        ));
+
+        // an incarnation reference the record never birthed refuses
+        let refused = log.execute(
+            agent(),
+            Command::ClaimTask {
+                id: TaskId(2),
+                incarnation: Some(crate::objects::incarnation::IncarnationId(RecordId(9))),
+            },
+            101,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+    }
+
+    #[test]
+    fn cancellation_and_reopening_are_human_authored_prose_acts() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+
+        // agents refuse both doors
+        for command in [
+            Command::CancelTask {
+                id: TaskId(3),
+                explanation: prose("agent cannot stop"),
+            },
+            Command::ReopenTask {
+                id: TaskId(2),
+                explanation: prose("agent cannot resume"),
             },
         ] {
-            let refused = log.execute(ctx, Command::AcceptTask { id: TaskId(0) }, 5);
-            assert!(matches!(refused, Err(Reject::NotBirthAttribution)));
+            let refused = log.execute(agent(), command, 99);
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
         }
-        // the refusals wrote nothing
-        assert_eq!(log.records().len(), before_refusals);
 
-        // the asker accepts: the receipt rides through the door
-        log.execute(asker.clone(), Command::AcceptTask { id: TaskId(0) }, 6)
-            .unwrap();
-        assert_eq!(
-            log.world().tasks[0].task.state,
-            TaskState::Done(Prose::new("suite green".into()).unwrap())
-        );
-        assert_eq!(log.world().tasks[0].delivered_at, None);
-
-        // accept only opens from delivered
-        let refused = log.execute(asker.clone(), Command::AcceptTask { id: TaskId(0) }, 7);
-        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-
-        // a human accepts anything; the birth attribution holds its own door
-        let author = Context {
-            actor: ActorName::new("dispatch".into()).unwrap(),
-            tier: Tier::Agent,
-        };
-        for (i, name) in ["agent-birthed work", "dispatch's own work"]
-            .iter()
-            .enumerate()
-        {
-            log.execute(
-                author.clone(),
-                Command::CreateTask {
-                    name: Prose::new((*name).into()).unwrap(),
-                    parent_id: None,
-                },
-                8 + i as u64,
-            )
-            .unwrap();
-            log.execute(author.clone(), Command::ClaimTask { id: TaskId(1 + i) }, 8)
-                .unwrap();
-            log.execute(
-                author.clone(),
-                Command::CompleteTask {
-                    id: TaskId(1 + i),
-                    receipt: Prose::new("delivered".into()).unwrap(),
-                },
-                9,
-            )
-            .unwrap();
-        }
-        log.execute(human(), Command::AcceptTask { id: TaskId(1) }, 10)
-            .unwrap();
-        assert!(matches!(
-            log.world().tasks[1].task.state,
-            TaskState::Done(_)
-        ));
-        log.execute(author, Command::AcceptTask { id: TaskId(2) }, 11)
-            .unwrap();
-        assert!(matches!(
-            log.world().tasks[2].task.state,
-            TaskState::Done(_)
-        ));
-
-        // an unknown task names the id
-        let refused = log.execute(human(), Command::AcceptTask { id: TaskId(9) }, 12);
-        assert!(matches!(refused, Err(Reject::InvalidTaskId)));
-
-        // delivering without the claim never folds
+        // the human cancels open t-3 with the explanation riding state
         log.execute(
-            asker,
-            Command::CreateTask {
-                name: Prose::new("never claimed".into()).unwrap(),
-                parent_id: None,
-            },
-            13,
-        )
-        .unwrap();
-        let refused = log.execute(
-            worker,
-            Command::CompleteTask {
+            human(),
+            Command::CancelTask {
                 id: TaskId(3),
-                receipt: Prose::new("not my claim".into()).unwrap(),
+                explanation: prose("the consumer need dissolved"),
             },
-            14,
+            99,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().tasks[3].task.state,
+            TaskState::Cancelled(prose("the consumer need dissolved"))
+        );
+
+        // a request never reopens a cancelled task
+        log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(3)),
+                kind: CommentKind::Request {
+                    body: prose("please resume the adoption"),
+                },
+            },
+            100,
+        )
+        .unwrap();
+        assert!(matches!(
+            log.world().tasks[3].task.state,
+            TaskState::Cancelled(_)
+        ));
+
+        // reopening restores open with the explanation recorded
+        log.execute(
+            human(),
+            Command::ReopenTask {
+                id: TaskId(3),
+                explanation: prose("the need returned"),
+            },
+            101,
+        )
+        .unwrap();
+        assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
+
+        // concluded tasks admit neither door: faults go to new tasks
+        for command in [
+            Command::CancelTask {
+                id: TaskId(0),
+                explanation: prose("too late to stop"),
+            },
+            Command::ReopenTask {
+                id: TaskId(0),
+                explanation: prose("too late to resume"),
+            },
+        ] {
+            let refused = log.execute(human(), command, 102);
+            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        }
+        let refused = log.execute(
+            human(),
+            Command::ReopenTask {
+                id: TaskId(3),
+                explanation: prose("only cancelled tasks reopen"),
+            },
+            103,
         );
         assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
     }
 
     #[test]
-    fn authority_supersedes_existence_in_rejections() {
+    fn use_records_the_reliance_without_deciding() {
         let mut log = Log::new();
-        let drop = || Command::DropTask {
-            id: TaskId(0),
-            note: Prose::new("invalid drop".into()).unwrap(),
-        };
-        let accept = || Command::AcceptProposal {
-            id: ProposalId(RecordId(99)),
-        };
-        assert!(matches!(
-            log.execute(agent(), drop(), 1),
-            Err(Reject::HumanOnly)
-        ));
-        assert!(matches!(
-            log.execute(human(), drop(), 1),
-            Err(Reject::InvalidTaskId)
-        ));
-        assert!(matches!(
-            log.execute(agent(), accept(), 1),
-            Err(Reject::HumanOnly)
-        ));
-        assert!(matches!(
-            log.execute(human(), accept(), 1),
-            Err(Reject::InvalidProposalId)
-        ));
-    }
+        populate_log(&mut log);
 
-    #[test]
-    fn second_open_proposal_on_one_task_is_refused() {
-        let mut log = Log::new();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: Prose::new("migrate floop".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        log.execute(
-            human(),
-            Command::CreateProposal {
-                name: Prose::new("drop floop instead".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-            2,
-        )
-        .unwrap();
+        // the story's use names foo's accepted offer from t-3's thread
+        let used = &log.world().comments[&CommentId(RecordId(17))];
+        assert_eq!(used.comment.root, TaskId(3));
+        assert!(matches!(used.comment.kind, CommentKind::Use { .. }));
+        assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
 
-        let second = Command::CreateProposal {
-            name: Prose::new("drop floop again".into()).unwrap(),
-            action: ProposalAction::Drop { task_id: TaskId(0) },
-        };
-        assert!(matches!(
-            log.execute(human(), second, 3),
-            Err(Reject::ProposalAlreadyOpen)
-        ));
-
-        log.execute(
-            human(),
-            Command::RejectProposal {
-                id: ProposalId(RecordId(1)),
-                note: Prose::new("floop stays".into()).unwrap(),
-            },
-            4,
-        )
-        .unwrap();
-        let third = Command::CreateProposal {
-            name: Prose::new("drop floop for real".into()).unwrap(),
-            action: ProposalAction::Drop { task_id: TaskId(0) },
-        };
-        assert!(log.execute(human(), third, 5).is_ok());
-    }
-
-    #[test]
-    fn accept_compound_write_two_records_in_order() {
-        let mut log = Log::new();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: Prose::new("I am going to do floop again".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        let proposed = log
-            .execute(
-                agent(),
-                Command::CreateProposal {
-                    name: Prose::new("this is a duplicated task".into()).unwrap(),
-                    action: ProposalAction::Drop { task_id: TaskId(0) },
+        // a use naming a non-offer refuses, writing nothing
+        let refused = log.execute(
+            agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(3)),
+                kind: CommentKind::Use {
+                    offer: CommentId(RecordId(2)),
+                    reason: prose("that is a note"),
                 },
-                2,
-            )
-            .unwrap();
+            },
+            99,
+        );
+        assert!(matches!(refused, Err(Reject::NotAnOffer)));
+        assert_eq!(log.records().len(), RECORD_COUNT);
+    }
 
-        // A proposal's identity is the record id of its creation act, so the proposal's id is 1
-        assert_eq!(proposed[0].id.0, 1);
-        assert!(log.world().proposals.contains_key(&ProposalId(RecordId(1))));
+    #[test]
+    fn revision_repairs_prose_and_never_references() {
+        let mut log = Log::new();
+        populate_log(&mut log);
 
-        let accepted = log
-            .execute(
+        // the offer's account is revised: the fold swaps the prose
+        log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(9)),
+                body: prose("edge case held, suite green — 56 tests"),
+            },
+            99,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&CommentId(RecordId(9))];
+        assert!(matches!(
+            &ctx.comment.kind,
+            CommentKind::Offer { body } if body.as_str().contains("56 tests")
+        ));
+        assert_eq!(
+            ctx.revised,
+            Some(Revision {
+                record: RecordId(18),
+                reviser: agent().actor,
+            })
+        );
+
+        // the bodyless Accept carries no prose to repair
+        let refused = log.execute(
+            human(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(10)),
+                body: prose("no prose to swap"),
+            },
+            100,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+
+        // the addressed position must be a comment's birth
+        let refused = log.execute(
+            human(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(99)),
+                body: prose("addresses nothing"),
+            },
+            101,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
+        assert_eq!(log.records().len(), RECORD_COUNT + 1);
+    }
+
+    #[test]
+    fn withdrawal_retires_a_note_at_any_tier_and_keeps_the_withdrawer() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+        let note_id = CommentId(RecordId(2));
+
+        // a human withdraws the agent's note: the tombstone names the withdrawer
+        log.execute(
+            human(),
+            Command::WithdrawComment {
+                id: note_id,
+                note: prose("parked in the wrong place"),
+            },
+            99,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&note_id];
+        assert_eq!(
+            ctx.withdrawn,
+            Some(Withdrawal {
+                record: RecordId(18),
+                withdrawer: human().actor,
+            })
+        );
+        assert!(matches!(
+            &ctx.comment.state,
+            CommentState::Withdrawn(note) if note.as_str() == "parked in the wrong place"
+        ));
+
+        // terminal: a second withdrawal and a revision both refuse
+        for command in [
+            Command::WithdrawComment {
+                id: note_id,
+                note: prose("changed my mind again"),
+            },
+            Command::ReviseComment {
+                id: note_id,
+                body: prose("repair in place"),
+            },
+        ] {
+            let refused = log.execute(agent(), command, 100);
+            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        }
+
+        // the variants keep their verdicts: the offer, the accept, the
+        // reject, and the use all refuse the door
+        for id in [3usize, 10, 8, 17] {
+            let refused = log.execute(
                 human(),
-                Command::AcceptProposal {
-                    id: ProposalId(RecordId(1)),
+                Command::WithdrawComment {
+                    id: CommentId(RecordId(id)),
+                    note: prose("not a note deposit"),
                 },
-                3,
-            )
-            .unwrap();
+                101,
+            );
+            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        }
 
-        // accepting produces two records: the proposal acceptance and the act of dropping the task
-        assert_eq!(accepted.len(), 2);
-        assert!(matches!(
-            &accepted[0].event,
-            Event::ProposalAccepted { id } if id.0.0 == 1
-        ));
-        let Event::TaskDropped { id, note } = &accepted[1].event else {
-            panic!("the embedded act must ride the accept");
-        };
-        assert_eq!(id.0, 0);
-        // the proposal's name becomes the drop's note
-        assert_eq!(note.as_str(), "this is a duplicated task");
-        assert_eq!(log.world().tasks[0].task.state, TaskState::Dropped);
-        assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))].state,
-            ProposalState::Accepted
-        );
-    }
-
-    #[test]
-    fn agent_accept_writes_nothing() {
-        let mut log = Log::new();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: Prose::new("duplicate corpse".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::CreateProposal {
-                name: Prose::new("duplicate of the sibling".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-            2,
-        )
-        .unwrap();
-
-        let refused = log.execute(
-            agent(),
-            Command::AcceptProposal {
-                id: ProposalId(RecordId(1)),
-            },
-            3,
-        );
-        assert!(matches!(refused, Err(Reject::HumanOnly)));
-        assert_eq!(log.records().len(), 2);
-        assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
-        assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))].state,
-            ProposalState::Open
-        );
-    }
-
-    #[test]
-    fn open_proposals_are_inert_and_stale_accept_fails_atomically() {
-        let mut log = Log::new();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: Prose::new("real work".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::CreateProposal {
-                name: Prose::new("not real work".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-            2,
-        )
-        .unwrap();
-
-        // claiming the task makes the proposal stale but it still valid
-        log.execute(agent(), Command::ClaimTask { id: TaskId(0) }, 3)
-            .unwrap();
-
-        // drop from claimed is illegal therefore the accept fails
+        // the addressed position must be a comment's birth
         let refused = log.execute(
             human(),
-            Command::AcceptProposal {
-                id: ProposalId(RecordId(1)),
+            Command::WithdrawComment {
+                id: CommentId(RecordId(99)),
+                note: prose("addresses nothing"),
             },
-            4,
+            102,
         );
-        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-        assert_eq!(log.records().len(), 3);
-        assert_eq!(log.world().tasks[0].task.state, TaskState::Claimed);
-        assert_eq!(
-            log.world().proposals[&ProposalId(RecordId(1))].state,
-            ProposalState::Open
-        );
+        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
+        assert_eq!(log.records().len(), RECORD_COUNT + 1);
     }
 
     #[test]
-    fn incarnation_lifecycle_runs_through_the_machinery_verbs() {
+    fn comments_have_no_state_gate() {
         let mut log = Log::new();
         populate_log(&mut log);
-        let session = SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap();
 
-        // the demand
-        log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("run the suite".into()).unwrap(),
-                kind: demand(),
-            },
-            20,
-        )
-        .unwrap();
-        let demand = CommentId(RecordId(16));
-        let trigger = RecordId(16);
-
-        // machinery verbs reject judgment tiers: the role is the only door
-        let refused = log.execute(
-            agent(),
-            Command::BindIncarnation {
-                task_id: TaskId(0),
-                response_target: demand,
-                trigger,
-                actor: ActorName::new("pi".into()).unwrap(),
-                session: session.clone(),
-            },
-            21,
-        );
-        assert!(matches!(refused, Err(Reject::HumanOnly)));
-
-        log.execute_system(
-            Command::BindIncarnation {
-                task_id: TaskId(0),
-                response_target: demand,
-                trigger,
-                actor: ActorName::new("pi".into()).unwrap(),
-                session: session.clone(),
-            },
-            21,
-        )
-        .unwrap();
-        let run = IncarnationId(RecordId(17));
-        assert_eq!(
-            log.world().incarnations[&run].incarnation.state,
-            IncarnationState::Bound
-        );
-        assert_eq!(log.world().tasks[0].active_incarnation, Some(run));
-        assert_eq!(log.world().comments[&demand].bound, Some(run));
-        assert_eq!(
-            log.world().comments[&demand].comment.state,
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-
-        // a second live run on one task is refused
-        let refused = log.execute_system(
-            Command::BindIncarnation {
-                task_id: TaskId(0),
-                response_target: demand,
-                trigger,
-                actor: ActorName::new("pi".into()).unwrap(),
-                session: session.clone(),
-            },
-            22,
-        );
-        assert!(matches!(refused, Err(Reject::IncarnationAlreadyActive)));
-
-        // settling before an accepted prompt is refused
-        let refused = log.execute_system(Command::SettleIncarnation { id: run }, 23);
-        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-
-        log.execute_system(Command::AcceptPrompt { id: run }, 24)
-            .unwrap();
-        assert_eq!(
-            log.world().incarnations[&run].incarnation.state,
-            IncarnationState::PromptAccepted
-        );
-
-        // the session answers; the reply responds but the run holds the slot
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Comment(demand),
-                body: Prose::new("55 green, nothing flaky".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            25,
-        )
-        .unwrap();
-        let reply = CommentId(RecordId(19));
-        assert_eq!(
-            log.world().comments[&demand].comment.state,
-            CommentState::Demand {
-                response: ResponseState::Responded { reply },
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-
-        // the run produced its reply, then settled
-        log.execute_system(
-            Command::MarkRecord {
-                incarnation_id: run,
-                record_id: RecordId(19),
-            },
-            26,
-        )
-        .unwrap();
-        log.execute_system(Command::SettleIncarnation { id: run }, 27)
-            .unwrap();
-        assert_eq!(
-            log.world().incarnations[&run].incarnation.state,
-            IncarnationState::Settled
-        );
-        assert_eq!(log.world().tasks[0].active_incarnation, None);
-        assert_eq!(log.world().incarnations[&run].produced, vec![RecordId(19)]);
-        assert_eq!(
-            log.world().comments[&demand].comment.state,
-            CommentState::Demand {
-                response: ResponseState::Responded { reply },
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-    }
-
-    #[test]
-    fn rejected_prompt_terminalizes_and_spends() {
-        let mut log = Log::new();
-        populate_log(&mut log);
-        let session = SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap();
-        log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("run the flaky one".into()).unwrap(),
-                kind: demand(),
-            },
-            20,
-        )
-        .unwrap();
-        let demand = CommentId(RecordId(16));
-        log.execute_system(
-            Command::BindIncarnation {
-                task_id: TaskId(0),
-                response_target: demand,
-                trigger: RecordId(16),
-                actor: ActorName::new("pi".into()).unwrap(),
-                session,
-            },
-            21,
-        )
-        .unwrap();
-        log.execute_system(
-            Command::RejectPrompt {
-                id: IncarnationId(RecordId(17)),
-                evidence: FailureEvidence::new(
-                    FailureCode::PromptRejected,
-                    Some("session refused the pointer prompt".into()),
-                ),
-            },
-            22,
-        )
-        .unwrap();
-        let run = IncarnationId(RecordId(17));
-        assert_eq!(
-            log.world().incarnations[&run].incarnation.state,
-            IncarnationState::Interrupted(FailureEvidence::new(
-                FailureCode::PromptRejected,
-                Some("session refused the pointer prompt".into()),
-            ))
-        );
-        assert_eq!(log.world().tasks[0].active_incarnation, None);
-        assert_eq!(log.world().comments[&demand].bound, Some(run));
-        assert_eq!(
-            log.world().comments[&demand].comment.state,
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-
-        // a second prompt outcome never lands on the same run
-        let refused = log.execute_system(Command::AcceptPrompt { id: run }, 23);
-        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-    }
-
-    #[test]
-    fn cancel_terminalizes_and_frees_at_any_tier() {
-        let mut log = Log::new();
-        populate_log(&mut log);
-        log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("run the flaky one".into()).unwrap(),
-                kind: demand(),
-            },
-            20,
-        )
-        .unwrap();
-        let demand = CommentId(RecordId(16));
-        log.execute_system(
-            Command::BindIncarnation {
-                task_id: TaskId(0),
-                response_target: demand,
-                trigger: RecordId(16),
-                actor: ActorName::new("pi".into()).unwrap(),
-                session: SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap(),
-            },
-            21,
-        )
-        .unwrap();
-        let run = IncarnationId(RecordId(17));
-
-        // cancel is a wish any principal may hold: agent tier lands it
-        log.execute(agent(), Command::CancelIncarnation { id: run }, 22)
-            .unwrap();
-        assert_eq!(
-            log.world().incarnations[&run].incarnation.state,
-            IncarnationState::Cancelled
-        );
-        assert_eq!(log.world().tasks[0].active_incarnation, None);
-        assert_eq!(
-            log.world().comments[&demand].comment.state,
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-
-        // the terminal run answers to nothing further
-        let refused = log.execute_system(Command::SettleIncarnation { id: run }, 23);
-        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-        // and a second cancel is refused, not absorbed
-        let refused = log.execute(human(), Command::CancelIncarnation { id: run }, 24);
-        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-    }
-
-    #[test]
-    fn a_human_reply_marks_any_demand_responded() {
-        let mut log = Log::new();
-        populate_log(&mut log);
         let before = log.records().len();
+        // t-0 concluded, t-2 cancelled: notes land on both
+        for (id, state) in [(0, "concluded"), (2, "cancelled")] {
+            log.execute(
+                agent(),
+                note(
+                    Target::Task(TaskId(id)),
+                    &format!("for the record, on the {state} task"),
+                ),
+                99,
+            )
+            .unwrap_or_else(|e| panic!("note on {state} task refused: {e:?}"));
+        }
+        assert_eq!(log.records().len(), before + 2);
 
-        // the agent demand is born authorized on its own birth record
-        log.execute(
+        // only an unknown comment id refuses, writing nothing
+        let refused = log.execute(
             human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("what is the fold count?".into()).unwrap(),
-                kind: demand(),
-            },
-            20,
-        )
-        .unwrap();
-        let demand = CommentId(RecordId(before));
-        assert_eq!(
-            log.world().comments[&demand].comment.state,
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
+            note(
+                Target::Comment(CommentId(RecordId(99))),
+                "addresses nothing",
+            ),
+            100,
         );
-        assert_eq!(log.world().comments[&demand].bound, None);
-
-        // the human's reply answers regardless of addressee, so the
-        // sweep never fires the demand again
-        log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Comment(demand),
-                body: Prose::new("never mind, the ask is retracted".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            21,
-        )
-        .unwrap();
-        let reply = CommentId(RecordId(before + 1));
-        assert_eq!(
-            log.world().comments[&demand].comment.state,
-            CommentState::Demand {
-                response: ResponseState::Responded { reply },
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-
-        // a later agent reply changes nothing
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Comment(demand),
-                body: Prose::new("fourteen, for the record".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            22,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world().comments[&demand].comment.state,
-            CommentState::Demand {
-                response: ResponseState::Responded { reply },
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-
-        // an ask holds for its answer: the first reply answers it, a
-        // system reply never does, and later replies are ordinary notes
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("which fold count did you want?".into()).unwrap(),
-                kind: CommentKind::Ask,
-            },
-            23,
-        )
-        .unwrap();
-        let ask = CommentId(RecordId(before + 3));
-        assert_eq!(
-            log.world().comments[&ask].comment.state,
-            CommentState::Ask {
-                response: ResponseState::Awaiting,
-            }
-        );
-        let mid = CommentId(RecordId(before + 4));
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Comment(ask),
-                body: Prose::new("drafting an answer".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            25,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world().comments[&ask].comment.state,
-            CommentState::Ask {
-                response: ResponseState::Responded { reply: mid },
-            }
-        );
-
-        // later answers queue as ordinary notes: the ask holds its answer
-        log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Comment(ask),
-                body: Prose::new("checked it myself too".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            26,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world().comments[&ask].comment.state,
-            CommentState::Ask {
-                response: ResponseState::Responded { reply: mid },
-            }
-        );
+        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
+        assert_eq!(log.records().len(), before + 2);
     }
 
     #[test]
@@ -1848,7 +1344,7 @@ mod test {
         let mut log = Log::new();
         populate_log(&mut log);
         let figure = Artifact {
-            name: Prose::new("sweep over 28 decades".into()).unwrap(),
+            name: prose("sweep over 28 decades"),
             hash: ContentHash::of(b"figure bytes"),
         };
 
@@ -1879,11 +1375,7 @@ mod test {
         assert_eq!(log.records().len(), before);
 
         // the thread moved but the state did not: t-3 keeps its claim
-        assert!(matches!(
-            log.world().tasks[3].task.state,
-            TaskState::Claimed
-        ));
-        assert_eq!(log.world().tasks[3].holder, Some(agent().actor));
+        assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
         assert_eq!(log.world().tasks[3].last_record_at, 20);
 
         // the pointers land in record order with their seqs
@@ -1896,7 +1388,7 @@ mod test {
         // and only the named thread holds them
         assert!(log.world().tasks[0].artifacts.is_empty());
 
-        // no state gate: a dropped task holds the pointer too
+        // no state gate: a cancelled task holds the pointer too
         log.execute(
             agent(),
             Command::Artifact {
@@ -1910,322 +1402,12 @@ mod test {
     }
 
     #[test]
-    fn revision_swaps_the_body_at_any_tier_and_keeps_the_reviser() {
-        let mut log = Log::new();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: Prose::new("migrate floop".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("run the sweep on the old door".into()).unwrap(),
-                kind: demand(),
-            },
-            2,
-        )
-        .unwrap();
-        let note = CommentId(RecordId(1));
-
-        // the author revises: the body swaps and the pointer names the record
-        log.execute(
-            agent(),
-            Command::ReviseComment {
-                id: note,
-                body: Prose::new("run the sweep on the new door".into()).unwrap(),
-            },
-            3,
-        )
-        .unwrap();
-        let ctx = &log.world().comments[&note];
-        assert_eq!(ctx.comment.body.as_str(), "run the sweep on the new door");
-        assert_eq!(
-            ctx.revised,
-            Some(Revision {
-                record: RecordId(2),
-                reviser: agent().actor,
-            })
-        );
-        // a content act, not a transition: the demand keeps its state
-        assert!(matches!(&ctx.comment.state, CommentState::Demand { .. }));
-
-        // any tier revises any comment: another agent's revision lands
-        let other = Context {
-            actor: ActorName::new("other agent".into()).unwrap(),
-            tier: Tier::Agent,
-        };
-        log.execute(
-            other.clone(),
-            Command::ReviseComment {
-                id: note,
-                body: Prose::new("not mine, but the door is free".into()).unwrap(),
-            },
-            4,
-        )
-        .unwrap();
-        let ctx = &log.world().comments[&note];
-        assert_eq!(ctx.comment.body.as_str(), "not mine, but the door is free");
-        assert_eq!(
-            ctx.revised,
-            Some(Revision {
-                record: RecordId(3),
-                reviser: other.actor,
-            })
-        );
-        // the birth attribution never moves: the words are still the
-        // author's record, only the swap is the reviser's
-        assert_eq!(ctx.actor, agent().actor);
-
-        // a human revises any comment, and a second revision moves the
-        // pointer to the latest record
-        log.execute(
-            human(),
-            Command::ReviseComment {
-                id: note,
-                body: Prose::new("the sweep covers both doors".into()).unwrap(),
-            },
-            5,
-        )
-        .unwrap();
-        let ctx = &log.world().comments[&note];
-        assert_eq!(ctx.comment.body.as_str(), "the sweep covers both doors");
-        assert_eq!(
-            ctx.revised,
-            Some(Revision {
-                record: RecordId(4),
-                reviser: human().actor,
-            })
-        );
-
-        // the addressed position must be a comment's birth: a task birth
-        // is not one, and an unknown seq is not either
-        for id in [CommentId(RecordId(0)), CommentId(RecordId(99))] {
-            let refused = log.execute(
-                human(),
-                Command::ReviseComment {
-                    id,
-                    body: Prose::new("addresses nothing".into()).unwrap(),
-                },
-                6,
-            );
-            assert!(matches!(refused, Err(Reject::InvalidCommentId)));
-        }
-        // the two refusals wrote nothing: the log holds exactly the
-        // create, the comment, and the three landed revisions
-        assert_eq!(log.records().len(), 5);
-    }
-
-    #[test]
-    fn withdrawal_retires_a_note_at_any_tier_and_keeps_the_withdrawer() {
-        let mut log = Log::new();
-        log.execute(
-            human(),
-            Command::CreateTask {
-                name: Prose::new("migrate floop".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("parked mid-flight on the wrong thread".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            2,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("run the sweep".into()).unwrap(),
-                kind: demand(),
-            },
-            2,
-        )
-        .unwrap();
-        log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("nudge the live run".into()).unwrap(),
-                kind: CommentKind::Steer,
-            },
-            2,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("which sweep?".into()).unwrap(),
-                kind: CommentKind::Ask,
-            },
-            2,
-        )
-        .unwrap();
-        let note = CommentId(RecordId(1));
-
-        // a human withdraws the agent's note: no author-identity door,
-        // the tombstone names the withdrawer
-        log.execute(
-            human(),
-            Command::WithdrawComment {
-                id: note,
-                note: Prose::new("the parking was premature".into()).unwrap(),
-            },
-            3,
-        )
-        .unwrap();
-        let ctx = &log.world().comments[&note];
-        assert_eq!(
-            ctx.withdrawn,
-            Some(Withdrawal {
-                record: RecordId(5),
-                withdrawer: human().actor,
-            })
-        );
-        // the tombstone's note rides the terminal state
-        assert!(matches!(
-            &ctx.comment.state,
-            CommentState::Withdrawn(note) if note.as_str() == "the parking was premature"
-        ));
-
-        // terminal: a second withdrawal and a revision both refuse
-        for command in [
-            Command::WithdrawComment {
-                id: note,
-                note: Prose::new("changed my mind again".into()).unwrap(),
-            },
-            Command::ReviseComment {
-                id: note,
-                body: Prose::new("repair in place".into()).unwrap(),
-            },
-        ] {
-            let refused = log.execute(agent(), command, 4);
-            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-        }
-
-        // the variants keep their own lifecycles: demand, steer, and
-        // ask all refuse the door
-        for id in [
-            CommentId(RecordId(2)),
-            CommentId(RecordId(3)),
-            CommentId(RecordId(4)),
-        ] {
-            let refused = log.execute(
-                human(),
-                Command::WithdrawComment {
-                    id,
-                    note: Prose::new("not a note deposit".into()).unwrap(),
-                },
-                4,
-            );
-            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-        }
-
-        // the addressed position must be a comment's birth
-        let refused = log.execute(
-            human(),
-            Command::WithdrawComment {
-                id: CommentId(RecordId(99)),
-                note: Prose::new("addresses nothing".into()).unwrap(),
-            },
-            4,
-        );
-        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
-
-        // the refusals wrote nothing: one withdrawal landed, ever
-        assert_eq!(log.records().len(), 6);
-        assert!(matches!(
-            log.records()[5].event,
-            Event::CommentWithdrawn { .. }
-        ));
-    }
-
-    #[test]
-    fn comments_have_no_state_gate() {
-        let mut log = Log::new();
-        for name in ["open work", "done work", "dropped work"] {
-            log.execute(
-                human(),
-                Command::CreateTask {
-                    name: Prose::new(name.into()).unwrap(),
-                    parent_id: None,
-                },
-                1,
-            )
-            .unwrap();
-        }
-        log.execute(human(), Command::ClaimTask { id: TaskId(1) }, 2)
-            .unwrap();
-        log.execute(
-            human(),
-            Command::CompleteTask {
-                id: TaskId(1),
-                receipt: Prose::new("shipped".into()).unwrap(),
-            },
-            3,
-        )
-        .unwrap();
-        log.execute(
-            human(),
-            Command::DropTask {
-                id: TaskId(2),
-                note: Prose::new("run dead".into()).unwrap(),
-            },
-            4,
-        )
-        .unwrap();
-
-        let before = log.records().len();
-        for (id, state) in [(0, "open"), (1, "done"), (2, "dropped")] {
-            log.execute(
-                agent(),
-                Command::Comment {
-                    target: Target::Task(TaskId(id)),
-                    body: Prose::new(format!("for the record, on the {state} task")).unwrap(),
-                    kind: CommentKind::Note,
-                },
-                9,
-            )
-            .unwrap_or_else(|e| panic!("comment on {state} task refused: {e:?}"));
-        }
-        assert_eq!(log.records().len(), before + 3);
-
-        // only an unknown comment id refuses, writing nothing
-        let refused = log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Comment(CommentId(RecordId(99))),
-                body: Prose::new("addresses nothing".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            10,
-        );
-        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
-        assert_eq!(log.records().len(), before + 3);
-    }
-
-    #[test]
     fn workspace_records_run_through_the_machinery_verbs() {
         let mut log = Log::new();
         log.execute(
-            Context {
-                actor: ActorName::new("human person".into()).unwrap(),
-                tier: Tier::Human,
-            },
+            human(),
             Command::CreateTask {
-                name: Prose::new("run managed demand in a worktree".into()).unwrap(),
+                name: prose("carry a merge through the worktree"),
                 parent_id: None,
             },
             1,
@@ -2319,6 +1501,19 @@ mod test {
                 .checkpoint,
             head
         );
+
+        // the provisioning verbs reject judgment tiers: the role is the
+        // only door
+        let refused = log.execute(
+            human(),
+            Command::CreateWorkspace {
+                task_id: TaskId(0),
+                base,
+                branch: GitBranch::new("saccade/t-1".into()).unwrap(),
+            },
+            7,
+        );
+        assert!(matches!(refused, Err(Reject::HumanOnly)));
     }
 
     #[test]
@@ -2327,7 +1522,7 @@ mod test {
         log.execute(
             human(),
             Command::CreateTask {
-                name: Prose::new("carry a merge through the worktree".into()).unwrap(),
+                name: prose("carry a merge through the worktree"),
                 parent_id: None,
             },
             1,
@@ -2417,291 +1612,5 @@ mod test {
             }
         }
         assert_eq!(log.records().len(), before + 1);
-    }
-
-    #[test]
-    fn a_refusal_spends_the_demand_and_lands_as_a_fact() {
-        let mut log = Log::new();
-        populate_log(&mut log);
-        log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Task(TaskId(4)),
-                body: Prose::new("run the sweep once more".into()).unwrap(),
-                kind: demand(),
-            },
-            20,
-        )
-        .unwrap();
-        let demand = CommentId(RecordId(RECORD_COUNT));
-
-        // the machinery's role is the only door: judgment tiers refuse
-        let refused = log.execute(
-            agent(),
-            Command::RefuseDemand {
-                demand,
-                reason: Prose::new("the worktree is a disk-only leftover".into()).unwrap(),
-            },
-            21,
-        );
-        assert!(matches!(refused, Err(Reject::HumanOnly)));
-
-        log.execute_system(
-            Command::RefuseDemand {
-                demand,
-                reason: Prose::new("the worktree is a disk-only leftover".into()).unwrap(),
-            },
-            21,
-        )
-        .unwrap();
-        let ctx = &log.world().comments[&demand];
-        assert_eq!(
-            ctx.comment.state,
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-        let refusal = ctx.refusal.as_ref().expect("the refusal landed");
-        assert_eq!(refusal.at, 21);
-        assert!(refusal.reason.as_str().contains("disk-only leftover"));
-
-        // one refusal per authorization: a second never lands
-        let refused = log.execute_system(
-            Command::RefuseDemand {
-                demand,
-                reason: Prose::new("a different cause".into()).unwrap(),
-            },
-            22,
-        );
-        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
-
-        // the asker's reply still answers the refused demand, fact intact
-        log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Comment(demand),
-                body: Prose::new("never mind, reconciled by hand".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            23,
-        )
-        .unwrap();
-        let ctx = &log.world().comments[&demand];
-        assert!(matches!(
-            &ctx.comment.state,
-            CommentState::Demand {
-                response: ResponseState::Responded { .. },
-                base: _,
-            }
-        ));
-        assert!(ctx.refusal.is_some());
-    }
-
-    #[test]
-    fn a_demand_on_a_done_task_reopens_it() {
-        let mut log = Log::new();
-        populate_log(&mut log);
-
-        // t-0 is done; a note and an ask both leave it done
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("context only, no action asked".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            15,
-        )
-        .unwrap();
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("which edge case worried you?".into()).unwrap(),
-                kind: CommentKind::Ask,
-            },
-            15,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world().tasks[0].task.state,
-            TaskState::Done(Prose::new("foo completed successfully".into()).unwrap())
-        );
-
-        // a demand on done reopens it, receipt history intact
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("one more round: check the edge case".into()).unwrap(),
-                kind: demand(),
-            },
-            16,
-        )
-        .unwrap();
-        assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
-
-        // the second cycle: claim, deliver, and the asker accepts again
-        log.execute(agent(), Command::ClaimTask { id: TaskId(0) }, 17)
-            .unwrap();
-        assert_eq!(log.world().tasks[0].task.state, TaskState::Claimed);
-        log.execute(
-            agent(),
-            Command::CompleteTask {
-                id: TaskId(0),
-                receipt: Prose::new("edge case held".into()).unwrap(),
-            },
-            18,
-        )
-        .unwrap();
-        assert_eq!(
-            log.world().tasks[0].task.state,
-            TaskState::Delivered(Prose::new("edge case held".into()).unwrap())
-        );
-        log.execute(human(), Command::AcceptTask { id: TaskId(0) }, 18)
-            .unwrap();
-        assert_eq!(
-            log.world().tasks[0].task.state,
-            TaskState::Done(Prose::new("edge case held".into()).unwrap())
-        );
-
-        // a demand on a dropped task leaves it dropped
-        log.execute(
-            agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(1)),
-                body: Prose::new("never mind, one more look".into()).unwrap(),
-                kind: demand(),
-            },
-            19,
-        )
-        .unwrap();
-        assert_eq!(log.world().tasks[1].task.state, TaskState::Dropped);
-    }
-
-    const RECORD_COUNT: usize = 16;
-
-    fn populate_log(log: &mut Log) {
-        let agent_ctx = agent();
-        let human_ctx = human();
-
-        log.execute(
-            agent_ctx.clone(),
-            Command::CreateTask {
-                name: Prose::new("implement foo".into()).unwrap(),
-                parent_id: None,
-            },
-            1,
-        )
-        .unwrap();
-
-        log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(0) }, 2)
-            .unwrap();
-
-        log.execute(
-            human_ctx.clone(),
-            Command::CreateTask {
-                name: Prose::new("fix bar".into()).unwrap(),
-                parent_id: None,
-            },
-            3,
-        )
-        .unwrap();
-
-        log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(1) }, 4)
-            .unwrap();
-
-        log.execute(
-            agent_ctx.clone(),
-            Command::CompleteTask {
-                id: TaskId(1),
-                receipt: Prose::new("bar fixed".into()).unwrap(),
-            },
-            5,
-        )
-        .unwrap();
-
-        log.execute(human_ctx.clone(), Command::AcceptTask { id: TaskId(1) }, 5)
-            .unwrap();
-
-        log.execute(
-            human_ctx.clone(),
-            Command::CreateTask {
-                name: Prose::new("improve baz".into()).unwrap(),
-                parent_id: Some(TaskId(0)),
-            },
-            6,
-        )
-        .unwrap();
-
-        log.execute(
-            agent_ctx.clone(),
-            Command::CompleteTask {
-                id: TaskId(0),
-                receipt: Prose::new("foo completed successfully".into()).unwrap(),
-            },
-            7,
-        )
-        .unwrap();
-
-        log.execute(human_ctx.clone(), Command::AcceptTask { id: TaskId(0) }, 7)
-            .unwrap();
-
-        log.execute(
-            human_ctx.clone(),
-            Command::CreateTask {
-                name: Prose::new("migrate floop".into()).unwrap(),
-                parent_id: None,
-            },
-            8,
-        )
-        .unwrap();
-
-        log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(3) }, 9)
-            .unwrap();
-
-        log.execute(
-            human_ctx.clone(),
-            Command::ReleaseTask {
-                id: TaskId(3),
-                note: Prose::new("run dead, reclaim".into()).unwrap(),
-            },
-            10,
-        )
-        .unwrap();
-
-        log.execute(agent_ctx.clone(), Command::ClaimTask { id: TaskId(3) }, 11)
-            .unwrap();
-
-        log.execute(
-            human_ctx.clone(),
-            Command::DropTask {
-                id: TaskId(2),
-                note: Prose::new("scope covered by fix bar".into()).unwrap(),
-            },
-            12,
-        )
-        .unwrap();
-
-        log.execute(
-            human_ctx.clone(),
-            Command::DropTask {
-                id: TaskId(1),
-                note: Prose::new("covered by fix bar; kept only as context".into()).unwrap(),
-            },
-            13,
-        )
-        .unwrap();
-
-        log.execute(
-            human_ctx.clone(),
-            Command::CreateTask {
-                name: Prose::new("open work".into()).unwrap(),
-                parent_id: None,
-            },
-            14,
-        )
-        .unwrap();
     }
 }

@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+use crate::RecordId;
 use crate::events::Event;
-use crate::objects::comment::CommentKind;
+use crate::objects::comment::{CommentId, CommentKind};
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::workspace::WorkspaceContext;
 use crate::types::actor::ActorName;
 use crate::types::artifact::Artifact;
 use crate::types::prose::Prose;
-use crate::{CommentId, ProposalId, RecordId};
 
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 pub struct TaskId(pub usize);
@@ -15,45 +15,46 @@ pub struct TaskId(pub usize);
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskState {
     Open,
-    Claimed,
-    /// A delivered run's deposit; accept is the only door to done
-    Delivered(Prose),
-    Done(Prose),
-    Dropped,
+    /// A whole-task offer stands; the current offer's identity is an
+    /// envelope fact on the context, never a payload here
+    Offered,
+    Concluded,
+    /// The human's explanation of why the undertaking stopped rides
+    /// the state, the way a verdict's grounds ride its comment
+    Cancelled(Prose),
 }
 
 impl TaskState {
-    /// The state machine table, all state transitions must go through this
+    /// The state machine table, all state transitions must go through
+    /// this. The store's reference checks decide whether an Accept or
+    /// Reject names the current offer; this table admits the cell.
     pub fn transition(&self, event: &Event) -> Option<TaskState> {
         match (self, event) {
-            (TaskState::Open, Event::TaskClaimed { .. }) => Some(TaskState::Claimed),
-            // an in-thread round claims a delivered task afresh; the
-            // demand never reopens it
-            (TaskState::Delivered(_), Event::TaskClaimed { .. }) => Some(TaskState::Claimed),
-            // the old law's close, reachable only in logs written before
-            // the receipts law
-            (TaskState::Claimed, Event::TaskDone { receipt, .. }) => {
-                Some(TaskState::Done(receipt.clone()))
-            }
-            (TaskState::Claimed, Event::TaskDelivered { receipt, .. }) => {
-                Some(TaskState::Delivered(receipt.clone()))
-            }
-            // the receipt rides through the accept door
-            (TaskState::Delivered(receipt), Event::TaskAccepted { .. }) => {
-                Some(TaskState::Done(receipt.clone()))
-            }
-            (TaskState::Claimed, Event::TaskReleased { .. }) => Some(TaskState::Open),
-            (TaskState::Open | TaskState::Done(_), Event::TaskDropped { .. }) => {
-                Some(TaskState::Dropped)
-            }
-            // a demand reopens done: the fired session claims afresh
             (
-                TaskState::Done(_),
+                TaskState::Open,
                 Event::Commented {
-                    kind: CommentKind::Demand { .. },
+                    kind: CommentKind::Offer { .. },
+                    ..
+                },
+            ) => Some(TaskState::Offered),
+            (
+                TaskState::Offered,
+                Event::Commented {
+                    kind: CommentKind::Accept { .. },
+                    ..
+                },
+            ) => Some(TaskState::Concluded),
+            (
+                TaskState::Offered,
+                Event::Commented {
+                    kind: CommentKind::Reject { .. },
                     ..
                 },
             ) => Some(TaskState::Open),
+            (TaskState::Open | TaskState::Offered, Event::TaskCancelled { explanation, .. }) => {
+                Some(TaskState::Cancelled(explanation.clone()))
+            }
+            (TaskState::Cancelled(_), Event::TaskReopened { .. }) => Some(TaskState::Open),
             _ => None,
         }
     }
@@ -72,109 +73,146 @@ pub struct TaskContext {
     pub birth: RecordId,
     /// Last updated record id
     pub last_updated: RecordId,
-    /// Event time of the claim now held, present only while claimed
-    pub claimed_at: Option<u64>,
     /// Event time of the most recent record that moved this task
     pub last_record_at: u64,
-    /// Event time of the delivery now held, present only while delivered
-    pub delivered_at: Option<u64>,
-    pub proposal: Option<ProposalId>,
+    /// Event time the standing offer landed, present while one stands
+    /// or the concluded one holds
+    pub offered_at: Option<u64>,
+    /// The ownership ledger, earliest first: whole-task responsibility,
+    /// transferred by claim, history preserved
+    pub ownership: Vec<OwnerEntry>,
+    /// The offer now standing, present while offered and after the
+    /// accept that concluded; a reject clears it
+    pub current_offer: Option<CommentId>,
     pub thread: Vec<CommentId>,
     /// Artifacts the thread holds, in record order
     pub artifacts: Vec<(RecordId, Artifact)>,
-    /// Holder of the current claim, present only while the task is claimed
-    pub holder: Option<ActorName>,
     /// The attribution that birthed the task, from the birth record
     pub birth_actor: ActorName,
-    /// The one live run on this task, None while unbound or terminal
-    pub active_incarnation: Option<IncarnationId>,
-    /// The task's workspace lineage, present once provisioned
+    /// The task's workspace lineage, present once registered
     pub workspace: Option<WorkspaceContext>,
+}
+
+/// The owner an ownership entry names — exactly the ratified kinds.
+/// An incarnation owner is a record-derived reference, never inferred
+/// from declared scope: a task-scoped helper claiming without the
+/// reference owns as the named external agent it is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Owner {
+    Human(ActorName),
+    External(ActorName),
+    Incarnation(IncarnationId),
+}
+
+/// One holding of whole-task responsibility: who held it, the record
+/// that transferred it, when. Ownership is separate from state — no
+/// claim is a state transition, no state gates a claim.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OwnerEntry {
+    pub owner: Owner,
+    pub record: RecordId,
+    pub at: u64,
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::objects::comment::{CommentKind, Target};
-    use crate::types::pointers::GitCommit;
     use crate::types::prose::Prose;
+
+    fn note() -> Event {
+        Event::Commented {
+            target: Target::Task(TaskId(0)),
+            kind: CommentKind::Note {
+                body: Prose::new("filler".into()).unwrap(),
+            },
+        }
+    }
+
+    fn offer() -> Event {
+        Event::Commented {
+            target: Target::Task(TaskId(0)),
+            kind: CommentKind::Offer {
+                body: Prose::new("filler".into()).unwrap(),
+            },
+        }
+    }
+
+    fn accept() -> Event {
+        Event::Commented {
+            target: Target::Comment(CommentId(RecordId(1))),
+            kind: CommentKind::Accept {
+                offer: CommentId(RecordId(1)),
+            },
+        }
+    }
+
+    fn reject() -> Event {
+        Event::Commented {
+            target: Target::Comment(CommentId(RecordId(1))),
+            kind: CommentKind::Reject {
+                offer: CommentId(RecordId(1)),
+                grounds: Prose::new("filler".into()).unwrap(),
+            },
+        }
+    }
 
     #[test]
     fn transition_table_admits_exactly_the_legal_cells() {
         let states = [
             TaskState::Open,
-            TaskState::Claimed,
-            TaskState::Delivered(Prose::new("filler".into()).unwrap()),
-            TaskState::Done(Prose::new("filler".into()).unwrap()),
-            TaskState::Dropped,
+            TaskState::Offered,
+            TaskState::Concluded,
+            TaskState::Cancelled(Prose::new("filler".into()).unwrap()),
         ];
         let events = [
             Event::TaskCreated {
                 name: Prose::new("filler".into()).unwrap(),
                 parent_id: None,
             },
-            Event::TaskClaimed { id: TaskId(0) },
-            Event::TaskDone {
+            Event::TaskClaimed {
                 id: TaskId(0),
-                receipt: Prose::new("filler".into()).unwrap(),
+                incarnation: None,
             },
-            Event::TaskDelivered {
+            Event::TaskCancelled {
                 id: TaskId(0),
-                receipt: Prose::new("filler".into()).unwrap(),
+                explanation: Prose::new("filler".into()).unwrap(),
             },
-            Event::TaskAccepted { id: TaskId(0) },
-            Event::TaskDropped {
+            Event::TaskReopened {
                 id: TaskId(0),
-                note: Prose::new("filler".into()).unwrap(),
+                explanation: Prose::new("filler".into()).unwrap(),
             },
-            Event::TaskReleased {
-                id: TaskId(0),
-                note: Prose::new("filler".into()).unwrap(),
-            },
-            Event::Commented {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("filler".into()).unwrap(),
-                kind: CommentKind::Demand {
-                    base: GitCommit::new("a1b2c3".into()).unwrap(),
-                },
-            },
-            Event::Commented {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("filler".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            Event::Commented {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("filler".into()).unwrap(),
-                kind: CommentKind::Steer,
-            },
-            Event::Commented {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("filler".into()).unwrap(),
-                kind: CommentKind::Ask,
-            },
+            note(),
+            offer(),
+            accept(),
+            reject(),
         ];
 
         let legal = |state: &TaskState, event: &Event| {
             matches!(
                 (state, event),
-                (TaskState::Open, Event::TaskClaimed { .. })
-                    | (TaskState::Delivered(_), Event::TaskClaimed { .. })
-                    | (TaskState::Claimed, Event::TaskDone { .. })
-                    | (TaskState::Claimed, Event::TaskDelivered { .. })
-                    | (TaskState::Delivered(_), Event::TaskAccepted { .. })
-                    | (TaskState::Claimed, Event::TaskReleased { .. })
-                    | (
-                        TaskState::Open | TaskState::Done(_),
-                        Event::TaskDropped { .. }
-                    )
-                    | (
-                        TaskState::Done(_),
-                        Event::Commented {
-                            kind: CommentKind::Demand { .. },
-                            ..
-                        }
-                    )
+                (
+                    TaskState::Open,
+                    Event::Commented {
+                        kind: CommentKind::Offer { .. },
+                        ..
+                    }
+                ) | (
+                    TaskState::Offered,
+                    Event::Commented {
+                        kind: CommentKind::Accept { .. },
+                        ..
+                    }
+                ) | (
+                    TaskState::Offered,
+                    Event::Commented {
+                        kind: CommentKind::Reject { .. },
+                        ..
+                    }
+                ) | (
+                    TaskState::Open | TaskState::Offered,
+                    Event::TaskCancelled { .. }
+                ) | (TaskState::Cancelled(_), Event::TaskReopened { .. })
             )
         };
 

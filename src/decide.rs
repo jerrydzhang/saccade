@@ -1,6 +1,6 @@
 use crate::Reject;
 use crate::events::{Command, Event};
-use crate::store::{Context, Tier, World};
+use crate::store::{Context, Tier};
 
 /// Authority requirements per event kind
 #[derive(Clone, Debug)]
@@ -13,32 +13,17 @@ fn required_tier(event: &Event) -> Authority {
     match event {
         Event::TaskCreated { .. }
         | Event::TaskClaimed { .. }
-        | Event::TaskDone { .. }
-        | Event::TaskDelivered { .. }
-        | Event::TaskReleased { .. }
-        | Event::ProposalCreated { .. }
-        | Event::ProposalWithdrawn { .. }
         | Event::Commented { .. }
         | Event::ArtifactAdded { .. }
-        | Event::IncarnationCancelled { .. }
         | Event::TaskWorkspaceCheckpointed { .. } => Authority::AnyTier,
-        // accept's door reads the world's birth attribution, so its
-        // authority lives in the fold, not in a tier cell
-        Event::TaskAccepted { .. }
-        | Event::CommentRevised { .. }
-        | Event::CommentWithdrawn { .. } => Authority::AnyTier,
-        Event::TaskDropped { .. }
-        | Event::ProposalRejected { .. }
-        | Event::ProposalAccepted { .. } => Authority::Require(Tier::Human),
-        Event::DemandRefused { .. }
-        | Event::SteerForwarded { .. }
-        | Event::IncarnationBound { .. }
-        | Event::IncarnationPromptAccepted { .. }
-        | Event::IncarnationPromptRejected { .. }
-        | Event::IncarnationSettled { .. }
-        | Event::RecordProducedBy { .. }
-        | Event::TaskWorkspaceCreated { .. }
-        | Event::TaskWorkspaceMaterialized { .. } => Authority::Require(Tier::System),
+        // the human-authored judgment acts: cancellation and reopening
+        Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
+        // a presentation repair may come from any judgment tier
+        Event::CommentRevised { .. } | Event::CommentWithdrawn { .. } => Authority::AnyTier,
+        // the machinery's workspace records follow provisioning by role
+        Event::TaskWorkspaceCreated { .. } | Event::TaskWorkspaceMaterialized { .. } => {
+            Authority::Require(Tier::System)
+        }
     }
 }
 
@@ -54,70 +39,17 @@ pub(crate) fn enforce_tier(context: &Context, events: &[Event]) -> Result<(), Re
     Ok(())
 }
 
-/// Stateful expansion between decide and the fold, some events need to be expanded into multiple
-/// events based on the current world state.
-pub(crate) fn expand(world: &World, events: &[Event]) -> Result<Vec<Event>, Reject> {
-    let mut expanded = Vec::with_capacity(events.len() + 1);
-    for event in events {
-        expanded.push(event.clone());
-        // NOTE: switch this to a match statement if we add more events that need expansion
-        if let Event::ProposalAccepted { id } = event {
-            let proposal = world.proposals.get(id).ok_or(Reject::InvalidProposalId)?;
-            expanded.push(proposal.action.target_event(&proposal.name));
-        }
-    }
-    Ok(expanded)
-}
-
 /// Stateless command syntax: a command is its events, nothing else
 pub fn decide(command: Command) -> Vec<Event> {
     match command {
-        // Task commands
         Command::CreateTask { name, parent_id } => vec![Event::TaskCreated { name, parent_id }],
-        Command::ClaimTask { id } => vec![Event::TaskClaimed { id }],
-        Command::CompleteTask { id, receipt } => vec![Event::TaskDelivered { id, receipt }],
-        Command::AcceptTask { id } => vec![Event::TaskAccepted { id }],
-        Command::DropTask { id, note } => vec![Event::TaskDropped { id, note }],
-        Command::ReleaseTask { id, note } => vec![Event::TaskReleased { id, note }],
-        // Proposal commands
-        Command::CreateProposal { name, action } => vec![Event::ProposalCreated { name, action }],
-        Command::WithdrawProposal { id, note } => vec![Event::ProposalWithdrawn { id, note }],
-        Command::RejectProposal { id, note } => vec![Event::ProposalRejected { id, note }],
-        Command::AcceptProposal { id } => vec![Event::ProposalAccepted { id }],
-        // Comment commands
-        Command::Comment { target, body, kind } => vec![Event::Commented { target, body, kind }],
+        Command::ClaimTask { id, incarnation } => vec![Event::TaskClaimed { id, incarnation }],
+        Command::CancelTask { id, explanation } => vec![Event::TaskCancelled { id, explanation }],
+        Command::ReopenTask { id, explanation } => vec![Event::TaskReopened { id, explanation }],
+        Command::Comment { target, kind } => vec![Event::Commented { target, kind }],
         Command::ReviseComment { id, body } => vec![Event::CommentRevised { id, body }],
         Command::WithdrawComment { id, note } => vec![Event::CommentWithdrawn { id, note }],
-        Command::RefuseDemand { demand, reason } => vec![Event::DemandRefused { demand, reason }],
         Command::Artifact { root, artifact } => vec![Event::ArtifactAdded { root, artifact }],
-        Command::ForwardSteer { steer } => vec![Event::SteerForwarded { steer }],
-        // Machinery verbs: System authorship comes from the role, never input
-        Command::BindIncarnation {
-            task_id,
-            response_target,
-            trigger,
-            actor,
-            session,
-        } => vec![Event::IncarnationBound {
-            task_id,
-            response_target,
-            trigger,
-            actor,
-            session,
-        }],
-        Command::AcceptPrompt { id } => vec![Event::IncarnationPromptAccepted { id }],
-        Command::RejectPrompt { id, evidence } => {
-            vec![Event::IncarnationPromptRejected { id, evidence }]
-        }
-        Command::SettleIncarnation { id } => vec![Event::IncarnationSettled { id }],
-        Command::CancelIncarnation { id } => vec![Event::IncarnationCancelled { id }],
-        Command::MarkRecord {
-            incarnation_id,
-            record_id,
-        } => vec![Event::RecordProducedBy {
-            record_id,
-            incarnation_id,
-        }],
         Command::CreateWorkspace {
             task_id,
             base,
@@ -143,18 +75,18 @@ pub fn decide(command: Command) -> Vec<Event> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::{CommentId, CommentKind};
+    use crate::objects::comment::{CommentId, CommentKind, Target};
     use crate::objects::incarnation::IncarnationId;
     use crate::types::actor::ActorName;
     use crate::types::artifact::Artifact;
-    use crate::types::failure::{FailureCode, FailureEvidence};
-    use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
-    use crate::{ContentHash, ProposalAction, ProposalId, Prose, RecordId, Target, TaskId};
+    use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
+    use crate::{ContentHash, Prose, RecordId, TaskId};
 
     fn agent() -> Context {
         Context {
             actor: ActorName::new("saccade bot".into()).unwrap(),
             tier: Tier::Agent,
+            scope: None,
         }
     }
 
@@ -162,97 +94,57 @@ mod test {
         Context {
             actor: ActorName::new("human person".into()).unwrap(),
             tier: Tier::Human,
+            scope: None,
         }
     }
+
+    fn prose() -> Prose {
+        Prose::new("filler".into()).unwrap()
+    }
+
     #[test]
     fn authority_table_gates_exactly_the_gated_events() {
-        let pid = ProposalId(RecordId(0));
         let events = [
             Event::TaskCreated {
-                name: Prose::new("filler".into()).unwrap(),
+                name: prose(),
                 parent_id: None,
             },
-            Event::TaskClaimed { id: TaskId(0) },
-            Event::TaskDone {
+            Event::TaskClaimed {
                 id: TaskId(0),
-                receipt: Prose::new("filler".into()).unwrap(),
+                incarnation: None,
             },
-            Event::TaskDelivered {
+            Event::TaskCancelled {
                 id: TaskId(0),
-                receipt: Prose::new("filler".into()).unwrap(),
+                explanation: prose(),
             },
-            Event::TaskAccepted { id: TaskId(0) },
-            Event::TaskDropped {
+            Event::TaskReopened {
                 id: TaskId(0),
-                note: Prose::new("filler".into()).unwrap(),
+                explanation: prose(),
             },
-            Event::TaskReleased {
-                id: TaskId(0),
-                note: Prose::new("filler".into()).unwrap(),
-            },
-            Event::ProposalCreated {
-                name: Prose::new("filler".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(0) },
-            },
-            Event::ProposalWithdrawn {
-                id: pid,
-                note: Prose::new("filler".into()).unwrap(),
-            },
-            Event::ProposalRejected {
-                id: pid,
-                note: Prose::new("filler".into()).unwrap(),
-            },
-            Event::ProposalAccepted { id: pid },
             Event::Commented {
                 target: Target::Task(TaskId(0)),
-                body: Prose::new("filler".into()).unwrap(),
-                kind: CommentKind::Note,
+                kind: CommentKind::Note { body: prose() },
+            },
+            Event::Commented {
+                target: Target::Comment(CommentId(RecordId(0))),
+                kind: CommentKind::Accept {
+                    offer: CommentId(RecordId(0)),
+                },
             },
             Event::CommentRevised {
                 id: CommentId(RecordId(0)),
-                body: Prose::new("filler".into()).unwrap(),
+                body: prose(),
             },
             Event::CommentWithdrawn {
                 id: CommentId(RecordId(0)),
-                note: Prose::new("filler".into()).unwrap(),
-            },
-            Event::DemandRefused {
-                demand: CommentId(RecordId(0)),
-                reason: Prose::new("filler".into()).unwrap(),
-            },
-            Event::SteerForwarded {
-                steer: CommentId(RecordId(0)),
+                note: prose(),
             },
             Event::ArtifactAdded {
                 root: TaskId(0),
                 artifact: Artifact {
-                    name: Prose::new("sweep figure".into()).unwrap(),
+                    name: prose(),
                     hash: ContentHash::of(b"bytes"),
                 },
-            },
-            Event::IncarnationBound {
-                task_id: TaskId(0),
-                response_target: CommentId(RecordId(0)),
-                trigger: RecordId(0),
-                actor: ActorName::new("pi".into()).unwrap(),
-                session: SessionPointer::new("/tmp/session".into()).unwrap(),
-            },
-            Event::IncarnationPromptAccepted {
-                id: IncarnationId(RecordId(0)),
-            },
-            Event::IncarnationPromptRejected {
-                id: IncarnationId(RecordId(0)),
-                evidence: FailureEvidence::new(FailureCode::PromptRejected, None),
-            },
-            Event::IncarnationSettled {
-                id: IncarnationId(RecordId(0)),
-            },
-            Event::IncarnationCancelled {
-                id: IncarnationId(RecordId(0)),
-            },
-            Event::RecordProducedBy {
-                incarnation_id: IncarnationId(RecordId(0)),
-                record_id: RecordId(0),
             },
             Event::TaskWorkspaceCreated {
                 task_id: TaskId(0),
@@ -289,6 +181,65 @@ mod test {
                 expectation(&ctx),
                 "system wrong at the authority table: {event:?}"
             );
+        }
+    }
+
+    /// The command translation is the identity: every command is its
+    /// events, one record each, no expansion left.
+    #[test]
+    fn every_command_expands_to_its_single_event() {
+        let commands = [
+            Command::CreateTask {
+                name: prose(),
+                parent_id: None,
+            },
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: Some(IncarnationId(RecordId(9))),
+            },
+            Command::CancelTask {
+                id: TaskId(0),
+                explanation: prose(),
+            },
+            Command::ReopenTask {
+                id: TaskId(0),
+                explanation: prose(),
+            },
+            Command::Comment {
+                target: Target::Task(TaskId(0)),
+                kind: CommentKind::Offer { body: prose() },
+            },
+            Command::ReviseComment {
+                id: CommentId(RecordId(0)),
+                body: prose(),
+            },
+            Command::WithdrawComment {
+                id: CommentId(RecordId(0)),
+                note: prose(),
+            },
+            Command::Artifact {
+                root: TaskId(0),
+                artifact: Artifact {
+                    name: prose(),
+                    hash: ContentHash::of(b"bytes"),
+                },
+            },
+            Command::CreateWorkspace {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+            },
+            Command::MaterializeWorkspace {
+                task_id: TaskId(0),
+                worktree: WorktreePath::new("/wt".into()).unwrap(),
+            },
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: GitCommit::new("abc123".into()).unwrap(),
+            },
+        ];
+        for command in commands {
+            assert_eq!(decide(command.clone()).len(), 1);
         }
     }
 }

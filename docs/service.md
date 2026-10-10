@@ -25,8 +25,8 @@ Environment=RUST_LOG=info
   request and the storage-seq cursor they died against. Reproduce a
   refusal with `sac clone --at <cursor> --out <path>`, serve the
   clone, and re-post the logged request.
-- Stop is SIGTERM: the server kills its live runs and exits 143. The
-  two-stroke Ctrl-C courtesy is for terminals, not services.
+- Stop is SIGTERM: the server exits 143. It owns no child processes —
+  this build runs no sessions.
 
 Consumers pin a release with a flake input:
 `saccade.url = "github:jerrydzhang/saccade/v0.1.0"` — the lockfile is

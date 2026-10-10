@@ -61,9 +61,6 @@
 
               env = {
                 PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
-                # development override for the pinned executor; the
-                # package bakes SACCADE_PI_PATH instead
-                SACCADE_PI = "${llm-agents.packages.${system}.pi}/bin/pi";
               };
 
               process.manager.implementation = "native";
@@ -94,17 +91,11 @@
           name = "saccade";
           src = ./.;
           buildInputs = [];
-          # the suite's runner tests exercise git worktrees and the
-          # state root under a writable home; the executor tests need
-          # python3 for the fake-Pi stub
+          # the api tests exercise real git worktrees under a
+          # writable home
           nativeBuildInputs = [
             pkgs.git
-            pkgs.python3
-            llm-agents.packages.${system}.pi
           ];
-          # the executor pin: never the ambient binary. The check phase
-          # runs the real-pi smoke and the fake-Pi stub against this path
-          env.SACCADE_PI_PATH = "${llm-agents.packages.${system}.pi}/bin/pi";
           preCheck = ''
             export HOME=$(mktemp -d)
           '';

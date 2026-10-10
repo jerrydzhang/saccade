@@ -12,7 +12,7 @@ use crate::wire;
 
 /// file-header stamp identifying a Saccade database.
 const APPLICATION_ID: i32 = i32::from_be_bytes(*b"sacd");
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 #[derive(Debug)]
 pub enum DbError {
@@ -72,6 +72,9 @@ pub struct StoredRecord {
     pub kind: String,
     #[serde(with = "payload_json")]
     pub payload: String,
+    /// The record's environment-declared scope, when its author carried one
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 /// Payloads are stored as JSON text and travel as the JSON itself.
@@ -198,7 +201,8 @@ fn init(conn: &Connection) -> Result<(), DbError> {
              actor       TEXT    NOT NULL,
              tier        TEXT    NOT NULL,
              kind        TEXT    NOT NULL,
-             payload     TEXT    NOT NULL
+             payload     TEXT    NOT NULL,
+             scope       TEXT    NULL
          );
          CREATE TRIGGER events_no_update BEFORE UPDATE ON events
              BEGIN SELECT RAISE(ABORT, 'events is append-only'); END;
@@ -213,7 +217,8 @@ fn init(conn: &Connection) -> Result<(), DbError> {
 
 pub fn load(conn: &Connection) -> Result<Loadout, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT seq, event_time, logged_time, actor, tier, kind, payload FROM events ORDER BY seq",
+        "SELECT seq, event_time, logged_time, actor, tier, kind, payload, scope
+         FROM events ORDER BY seq",
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -225,6 +230,7 @@ pub fn load(conn: &Connection) -> Result<Loadout, DbError> {
                 tier: row.get(4)?,
                 kind: row.get(5)?,
                 payload: row.get(6)?,
+                scope: row.get(7)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -269,6 +275,16 @@ pub fn load(conn: &Connection) -> Result<Loadout, DbError> {
                     detail: "invalid actor name".into(),
                 })?,
                 tier,
+                scope: row
+                    .scope
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|_| DbError::Corrupt {
+                        seq: row.seq,
+                        kind: row.kind.clone(),
+                        detail: "invalid scope".into(),
+                    })?,
             },
             event,
         });
@@ -349,8 +365,8 @@ pub fn clone(source: &Path, at: usize, out: &Path) -> Result<usize, DbError> {
     let mut copied = 0usize;
     for row in rows.iter().take_while(|r| r.seq <= at) {
         txn.execute(
-            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 row.seq as i64,
                 row.event_time as i64,
@@ -358,7 +374,8 @@ pub fn clone(source: &Path, at: usize, out: &Path) -> Result<usize, DbError> {
                 row.actor,
                 row.tier,
                 row.kind,
-                row.payload
+                row.payload,
+                row.scope
             ],
         )?;
         copied += 1;
@@ -414,6 +431,11 @@ fn persist(
     for record in records {
         let tier = wire::tier_of(&record.context.tier);
         let (kind, payload) = wire::disassemble(&record.event);
+        let scope = record
+            .context
+            .scope
+            .as_ref()
+            .map(|s| serde_json::to_string(s).expect("scope is plain data"));
         stored.push(StoredRecord {
             seq: record.id.0,
             event_time,
@@ -422,10 +444,11 @@ fn persist(
             tier: tier.to_string(),
             kind: kind.clone(),
             payload: payload.clone(),
+            scope: scope.clone(),
         });
         txn.execute(
-            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 record.id.0 as i64,
                 event_time as i64,
@@ -433,7 +456,8 @@ fn persist(
                 record.context.actor.as_str(),
                 tier,
                 kind,
-                payload
+                payload,
+                scope
             ],
         )?;
     }
@@ -452,15 +476,12 @@ mod test {
     use super::*;
     use crate::events::{Command, Event};
     use crate::objects::comment::CommentKind;
-    use crate::objects::comment::{CommentState, ResponseState, Revision, Withdrawal};
-    use crate::objects::incarnation::{IncarnationId, IncarnationState};
+    use crate::objects::comment::{CommentState, Revision, Withdrawal};
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
     use crate::types::artifact::Artifact;
-    use crate::types::pointers::{GitBranch, GitCommit, SessionPointer, WorktreePath};
-    use crate::{
-        CommentId, ContentHash, ProposalAction, ProposalId, ProposalState, Prose, RecordId, Target,
-    };
+    use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
+    use crate::{CommentId, ContentHash, Prose, RecordId, Scope, Target};
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().expect("open memory db");
@@ -474,6 +495,7 @@ mod test {
         Context {
             actor: ActorName::new("saccade bot".into()).unwrap(),
             tier: Tier::Agent,
+            scope: None,
         }
     }
 
@@ -481,6 +503,21 @@ mod test {
         Context {
             actor: ActorName::new("human person".into()).unwrap(),
             tier: Tier::Human,
+            scope: None,
+        }
+    }
+
+    /// A task-bound session's context: the environment-declared scope
+    /// rides every record it authors.
+    fn scoped_agent() -> Context {
+        Context {
+            actor: ActorName::new("pi".into()).unwrap(),
+            tier: Tier::Agent,
+            scope: Some(Scope {
+                task: TaskId(0),
+                incarnation: None,
+                workspace: Some(WorktreePath::new("/repo/wt/t-0".into()).unwrap()),
+            }),
         }
     }
 
@@ -491,88 +528,173 @@ mod test {
         }
     }
 
-    fn demand() -> CommentKind {
-        CommentKind::Demand {
-            base: GitCommit::new("a1b2c3".into()).unwrap(),
+    fn offer(task: usize, body: &str) -> Command {
+        Command::Comment {
+            target: Target::Task(TaskId(task)),
+            kind: CommentKind::Offer {
+                body: Prose::new(body.into()).unwrap(),
+            },
+        }
+    }
+
+    fn accept(seq: usize) -> Command {
+        Command::Comment {
+            target: Target::Comment(CommentId(RecordId(seq))),
+            kind: CommentKind::Accept {
+                offer: CommentId(RecordId(seq)),
+            },
+        }
+    }
+
+    fn reject(seq: usize, grounds: &str) -> Command {
+        Command::Comment {
+            target: Target::Comment(CommentId(RecordId(seq))),
+            kind: CommentKind::Reject {
+                offer: CommentId(RecordId(seq)),
+                grounds: Prose::new(grounds.into()).unwrap(),
+            },
+        }
+    }
+
+    fn prose(text: &str) -> Prose {
+        Prose::new(text.into()).unwrap()
+    }
+
+    fn note(body: &str) -> Command {
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            kind: CommentKind::Note {
+                body: Prose::new(body.into()).unwrap(),
+            },
         }
     }
 
     #[test]
     fn execute_then_load_round_trips_the_world() {
         let mut conn = memory_db();
-        record(&mut conn, &agent(), create("implement foo"), 10).unwrap();
+        // seq 0: t-0 born, claimed, scoped note, offered, accepted
+        record(&mut conn, &human(), create("implement foo"), 10).unwrap();
         record(
             &mut conn,
-            &human(),
-            Command::ClaimTask { id: TaskId(0) },
+            &agent(),
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: None,
+            },
             11,
         )
         .unwrap();
+        record(&mut conn, &scoped_agent(), note("mid-flight finding"), 11).unwrap();
+        record(&mut conn, &agent(), offer(0, "suite green, 55 tests"), 12).unwrap();
+        record(&mut conn, &human(), accept(3), 12).unwrap();
+        // seq 5..9: t-1 offered, rejected on grounds, offered anew, accepted
+        record(&mut conn, &human(), create("fix bar"), 13).unwrap();
+        record(&mut conn, &agent(), offer(1, "bar fixed the quick way"), 14).unwrap();
         record(
             &mut conn,
             &human(),
-            Command::CompleteTask {
-                id: TaskId(0),
-                receipt: Prose::new("tests green".into()).unwrap(),
-            },
-            12,
-        )
-        .unwrap();
-        // the delivered deposit passes through the accept door
-        record(
-            &mut conn,
-            &human(),
-            Command::AcceptTask { id: TaskId(0) },
-            12,
-        )
-        .unwrap();
-
-        record(&mut conn, &agent(), create("duplicate corpse"), 13).unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::CreateProposal {
-                name: Prose::new("duplicate of t-0".into()).unwrap(),
-                action: ProposalAction::Drop { task_id: TaskId(1) },
-            },
-            14,
-        )
-        .unwrap();
-        let (compound, _) = record(
-            &mut conn,
-            &human(),
-            Command::AcceptProposal {
-                id: ProposalId(RecordId(5)),
-            },
+            reject(6, "the edge case still fails"),
             15,
         )
         .unwrap();
-        assert_eq!(compound.len(), 2);
-
-        // the thread round-trips: root on the task, reply to the record
+        record(&mut conn, &agent(), offer(1, "edge case held"), 16).unwrap();
+        record(&mut conn, &human(), accept(8), 16).unwrap();
+        // seq 10..13: t-2 cancelled, reopened, requested on the thread
+        record(&mut conn, &human(), create("migrate floop"), 17).unwrap();
         record(
             &mut conn,
-            &agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("receipt verified against receipts test".into()).unwrap(),
-                kind: CommentKind::Note,
+            &human(),
+            Command::CancelTask {
+                id: TaskId(2),
+                explanation: prose("no longer wanted"),
             },
-            30,
+            18,
         )
         .unwrap();
         record(
             &mut conn,
             &human(),
-            Command::Comment {
-                target: Target::Comment(CommentId(RecordId(8))),
-                body: Prose::new("agreed, closing".into()).unwrap(),
-                kind: CommentKind::Note,
+            Command::ReopenTask {
+                id: TaskId(2),
+                explanation: prose("the blocker cleared"),
             },
-            31,
+            19,
         )
         .unwrap();
-        // a mixed-context batch appends atomically with per-draft tiers
+        record(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(2)),
+                kind: CommentKind::Request {
+                    body: prose("please resume the migration"),
+                },
+            },
+            20,
+        )
+        .unwrap();
+        // seq 14..15: t-3 records its use of foo's account
+        record(&mut conn, &human(), create("adopt foo's account"), 21).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                target: Target::Task(TaskId(3)),
+                kind: CommentKind::Use {
+                    offer: CommentId(RecordId(3)),
+                    reason: prose("builds on the landed account"),
+                },
+            },
+            21,
+        )
+        .unwrap();
+        // seq 16..19: the artifact pointer and the workspace lineage
+        record(
+            &mut conn,
+            &agent(),
+            Command::Artifact {
+                root: TaskId(0),
+                artifact: Artifact {
+                    name: Prose::new("sweep figure".into()).unwrap(),
+                    hash: ContentHash::of(b"figure bytes"),
+                },
+            },
+            23,
+        )
+        .unwrap();
+        let system = Context::system();
+        record(
+            &mut conn,
+            &system,
+            Command::CreateWorkspace {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+            },
+            22,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::MaterializeWorkspace {
+                task_id: TaskId(0),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            22,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: GitCommit::new("def456".into()).unwrap(),
+            },
+            22,
+        )
+        .unwrap();
+        // seq 20..21: a mixed-context batch appends atomically
         let batch = AtomicBatch {
             drafts: vec![
                 RecordDraft {
@@ -584,353 +706,39 @@ mod test {
                 },
                 RecordDraft {
                     context: human(),
-                    event: Event::TaskClaimed { id: TaskId(2) },
-                },
-                RecordDraft {
-                    context: human(),
-                    event: Event::TaskDone {
-                        id: TaskId(2),
-                        receipt: Prose::new("batched receipt".into()).unwrap(),
+                    event: Event::TaskClaimed {
+                        id: TaskId(4),
+                        incarnation: None,
                     },
                 },
             ],
         };
-        let batched = execute_batch(&mut conn, batch, 32).unwrap();
-        assert_eq!(batched.len(), 3);
-
-        // an agent demand runs its course: bind, accept, reply, produce, settle
-        record(
-            &mut conn,
-            &human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("who folded the receipt?".into()).unwrap(),
-                kind: demand(),
-            },
-            31,
-        )
-        .unwrap();
-        let system = Context::system();
-        record(
-            &mut conn,
-            &system,
-            Command::BindIncarnation {
-                task_id: TaskId(0),
-                response_target: CommentId(RecordId(13)),
-                trigger: RecordId(13),
-                actor: ActorName::new("pi".into()).unwrap(),
-                session: SessionPointer::new("/tmp/pi-session.jsonl".into()).unwrap(),
-            },
-            31,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::AcceptPrompt {
-                id: IncarnationId(RecordId(14)),
-            },
-            31,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::Comment {
-                target: Target::Comment(CommentId(RecordId(13))),
-                body: Prose::new("the fold did, at seq 9".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            31,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::MarkRecord {
-                record_id: RecordId(16),
-                incarnation_id: IncarnationId(RecordId(14)),
-            },
-            31,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::SettleIncarnation {
-                id: IncarnationId(RecordId(14)),
-            },
-            31,
-        )
-        .unwrap();
-
-        // the demand reopened done t-0; the fired session claims, delivers,
-        // and the asker accepts again
-        record(
-            &mut conn,
-            &agent(),
-            Command::ClaimTask { id: TaskId(0) },
-            32,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::CompleteTask {
-                id: TaskId(0),
-                receipt: Prose::new("refolded the receipt".into()).unwrap(),
-            },
-            32,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &human(),
-            Command::AcceptTask { id: TaskId(0) },
-            32,
-        )
-        .unwrap();
-
-        // the workspace records its lineage, worktree, and checkpoints
-        record(
-            &mut conn,
-            &system,
-            Command::CreateWorkspace {
-                task_id: TaskId(0),
-                base: GitCommit::new("abc123".into()).unwrap(),
-                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-            },
-            33,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::MaterializeWorkspace {
-                task_id: TaskId(0),
-                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
-            },
-            33,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::CheckpointWorkspace {
-                task_id: TaskId(0),
-                checkpoint: GitCommit::new("def456".into()).unwrap(),
-            },
-            33,
-        )
-        .unwrap();
-
-        // a second demand the machinery refuses: the fact lands on the
-        // thread, the authorization spends
-        record(
-            &mut conn,
-            &human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("one more round".into()).unwrap(),
-                kind: demand(),
-            },
-            33,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::RefuseDemand {
-                demand: CommentId(RecordId(25)),
-                reason: Prose::new(
-                    "t-0 branch saccade/t-0 diverged from the recorded checkpoint".into(),
-                )
-                .unwrap(),
-            },
-            33,
-        )
-        .unwrap();
-
-        // the refused demand reopened done t-0; the re-ask cycle closes it
-        record(
-            &mut conn,
-            &agent(),
-            Command::ClaimTask { id: TaskId(0) },
-            33,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::CompleteTask {
-                id: TaskId(0),
-                receipt: Prose::new("reconciled the branch by hand".into()).unwrap(),
-            },
-            33,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::AcceptTask { id: TaskId(0) },
-            34,
-        )
-        .unwrap();
-
-        // the variant cycle rides the same round-trip: a demand fires a
-        // run, a steer reaches it and is consumed, an ask is answered,
-        // the run settles
-        record(
-            &mut conn,
-            &human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("serve the re-cut".into()).unwrap(),
-                kind: demand(),
-            },
-            34,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::BindIncarnation {
-                task_id: TaskId(0),
-                response_target: CommentId(RecordId(30)),
-                trigger: RecordId(30),
-                actor: ActorName::new("pi/t-0-2".into()).unwrap(),
-                session: SessionPointer::new("/tmp/pi-session-2.jsonl".into()).unwrap(),
-            },
-            34,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::AcceptPrompt {
-                id: IncarnationId(RecordId(31)),
-            },
-            34,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &human(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("also cover the offline path".into()).unwrap(),
-                kind: CommentKind::Steer,
-            },
-            34,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::ForwardSteer {
-                steer: CommentId(RecordId(33)),
-            },
-            34,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("which offline path, break-glass or the copy?".into()).unwrap(),
-                kind: CommentKind::Ask,
-            },
-            34,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &human(),
-            Command::Comment {
-                target: Target::Comment(CommentId(RecordId(35))),
-                body: Prose::new("break-glass; the copy is dead".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            34,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::SettleIncarnation {
-                id: IncarnationId(RecordId(31)),
-            },
-            34,
-        )
-        .unwrap();
-
-        // an artifact parks its pointer on the thread: name and hash,
-        // the bytes never ride the columns
-        record(
-            &mut conn,
-            &agent(),
-            Command::Artifact {
-                root: TaskId(0),
-                artifact: Artifact {
-                    name: Prose::new("sweep figure".into()).unwrap(),
-                    hash: ContentHash::of(b"figure bytes"),
-                },
-            },
-            35,
-        )
-        .unwrap();
-
-        // the returned world is the one a full reload produces: the
-        // revision is the last write, so its world carries the swap
-        record(
-            &mut conn,
-            &agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("post-fold receipt".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            35,
-        )
-        .unwrap();
-
-        // the revision swaps the body the fold presents; the pointer
-        // names the record that did it, the birth bytes stay in their row
+        let batched = execute_batch(&mut conn, batch, 24).unwrap();
+        assert_eq!(batched.len(), 2);
+        // seq 22..23: the revision swaps the prose the fold presents
+        record(&mut conn, &agent(), note("post-fold receipt"), 25).unwrap();
         record(
             &mut conn,
             &agent(),
             Command::ReviseComment {
-                id: CommentId(RecordId(39)),
-                body: Prose::new("post-fold receipt, corrected".into()).unwrap(),
+                id: CommentId(RecordId(22)),
+                body: prose("post-fold receipt, corrected"),
             },
-            36,
+            26,
         )
         .unwrap();
-
-        // the withdrawal family rides the same columns: a fresh note,
-        // then the repair — the fold keeps the tombstone, the log keeps
-        // the bytes. The withdrawal is the last write, so its world is
-        // the one a full reload must produce
-        record(
-            &mut conn,
-            &agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(0)),
-                body: Prose::new("parked mid-flight".into()).unwrap(),
-                kind: CommentKind::Note,
-            },
-            36,
-        )
-        .unwrap();
+        // seq 24..25: the withdrawal — the fold keeps the tombstone,
+        // the log keeps the bytes; the last write's world is the one a
+        // full reload must produce
+        record(&mut conn, &agent(), note("parked mid-flight"), 27).unwrap();
         let (_, returned) = record(
             &mut conn,
             &human(),
             Command::WithdrawComment {
-                id: CommentId(RecordId(41)),
-                note: Prose::new("the parking was premature".into()).unwrap(),
+                id: CommentId(RecordId(24)),
+                note: prose("the parking was premature"),
             },
-            36,
+            27,
         )
         .unwrap();
 
@@ -939,109 +747,125 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 43);
-        // the revision family rides the same columns: pointer only
-        assert_eq!(loadout.rows[40].kind, "comment_revised");
+        assert_eq!(loadout.rows.len(), 26);
+        // the task families ride their own kinds
+        assert_eq!(loadout.rows[0].kind, "task_created");
+        assert_eq!(loadout.rows[1].kind, "task_claimed");
+        assert_eq!(loadout.rows[11].kind, "task_cancelled");
+        assert_eq!(loadout.rows[12].kind, "task_reopened");
+        assert_eq!(loadout.rows[20].kind, "task_created");
+        assert_eq!(loadout.rows[21].kind, "task_claimed");
+        // the workspace records are machinery-authored
+        assert_eq!(loadout.rows[17].kind, "task_workspace_created");
+        assert_eq!(loadout.rows[18].kind, "task_workspace_materialized");
+        assert_eq!(loadout.rows[19].kind, "task_workspace_checkpointed");
+        assert_eq!(loadout.rows[17].actor.as_str(), "saccade");
+        // the scoped record carries its declared scope; unscoped rows none
         assert!(
-            loadout.rows[40]
+            loadout.rows[2]
+                .scope
+                .as_deref()
+                .is_some_and(|s| s.contains("wt/t-0")),
+            "{}",
+            loadout.rows[2].scope.clone().unwrap_or_default()
+        );
+        assert_eq!(loadout.rows[0].scope, None);
+        assert_eq!(
+            world.comments[&CommentId(RecordId(2))].scope,
+            scoped_agent().scope
+        );
+        // the comment families ride the commented kind with their
+        // variant payloads
+        for (seq, variant) in [
+            (3, "offer"),
+            (4, "accept"),
+            (7, "reject"),
+            (13, "request"),
+            (15, "use"),
+        ] {
+            assert_eq!(loadout.rows[seq].kind, "commented");
+            assert!(
+                loadout.rows[seq].payload.contains(variant),
+                "seq {seq}: {}",
+                loadout.rows[seq].payload
+            );
+        }
+        assert!(
+            loadout.rows[7]
+                .payload
+                .contains("the edge case still fails")
+        );
+        // the revision family: pointer only, the fold presents the swap
+        assert_eq!(loadout.rows[23].kind, "comment_revised");
+        assert!(
+            loadout.rows[23]
                 .payload
                 .contains("post-fold receipt, corrected")
         );
-        // the fold presents the revised body, the birth row keeps the original
         assert_eq!(
-            world.comments[&CommentId(RecordId(39))]
+            world.comments[&CommentId(RecordId(22))]
                 .comment
-                .body
+                .kind
+                .prose()
+                .unwrap()
                 .as_str(),
             "post-fold receipt, corrected"
         );
         assert_eq!(
-            world.comments[&CommentId(RecordId(39))].revised,
+            world.comments[&CommentId(RecordId(22))].revised,
             Some(Revision {
-                record: RecordId(40),
+                record: RecordId(23),
                 reviser: agent().actor,
             })
         );
-        assert!(loadout.rows[39].payload.contains("post-fold receipt"));
-        // the withdrawal family rides the same columns: the note and
-        // the tombstone's pointer; the birth bytes stay in their row
-        assert_eq!(loadout.rows[42].kind, "comment_withdrawn");
+        assert!(loadout.rows[22].payload.contains("post-fold receipt"));
+        // the withdrawal family: the note and the tombstone's pointer
+        assert_eq!(loadout.rows[25].kind, "comment_withdrawn");
         assert!(
-            loadout.rows[42]
+            loadout.rows[25]
                 .payload
                 .contains("the parking was premature")
         );
         assert_eq!(
-            world.comments[&CommentId(RecordId(41))].withdrawn,
+            world.comments[&CommentId(RecordId(24))].withdrawn,
             Some(Withdrawal {
-                record: RecordId(42),
+                record: RecordId(25),
                 withdrawer: human().actor,
             })
         );
         assert!(matches!(
-            world.comments[&CommentId(RecordId(41))].comment.state,
+            world.comments[&CommentId(RecordId(24))].comment.state,
             CommentState::Withdrawn(_)
         ));
-        assert!(loadout.rows[41].payload.contains("parked mid-flight"));
-        // the artifact family rides the same columns: pointer only
-        assert_eq!(loadout.rows[38].kind, "artifact_added");
-        assert!(loadout.rows[38].payload.contains("sweep figure"));
+        assert!(loadout.rows[24].payload.contains("parked mid-flight"));
+        // the artifact family: pointer only
+        assert_eq!(loadout.rows[16].kind, "artifact_added");
+        assert!(loadout.rows[16].payload.contains("sweep figure"));
         assert!(
-            loadout.rows[38]
+            loadout.rows[16]
                 .payload
                 .contains(ContentHash::of(b"figure bytes").as_str())
         );
         assert_eq!(
             world.tasks[0].artifacts,
             vec![(
-                RecordId(38),
+                RecordId(16),
                 Artifact {
                     name: Prose::new("sweep figure".into()).unwrap(),
                     hash: ContentHash::of(b"figure bytes"),
                 }
             )]
         );
-        assert_eq!(loadout.rows[2].kind, "task_delivered");
-        assert_eq!(loadout.rows[3].kind, "task_accepted");
-        assert_eq!(loadout.rows[5].kind, "proposal_created");
-        assert_eq!(loadout.rows[6].kind, "proposal_accepted");
-        assert_eq!(loadout.rows[7].kind, "task_dropped");
-        assert_eq!(loadout.rows[8].actor.as_str(), "saccade bot");
-        assert_eq!(loadout.rows[8].tier, "agent");
-        assert_eq!(loadout.rows[9].actor.as_str(), "human person");
-        assert_eq!(loadout.rows[9].tier, "human");
-        assert_eq!(loadout.rows[12].kind, "task_done");
-        assert_eq!(loadout.rows[26].kind, "demand_refused");
-        assert_eq!(loadout.rows[26].actor.as_str(), "saccade");
-        // the demand's payload carries its firing's base through the
-        // columns
-        assert_eq!(loadout.rows[13].kind, "commented");
-        assert!(loadout.rows[13].payload.contains("a1b2c3"));
-        assert_eq!(loadout.rows[28].kind, "task_delivered");
-        assert_eq!(loadout.rows[29].kind, "task_accepted");
-        assert_eq!(loadout.rows[22].kind, "task_workspace_created");
-        assert_eq!(loadout.rows[23].kind, "task_workspace_materialized");
-        assert_eq!(loadout.rows[24].kind, "task_workspace_checkpointed");
-        assert_eq!(loadout.rows[22].actor.as_str(), "saccade");
-        // the variant cycle round-trips: the steer's consumption and the
-        // ask's answer ride the same columns
-        assert_eq!(loadout.rows[34].kind, "steer_forwarded");
-        assert_eq!(loadout.rows[34].actor.as_str(), "saccade");
-        assert!(matches!(
-            world.comments[&CommentId(RecordId(33))].comment.state,
-            crate::objects::comment::CommentState::Steer {
-                delivery: crate::objects::comment::SteerDelivery::Forwarded,
-            }
-        ));
-        assert!(matches!(
-            world.comments[&CommentId(RecordId(35))].comment.state,
-            crate::objects::comment::CommentState::Ask {
-                response: ResponseState::Responded {
-                    reply: CommentId(RecordId(36))
-                },
-            }
-        ));
-        assert_eq!(world.tasks[0].active_incarnation, None);
+        // the world folded the full story
+        assert_eq!(world.tasks.len(), 5);
+        assert!(matches!(world.tasks[0].task.state, TaskState::Concluded));
+        assert!(matches!(world.tasks[1].task.state, TaskState::Concluded));
+        assert!(matches!(world.tasks[2].task.state, TaskState::Open));
+        assert!(matches!(world.tasks[3].task.state, TaskState::Open));
+        assert!(matches!(world.tasks[4].task.state, TaskState::Open));
+        assert_eq!(world.tasks[0].current_offer, Some(CommentId(RecordId(3))));
+        assert_eq!(world.tasks[1].current_offer, Some(CommentId(RecordId(8))));
+        assert_eq!(world.tasks[2].current_offer, None);
         assert!(matches!(
             world.tasks[0]
                 .workspace
@@ -1049,53 +873,6 @@ mod test {
                 .map(|w| &w.workspace.checkpoint),
             Some(checkpoint) if *checkpoint == GitCommit::new("def456".into()).unwrap()
         ));
-        assert_eq!(world.tasks.len(), 3);
-        // the variant cycle's demand reopened t-0 and its run settled
-        // unanswered: open, holding a spent ask
-        assert!(matches!(world.tasks[0].task.state, TaskState::Open));
-        assert!(matches!(world.tasks[1].task.state, TaskState::Dropped));
-        assert!(matches!(world.tasks[2].task.state, TaskState::Done(_)));
-        assert_eq!(
-            world.proposals[&ProposalId(RecordId(5))].state,
-            ProposalState::Accepted
-        );
-        let reply = &world.comments[&CommentId(RecordId(9))];
-        let root = &world.comments[&CommentId(RecordId(8))];
-        assert_eq!(root.actor.as_str(), "saccade bot");
-        assert_eq!(reply.actor.as_str(), "human person");
-        let demand = &world.comments[&CommentId(RecordId(13))];
-        assert_eq!(
-            demand.comment.state,
-            CommentState::Demand {
-                response: ResponseState::Responded {
-                    reply: CommentId(RecordId(16))
-                },
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-        let run = &world.incarnations[&IncarnationId(RecordId(14))];
-        assert_eq!(run.incarnation.state, IncarnationState::Settled);
-        assert_eq!(run.produced, vec![RecordId(16)]);
-        assert_eq!(
-            world.comments[&CommentId(RecordId(13))].bound,
-            Some(IncarnationId(RecordId(14)))
-        );
-        assert_eq!(world.tasks[0].active_incarnation, None);
-        // the refusal round-trips through the wire columns
-        assert_eq!(loadout.rows[26].kind, "demand_refused");
-        assert_eq!(loadout.rows[26].actor.as_str(), "saccade");
-        let refused = &world.comments[&CommentId(RecordId(25))];
-        assert_eq!(
-            refused.comment.state,
-            CommentState::Demand {
-                response: ResponseState::Awaiting,
-                base: GitCommit::new("a1b2c3".into()).unwrap(),
-            }
-        );
-        assert!(refused.bound.is_none());
-        let refusal = refused.refusal.as_ref().expect("the refusal fact folded");
-        assert!(refusal.reason.as_str().contains("diverged"));
-        assert_eq!(refusal.at, 33);
 
         // bi-temporal: event time is caller-supplied, logged time is ours
         assert_eq!(loadout.rows[0].event_time, 10);
@@ -1110,31 +887,9 @@ mod test {
 
         {
             let mut conn = open(&path).expect("create the file-backed log");
-            record(&mut conn, &agent(), create("implement foo"), 10).unwrap();
-            record(
-                &mut conn,
-                &human(),
-                Command::ClaimTask { id: TaskId(0) },
-                11,
-            )
-            .unwrap();
-            record(
-                &mut conn,
-                &human(),
-                Command::CompleteTask {
-                    id: TaskId(0),
-                    receipt: Prose::new("tests green".into()).unwrap(),
-                },
-                12,
-            )
-            .unwrap();
-            record(
-                &mut conn,
-                &human(),
-                Command::AcceptTask { id: TaskId(0) },
-                12,
-            )
-            .unwrap();
+            record(&mut conn, &human(), create("implement foo"), 10).unwrap();
+            record(&mut conn, &agent(), offer(0, "suite green"), 11).unwrap();
+            record(&mut conn, &human(), accept(1), 12).unwrap();
         } // connection dropped: WAL checkpoints back into the main file
 
         // reopen runs the full open path: pragmas, header-stamp verify
@@ -1143,47 +898,17 @@ mod test {
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load after reopen");
         };
-        assert_eq!(loadout.rows.len(), 4);
+        assert_eq!(loadout.rows.len(), 3);
         assert_eq!(world.tasks.len(), 1);
-        assert!(matches!(world.tasks[0].task.state, TaskState::Done(_)));
+        assert!(matches!(world.tasks[0].task.state, TaskState::Concluded));
 
         // the read-only path sees the same file
         let ro = open_read(&path).expect("read-only open of a real file");
-        assert_eq!(load(&ro).unwrap().rows.len(), 4);
+        assert_eq!(load(&ro).unwrap().rows.len(), 3);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
-    }
-
-    /// The live log predates the demand's base field: its rows carry
-    /// the bare string kind, and the fold still loads them as demands
-    /// whose base is the reserved word.
-    #[test]
-    fn legacy_demand_rows_load_with_the_reserved_word() {
-        let mut conn = memory_db();
-        record(&mut conn, &agent(), create("fire the old way"), 10).unwrap();
-        conn.execute(
-            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
-             VALUES (1, 11, 11, 'human person', 'human', 'commented',
-                     '{\"target\":{\"task\":0},\"body\":\"fired before bases\",\"kind\":\"demand\"}')",
-            [],
-        )
-        .unwrap();
-        let loadout = load(&conn).unwrap();
-        let LoadState::Full(world) = loadout.state else {
-            panic!("the legacy row folds");
-        };
-        assert!(
-            matches!(
-                &world.comments[&CommentId(RecordId(1))].comment.state,
-                CommentState::Demand {
-                    response: ResponseState::Awaiting,
-                    base,
-                } if base.as_str() == "unrecorded"
-            ),
-            "the pre-base demand loads as a demand whose base is unrecorded"
-        );
     }
 
     #[test]
@@ -1203,7 +928,10 @@ mod test {
                 },
                 RecordDraft {
                     context: agent(),
-                    event: Event::TaskClaimed { id: TaskId(99) },
+                    event: Event::TaskClaimed {
+                        id: TaskId(99),
+                        incarnation: None,
+                    },
                 },
             ],
         };
@@ -1227,7 +955,15 @@ mod test {
         let mut conn = memory_db();
         record(&mut conn, &agent(), create("a"), 1).unwrap();
 
-        let rejected = record(&mut conn, &agent(), Command::ClaimTask { id: TaskId(9) }, 2);
+        let rejected = record(
+            &mut conn,
+            &agent(),
+            Command::ClaimTask {
+                id: TaskId(9),
+                incarnation: None,
+            },
+            2,
+        );
         assert!(matches!(
             rejected,
             Err(ExecuteFail::Reject(Reject::InvalidTaskId))
@@ -1268,6 +1004,20 @@ mod test {
         assert!(matches!(refused, Err(ExecuteFail::Degraded(_))));
     }
 
+    /// A pre-replacement log carries the old schema stamp: the new
+    /// binary refuses it loudly rather than folding nonsense.
+    #[test]
+    fn pre_replacement_schema_is_refused() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (seq INTEGER PRIMARY KEY);
+             PRAGMA application_id = 1937007524;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        assert!(matches!(verify(&conn), Err(DbError::NotSaccade)));
+    }
+
     #[test]
     fn unknown_tier_degrades_the_same_way() {
         let conn = memory_db();
@@ -1289,7 +1039,7 @@ mod test {
         let conn = memory_db();
         conn.execute(
             "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
-             VALUES (0, 1, 1, 'vandal', 'human', 'task_done', '{')",
+             VALUES (0, 1, 1, 'vandal', 'human', 'task_cancelled', '{')",
             [],
         )
         .unwrap();

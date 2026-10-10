@@ -26,8 +26,5 @@ and server binary versions, duration.
   interchangeable.
 - **Door-level refusals write no line** (cross-site, nameless forms,
   unknown routes): no code vocabulary exists for them; none is invented.
-- **Retention**: a terminal task's agent-dir runtime output lives on at
-  `retention/t-N`; the SessionPointer's own file (under `sessions/`)
-  was never swept — it always outlived the task.
 - **Bootstrap**: reads on a missing db refuse ("any mutating command
   creates one"); the first mutating verb initializes it.

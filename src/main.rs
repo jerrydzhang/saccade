@@ -9,13 +9,12 @@ use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{
-    ArtifactLine, CommentLine, ProposalView, SearchGroup, SearchQuery, TaskView, Term, ThreadItem,
-    artifact_line, comment_line, matched_line, proposal_view, search, show_view, task_view,
-    thread_index, thread_view,
+    ArtifactLine, CommentLine, SearchGroup, SearchQuery, TaskView, Term, ThreadItem, artifact_line,
+    comment_line, matched_line, search, show_view, task_view, thread_index, thread_view,
 };
 use saccade::{
     ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, GitCommit,
-    ProposalAction, ProposalId, Prose, RecordId, Reject, Target, Tier,
+    IncarnationId, Prose, RecordId, Reject, Scope, Target, Tier, WorktreePath,
 };
 
 mod skill;
@@ -62,7 +61,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create a new object
+    /// Create a new task
     Create {
         #[arg(value_enum)]
         kind: ObjKind,
@@ -70,46 +69,61 @@ enum Cmd {
         #[arg(long)]
         parent: Option<String>,
     },
-    /// Claim an open task
+    /// Take whole-task responsibility; a transfer, never a state change
     Claim { id: String },
-    /// Deliver a claimed task's run, depositing the receipt accept reviews
-    Done {
+    /// Human-only: stop an unfinished undertaking, explaining why
+    Cancel {
         id: String,
         #[arg(long)]
-        receipt: String,
+        explanation: String,
     },
-    /// Human-only: drop a task (from open or done)
-    Drop {
+    /// Human-only: resume a cancelled undertaking, explaining why
+    Reopen {
         id: String,
         #[arg(long)]
-        note: String,
+        explanation: String,
     },
-    /// Human-only: release a claimed task back to open
-    Release {
-        id: String,
-        #[arg(long)]
-        note: String,
-    },
-    /// Propose a gated act for human acceptance
-    Propose {
-        #[arg(value_enum)]
-        action: ProposeVerb,
-        id: String,
-        #[arg(long)]
-        name: String,
-    },
-    /// Accept a proposal (bare seq, human) or a delivered task (t-N, the
-    /// birth attribution or a human)
-    Accept { id: String },
-    /// Human-only: reject a proposal with a ruling note
+    /// Attach a note to a task (t-<n>) or reply to a comment (c-<seq>)
+    Comment { target: String, body: String },
+    /// Attach a request — prose seeking response, recording why work
+    /// happened — to a task (t-<n>) or a comment (c-<seq>)
+    Request { target: String, body: String },
+    /// Offer the whole-task closing account (t-<n> only: a broadcast)
+    Offer { id: String, body: String },
+    /// Accept an offered conclusion: the offer it accepts (c-<seq>)
+    Accept { offer: String },
+    /// Reject an offered conclusion with grounds, asking reconsideration
     Reject {
-        id: String,
+        offer: String,
         #[arg(long)]
-        note: String,
+        grounds: String,
     },
-    /// Withdraw a proposal (bare log position) or a comment note
-    /// (c-<seq>) with a note: the proposal leaves the ruling queue;
-    /// the comment's body leaves the fold, a tombstone stays
+    /// Record a consuming task's reliance on a source offer
+    Use {
+        /// The consuming task (t-<n>)
+        task: String,
+        /// The source offer (c-<seq>)
+        offer: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Revise a comment's prose: the fold presents the latest and names
+    /// a reviser who differs from the birth author, the log keeps the
+    /// original
+    Revise {
+        id: String,
+        /// The revised prose, as an argument
+        #[arg(required_unless_present_any = ["stdin", "body_file"])]
+        body: Option<String>,
+        /// Read the revised prose from stdin instead of an argument
+        #[arg(long, conflicts_with_all = ["body", "body_file"])]
+        stdin: bool,
+        /// Read the revised prose from a file instead of an argument
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["body", "stdin"])]
+        body_file: Option<PathBuf>,
+    },
+    /// Withdraw a note comment: the body leaves the fold, a tombstone
+    /// with the note stays
     Withdraw {
         id: String,
         #[arg(long)]
@@ -122,45 +136,6 @@ enum Cmd {
     },
     /// Print raw event records
     Log,
-    /// List proposals (the ruling queue)
-    Proposals,
-    /// Attach a comment to a task (t-<n>) or reply to a comment (c-<seq>)
-    Comment {
-        target: String,
-        body: String,
-        /// Fire a run on the task when it is free, queue while busy
-        #[arg(long)]
-        demand: bool,
-    },
-    /// Steer a task's live run at its next turn boundary; with no run
-    /// living, the steer stands on the thread as intent
-    Steer { id: String, body: String },
-    /// Revise a comment's body: the fold presents the latest and names
-    /// a reviser who differs from the birth author, the log keeps the
-    /// original
-    Revise {
-        id: String,
-        /// The revised body, as an argument
-        #[arg(required_unless_present_any = ["stdin", "body_file"])]
-        body: Option<String>,
-        /// Read the revised body from stdin instead of an argument
-        #[arg(long, conflicts_with_all = ["body", "body_file"])]
-        stdin: bool,
-        /// Read the revised body from a file instead of an argument
-        #[arg(long, value_name = "FILE", conflicts_with_all = ["body", "stdin"])]
-        body_file: Option<PathBuf>,
-    },
-    /// Park an artifact on a task's thread: hash the file into the
-    /// store, record the pointer — the bytes never ride the wire
-    Artifact {
-        /// The task whose thread holds it (t-<n>)
-        task: String,
-        /// The file whose bytes become the artifact
-        path: PathBuf,
-        /// The artifact's name; defaults to the file's basename
-        #[arg(long)]
-        name: Option<String>,
-    },
     /// Everything about tasks and records, many at once; bare seqs show
     /// the raw event, t-<n> shows the task plus its thread
     Show {
@@ -178,13 +153,14 @@ enum Cmd {
         withdrawn: bool,
     },
     /// Search the folded record: exact terms over task titles, comment
-    /// bodies, and receipts; an id term is a reference search
+    /// prose, and explanations; an id term is a reference search
     Search {
         /// Terms to match (a record must match them all) and
         /// only-show-me facets:
         ///   in:t-N     one thread's records only
         ///   by:NAME    author, matched within names (by:pi finds pi/t-90-1)
-        ///   kind:K     task, note, demand, steer, ask, receipt, artifact
+        ///   kind:K     task, note, request, offer, accept, reject, use,
+        ///              explanation, artifact
         ///   under:t-N  the task's thread and its descendants' threads
         ///
         /// An id term — 'c-907' or 't-49' — is a reference search: every
@@ -198,18 +174,13 @@ enum Cmd {
         #[arg(long)]
         withdrawn: bool,
     },
-    /// Serve the read-only canvas over HTTP (127.0.0.1 by default)
+    /// Serve the console and /api/v1 over HTTP (127.0.0.1 by default)
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
         bind: String,
         #[arg(long, default_value_t = 8811)]
         port: u16,
-        /// The executor sessions run as (recorded on the bind, named in the reply door)
-        #[arg(long, default_value = "pi")]
-        executor: String,
     },
-    /// Stop a task's active run: the event is the kill request
-    Cancel { id: String },
     /// Record a task's current branch tip as its checkpoint
     Checkpoint { id: String },
     /// Clone the log's prefix through a storage seq into a fresh
@@ -222,20 +193,21 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Block until the demand's run asks something of the waiter: settle,
-    /// cancel, prompt rejection carrying the cause, refusal, an answer
-    /// with no run behind it, or a blocking ask — never replies
-    Wait {
-        /// The demand to watch (c-<n>)
-        id: String,
-        /// Give up after this many seconds (default: wait forever)
-        #[arg(long)]
-        timeout: Option<u64>,
-    },
     /// Deploy this binary's embedded skill, or verify the copy in this repo
     Skill {
         #[command(subcommand)]
         verb: SkillVerb,
+    },
+    /// Park an artifact on a task's thread: hash the file into the
+    /// store, record the pointer — the bytes never ride the wire
+    Artifact {
+        /// The task whose thread holds it (t-<n>)
+        task: String,
+        /// The file whose bytes become the artifact
+        path: PathBuf,
+        /// The artifact's name; defaults to the file's basename
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 
@@ -251,12 +223,6 @@ enum SkillVerb {
 #[derive(Clone, Copy, ValueEnum)]
 enum ObjKind {
     Task,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum ProposeVerb {
-    Drop,
-    Release,
 }
 
 fn main() -> ExitCode {
@@ -295,6 +261,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[derive(Debug)]
 enum Fail {
     Db(db::DbError),
     Degraded(String),
@@ -310,10 +277,6 @@ enum Fail {
         actor: String,
         tier: &'static str,
     },
-    /// The demand door's sight guard: a demand records the main
-    /// checkout's tip at fire time, so a firing context that cannot
-    /// see it refuses before any command exists.
-    UnsightedDemand(String),
     Usage(String),
     Client(client::ClientFail),
 }
@@ -342,7 +305,6 @@ impl Fail {
             Fail::Reject(r) => r.code(),
             Fail::Taught { code, .. } => code,
             Fail::IdentityFallback { .. } => "identity_fallback",
-            Fail::UnsightedDemand(_) => "unsighted_demand",
             Fail::Usage(_) => "usage",
             Fail::Client(c) => c.code(),
         }
@@ -364,9 +326,6 @@ impl std::fmt::Display for Fail {
                 "this write would record {actor}/{tier} with no SACCADE_ACTOR and no tty \
                  (--actor rides the keyboard arm); export SACCADE_ACTOR=<name>"
             ),
-            Fail::UnsightedDemand(detail) => {
-                write!(f, "the demand did not fire: {detail}")
-            }
             Fail::Usage(m) => write!(f, "{m}"),
             Fail::Client(c) => write!(f, "{c}"),
         }
@@ -385,97 +344,66 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             name: Prose::new(name.clone())?,
             parent_id: parent.as_deref().map(parse_task_id).transpose()?,
         },
-        Cmd::Claim { id } => Command::ClaimTask {
+        Cmd::Claim { id } => {
+            let id = parse_task_id(id)?;
+            // an incarnation claim names its reference explicitly: the
+            // wrapper's env, never the task scope alone
+            let incarnation = context_scope()?.and_then(|s| s.incarnation);
+            Command::ClaimTask { id, incarnation }
+        }
+        Cmd::Cancel { id, explanation } => Command::CancelTask {
             id: parse_task_id(id)?,
+            explanation: Prose::new(explanation.clone())?,
         },
-        Cmd::Done { id, receipt } => Command::CompleteTask {
+        Cmd::Reopen { id, explanation } => Command::ReopenTask {
             id: parse_task_id(id)?,
-            receipt: Prose::new(receipt.clone())?,
+            explanation: Prose::new(explanation.clone())?,
         },
-        Cmd::Drop { id, note } => Command::DropTask {
-            id: parse_task_id(id)?,
-            note: Prose::new(note.clone())?,
-        },
-        Cmd::Release { id, note } => Command::ReleaseTask {
-            id: parse_task_id(id)?,
-            note: Prose::new(note.clone())?,
-        },
-        Cmd::Propose { action, id, name } => Command::CreateProposal {
-            name: Prose::new(name.clone())?,
-            action: match action {
-                ProposeVerb::Drop => ProposalAction::Drop {
-                    task_id: parse_task_id(id)?,
-                },
-                ProposeVerb::Release => ProposalAction::Release {
-                    task_id: parse_task_id(id)?,
-                },
+        Cmd::Comment { target, body } => Command::Comment {
+            target: parse_target(target)?,
+            kind: CommentKind::Note {
+                body: Prose::new(body.clone())?,
             },
         },
-        Cmd::Accept { id } => {
-            // one verb, two objects: t-N accepts a task, a bare seq a proposal
-            if id.starts_with("t-") {
-                Command::AcceptTask {
-                    id: parse_task_id(id)?,
-                }
-            } else {
-                Command::AcceptProposal {
-                    id: parse_proposal_id(id)?,
-                }
-            }
-        }
-        Cmd::Reject { id, note } => Command::RejectProposal {
-            id: parse_proposal_id(id)?,
-            note: Prose::new(note.clone())?,
-        },
-        Cmd::Withdraw { id, note } => {
-            // one verb, two objects: c-N withdraws a comment note, a
-            // bare log position a proposal
-            if id.starts_with("c-") {
-                Command::WithdrawComment {
-                    id: parse_comment_id(id)?,
-                    note: Prose::new(note.clone())?,
-                }
-            } else {
-                Command::WithdrawProposal {
-                    id: parse_proposal_id(id)?,
-                    note: Prose::new(note.clone())?,
-                }
-            }
-        }
-        Cmd::Comment {
-            target,
-            body,
-            demand,
-        } => {
-            let kind = if *demand {
-                let repo_root = match &cli.repo {
-                    Some(repo) => repo
-                        .canonicalize()
-                        .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display())))?,
-                    None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(|_| {
-                        Fail::UnsightedDemand(
-                            "no git repository resolves from the working directory; \
-                                 pass --repo so the demand can sight the main checkout"
-                                .into(),
-                        )
-                    })?,
-                };
-                let base =
-                    saccade::runner::firing_base(&repo_root).map_err(Fail::UnsightedDemand)?;
-                CommentKind::Demand { base }
-            } else {
-                CommentKind::Note
-            };
-            Command::Comment {
-                target: parse_target(target)?,
+        Cmd::Request { target, body } => Command::Comment {
+            target: parse_target(target)?,
+            kind: CommentKind::Request {
                 body: Prose::new(body.clone())?,
-                kind,
+            },
+        },
+        Cmd::Offer { id, body } => Command::Comment {
+            target: Target::Task(parse_task_id(id)?),
+            kind: CommentKind::Offer {
+                body: Prose::new(body.clone())?,
+            },
+        },
+        Cmd::Accept { offer } => {
+            let offer = parse_comment_id(offer)?;
+            Command::Comment {
+                target: Target::Comment(offer),
+                kind: CommentKind::Accept { offer },
             }
         }
-        Cmd::Steer { id, body } => Command::Comment {
-            target: Target::Task(parse_task_id(id)?),
-            body: Prose::new(body.clone())?,
-            kind: CommentKind::Steer,
+        Cmd::Reject { offer, grounds } => {
+            let offer = parse_comment_id(offer)?;
+            Command::Comment {
+                target: Target::Comment(offer),
+                kind: CommentKind::Reject {
+                    offer,
+                    grounds: Prose::new(grounds.clone())?,
+                },
+            }
+        }
+        Cmd::Use {
+            task,
+            offer,
+            reason,
+        } => Command::Comment {
+            target: Target::Task(parse_task_id(task)?),
+            kind: CommentKind::Use {
+                offer: parse_comment_id(offer)?,
+                reason: Prose::new(reason.clone())?,
+            },
         },
         Cmd::Revise {
             id,
@@ -485,6 +413,10 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         } => Command::ReviseComment {
             id: parse_revision_id(id)?,
             body: Prose::new(revise_body(body.clone(), *stdin, body_file.clone())?)?,
+        },
+        Cmd::Withdraw { id, note } => Command::WithdrawComment {
+            id: parse_comment_id(id)?,
+            note: Prose::new(note.clone())?,
         },
         Cmd::Artifact { task, path, name } => {
             let id = parse_task_id(task)?;
@@ -522,14 +454,10 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             }
             Command::Artifact { root: id, artifact }
         }
-        Cmd::List { .. } | Cmd::Log | Cmd::Proposals | Cmd::Show { .. } | Cmd::Search { .. } => {
+        Cmd::List { .. } | Cmd::Log | Cmd::Show { .. } | Cmd::Search { .. } => {
             return read_only(cli, &db_path);
         }
-        Cmd::Serve {
-            bind,
-            port,
-            executor,
-        } => {
+        Cmd::Serve { bind, port } => {
             let _ = tracing_subscriber::fmt()
                 .json()
                 .with_env_filter(
@@ -542,14 +470,10 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 .enable_all()
                 .build()
                 .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
-            return match runtime.block_on(saccade::serve::run(&db_path, bind, *port, executor)) {
+            return match runtime.block_on(saccade::serve::run(&db_path, bind, *port)) {
                 Err(e) => Err(Fail::Usage(e)),
                 Ok(infallible) => match infallible {},
             };
-        }
-        Cmd::Wait { id, timeout } => {
-            let comment = parse_comment_id(id)?;
-            return saccade::runner::wait(&db_path, comment, *timeout).map_err(runner_fail);
         }
         Cmd::Clone { at, out } => {
             // the reproduction recipe's cursor half: the clone names the
@@ -568,24 +492,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                     out.display()
                 )
             });
-        }
-        Cmd::Cancel { id } => {
-            let task = parse_task_id(id)?;
-            let conn = db::open_read(&db_path).map_err(Fail::Db)?;
-            let loadout = db::load(&conn).map_err(Fail::Db)?;
-            let LoadState::Full(world) = loadout.state else {
-                return Err(Fail::Degraded(
-                    "cancel needs the world; the log will not fold".into(),
-                ));
-            };
-            let Some(incarnation) = world.tasks.get(task.0).and_then(|c| c.active_incarnation)
-            else {
-                return Err(Fail::Usage(format!(
-                    "t-{} has no active run to cancel",
-                    task.0
-                )));
-            };
-            Command::CancelIncarnation { id: incarnation }
         }
         Cmd::Skill { .. } => unreachable!("the skill door dispatches before the db doors"),
         Cmd::Checkpoint { id } => {
@@ -672,15 +578,6 @@ fn refused(conn: &rusqlite::Connection, command: &Command, reject: Reject) -> Fa
             text,
         },
         None => Fail::Reject(reject),
-    }
-}
-
-fn runner_fail(e: saccade::runner::RunnerFail) -> Fail {
-    match e {
-        saccade::runner::RunnerFail::Db(e) => Fail::from(e),
-        saccade::runner::RunnerFail::Usage(m)
-        | saccade::runner::RunnerFail::Git(m)
-        | saccade::runner::RunnerFail::Refused { reason: m } => Fail::Usage(m),
     }
 }
 
@@ -801,7 +698,7 @@ fn parse_comment_id(token: &str) -> Result<CommentId, Fail> {
         let note = token
             .strip_prefix('#')
             .filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
-            .map(|d| format!("; drop the '#': the demand is c-{d}"))
+            .map(|d| format!("; drop the '#': the comment is addressed as c-{d}"))
             .unwrap_or_default();
         Fail::Usage(format!(
             "'{token}' is not a comment id (expected c-<n>){note}"
@@ -831,7 +728,46 @@ fn context_of(cli: &Cli) -> Result<Context, Fail> {
     Ok(Context {
         actor: ActorName::new(actor)?,
         tier,
+        scope: context_scope()?,
     })
+}
+
+/// The environment-declared scope: SACCADE_TASK anchors it
+/// ("t-<n>"), SACCADE_INCARNATION names a record-derived worker
+/// ("c-<seq>"), SACCADE_WORKSPACE names the workspace address (an
+/// absolute path). Disclosure riding every record, never proof; the
+/// incarnation and workspace keys ride only with the task anchor.
+fn context_scope() -> Result<Option<Scope>, Fail> {
+    let Some(task) = std::env::var("SACCADE_TASK").ok().filter(|t| !t.is_empty()) else {
+        return Ok(None);
+    };
+    let task = parse_task_id(&task)?;
+    let incarnation = match std::env::var("SACCADE_INCARNATION") {
+        Ok(value) if !value.is_empty() => {
+            let id = parse_comment_id(&value).map_err(|_| {
+                Fail::Usage(format!(
+                    "SACCADE_INCARNATION='{value}' is not a c-<seq> reference"
+                ))
+            })?;
+            Some(IncarnationId(id.0))
+        }
+        _ => None,
+    };
+    let workspace = match std::env::var("SACCADE_WORKSPACE") {
+        Ok(value) if !value.is_empty() => {
+            Some(WorktreePath::new(value.clone().into()).map_err(|_| {
+                Fail::Usage(format!(
+                    "SACCADE_WORKSPACE='{value}' is not an absolute path"
+                ))
+            })?)
+        }
+        _ => None,
+    };
+    Ok(Some(Scope {
+        task,
+        incarnation,
+        workspace,
+    }))
 }
 
 /// The write door's guard: possession passes any context; without it,
@@ -883,10 +819,6 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
         }
         Cmd::List { .. } => match loadout.state {
             LoadState::Full(world) => Ok(render_tasks(cli, &world)),
-            LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
-        },
-        Cmd::Proposals => match loadout.state {
-            LoadState::Full(world) => Ok(render_proposals(cli, &world)),
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
         Cmd::Show {
@@ -996,15 +928,6 @@ fn hashed_record_note(rest: &str) -> String {
     String::new()
 }
 
-fn parse_proposal_id(token: &str) -> Result<ProposalId, Fail> {
-    let n: usize = token.parse().map_err(|_| {
-        Fail::Usage(format!(
-            "'{token}' is not a proposal id (expected a bare log position, e.g. 614)"
-        ))
-    })?;
-    Ok(ProposalId(RecordId(n)))
-}
-
 /// The revise door's body sources: the argument, the pipe, or the file
 /// — one of the three, the bytes landing verbatim.
 fn revise_body(body: Option<String>, stdin: bool, file: Option<PathBuf>) -> Result<String, Fail> {
@@ -1103,7 +1026,7 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
     // the digest question is standing work; history lives in log and show
     let views: Vec<_> = views
         .into_iter()
-        .filter(|v| matches!(v.state, "open" | "claimed" | "delivered"))
+        .filter(|v| matches!(v.state, "open" | "offered"))
         .collect();
 
     if cli.json {
@@ -1115,11 +1038,9 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
                     "state": v.state,
                     "parent": v.parent,
                     "name": v.name,
+                    "owner": v.owner,
+                    "offer": v.offer,
                     "comments": v.n_comments,
-                    "proposal": v.proposal.as_ref().map(|m| serde_json::json!({
-                        "seq": m.seq,
-                        "verb": m.verb,
-                    })),
                 })
             })
             .collect();
@@ -1135,10 +1056,7 @@ fn render_tasks(cli: &Cli, world: &World) -> String {
                 v.state,
                 v.parent.clone().unwrap_or_else(|| "-".into()),
                 v.name,
-                v.proposal
-                    .as_ref()
-                    .map(|m| format!("{} c-{}", m.verb, m.seq))
-                    .unwrap_or_else(|| "-".into()),
+                v.owner.clone().unwrap_or_else(|| "-".into()),
                 if v.n_comments > 0 { "#" } else { "-" }
             )
         })
@@ -1152,7 +1070,7 @@ const HEADER_INDENT_CAP: usize = 4;
 
 /// The inspector dock as text: everything about the one thing. The
 /// thread renders the addressed forest — items in first-record order,
-/// replies carrying their target chip, bodies at one constant margin.
+/// replies carrying their target chip, prose at one constant margin.
 fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     let view =
         show_view(world, task_id).ok_or_else(|| Fail::Usage(format!("no task t-{}", task_id.0)))?;
@@ -1166,16 +1084,22 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     if let Some(parent) = &view.parent {
         out.push(format!("parent  {parent}"));
     }
-    if let Some(receipt) = &view.receipt {
-        out.push("receipt".to_string());
-        out.push(wrap(receipt, WIDTH, "  ", "  "));
+    if let Some(owner) = &view.owner {
+        out.push(format!("owner  {owner}"));
+    }
+    if let Some(offer) = view.offer {
+        out.push(format!("offer  c-{offer}"));
+    }
+    if let Some(explanation) = &view.explanation {
+        out.push("explanation".to_string());
+        out.push(wrap(explanation, WIDTH, "  ", "  "));
     }
     let thread = thread_view(world, task_id).expect("a task with a show view holds its thread");
     for item in &thread.items {
         out.push(String::new());
         match item {
             ThreadItem::Note(line) => out.extend(comment_block(line, false)),
-            ThreadItem::Group { root, replies } | ThreadItem::Exchange { root, replies, .. } => {
+            ThreadItem::Group { root, replies } => {
                 out.extend(comment_block(root, false));
                 for line in replies {
                     out.extend(comment_block(line, false));
@@ -1201,8 +1125,8 @@ fn artifact_block(line: &ArtifactLine) -> Vec<String> {
 
 /// A thread view's body format for one comment: its header line —
 /// indent capped by depth, a reply's target chip naming the comment
-/// it addresses — the wrapped body at a constant margin, and the
-/// machinery's refusal when it refused. A withdrawn note renders its
+/// it addresses, a use's chip naming the offer it relies on — the
+/// wrapped prose at a constant margin. A withdrawn note renders its
 /// tombstone, the body only when revealed.
 fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
     let indent = "  ".repeat(line.depth.saturating_sub(1).min(HEADER_INDENT_CAP));
@@ -1210,6 +1134,11 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
         Target::Comment(parent) => format!("→c-{}  ", parent.0.0),
         Target::Task(_) => String::new(),
     };
+    let uses = line
+        .offer
+        .filter(|_| line.kind == "use")
+        .map(|o| format!("  uses c-{o}"))
+        .unwrap_or_default();
     // the withdrawal is terminal, so its mark replaces the revised one:
     // the body is gone, its provenance mark would narrate absence —
     // and a withdrawer who differs from the birth author is named
@@ -1225,16 +1154,14 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
             _ => String::new(),
         }
     };
-    let marks = match (&line.state, mark.is_empty()) {
-        (Some(state), false) => Some(format!("{state}, {mark}")),
-        (Some(state), true) => Some(state.clone()),
-        (None, false) => Some(mark),
-        (None, true) => None,
+    let state = if mark.is_empty() {
+        String::new()
+    } else {
+        format!("  ({mark})")
     };
-    let state = marks.map(|m| format!("  ({m})")).unwrap_or_default();
     let mut out = vec![format!(
-        "{indent}c-{}  {chip}{}{state}",
-        line.seq, line.actor
+        "{indent}c-{}  {chip}{} [{}]{}{state}",
+        line.seq, line.actor, line.kind, uses
     )];
     if line.withdrawn {
         // the tombstone: one line, the note
@@ -1245,14 +1172,8 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
         }
         return out;
     }
-    out.push(wrap(&line.body, WIDTH, "  ", "  "));
-    if let Some(refusal) = &line.refusal {
-        out.push(wrap(
-            &format!("refused {}: {}", fmt_when(refusal.at), refusal.reason),
-            WIDTH,
-            "  ",
-            "  ",
-        ));
+    if !line.body.is_empty() {
+        out.push(wrap(&line.body, WIDTH, "  ", "  "));
     }
     out
 }
@@ -1367,8 +1288,7 @@ fn show_value(
                 .iter()
                 .flat_map(|item| match item {
                     ThreadItem::Note(line) => vec![comment_value(line, false)],
-                    ThreadItem::Group { root, replies }
-                    | ThreadItem::Exchange { root, replies, .. } => std::iter::once(root)
+                    ThreadItem::Group { root, replies } => std::iter::once(root)
                         .chain(replies.iter())
                         .map(|line| comment_value(line, false))
                         .collect::<Vec<_>>(),
@@ -1382,7 +1302,9 @@ fn show_value(
                 "state": view.state,
                 "parent": view.parent,
                 "name": view.name,
-                "receipt": view.receipt,
+                "owner": view.owner,
+                "offer": view.offer,
+                "explanation": view.explanation,
                 "entries": entries,
             }))
         }
@@ -1427,11 +1349,12 @@ fn show_value(
 }
 
 /// A comment as the json face renders it: the thread line's facts with
-/// the body whole — the folded bytes, never the wrapped ones. A
+/// the prose whole — the folded bytes, never the wrapped ones. A
 /// withdrawn note's body is null unless revealed; the tombstone's
 /// facts ride beside it.
 fn comment_value(line: &CommentLine, reveal: bool) -> serde_json::Value {
-    let body = if line.withdrawn && !reveal {
+    let hidden = line.body.is_empty() || (line.withdrawn && !reveal);
+    let body = if hidden {
         serde_json::Value::Null
     } else {
         serde_json::json!(line.body)
@@ -1440,21 +1363,17 @@ fn comment_value(line: &CommentLine, reveal: bool) -> serde_json::Value {
         "kind": line.kind,
         "seq": line.seq,
         "target": serde_json::to_value(line.target).expect("targets are plain data"),
+        "offer": line.offer,
         "depth": line.depth,
         "actor": line.actor,
         "tier": line.tier,
         "body": body,
-        "state": line.state,
         "revised": line.revised,
         "reviser": line.reviser,
         "withdrawn": line.withdrawn,
         "withdrawer": line.withdrawer,
         "withdrawal_note": line.withdrawal_note,
         "born_at": line.born_at,
-        "refusal": line.refusal.as_ref().map(|r| serde_json::json!({
-            "reason": r.reason,
-            "at": r.at,
-        })),
     })
 }
 
@@ -1524,17 +1443,6 @@ fn show_stdin(
     Ok(blocks.join("\n\n"))
 }
 
-/// The refusal's moment, as the thread renders it.
-fn fmt_when(ts: u64) -> String {
-    let dt = time::OffsetDateTime::from_unix_timestamp(ts as i64)
-        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH)
-        .to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC));
-    dt.format(&time::macros::format_description!(
-        "[year]-[month repr:numerical]-[day] [hour repr:24]:[minute]"
-    ))
-    .unwrap_or_default()
-}
-
 /// Greedy word wrap; a word longer than a line is hard-broken so a single
 /// token cannot re-create the wall.
 fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
@@ -1565,37 +1473,6 @@ fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
         out.extend(piece);
     }
     out
-}
-
-fn render_proposals(cli: &Cli, world: &World) -> String {
-    let views: Vec<ProposalView> = world
-        .proposals
-        .keys()
-        .map(|id| proposal_view(world, *id))
-        .map(|v| v.expect("ids come from the map itself"))
-        .collect();
-
-    if cli.json {
-        let rows: Vec<serde_json::Value> = views
-            .iter()
-            .map(|v| {
-                serde_json::json!({
-                    "id": v.id,
-                    "state": v.state,
-                    "action": v.action,
-                    "task": v.task,
-                    "name": v.name,
-                })
-            })
-            .collect();
-        return serde_json::to_string_pretty(&rows).expect("views are plain data");
-    }
-
-    views
-        .iter()
-        .map(|v| format!("{}\t{}\t{} {}\t{}", v.id, v.state, v.action, v.task, v.name))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// The search door as text: thread groups of pointers, one matched
@@ -1732,9 +1609,23 @@ fn row_line(row: &StoredRecord) -> String {
         Ok(v) => v,
         Err(_) => return String::new(),
     };
-    ["body", "name", "receipt", "note"]
+    ["body", "name", "explanation", "note"]
         .iter()
         .find_map(|k| payload.get(k).and_then(|v| v.as_str()))
+        .or_else(|| {
+            // the comment payloads nest their prose inside the variant
+            let kind = payload.get("kind")?;
+            let mut found = None;
+            for variant in kind.as_object().into_iter().flatten() {
+                for key in ["body", "grounds", "reason"] {
+                    if let Some(text) = variant.1.get(key).and_then(|v| v.as_str()) {
+                        found = Some(text);
+                        break;
+                    }
+                }
+            }
+            found
+        })
         .map(|t| t.lines().next().unwrap_or_default().to_string())
         .unwrap_or_default()
 }
@@ -1789,6 +1680,46 @@ mod test {
         unsafe { std::env::remove_var("SACCADE_ACTOR") };
     }
 
+    /// The declared scope: the task anchor alone yields a scope with no
+    /// incarnation; a malformed anchor is loud; the keys ride only with
+    /// the anchor.
+    #[test]
+    fn the_declared_scope_reads_the_environment() {
+        unsafe {
+            std::env::remove_var("SACCADE_TASK");
+            std::env::remove_var("SACCADE_INCARNATION");
+            std::env::remove_var("SACCADE_WORKSPACE");
+        }
+        assert!(context_scope().unwrap().is_none());
+
+        // an incarnation key without the anchor rides nothing
+        unsafe { std::env::set_var("SACCADE_INCARNATION", "c-9") };
+        assert!(context_scope().unwrap().is_none());
+        unsafe { std::env::remove_var("SACCADE_INCARNATION") };
+
+        unsafe { std::env::set_var("SACCADE_TASK", "t-125") };
+        let scope = context_scope().unwrap().expect("the anchor yields a scope");
+        assert_eq!(scope.task, TaskId(125));
+        assert_eq!(scope.incarnation, None);
+        assert_eq!(scope.workspace, None);
+
+        unsafe {
+            std::env::set_var("SACCADE_INCARNATION", "c-9");
+            std::env::set_var("SACCADE_WORKSPACE", "/repo/wt/t-125");
+        }
+        let scope = context_scope().unwrap().expect("the anchor yields a scope");
+        assert_eq!(scope.incarnation, Some(IncarnationId(RecordId(9))));
+        assert_eq!(
+            scope.workspace,
+            Some(WorktreePath::new("/repo/wt/t-125".into()).unwrap())
+        );
+
+        // malformed values are loud, never silently dropped
+        unsafe { std::env::set_var("SACCADE_TASK", "t-one") };
+        assert!(context_scope().is_err());
+        unsafe { std::env::remove_var("SACCADE_TASK") };
+    }
+
     /// The write door's matrix: possession passes any context, and
     /// without it a non-tty call refuses, --actor notwithstanding. The
     /// keyboard arms are the pty smoke's (the suite has no tty); built
@@ -1800,10 +1731,12 @@ mod test {
         let jerry = Context {
             actor: ActorName::new("jerry".into()).unwrap(),
             tier: Tier::Human,
+            scope: None,
         };
         let pi = Context {
             actor: ActorName::new("pi".into()).unwrap(),
             tier: Tier::Agent,
+            scope: None,
         };
         let cli_of = |actor: Option<&str>| Cli {
             db: None,
@@ -1842,7 +1775,7 @@ mod test {
 
     /// Hashed tokens learn their bare doors at the parse door: a hashed
     /// task id wants the bare thread, a hashed record id wants the
-    /// bare c-N, a hashed demand wants the c- door.
+    /// bare c-N.
     #[test]
     fn hashed_tokens_learn_their_bare_doors() {
         let refused = parse_task_id("#t-3")
@@ -1873,15 +1806,6 @@ mod test {
             refused,
             "'#7' is not a comment id (expected c-<seq>); \
              drop the '#': the comment is addressed as c-7"
-        );
-
-        let refused = parse_comment_id("#7")
-            .map_err(|f| f.to_string())
-            .unwrap_err();
-        assert_eq!(
-            refused,
-            "'#7' is not a comment id (expected c-<n>); \
-             drop the '#': the demand is c-7"
         );
 
         assert_eq!(

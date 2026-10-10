@@ -9,19 +9,13 @@ use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use std::process::exit;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::api::AppState;
 use crate::db::{self, ExecuteFail};
-use crate::objects::comment::CommentKind;
-use crate::objects::comment::Target;
-use crate::objects::proposal::ProposalId;
+use crate::objects::comment::{CommentKind, Target};
 use crate::objects::task::TaskId;
-use crate::views::{
-    closed_tasks, forest, next_panel, open_proposals, proposal_view, ribbon_marks, show_view,
-    thread_view,
-};
+use crate::views::{closed_tasks, forest, next_panel, ribbon_marks, show_view, thread_view};
 use crate::web;
 use crate::{ActorName, Command, Context, Prose, RecordId, Reject, Tier};
 
@@ -29,45 +23,15 @@ pub async fn run(
     db_path: &std::path::Path,
     bind: &str,
     port: u16,
-    executor: &str,
 ) -> Result<std::convert::Infallible, String> {
     let addr = format!("{bind}:{port}");
     let repo_root = crate::paths::repo_root(std::path::Path::new("."))
         .map_err(|e| format!("the serving repo: {e}"))?;
-    let actor = ActorName::new(executor.to_string())
-        .map_err(|e| format!("'{executor}' is not a valid actor name: {e:?}"))?;
-    // sessions reach this server at its loopback face, whatever it
-    // bound to for the console
-    let host = match bind {
-        "0.0.0.0" | "::" | "[::]" => "127.0.0.1",
-        other => other,
-    };
-    let server_url = format!("http://{host}:{port}");
     let repo_name = web::RepoName::of(&repo_root);
-    let state = match crate::supervisor::RunnerConfig::serving(
-        repo_root.clone(),
-        actor,
-        &server_url,
-    ) {
-        Some(runner) => {
-            let state = AppState::with_runner(db_path, runner)?
-                .with_repo_name(repo_name)
-                .with_repo_root(repo_root.clone());
-            info!(%server_url, "demands will fire runs; boot scan next");
-            state
-        }
-        None => {
-            let state = AppState::open(db_path)?
-                .with_artifacts(crate::paths::artifacts_at(&repo_root))
-                .with_repo_name(repo_name)
-                .with_repo_root(repo_root.clone());
-            warn!(
-                "no pinned executor: SACCADE_PI_PATH was not baked at build and SACCADE_PI is unset; \
-                 demands queue but never fire"
-            );
-            state
-        }
-    };
+    let state = AppState::open(db_path)?
+        .with_artifacts(crate::paths::artifacts_at(&repo_root))
+        .with_repo_name(repo_name)
+        .with_repo_root(repo_root);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("cannot bind {addr}: {e}"))?;
@@ -77,17 +41,7 @@ pub async fn run(
         );
     }
     info!(%addr, "serving http");
-    let router = router(state.clone());
-    // boot reconciliation before the scan: orphans close, then the
-    // demands that queued behind them fire
-    tokio::task::spawn_blocking({
-        let state = state.clone();
-        move || {
-            crate::supervisor::recover(&state, &repo_root);
-            crate::supervisor::sweep(&state);
-        }
-    });
-    watch_signals(state);
+    let router = router(state);
     axum::serve(listener, router)
         .await
         .expect("axum serves until killed");
@@ -99,45 +53,6 @@ pub fn router(state: AppState) -> axum::Router {
     crate::api::routes()
         .fallback(get(web_get).post(web_post))
         .with_state(state)
-}
-
-/// Two-strike interrupt: the first Ctrl-C with live runs warns and
-/// keeps serving — the operator should know what they are about to
-/// orphan; the second kills the children and exits. SIGTERM skips the
-/// courtesy.
-fn watch_signals(state: AppState) {
-    tokio::spawn(async move {
-        let runs = state.runs();
-        let mut interrupt =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                .expect("SIGINT is watchable");
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("SIGTERM is watchable");
-        let mut armed = false;
-        loop {
-            tokio::select! {
-                _ = interrupt.recv() => {
-                    if armed || runs.is_empty() {
-                        runs.kill_all();
-                        exit(130);
-                    }
-                    let live = runs
-                        .ids()
-                        .iter()
-                        .map(|id| format!("i-{}", id.0 .0))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    warn!("active runs: {live}; interrupt again to abandon them");
-                    armed = true;
-                }
-                _ = terminate.recv() => {
-                    runs.kill_all();
-                    exit(143);
-                }
-            }
-        }
-    });
 }
 
 struct Req {
@@ -266,7 +181,6 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
     let c = web::Console {
         forest: forest(&snapshot.world),
         closed: closed_tasks(&snapshot.world),
-        gate: open_proposals(&snapshot.world),
         next: next_panel(&snapshot.world, now),
         marks: ribbon_marks(&snapshot.world, now),
         focus: focused,
@@ -285,13 +199,8 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
 /// thread. The strip's movement marks are world-wide, not per focus.
 fn focus(world: &crate::store::World, n: usize) -> Option<web::Focus> {
     let show = show_view(world, TaskId(n))?;
-    let proposals = open_proposals(world)
-        .into_iter()
-        .filter(|v| task_num(&v.task) == Some(n))
-        .collect();
     Some(web::Focus {
         show,
-        proposals,
         thread: thread_view(world, TaskId(n))?,
         refs: crate::views::ref_index(world),
     })
@@ -307,11 +216,8 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
             Ok(n) => compose(req, app, n, &fields),
             Err(_) => page(app, 404, "no task named"),
         },
-        PostRoute::Ruling(seq) => match proposal_task(app, seq) {
-            Some(n) => rule(req, app, n, &fields, seq),
-            None => page(app, 404, &format!("no open proposal c-{seq}")),
-        },
         PostRoute::Accept(n) => accept(req, app, n, &fields),
+        PostRoute::Reject(n) => reject(req, app, n, &fields),
         PostRoute::Revise(seq) => revise(req, app, seq, &fields),
         PostRoute::NotFound => page(app, 404, "nothing here — try /"),
     }
@@ -330,32 +236,14 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
         Ok(ok) => ok,
         Err(msg) => return console_reject(req, app, n, fields, &msg),
     };
-    let kind = if addr.demand {
-        let sighted = app
-            .repo_root()
-            .map(crate::runner::firing_base)
-            .unwrap_or_else(|| {
-                Err(
-                    "this console sees no repository; a demand records the main checkout's tip"
-                        .into(),
-                )
-            });
-        match sighted {
-            Ok(base) => CommentKind::Demand { base },
-            Err(reason) => return console_reject(req, app, n, fields, &reason),
-        }
-    } else {
-        CommentKind::Note
-    };
     let command = Command::Comment {
         target: addr.target,
-        body: Prose::new(addr.body.clone()).unwrap(),
-        kind,
+        kind: CommentKind::Note {
+            body: Prose::new(addr.body.clone()).unwrap(),
+        },
     };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(stored) => {
-            let fired = app.clone();
-            tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));
             let seq = stored.last().map(|s| s.seq).unwrap_or(0);
             let root = match addr.target {
                 Target::Task(t) => t.0,
@@ -394,36 +282,30 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     }
 }
 
-/// The judgment door: one form, one name, two buttons. The clicked
-/// button's name/value names the ruling; identity is claimed at the
-/// act; execute, sweep, and 303 back to the focused task.
-fn rule(req: &Req, app: &AppState, n: usize, fields: &[(String, String)], seq: usize) -> Response {
-    let command = match form_field(fields, "ruling") {
-        "accept" => Command::AcceptProposal {
-            id: ProposalId(RecordId(seq)),
-        },
-        "reject" => {
-            let note = form_field(fields, "note");
-            if Prose::new(note.to_string()).is_err() {
-                return console_reject(req, app, n, fields, "a ruling needs a note");
-            }
-            Command::RejectProposal {
-                id: ProposalId(RecordId(seq)),
-                note: Prose::new(note.to_string()).unwrap(),
-            }
-        }
-        _ => return console_reject(req, app, n, fields, "the ruling is accept or reject"),
+/// The reject door: one form, one name, the required grounds. The
+/// offer rejected is the task's standing one; identity is claimed at
+/// the act; execute and 303 back to the focused task.
+fn reject(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
+    let Some(offer) = standing_offer(app, n) else {
+        return page(app, 404, &format!("t-{n} holds no standing offer"));
     };
-    let who = match identity(req, fields) {
+    let grounds = form_field(fields, "grounds");
+    if Prose::new(grounds.to_string()).is_err() {
+        return console_reject(req, app, n, fields, "a rejection needs grounds");
+    }
+    let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
         Err(msg) => return console_reject(req, app, n, fields, &msg),
     };
-    match app.execute(&who.0, command, None, console_request(req)) {
-        Ok(_) => {
-            let fired = app.clone();
-            tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));
-            redirect(&format!("/t/{n}"), who.1.as_deref())
-        }
+    let command = Command::Comment {
+        target: Target::Comment(offer),
+        kind: CommentKind::Reject {
+            offer,
+            grounds: Prose::new(grounds.to_string()).unwrap(),
+        },
+    };
+    match app.execute(&context, command, None, console_request(req)) {
+        Ok(_) => redirect(&format!("/t/{n}"), first_claim.as_deref()),
         Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
             page(app, 503, &format!("world projection unavailable: {reason}"))
@@ -432,21 +314,30 @@ fn rule(req: &Req, app: &AppState, n: usize, fields: &[(String, String)], seq: u
     }
 }
 
-/// The accept door: one form, one name, one button. The receipt stands
-/// as deposited above; identity is claimed at the act; execute, sweep,
+/// The task's standing offer, when one stands.
+fn standing_offer(app: &AppState, n: usize) -> Option<crate::CommentId> {
+    let snapshot = app.snapshot().ok()?;
+    let ctx = snapshot.world.tasks.get(n)?;
+    ctx.current_offer
+}
+
+/// The accept door: one form, one name, one button. The offer accepted
+/// is the task's standing one; identity is claimed at the act; execute
 /// and 303 back to the focused task.
 fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
-    let who = match identity(req, fields) {
+    let Some(offer) = standing_offer(app, n) else {
+        return page(app, 404, &format!("t-{n} holds no standing offer"));
+    };
+    let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
         Err(msg) => return console_reject(req, app, n, fields, &msg),
     };
-    let command = Command::AcceptTask { id: TaskId(n) };
-    match app.execute(&who.0, command, None, console_request(req)) {
-        Ok(_) => {
-            let fired = app.clone();
-            tokio::task::spawn_blocking(move || crate::supervisor::sweep(&fired));
-            redirect(&format!("/t/{n}"), who.1.as_deref())
-        }
+    let command = Command::Comment {
+        target: Target::Comment(offer),
+        kind: CommentKind::Accept { offer },
+    };
+    match app.execute(&context, command, None, console_request(req)) {
+        Ok(_) => redirect(&format!("/t/{n}"), first_claim.as_deref()),
         Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
             page(app, 503, &format!("world projection unavailable: {reason}"))
@@ -531,6 +422,7 @@ fn identity(req: &Req, fields: &[(String, String)]) -> Result<(Context, Option<S
         Context {
             actor,
             tier: Tier::Human,
+            scope: None,
         },
         first_claim.then_some(w),
     ))
@@ -562,7 +454,6 @@ fn console_reject(
     let c = web::Console {
         forest: forest(&snapshot.world),
         closed: closed_tasks(&snapshot.world),
-        gate: open_proposals(&snapshot.world),
         next: next_panel(&snapshot.world, now),
         marks: ribbon_marks(&snapshot.world, now),
         focus: focus(&snapshot.world, n),
@@ -687,24 +578,17 @@ fn reject_text(r: &Reject) -> String {
         ReasonRequired => "words are required".into(),
         HumanOnly => "human-only act".into(),
         InvalidTaskId => "no such task".into(),
-        InvalidProposalId => "no open proposal with that id".into(),
-        ProposalAlreadyOpen => "that task already has an open proposal".into(),
         InvalidCommentId => "no comment with that id".into(),
-        NotBirthAttribution => "only the task's birth attribution or a human may accept".into(),
+        NotAnOffer => "that comment is not an offer".into(),
+        NotCurrentOffer => "that offer is not the task's standing one".into(),
+        SelfAcceptance => {
+            "the declared task scope covers this task: a task-bound producer cannot accept its \
+             own conclusion"
+                .into()
+        }
         InvalidParentTaskId => "no such parent task".into(),
         other => format!("{other:?}"),
     }
-}
-
-/// The task an open proposal targets, for routing judgment acts back to
-/// the focused thread.
-fn proposal_task(app: &AppState, seq: usize) -> Option<usize> {
-    let snapshot = app.snapshot().ok()?;
-    let view = proposal_view(&snapshot.world, ProposalId(RecordId(seq)))?;
-    if view.state != "open" {
-        return None;
-    }
-    task_num(&view.task)
 }
 
 #[derive(Debug)]
@@ -716,8 +600,8 @@ enum Route {
 }
 enum PostRoute {
     Compose,
-    Ruling(usize),
     Accept(usize),
+    Reject(usize),
     Revise(usize),
     NotFound,
 }
@@ -744,19 +628,19 @@ fn parse_post(url: &str) -> PostRoute {
     if path == "/compose" {
         return PostRoute::Compose;
     }
-    if let Some(seq) = path
-        .strip_prefix("/p/")
-        .and_then(|rest| rest.strip_suffix("/ruling"))
-        .and_then(num)
-    {
-        return PostRoute::Ruling(seq);
-    }
     if let Some(n) = path
         .strip_prefix("/t/")
         .and_then(|rest| rest.strip_suffix("/accept"))
         .and_then(num)
     {
         return PostRoute::Accept(n);
+    }
+    if let Some(n) = path
+        .strip_prefix("/t/")
+        .and_then(|rest| rest.strip_suffix("/reject"))
+        .and_then(num)
+    {
+        return PostRoute::Reject(n);
     }
     if let Some(seq) = path
         .strip_prefix("/c/")
@@ -809,10 +693,6 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn task_num(id: &str) -> Option<usize> {
-    id.strip_prefix("t-").and_then(|n| n.parse().ok())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,9 +714,10 @@ mod tests {
     #[test]
     fn post_routes_and_forms_parse() {
         assert!(matches!(parse_post("/compose"), PostRoute::Compose));
-        assert!(matches!(parse_post("/p/9/ruling"), PostRoute::Ruling(9)));
         assert!(matches!(parse_post("/t/3/accept"), PostRoute::Accept(3)));
+        assert!(matches!(parse_post("/t/3/reject"), PostRoute::Reject(3)));
         assert!(matches!(parse_post("/c/7/revise"), PostRoute::Revise(7)));
+        assert!(matches!(parse_post("/p/9/ruling"), PostRoute::NotFound));
         assert!(matches!(parse_post("/t/3/comment"), PostRoute::NotFound));
         assert!(matches!(parse_post("/t/3"), PostRoute::NotFound));
         assert!(matches!(parse_post("/c/7/edit"), PostRoute::NotFound));

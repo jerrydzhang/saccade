@@ -17,8 +17,7 @@ use serde_json::{Value, json};
 use crate::ActorName;
 use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
-use crate::store::{Context, RecordId, Tier, World};
-use crate::supervisor;
+use crate::store::{Context, RecordId, Scope, Tier, World};
 use crate::web;
 use crate::{Command, Reject};
 
@@ -34,14 +33,10 @@ struct Inner {
 }
 
 /// The sole writer's state: writes refold rather than apply incrementally,
-/// so one definition of truth serves readers and writers alike. The runner
-/// config rides outside the lock: immutable, and absent when this server
-/// only writes.
+/// so one definition of truth serves readers and writers alike.
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Mutex<ServerState>>,
-    runner: Option<supervisor::RunnerConfig>,
-    runs: supervisor::LiveRuns,
     attempts: Attempts,
     /// The artifact store the bytes door serves from; a server that
     /// was not told a repo root has none.
@@ -81,23 +76,10 @@ impl AppState {
         };
         Ok(AppState {
             inner: Arc::new(Mutex::new(state)),
-            runner: None,
-            runs: supervisor::LiveRuns::default(),
             attempts: Attempts::beside(db_path),
             artifacts: None,
             repo_root: None,
             repo_name: None,
-        })
-    }
-
-    /// A server that runs what it is asked: demands fire sessions.
-    pub fn with_runner(db_path: &Path, runner: supervisor::RunnerConfig) -> Result<Self, String> {
-        let artifacts = Some(crate::paths::artifacts_at(&runner.repo_root));
-        let app = Self::open(db_path)?;
-        Ok(AppState {
-            runner: Some(runner),
-            artifacts,
-            ..app
         })
     }
 
@@ -134,16 +116,6 @@ impl AppState {
     /// The artifact store's home, when this server knows one.
     pub fn artifacts_dir(&self) -> Option<&Path> {
         self.artifacts.as_deref()
-    }
-
-    pub fn runner_config(&self) -> Option<&supervisor::RunnerConfig> {
-        self.runner.as_ref()
-    }
-
-    /// The live sessions this server owns; empty for a server that
-    /// never runs.
-    pub fn runs(&self) -> supervisor::LiveRuns {
-        self.runs.clone()
     }
 
     /// Run against the sole writer's connection under the lock; blocking
@@ -258,6 +230,9 @@ pub(crate) enum WireTier {
 pub(crate) struct WireContext {
     pub actor: ActorName,
     pub tier: WireTier,
+    /// The environment-declared scope, when the sending session carries one
+    #[serde(default)]
+    pub scope: Option<Scope>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -352,6 +327,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
             WireTier::Human => Tier::Human,
             WireTier::Agent => Tier::Agent,
         },
+        scope: envelope.context.scope,
     };
     let command = envelope.command;
     let received = AsReceived {
@@ -360,8 +336,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     };
     match app.execute(&context, command.clone(), envelope.at, received) {
         Ok(stored) => {
-            let fired = app.clone();
-            tokio::task::spawn_blocking(move || supervisor::sweep(&fired));
             let mut reply = json!({"records": &stored});
             // a create reply names what was born: the id resolved from
             // the post-write fold, matched by the birth record it landed

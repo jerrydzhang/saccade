@@ -97,32 +97,6 @@ pub fn artifacts_at(repo_root: &Path) -> PathBuf {
     state_dir(repo_root).join("artifacts")
 }
 
-/// Where a terminal task's session artifacts outlive their agent dir.
-pub fn retention_at(repo_root: &Path, task: usize) -> PathBuf {
-    state_dir(repo_root)
-        .join("retention")
-        .join(format!("t-{task}"))
-}
-
-/// The worktree a task's workspace provisions.
-pub fn worktree_at(repo_root: &Path, task: usize) -> PathBuf {
-    state_dir(repo_root)
-        .join("worktrees")
-        .join(format!("t-{task}"))
-}
-
-/// The session pointer's conventional backing file.
-pub fn session_at(repo_root: &Path, task: usize) -> PathBuf {
-    state_dir(repo_root)
-        .join("sessions")
-        .join(format!("t-{task}.jsonl"))
-}
-
-/// The pi agent dir a task's runs are composed under.
-pub fn agent_dir_at(repo_root: &Path, task: usize) -> PathBuf {
-    state_dir(repo_root).join("agent").join(format!("t-{task}"))
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
