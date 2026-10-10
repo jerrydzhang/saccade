@@ -150,8 +150,8 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac withdraw c-<seq> --note "…"` | any tier | the note's standing-error repair: body out, tombstone stays |
 | `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
 | `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace — none is created by checkpoint |
-| `sac start t-N "initial request"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects, record the request, assign the incarnation ownership, and launch the pinned native Pi in a host terminal with the request as its prompt; a repeat start reports and opens the standing workspace — no second launch, request, or ownership change |
-| `sac open t-N` | any tier | ensure the recorded workspace exists (a missing checkout is recreated from its branch tip) and open it through the host; launches no harness, lands no records, changes no ownership |
+| `sac start t-N "initial request"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects, record the request, assign the incarnation ownership, and submit the pinned native Pi into one host terminal with the request as its prompt; a repeat start reveals the standing workspace's live terminal or reports its address — no second launch, request, or ownership change |
+| `sac open t-N` | any tier | ensure the recorded environment exists (a missing checkout is recreated from its branch tip); a fresh association births the establishment alone, a standing one reveals its live terminal or reports its address — never a harness launch, request, or ownership change |
 | `sac exec t-N -- <command and argv>` | any tier | run a command inside the recorded workspace: identity and routing injected from the record, argv boundaries kept, nothing recorded |
 | `sac identity` | anonymous | report the environment-declared actor/tier, scope, and routing — disclosure, never a liveness claim |
 | `sac list` / `sac show <ids…>` / `sac log` | anonymous | the board, threads and records, raw events |
@@ -236,11 +236,15 @@ recovery beyond that is not built.
 
 `sac exec t-N -- <argv>` is the harness-agnostic door into a
 workspace: it injects the session's identity and routing
-(`SACCADE_TASK`, `SACCADE_INCARNATION`, `SACCADE_WORKSPACE`, plus repo,
-db, and server), overwriting stale bindings inherited from another
-task, and execs the argv with its argument boundaries intact. `sac
-start` uses the same injection to launch the pinned native Pi. The
-record governs; the workspace is a cache.
+(`SACCADE_ACTOR` — the caller's declared attribution preserved, else
+the command's own label, so no wrapper session writes as an unpossessed
+human — `SACCADE_TASK`, `SACCADE_INCARNATION`, `SACCADE_WORKSPACE`,
+plus repo, db, and server), overwriting stale bindings inherited from
+another task, and execs the argv with its argument boundaries intact.
+`sac start` submits the pinned native Pi through the same injection.
+A standing workspace never grows a terminal per visit: open and repeat
+start reveal the live terminal the host holds in the worktree, or
+report the address. The record governs; the workspace is a cache.
 
 ## Errors and degraded mode
 

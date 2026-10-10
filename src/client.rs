@@ -252,6 +252,7 @@ pub fn start_workspace(
             "task": task,
             "base": base,
             "request": request.as_str(),
+            "client": env!("CARGO_PKG_VERSION"),
         }),
     )
 }
@@ -264,6 +265,6 @@ pub fn open_workspace(url: &str, task: usize) -> Result<WorkspaceReply, ClientFa
     post_json(
         url,
         "/api/v1/workspace/open",
-        serde_json::json!({ "task": task }),
+        serde_json::json!({ "task": task, "client": env!("CARGO_PKG_VERSION") }),
     )
 }

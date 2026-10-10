@@ -96,12 +96,13 @@ with them.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes — accepted).
 - Native pi stays the pinned harness, a flake input — never the
-  ambient binary. The tracker launches and supervises nothing: no
-  managed RPC, no session ownership, no spawn-time lever composition.
-  An incarnation is a record-derived identity (its birth record, one
-  task, one workspace address) with no lifecycle and no session
-  pointer; native attachment and its effects are the next slice's
-  doors, not standing machinery.
+  ambient binary. The tracker supervises nothing: no managed RPC, no
+  session ownership, no spawn-time lever composition — start asks the
+  host for one terminal and never manages it. An incarnation is a
+  record-derived identity (its birth record — the workspace
+  establishment, one task, one workspace address) with no lifecycle
+  and no session pointer; attachment effects beyond the submitted
+  launch remain unbuilt.
 - Attention routes through declared dependency and chain judgment,
   never addressing. No comment names a recipient. The human is reached
   by the descriptive pull surface; waits and push signals are unbuilt.

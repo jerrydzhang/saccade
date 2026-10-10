@@ -9,14 +9,12 @@ use std::path::{Path, PathBuf};
 use crate::objects::task::TaskId;
 use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
-/// An effect-layer refusal: the tracker names its cause, git names
-/// its failure. These are operation codes, never fold refusals.
+/// An effect-layer refusal: operation codes, never fold refusals.
 #[derive(Debug)]
 pub enum WorkspaceFail {
     /// The task's default branch name is already taken in the repo.
     BranchExists(GitBranch),
-    /// The recorded branch no longer exists in the repo: recovery
-    /// policy for a missing branch is not built.
+    /// The recorded branch is gone; recovery of a missing branch is not built.
     BranchMissing(GitBranch),
     /// The workspace's path is already occupied on disk.
     PathOccupied(PathBuf),
@@ -52,7 +50,7 @@ impl WorkspaceFail {
     }
 }
 
-/// The facts an establishment established.
+/// The facts an establishment established: exactly what the birth records.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Established {
     pub task: TaskId,
@@ -100,16 +98,14 @@ fn branch_exists(root: &Path, branch: &GitBranch) -> bool {
         .unwrap_or(false)
 }
 
-/// The task's default branch name. The naming scheme is not ratified;
-/// this default sweeps in one place when it is.
+/// The task's default branch name; the unratified scheme sweeps here.
 pub fn branch_name(task: TaskId) -> GitBranch {
     GitBranch::new(format!("saccade/t-{}", task.0)).expect("the scheme names a valid branch")
 }
 
-/// Establish a task's workspace: a new branch at the named base (the
-/// primary checkout's current HEAD by default) and its worktree under
-/// the tracker's worktree home. Existing files, branches, and other
-/// worktrees are never touched.
+/// Establish: a new branch at the named base (the primary checkout's
+/// HEAD by default) and its worktree under the tracker's home; nothing
+/// existing is ever touched.
 pub fn establish(
     root: &Path,
     worktree_home: &Path,
@@ -146,11 +142,9 @@ pub fn establish(
     })
 }
 
-/// Ensure a recorded workspace's checkout exists: a present checkout
-/// is left alone, files and uncommitted changes included; a missing
-/// one is recreated from its branch's current tip, preserving any
-/// committed advancement since the last checkpoint. Returns whether
-/// recreation happened. Identity and record are untouched.
+/// Ensure the recorded checkout exists: a present one is left alone,
+/// a missing one is recreated from its branch's current tip (committed
+/// advancement preserved). Identity and record untouched.
 pub fn ensure_checkout(root: &Path, facts: &Established) -> Result<bool, WorkspaceFail> {
     let path = facts.worktree.as_path();
     if path.is_dir() {
@@ -194,8 +188,7 @@ pub fn recorded(
     }
 }
 
-/// The worktree home: worktrees live beside the tracker's own db, so
-/// a tracker's workspaces never collide with another tracker's.
+/// The worktree home: worktrees live beside the tracker's own db.
 pub fn worktree_home(db_path: &Path) -> PathBuf {
     db_path
         .parent()

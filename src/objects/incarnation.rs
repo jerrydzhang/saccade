@@ -9,9 +9,8 @@ use crate::types::pointers::WorktreePath;
 pub struct IncarnationId(pub RecordId);
 
 /// A task-bound worker identity: record-derived id, one task, one
-/// workspace address. No lifecycle, no session pointer — attachment
-/// and its effects are the native-start slice's doors, so this slice
-/// births none and the registry reads empty until that slice lands.
+/// workspace address. No lifecycle, no session pointer — the shared
+/// workspace-establishment birth is the only door that births one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Incarnation {
     pub task: TaskId,

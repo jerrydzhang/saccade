@@ -425,8 +425,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/version", get(version))
 }
 
-/// The workspace facts every operation reply carries: what the record
-/// established, never a liveness claim.
+/// The workspace facts an operation reply carries: record facts, never
+/// a liveness claim.
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct WorkspaceFacts {
     pub task: usize,
@@ -449,8 +449,7 @@ impl WorkspaceFacts {
 /// One workspace operation's outcome.
 #[derive(Serialize, Deserialize)]
 pub struct WorkspaceReply {
-    /// Whether this call birthed the establishment; a repeat start or
-    /// an open of a recorded workspace lands nothing and says so
+    /// Whether this call birthed the establishment
     pub established: bool,
     /// Whether a missing checkout was recreated from its branch tip
     pub recreated: bool,
@@ -468,11 +467,15 @@ struct StartRequest {
     #[serde(default)]
     base: Option<String>,
     request: crate::Prose,
+    #[serde(default)]
+    client: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct OpenRequest {
     task: usize,
+    #[serde(default)]
+    client: Option<String>,
 }
 
 enum OperationOutcome {
@@ -480,16 +483,14 @@ enum OperationOutcome {
     Failed(ApiFail),
 }
 
-/// One workspace operation under the held writer lock: resolve the
-/// task, then establish on first sight or ensure the recorded
-/// environment exists. `caller_records` names the caller-authored
-/// records a first establishment lands beside the machinery's birth;
-/// a task already holding a workspace follows the no-duplicate rule —
-/// the association governs, the checkout is ensured, nothing lands.
+/// One workspace operation under the held writer lock: establish on
+/// first sight or ensure the recorded environment; a standing
+/// association lands nothing.
 fn workspace_operation(
     app: &AppState,
     guard: &mut ServerState,
     actor: Option<String>,
+    received: &AsReceived,
     task: usize,
     base: Option<&str>,
     caller_records: impl FnOnce(RecordId) -> Vec<db::RecordDraft>,
@@ -502,7 +503,7 @@ fn workspace_operation(
             let seqs: Vec<usize> = reply.records.iter().map(|s| s.seq).collect();
             app.attempts.append(
                 actor.as_deref(),
-                None,
+                received.client.as_deref(),
                 duration_ms,
                 Outcome::Landed { seqs: &seqs },
             );
@@ -522,12 +523,12 @@ fn workspace_operation(
             };
             app.attempts.append(
                 actor.as_deref(),
-                None,
+                received.client.as_deref(),
                 duration_ms,
                 Outcome::Refused {
                     code,
                     cursor,
-                    request: "workspace operation",
+                    request: &received.raw,
                 },
             );
         }
@@ -557,8 +558,7 @@ fn run_operation(
     let task_id = TaskId(task);
     match inner.world.tasks[task].workspace.as_ref() {
         Some(recorded_ctx) => {
-            // the recorded association governs: recreate a missing
-            // checkout from the branch tip, never another birth
+            // the association governs: recreate the checkout, never another birth
             let facts = workspace::recorded(task_id, recorded_ctx);
             match workspace::ensure_checkout(&repo_root, &facts) {
                 Ok(recreated) => OperationOutcome::Done(WorkspaceReply {
@@ -608,8 +608,8 @@ fn run_operation(
     }
 }
 
-/// The refresh a landed operation owes the cache: whatever the writes
-/// left behind, so readers never see a world the log contradicts.
+/// Refresh the cache after a landed operation, so readers never see a
+/// world the log contradicts.
 fn reload_inner(guard: &mut ServerState) -> Result<(), String> {
     let ServerState::Ready(inner) = guard else {
         return Ok(());
@@ -626,9 +626,14 @@ fn reload_inner(guard: &mut ServerState) -> Result<(), String> {
 }
 
 async fn workspace_start(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
     let request: StartRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
     };
     let caller = Context {
         actor: request.context.actor,
@@ -646,6 +651,7 @@ async fn workspace_start(State(app): State<AppState>, body: Bytes) -> Response {
         &app,
         &mut guard,
         Some(caller.actor.as_str().to_string()),
+        &received,
         task,
         base.as_deref(),
         |birth| {
@@ -673,17 +679,29 @@ async fn workspace_start(State(app): State<AppState>, body: Bytes) -> Response {
 }
 
 async fn workspace_open(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
     let request: OpenRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
     };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = workspace_operation(&app, &mut guard, None, request.task, None, |_| Vec::new());
+    let outcome = workspace_operation(
+        &app,
+        &mut guard,
+        None,
+        &received,
+        request.task,
+        None,
+        |_| Vec::new(),
+    );
     respond_operation(guard, outcome)
 }
 
-/// A landed operation refreshed the cache before it answers; a failed
-/// one answers with its named cause.
+/// A landed operation refreshes the cache before answering.
 fn respond_operation(
     mut guard: std::sync::MutexGuard<'_, ServerState>,
     outcome: OperationOutcome,
