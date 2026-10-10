@@ -8,9 +8,9 @@ use crate::events::{Command, Event};
 use crate::objects::comment::{
     Comment, CommentContext, CommentId, CommentKind, CommentState, Revision, Target, Withdrawal,
 };
-use crate::objects::incarnation::{IncarnationContext, IncarnationId};
+use crate::objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
 use crate::objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
-use crate::objects::workspace::{Workspace, WorkspaceContext, WorktreeState};
+use crate::objects::workspace::{Workspace, WorkspaceContext};
 use crate::types::actor::ActorName;
 use crate::types::pointers::WorktreePath;
 
@@ -43,10 +43,8 @@ pub enum Reason {
     InvalidStateTransition,
     /// The task already holds a workspace: one lineage per task.
     WorkspaceAlreadyExists,
-    /// The event names a task whose workspace was never created.
+    /// The event names a task whose workspace was never established.
     WorkspaceMissing,
-    /// A second physical creation while the worktree is present.
-    WorktreeAlreadyPresent,
     /// An agent- or human-tier checkpoint names a head the workspace
     /// already left; the explicit door never rewinds.
     CheckpointRewind,
@@ -68,7 +66,6 @@ impl From<Reason> for Reject {
             Reason::InvalidStateTransition => Reject::InvalidStateTransition,
             Reason::WorkspaceAlreadyExists => Reject::WorkspaceAlreadyExists,
             Reason::WorkspaceMissing => Reject::WorkspaceMissing,
-            Reason::WorktreeAlreadyPresent => Reject::WorktreeAlreadyPresent,
             Reason::CheckpointRewind => Reject::CheckpointRewind,
         }
     }
@@ -125,8 +122,8 @@ pub struct Record {
 pub struct World {
     pub tasks: Vec<TaskContext>,
     pub comments: BTreeMap<CommentId, CommentContext>,
-    /// Record-derived worker identities; births are the native-start
-    /// slice's door, so this reads empty until that slice lands
+    /// Record-derived worker identities, born one-to-one with the
+    /// workspace establishments
     pub incarnations: BTreeMap<IncarnationId, IncarnationContext>,
 }
 
@@ -165,15 +162,18 @@ impl World {
         Ok(self)
     }
 
-    /// The incarnation reference — never the declared scope — names a
-    /// task-bound worker.
+    /// The owner a claim names — exactly the ratified kinds. The
+    /// incarnation reference, never the caller's tier, names a
+    /// task-bound worker: a claim that rides one holds as the
+    /// incarnation whoever requested it; a claim without the
+    /// reference holds as the caller.
     fn owner_of(context: &Context, incarnation: Option<IncarnationId>) -> Result<Owner, Reason> {
+        if let Some(id) = incarnation {
+            return Ok(Owner::Incarnation(id));
+        }
         match context.tier {
             Tier::Human => Ok(Owner::Human(context.actor.clone())),
-            Tier::Agent => Ok(match incarnation {
-                Some(id) => Owner::Incarnation(id),
-                None => Owner::External(context.actor.clone()),
-            }),
+            Tier::Agent => Ok(Owner::External(context.actor.clone())),
             // machinery holds no whole-task responsibility
             Tier::System => Err(Reason::InvalidStateTransition),
         }
@@ -411,10 +411,11 @@ impl World {
                 task_ctx.last_record_at = record.timestamp;
             }
             // Workspace events
-            Event::TaskWorkspaceCreated {
+            Event::WorkspaceEstablished {
                 task_id,
                 ref base,
                 ref branch,
+                ref worktree,
             } => {
                 let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
                 if task_ctx.workspace.is_some() {
@@ -425,24 +426,23 @@ impl World {
                         base: base.clone(),
                         branch: branch.clone(),
                         checkpoint: base.clone(),
-                        worktree: WorktreeState::Absent,
+                        worktree: worktree.clone(),
                     },
+                    birth: record.id,
                     heads: vec![base.clone()],
                 });
-                task_ctx.last_updated = record.id;
-                task_ctx.last_record_at = record.timestamp;
-            }
-            ref event @ Event::TaskWorkspaceMaterialized { task_id, .. } => {
-                let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
-                let workspace = task_ctx
-                    .workspace
-                    .as_mut()
-                    .ok_or(Reason::WorkspaceMissing)?;
-                workspace.workspace.worktree = workspace
-                    .workspace
-                    .worktree
-                    .transition(event)
-                    .ok_or(Reason::WorktreeAlreadyPresent)?;
+                // the same birth is the task-bound worker's identity:
+                // one record position, both names
+                self.incarnations.insert(
+                    IncarnationId(record.id),
+                    IncarnationContext {
+                        incarnation: Incarnation {
+                            task: task_id,
+                            workspace: worktree.clone(),
+                        },
+                        born_at: record.timestamp,
+                    },
+                );
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
             }
@@ -530,8 +530,8 @@ mod test {
     use super::*;
     use crate::Event;
     use crate::objects::comment::{CommentId, CommentKind, CommentState, Target};
+    use crate::objects::incarnation::IncarnationId;
     use crate::objects::task::{Owner, TaskId, TaskState};
-    use crate::objects::workspace::WorktreeState;
     use crate::types::actor::ActorName;
     use crate::types::artifact::Artifact;
     use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
@@ -807,10 +807,11 @@ mod test {
             id: TaskId(0),
             explanation: prose("stop nothing"),
         };
-        let provision = || Command::CreateWorkspace {
+        let provision = || Command::EstablishWorkspace {
             task_id: TaskId(0),
             base: GitCommit::new("abc123".into()).unwrap(),
             branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+            worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
         };
         // the tier gate fires before the fold ever reads existence
         assert!(matches!(
@@ -819,6 +820,10 @@ mod test {
         ));
         assert!(matches!(
             log.execute(human(), cancel(), 1),
+            Err(Reject::InvalidTaskId)
+        ));
+        assert!(matches!(
+            log.execute_system(provision(), 1),
             Err(Reject::InvalidTaskId)
         ));
         assert!(matches!(
@@ -876,10 +881,6 @@ mod test {
         assert!(matches!(
             Reject::from(Reason::WorkspaceMissing),
             Reject::WorkspaceMissing
-        ));
-        assert!(matches!(
-            Reject::from(Reason::WorktreeAlreadyPresent),
-            Reject::WorktreeAlreadyPresent
         ));
         assert!(matches!(
             Reject::from(Reason::CheckpointRewind),
@@ -1490,7 +1491,7 @@ mod test {
     }
 
     #[test]
-    fn workspace_records_run_through_the_machinery_verbs() {
+    fn the_establishment_births_the_shared_workspace_identity() {
         let mut log = Log::new();
         log.execute(
             human(),
@@ -1502,106 +1503,158 @@ mod test {
         )
         .unwrap();
 
-        // a task with no workspace refuses worktree and checkpoint records
+        // a task with no workspace refuses the checkpoint record
         let base = GitCommit::new("abc123".into()).unwrap();
         let branch = GitBranch::new("saccade/t-0".into()).unwrap();
         let worktree = WorktreePath::new("/repo/wt/t-0".into()).unwrap();
         let refused = log.execute_system(
-            Command::MaterializeWorkspace {
+            Command::CheckpointWorkspace {
                 task_id: TaskId(0),
-                worktree: worktree.clone(),
+                checkpoint: base.clone(),
             },
             2,
         );
         assert!(matches!(refused, Err(Reject::WorkspaceMissing)));
 
-        // provisioning births the lineage: checkpoint starts at the base
+        // the establishment births the lineage at the record's position:
+        // checkpoint starts at the base, and the same position names the
+        // task-bound worker
         log.execute_system(
-            Command::CreateWorkspace {
+            Command::EstablishWorkspace {
                 task_id: TaskId(0),
                 base: base.clone(),
                 branch: branch.clone(),
+                worktree: worktree.clone(),
             },
             2,
         )
         .unwrap();
+        let birth = RecordId(1);
         let ctx = &log.world().tasks[0];
         assert_eq!(ctx.workspace.as_ref().unwrap().workspace.checkpoint, base);
-        assert!(matches!(
-            ctx.workspace.as_ref().unwrap().workspace.worktree,
-            WorktreeState::Absent
-        ));
+        assert_eq!(ctx.workspace.as_ref().unwrap().workspace.worktree, worktree);
+        assert_eq!(ctx.workspace.as_ref().unwrap().birth, birth);
+        let inc = &log.world().incarnations[&IncarnationId(birth)];
+        assert_eq!(
+            (inc.incarnation.task, inc.incarnation.workspace.as_path()),
+            (TaskId(0), worktree.as_path())
+        );
 
         // one lineage per task
         let refused = log.execute_system(
-            Command::CreateWorkspace {
+            Command::EstablishWorkspace {
                 task_id: TaskId(0),
                 base: base.clone(),
                 branch: branch.clone(),
+                worktree: worktree.clone(),
             },
             3,
         );
         assert!(matches!(refused, Err(Reject::WorkspaceAlreadyExists)));
 
-        // the physical creation is recorded, once
-        log.execute_system(
-            Command::MaterializeWorkspace {
+        // the establishment verb rejects judgment tiers: the role is
+        // the only door
+        let refused = log.execute(
+            human(),
+            Command::EstablishWorkspace {
                 task_id: TaskId(0),
-                worktree: worktree.clone(),
+                base,
+                branch: GitBranch::new("saccade/t-1".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-1".into()).unwrap(),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::HumanOnly)));
+    }
+
+    /// The claim that names the incarnation reference holds as the
+    /// incarnation at every judgment tier: a human requesting the
+    /// start does not manufacture a human owner.
+    #[test]
+    fn an_incarnation_claim_names_the_incarnation_whoever_requests_it() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("carry a merge through the worktree"),
+                parent_id: None,
+            },
+            1,
+        )
+        .unwrap();
+        let birth = RecordId(1);
+        log.execute_system(
+            Command::EstablishWorkspace {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            2,
+        )
+        .unwrap();
+
+        // the human requests the start: ownership names the incarnation
+        log.execute(
+            human(),
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: Some(IncarnationId(birth)),
+            },
+            3,
+        )
+        .unwrap();
+        assert!(matches!(
+            log.world().tasks[0].ownership[0].owner,
+            Owner::Incarnation(IncarnationId(id)) if id == birth
+        ));
+
+        // a claim whose incarnation is bound to another task refuses
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("adopt the account"),
+                parent_id: None,
             },
             4,
         )
         .unwrap();
-        let refused = log.execute_system(
-            Command::MaterializeWorkspace {
-                task_id: TaskId(0),
-                worktree: worktree.clone(),
+        let refused = log.execute(
+            agent(),
+            Command::ClaimTask {
+                id: TaskId(1),
+                incarnation: Some(IncarnationId(birth)),
             },
             5,
         );
-        assert!(matches!(refused, Err(Reject::WorktreeAlreadyPresent)));
-        assert!(matches!(
-            log.world().tasks[0]
-                .workspace
-                .as_ref()
-                .unwrap()
-                .workspace
-                .worktree,
-            WorktreeState::Present(_)
-        ));
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
 
-        // a checkpoint advances; it may advance again
-        let head = GitCommit::new("def456".into()).unwrap();
-        log.execute_system(
-            Command::CheckpointWorkspace {
-                task_id: TaskId(0),
-                checkpoint: head.clone(),
+        // ordinary claims keep their owners: the human, the external agent
+        log.execute(
+            human(),
+            Command::ClaimTask {
+                id: TaskId(1),
+                incarnation: None,
             },
             6,
         )
         .unwrap();
-        assert_eq!(
-            log.world().tasks[0]
-                .workspace
-                .as_ref()
-                .unwrap()
-                .workspace
-                .checkpoint,
-            head
-        );
-
-        // the provisioning verbs reject judgment tiers: the role is the
-        // only door
-        let refused = log.execute(
-            human(),
-            Command::CreateWorkspace {
-                task_id: TaskId(0),
-                base,
-                branch: GitBranch::new("saccade/t-1".into()).unwrap(),
+        log.execute(
+            agent(),
+            Command::ClaimTask {
+                id: TaskId(1),
+                incarnation: None,
             },
             7,
-        );
-        assert!(matches!(refused, Err(Reject::HumanOnly)));
+        )
+        .unwrap();
+        let owners: Vec<&Owner> = log.world().tasks[1]
+            .ownership
+            .iter()
+            .map(|e| &e.owner)
+            .collect();
+        assert!(matches!(owners[0], Owner::Human(_)));
+        assert!(matches!(owners[1], Owner::External(_)));
     }
 
     #[test]
@@ -1618,10 +1671,11 @@ mod test {
         .unwrap();
         let base = GitCommit::new("abc123".into()).unwrap();
         log.execute_system(
-            Command::CreateWorkspace {
+            Command::EstablishWorkspace {
                 task_id: TaskId(0),
                 base: base.clone(),
                 branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
             },
             2,
         )

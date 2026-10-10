@@ -96,6 +96,9 @@
           nativeBuildInputs = [
             pkgs.git
           ];
+          # the pinned native pi this binary's start door launches;
+          # SACCADE_PI remains the development override
+          SACCADE_PI_BIN = "${llm-agents.packages.${system}.pi}/bin/pi";
           preCheck = ''
             export HOME=$(mktemp -d)
           '';

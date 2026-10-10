@@ -17,8 +17,12 @@ use serde_json::{Value, json};
 use crate::ActorName;
 use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
+use crate::events::Event;
+use crate::objects::comment::{CommentKind, Target};
+use crate::objects::task::TaskId;
 use crate::store::{Context, RecordId, Scope, Tier, World};
 use crate::web;
+use crate::workspace::{self, Established, WorkspaceFail};
 use crate::{Command, Reject};
 
 enum ServerState {
@@ -30,6 +34,8 @@ struct Inner {
     conn: rusqlite::Connection,
     world: World,
     rows: Vec<StoredRecord>,
+    /// The tracker's own db: the worktree home derives from it
+    db_path: std::path::PathBuf,
 }
 
 /// The sole writer's state: writes refold rather than apply incrementally,
@@ -63,13 +69,31 @@ pub struct Degraded {
 
 impl AppState {
     pub fn open(db_path: &Path) -> Result<Self, String> {
-        let conn = db::open(db_path).map_err(|e| format!("database: {e}"))?;
+        // the worktree home derives from the db's own directory, so the
+        // path is absolute from the start — a fresh tracker resolves
+        // through its parent, an existing one canonically
+        let canonical = if db_path.exists() {
+            std::fs::canonicalize(db_path)
+                .map_err(|e| format!("database {}: {e}", db_path.display()))?
+        } else {
+            let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+            let parent = if parent.as_os_str().is_empty() {
+                Path::new(".").to_path_buf()
+            } else {
+                parent.to_path_buf()
+            };
+            let canonical_parent = std::fs::canonicalize(&parent)
+                .map_err(|e| format!("database {}: {e}", db_path.display()))?;
+            canonical_parent.join(db_path.file_name().unwrap_or_default())
+        };
+        let conn = db::open(&canonical).map_err(|e| format!("database: {e}"))?;
         let loadout = db::load(&conn).map_err(|e| format!("database: {e}"))?;
         let state = match loadout.state {
             db::LoadState::Full(world) => ServerState::Ready(Inner {
                 conn,
                 world,
                 rows: loadout.rows,
+                db_path: canonical,
             }),
             db::LoadState::Degraded(reason) => ServerState::Degraded(reason, conn),
         };
@@ -249,6 +273,10 @@ enum ApiFail {
     Degraded(String),
     Db(String),
     Malformed(String),
+    /// An effect-layer refusal: the tracker names its cause
+    Workspace(WorkspaceFail),
+    /// The serving edge has no repo to run effects against
+    NoRepo,
 }
 
 impl From<ExecuteFail> for ApiFail {
@@ -286,6 +314,21 @@ impl ApiFail {
                 StatusCode::BAD_REQUEST,
                 "malformed_request".into(),
                 Value::String(detail),
+            ),
+            ApiFail::Workspace(fail) => {
+                let status = match fail {
+                    WorkspaceFail::Git(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                    _ => StatusCode::BAD_REQUEST,
+                };
+                (status, fail.code().into(), Value::String(fail.detail()))
+            }
+            ApiFail::NoRepo => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "workspace_no_repo".into(),
+                Value::String(
+                    "the server resolved no repo root at boot; it cannot establish workspaces"
+                        .into(),
+                ),
             ),
         }
     }
@@ -377,7 +420,296 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/command", post(command))
+        .route("/api/v1/workspace/start", post(workspace_start))
+        .route("/api/v1/workspace/open", post(workspace_open))
         .route("/api/v1/version", get(version))
+}
+
+/// The workspace facts every operation reply carries: what the record
+/// established, never a liveness claim.
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+pub struct WorkspaceFacts {
+    pub task: usize,
+    pub base: String,
+    pub branch: String,
+    pub path: String,
+}
+
+impl WorkspaceFacts {
+    fn of(established: &Established) -> Self {
+        WorkspaceFacts {
+            task: established.task.0,
+            base: established.base.as_str().to_string(),
+            branch: established.branch.as_str().to_string(),
+            path: established.worktree.as_path().display().to_string(),
+        }
+    }
+}
+
+/// One workspace operation's outcome.
+#[derive(Serialize, Deserialize)]
+pub struct WorkspaceReply {
+    /// Whether this call birthed the establishment; a repeat start or
+    /// an open of a recorded workspace lands nothing and says so
+    pub established: bool,
+    /// Whether a missing checkout was recreated from its branch tip
+    pub recreated: bool,
+    pub workspace: WorkspaceFacts,
+    /// The establishment record's position: the shared
+    /// workspace/incarnation identity
+    pub incarnation: usize,
+    pub records: Vec<StoredRecord>,
+}
+
+#[derive(Deserialize)]
+struct StartRequest {
+    context: WireContext,
+    task: usize,
+    #[serde(default)]
+    base: Option<String>,
+    request: crate::Prose,
+}
+
+#[derive(Deserialize)]
+struct OpenRequest {
+    task: usize,
+}
+
+enum OperationOutcome {
+    Done(WorkspaceReply),
+    Failed(ApiFail),
+}
+
+/// One workspace operation under the held writer lock: resolve the
+/// task, then establish on first sight or ensure the recorded
+/// environment exists. `caller_records` names the caller-authored
+/// records a first establishment lands beside the machinery's birth;
+/// a task already holding a workspace follows the no-duplicate rule —
+/// the association governs, the checkout is ensured, nothing lands.
+fn workspace_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    actor: Option<String>,
+    task: usize,
+    base: Option<&str>,
+    caller_records: impl FnOnce(RecordId) -> Vec<db::RecordDraft>,
+) -> OperationOutcome {
+    let started = std::time::Instant::now();
+    let outcome = run_operation(app, guard, task, base, caller_records);
+    let duration_ms = started.elapsed().as_millis() as u64;
+    match &outcome {
+        OperationOutcome::Done(reply) => {
+            let seqs: Vec<usize> = reply.records.iter().map(|s| s.seq).collect();
+            app.attempts.append(
+                actor.as_deref(),
+                None,
+                duration_ms,
+                Outcome::Landed { seqs: &seqs },
+            );
+        }
+        OperationOutcome::Failed(fail) => {
+            let code = match fail {
+                ApiFail::Reject(reject, _) => reject.code(),
+                ApiFail::Degraded(_) => "degraded",
+                ApiFail::Db(_) => "storage",
+                ApiFail::Malformed(_) => "malformed_request",
+                ApiFail::Workspace(effect) => effect.code(),
+                ApiFail::NoRepo => "workspace_no_repo",
+            };
+            let cursor = match guard {
+                ServerState::Ready(inner) => inner.rows.last().map(|r| r.seq),
+                ServerState::Degraded(..) => None,
+            };
+            app.attempts.append(
+                actor.as_deref(),
+                None,
+                duration_ms,
+                Outcome::Refused {
+                    code,
+                    cursor,
+                    request: "workspace operation",
+                },
+            );
+        }
+    }
+    outcome
+}
+
+fn run_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    task: usize,
+    base: Option<&str>,
+    caller_records: impl FnOnce(RecordId) -> Vec<db::RecordDraft>,
+) -> OperationOutcome {
+    let ServerState::Ready(inner) = guard else {
+        let ServerState::Degraded(reason, _) = guard else {
+            unreachable!("the state is one of the two")
+        };
+        return OperationOutcome::Failed(ApiFail::Degraded(reason.clone()));
+    };
+    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
+        return OperationOutcome::Failed(ApiFail::NoRepo);
+    };
+    if inner.world.tasks.get(task).is_none() {
+        return OperationOutcome::Failed(ApiFail::Reject(Reject::InvalidTaskId, None));
+    }
+    let task_id = TaskId(task);
+    match inner.world.tasks[task].workspace.as_ref() {
+        Some(recorded_ctx) => {
+            // the recorded association governs: recreate a missing
+            // checkout from the branch tip, never another birth
+            let facts = workspace::recorded(task_id, recorded_ctx);
+            match workspace::ensure_checkout(&repo_root, &facts) {
+                Ok(recreated) => OperationOutcome::Done(WorkspaceReply {
+                    established: false,
+                    recreated,
+                    workspace: WorkspaceFacts::of(&facts),
+                    incarnation: recorded_ctx.birth.0,
+                    records: Vec::new(),
+                }),
+                Err(fail) => OperationOutcome::Failed(ApiFail::Workspace(fail)),
+            }
+        }
+        None => {
+            let home = workspace::worktree_home(&inner.db_path);
+            let established = match workspace::establish(&repo_root, &home, task_id, base) {
+                Ok(facts) => facts,
+                Err(fail) => return OperationOutcome::Failed(ApiFail::Workspace(fail)),
+            };
+            let birth = RecordId(inner.rows.len());
+            let mut drafts = vec![db::RecordDraft {
+                context: Context::system(),
+                event: Event::WorkspaceEstablished {
+                    task_id,
+                    base: established.base.clone(),
+                    branch: established.branch.clone(),
+                    worktree: established.worktree.clone(),
+                },
+            }];
+            drafts.extend(caller_records(birth));
+            match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
+                Ok(records) => OperationOutcome::Done(WorkspaceReply {
+                    established: true,
+                    recreated: false,
+                    workspace: WorkspaceFacts::of(&established),
+                    incarnation: birth.0,
+                    records,
+                }),
+                Err(ExecuteFail::Reject(reject)) => {
+                    OperationOutcome::Failed(ApiFail::Reject(reject, None))
+                }
+                Err(ExecuteFail::Degraded(reason)) => {
+                    OperationOutcome::Failed(ApiFail::Degraded(reason))
+                }
+                Err(ExecuteFail::Db(e)) => OperationOutcome::Failed(ApiFail::Db(e.to_string())),
+            }
+        }
+    }
+}
+
+/// The refresh a landed operation owes the cache: whatever the writes
+/// left behind, so readers never see a world the log contradicts.
+fn reload_inner(guard: &mut ServerState) -> Result<(), String> {
+    let ServerState::Ready(inner) = guard else {
+        return Ok(());
+    };
+    let loadout = db::load(&inner.conn).map_err(|e| e.to_string())?;
+    match loadout.state {
+        db::LoadState::Full(world) => {
+            inner.world = world;
+            inner.rows = loadout.rows;
+            Ok(())
+        }
+        db::LoadState::Degraded(reason) => Err(reason),
+    }
+}
+
+async fn workspace_start(State(app): State<AppState>, body: Bytes) -> Response {
+    let request: StartRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let caller = Context {
+        actor: request.context.actor,
+        tier: match request.context.tier {
+            WireTier::Human => Tier::Human,
+            WireTier::Agent => Tier::Agent,
+        },
+        scope: request.context.scope,
+    };
+    let task = request.task;
+    let base = request.base;
+    let prose = request.request;
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = workspace_operation(
+        &app,
+        &mut guard,
+        Some(caller.actor.as_str().to_string()),
+        task,
+        base.as_deref(),
+        |birth| {
+            vec![
+                db::RecordDraft {
+                    context: caller.clone(),
+                    event: Event::Commented {
+                        target: Target::Task(TaskId(task)),
+                        kind: CommentKind::Request {
+                            body: prose.clone(),
+                        },
+                    },
+                },
+                db::RecordDraft {
+                    context: caller,
+                    event: Event::TaskClaimed {
+                        id: TaskId(task),
+                        incarnation: Some(crate::IncarnationId(birth)),
+                    },
+                },
+            ]
+        },
+    );
+    respond_operation(guard, outcome)
+}
+
+async fn workspace_open(State(app): State<AppState>, body: Bytes) -> Response {
+    let request: OpenRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = workspace_operation(&app, &mut guard, None, request.task, None, |_| Vec::new());
+    respond_operation(guard, outcome)
+}
+
+/// A landed operation refreshed the cache before it answers; a failed
+/// one answers with its named cause.
+fn respond_operation(
+    mut guard: std::sync::MutexGuard<'_, ServerState>,
+    outcome: OperationOutcome,
+) -> Response {
+    if let OperationOutcome::Done(_) = &outcome
+        && let Err(reason) = reload_inner(&mut guard)
+    {
+        return api_failure(ApiFail::Degraded(reason));
+    }
+    match outcome {
+        OperationOutcome::Done(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        OperationOutcome::Failed(fail) => api_failure(fail),
+    }
+}
+
+fn api_failure(fail: ApiFail) -> Response {
+    let (status, code, detail) = fail.parts();
+    (
+        status,
+        Json(json!({"error": {"code": code, "detail": detail}})),
+    )
+        .into_response()
 }
 
 /// The handshake surface: which build is serving, nothing more

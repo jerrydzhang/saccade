@@ -44,16 +44,16 @@ pub enum Event {
     /// A thread holding an artifact: name and content identity, the
     /// bytes stay in the store. Authored like a comment, any tier.
     ArtifactAdded { root: TaskId, artifact: Artifact },
-    // Workspace events: machinery verbs, System-authored by role
-    TaskWorkspaceCreated {
+    // Workspace events: the establishment is the machinery verb,
+    // System-authored by role; the checkpoint is the exception any
+    // tier may record
+    /// The workspace-establishment birth: task reference, canonical
+    /// base, branch, and the workspace's absolute path. The record's
+    /// position is the shared workspace/incarnation identity.
+    WorkspaceEstablished {
         task_id: TaskId,
         base: GitCommit,
         branch: GitBranch,
-    },
-    /// The workspace's physical creation: the worktree exists on
-    /// disk, at the path named.
-    TaskWorkspaceMaterialized {
-        task_id: TaskId,
         worktree: WorktreePath,
     },
     TaskWorkspaceCheckpointed {
@@ -100,13 +100,10 @@ pub enum Command {
         artifact: Artifact,
     },
     // Machinery verbs: System authorship comes from the role, never input
-    CreateWorkspace {
+    EstablishWorkspace {
         task_id: TaskId,
         base: GitCommit,
         branch: GitBranch,
-    },
-    MaterializeWorkspace {
-        task_id: TaskId,
         worktree: WorktreePath,
     },
     CheckpointWorkspace {

@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 11] = [
+const KINDS: [&str; 10] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -35,8 +35,7 @@ const KINDS: [&str; 11] = [
     "comment_revised",
     "comment_withdrawn",
     "artifact_added",
-    "task_workspace_created",
-    "task_workspace_materialized",
+    "workspace_established",
     "task_workspace_checkpointed",
 ];
 
@@ -165,13 +164,10 @@ mod test {
                     hash: ContentHash::of(b"figure bytes"),
                 },
             },
-            Event::TaskWorkspaceCreated {
+            Event::WorkspaceEstablished {
                 task_id: TaskId(0),
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-            },
-            Event::TaskWorkspaceMaterialized {
-                task_id: TaskId(0),
                 worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
             },
             Event::TaskWorkspaceCheckpointed {

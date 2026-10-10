@@ -335,9 +335,13 @@ fn head_meta(show: &ShowView) -> String {
         Some(p) => format!("{} · under {}", show.id, p),
         None => show.id.clone(),
     };
-    match &show.owner {
+    let owned = match &show.owner {
         Some(owner) => format!("{lineage} · owned by {owner}"),
         None => lineage,
+    };
+    match &show.workspace {
+        Some(workspace) => format!("{owned} · {workspace}"),
+        None => owned,
     }
 }
 

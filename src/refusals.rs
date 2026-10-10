@@ -170,8 +170,7 @@ fn command_task(world: &World, command: &Command) -> Option<TaskId> {
         Command::ClaimTask { id, .. }
         | Command::CancelTask { id, .. }
         | Command::ReopenTask { id, .. }
-        | Command::CreateWorkspace { task_id: id, .. }
-        | Command::MaterializeWorkspace { task_id: id, .. }
+        | Command::EstablishWorkspace { task_id: id, .. }
         | Command::CheckpointWorkspace { task_id: id, .. } => Some(*id),
         Command::Comment {
             target: Target::Task(id),

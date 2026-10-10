@@ -132,6 +132,11 @@ impl GitBranch {
         }
         Ok(Self(value))
     }
+
+    /// The branch's name as the effects and views state it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[cfg(test)]

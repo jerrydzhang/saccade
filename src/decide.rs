@@ -20,10 +20,8 @@ fn required_tier(event: &Event) -> Authority {
         Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
         // a presentation repair may come from any judgment tier
         Event::CommentRevised { .. } | Event::CommentWithdrawn { .. } => Authority::AnyTier,
-        // the machinery's workspace records follow provisioning by role
-        Event::TaskWorkspaceCreated { .. } | Event::TaskWorkspaceMaterialized { .. } => {
-            Authority::Require(Tier::System)
-        }
+        // the machinery's establishment is provisioning by role
+        Event::WorkspaceEstablished { .. } => Authority::Require(Tier::System),
     }
 }
 
@@ -50,18 +48,17 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::ReviseComment { id, body } => vec![Event::CommentRevised { id, body }],
         Command::WithdrawComment { id, note } => vec![Event::CommentWithdrawn { id, note }],
         Command::Artifact { root, artifact } => vec![Event::ArtifactAdded { root, artifact }],
-        Command::CreateWorkspace {
+        Command::EstablishWorkspace {
             task_id,
             base,
             branch,
-        } => vec![Event::TaskWorkspaceCreated {
+            worktree,
+        } => vec![Event::WorkspaceEstablished {
             task_id,
             base,
             branch,
+            worktree,
         }],
-        Command::MaterializeWorkspace { task_id, worktree } => {
-            vec![Event::TaskWorkspaceMaterialized { task_id, worktree }]
-        }
         Command::CheckpointWorkspace {
             task_id,
             checkpoint,
@@ -106,7 +103,7 @@ mod test {
     fn authority_table_gates_exactly_the_gated_events() {
         // Expected cells stated independently of required_tier.
         use Authority::*;
-        let events: [(Event, Authority); 16] = [
+        let events: [(Event, Authority); 15] = [
             (
                 Event::TaskCreated {
                     name: prose(),
@@ -211,16 +208,10 @@ mod test {
             ),
             // Provisioning stays machine-authored; checkpoint is the exception.
             (
-                Event::TaskWorkspaceCreated {
+                Event::WorkspaceEstablished {
                     task_id: TaskId(0),
                     base: GitCommit::new("abc123".into()).unwrap(),
                     branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-                },
-                Require(Tier::System),
-            ),
-            (
-                Event::TaskWorkspaceMaterialized {
-                    task_id: TaskId(0),
                     worktree: WorktreePath::new("/wt".into()).unwrap(),
                 },
                 Require(Tier::System),
@@ -292,13 +283,10 @@ mod test {
                     hash: ContentHash::of(b"bytes"),
                 },
             },
-            Command::CreateWorkspace {
+            Command::EstablishWorkspace {
                 task_id: TaskId(0),
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-            },
-            Command::MaterializeWorkspace {
-                task_id: TaskId(0),
                 worktree: WorktreePath::new("/wt".into()).unwrap(),
             },
             Command::CheckpointWorkspace {

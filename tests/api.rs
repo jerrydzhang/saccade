@@ -193,7 +193,7 @@ async fn the_tier_law_holds_through_http() {
         &envelope(
             "pi",
             "agent",
-            json!({"create_workspace": {"task_id": 0, "base_url": "abc123", "branch": "saccade/t-0"}}),
+            json!({"establish_workspace": {"task_id": 0, "base": "abc123", "branch": "saccade/t-0", "worktree": "/repo/wt/t-0"}}),
         ),
     );
     assert_eq!(status, 400);
@@ -439,6 +439,242 @@ async fn a_refused_writes_line_replays_against_a_cursor_clone() {
     let (status, body) = post_raw(&clone_base, replay);
     assert_eq!(status, 400);
     assert_eq!(json_of(&body)["error"]["code"], "invalid_task_id");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+// ---- the workspace operations: real git, the server's own effects ----
+
+async fn spawn_workspace_server(db_path: &std::path::Path, repo: &std::path::Path) -> String {
+    let state = AppState::open(db_path)
+        .expect("the scratch tracker opens")
+        .with_repo_root(repo.to_path_buf());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = axum::Router::new()
+        .merge(saccade::api::routes())
+        .with_state(state);
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+fn post_workspace(base_url: &str, path: &str, body: &Value) -> (u16, String) {
+    let mut r = ureq::post(&format!("{base_url}{path}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(body.clone())
+        .expect("the loopback server answers");
+    (r.status().as_u16(), r.body_mut().read_to_string().unwrap())
+}
+
+/// A scratch git repo with two commits; returns its root and both tips.
+fn scratch_repo(dir: &std::path::Path) -> (std::path::PathBuf, String, String) {
+    let root = dir.join("repo");
+    std::fs::create_dir_all(&root).unwrap();
+    sh(&root, &["init", "-q", "--initial-branch=main"]);
+    std::fs::write(root.join("readme"), "the project\n").unwrap();
+    sh(&root, &["add", "."]);
+    sh(&root, &["commit", "-qm", "base"]);
+    let first = sh(&root, &["rev-parse", "HEAD"]);
+    std::fs::write(root.join("readme"), "the project, advanced\n").unwrap();
+    sh(&root, &["commit", "-qam", "advanced"]);
+    let head = sh(&root, &["rev-parse", "HEAD"]);
+    (root, first, head)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_establishes_through_the_servers_git_effects() {
+    let db = scratch_db("ws-start");
+    let (root, _first, head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "migrate the floop guard", "parent_id": null}}),
+        ),
+    );
+
+    // first start: establishment, caller request, incarnation ownership
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/start",
+        &json!({
+            "context": {"actor": "jerry", "tier": "human"},
+            "task": 0,
+            "base": null,
+            "request": "migrate the floop guard"
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["established"], true);
+    assert_eq!(reply["recreated"], false);
+    assert_eq!(reply["workspace"]["branch"], "saccade/t-0");
+    assert_eq!(reply["workspace"]["base"], head.as_str());
+    let records = reply["records"].as_array().expect("three records");
+    let kinds: Vec<&str> = records
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["workspace_established", "commented", "task_claimed"]
+    );
+    let actors: Vec<&str> = records
+        .iter()
+        .map(|r| r["actor"].as_str().unwrap())
+        .collect();
+    assert_eq!(actors, ["saccade", "jerry", "jerry"]);
+    let tiers: Vec<&str> = records
+        .iter()
+        .map(|r| r["tier"].as_str().unwrap())
+        .collect();
+    assert_eq!(tiers, ["system", "human", "human"]);
+    let birth = records[0]["seq"].as_u64().unwrap() as usize;
+    assert_eq!(reply["incarnation"].as_u64().unwrap(), birth as u64);
+
+    // the checkout exists at the tracker's worktree home, on the branch
+    let worktree = db.parent().unwrap().join("worktrees").join("t-0");
+    assert!(worktree.join("readme").is_file());
+    assert_eq!(
+        sh(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "saccade/t-0"
+    );
+
+    // ownership names the incarnation; the request kept its human author
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log folds"),
+    };
+    assert!(matches!(
+        world.tasks[0].ownership[0].owner,
+        saccade::Owner::Incarnation(_)
+    ));
+    assert_eq!(
+        world.comments[&saccade::CommentId(saccade::RecordId(birth + 1))]
+            .actor
+            .as_str(),
+        "jerry"
+    );
+
+    // repeat start: nothing lands, nothing launches — the association governs
+    std::fs::write(worktree.join("dirty.txt"), "uncommitted\n").unwrap();
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/start",
+        &json!({
+            "context": {"actor": "jerry", "tier": "human"},
+            "task": 0,
+            "request": "a second request that must not land"
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["established"], false);
+    assert_eq!(reply["records"].as_array().unwrap().len(), 0);
+    assert_eq!(saccade::db::load(&conn).unwrap().rows.len(), 4);
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("dirty.txt")).unwrap(),
+        "uncommitted\n"
+    );
+
+    // a missing checkout is recreated from the branch tip, identity unchanged
+    sh(&worktree, &["add", "dirty.txt"]);
+    sh(&worktree, &["commit", "-qm", "advancement"]);
+    let tip = sh(&worktree, &["rev-parse", "HEAD"]);
+    std::fs::remove_dir_all(&worktree).unwrap();
+    let (status, body) = post_workspace(&base_url, "/api/v1/workspace/open", &json!({"task": 0}));
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["recreated"], true);
+    assert_eq!(reply["incarnation"].as_u64().unwrap(), birth as u64);
+    assert_eq!(sh(&worktree, &["rev-parse", "HEAD"]), tip);
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log folds"),
+    };
+    assert!(matches!(
+        world.tasks[0].ownership[0].owner,
+        saccade::Owner::Incarnation(_)
+    ));
+
+    // a vanished branch is a named refusal, never invented recovery
+    std::fs::remove_dir_all(&worktree).unwrap();
+    sh(&root, &["worktree", "prune"]);
+    sh(&root, &["branch", "-qD", "saccade/t-0"]);
+    let (status, body) = post_workspace(&base_url, "/api/v1/workspace/open", &json!({"task": 0}));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "workspace_branch_missing");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_branch_scheme_and_base_are_effects_not_claims() {
+    let db = scratch_db("ws-base");
+    let (root, first, head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+    post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "stack work", "parent_id": null}}),
+        ),
+    );
+
+    // a taken branch name is a named refusal that records nothing
+    sh(&root, &["branch", "saccade/t-0"]);
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/start",
+        &json!({
+            "context": {"actor": "jerry", "tier": "human"},
+            "task": 0,
+            "request": "will not land"
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "workspace_branch_exists");
+    let conn = saccade::db::open_read(&db).unwrap();
+    assert_eq!(saccade::db::load(&conn).unwrap().rows.len(), 1);
+    sh(&root, &["branch", "-qD", "saccade/t-0"]);
+
+    // an explicit base names the stacked commit
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/start",
+        &json!({
+            "context": {"actor": "jerry", "tier": "human"},
+            "task": 0,
+            "base": "HEAD~1",
+            "request": "stacked work"
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["workspace"]["base"], first.as_str());
+
+    // an unknown task refuses before any effect
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/start",
+        &json!({
+            "context": {"actor": "jerry", "tier": "human"},
+            "task": 9,
+            "request": "no such task"
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_task_id");
+    let _ = head;
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -1687,4 +1923,466 @@ async fn offline_replies_match_the_wire() {
 
     std::fs::remove_dir_all(offline_db.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(served_db.parent().unwrap()).unwrap();
+}
+
+// ---- the workspace doors through the CLI face: a fake host, real exec ----
+
+/// A fake `orca` on PATH: the worktree resolves instantly and every
+/// terminal create is logged verbatim. The real host is the smoke's.
+fn fake_host(dir: &std::path::Path) -> std::path::PathBuf {
+    let bin_dir = dir.join("host-bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let orca = bin_dir.join("orca");
+    std::fs::write(
+        &orca,
+        "#!/usr/bin/env bash\n\
+         echo \"$*\" >> \"$FAKE_ORCA_LOG\"\n\
+         if [ \"$1\" = worktree ]; then exit 0; fi\n\
+         if [ \"$1\" = terminal ]; then\n\
+           echo '{\"ok\":true,\"result\":{\"terminal\":{\"id\":\"fake-term-1\"}}}'\n\
+           exit 0\n\
+         fi\n\
+         exit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&orca, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    orca
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_open_exec_and_identity_through_the_cli_face() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("ws-cli");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    // the fake host rides first on PATH
+    let host = fake_host(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    std::fs::write(&host_log, b"").unwrap();
+
+    // NixOS carries no /bin/echo: the binaries resolve from this PATH
+    let on_path = |name: &str| {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("command -v {name}"))
+            .output()
+            .expect("sh runs");
+        assert!(out.status.success(), "no {name} on PATH");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let (echo, env_bin, pwd, true_bin) = (
+        on_path("echo"),
+        on_path("env"),
+        on_path("pwd"),
+        on_path("true"),
+    );
+
+    let sac = |args: &[&str], envs: &[(&str, &str)]| {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args(args)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    host.parent().unwrap().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("FAKE_ORCA_LOG", host_log.display().to_string())
+            .env("SACCADE_PI", &true_bin)
+            .env_remove("SACCADE_ACTOR")
+            .env_remove("SACCADE_REPO")
+            .env_remove("SACCADE_DB")
+            .env_remove("SACCADE_SERVER")
+            .env_remove("SACCADE_TASK")
+            .env_remove("SACCADE_INCARNATION")
+            .env_remove("SACCADE_WORKSPACE")
+            .current_dir(&root);
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // the task exists before any start: creation is never implicit
+    assert!(
+        sac(
+            &[
+                "--server",
+                &base_url,
+                "--db",
+                db.to_str().unwrap(),
+                "create",
+                "task",
+                "land the workspace doors",
+            ],
+            &[("SACCADE_ACTOR", "pi")]
+        )
+        .0
+    );
+
+    // first start: records land, the host is asked once, the typed
+    // command carries the request with its boundaries quoted
+    let (ok, out, err) = sac(
+        &[
+            "--server",
+            &base_url,
+            "--db",
+            db.to_str().unwrap(),
+            "start",
+            "t-0",
+            "please fix it's 'the' flake now",
+        ],
+        &[("SACCADE_ACTOR", "pi")],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert!(out.contains("workspace established"), "{out}");
+    assert!(out.contains("c-1"), "{out}");
+    let asked = std::fs::read_to_string(&host_log).unwrap();
+    assert!(
+        asked.contains("terminal create --worktree path:"),
+        "{asked}"
+    );
+    assert!(
+        asked.contains(&format!(
+            "exec t-0 -- {true_bin} 'please fix it'\\''s '\\''the'\\'' flake now'"
+        )),
+        "the typed command keeps the request verbatim: {asked}"
+    );
+    assert!(asked.contains("--server"), "{asked}");
+
+    // repeat start: the host opens the workspace, no harness, no request
+    std::fs::write(&host_log, b"").unwrap();
+    let (ok, out, err) = sac(
+        &[
+            "--server",
+            &base_url,
+            "--db",
+            db.to_str().unwrap(),
+            "start",
+            "t-0",
+            "again",
+        ],
+        &[("SACCADE_ACTOR", "pi")],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert!(out.contains("no duplicate"), "{out}");
+    let asked = std::fs::read_to_string(&host_log).unwrap();
+    assert!(asked.contains("terminal create"), "{asked}");
+    assert!(!asked.contains("--command"), "{asked}");
+
+    // open: the missing checkout is recreated, identity unchanged
+    let worktree = db.parent().unwrap().join("worktrees").join("t-0");
+    std::fs::remove_dir_all(&worktree).unwrap();
+    let (ok, out, err) = sac(
+        &[
+            "--server",
+            &base_url,
+            "--db",
+            db.to_str().unwrap(),
+            "open",
+            "t-0",
+        ],
+        &[("SACCADE_ACTOR", "pi")],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert!(out.contains("recreated"), "{out}");
+    assert!(worktree.join("readme").is_file());
+
+    // exec: argv boundaries, working directory, stale scope overwritten
+    let (ok, out, err) = sac(
+        &[
+            "--server",
+            &base_url,
+            "--db",
+            db.to_str().unwrap(),
+            "exec",
+            "t-0",
+            "--",
+            &echo,
+            "two  spaces",
+            "x y",
+        ],
+        &[
+            ("SACCADE_ACTOR", "pi"),
+            ("SACCADE_TASK", "t-99"),
+            ("SACCADE_INCARNATION", "c-999"),
+            ("SACCADE_WORKSPACE", "/nowhere"),
+        ],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert_eq!(out.trim_end(), "two  spaces x y");
+
+    let (ok, out, err) = sac(
+        &[
+            "--server",
+            &base_url,
+            "--db",
+            db.to_str().unwrap(),
+            "exec",
+            "t-0",
+            "--",
+            &env_bin,
+        ],
+        &[
+            ("SACCADE_ACTOR", "pi"),
+            ("SACCADE_TASK", "t-99"),
+            ("SACCADE_INCARNATION", "c-999"),
+            ("SACCADE_WORKSPACE", "/nowhere"),
+        ],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    let env_line = |key: &str| {
+        out.lines()
+            .find(|l| l.starts_with(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("{key} missing from: {out}"))
+            .to_string()
+    };
+    assert_eq!(env_line("SACCADE_TASK"), "SACCADE_TASK=t-0");
+    assert_eq!(env_line("SACCADE_INCARNATION"), "SACCADE_INCARNATION=c-1");
+    assert_eq!(
+        env_line("SACCADE_WORKSPACE"),
+        format!("SACCADE_WORKSPACE={}", worktree.display())
+    );
+    assert_eq!(
+        env_line("SACCADE_REPO"),
+        format!("SACCADE_REPO={}", root.display())
+    );
+    assert_eq!(
+        env_line("SACCADE_DB"),
+        format!("SACCADE_DB={}", db.display())
+    );
+    assert_eq!(
+        env_line("SACCADE_SERVER"),
+        format!("SACCADE_SERVER={base_url}")
+    );
+
+    // the working directory is the checkout
+    let (ok, out, err) = sac(
+        &[
+            "--server",
+            &base_url,
+            "--db",
+            db.to_str().unwrap(),
+            "exec",
+            "t-0",
+            "--",
+            &pwd,
+        ],
+        &[("SACCADE_ACTOR", "pi")],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert_eq!(out.trim_end(), worktree.display().to_string());
+
+    // exec provisions nothing: a task without a workspace refuses
+    assert!(
+        sac(
+            &[
+                "--server",
+                &base_url,
+                "--db",
+                db.to_str().unwrap(),
+                "create",
+                "task",
+                "never started",
+            ],
+            &[("SACCADE_ACTOR", "pi")]
+        )
+        .0
+    );
+    let (ok, _, err) = sac(
+        &[
+            "--server",
+            &base_url,
+            "--db",
+            db.to_str().unwrap(),
+            "exec",
+            "t-1",
+            "--",
+            &true_bin,
+        ],
+        &[("SACCADE_ACTOR", "pi")],
+    );
+    assert!(!ok, "{err}");
+    assert!(err.contains("workspace_missing"), "{err}");
+
+    // identity: the environment's declaration, read-only
+    let (ok, out, err) = sac(
+        &[
+            "--server",
+            &base_url,
+            "--db",
+            db.to_str().unwrap(),
+            "identity",
+            "--json",
+        ],
+        &[
+            ("SACCADE_ACTOR", "pi"),
+            ("SACCADE_TASK", "t-0"),
+            ("SACCADE_INCARNATION", "c-1"),
+            ("SACCADE_WORKSPACE", worktree.to_str().unwrap()),
+        ],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    let identity: Value = serde_json::from_str(&out).expect("the json face parses");
+    assert_eq!(identity["actor"], "pi");
+    assert_eq!(identity["tier"], "agent");
+    assert_eq!(identity["task"], "t-0");
+    assert_eq!(identity["incarnation"], "c-1");
+    assert_eq!(identity["workspace"], worktree.display().to_string());
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+// ---- the guard's terminal arms: a real pty, piped prose ----
+
+/// Open a pty; the child's stdout and stderr attach to its slave.
+fn open_pty() -> (i32, std::path::PathBuf) {
+    let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+    assert!(master >= 0, "posix_openpt");
+    assert_eq!(unsafe { libc::grantpt(master) }, 0);
+    assert_eq!(unsafe { libc::unlockpt(master) }, 0);
+    let mut buf = [0u8; 64];
+    assert_eq!(
+        unsafe { libc::ptsname_r(master, buf.as_mut_ptr().cast(), buf.len()) },
+        0
+    );
+    let name = std::ffi::CStr::from_bytes_until_nul(&buf)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    (master, std::path::PathBuf::from(name))
+}
+
+use std::os::unix::ffi::OsStrExt;
+
+/// A slave fd as spawnable stdio; the master stays open in this process
+/// so the slave keeps reporting a terminal.
+fn pty_stdio(masters: &mut Vec<i32>) -> std::process::Stdio {
+    use std::os::unix::io::FromRawFd;
+    let (master, slave) = open_pty();
+    let fd = unsafe { libc::open(slave.as_os_str().as_bytes().as_ptr().cast(), libc::O_RDWR) };
+    assert!(fd >= 0, "open the pty slave");
+    masters.push(master);
+    std::process::Stdio::from(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
+/// Run sac with piped stdin and each of stdout/stderr either a pipe or
+/// a pty slave; the bytes written to stdin land before the wait.
+fn run_with_terminals(
+    bin: &str,
+    args: &[String],
+    stdout_tty: bool,
+    stderr_tty: bool,
+) -> std::process::Output {
+    use std::io::Write;
+    let mut masters = Vec::new();
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args)
+        .env_remove("SACCADE_ACTOR")
+        .env_remove("SACCADE_TASK")
+        .env_remove("SACCADE_INCARNATION")
+        .env_remove("SACCADE_WORKSPACE")
+        .stdin(std::process::Stdio::piped())
+        .stdout(if stdout_tty {
+            pty_stdio(&mut masters)
+        } else {
+            std::process::Stdio::piped()
+        })
+        .stderr(if stderr_tty {
+            pty_stdio(&mut masters)
+        } else {
+            std::process::Stdio::piped()
+        });
+    let mut child = cmd.spawn().expect("spawn sac");
+    child.stdin.take().unwrap().write_all(b"").unwrap();
+    let out = child.wait_with_output().expect("sac answers");
+    for master in masters {
+        unsafe { libc::close(master) };
+    }
+    out
+}
+
+/// The forgotten-identity guard's terminal arms, per the ratified
+/// rule: a mutation with a terminal attached anywhere proceeds as the
+/// human's; a caller with no terminal and no possession refuses.
+#[test]
+fn piped_human_prose_passes_and_unattended_refuses() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("ws-guard");
+
+    // the task exists; possession (an agent) seeds it offline
+    let seed = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&db)
+        .arg("--offline")
+        .env("SACCADE_ACTOR", "pi")
+        .args(["create", "task", "guarded writes"])
+        .output()
+        .expect("spawn sac");
+    assert!(
+        seed.status.success(),
+        "seed: {}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+
+    let args = |sub: &[&str]| {
+        let mut full = vec![
+            "--db".to_string(),
+            db.display().to_string(),
+            "--offline".to_string(),
+        ];
+        full.extend(sub.iter().map(|s| s.to_string()));
+        full
+    };
+
+    // piped prose, terminal stdout and stderr: the human writes
+    let out = run_with_terminals(
+        bin,
+        &args(&["comment", "t-0", "piped prose from a human shell"]),
+        true,
+        true,
+    );
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // the record landed, human-authored
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log folds"),
+    };
+    assert_eq!(world.tasks[0].thread.len(), 1);
+    assert_eq!(world.tasks[0].thread.len(), 1);
+
+    // no terminal anywhere and no SACCADE_ACTOR: refusal, taught
+    let out = run_with_terminals(
+        bin,
+        &args(&["comment", "t-0", "no terminal in sight"]),
+        false,
+        false,
+    );
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no SACCADE_ACTOR and no terminal"), "{err}");
+    assert!(err.contains("export SACCADE_ACTOR"), "{err}");
+
+    // and nothing landed: the thread holds the one piped note
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log folds"),
+    };
+    assert_eq!(world.tasks[0].thread.len(), 1);
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }

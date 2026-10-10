@@ -183,6 +183,38 @@ enum Cmd {
     },
     /// Record a task's current branch tip as its checkpoint
     Checkpoint { id: String },
+    /// Establish a task's workspace and launch the pinned harness with
+    /// the initial request; a task already holding a workspace is
+    /// reported and opened, never duplicated
+    Start {
+        id: String,
+        /// The initial request, quoted
+        #[arg(required_unless_present = "stdin", conflicts_with = "stdin")]
+        body: Option<String>,
+        /// Read the initial request from stdin instead of an argument
+        #[arg(long)]
+        stdin: bool,
+        /// The Git base for the new branch: a ref, defaulting to the
+        /// primary checkout's current HEAD
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// Open a task's workspace through the host: ensure the recorded
+    /// environment exists (a missing checkout is recreated from its
+    /// branch tip), launch no harness, land no records
+    Open { id: String },
+    /// Run a command inside a task's workspace: resolve the recorded
+    /// workspace/incarnation, enter the checkout, inject the identity
+    /// and routing environment, and exec the argv as given
+    Exec {
+        id: String,
+        /// The command and its arguments, after --
+        #[arg(last = true)]
+        argv: Vec<String>,
+    },
+    /// Report this session's environment-declared identity and routing:
+    /// disclosure, never a liveness claim or proof of ownership
+    Identity,
     /// Clone the log's prefix through a storage seq into a fresh
     /// tracker: the reproduction recipe's cursor half
     Clone {
@@ -323,8 +355,8 @@ impl std::fmt::Display for Fail {
             Fail::Taught { code, text } => write!(f, "rejected: {code} — {text}"),
             Fail::IdentityFallback { actor, tier } => write!(
                 f,
-                "this write would record {actor}/{tier} with no SACCADE_ACTOR and no tty \
-                 (--actor rides the keyboard arm); export SACCADE_ACTOR=<name>"
+                "this write would record {actor}/{tier} with no SACCADE_ACTOR and no terminal \
+                 attached (--actor rides the terminal arm); export SACCADE_ACTOR=<name>"
             ),
             Fail::Usage(m) => write!(f, "{m}"),
             Fail::Client(c) => write!(f, "{c}"),
@@ -457,6 +489,15 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::List { .. } | Cmd::Log | Cmd::Show { .. } | Cmd::Search { .. } => {
             return read_only(cli, &db_path);
         }
+        Cmd::Start {
+            id,
+            body,
+            stdin,
+            base,
+        } => return start_door(cli, &db_path, id, body.clone(), *stdin, base.clone()),
+        Cmd::Open { id } => return open_door(cli, &db_path, id),
+        Cmd::Exec { id, argv } => return exec_door(cli, &db_path, id, argv),
+        Cmd::Identity => return identity_door(cli),
         Cmd::Serve { bind, port } => {
             let _ = tracing_subscriber::fmt()
                 .json()
@@ -771,17 +812,22 @@ fn context_scope() -> Result<Option<Scope>, Fail> {
 }
 
 /// The write door's guard: possession passes any context; without it,
-/// a keyboard or nothing. A tty earns the write — the unnamed fallback
-/// on one notice line, a named --actor silently — and every non-tty
-/// caller (scripts, spawned agents) refuses before any write, taught
-/// the fix. Possession is read from the context's tier, never the
-/// --actor flag: clap binds SACCADE_ACTOR into that flag, so it cannot
-/// tell possession from a passed name.
+/// a terminal attached anywhere or nothing. A terminal attached to
+/// any of stdin, stdout, or stderr earns the write — the unnamed
+/// fallback on one notice line, a named --actor silently — and a
+/// caller with no terminal and no SACCADE_ACTOR (scripts, spawned
+/// agents that forgot their identity) refuses before any write,
+/// taught the fix. Possession is read from the context's tier, never
+/// the --actor flag: clap binds SACCADE_ACTOR into that flag, so it
+/// cannot tell possession from a passed name.
 fn identity_fallback_guard(cli: &Cli, context: &Context) -> Result<(), Fail> {
     if matches!(context.tier, Tier::Agent) {
         return Ok(());
     }
-    if std::io::stdin().is_terminal() {
+    let interactive = std::io::stdin().is_terminal()
+        || std::io::stdout().is_terminal()
+        || std::io::stderr().is_terminal();
+    if interactive {
         if cli.actor.is_none() {
             eprintln!("{}", identity_fallback_notice(context));
         }
@@ -803,6 +849,433 @@ fn identity_fallback_notice(context: &Context) -> String {
         saccade::wire::tier_of(&context.tier)
     )
 }
+/// The primary repo root: --repo names it, else the repo containing
+/// the working directory (a worktree resolves to its main checkout).
+fn resolve_repo(cli: &Cli) -> Result<PathBuf, Fail> {
+    match &cli.repo {
+        Some(repo) => repo
+            .canonicalize()
+            .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display()))),
+        None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage),
+    }
+}
+
+/// The start door: first sight establishes the workspace through the
+/// server's own Git effects (the caller's claims never name the
+/// facts), lands the caller's request and the incarnation ownership,
+/// then launches the pinned harness in a host terminal with the
+/// request as its initial prompt. A task already holding a workspace
+/// is reported and opened — no second harness, no second request, no
+/// ownership transfer.
+fn start_door(
+    cli: &Cli,
+    db_path: &std::path::Path,
+    id: &str,
+    body: Option<String>,
+    stdin: bool,
+    base: Option<String>,
+) -> Result<String, Fail> {
+    if cli.offline {
+        return Err(Fail::Usage(
+            "start runs through the server: the sole writer establishes workspaces; --offline cannot".into(),
+        ));
+    }
+    let task = parse_task_id(id)?;
+    let request = Prose::new(start_body(body, stdin)?)?;
+    let context = context_of(cli)?;
+    identity_fallback_guard(cli, &context)?;
+    client::handshake(&cli.server);
+    let reply = client::start_workspace(&cli.server, &context, task.0, base.as_deref(), &request)
+        .map_err(Fail::Client)?;
+    let host = if reply.established {
+        launch_harness(cli, db_path, task, &reply, &request)?
+    } else {
+        open_host_terminal(&reply.workspace.path).map_err(|e| {
+            Fail::Usage(format!(
+                "workspace stands at {}; the host would not open it: {e}",
+                reply.workspace.path
+            ))
+        })?
+    };
+    render_workspace_reply(cli, &reply, &host)
+}
+
+/// The open door: ensure the recorded environment exists (a missing
+/// checkout is recreated from its branch tip, identity unchanged) and
+/// open it through the host. No harness launch, no session restore,
+/// no records, ownership untouched.
+fn open_door(cli: &Cli, db_path: &std::path::Path, id: &str) -> Result<String, Fail> {
+    let _ = db_path;
+    if cli.offline {
+        return Err(Fail::Usage(
+            "open runs through the server: the sole writer establishes workspaces; --offline cannot".into(),
+        ));
+    }
+    let task = parse_task_id(id)?;
+    client::handshake(&cli.server);
+    let reply = client::open_workspace(&cli.server, task.0).map_err(Fail::Client)?;
+    let host = open_host_terminal(&reply.workspace.path).map_err(|e| {
+        Fail::Usage(format!(
+            "workspace stands at {}; the host would not open it: {e}",
+            reply.workspace.path
+        ))
+    })?;
+    render_workspace_reply(cli, &reply, &host)
+}
+
+/// The exec door: resolve the recorded workspace/incarnation, enter
+/// the checkout, inject the identity and routing environment —
+/// overwriting any stale task bindings inherited from another task —
+/// and exec the argv with its argument boundaries intact. No records,
+/// no provisioning: a missing checkout is the exec's own failure.
+fn exec_door(
+    cli: &Cli,
+    db_path: &std::path::Path,
+    id: &str,
+    argv: &[String],
+) -> Result<String, Fail> {
+    let [program, rest @ ..] = argv else {
+        return Err(Fail::Usage("exec needs a command after --".into()));
+    };
+    let task = parse_task_id(id)?;
+    let conn = db::open_read(db_path).map_err(Fail::Db)?;
+    let loadout = db::load(&conn).map_err(Fail::Db)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "exec needs the world; the log will not fold".into(),
+        ));
+    };
+    let ctx = world.tasks.get(task.0).ok_or(Reject::InvalidTaskId)?;
+    let workspace = ctx.workspace.as_ref().ok_or(Reject::WorkspaceMissing)?;
+    let repo = resolve_repo(cli)?;
+    let env = injected_environment(task, workspace, &repo, db_path, &cli.server);
+    let checkout = workspace.workspace.worktree.as_path();
+    std::env::set_current_dir(checkout).map_err(|e| {
+        Fail::Usage(format!(
+            "the checkout {} is missing: 'sac open t-{}' recreates it from the branch — {e}",
+            checkout.display(),
+            task.0
+        ))
+    })?;
+    let err = std::os::unix::process::CommandExt::exec(
+        std::process::Command::new(program).args(rest).envs(env),
+    );
+    Err(Fail::Usage(format!("cannot exec {program}: {err}")))
+}
+
+/// The identity door: what this session's environment declares, plus
+/// its routing. Possession fixes the tier; the scope is disclosure
+/// riding records, never proof; nothing here is a liveness claim.
+fn identity_door(cli: &Cli) -> Result<String, Fail> {
+    let context = context_of(cli)?;
+    let scope = context.scope.clone();
+    let repo = resolve_repo(cli).ok();
+    let db_path = resolve_db(cli).ok();
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "actor": context.actor.as_str(),
+            "tier": saccade::wire::tier_of(&context.tier),
+            "task": scope.as_ref().map(|s| format!("t-{}", s.task.0)),
+            "incarnation": scope.as_ref().and_then(|s| s.incarnation.map(|i| format!("c-{}", i.0 .0))),
+            "workspace": scope.as_ref().and_then(|s| s.workspace.as_ref().map(|w| w.as_path().display().to_string())),
+            "repo": repo.map(|p| p.display().to_string()),
+            "db": db_path.map(|p| p.display().to_string()),
+            "server": cli.server,
+        }))
+        .expect("identity is plain data"));
+    }
+    let mut out = vec![format!(
+        "actor  {} ({})",
+        context.actor.as_str(),
+        saccade::wire::tier_of(&context.tier)
+    )];
+    match &scope {
+        Some(scope) => {
+            out.push(format!("task  t-{}", scope.task.0));
+            if let Some(incarnation) = scope.incarnation {
+                out.push(format!("incarnation  c-{}", incarnation.0.0));
+            }
+            if let Some(workspace) = &scope.workspace {
+                out.push(format!("workspace  {}", workspace.as_path().display()));
+            }
+        }
+        None => out.push("task  none declared".into()),
+    }
+    if let Some(repo) = repo {
+        out.push(format!("repo  {}", repo.display()));
+    }
+    if let Some(db) = db_path {
+        out.push(format!("db  {}", db.display()));
+    }
+    out.push(format!("server  {}", cli.server));
+    Ok(out.join("\n"))
+}
+
+/// The environment a task's sessions run under: scope declarations
+/// from the record, routing to this tracker. Stale inherited bindings
+/// are overwritten, never merged.
+fn injected_environment(
+    task: TaskId,
+    workspace: &saccade::objects::workspace::WorkspaceContext,
+    repo: &std::path::Path,
+    db_path: &std::path::Path,
+    server: &str,
+) -> Vec<(String, String)> {
+    vec![
+        ("SACCADE_TASK".into(), format!("t-{}", task.0)),
+        (
+            "SACCADE_INCARNATION".into(),
+            format!("c-{}", workspace.birth.0),
+        ),
+        (
+            "SACCADE_WORKSPACE".into(),
+            workspace.workspace.worktree.as_path().display().to_string(),
+        ),
+        ("SACCADE_REPO".into(), repo.display().to_string()),
+        ("SACCADE_DB".into(), db_path.display().to_string()),
+        ("SACCADE_SERVER".into(), server.to_string()),
+    ]
+}
+
+/// The start door's body source: the quoted argument or the pipe.
+fn start_body(body: Option<String>, stdin: bool) -> Result<String, Fail> {
+    if stdin {
+        if std::io::stdin().is_terminal() {
+            return Err(Fail::Usage(
+                "nothing piped: --stdin reads the request".into(),
+            ));
+        }
+        return std::io::read_to_string(std::io::stdin())
+            .map_err(|e| Fail::Usage(format!("stdin: {e}")));
+    }
+    body.ok_or_else(|| Fail::Usage("the request comes quoted or through --stdin".into()))
+}
+
+/// The pinned native Pi: the development override first, then the
+/// flake pin this binary was built with. Never an arbitrary PATH pi.
+fn pinned_pi() -> Result<PathBuf, Fail> {
+    if let Some(path) = std::env::var_os("SACCADE_PI").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = option_env!("SACCADE_PI_BIN") {
+        return Ok(PathBuf::from(path));
+    }
+    Err(Fail::Usage(
+        "no pinned pi: this binary carries no flake pin; export SACCADE_PI=<pi> to name one".into(),
+    ))
+}
+
+/// One POSIX word, quoted so any bytes survive the shell that types it.
+fn shell_quote(word: &str) -> String {
+    if !word.is_empty()
+        && word.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'=' | b'/' | b'.' | b'+')
+        })
+    {
+        return word.to_string();
+    }
+    let mut out = String::with_capacity(word.len() + 2);
+    out.push('\'');
+    for c in word.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// What the host did with our terminal request.
+#[derive(serde::Serialize)]
+struct HostLaunch {
+    terminal: String,
+    command: Option<String>,
+}
+
+fn orca(args: &[&str]) -> Result<std::process::Output, String> {
+    std::process::Command::new("orca")
+        .args(args)
+        .output()
+        .map_err(|e| format!("orca {}: {e}", args.first().unwrap_or(&"")))
+}
+
+/// Wait for the host's cached discovery to see the worktree Orca will
+/// be asked to use: bounded, exact-path, never a second checkout. The
+/// probe observed ~35s; the bound leaves room without hanging forever.
+fn orca_await_worktree(path: &str) -> Result<(), String> {
+    let selector = format!("path:{path}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    loop {
+        let out = orca(&["worktree", "show", "--worktree", &selector])?;
+        if out.status.success() {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "orca has not discovered {path} yet (bounded at 90s); 'sac open t-<n>' opens it once it has",
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+    }
+}
+
+/// Create a host terminal in the worktree. Without a command it is a
+/// plain shell — the open behavior; with one, the command is typed
+/// into that shell verbatim, argv boundaries kept by quoting.
+fn open_host_terminal(path: &str) -> Result<HostLaunch, String> {
+    orca_await_worktree(path)?;
+    let out = orca(&[
+        "terminal",
+        "create",
+        "--worktree",
+        &format!("path:{path}"),
+        "--json",
+    ])?;
+    if !out.status.success() {
+        return Err(format!(
+            "orca terminal create failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let id = terminal_id(&String::from_utf8_lossy(&out.stdout));
+    Ok(HostLaunch {
+        terminal: id,
+        command: None,
+    })
+}
+
+/// The created terminal's handle, when the host names one.
+fn terminal_id(stdout: &str) -> String {
+    let parsed: Option<String> = serde_json::from_str::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|v| {
+            ["result", "terminal"]
+                .iter()
+                .try_fold(v, |acc, key| acc.get(key).cloned())
+                .and_then(|t| t.get("id").and_then(|id| id.as_str()).map(str::to_string))
+        });
+    parsed.unwrap_or_else(|| "created".into())
+}
+
+/// Launch the pinned harness in a host terminal at the workspace, the
+/// initial request as its literal prompt. The typed command is a
+/// self-contained sac exec invocation: explicit routing flags, the
+/// dev environment activated when the worktree carries an .envrc, and
+/// the session's identity injected by exec itself.
+fn launch_harness(
+    cli: &Cli,
+    db_path: &std::path::Path,
+    task: TaskId,
+    reply: &client::WorkspaceReply,
+    request: &Prose,
+) -> Result<HostLaunch, Fail> {
+    let pi = pinned_pi()?;
+    let repo = resolve_repo(cli)?;
+    let sac = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("sac"));
+    let mut argv = vec![sac.display().to_string()];
+    argv.extend([
+        "--server".to_string(),
+        cli.server.clone(),
+        "--db".to_string(),
+        db_path.display().to_string(),
+        "--repo".to_string(),
+        repo.display().to_string(),
+        "exec".to_string(),
+        format!("t-{}", task.0),
+        "--".to_string(),
+        pi.display().to_string(),
+        request.as_str().to_string(),
+    ]);
+    let worktree = &reply.workspace.path;
+    let direnv = std::path::Path::new(worktree).join(".envrc");
+    let argv: Vec<String> = if direnv.is_file() {
+        vec!["direnv".into(), "exec".into(), worktree.clone()]
+            .into_iter()
+            .chain(argv)
+            .collect()
+    } else {
+        argv
+    };
+    let command = argv
+        .iter()
+        .map(|w| shell_quote(w))
+        .collect::<Vec<_>>()
+        .join(" ");
+    orca_await_worktree(worktree).map_err(Fail::Usage)?;
+    let out = orca(&[
+        "terminal",
+        "create",
+        "--worktree",
+        &format!("path:{worktree}"),
+        "--title",
+        &format!("sac t-{}", task.0),
+        "--command",
+        &command,
+        "--json",
+    ])
+    .map_err(Fail::Usage)?;
+    if !out.status.success() {
+        return Err(Fail::Usage(format!(
+            "the workspace stands at {worktree} and the records landed, but orca terminal create failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let id = terminal_id(&String::from_utf8_lossy(&out.stdout));
+    Ok(HostLaunch {
+        terminal: id,
+        command: Some(command),
+    })
+}
+
+/// The workspace doors' report: the facts the record established, the
+/// records a first establishment landed, and what the host did.
+fn render_workspace_reply(
+    cli: &Cli,
+    reply: &client::WorkspaceReply,
+    host: &HostLaunch,
+) -> Result<String, Fail> {
+    if cli.json {
+        let mut value = serde_json::to_value(reply).expect("the reply is plain data");
+        value["host"] = serde_json::to_value(host).expect("the host report is plain data");
+        return Ok(serde_json::to_string_pretty(&value).expect("plain data"));
+    }
+    let mut out = Vec::new();
+    if reply.established {
+        out.push(format!(
+            "t-{} workspace established — request recorded, ownership names c-{}",
+            reply.workspace.task, reply.incarnation
+        ));
+    } else if reply.recreated {
+        out.push(format!(
+            "t-{} workspace stands — checkout recreated from the branch tip, no duplicate records",
+            reply.workspace.task
+        ));
+    } else {
+        out.push(format!(
+            "t-{} workspace stands — no duplicate launch, request, or ownership change",
+            reply.workspace.task
+        ));
+    }
+    out.push(format!(
+        "  branch {} · base {}",
+        reply.workspace.branch, reply.workspace.base
+    ));
+    out.push(format!("  path {}", reply.workspace.path));
+    out.push(format!(
+        "  host terminal {} · harness {}",
+        host.terminal,
+        if host.command.is_some() {
+            "launched"
+        } else {
+            "none"
+        }
+    ));
+    out.extend(reply.records.iter().map(record_line));
+    Ok(out.join("\n"))
+}
+
 fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
     let conn = db::open_read(db_path).map_err(Fail::Db)?;
     let loadout = db::load(&conn).map_err(Fail::Db)?;
@@ -1089,6 +1562,9 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     }
     if let Some(offer) = view.offer {
         out.push(format!("offer  c-{offer}"));
+    }
+    if let Some(workspace) = &view.workspace {
+        out.push(format!("workspace  {workspace}"));
     }
     if let Some(explanation) = &view.explanation {
         out.push("explanation".to_string());
@@ -1723,9 +2199,9 @@ mod test {
     }
 
     /// The write door's matrix: possession passes any context, and
-    /// without it a non-tty call refuses, --actor notwithstanding. The
-    /// keyboard arms are the pty smoke's (the suite has no tty); built
-    /// from literals, never the env — the tier test above owns
+    /// without it a terminal-free call refuses, --actor notwithstanding.
+    /// The terminal arms are the pty smoke's (the suite has no tty);
+    /// built from literals, never the env — the tier test above owns
     /// SACCADE_ACTOR process-wide, so possession rides the context's
     /// tier, never a fresh env read.
     #[test]
@@ -1757,22 +2233,42 @@ mod test {
         assert!(identity_fallback_guard(&unnamed, &pi).is_ok());
         assert!(identity_fallback_guard(&named, &pi).is_ok());
 
-        // no tty in the suite: unpossessed refuses, --actor notwithstanding
+        // no terminal in the suite: unpossessed refuses, --actor notwithstanding
         let refused = identity_fallback_guard(&unnamed, &jerry).unwrap_err();
         assert_eq!(refused.code(), "identity_fallback");
         assert_eq!(
             refused.to_string(),
-            "this write would record jerry/human with no SACCADE_ACTOR and no tty \
-             (--actor rides the keyboard arm); export SACCADE_ACTOR=<name>"
+            "this write would record jerry/human with no SACCADE_ACTOR and no terminal \
+             attached (--actor rides the terminal arm); export SACCADE_ACTOR=<name>"
         );
         assert!(identity_fallback_guard(&named, &jerry).is_err());
 
-        // the keyboard arm's one line: identity named, agent fix taught
+        // the terminal arm's one line: identity named, agent fix taught
         assert_eq!(
             identity_fallback_notice(&jerry),
             "note: this write records jerry/human from the identity fallback \
              (no SACCADE_ACTOR, no --actor); agents export SACCADE_ACTOR=<name>"
         );
+    }
+
+    /// The typed command survives the shell that types it: the quoting
+    /// keeps argument boundaries across arbitrary request prose.
+    #[test]
+    fn shell_quoting_keeps_word_boundaries() {
+        assert_eq!(shell_quote("sac"), "sac");
+        assert_eq!(shell_quote("/nix/store/x-bin/pi"), "/nix/store/x-bin/pi");
+        assert_eq!(
+            shell_quote("it's a 'quoted' $WORD"),
+            "'it'\\''s a '\\''quoted'\\'' $WORD'"
+        );
+        assert_eq!(shell_quote(""), "''");
+        let words = ["fix the 'flake' and $PATH", "--flag", ""];
+        let line = words
+            .iter()
+            .map(|w| shell_quote(w))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(line, "'fix the '\\''flake'\\'' and $PATH' --flag ''");
     }
 
     /// Hashed tokens learn their bare doors at the parse door: a hashed

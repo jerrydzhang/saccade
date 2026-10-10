@@ -5,7 +5,26 @@ use crate::Command;
 use crate::api::{Envelope, WireContext, WireTier};
 use crate::db::StoredRecord;
 use crate::store::{Context, Tier};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+/// The workspace facts an operation reply carries.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct WorkspaceFacts {
+    pub task: usize,
+    pub base: String,
+    pub branch: String,
+    pub path: String,
+}
+
+/// One workspace operation's outcome, the wire's shape.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WorkspaceReply {
+    pub established: bool,
+    pub recreated: bool,
+    pub workspace: WorkspaceFacts,
+    pub incarnation: usize,
+    pub records: Vec<StoredRecord>,
+}
 
 #[derive(Debug)]
 pub enum ClientFail {
@@ -151,4 +170,100 @@ pub fn handshake(url: &str) {
             theirs = body["version"].as_str().unwrap_or_default()
         );
     }
+}
+
+/// POST one JSON body and read the reply: 200 with a parsed body, or
+/// the typed error envelope every surface shares.
+fn post_json<T: serde::de::DeserializeOwned>(
+    url: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<T, ClientFail> {
+    let mut response = ureq::post(&format!("{url}{path}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(body)
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    let status = response.status().as_u16();
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    if status == 200 {
+        serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
+            code: "malformed_response".into(),
+            detail: e.to_string(),
+        })
+    } else {
+        Err(error_of(&text))
+    }
+}
+
+fn error_of(text: &str) -> ClientFail {
+    #[derive(Deserialize)]
+    struct ErrorDetail {
+        code: String,
+        detail: serde_json::Value,
+    }
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        error: ErrorDetail,
+    }
+    let body: ErrorBody = serde_json::from_str(text).unwrap_or(ErrorBody {
+        error: ErrorDetail {
+            code: "malformed_response".into(),
+            detail: serde_json::Value::String(text.into()),
+        },
+    });
+    ClientFail::Refused {
+        code: body.error.code,
+        detail: body.error.detail.to_string(),
+    }
+}
+
+/// The start operation: first sight establishes the workspace, records
+/// the caller's request, and assigns the incarnation ownership; a task
+/// already holding a workspace is ensured and reported, nothing landed.
+pub fn start_workspace(
+    url: &str,
+    context: &Context,
+    task: usize,
+    base: Option<&str>,
+    request: &crate::Prose,
+) -> Result<WorkspaceReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/workspace/start",
+        serde_json::json!({
+            "context": {
+                "actor": context.actor.as_str(),
+                "tier": match context.tier {
+                    Tier::Human => "human",
+                    Tier::Agent => "agent",
+                    Tier::System => unreachable!("the API has no system tier"),
+                },
+                "scope": context.scope,
+            },
+            "task": task,
+            "base": base,
+            "request": request.as_str(),
+        }),
+    )
+}
+
+/// The open operation: ensure the recorded environment exists (a
+/// missing checkout is recreated from its branch tip), launching
+/// nothing, landing nothing on a recorded workspace; an unestablished
+/// task births the establishment alone.
+pub fn open_workspace(url: &str, task: usize) -> Result<WorkspaceReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/workspace/open",
+        serde_json::json!({ "task": task }),
+    )
 }

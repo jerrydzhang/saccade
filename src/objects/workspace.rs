@@ -1,25 +1,11 @@
-use crate::events::Event;
+use crate::RecordId;
 use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
-/// A worktree's residency: born absent, present once physically created.
-#[derive(Clone, Debug, PartialEq)]
-pub enum WorktreeState {
-    Absent,
-    Present(WorktreePath),
-}
-
-impl WorktreeState {
-    /// The state machine table, all state transitions must go through this
-    pub fn transition(&self, event: &Event) -> Option<WorktreeState> {
-        match (self, event) {
-            (WorktreeState::Absent, Event::TaskWorkspaceMaterialized { worktree, .. }) => {
-                Some(WorktreeState::Present(worktree.clone()))
-            }
-            _ => None,
-        }
-    }
-}
-
+/// The task's working environment, born once by the establishment
+/// record: the facts that record established, never a promise that
+/// a directory or process still exists — existence checks live in
+/// effects, not the fold. The birth record's position is the shared
+/// workspace/incarnation identity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workspace {
     /// The immutable commit the workspace was cut from
@@ -28,59 +14,17 @@ pub struct Workspace {
     pub branch: GitBranch,
     /// The latest recorded clean head; born at base
     pub checkpoint: GitCommit,
-    pub worktree: WorktreeState,
+    /// The workspace's absolute address
+    pub worktree: WorktreePath,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorkspaceContext {
     pub workspace: Workspace,
+    /// The establishment record's position: the shared
+    /// workspace/incarnation identity
+    pub birth: RecordId,
     /// Every head the record has named, base first; the explicit
     /// checkpoint door returns to none of them
     pub heads: Vec<GitCommit>,
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::objects::task::TaskId;
-
-    #[test]
-    fn transition_table_admits_exactly_the_legal_cells() {
-        let states = [
-            WorktreeState::Absent,
-            WorktreeState::Present(WorktreePath::new("/wt".into()).unwrap()),
-        ];
-        let events = [
-            Event::TaskWorkspaceCreated {
-                task_id: TaskId(0),
-                base: GitCommit::new("abc123".into()).unwrap(),
-                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-            },
-            Event::TaskWorkspaceMaterialized {
-                task_id: TaskId(0),
-                worktree: WorktreePath::new("/wt".into()).unwrap(),
-            },
-            Event::TaskWorkspaceCheckpointed {
-                task_id: TaskId(0),
-                checkpoint: GitCommit::new("def456".into()).unwrap(),
-            },
-        ];
-
-        for state in &states {
-            for event in &events {
-                let legal = matches!(
-                    (state, event),
-                    (
-                        WorktreeState::Absent,
-                        Event::TaskWorkspaceMaterialized { .. }
-                    )
-                );
-                assert_eq!(
-                    state.transition(event).is_some(),
-                    legal,
-                    "table disagrees at ({state:?}, {event:?})"
-                );
-            }
-        }
-    }
 }

@@ -477,6 +477,7 @@ mod test {
     use crate::events::{Command, Event};
     use crate::objects::comment::CommentKind;
     use crate::objects::comment::{CommentState, Revision, Withdrawal};
+    use crate::objects::incarnation::IncarnationId;
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
     use crate::types::artifact::Artifact;
@@ -660,19 +661,10 @@ mod test {
         record(
             &mut conn,
             &system,
-            Command::CreateWorkspace {
+            Command::EstablishWorkspace {
                 task_id: TaskId(0),
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-            },
-            22,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &system,
-            Command::MaterializeWorkspace {
-                task_id: TaskId(0),
                 worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
             },
             22,
@@ -684,6 +676,16 @@ mod test {
             Command::CheckpointWorkspace {
                 task_id: TaskId(0),
                 checkpoint: GitCommit::new("def456".into()).unwrap(),
+            },
+            22,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: Some(IncarnationId(RecordId(17))),
             },
             22,
         )
@@ -744,11 +746,21 @@ mod test {
         assert_eq!(loadout.rows[12].kind, "task_reopened");
         assert_eq!(loadout.rows[20].kind, "task_created");
         assert_eq!(loadout.rows[21].kind, "task_claimed");
-        // the workspace records are machinery-authored
-        assert_eq!(loadout.rows[17].kind, "task_workspace_created");
-        assert_eq!(loadout.rows[18].kind, "task_workspace_materialized");
-        assert_eq!(loadout.rows[19].kind, "task_workspace_checkpointed");
+        // the workspace establishment is machinery-authored and births
+        // the shared identity the claim names
+        assert_eq!(loadout.rows[17].kind, "workspace_established");
+        assert_eq!(loadout.rows[18].kind, "task_workspace_checkpointed");
         assert_eq!(loadout.rows[17].actor.as_str(), "saccade");
+        assert_eq!(
+            world.incarnations[&IncarnationId(RecordId(17))]
+                .incarnation
+                .workspace,
+            WorktreePath::new("/repo/wt/t-0".into()).unwrap()
+        );
+        assert_eq!(
+            world.tasks[0].workspace.as_ref().unwrap().birth,
+            RecordId(17)
+        );
         // the scoped record carries its declared scope; unscoped rows none
         assert!(
             loadout.rows[2]

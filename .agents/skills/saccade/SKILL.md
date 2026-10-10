@@ -10,7 +10,8 @@ One binary over an append-only event log; the world is a fold of that log.
 The record is the reasoning cache: conclusions live on threads so the next
 reader — often you, after a context loss — never re-derives them. There is
 no managed execution in this build: the tracker records undertakings,
-accounts, and decisions — nothing launches, waits, or supervises anything.
+accounts, and decisions — it never waits on or supervises anything, and
+launching asks the host for a terminal, never manages the session.
 
 ## Identity
 
@@ -28,10 +29,11 @@ cannot **accept** that task's offer (`self_acceptance`). Humans are never
 scope-gated.
 
 An unpossessed write is guarded: with `SACCADE_ACTOR` unset, a mutation
-from a keyboard proceeds on one notice line (a named `--actor` passes
-silently), and the same mutation without a tty refuses
-(`identity_fallback`), `--actor` notwithstanding — export
-`SACCADE_ACTOR=<name>`, as `--actor` rides the keyboard arm.
+with a terminal attached to any of stdin, stdout, or stderr proceeds on
+one notice line (a named `--actor` passes silently), and the same
+mutation with no terminal anywhere refuses (`identity_fallback`),
+`--actor` notwithstanding — export `SACCADE_ACTOR=<name>`, as `--actor`
+rides the terminal arm.
 
 ## The record is the reasoning cache
 
@@ -104,8 +106,8 @@ repair alone: the body leaves the fold, a tombstone stays.
 ## Working a task
 
 There is no runner in this build. You arrive at a task through whatever
-launched you — a human, a coordinating agent — working in a worktree
-someone established. The tracker's part of the loop:
+launched you — a human, a coordinating agent, `sac start` — working in a
+workspace the record names. The tracker's part of the loop:
 
 1. **Retrieve first** (the protocol above): read your thread whole —
    the spec, prior verdicts, dead ends, parked working state — then the
@@ -147,16 +149,22 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac revise c-<seq> "…"` (prose also by `--stdin` or `--body-file`) | any tier | presentation repair on prose-carrying variants; the fold names a reviser, `sac log` keeps the original |
 | `sac withdraw c-<seq> --note "…"` | any tier | the note's standing-error repair: body out, tombstone stays |
 | `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
-| `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace — none is created in this build |
+| `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace — none is created by checkpoint |
+| `sac start t-N "initial request"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects, record the request, assign the incarnation ownership, and launch the pinned native Pi in a host terminal with the request as its prompt; a repeat start reports and opens the standing workspace — no second launch, request, or ownership change |
+| `sac open t-N` | any tier | ensure the recorded workspace exists (a missing checkout is recreated from its branch tip) and open it through the host; launches no harness, lands no records, changes no ownership |
+| `sac exec t-N -- <command and argv>` | any tier | run a command inside the recorded workspace: identity and routing injected from the record, argv boundaries kept, nothing recorded |
+| `sac identity` | anonymous | report the environment-declared actor/tier, scope, and routing — disclosure, never a liveness claim |
 | `sac list` / `sac show <ids…>` / `sac log` | anonymous | the board, threads and records, raw events |
 | `sac search <terms…> [in:t-N by:NAME kind:K under:t-N] [-C N]` | anonymous | exact terms over titles, comment prose, explanations; kinds: task, note, request, offer, accept, reject, use, artifact, explanation |
 | `sac serve [--bind] [--port]` | — | the sole-writer HTTP server and console |
 | `sac clone --at <seq> --out <path>` | anonymous | copy the log's prefix into a fresh tracker |
 | `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
 
-Not in this build (later slices, do not assume them): launching agents
-or workspaces from the tracker, generic waits, steering a live session,
-proposal machinery of any kind.
+Not in this build (later slices, do not assume them): managed
+completion obligations, generic waits, steering a live session,
+proposal machinery of any kind. Launching is the host's: `sac start`
+asks the host (Orca) for one terminal and never supervises it —
+restarting Saccade leaves native sessions alone.
 
 ## Prose
 
@@ -209,13 +217,30 @@ honestly as "now".
 
 ## Workspaces
 
-Task worktrees, branches, and workspaces are established outside the
-tracker in this build — the record's workspace lineage is written by
-machinery events (`sac log` shows them) and `sac checkpoint t-N`
-records a branch tip against a recorded workspace. There is no
-provisioning door yet: a fresh tracker holds no workspace records, and
-checkpoint refuses (`workspace_missing`) until the native-workspace
-slice lands. The record governs; the workspace is a cache.
+`sac start t-N "initial request"` establishes the workspace: one
+machinery-authored establishment record carries the task reference,
+the canonical base commit (the primary checkout's current HEAD, or
+`--base <ref>`), the branch (`saccade/t-<n>`), and the worktree's
+absolute path — beside the tracker's db, under `worktrees/t-<n>`. That
+record's position is the **shared workspace/incarnation identity**:
+claims and `SACCADE_INCARNATION` reference it, and first start's
+ownership names it while the request keeps its caller's authorship.
+
+The record holds establishment facts, not liveness: a checkout can go
+missing while its association stands. `sac open` (and a repeat start)
+recreate a missing checkout from its branch's current tip — committed
+advancement survives, identity never changes — and leave a present
+checkout's files, uncommitted changes, programs, and ownership alone.
+A branch that no longer exists refuses (`workspace_branch_missing`);
+recovery beyond that is not built.
+
+`sac exec t-N -- <argv>` is the harness-agnostic door into a
+workspace: it injects the session's identity and routing
+(`SACCADE_TASK`, `SACCADE_INCARNATION`, `SACCADE_WORKSPACE`, plus repo,
+db, and server), overwriting stale bindings inherited from another
+task, and execs the argv with its argument boundaries intact. `sac
+start` uses the same injection to launch the pinned native Pi. The
+record governs; the workspace is a cache.
 
 ## Errors and degraded mode
 

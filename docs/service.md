@@ -26,7 +26,8 @@ Environment=RUST_LOG=info
   refusal with `sac clone --at <cursor> --out <path>`, serve the
   clone, and re-post the logged request.
 - Stop is SIGTERM: the server exits 143. It owns no child processes —
-  this build runs no sessions.
+  this build runs no sessions. The workspace operations spawn one-shot
+  git runs under the writer lock; nothing long-lived is ever kept.
 
 Consumers pin a release with a flake input:
 `saccade.url = "github:jerrydzhang/saccade/v0.1.0"` — the lockfile is

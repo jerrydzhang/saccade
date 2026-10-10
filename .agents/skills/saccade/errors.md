@@ -7,9 +7,9 @@ finding — name it on the thread before proceeding.
 
 - `human_only` — you attempted a judgment act (cancel, reopen). Stop;
   escalate.
-- `identity_fallback` — a non-tty write with no `SACCADE_ACTOR` refuses
-  before any write lands (`--actor` rides the keyboard arm); export
-  `SACCADE_ACTOR=<name>`.
+- `identity_fallback` — a write with no terminal on stdin, stdout, or
+  stderr and no `SACCADE_ACTOR` refuses before any write lands (`--actor`
+  rides the terminal arm); export `SACCADE_ACTOR=<name>`.
 - `invalid_task_id` / `invalid_parent_task_id` — no such task; ids are exact
   `t-N` tokens, not searches.
 - `invalid_comment_id` — the `c-N` target names no comment; a task birth
@@ -34,12 +34,22 @@ finding — name it on the thread before proceeding.
   never birthed, or one bound to another task.
 - `workspace_already_exists` — the task already holds a workspace
   lineage; one per task.
-- `workspace_missing` — the task has no recorded workspace. In this
-  build nothing creates one; the native-workspace slice will.
-- `worktree_already_present` — a second physical creation while the
-  worktree is present.
+- `workspace_missing` — the task has no recorded workspace; `sac start`
+  and `sac open` establish one, `sac exec` does not.
 - `checkpoint_rewind` — the branch tip sits behind the recorded
   checkpoint; a checkpoint advances, never rewinds.
+- `workspace_branch_exists` — start would take a branch name the repo
+  already holds; the branch scheme is `saccade/t-<n>`, one lineage per
+  task.
+- `workspace_branch_missing` — the recorded branch no longer exists in
+  the repo, so the checkout cannot be recreated; recovery of a missing
+  branch is not built.
+- `workspace_path_occupied` — the workspace's worktree path is already
+  occupied on disk.
+- `workspace_effect` — a git effect failed; the detail carries git's
+  own stderr.
+- `workspace_no_repo` — the serving edge resolved no repo root at boot,
+  so it cannot run workspace effects.
 - `invalid_actor` — the actor name is empty or carries edge whitespace.
 - `reason_required` — the prose is empty or whitespace; names, bodies,
   grounds, reasons, and explanations need words.
@@ -48,7 +58,10 @@ finding — name it on the thread before proceeding.
   fixes it.
 - `database_error` — includes missing file (reads) and corruption (loud,
   named). A pre-0.10 log (old model) is refused loudly, not folded
-  into nonsense — this build starts a fresh record.
+  into nonsense — this build starts a fresh record. A 0.10 log holding
+  the pre-establishment workspace events degrades (unknown kind): the
+  record's workspace lineage was born in no released world, so those
+  logs are not migrated.
 
 When the tracker misbehaves or a refusal needs reproducing, read
 `diagnosing.md` beside this file: the attempts log reconstructs the

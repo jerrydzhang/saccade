@@ -16,6 +16,7 @@ pub mod types;
 pub mod views;
 pub mod web;
 pub mod wire;
+pub mod workspace;
 
 use serde::{Deserialize, Serialize};
 
@@ -60,8 +61,6 @@ pub enum Reject {
     WorkspaceAlreadyExists,
     #[error("the task has no workspace")]
     WorkspaceMissing,
-    #[error("the worktree is already present")]
-    WorktreeAlreadyPresent,
     #[error("the tip rewinds the recorded checkpoint")]
     CheckpointRewind,
     // Misc
@@ -89,7 +88,6 @@ impl Reject {
             Reject::HumanOnly => "human_only",
             Reject::WorkspaceAlreadyExists => "workspace_already_exists",
             Reject::WorkspaceMissing => "workspace_missing",
-            Reject::WorktreeAlreadyPresent => "worktree_already_present",
             Reject::CheckpointRewind => "checkpoint_rewind",
             Reject::InvalidActor => "invalid_actor",
             Reject::InvalidStateTransition => "invalid_state_transition",
@@ -118,7 +116,6 @@ mod test {
             Reject::HumanOnly,
             Reject::WorkspaceAlreadyExists,
             Reject::WorkspaceMissing,
-            Reject::WorktreeAlreadyPresent,
             Reject::CheckpointRewind,
             Reject::InvalidActor,
             Reject::InvalidStateTransition,

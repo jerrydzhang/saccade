@@ -236,6 +236,8 @@ pub struct ShowView {
     pub explanation: Option<String>,
     pub owner: Option<String>,
     pub offer: Option<usize>,
+    /// The established workspace's branch and address, when one stands
+    pub workspace: Option<String>,
 }
 
 impl ShowView {
@@ -251,6 +253,13 @@ impl ShowView {
             },
             owner: current_owner(ctx).map(|o| owner_str(&o.owner)),
             offer: ctx.current_offer.map(|c| c.0.0),
+            workspace: ctx.workspace.as_ref().map(|w| {
+                format!(
+                    "{} · {}",
+                    w.workspace.branch.as_str(),
+                    w.workspace.worktree.as_path().display()
+                )
+            }),
         }
     }
 }
