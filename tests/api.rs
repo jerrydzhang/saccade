@@ -1995,6 +1995,7 @@ fn stub_pi(dir: &std::path::Path) -> std::path::PathBuf {
 {
   printf 'argv: %s\n' "$*"
   printf 'pwd: %s\n' "$PWD"
+  printf 'sac: %s\n' "$(command -v sac)"
   env | grep '^SACCADE_' | sort
 } > "$PI_DUMP"
 "#,
@@ -2013,6 +2014,13 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
 
     let host = fake_host(db.parent().unwrap());
     let pi = stub_pi(db.parent().unwrap());
+    let stale_sac = host.parent().unwrap().join("sac");
+    std::fs::write(&stale_sac, "#!/usr/bin/env bash\necho \"sac 0.9.0\"\n").unwrap();
+    std::fs::set_permissions(
+        &stale_sac,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
     let host_log = db.parent().unwrap().join("host.log");
     let host_state = db.parent().unwrap().join("host-state");
     std::fs::write(&host_log, b"").unwrap();
@@ -2140,7 +2148,14 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     let fresh = std::process::Command::new("bash")
         .arg("-c")
         .arg(&typed)
-        .env("PATH", std::env::var("PATH").unwrap())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                host.parent().unwrap().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
         .env("PI_DUMP", dump.display().to_string())
         .env_remove("SACCADE_ACTOR")
         .env_remove("SACCADE_TASK")
@@ -2179,6 +2194,10 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     );
     assert_eq!(line("SACCADE_ACTOR"), "SACCADE_ACTOR=pi dump");
     assert_eq!(line("SACCADE_ENVRC_LAYER"), "SACCADE_ENVRC_LAYER=envrc");
+    assert!(
+        injected.lines().any(|l| l == format!("sac: {}", bin)),
+        "a bare sac resolves the reviewed build past the stale one: {injected}"
+    );
     assert_eq!(line("SACCADE_TASK"), "SACCADE_TASK=t-0");
     assert_eq!(line("SACCADE_INCARNATION"), "SACCADE_INCARNATION=i-1");
     assert_eq!(
@@ -2357,6 +2376,21 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         env_line(&out, "SACCADE_DB"),
         format!("SACCADE_DB={}", db.display())
     );
+
+    // a stale ambient sac loses to the wrapper's own build in the child
+    let (ok, out, err) = run(
+        &routed(&[
+            "exec",
+            "t-0",
+            "--",
+            "sh",
+            "-c",
+            "command -v sac; sac --version",
+        ]),
+        &[("SACCADE_ACTOR", "pi")],
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert_eq!(out.trim_end(), format!("{bin}\nsac 0.11.0"));
 
     // the working directory is the checkout
     let (ok, out, err) = run(
