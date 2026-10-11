@@ -2215,8 +2215,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
 
 // ---- the workspace doors through the CLI face: a fake host, real exec ----
 
-/// A stateful fake `orca`: pinned wire shapes, one logged argument per line.
-/// Shebang is `/bin/sh`: the Nix sandbox has no `/usr/bin/env`.
+/// A fake `orca` with pinned wire shapes; shebang /bin/sh — the sandbox has no /usr/bin/env.
 fn fake_host(dir: &std::path::Path) -> std::path::PathBuf {
     let bin_dir = dir.join("host-bin");
     std::fs::create_dir_all(&bin_dir).unwrap();

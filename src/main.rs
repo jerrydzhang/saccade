@@ -861,6 +861,12 @@ fn context_scope() -> Result<Option<Scope>, Fail> {
     }))
 }
 
+fn attached_terminal() -> bool {
+    std::io::stdin().is_terminal()
+        || std::io::stdout().is_terminal()
+        || std::io::stderr().is_terminal()
+}
+
 /// The write door's guard: possession passes any context; without it,
 /// a terminal attached anywhere or nothing. A terminal attached to
 /// any of stdin, stdout, or stderr earns the write — the unnamed
@@ -869,15 +875,7 @@ fn context_scope() -> Result<Option<Scope>, Fail> {
 /// agents that forgot their identity) refuses before any write,
 /// taught the fix. Possession is read from the context's tier, never
 /// the --actor flag: clap binds SACCADE_ACTOR into that flag, so it
-/// cannot tell possession from a passed name. The observation rides
-/// in as `interactive` — a Nix builder hands tests a terminal, so the
-/// contract drives the matrix over the injected value.
-fn attached_terminal() -> bool {
-    std::io::stdin().is_terminal()
-        || std::io::stdout().is_terminal()
-        || std::io::stderr().is_terminal()
-}
-
+/// cannot tell possession from a passed name.
 fn identity_fallback_guard(cli: &Cli, context: &Context, interactive: bool) -> Result<(), Fail> {
     if matches!(context.tier, Tier::Agent) {
         return Ok(());
@@ -2506,8 +2504,7 @@ mod test {
         restore();
     }
 
-    /// The write door's authority matrix: possession passes every cell;
-    /// the unpossessed human write needs a terminal or refuses.
+    /// Possession passes; the unpossessed human write needs a terminal or refuses.
     #[test]
     fn the_identity_fallback_guards_the_write_door() {
         let jerry = Context {
@@ -2539,7 +2536,7 @@ mod test {
             assert!(identity_fallback_guard(&named, &pi, terminal).is_ok());
         }
 
-        // a terminal earns the unpossessed human write in either dress
+        // a terminal earns the unpossessed human write, named or unnamed
         assert!(identity_fallback_guard(&unnamed, &jerry, true).is_ok());
         assert!(identity_fallback_guard(&named, &jerry, true).is_ok());
 
