@@ -1,8 +1,4 @@
-/**
- * Contract tests for the websearch extension: provider parsing, fallback,
- * cancellation, bounds, and honest failure — over fake provider transports.
- * Run: node --test extensions/
- */
+// Runs with: node --test extensions/websearch.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -314,7 +310,7 @@ test("oversized fetch content lands in a temp file with a bounded inline preview
 		);
 		assert.match(out.text, /Showing first 20000 of 50000 characters\. Full content saved to:\n/);
 		const path = out.details.fullPath as string;
-		assert.match(path, /big\.example-[0-9a-f]{10}\.md$/);
+		assert.match(path, /big.example-[0-9a-f]{10}-[0-9a-f]{8}\.md$/);
 		const stored = await readFile(path, "utf-8");
 		assert.equal(stored.length, 50_000);
 	} finally {
@@ -354,6 +350,166 @@ test("web_fetch rejects non-http URLs before any network contact", async () => {
 		(err: Error) => /requires an http\(s\) URL/.test(err.message),
 	);
 	assert.equal(contacted, false);
+});
+
+test("a second fetch of the same URL writes a new file and never rewrites the earlier pointer's content", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "websearch-test-"));
+	try {
+		const paths: string[] = [];
+		for (const body of ["first content A", "second content B"]) {
+			const out = await runWebFetch(
+				{ url: "https://repeat.example/page", maxChars: 5 },
+				depsFrom(
+					() => new Response(jsonRpc({ content: [{ type: "text", text: body }] }), { status: 200 }),
+					{},
+					{ tmpDir: dir },
+				),
+			);
+			paths.push(out.details.fullPath as string);
+		}
+		assert.notEqual(paths[0], paths[1]);
+		assert.equal(await readFile(paths[0], "utf-8"), "first content A");
+		assert.equal(await readFile(paths[1], "utf-8"), "second content B");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("a caller-legal maxChars cannot push multibyte output past the aggregate bound — it spills with a safe cut", async () => {
+	const out = await runWebFetch(
+		{ url: "https://emoji.example/page", maxChars: 200_000 },
+		depsFrom(() => new Response(jsonRpc({ content: [{ type: "text", text: "🏝️".repeat(60_000) }] }), { status: 200 })),
+	);
+	assert.ok(Buffer.byteLength(out.text, "utf8") < 1024 * 1024);
+	assert.match(out.text, /\[Output truncated at 102400 bytes \/ 2000 lines\. Full output: /);
+	assert.equal(out.details.outputTruncated, true);
+	assert.doesNotMatch(out.text, /[\uD800-\uDBFF]$/);
+	const spilled = await readFile(out.details.fullPath as string, "utf-8");
+	assert.ok(Buffer.byteLength(spilled, "utf8") > 400_000);
+});
+
+test("a many-line search output also trips the aggregate bound and spills", async () => {
+	const manyLines = Array.from({ length: 3000 }, (_, i) => `line ${i}`).join("\n");
+	const out = await runWebSearch(
+		{ query: "q" },
+		depsFrom(() => new Response(jsonRpc({ content: [{ type: "text", text: manyLines }] }), { status: 200 })),
+	);
+	assert.match(out.text, /\[Output truncated at 102400 bytes \/ 2000 lines\. Full output: /);
+});
+
+test("a credential cut by truncation leaves no key fragment in surfaced error text", async () => {
+	const pad = "x".repeat(290);
+	const fakeKey = "FAKE-SECRET-KEY-0123456789";
+	await assert.rejects(
+		runWebSearch(
+			{ query: "q" },
+			depsFrom(
+				(url) => {
+					if (url === EXA_SEARCH_URL) return new Response(pad + fakeKey + " tail", { status: 500 });
+					return new Response("nope", { status: 500 });
+				},
+				{ ZAI_API_KEY: fakeKey },
+			),
+		),
+		(err: Error) => !err.message.includes(fakeKey) && !err.message.includes("FAKE-SECRE"),
+	);
+});
+
+test("even very short key values are scrubbed from surfaced error text", async () => {
+	await assert.rejects(
+		runWebSearch(
+			{ query: "q" },
+			depsFrom(
+				(url) => {
+					if (url === EXA_SEARCH_URL) return new Response("bad key kqz rejected", { status: 401 });
+					return new Response("nope", { status: 500 });
+				},
+				{ ZAI_API_KEY: "kqz" },
+			),
+		),
+		(err: Error) => !err.message.includes("kqz") && err.message.includes("[redacted]"),
+	);
+});
+
+test("one composed deadline signal spans every request of a provider attempt", async () => {
+	const signals: AbortSignal[] = [];
+	let zaiPhase = 0;
+	await runWebSearch(
+		{ query: "q" },
+		depsFrom(
+			(url, init) => {
+				if (url === EXA_SEARCH_URL) return new Response("down", { status: 503 });
+				signals.push(init.signal as AbortSignal);
+				zaiPhase += 1;
+				if (zaiPhase === 1) return new Response("", { status: 200, headers: { "mcp-session-id": "s1" } });
+				if (zaiPhase === 2) return new Response("", { status: 202 });
+				if (zaiPhase === 3)
+					return new Response(
+						jsonRpc({ isError: true, content: [{ type: "text", text: "invalid arguments: unknown field location" }] }),
+						{ status: 200 },
+					);
+				return new Response(
+					jsonRpc({
+						content: [{ type: "text", text: JSON.stringify([{ title: "T", link: "https://t.example", content: "c" }]) }],
+					}),
+					{ status: 200 },
+				);
+			},
+			{ ZAI_API_KEY: "test-key-1234567890" },
+		),
+	);
+	assert.equal(signals.length, 4);
+	assert.ok(signals.every((s) => s === signals[0]));
+});
+
+test("a cancellation inside the zai notification propagates instead of being swallowed", async () => {
+	const controller = new AbortController();
+	const calls: string[] = [];
+	await assert.rejects(
+		runWebSearch(
+			{ query: "q" },
+			depsFrom(
+				(url, init) => {
+					calls.push(String(url).split("?")[0]);
+					if (url === EXA_SEARCH_URL) return new Response("down", { status: 503 });
+					const body = JSON.parse(init.body as string);
+					if (body.method === "notifications/initialized") {
+						controller.abort();
+						return Promise.reject(new DOMException("aborted", "AbortError"));
+					}
+					if (body.method === "initialize") return new Response("", { status: 200, headers: { "mcp-session-id": "s1" } });
+					return new Response("{}", { status: 200 });
+				},
+				{ ZAI_API_KEY: "test-key-1234567890" },
+				{ signal: controller.signal },
+			),
+		),
+		(err: any) => err.name === "AbortedError",
+	);
+	assert.equal(calls.length, 3);
+});
+
+test("a rate-limit tool error fails the provider without retrying under the second shape", async () => {
+	const bodies: any[] = [];
+	await assert.rejects(
+		runWebSearch(
+			{ query: "q" },
+			depsFrom(
+				(url, init) => {
+					if (url === EXA_SEARCH_URL) return new Response("down", { status: 503 });
+					bodies.push(JSON.parse(init.body as string));
+					if (bodies.length === 1) return new Response("", { status: 200, headers: { "mcp-session-id": "s1" } });
+					if (bodies.length === 2) return new Response("", { status: 202 });
+					return new Response(jsonRpc({ isError: true, content: [{ type: "text", text: "rate limited, slow down" }] }), {
+						status: 200,
+					});
+				},
+				{ ZAI_API_KEY: "test-key-1234567890" },
+			),
+		),
+		(err: Error) => /rate limited/.test(err.message),
+	);
+	assert.equal(bodies.length, 3);
 });
 
 test("exa section parsing refuses sections missing a URL rather than inventing sources", () => {

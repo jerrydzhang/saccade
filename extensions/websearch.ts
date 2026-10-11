@@ -1,18 +1,6 @@
-/**
- * Native Pi websearch capability: web_search + web_fetch.
- *
- * Providers, fixed order: keyless Exa MCP primary, ZAI MCP fallback (only
- * when ZAI_API_KEY is set). No other providers, no model calls, no caching,
- * no configuration surface. Explicit-failure discipline: provider attempts
- * are reported honestly; cancellation never triggers fallback.
- *
- * Authored for the pinned native Pi extension API (pi.registerTool,
- * TypeBox parameters). The default factory is the only pi-facing code;
- * everything below it is pure logic exercised directly by tests.
- */
+// Independently authored for pinned Pi 0.87.0; only the default factory is pi-facing.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// Bounds — stated in tool descriptions and echoed in output when truncating.
 const DEFAULT_NUM_RESULTS = 5;
 const MAX_NUM_RESULTS = 20;
 const EXCERPT_CHARS = 240;
@@ -20,6 +8,9 @@ const DEFAULT_FETCH_CHARS = 20_000;
 const MAX_FETCH_CHARS = 200_000;
 const PROVIDER_TIMEOUT_MS = 30_000;
 const RAW_TEXT_CAP = 20_000;
+// 100 KiB: the pinned binary's own tool-output ceiling, enforced independently of caller args.
+const OUTPUT_BYTE_CAP = 100 * 1024;
+const OUTPUT_LINE_CAP = 2_000;
 
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const ZAI_SEARCH_URL = "https://api.z.ai/api/mcp/web_search_prime/mcp";
@@ -66,19 +57,35 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) throw new AbortedError();
 }
 
-/** Compose the caller signal with the per-provider hard timeout. */
 function boundedSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
  const timeout = AbortSignal.timeout(timeoutMs);
 	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-/** Keep credential bytes out of any text we surface; never prints. */
+// Keep credential bytes out of any text we surface; never prints.
 function scrub(text: string, secrets: (string | undefined)[]): string {
 	let out = text;
 	for (const s of secrets) {
-		if (s && s.length > 8 && out.includes(s)) out = out.split(s).join("[redacted]");
+		if (s && out.includes(s)) out = out.split(s).join("[redacted]");
 	}
 	return out;
+}
+
+/** UTF-8-safe: the cut falls between code points, never inside one. */
+function capUtf8(text: string, maxBytes: number): { text: string; truncated: boolean } {
+	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { text, truncated: false };
+	let buf = Buffer.from(text, "utf8").subarray(0, maxBytes);
+	while (buf.length > 0 && (buf[buf.length - 1]! & 0xc0) === 0x80) buf = buf.subarray(0, -1);
+	return { text: buf.toString("utf8"), truncated: true };
+}
+
+// Scrub before truncate: truncation could otherwise cut a secret so only its tail survives.
+function sanitizeDetail(text: string, secrets: (string | undefined)[]): string {
+	return truncate(scrub(text, secrets), 300).text;
+}
+
+function exceedsOutputBounds(text: string): boolean {
+	return Buffer.byteLength(text, "utf8") > OUTPUT_BYTE_CAP || text.split("\n").length > OUTPUT_LINE_CAP;
 }
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
@@ -89,8 +96,6 @@ function clampInt(value: number | undefined, min: number, max: number, fallback:
 function truncate(text: string, max: number): { text: string; truncated: boolean } {
 	return text.length <= max ? { text, truncated: false } : { text: text.slice(0, max), truncated: true };
 }
-
-// ── Exa MCP (stateless, keyless) ────────────────────────────────────────────
 
 async function exaMcpCall(
 	tool: string,
@@ -108,7 +113,7 @@ async function exaMcpCall(
 	});
 	const raw = await response.text();
 	if (!response.ok) {
-		throw new Error(`HTTP ${response.status}: ${truncate(raw, 300).text}`);
+		throw new Error(`HTTP ${response.status}: ${raw}`);
 	}
 	// The endpoint answers either plain JSON or SSE; both carry one JSON body.
 	const data = extractJsonRpcPayload(raw);
@@ -118,7 +123,7 @@ async function exaMcpCall(
 	if (!result || typeof result !== "object") throw new Error("MCP response missing result");
 	if (result.isError === true) {
 		const text = mcpTextBlocks(result).join(" ").trim();
-		throw new Error(truncate(text || "MCP tool reported an error", 300).text);
+		throw new Error(text || "MCP tool reported an error");
 	}
 	return result;
 }
@@ -133,9 +138,7 @@ function extractJsonRpcPayload(raw: string): Record<string, any> | null {
 			return null;
 		}
 	}
-	// SSE: take the last data line carrying a JSON-RPC response (result or
-	// error). Request ids vary per call (1 = initialize, 2 = tools/call), so
-	// id equality is not a usable filter.
+	// Request ids vary per call (1 = initialize, 2 = tools/call), so id equality is not a usable filter.
 	let found: Record<string, any> | null = null;
 	for (const line of trimmed.split("\n")) {
 		const m = line.match(/^data:\s*(\{.*\})\s*$/);
@@ -144,8 +147,7 @@ function extractJsonRpcPayload(raw: string): Record<string, any> | null {
 			const parsed = JSON.parse(m[1]);
 			if (parsed.jsonrpc === "2.0" && (parsed.result !== undefined || parsed.error !== undefined)) found = parsed;
 		} catch {
-			// ignore non-JSON data lines
-		}
+			}
 	}
 	return found;
 }
@@ -158,11 +160,7 @@ function mcpTextBlocks(result: Record<string, any>): string[] {
 		.map((c: any) => c.text as string);
 }
 
-/**
- * Parse Exa's text sections (`Title:`/`URL:`/`Author:`/`Published Date:`/
- * `Text:`) into results. Returns null unless at least one section carries
- * both a title and a URL — partial guesses are never promoted to sources.
- */
+// Sections without both title and URL are never promoted to sources.
 export function parseExaTextSections(text: string): ParsedResult[] | null {
 	const sections = text
 		.replace(/\r\n?/g, "\n")
@@ -196,7 +194,6 @@ interface ExaOutcome {
 }
 
 function normalizeExaSearch(result: Record<string, any>): ExaOutcome {
-	// Some MCP clients receive structuredContent; prefer it when present.
 	const structured = result.structuredContent;
 	if (structured && Array.isArray(structured.results)) {
 		const results: ParsedResult[] = [];
@@ -228,8 +225,7 @@ function normalizeExaSearch(result: Record<string, any>): ExaOutcome {
 
 async function exaSearch(params: SearchParams, deps: WebSearchDeps): Promise<ExaOutcome> {
 	const numResults = clampInt(params.numResults, 1, MAX_NUM_RESULTS, DEFAULT_NUM_RESULTS);
-	// The current Exa schema requires `objective`; the supplied query is the
-	// deterministic adaptation — no second model authors it.
+	// The Exa schema requires `objective`; the supplied query is the deterministic adaptation — no second model authors it.
 	const result = await exaMcpCall("web_search_exa", { query: params.query, objective: params.query, numResults }, deps);
 	return normalizeExaSearch(result);
 }
@@ -245,9 +241,7 @@ async function exaFetch(url: string, deps: WebSearchDeps): Promise<string> {
 	return text;
 }
 
-// ── ZAI MCP (session-based, bearer key) ─────────────────────────────────────
-
-async function zaiSession(url: string, key: string, deps: WebSearchDeps): Promise<string> {
+async function zaiSession(url: string, key: string, deps: WebSearchDeps, attemptSignal: AbortSignal): Promise<string> {
 	const fetchImpl = deps.fetchImpl ?? fetch;
 	const response = await fetchImpl(url, {
 		method: "POST",
@@ -266,24 +260,27 @@ async function zaiSession(url: string, key: string, deps: WebSearchDeps): Promis
 				clientInfo: { name: "saccade-websearch", version: "0.1.0" },
 			},
 		}),
-		signal: boundedSignal(deps.signal, deps.timeoutMs ?? PROVIDER_TIMEOUT_MS),
+		signal: attemptSignal,
 	});
 	if (!response.ok) throw new Error(`initialize HTTP ${response.status}`);
 	const sessionId = response.headers.get("mcp-session-id");
 	if (!sessionId) throw new Error("no mcp-session-id on initialize response");
-	// Notifications/initialized is protocol-politeness; its failure is not
-	// fatal — the tools/list exchange worked without it during verification.
-	await fetchImpl(url, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Accept: "application/json, text/event-stream",
-			Authorization: `Bearer ${key}`,
-			"mcp-session-id": sessionId,
-		},
-		body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
-		signal: boundedSignal(deps.signal, deps.timeoutMs ?? PROVIDER_TIMEOUT_MS),
-	}).catch(() => undefined);
+	// The notification is skippable protocol-politeness, but a cancellation inside it must not be swallowed into a follow-up call.
+	try {
+		await fetchImpl(url, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Accept: "application/json, text/event-stream",
+				Authorization: `Bearer ${key}`,
+				"mcp-session-id": sessionId,
+			},
+			body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+			signal: attemptSignal,
+		});
+	} catch (err) {
+		if ((err as any)?.name === "AbortError" || (err as any)?.name === "TimeoutError" || deps.signal?.aborted) throw err;
+	}
 	return sessionId;
 }
 
@@ -294,6 +291,7 @@ async function zaiToolCall(
 	key: string,
 	sessionId: string,
 	deps: WebSearchDeps,
+	attemptSignal: AbortSignal,
 ): Promise<Record<string, any>> {
 	const fetchImpl = deps.fetchImpl ?? fetch;
 	const response = await fetchImpl(baseUrl, {
@@ -310,27 +308,25 @@ async function zaiToolCall(
 			method: "tools/call",
 			params: { name: toolName, arguments: args },
 		}),
-		signal: boundedSignal(deps.signal, deps.timeoutMs ?? PROVIDER_TIMEOUT_MS),
+		signal: attemptSignal,
 	});
 	const raw = await response.text();
-	if (!response.ok) throw new Error(`HTTP ${response.status}: ${truncate(raw, 300).text}`);
+	if (!response.ok) throw new Error(`HTTP ${response.status}: ${raw}`);
 	const data = extractJsonRpcPayload(raw);
 	if (!data) throw new Error("unparseable MCP response (no JSON-RPC body)");
-	if (data.error) {
-		const err = new Error(`MCP error: ${JSON.stringify(data.error)}`);
-		(err as any).shapeError = true;
-		throw err;
-	}
+	if (data.error) throw new Error(`MCP error: ${JSON.stringify(data.error)}`);
 	const result = data.result;
 	if (!result || typeof result !== "object") throw new Error("MCP response missing result");
 	if (result.isError === true) {
 		const text = mcpTextBlocks(result).join(" ").trim();
-		const err = new Error(truncate(text || "MCP tool reported an error", 300).text);
-		(err as any).shapeError = true;
-		throw err;
+		throw new Error(text || "MCP tool reported an error");
 	}
 	return result;
 }
+
+// Retry needs positive invalid-argument evidence; rate limits and auth faults must fail the provider, never repeat under a new shape.
+const SHAPE_ERROR_RE =
+	/invalid (argument|parameter|param)|unknown (argument|parameter|field|tool)|unrecognized|unexpected (field|argument|property)|schema validation/i;
 
 function isShapeError(err: unknown): boolean {
 	const msg = err instanceof Error ? err.message : String(err);
@@ -338,13 +334,12 @@ function isShapeError(err: unknown): boolean {
 	if (parsed) {
 		try {
 			const code = JSON.parse(parsed[1])?.code;
-			// -32602 (invalid params) and -32601/unknown-tool style protocol errors
 			return code === -32602 || code === -32601;
 		} catch {
 			return false;
 		}
 	}
-	return (err as any)?.shapeError === true;
+	return SHAPE_ERROR_RE.test(msg);
 }
 
 async function zaiSearch(
@@ -353,11 +348,10 @@ async function zaiSearch(
 	key: string,
 	deps: WebSearchDeps,
 ): Promise<ExaOutcome> {
-	// One session spans the bounded shape attempts; a shape error must not
-	// multiply session setups.
-	const sessionId = await zaiSession(ZAI_SEARCH_URL, key, deps);
-	// Attempt shapes, bounded: the skill-proven shape first, then the minimal
-	// schema shape. Only argument-shape failures advance; real failures stop.
+	// One composed signal spans the whole attempt — per-call timeouts would multiply the promised budget.
+	const attemptSignal = boundedSignal(deps.signal, deps.timeoutMs ?? PROVIDER_TIMEOUT_MS);
+	const sessionId = await zaiSession(ZAI_SEARCH_URL, key, deps, attemptSignal);
+	// The verified schema shape is primary; only positively identified argument-shape failure advances.
 	const shapes: Record<string, unknown>[] = [
 		{ search_query: query, location: "us", content_size: "high" },
 		{ search_query: query },
@@ -365,7 +359,7 @@ async function zaiSearch(
 	let lastError: unknown;
 	for (const args of shapes) {
 		try {
-			const result = await zaiToolCall(ZAI_SEARCH_URL, "web_search_prime", args, key, sessionId, deps);
+			const result = await zaiToolCall(ZAI_SEARCH_URL, "web_search_prime", args, key, sessionId, deps, attemptSignal);
 			const text = mcpTextBlocks(result).join("\n\n").trim();
 			if (!text) throw new Error("ZAI search returned no content");
 			return parseZaiSearchPayload(text);
@@ -377,11 +371,7 @@ async function zaiSearch(
 	throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-/**
- * ZAI returns a JSON array (often JSON-encoded inside the text block) of
- * {title, link, content}. Parsed only when it round-trips cleanly; the
- * domain-level links are shown exactly as the provider returns them.
- */
+// ZAI answers are a JSON array (often JSON-encoded in the text block) of {title, link, content}; kept verbatim, domain-level links included.
 export function parseZaiSearchPayload(text: string): ExaOutcome {
 	try {
 		let value: any = JSON.parse(text);
@@ -400,21 +390,28 @@ export function parseZaiSearchPayload(text: string): ExaOutcome {
 			if (results.length > 0) return { kind: "structured", results };
 		}
 	} catch {
-		// fall through to raw
 	}
 	return { kind: "raw", rawText: text };
 }
 
 async function zaiFetch(url: string, key: string, deps: WebSearchDeps): Promise<string> {
-	const sessionId = await zaiSession(ZAI_READER_URL, key, deps);
-	const result = await zaiToolCall(ZAI_READER_URL, "webReader", { url, return_format: "markdown" }, key, sessionId, deps);
+	const attemptSignal = boundedSignal(deps.signal, deps.timeoutMs ?? PROVIDER_TIMEOUT_MS);
+	const sessionId = await zaiSession(ZAI_READER_URL, key, deps, attemptSignal);
+	const result = await zaiToolCall(
+		ZAI_READER_URL,
+		"webReader",
+		{ url, return_format: "markdown" },
+		key,
+		sessionId,
+		deps,
+		attemptSignal,
+	);
 	const text = mcpTextBlocks(result).join("\n\n").trim();
 	if (!text) throw new Error("ZAI reader returned no content");
 	return unwrapZaiReaderPayload(text);
 }
 
-/** The reader wraps the page in a JSON string even in markdown mode; unwrap
- * to the content field when it round-trips, else pass the text through. */
+// The reader wraps the page in a JSON string even in markdown mode.
 function unwrapZaiReaderPayload(text: string): string {
 	try {
 		let value: any = JSON.parse(text);
@@ -427,8 +424,6 @@ function unwrapZaiReaderPayload(text: string): string {
 	}
 	return text;
 }
-
-// ── Orchestration: Exa first, ZAI when keyed; cancel never falls back ──────
 
 function secretsOf(env: Record<string, string | undefined>): string[] {
 	return [env.ZAI_API_KEY];
@@ -447,7 +442,7 @@ async function runWithFallback(
 		return await runExa();
 	} catch (err) {
 		throwIfAborted(deps.signal);
-		attempts.push(`exa-mcp: ${scrub(err instanceof Error ? err.message : String(err), secrets)}`);
+		attempts.push(`exa-mcp: ${sanitizeDetail(err instanceof Error ? err.message : String(err), secrets)}`);
 	}
 	const key = env.ZAI_API_KEY;
 	if (!key) {
@@ -456,10 +451,9 @@ async function runWithFallback(
 	try {
 		return await runZai();
 	} catch (err) {
-		// A caller cancellation arriving during the fallback attempt is not a
-		// provider failure — surface it as cancellation, never as an error.
+		// Cancellation arriving during fallback is not a provider failure — it must surface as cancellation, never trigger the next provider.
 		throwIfAborted(deps.signal);
-		attempts.push(`zai: ${scrub(err instanceof Error ? err.message : String(err), secrets)}`);
+		attempts.push(`zai: ${sanitizeDetail(err instanceof Error ? err.message : String(err), secrets)}`);
 	}
 	throw new Error(`${toolName} failed — ${attempts.join("; ")}`);
 }
@@ -467,7 +461,7 @@ async function runWithFallback(
 export async function runWebSearch(params: SearchParams, deps: WebSearchDeps = {}): Promise<ToolOutcome> {
 	throwIfAborted(deps.signal);
 	const numResults = clampInt(params.numResults, 1, MAX_NUM_RESULTS, DEFAULT_NUM_RESULTS);
-	return runWithFallback(
+	const outcome = await runWithFallback(
 		deps,
 		async () => formatSearchOutcome("exa-mcp", await exaSearch(params, deps), numResults),
 		async () => {
@@ -477,6 +471,7 @@ export async function runWebSearch(params: SearchParams, deps: WebSearchDeps = {
 		},
 		"web_search",
 	);
+	return boundToolOutcome(outcome, deps);
 }
 
 function formatSearchOutcome(provider: string, outcome: ExaOutcome, numResults: number): ToolOutcome {
@@ -528,7 +523,7 @@ export async function runWebFetch(params: FetchParams, deps: WebSearchDeps = {})
 		},
 		"web_fetch",
 	);
-	return outcome;
+	return boundToolOutcome(outcome, deps);
 }
 
 async function formatFetchOutcome(
@@ -543,37 +538,53 @@ async function formatFetchOutcome(
 	if (!capped.truncated) {
 		return { text: header + content, details: { provider, url, chars: content.length } };
 	}
-	const path = await persistFullContent(url, content, deps);
+	// Content at MAX_FETCH_CHARS may be provider-truncated — never claim it is the complete page.
+	const extractionCapped = content.length >= MAX_FETCH_CHARS;
+	const path = await persistOutputFile(url, content, deps);
 	return {
 		text:
 			header +
-			`Showing first ${maxChars} of ${content.length} characters. Full content saved to:\n${path}\n` +
+			`Showing first ${maxChars} of ${content.length} characters. ` +
+			(extractionCapped
+				? `Provider extraction hit the ${MAX_FETCH_CHARS}-character cap; saved output may be incomplete:\n${path}\n`
+				: `Full content saved to:\n${path}\n`) +
 			`(read it with the read tool using offset/limit)\n\n---\n\n` +
 			capped.text,
-		details: { provider, url, chars: content.length, inlineChars: maxChars, fullPath: path },
+		details: { provider, url, chars: content.length, inlineChars: maxChars, fullPath: path, extractionCapped },
 	};
 }
 
-async function persistFullContent(url: string, content: string, deps: WebSearchDeps): Promise<string> {
+// One immutable file per invocation: a later fetch must never rewrite content an earlier result points at.
+async function persistOutputFile(url: string, content: string, deps: WebSearchDeps): Promise<string> {
 	const { mkdir, writeFile } = await import("node:fs/promises");
 	const { tmpdir } = await import("node:os");
 	const { join } = await import("node:path");
-	const { createHash } = await import("node:crypto");
+	const { createHash, randomBytes } = await import("node:crypto");
 	const dir = deps.tmpDir ?? join(tmpdir(), "saccade-websearch");
 	await mkdir(dir, { recursive: true });
 	let host = "page";
 	try {
 		host = new URL(url).hostname.replace(/[^a-z0-9.-]/gi, "_") || "page";
 	} catch {
-		// keep default
 	}
 	const hash = createHash("sha1").update(url).digest("hex").slice(0, 10);
-	const path = join(dir, `${host}-${hash}.md`);
+	const nonce = randomBytes(4).toString("hex");
+	const path = join(dir, `${host}-${hash}-${nonce}.md`);
 	await writeFile(path, content, "utf-8");
 	return path;
 }
 
-// ── Pi registration ─────────────────────────────────────────────────────────
+// Final aggregate bound: even caller-legal maxChars or many small results can exceed what a tool result should carry inline.
+async function boundToolOutcome(outcome: ToolOutcome, deps: WebSearchDeps): Promise<ToolOutcome> {
+	if (!exceedsOutputBounds(outcome.text)) return outcome;
+	const path = await persistOutputFile("output", outcome.text, deps);
+	const preview = capUtf8(outcome.text, OUTPUT_BYTE_CAP).text;
+	return {
+		text:
+			`${preview}\n\n[Output truncated at ${OUTPUT_BYTE_CAP} bytes / ${OUTPUT_LINE_CAP} lines. Full output: ${path}]`,
+		details: { ...outcome.details, outputTruncated: true, fullPath: path },
+	};
+}
 
 export default async function (pi: ExtensionAPI): Promise<void> {
 	const { Type } = await import("typebox");

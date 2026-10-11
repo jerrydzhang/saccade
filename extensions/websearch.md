@@ -11,11 +11,18 @@ dependencies.
   they are forwarded verbatim, without a filtering guarantee.
 - **`web_fetch {url, maxChars?}`** — returns page content with the source URL
   stated. Inline bound defaults to 20,000 chars (max 200,000); larger content
-  is written to a temp file whose path is returned for ordinary reads.
+  is written to a unique per-invocation temp file whose path is returned for
+  ordinary reads. Content at the provider's extraction cap (200,000 chars) is
+  labeled as possibly incomplete, never as the complete page.
 
-Both tools run one bounded attempt per provider (30s timeout each),
-report failures honestly (providers tried and causes), and honour caller
-cancellation without falling back.
+Both tools enforce a final aggregate output bound (100 KiB bytes / 2,000
+lines — the pinned binary's own tool-output ceilings) independently of caller
+arguments: anything larger is spilled to a unique temp file and returned as a
+bounded preview plus pointer. Provider attempts share one 30s deadline
+(handshake through response); failures are reported honestly (providers tried
+and causes, credential bytes scrubbed before truncation); caller cancellation
+never triggers fallback. ZAI result links are domain-level as the provider
+returns them, and are disclosed as such.
 
 ## Loading
 
