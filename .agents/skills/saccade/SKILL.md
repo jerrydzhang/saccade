@@ -21,6 +21,12 @@ unset means human tier. There is no tier argument, and actor names never
 carry authority. Mutating commands record your identity from possession;
 reads need none.
 
+Before your first tracker write, run `sac identity`. Preserve an injected
+`SACCADE_ACTOR` and task scope on ordinary writes: do not override them with
+`--actor`, environment assignments, or names copied from the requester or
+thread. An agent establishes its own actor label only when `SACCADE_ACTOR`
+is absent; then set it and check `sac identity` before writing.
+
 A session's environment may declare a **scope**: `SACCADE_TASK` (its task
 binding, `t-N`) anchors it, `SACCADE_INCARNATION` (an `i-N` birth reference)
 and `SACCADE_WORKSPACE` (an absolute path) ride with it. The scope is
