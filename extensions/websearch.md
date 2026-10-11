@@ -1,0 +1,44 @@
+# websearch extension
+
+Native Pi extension adding two tools — `web_search` and `web_fetch` — authored
+independently for the pinned Pi extension API (0.87.0). Single file, zero npm
+dependencies.
+
+- **`web_search {query, numResults?}`** — returns source titles, URLs and
+  excerpts (≤240 chars) with provider attribution. Keyless Exa MCP primary;
+  ZAI fallback when `ZAI_API_KEY` is set. No answer generation, no
+  classification. Recency/site operators may be typed inside the query;
+  they are forwarded verbatim, without a filtering guarantee.
+- **`web_fetch {url, maxChars?}`** — returns page content with the source URL
+  stated. Inline bound defaults to 20,000 chars (max 200,000); larger content
+  is written to a temp file whose path is returned for ordinary reads.
+
+Both tools run one bounded attempt per provider (30s timeout each),
+report failures honestly (providers tried and causes), and honour caller
+cancellation without falling back.
+
+## Loading
+
+Saccade does not install or inject this extension. Load it explicitly:
+
+- **One session:** `pi -e extensions/websearch.ts` (path relative to this repo).
+- **Global (your action, not Saccade's):** place the file in your own Pi
+  extensions directory, e.g.
+  `cp extensions/websearch.ts ~/.pi/agent/extensions/websearch.ts`.
+  No `settings.json` edit and no launch flag is involved; removal is deleting
+  the file.
+
+Credentials are read from the environment only: `ZAI_API_KEY` (optional
+fallback; its absence is reported, never an error). Keys are never logged or
+echoed; provider error text is scrubbed of credential bytes before surfacing.
+
+## Tests
+
+```
+node --test extensions/websearch.test.ts
+```
+
+Contract coverage over fake provider transports: section/structured parsing,
+raw passthrough, Exa→ZAI fallback, missing key, total-failure attribution,
+credential redaction, cancellation without fallback, numeric bounds, temp-file
+overflow, and URL-scheme rejection.
