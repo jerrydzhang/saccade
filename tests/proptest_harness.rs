@@ -372,30 +372,19 @@ proptest! {
             LoadState::Full(world) => prop_assert_eq!(&world, &live),
             LoadState::Degraded(reason) => panic!("wire round-trip degraded the log: {reason}"),
         }
-    }
 
-    #[test]
-    fn thread_membership_implies_the_task_wait_matches(actions in sequence_strategy()) {
-        let mut conn = db::open(std::path::Path::new(":memory:")).expect(":memory: opens");
-        let mut live = World::new();
-        for action in &actions {
-            let ctx = context(action, &live);
-            let cmd = command_of(action, &live);
-            if let Ok((_, world)) = db::record(&mut conn, &ctx, cmd, 1) {
-                live = world;
-            }
-        }
-        let loadout = db::load(&conn).expect("load after generated sequence");
-        let world = match loadout.state {
-            LoadState::Full(world) => world,
-            LoadState::Degraded(reason) => panic!("the generated log degraded: {reason}"),
-        };
-        let index = saccade::views::thread_index(&world);
-        for row in &loadout.rows {
+        // the task wait matches every record the fold homes on a thread
+        let index = saccade::views::thread_index(&live);
+        for row in &rows {
             let event = wire::assemble(&row.kind, &row.payload).expect("the loaded log assembles");
             if let Some(home) = index.get(&row.seq) {
                 prop_assert!(
-                    saccade::views::wait_matches(&world, saccade::RecordId(row.seq), &event, &saccade::Target::Task(*home)),
+                    saccade::views::wait_matches(
+                        &live,
+                        saccade::RecordId(row.seq),
+                        &event,
+                        &saccade::Target::Task(*home)
+                    ),
                     "seq {} folds into t-{} but the task wait does not match it",
                     row.seq,
                     home.0

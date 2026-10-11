@@ -242,10 +242,11 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Block until a record answering the target lands: a task wait
-    /// matches records folding into the task, a comment wait matches
-    /// its reply chain (revisions and decisions included). Matches are
-    /// strictly after the given global position; nothing is recorded
+    /// Block until matching activity lands on the target: a task
+    /// wait matches records folding into the task, a comment wait
+    /// matches its reply chain (revisions and decisions included).
+    /// Matches are strictly after the given global position; nothing
+    /// is recorded
     Wait {
         /// The task (t-<n>) or comment (c-<seq>) to wait on
         target: String,
@@ -253,10 +254,6 @@ enum Cmd {
         /// cursor a read disclosed, never defaulted
         #[arg(long)]
         after: u64,
-        /// Answer empty after this many seconds, naming the snapshot's
-        /// cursor; without it the wait is unbounded
-        #[arg(long)]
-        timeout: Option<u64>,
     },
 }
 
@@ -506,11 +503,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::List { .. } | Cmd::Log | Cmd::Show { .. } | Cmd::Search { .. } => {
             return read_only(cli, &db_path);
         }
-        Cmd::Wait {
-            target,
-            after,
-            timeout,
-        } => return wait_door(cli, &db_path, target, *after, *timeout),
+        Cmd::Wait { target, after } => return wait_door(cli, &db_path, target, *after),
         Cmd::Start {
             id,
             body,
@@ -644,8 +637,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     ))
 }
 
-/// A request write's reply facts, when the command was one: the
-/// caller resolves the position against its own fold or the server's.
 fn request_of(
     command: &Command,
     stored: &[db::StoredRecord],
@@ -1480,7 +1471,7 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
                 for token in ids {
                     blocks.push(render_id(&world, &loadout.rows, token, *withdrawn)?);
                 }
-                Ok(blocks.join("\n\n"))
+                Ok(format!("{}\n{}", blocks.join("\n\n"), cursor_line(cursor)))
             }
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
         },
@@ -1507,27 +1498,16 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
     }
 }
 
-/// The wait door's poll interval: committed records observed, nothing
-/// clock-driven ever fired by it.
 const WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// The wait door: blocking read semantics over the log. Already
-/// committed records are checked before any blocking, so responses
-/// that landed between a read and this wait are caught; matches are
-/// strictly after the supplied cursor, ride the target's structure,
-/// and carry no sufficiency verdict. No record lands; the reply names
-/// the cursor the inspected snapshot ends at.
 fn wait_door(
     cli: &Cli,
     db_path: &std::path::Path,
     target: &str,
     after: u64,
-    timeout: Option<u64>,
 ) -> Result<String, Fail> {
     let target = parse_target(target)?;
     let conn = db::open_read(db_path).map_err(Fail::Db)?;
-    let deadline =
-        timeout.map(|secs| std::time::Instant::now() + std::time::Duration::from_secs(secs));
     loop {
         let loadout = db::load(&conn).map_err(Fail::Db)?;
         let world = match loadout.state {
@@ -1546,16 +1526,17 @@ fn wait_door(
             })
             .cloned()
             .collect();
-        let cursor = loadout.rows.last().map(|r| r.seq);
-        if !matched.is_empty() || deadline.is_some_and(|d| std::time::Instant::now() >= d) {
-            return Ok(render_wait(cli, &matched, cursor));
+        if !matched.is_empty() {
+            return Ok(render_wait(
+                cli,
+                &matched,
+                loadout.rows.last().map(|r| r.seq),
+            ));
         }
         std::thread::sleep(WAIT_POLL);
     }
 }
 
-/// The wait's target must exist now: a read-door refusal like any
-/// other read of a missing id.
 fn wait_target_exists(world: &saccade::World, target: &Target, records: usize) -> Result<(), Fail> {
     match target {
         Target::Task(task) => {
@@ -1581,9 +1562,6 @@ fn wait_target_exists(world: &saccade::World, target: &Target, records: usize) -
     Ok(())
 }
 
-/// The wait's report: the matched records in record order, then the
-/// cursor for the next wait — the snapshot this wait inspected
-/// through, matched or not.
 fn render_wait(cli: &Cli, matched: &[StoredRecord], cursor: Option<usize>) -> String {
     if cli.json {
         return serde_json::to_string_pretty(&serde_json::json!({
@@ -1593,14 +1571,16 @@ fn render_wait(cli: &Cli, matched: &[StoredRecord], cursor: Option<usize>) -> St
         .expect("records are plain data");
     }
     let mut lines: Vec<String> = matched.iter().map(record_line).collect();
-    if lines.is_empty() {
-        lines.push("no matching record".into());
-    }
-    lines.push(match cursor {
+    lines.push(cursor_line(cursor));
+    lines.join("\n")
+}
+
+/// Every text read ends with this line, feedable to the next `wait --after`.
+fn cursor_line(cursor: Option<usize>) -> String {
+    match cursor {
         Some(c) => format!("cursor {c}"),
         None => "cursor none".into(),
-    });
-    lines.join("\n")
+    }
 }
 
 /// The 'i-<seq>' face the incarnation reference carries.
@@ -1727,7 +1707,7 @@ fn render_records(
 ) -> String {
     if cli.json {
         // the wire's reply shape: records always, the born task's token
-        // only on a create, the request facts only on a request write
+        // only on a create
         let mut reply = serde_json::json!({"records": stored});
         if let Some(id) = born {
             reply["id"] = serde_json::json!(id);
@@ -1761,8 +1741,7 @@ fn render_log(
 ) -> String {
     if cli.json {
         // the log row's own grammar, plus the fold's thread membership:
-        // a row with no home thread carries null, never absence — and
-        // the cursor the read inspected through, for the next wait
+        // a row with no home thread carries null, never absence
         let out: Vec<serde_json::Value> = rows
             .iter()
             .map(|r| {
@@ -1780,7 +1759,9 @@ fn render_log(
         }))
         .expect("records are plain data");
     }
-    rows.iter().map(record_line).collect::<Vec<_>>().join("\n")
+    let mut lines: Vec<String> = rows.iter().map(record_line).collect();
+    lines.push(cursor_line(cursor));
+    lines.join("\n")
 }
 
 fn record_line(r: &StoredRecord) -> String {
@@ -1836,6 +1817,7 @@ fn render_tasks(cli: &Cli, world: &World, cursor: Option<usize>) -> String {
                 if v.n_comments > 0 { "#" } else { "-" }
             )
         })
+        .chain(std::iter::once(cursor_line(cursor)))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -2224,7 +2206,7 @@ fn show_stdin(
             Err(f) => blocks.push(format!("skipped '{token}': {f}")),
         }
     }
-    Ok(blocks.join("\n\n"))
+    Ok(format!("{}\n{}", blocks.join("\n\n"), cursor_line(cursor)))
 }
 
 /// Greedy word wrap; a word longer than a line is hard-broken so a single
@@ -2299,7 +2281,7 @@ fn render_search(
         .expect("results are plain data");
     }
     if groups.is_empty() {
-        return format!("no matches ({})", tokens.join(" "));
+        return format!("no matches ({})\n{}", tokens.join(" "), cursor_line(cursor));
     }
     let mut out = Vec::new();
     for g in groups {
@@ -2321,6 +2303,7 @@ fn render_search(
             out.push(format!("{prefix}{}", glimpse(&line, budget)));
         }
     }
+    out.push(cursor_line(cursor));
     out.join("\n")
 }
 
@@ -2387,15 +2370,16 @@ fn render_anchor(
         }))
         .expect("rows are plain data");
     }
-    window
+    let mut lines: Vec<String> = window
         .iter()
         .map(|row| {
             let prefix = format!("c-{}  {}  {}/{}", row.seq, row.kind, row.actor, row.tier);
             let budget = WIDTH.saturating_sub(prefix.chars().count() + 2);
             format!("{prefix}  {}", glimpse(&row_line(row), budget))
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect();
+    lines.push(cursor_line(cursor));
+    lines.join("\n")
 }
 
 /// The record's own first text line — the same fields the log prints.

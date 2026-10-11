@@ -15,8 +15,6 @@ pub const ADRIFT_AFTER_SECS: u64 = 24 * 3600;
 /// The movement ribbon carries this much history, nothing older.
 pub const RIBBON_WINDOW_SECS: u64 = 72 * 3600;
 
-/// The recorded workspace facts one operation reply carries: record
-/// facts, never a liveness claim.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceFacts {
     pub task: usize,
@@ -25,8 +23,6 @@ pub struct WorkspaceFacts {
     pub path: String,
 }
 
-/// A request write's reply facts: the request's record position, its
-/// root task, and the task's recorded workspace when one stands.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RequestFacts {
     pub seq: usize,
@@ -34,10 +30,6 @@ pub struct RequestFacts {
     pub workspace: Option<WorkspaceFacts>,
 }
 
-/// The destination facts recording a request returns: the request's
-/// own record position, the root task its target resolves through,
-/// and the recorded workspace address when the task holds one. A task
-/// with no recorded workspace returns none — nothing is provisioned.
 pub fn request_facts(world: &World, position: RecordId) -> Option<RequestFacts> {
     let comment = world.comments.get(&CommentId(position))?;
     let task = comment.comment.root.0;
@@ -57,15 +49,8 @@ pub fn request_facts(world: &World, position: RecordId) -> Option<RequestFacts> 
     })
 }
 
-/// Whether one record answers a wait: a task wait matches every record
-/// folding into that task — its birth, its claims and state acts, its
-/// comments and artifacts, revisions and withdrawals of its comments,
-/// its workspace records; a comment wait matches activity on that
-/// comment's chain — a birth targeting into it (replies and decisions
-/// alike) or a revision/withdrawal of a chain member. Everything is
-/// structural from recorded references; prose citations never match,
-/// and a use never matches a comment wait (it targets the consuming
-/// task, not the comment).
+/// A use never matches a comment wait: matching follows targets, and
+/// a use targets its consuming task, never the offer it names.
 pub fn wait_matches(world: &World, at: RecordId, event: &Event, target: &Target) -> bool {
     match event {
         Event::TaskCreated { .. } => match target {
@@ -94,12 +79,10 @@ pub fn wait_matches(world: &World, at: RecordId, event: &Event, target: &Target)
     }
 }
 
-/// The task a comment born at this position lives on, by its root.
 fn born_task(world: &World, at: RecordId) -> Option<TaskId> {
     world.comments.get(&CommentId(at)).map(|c| c.comment.root)
 }
 
-/// The target one resident comment carries.
 fn target_of(world: &World, id: CommentId) -> Target {
     world
         .comments
@@ -109,8 +92,6 @@ fn target_of(world: &World, id: CommentId) -> Target {
         .target
 }
 
-/// Whether the chain from `born` up through its targets passes
-/// `watched` — the reply-chain membership a comment wait matches on.
 fn chain_contains(world: &World, born: Target, watched: CommentId) -> bool {
     let mut up = born;
     loop {
@@ -2187,10 +2168,7 @@ mod test {
             )
         }
 
-        /// Two tasks; t-0 holds the waited offer, its sibling note, a
-        /// two-link reply chain, revisions, a withdrawal, the decision
-        /// naming the offer, a claim, and an artifact; t-1 holds its
-        /// own note and a use naming t-0's offer.
+        // t-0 holds the waited offer, its sibling note, a two-link chain, revisions, a withdrawal, the accept, a claim, an artifact
         fn story() -> (World, Vec<(usize, Event)>) {
             let events = vec![
                 task(0, "implement foo"),
@@ -2288,8 +2266,7 @@ mod test {
                 .collect()
         }
 
-        /// A task wait matches every record folding into the task and
-        /// nothing folding into another.
+        // the task wait matches its own records and never another task's
         #[test]
         fn the_task_wait_matches_exactly_its_own_records() {
             let (world, events) = story();
@@ -2303,11 +2280,7 @@ mod test {
             );
         }
 
-        /// A comment wait matches only its reply chain: replies at any
-        /// depth, revisions and withdrawals of chain members, and the
-        /// decision naming it. The offer's own birth, the sibling note
-        /// on the same task, the use naming it, and the prose citation
-        /// inside c-5's body all stay asleep.
+        // the comment wait wakes only on its chain: replies, revisions of members, the accept — not the birth, sibling, use, or in-prose citation
         #[test]
         fn the_comment_wait_matches_only_its_chain() {
             let (world, events) = story();
@@ -2343,8 +2316,7 @@ mod test {
             record(seq, ctx, Event::Commented { target, kind })
         }
 
-        /// t-0 holds a recorded workspace, t-1 holds none; the last
-        /// request replies into t-1's note, so its root is t-1.
+        // the request resolves a comment target through its root; a task with no workspace returns none
         #[test]
         fn the_request_facts_resolve_the_root_and_the_recorded_workspace() {
             let jerry = ctx("jerry");

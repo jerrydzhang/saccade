@@ -55,14 +55,10 @@ struct RecordsBody {
     /// that predate it omit the field
     #[serde(default)]
     id: Option<String>,
-    /// A request write's record position, present only on request replies
     #[serde(default)]
     seq: Option<usize>,
-    /// The request's root task, present only on request replies
     #[serde(default)]
     task: Option<usize>,
-    /// The destination task's recorded workspace, present only on
-    /// request replies; null when the task holds none
     #[serde(default)]
     workspace: Option<WorkspaceFacts>,
 }
@@ -78,9 +74,8 @@ struct ErrorBody {
     error: ErrorDetail,
 }
 
-/// One command's outcome: the records it landed, the born task's
-/// token when the command created one, and the request facts when it
-/// was a request write.
+/// One command's outcome: the records it landed, and the born task's
+/// token when the command created one.
 #[derive(Debug)]
 pub struct Reply {
     pub records: Vec<StoredRecord>,

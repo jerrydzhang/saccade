@@ -394,8 +394,6 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                     .expect("the birth record folds into its task");
                 reply["id"] = json!(format!("t-{}", born.0));
             }
-            // a request reply carries its record position, the root
-            // task, and the recorded workspace when one stands
             if matches!(
                 &command,
                 Command::Comment {

@@ -216,8 +216,7 @@ async fn a_request_reply_names_its_position_and_the_recorded_workspace() {
         ),
     );
 
-    // no recorded workspace: the request returns its position, its
-    // root task, and no workspace — none is provisioned
+    // no recorded workspace: the request names its position, its root task, no workspace
     let (status, body) = post_command(
         &base_url,
         &envelope(
@@ -1572,7 +1571,7 @@ fn search_reads_the_record_through_the_cli_face() {
     // the retired '#' term learns the c- form instead of matching words
     let (ok, out, _) = sac(&["search", "c-99999"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "no matches (c-99999)");
+    assert_eq!(out.trim_end(), "no matches (c-99999)\ncursor 5");
     let (ok, _, err) = sac(&["search", "#99999"]);
     assert!(!ok, "{err}");
     assert!(
@@ -1581,7 +1580,7 @@ fn search_reads_the_record_through_the_cli_face() {
     );
     let (ok, out, _) = sac(&["search", "by:nobody"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "no matches (by:nobody)");
+    assert_eq!(out.trim_end(), "no matches (by:nobody)\ncursor 5");
 
     // the anchor window reads the log's own rows
     let (ok, out, _) = sac(&["search", "c-1", "-C", "1"]);
@@ -1606,7 +1605,7 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(ok, "{out}");
     assert_eq!(
         out.trim_end(),
-        "c-5  pi [note]\n  floop guards the door the second line holds the detail"
+        "c-5  pi [note]\n  floop guards the door the second line holds the detail\ncursor 5"
     );
     let (ok, out, _) = sac(&["show", "5"]);
     assert!(ok, "{out}");
@@ -1628,10 +1627,13 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(sac(&["create", "task", "guard child", "--parent", "t-1"]).0);
     let (ok, out, _) = sac(&["show", "c-6"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "c-6  task  pi\nbirth of t-2 (parent t-1)");
+    assert_eq!(
+        out.trim_end(),
+        "c-6  task  pi\nbirth of t-2 (parent t-1)\ncursor 6"
+    );
     let (ok, out, _) = sac(&["show", "c-0"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "c-0  task  pi\nbirth of t-0");
+    assert_eq!(out.trim_end(), "c-0  task  pi\nbirth of t-0\ncursor 6");
 
     // several ids render each, threads and records in one call
     let (ok, out, _) = sac(&["show", "t-1", "c-1"]);
@@ -1659,14 +1661,14 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(ok, "{out}");
     assert_eq!(
         out.trim_end(),
-        "c-3  task_claimed  pi\n{\"id\":0,\"incarnation\":null}"
+        "c-3  task_claimed  pi\n{\"id\":0,\"incarnation\":null}\ncursor 6"
     );
     // the typed door opens the offer as its comment block, prose wrapped
     let (ok, out, _) = sac(&["show", "c-4"]);
     assert!(ok, "{out}");
     assert_eq!(
         out.trim_end(),
-        "c-4  pi [offer]\n  floop landed; suite green"
+        "c-4  pi [offer]\n  floop landed; suite green\ncursor 6"
     );
     let (ok, _, err) = sac(&["show", "bogus"]);
     assert!(!ok);
@@ -1817,6 +1819,25 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
         .expect("the revision row");
     assert_eq!(revised["thread"], Value::Null);
 
+    // text reads end with the cursor line too: show, log, list, search, anchor
+    for args in [
+        vec!["show", "t-0"],
+        vec!["show", "c-2"],
+        vec!["log"],
+        vec!["list"],
+        vec!["search", "byte"],
+        vec!["search", "c-2", "-C", "1"],
+    ] {
+        let (ok, out, _) = sac(&args);
+        assert!(ok, "{}: {out}", args.join(" "));
+        assert_eq!(
+            out.lines().last().unwrap(),
+            "cursor 4",
+            "{}: {out}",
+            args.join(" ")
+        );
+    }
+
     // the pipe's json face: every line's outcome, skips included
     let pipe = |input: &str, args: &[&str]| {
         use std::io::Write as _;
@@ -1853,6 +1874,11 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     assert_eq!(rows[0]["id"], json!("bogus"));
     assert!(rows[0]["error"].is_string());
     assert_eq!(rows[1]["body"], json!(body));
+
+    // the stdin text face ends with the cursor line too
+    let (ok, out, _) = pipe("t-0\n", &["show", "--stdin"]);
+    assert!(ok, "{out}");
+    assert_eq!(out.lines().last().unwrap(), "cursor 4", "{out}");
 
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
@@ -2029,8 +2055,7 @@ async fn offline_replies_match_the_wire() {
     let claimed = offline(&offline_db, &["--json", "claim", "t-0"]);
     assert_eq!(claimed["records"][0]["kind"], "task_claimed");
 
-    // a request names its position and root task on both paths, and
-    // no workspace where none stands
+    // a request names its position and root task on both paths, no workspace where none stands
     let asked = offline(&offline_db, &["--json", "request", "t-0", "status?"]);
     assert_eq!(asked["seq"], asked["records"][0]["seq"]);
     assert_eq!(asked["task"], 0);
@@ -2052,7 +2077,7 @@ async fn offline_replies_match_the_wire() {
 // ---- the wait door through the CLI face: committed, delayed, mute ----
 
 #[test]
-fn the_wait_door_answers_committed_and_delayed_writes_and_lands_nothing() {
+fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("wait-door");
     let sac = |args: &[&str]| {
@@ -2078,6 +2103,45 @@ fn the_wait_door_answers_committed_and_delayed_writes_and_lands_nothing() {
         let (ok, out, err) = sac(args);
         assert!(ok, "sac {:?}: {out}{err}", args);
     };
+    // the test bounds the blocking observation itself and kills a wedged child
+    let spawn_waiter = |args: &[&str]| {
+        std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .arg("--offline")
+            .env("SACCADE_ACTOR", "pi")
+            .env("SACCADE_TASK", "")
+            .env("SACCADE_INCARNATION", "")
+            .env("SACCADE_WORKSPACE", "")
+            .args(["--json", "wait"])
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the waiting sac")
+    };
+    let observed = |mut child: std::process::Child| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            match child.try_wait().expect("poll the waiting sac") {
+                Some(_) => break,
+                None if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    panic!("the wait never woke");
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+        let out = child.wait_with_output().expect("the wait's output");
+        assert!(out.status.success());
+        let wait: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let seqs: Vec<u64> = wait["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["seq"].as_u64().unwrap())
+            .collect();
+        (seqs, wait["cursor"].clone())
+    };
     let row_count = || {
         let (ok, out, err) = sac(&["--json", "log"]);
         assert!(ok, "{out}{err}");
@@ -2088,80 +2152,58 @@ fn the_wait_door_answers_committed_and_delayed_writes_and_lands_nothing() {
     sac_quiet(&["create", "task", "wait for the reply"]); // seq 0
     sac_quiet(&["comment", "t-0", "the opening note"]); // seq 1 -> c-1
 
-    // a response that committed before the wait: caught, never blocked
-    let (ok, out, _) = sac(&["--json", "wait", "t-0", "--after", "0"]);
-    assert!(ok, "{out}");
-    let wait: Value = serde_json::from_str(&out).unwrap();
-    let seqs: Vec<u64> = wait["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["seq"].as_u64().unwrap())
-        .collect();
+    // activity that committed before the wait: caught, never blocked
+    let (seqs, cursor) = observed(spawn_waiter(&["t-0", "--after", "0"]));
     assert_eq!(seqs, vec![1]);
-    assert_eq!(wait["cursor"], 1);
+    assert_eq!(cursor, 1);
 
     // the cursor a read disclosed: a write landing between the read
     // and the wait is already committed when the wait checks first
-    sac_quiet(&["comment", "t-0", "the answer"]); // seq 2
+    sac_quiet(&["comment", "t-0", "a follow-up note"]); // seq 2
     let (_, out, _) = sac(&["--json", "log"]);
     let log: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(log["cursor"], 2);
     sac_quiet(&["comment", "t-0", "a late addition"]); // seq 3
-    let (ok, out, _) = sac(&["--json", "wait", "t-0", "--after", "2"]);
-    assert!(ok, "{out}");
-    let wait: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(wait["records"][0]["seq"], 3);
-    assert_eq!(wait["cursor"], 3);
+    let (seqs, cursor) = observed(spawn_waiter(&["t-0", "--after", "2"]));
+    assert_eq!(seqs, vec![3]);
+    assert_eq!(cursor, 3);
 
-    // the delayed response: the wait blocks on a comment chain until
-    // another process's write commits the waking record
-    let mut child = std::process::Command::new(bin)
-        .arg("--db")
-        .arg(&path)
-        .arg("--offline")
-        .env("SACCADE_ACTOR", "pi")
-        .env("SACCADE_TASK", "")
-        .env("SACCADE_INCARNATION", "")
-        .env("SACCADE_WORKSPACE", "")
-        .args(["--json", "wait", "c-1", "--after", "3", "--timeout", "20"])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn the waiting sac");
+    // the blocked wait wakes on another process's committed write
+    let mut child = spawn_waiter(&["c-1", "--after", "3"]);
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert!(
         child.try_wait().unwrap().is_none(),
-        "the wait woke with nothing to wake on"
+        "the wait woke with nothing matching"
     );
     sac_quiet(&["comment", "c-1", "the reply on the note"]); // seq 4
-    let out = child.wait_with_output().expect("the wait answers");
-    assert!(out.status.success());
-    let wait: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(wait["records"][0]["seq"], 4);
-    assert_eq!(wait["cursor"], 4);
+    let (seqs, cursor) = observed(child);
+    assert_eq!(seqs, vec![4]);
+    assert_eq!(cursor, 4);
 
-    // the timed-out wait answers empty, names the cursor, lands nothing
+    // a completed wait lands nothing
     let before = row_count();
-    let (ok, out, _) = sac(&["--json", "wait", "t-0", "--after", "100", "--timeout", "1"]);
-    assert!(ok, "{out}");
-    let wait: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(wait["records"].as_array().unwrap().len(), 0);
-    assert_eq!(wait["cursor"], 4);
+    let (_, cursor) = observed(spawn_waiter(&["t-0", "--after", "3"]));
+    assert_eq!(cursor, 4);
     assert_eq!(row_count(), before, "the wait landed nothing");
 
-    // unrelated activity on the task does not wake a comment wait
+    // the sibling neither wakes the comment wait nor rides in its records
+    let mut child = spawn_waiter(&["c-1", "--after", "4"]);
     sac_quiet(&["comment", "t-0", "an unrelated sibling"]); // seq 5
-    let (ok, out, _) = sac(&["--json", "wait", "c-1", "--after", "4", "--timeout", "1"]);
-    assert!(ok, "{out}");
-    let wait: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(wait["records"].as_array().unwrap().len(), 0);
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "unrelated activity woke the comment wait"
+    );
+    sac_quiet(&["comment", "c-1", "the real reply"]); // seq 6
+    let (seqs, cursor) = observed(child);
+    assert_eq!(seqs, vec![6]);
+    assert_eq!(cursor, 6);
 
-    // the text face: matched record lines, then the cursor for the
-    // next wait — the snapshot inspected through, matched or not
-    let (ok, out, _) = sac(&["wait", "t-0", "--after", "4"]);
+    // the text face: matched record lines, then the cursor for the next wait
+    let (ok, out, _) = sac(&["wait", "t-0", "--after", "5"]);
     assert!(ok, "{out}");
-    assert!(out.contains("c-5"), "{out}");
-    assert!(out.trim_end().ends_with("cursor 5"), "{out}");
+    assert!(out.contains("c-6"), "{out}");
+    assert!(out.trim_end().ends_with("cursor 6"), "{out}");
 
     // a missing target refuses at the read door
     let (ok, _, stderr) = sac(&["wait", "t-9", "--after", "0"]);
