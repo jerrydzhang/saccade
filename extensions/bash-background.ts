@@ -1,15 +1,6 @@
-/**
- * Background execution for the bash tool: `background: true` runs a command
- * detached, returns immediately, and delivers the result as a follow-up
- * message when it finishes. Ordinary calls delegate to pi's built-in bash
- * unchanged. `bash_stop {id}` stops a command this session launched.
- *
- * Loaded explicitly — see extensions/README.md. Nothing here installs itself.
- */
-
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { accessSync, closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -30,10 +21,8 @@ const TAIL_LINES = 20;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const SESSION_ENV_KEYS = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"] as const;
 
-// The wrapper runs the command in the caller's shell (argv transport, never
-// interpolated) and appends the nonce-tagged exit line, so the exit code
-// survives extension reload: the reloaded instance holds no ChildProcess, it
-// finds the marker in the log.
+// The wrapper appends a nonce-tagged exit line: a reloaded instance holds no
+// ChildProcess, it recovers the exit code from the log.
 const WRAPPER = [
 	"cmd=$1; nonce=$2; shift 2",
 	'"$@" "$cmd"; code=$?',
@@ -42,9 +31,8 @@ const WRAPPER = [
 
 type JobState = "running" | "stopping" | "exited" | "unknown" | "stopped";
 
-// Plain data only: this map is the reload continuity, so a reloaded instance
-// can take running jobs over from marker reads alone. Never store a
-// ChildProcess or a captured pi here.
+// Plain data only: a reloaded instance takes jobs over from marker reads, so
+// nothing process-bound or session-bound may live here.
 interface BgJob {
 	id: string;
 	command: string;
@@ -55,6 +43,8 @@ interface BgJob {
 	deadlineAt?: number;
 	state: JobState;
 	stopReason?: "stopped" | "timeout";
+	/** Set when a stop escalation ended unresolved; the command may live on. */
+	stopFailed?: "survived" | "denied";
 	exitCode?: number;
 	endedAt?: number;
 	notified: boolean;
@@ -68,40 +58,43 @@ interface Registry {
 	poller?: ReturnType<typeof setInterval>;
 }
 
-// globalThis under a Symbol.for key because pi loads extensions with
-// moduleCache: false — module state dies on /reload, this survives it within
-// the same process. It holds no meaning across processes.
+// On globalThis because pi reloads extensions with moduleCache: false — module
+// state dies on /reload, this survives it within the same process.
 const REGISTRY_KEY = Symbol.for("bash-background.jobs");
 
 function registry(): Registry {
 	const holder = globalThis as typeof globalThis & { [REGISTRY_KEY]?: Registry };
-	const reg = (holder[REGISTRY_KEY] ??= { jobs: new Map<string, BgJob>(), nextId: 1 });
-	return reg;
+	return (holder[REGISTRY_KEY] ??= { jobs: new Map<string, BgJob>(), nextId: 1 });
 }
 
 let pi: ExtensionAPI | undefined;
 
-function reached(send: () => void): boolean {
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// EPERM on a probe means the target exists but cannot be signalled —
+// existence, never absence; only ESRCH settles liveness.
+function probeAlive(pid: number, group: boolean): boolean {
 	try {
-		send();
+		process.kill(group ? -pid : pid, 0);
 		return true;
 	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ESRCH";
+	}
+}
+
+function signalGroup(pid: number, sig: NodeJS.Signals): "sent" | "absent" | "denied" {
+	try {
+		process.kill(-pid, sig);
+		return "sent";
+	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
-		if (code === "ESRCH" || code === "EPERM") return false;
+		if (code === "ESRCH") return "absent";
+		if (code === "EPERM") return "denied";
 		throw error;
 	}
 }
 
-function pidAlive(pid: number): boolean {
-	return reached(() => process.kill(pid, 0));
-}
-
-function groupAlive(pid: number): boolean {
-	return reached(() => process.kill(-pid, 0));
-}
-
-// Pinned bash convention: invalid and out-of-range timeouts throw the same
-// errors the built-in throws; omission means no deadline.
+// Pinned bash convention: the same timeout refusals the built-in raises.
 function validateTimeout(timeout: number | undefined): void {
 	if (timeout === undefined) return;
 	if (!Number.isFinite(timeout) || timeout <= 0) {
@@ -131,8 +124,13 @@ function shellEnv(ctx: ExtensionContext | undefined): NodeJS.ProcessEnv {
 async function spawnJob(command: string, timeout: number | undefined, ctx: ExtensionContext | undefined): Promise<BgJob> {
 	const cwd = ctx?.cwd ?? process.cwd();
 	const logPath = join(tmpdir(), `bash-bg-${randomBytes(6).toString("hex")}.log`);
-	const fd = openSync(logPath, "wx", 0o600);
 	const nonce = randomBytes(8).toString("hex");
+	try {
+		accessSync(cwd);
+	} catch {
+		throw new Error(`Working directory does not exist: ${cwd}\nCannot execute background commands.`);
+	}
+	const fd = openSync(logPath, "wx", 0o600);
 	try {
 		const { shell, args } = getShellConfig();
 		const child = spawn("sh", ["-c", WRAPPER, "bash-bg", command, nonce, shell, ...args], {
@@ -141,13 +139,13 @@ async function spawnJob(command: string, timeout: number | undefined, ctx: Exten
 			detached: true,
 			stdio: ["ignore", fd, fd],
 		});
-		// The armed reply must not lie: spawn failures (missing cwd, ENOENT)
-		// surface here as a thrown error, not as a started job. A later error
-		// event gets a no-op listener so a dropped handle cannot crash the host.
+		// The armed reply must not lie: spawn failures surface here as errors.
 		await new Promise<void>((resolve, reject) => {
 			child.once("spawn", resolve);
 			child.once("error", reject);
 		});
+		// A dropped handle still needs this listener, or a later error crashes
+		// the host process.
 		child.on("error", () => {});
 		child.unref();
 		const reg = registry();
@@ -172,48 +170,64 @@ async function spawnJob(command: string, timeout: number | undefined, ctx: Exten
 	}
 }
 
-// Bounded tail read: a log can grow without limit, so nothing here reads the
-// whole file. Returns the last bytes plus the exit marker when present.
-function readTail(job: BgJob, bytes: number): string {
-	let fd: number;
+// Bounded reads only: a log can grow without limit.
+function readTail(job: BgJob, bytes: number): { text: string; size: number } {
 	try {
-		fd = openSync(job.logPath, "r");
+		const fd = openSync(job.logPath, "r");
+		try {
+			const size = fstatSync(fd).size;
+			const start = Math.max(0, size - bytes);
+			const buffer = Buffer.alloc(size - start);
+			readSync(fd, buffer, 0, buffer.length, start);
+			return { text: buffer.toString("utf8"), size };
+		} finally {
+			closeSync(fd);
+		}
 	} catch {
-		return "";
-	}
-	try {
-		const size = fstatSync(fd).size;
-		const start = Math.max(0, size - bytes);
-		const buffer = Buffer.alloc(size - start);
-		readSync(fd, buffer, 0, buffer.length, start);
-		return buffer.toString("utf8");
-	} finally {
-		closeSync(fd);
+		return { text: "", size: 0 };
 	}
 }
 
+// Only a completed, nonce-tagged marker line counts; anything else a command
+// prints is user output, never exit evidence.
 function readMarker(job: BgJob): number | undefined {
-	const tail = readTail(job, TAIL_BYTES * 2);
-	const line = tail.split("\n").reverse().find((l) => l.startsWith(`${MARKER}:`));
-	if (!line) return undefined;
-	const parts = line.split(":");
-	if (parts[1] !== job.nonce) return undefined;
-	const code = Number(parts[2]);
-	return Number.isInteger(code) ? code : undefined;
+	const { text } = readTail(job, TAIL_BYTES * 2);
+	const pattern = new RegExp(`(?:^|\\n)${MARKER}:([0-9a-f]{16}):(\\d+)\\n`, "g");
+	let match: RegExpExecArray | null;
+	let found: number | undefined;
+	while ((match = pattern.exec(text)) !== null) {
+		if (match[1] === job.nonce) found = Number(match[2]);
+	}
+	return found;
 }
 
-function outputTail(job: BgJob): { text: string; cut: boolean } {
-	const tail = readTail(job, TAIL_BYTES)
-		.split("\n")
-		.filter((l) => !l.startsWith(`${MARKER}:`))
-		.join("\n")
-		.replace(/^\n+/, "")
-		.replace(/\n+$/, "");
-	if (tail === "") return { text: "", cut: false };
-	const lines = tail.split("\n");
-	const kept = lines.slice(-TAIL_LINES);
-	const cut = lines.length > TAIL_LINES || Buffer.byteLength(tail) > TAIL_BYTES;
-	return { text: kept.join("\n"), cut };
+function outputTail(job: BgJob): { text: string; cut: "none" | "lines" | "bytes" } {
+	const { text: raw, size } = readTail(job, TAIL_BYTES);
+	const bytesCut = size > TAIL_BYTES;
+	// The window can start mid-character; drop continuation bytes so the text
+	// stays valid UTF-8.
+	let start = 0;
+	while (start < Math.min(3, raw.length) && (raw.charCodeAt(start) & 0xc0) === 0x80) start++;
+	// Strip this job's control marker (complete or torn by a kill) together
+	// with its separating newline; nothing else the command printed is touched.
+	let text = raw
+		.slice(start)
+		.replace(new RegExp(`\\n?${MARKER}:${job.nonce}(:\\d+)?(\\n|$)`), "");
+	if (bytesCut) {
+		// The window opens mid-line; drop that partial line unless the whole
+		// window is one unterminated line, where the cut notice covers it.
+		const newline = text.indexOf("\n");
+		if (newline !== -1) text = text.slice(newline + 1);
+	}
+	const lines = text.split("\n");
+	const joined = lines.join("\n").replace(/\n+$/, "");
+	if (joined === "") return { text: "", cut: bytesCut ? "bytes" : "none" };
+	if (bytesCut) return { text: joined, cut: "bytes" };
+	const cut = lines.length > TAIL_LINES || Buffer.byteLength(joined) > TAIL_BYTES;
+	return {
+		text: cut ? lines.slice(-TAIL_LINES).join("\n") : joined,
+		cut: cut ? "lines" : "none",
+	};
 }
 
 function oneLine(command: string): string {
@@ -221,13 +235,22 @@ function oneLine(command: string): string {
 	return line.length > 120 ? `${line.slice(0, 117)}...` : line;
 }
 
+function timeoutSeconds(job: BgJob): number {
+	return Math.round(((job.deadlineAt ?? 0) - job.startedAt) / 100) / 10;
+}
+
 function outcome(job: BgJob): string {
 	if (job.state === "exited") {
-		if (job.exitCode !== 0) return `failed: exited with code ${job.exitCode}`;
-		return "exited with code 0";
+		const base = job.exitCode === 0 ? "exited with code 0" : `failed: exited with code ${job.exitCode}`;
+		if (job.stopFailed === "denied" || job.stopFailed === "survived") {
+			return job.stopReason === "timeout"
+				? `${base} after its timeout of ${timeoutSeconds(job)}s elapsed (stop could not be completed)`
+				: `${base} (an earlier stop attempt did not complete)`;
+		}
+		return base;
 	}
 	if (job.state === "stopped" && job.stopReason === "timeout") {
-		return `was stopped: its timeout of ${Math.round(((job.deadlineAt ?? 0) - job.startedAt) / 100) / 10}s elapsed`;
+		return `was stopped: its timeout of ${timeoutSeconds(job)}s elapsed`;
 	}
 	if (job.state === "unknown") return "ended without reporting an exit status";
 	return `was stopped (${job.stopReason ?? "by request"})`;
@@ -240,12 +263,10 @@ function completionText(job: BgJob): string {
 		`Background command ${job.id} ${outcome(job)}, ran ${seconds}s.`,
 		`Command: ${oneLine(job.command)}`,
 	];
-	if (text === "") lines.push("(no output)");
-	else {
-		lines.push(cut ? `Output, last ${TAIL_LINES} lines — full output: ${job.logPath}` : "Output:");
-		lines.push(text);
-	}
-	if (text !== "" && !cut) lines.push(`Full output: ${job.logPath}`);
+	if (text === "") lines.push(cut === "bytes" ? `Earlier output was cut — full output: ${job.logPath}` : "(no output)");
+	else if (cut === "bytes") lines.push(`Output (tail; earlier output cut) — full output: ${job.logPath}`, text);
+	else if (cut === "lines") lines.push(`Output, last ${TAIL_LINES} lines — full output: ${job.logPath}`, text);
+	else lines.push("Output:", text, `Full output: ${job.logPath}`);
 	return lines.join("\n");
 }
 
@@ -271,93 +292,97 @@ function deliver(job: BgJob): void {
 			{ deliverAs: "followUp", triggerTurn: true },
 		);
 	} catch {
-		// A stale handle (mid-reload) must not consume the result: the next
-		// poller tick retries through the rebound instance.
+		// A stale handle must not consume the result: the rebound instance
+		// retries on its next tick.
 		job.notified = false;
 	}
 }
 
 const killsInFlight = new Map<string, Promise<string>>();
 
-// Returns the observed outcome; the caller words it. Sets terminal state.
-function stopJob(job: BgJob, reason: "stopped" | "timeout"): Promise<string> {
+function settleFromMarker(job: BgJob): string | undefined {
+	const marker = readMarker(job);
+	if (marker === undefined) return undefined;
+	job.state = "exited";
+	job.exitCode = marker;
+	job.endedAt = Date.now();
+	// A late marker during a stop attempt is not "finished on its own" when the
+	// deadline caused the attempt.
+	if (job.stopReason === "timeout") {
+		return `exited with code ${marker} after its timeout of ${timeoutSeconds(job)}s elapsed (stop was in progress)`;
+	}
+	return `finished on its own while being stopped: exited with code ${marker}`;
+}
+
+// Returns the observed outcome; the caller words it. Terminal only when
+// settlement was actually observed — an unkillable group stays running.
+async function stopJob(job: BgJob, reason: "stopped" | "timeout"): Promise<string> {
 	const existing = killsInFlight.get(job.id);
 	if (existing) return existing;
 	const run = (async (): Promise<string> => {
 		job.stopping = true;
 		job.stopReason = reason;
-		// Marked before the kill so the poller can never deliver a completion
-		// for a command the agent explicitly stopped; the stop result itself
-		// carries the observed outcome.
+		// Set before the kill so an explicitly stopped command can never
+		// deliver afterwards; the stop result itself carries the outcome. A
+		// deadline stop keeps delivering — with its cause preserved.
 		if (reason === "stopped") job.notified = true;
-		const marker = readMarker(job);
-		if (marker !== undefined) {
-			job.state = "exited";
-			job.exitCode = marker;
+		const settled = settleFromMarker(job);
+		if (settled !== undefined) return settled;
+		if (job.groupGone) {
+			// Evidence from an earlier settlement: this pid is never signalled again.
+			job.state = "unknown";
 			job.endedAt = Date.now();
-			return `finished on its own while being stopped: exited with code ${marker}`;
+			return "had already ended (exit status unknown)";
 		}
-		if (!groupAlive(job.pid)) {
-			job.groupGone = true;
-			const late = readMarker(job);
-			if (late !== undefined) {
-				job.state = "exited";
-				job.exitCode = late;
-			} else {
-				job.state = "unknown";
-			}
-			job.endedAt = Date.now();
-			return job.state === "exited" ? `had already finished: exited with code ${late}` : "had already ended (exit status unknown)";
+		let stopped = false;
+		let denied = false;
+		const attempt = (sig: NodeJS.Signals): void => {
+			const how = signalGroup(job.pid, sig);
+			if (how === "absent") stopped = true;
+			if (how === "denied") denied = true;
+		};
+		attempt("SIGTERM");
+		for (let waited = 0; !stopped && !denied && waited < STOP_GRACE_MS; waited += STOP_POLL_STEP_MS) {
+			await sleep(STOP_POLL_STEP_MS);
+			stopped = !probeAlive(job.pid, true);
 		}
-		reached(() => process.kill(-job.pid, "SIGTERM"));
-		let killed = false;
-		for (let waited = 0; waited < STOP_GRACE_MS; waited += STOP_POLL_STEP_MS) {
-			await new Promise((r) => setTimeout(r, STOP_POLL_STEP_MS));
-			if (!groupAlive(job.pid)) {
-				killed = true;
-				break;
-			}
-		}
-		if (!killed) {
-			reached(() => process.kill(-job.pid, "SIGKILL"));
-			for (let waited = 0; waited < AFTER_KILL_MS; waited += STOP_POLL_STEP_MS) {
-				await new Promise((r) => setTimeout(r, STOP_POLL_STEP_MS));
-				if (!groupAlive(job.pid)) {
-					killed = true;
-					break;
-				}
+		if (!stopped && !denied) {
+			attempt("SIGKILL");
+			for (let waited = 0; !stopped && !denied && waited < AFTER_KILL_MS; waited += STOP_POLL_STEP_MS) {
+				await sleep(STOP_POLL_STEP_MS);
+				stopped = !probeAlive(job.pid, true);
 			}
 		}
-		job.groupGone = killed;
-		const late = readMarker(job);
-		if (late !== undefined) {
-			job.state = "exited";
-			job.exitCode = late;
-			job.endedAt = Date.now();
-			return `finished on its own while being stopped: exited with code ${late}`;
-		}
-		job.endedAt = Date.now();
-		if (killed) {
+		const late = settleFromMarker(job);
+		if (late !== undefined) return late;
+		if (stopped) {
 			job.state = "stopped";
+			job.groupGone = true;
+			job.endedAt = Date.now();
 			return reason === "timeout"
 				? "stopped at its deadline (command group gone)"
 				: "stopped (command group gone)";
 		}
-		job.state = "stopped";
-		return "could not be stopped: the command group survived SIGKILL and may still be running";
+		// Unresolved: the group is still alive or unprobeable, so the job stays
+		// running and later ticks keep watching for a natural exit.
+		job.stopping = false;
+		job.stopFailed = denied ? "denied" : "survived";
+		return denied
+			? "could not be stopped: the command group could not be signalled (permission denied) and may still be running"
+			: "could not be stopped: the command group survived SIGKILL and may still be running";
 	})();
-	const clear = (): void => {
+	const shared = run.finally(() => {
 		job.stopping = false;
 		killsInFlight.delete(job.id);
-	};
-	killsInFlight.set(job.id, run.then(clear, clear));
-	return run;
+	});
+	killsInFlight.set(job.id, shared);
+	return shared;
 }
 
-function stopAllJobs(): void {
-	for (const job of registry().jobs.values()) {
-		if (job.state === "running") void stopJob(job, "stopped");
-	}
+// Awaited by shutdown hooks so pi can hold exit until escalation settles.
+async function stopAllJobs(): Promise<void> {
+	const active = [...registry().jobs.values()].filter((j) => j.state === "running" || j.state === "stopping");
+	await Promise.allSettled(active.map((j) => stopJob(j, "stopped")));
 }
 
 function ensurePoller(): void {
@@ -377,7 +402,7 @@ function pollTick(): void {
 	const reg = registry();
 	for (const job of reg.jobs.values()) {
 		if (job.state !== "running" || job.stopping) continue;
-		if (job.deadlineAt !== undefined && Date.now() >= job.deadlineAt) {
+		if (job.deadlineAt !== undefined && !job.stopFailed && Date.now() >= job.deadlineAt) {
 			void stopJob(job, "timeout");
 			continue;
 		}
@@ -386,7 +411,7 @@ function pollTick(): void {
 			job.state = "exited";
 			job.exitCode = marker;
 			job.endedAt = Date.now();
-		} else if (!pidAlive(job.pid)) {
+		} else if (!probeAlive(job.pid, false)) {
 			job.state = "unknown";
 			job.endedAt = Date.now();
 		}
@@ -394,7 +419,9 @@ function pollTick(): void {
 	for (const job of reg.jobs.values()) {
 		deliver(job);
 	}
-	const pending = [...reg.jobs.values()].some((job) => job.state === "running" || job.state === "stopping" || !job.notified);
+	const pending = [...reg.jobs.values()].some(
+		(job) => job.state === "running" || job.state === "stopping" || !job.notified,
+	);
 	if (!pending) stopPoller();
 }
 
@@ -432,7 +459,6 @@ export default function (handle: ExtensionAPI) {
 			// The call's abort signal is deliberately unused: it aborts the tool
 			// call, and a background command must outlive the call that started it.
 			const job = await spawnJob(input.command, input.timeout, ctx);
-			const seconds = input.timeout !== undefined ? input.timeout : undefined;
 			return {
 				content: [
 					{
@@ -441,7 +467,7 @@ export default function (handle: ExtensionAPI) {
 							`Background command ${job.id} started (pid ${job.pid}).`,
 							`Command: ${oneLine(input.command)}`,
 							`Output streams to ${job.logPath} — read it anytime for progress; reading never consumes the result.`,
-							seconds !== undefined ? `Deadline: ${seconds}s total runtime.` : "No deadline.",
+							job.deadlineAt !== undefined ? `Deadline: ${input.timeout}s total runtime.` : "No deadline.",
 							"The result will be delivered here automatically when it finishes — continue other work instead of polling.",
 						].join("\n"),
 					},
@@ -485,20 +511,24 @@ export default function (handle: ExtensionAPI) {
 			};
 		},
 	});
-	handle.on("session_start", (event) => {
+	handle.on("session_start", async (event) => {
 		// A replaced session (new/resume/fork) never adopts the old session's
-		// jobs; a reload takes them over. Cleanup here is belt-and-braces for a
-		// shutdown that did not run.
+		// jobs; a reload takes them over. Awaited cleanup here is
+		// belt-and-braces for a shutdown that did not run.
 		if (event.reason !== "reload" && event.reason !== "startup") {
-			stopAllJobs();
+			await stopAllJobs();
 			registry().jobs.clear();
 			stopPoller();
 		}
 		attach(handle);
 	});
-	handle.on("session_shutdown", (event) => {
-		if (event.reason === "reload") return;
-		stopAllJobs();
+	handle.on("session_shutdown", async (event) => {
+		if (event.reason === "reload") {
+			// Jobs keep running; this instance's handle must never deliver again.
+			pi = undefined;
+			return;
+		}
+		await stopAllJobs();
 		registry().jobs.clear();
 		stopPoller();
 		pi = undefined;

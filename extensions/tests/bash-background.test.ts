@@ -1,5 +1,4 @@
-// Contracts over the fake ExtensionAPI and real child processes: delegation,
-// the armed reply, completion delivery, deadlines, stop, and lifecycle.
+// Contracts over the fake ExtensionAPI and real child processes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -244,4 +243,71 @@ test("a replaced session never adopts or delivers old jobs", async () => {
 	assert.equal(second.sent.length, 0);
 	const orphan = await second.bashStop().execute("c1", { id: "bg-1" });
 	assert.match(orphan.content[0].text, /No background command bg-1/);
+});
+
+test("shutdown awaits escalation for TERM-ignoring commands before returning", async () => {
+	const app = fresh();
+	bashBackground(app.handle);
+	await app.emit("session_start", { reason: "startup" });
+	const out = await app.bash().execute("c1", { command: "trap \"\" TERM; sleep 30", background: true }, undefined, undefined, testCtx("/tmp"));
+	const pid = pidFrom(out.content[0].text);
+	await app.emit("session_shutdown", { reason: "quit" });
+	assert.equal(groupAlive(pid), false, "group gone the moment the awaited handler returns");
+});
+
+test("large single-line output is cut with an honest notice", async () => {
+	const app = fresh();
+	bashBackground(app.handle);
+	await app.bash().execute("c1", { command: "head -c 20000 </dev/zero | tr '\\0' 'x'", background: true }, undefined, undefined, testCtx("/tmp"));
+	await waitFor(() => app.sent.length === 1);
+	assert.match(app.sent[0].message.content, /earlier output cut/);
+	assert.match(app.sent[0].message.content, /xxxx/);
+	assert.doesNotMatch(app.sent[0].message.content, /^Output:$/m);
+});
+
+test("user lines resembling the exit marker survive verbatim", async () => {
+	const app = fresh();
+	bashBackground(app.handle);
+	const cmd = "echo '__BASH_BG_EXIT__:0000000000000000:99'; echo marker-fine";
+	await app.bash().execute("c1", { command: cmd, background: true }, undefined, undefined, testCtx("/tmp"));
+	await waitFor(() => app.sent.length === 1);
+	assert.match(app.sent[0].message.content, /__BASH_BG_EXIT__:0000000000000000:99/);
+	assert.match(app.sent[0].message.content, /marker-fine/);
+	assert.match(app.sent[0].message.content, /exited with code 0/, "the real marker still settles the exit");
+});
+
+test("output cut mid-character stays valid UTF-8", async () => {
+	const app = fresh();
+	bashBackground(app.handle);
+	const cmd = "i=0; while [ $i -lt 1500 ]; do printf '★'; i=$((i+1)); done; echo done";
+	await app.bash().execute("c1", { command: cmd, background: true }, undefined, undefined, testCtx("/tmp"));
+	await waitFor(() => app.sent.length === 1);
+	assert.doesNotMatch(app.sent[0].message.content, /\uFFFD/);
+	assert.match(app.sent[0].message.content, /done/);
+});
+
+test("concurrent stops join one escalation and report one outcome", async () => {
+	const app = fresh();
+	bashBackground(app.handle);
+	await app.bash().execute("c1", { command: "sleep 30", background: true }, undefined, undefined, testCtx("/tmp"));
+	const [first, second] = await Promise.all([
+		app.bashStop().execute("c2", { id: "bg-1" }),
+		app.bashStop().execute("c3", { id: "bg-1" }),
+	]);
+	assert.equal(first.content[0].text, second.content[0].text);
+	assert.match(first.content[0].text, /stopped \(command group gone\)/);
+	assert.equal(app.sent.length, 0);
+});
+
+test("deadline delivery reconnects after reload with the timeout cause", async () => {
+	const first = fresh();
+	bashBackground(first.handle);
+	await first.bash().execute("c1", { command: "sleep 30", background: true, timeout: 1 }, undefined, undefined, testCtx("/tmp"));
+	await first.emit("session_shutdown", { reason: "reload" });
+	const second = fakePi();
+	bashBackground(second.handle);
+	await second.emit("session_start", { reason: "reload" });
+	await waitFor(() => second.sent.length === 1, 10000);
+	assert.match(second.sent[0].message.content, /timeout of 1s elapsed/);
+	assert.equal(first.sent.length, 0);
 });
