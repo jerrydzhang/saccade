@@ -1,12 +1,10 @@
-# The global Pi extension installer: an immutable snapshot of the production
-# extension files taken from the pinned saccade input — never the live working
-# tree — plus the app script that installs it into ~/.pi/agent/extensions.
+# snapshots come from the pinned saccade input, never the live working tree
 {
   lib,
   pkgs,
   saccade,
 }: let
-  # the production files the installer ships; tests and docs stay out
+  # explicit list: extensions/ also carries tests and docs
   piExtensionFiles = [
     "websearch.ts"
     "bash-background.ts"
@@ -17,7 +15,6 @@
     '')
     piExtensionFiles;
 
-  # immutable snapshot; the install never points at the working tree
   pi-extensions-snapshot = pkgs.runCommand "saccade-pi-extensions" {} ''
     mkdir -p $out
     ${piExtensionInstallLines}
@@ -57,6 +54,9 @@
         if [[ ! -f $manifest ]]; then
           die "$root exists but $manifest does not; not an installation of this installer"
         fi
+        if [[ "$(readlink "$root")" != "$(jq -r '.snapshot' "$manifest")" ]]; then
+          die "$root does not resolve to the recorded snapshot; refusing to touch it"
+        fi
       fi
 
       previous=""
@@ -70,20 +70,22 @@
         fi
       done <<<"$previous"
 
-      # a name neither in the manifest nor an existing link of ours
-      # belongs to the user; overwrite only this installer's own files
-      for f in "''${files[@]}"; do
+      # the manifest names what a previous run installed, never permission to
+      # replace bytes now on disk: every existing managed or stale entry must
+      # be this installer's own symlink to the recorded root
+      while IFS= read -r f; do
+        [[ -z $f ]] && continue
         if [[ -e $target/$f || -L $target/$f ]]; then
-          if ! grep -qxF "$f" <<<"$previous" && [[ "$(readlink "$target/$f")" != "$root/$f" ]]; then
-            die "$target/$f exists and was not installed by this installer; refusing to overwrite"
+          if [[ ! -L $target/$f || "$(readlink "$target/$f")" != "$root/$f" ]]; then
+            die "$target/$f was replaced and is not this installer's symlink; refusing to touch it"
           fi
         fi
-      done
+      done <<<"$(printf '%s\n' "$previous" "''${files[@]}" | sort -u)"
 
       # root the new snapshot before anything points through the out-link
       "${nixBin}" --extra-experimental-features 'nix-command flakes' build --out-link "$root" "${snapshot}"
 
-      # drop names the previous installation had that this one does not
+      # a previous generation may have installed files this one does not
       while IFS= read -r f; do
         [[ -z $f ]] && continue
         grep -qxF "$f" <<<"${currentFiles}" || rm -f "$target/$f"
