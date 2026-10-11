@@ -596,7 +596,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
 
     // Identity is required only where it is recorded: mutating commands.
     let context = context_of(cli)?;
-    identity_fallback_guard(cli, &context)?;
+    identity_fallback_guard(cli, &context, attached_terminal())?;
     let creates = matches!(command, Command::CreateTask { .. });
     let mut born: Option<String> = None;
     let mut request: Option<RequestFacts> = None;
@@ -869,14 +869,19 @@ fn context_scope() -> Result<Option<Scope>, Fail> {
 /// agents that forgot their identity) refuses before any write,
 /// taught the fix. Possession is read from the context's tier, never
 /// the --actor flag: clap binds SACCADE_ACTOR into that flag, so it
-/// cannot tell possession from a passed name.
-fn identity_fallback_guard(cli: &Cli, context: &Context) -> Result<(), Fail> {
+/// cannot tell possession from a passed name. The observation rides
+/// in as `interactive` — a Nix builder hands tests a terminal, so the
+/// contract drives the matrix over the injected value.
+fn attached_terminal() -> bool {
+    std::io::stdin().is_terminal()
+        || std::io::stdout().is_terminal()
+        || std::io::stderr().is_terminal()
+}
+
+fn identity_fallback_guard(cli: &Cli, context: &Context, interactive: bool) -> Result<(), Fail> {
     if matches!(context.tier, Tier::Agent) {
         return Ok(());
     }
-    let interactive = std::io::stdin().is_terminal()
-        || std::io::stdout().is_terminal()
-        || std::io::stderr().is_terminal();
     if interactive {
         if cli.actor.is_none() {
             eprintln!("{}", identity_fallback_notice(context));
@@ -936,7 +941,7 @@ fn start_door(
     let task = parse_task_id(id)?;
     let request = Prose::new(start_body(body, stdin)?)?;
     let context = context_of(cli)?;
-    identity_fallback_guard(cli, &context)?;
+    identity_fallback_guard(cli, &context, attached_terminal())?;
     client::handshake(&cli.server);
     let reply = client::start_workspace(&cli.server, &context, task.0, base.as_deref(), &request)
         .map_err(Fail::Client)?;
@@ -2501,7 +2506,8 @@ mod test {
         restore();
     }
 
-    /// Possession passes any context; the terminal-free matrix refuses.
+    /// The write door's authority matrix: possession passes every cell;
+    /// the unpossessed human write needs a terminal or refuses.
     #[test]
     fn the_identity_fallback_guards_the_write_door() {
         let jerry = Context {
@@ -2527,19 +2533,25 @@ mod test {
         let unnamed = cli_of(None);
         let named = cli_of(Some("saccade bot"));
 
-        // possession passes any context, flag or none
-        assert!(identity_fallback_guard(&unnamed, &pi).is_ok());
-        assert!(identity_fallback_guard(&named, &pi).is_ok());
+        // possession passes every cell, flag or none, terminal or none
+        for terminal in [false, true] {
+            assert!(identity_fallback_guard(&unnamed, &pi, terminal).is_ok());
+            assert!(identity_fallback_guard(&named, &pi, terminal).is_ok());
+        }
 
-        // no terminal in the suite: unpossessed refuses, --actor notwithstanding
-        let refused = identity_fallback_guard(&unnamed, &jerry).unwrap_err();
+        // a terminal earns the unpossessed human write in either dress
+        assert!(identity_fallback_guard(&unnamed, &jerry, true).is_ok());
+        assert!(identity_fallback_guard(&named, &jerry, true).is_ok());
+
+        // no terminal: the unpossessed human write refuses, --actor notwithstanding
+        let refused = identity_fallback_guard(&unnamed, &jerry, false).unwrap_err();
         assert_eq!(refused.code(), "identity_fallback");
         assert_eq!(
             refused.to_string(),
             "this write would record jerry/human with no SACCADE_ACTOR and no terminal \
              attached (--actor rides the terminal arm); export SACCADE_ACTOR=<name>"
         );
-        assert!(identity_fallback_guard(&named, &jerry).is_err());
+        assert!(identity_fallback_guard(&named, &jerry, false).is_err());
 
         // the terminal arm's one line: identity named, agent fix taught
         assert_eq!(
