@@ -376,25 +376,68 @@ test("a second fetch of the same URL writes a new file and never rewrites the ea
 });
 
 test("a caller-legal maxChars cannot push multibyte output past the aggregate bound — it spills with a safe cut", async () => {
-	const out = await runWebFetch(
-		{ url: "https://emoji.example/page", maxChars: 200_000 },
-		depsFrom(() => new Response(jsonRpc({ content: [{ type: "text", text: "🏝️".repeat(60_000) }] }), { status: 200 })),
-	);
-	assert.ok(Buffer.byteLength(out.text, "utf8") < 1024 * 1024);
-	assert.match(out.text, /\[Output truncated at 102400 bytes \/ 2000 lines\. Full output: /);
-	assert.equal(out.details.outputTruncated, true);
-	assert.doesNotMatch(out.text, /[\uD800-\uDBFF]$/);
-	const spilled = await readFile(out.details.fullPath as string, "utf-8");
-	assert.ok(Buffer.byteLength(spilled, "utf8") > 400_000);
+	const dir = await mkdtemp(join(tmpdir(), "websearch-test-"));
+	try {
+		const out = await runWebFetch(
+			{ url: "https://emoji.example/page", maxChars: 200_000 },
+			depsFrom(
+				() => new Response(jsonRpc({ content: [{ type: "text", text: "🏝️".repeat(60_000) }] }), { status: 200 }),
+				{},
+				{ tmpDir: dir },
+			),
+		);
+		assert.ok(Buffer.byteLength(out.text, "utf8") <= 50 * 1024);
+		assert.match(out.text, /\[Output truncated\. Full output: /);
+		assert.equal(out.details.outputTruncated, true);
+		assert.ok(!out.text.includes("\uFFFD"), "byte cut must not introduce replacement characters");
+		assert.doesNotMatch(out.text, /[\uD800-\uDBFF]$/);
+		const spilled = await readFile(out.details.fullPath as string, "utf-8");
+		assert.ok(Buffer.byteLength(spilled, "utf8") >= 420_000, "spill must hold the full fetched content");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
-test("a many-line search output also trips the aggregate bound and spills", async () => {
-	const manyLines = Array.from({ length: 3000 }, (_, i) => `line ${i}`).join("\n");
-	const out = await runWebSearch(
-		{ query: "q" },
-		depsFrom(() => new Response(jsonRpc({ content: [{ type: "text", text: manyLines }] }), { status: 200 })),
-	);
-	assert.match(out.text, /\[Output truncated at 102400 bytes \/ 2000 lines\. Full output: /);
+test("a many-line fetched page returns at most 2000 lines and spills the complete original", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "websearch-test-"));
+	try {
+		const manyLines = Array.from({ length: 3000 }, (_, i) => `line ${i}`).join("\n");
+		const out = await runWebFetch(
+			{ url: "https://lines.example/page", maxChars: 200_000 },
+			depsFrom(
+				() => new Response(jsonRpc({ content: [{ type: "text", text: manyLines }] }), { status: 200 }),
+				{},
+				{ tmpDir: dir },
+			),
+		);
+		assert.ok(out.text.split("\n").length <= 2000, "final text must respect the line cap");
+		assert.ok(Buffer.byteLength(out.text, "utf8") <= 50 * 1024, "final text must respect the byte cap");
+		assert.match(out.text, /\[Output truncated\. Full output: /);
+		const spilled = (await readFile(out.details.fullPath as string, "utf-8")).split("\n").length;
+		assert.ok(spilled >= 3000, "spilled output must hold every original line");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("raw search output also respects the final line and byte caps after its own raw-text cap", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "websearch-test-"));
+	try {
+		const manyLines = Array.from({ length: 3000 }, (_, i) => `line ${i} with some padding text`).join("\n");
+		const out = await runWebSearch(
+			{ query: "q" },
+			depsFrom(
+				() => new Response(jsonRpc({ content: [{ type: "text", text: manyLines }] }), { status: 200 }),
+				{},
+				{ tmpDir: dir },
+			),
+		);
+		assert.ok(out.text.split("\n").length <= 2000, "final text must respect the line cap");
+		assert.ok(Buffer.byteLength(out.text, "utf8") <= 50 * 1024, "final text must respect the byte cap");
+		assert.ok(out.details.outputTruncated === true || out.details.kind === "raw");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 test("a credential cut by truncation leaves no key fragment in surfaced error text", async () => {

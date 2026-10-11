@@ -15,14 +15,15 @@ dependencies.
   ordinary reads. Content at the provider's extraction cap (200,000 chars) is
   labeled as possibly incomplete, never as the complete page.
 
-Both tools enforce a final aggregate output bound (100 KiB bytes / 2,000
-lines — the pinned binary's own tool-output ceilings) independently of caller
-arguments: anything larger is spilled to a unique temp file and returned as a
-bounded preview plus pointer. Provider attempts share one 30s deadline
-(handshake through response); failures are reported honestly (providers tried
-and causes, credential bytes scrubbed before truncation); caller cancellation
-never triggers fallback. ZAI result links are domain-level as the provider
-returns them, and are disclosed as such.
+Both tools enforce the pinned Pi bounded-tool contract (public SDK constants
+`DEFAULT_MAX_BYTES` 50KB and `DEFAULT_MAX_LINES` 2000) independently of caller
+arguments: anything larger is cut at a valid code point boundary, spilled to
+a unique temp file, and returned as a bounded preview plus a full-output
+pointer. Provider attempts share one 30s deadline (handshake through
+response); failures are reported honestly (providers tried and causes,
+credential bytes scrubbed before truncation); caller cancellation never
+triggers fallback. ZAI result links are domain-level as the provider returns
+them, and are disclosed as such.
 
 ## Loading
 

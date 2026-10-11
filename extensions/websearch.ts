@@ -8,8 +8,11 @@ const DEFAULT_FETCH_CHARS = 20_000;
 const MAX_FETCH_CHARS = 200_000;
 const PROVIDER_TIMEOUT_MS = 30_000;
 const RAW_TEXT_CAP = 20_000;
-// 100 KiB: the pinned binary's own tool-output ceiling, enforced independently of caller args.
-const OUTPUT_BYTE_CAP = 100 * 1024;
+// Public bounded-tool contract at this pin (extensions.md): DEFAULT_MAX_BYTES
+// 50KB, DEFAULT_MAX_LINES 2000, whichever hit first — honored via pi's own
+// truncateHead when running inside pi; the local fallback exists only for
+// bare-node test runs.
+const OUTPUT_BYTE_CAP = 50 * 1024;
 const OUTPUT_LINE_CAP = 2_000;
 
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
@@ -72,11 +75,30 @@ function scrub(text: string, secrets: (string | undefined)[]): string {
 }
 
 /** UTF-8-safe: the cut falls between code points, never inside one. */
-function capUtf8(text: string, maxBytes: number): { text: string; truncated: boolean } {
-	if (Buffer.byteLength(text, "utf8") <= maxBytes) return { text, truncated: false };
-	let buf = Buffer.from(text, "utf8").subarray(0, maxBytes);
-	while (buf.length > 0 && (buf[buf.length - 1]! & 0xc0) === 0x80) buf = buf.subarray(0, -1);
-	return { text: buf.toString("utf8"), truncated: true };
+function validUtf8Cut(buf: Buffer): Buffer {
+	for (let drop = 0; drop < 4 && drop <= buf.length; drop++) {
+		const candidate = drop === 0 ? buf : buf.subarray(0, buf.length - drop);
+		if (Buffer.from(candidate.toString("utf8"), "utf8").equals(candidate)) return candidate;
+	}
+	return Buffer.alloc(0);
+}
+
+// Bare-node stand-in for pi's truncateHead: identical keep-first semantics,
+// byte cut at a valid code point boundary.
+function localTruncateHead(text: string, maxLines: number, maxBytes: number): { content: string } {
+	let content = text;
+	if (content.split("\n").length > maxLines) content = content.split("\n").slice(0, maxLines).join("\n");
+	const buf = Buffer.from(content, "utf8");
+	if (buf.length > maxBytes) content = validUtf8Cut(buf.subarray(0, maxBytes)).toString("utf8");
+	return { content };
+}
+
+async function loadPiTruncation(): Promise<any | null> {
+	try {
+		return await import("@earendil-works/pi-coding-agent");
+	} catch {
+		return null;
+	}
 }
 
 // Scrub before truncate: truncation could otherwise cut a secret so only its tail survives.
@@ -574,14 +596,21 @@ async function persistOutputFile(url: string, content: string, deps: WebSearchDe
 	return path;
 }
 
-// Final aggregate bound: even caller-legal maxChars or many small results can exceed what a tool result should carry inline.
+// Final aggregate bound for every tool surface: even caller-legal maxChars or
+// many small results can exceed what a tool result should carry inline. The
+// footer is part of the final text, so the cut reserves room for it.
 async function boundToolOutcome(outcome: ToolOutcome, deps: WebSearchDeps): Promise<ToolOutcome> {
 	if (!exceedsOutputBounds(outcome.text)) return outcome;
 	const path = await persistOutputFile("output", outcome.text, deps);
-	const preview = capUtf8(outcome.text, OUTPUT_BYTE_CAP).text;
+	const footer = `\n\n[Output truncated. Full output: ${path}]`;
+	const pi = await loadPiTruncation();
+	const maxBytes = (pi?.DEFAULT_MAX_BYTES ?? OUTPUT_BYTE_CAP) as number;
+	const maxLines = (pi?.DEFAULT_MAX_LINES ?? OUTPUT_LINE_CAP) as number;
+	const truncation = pi
+		? pi.truncateHead(outcome.text, { maxBytes: maxBytes - Buffer.byteLength(footer, "utf8"), maxLines: maxLines - 2 })
+		: localTruncateHead(outcome.text, maxLines - 2, maxBytes - Buffer.byteLength(footer, "utf8"));
 	return {
-		text:
-			`${preview}\n\n[Output truncated at ${OUTPUT_BYTE_CAP} bytes / ${OUTPUT_LINE_CAP} lines. Full output: ${path}]`,
+		text: truncation.content + footer,
 		details: { ...outcome.details, outputTruncated: true, fullPath: path },
 	};
 }
