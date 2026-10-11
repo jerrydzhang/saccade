@@ -34,7 +34,8 @@ Saccade does not install or inject this extension. Load it explicitly:
   extensions directory, e.g.
   `cp extensions/websearch.ts ~/.pi/agent/extensions/websearch.ts`.
   No `settings.json` edit and no launch flag is involved; removal is deleting
-  the file.
+  the file. The packaged path for the global copy is the Saccade installer,
+  `nix run .#install-pi-extensions` (see `docs/pi-extensions.md`).
 
 Credentials are read from the environment only: `ZAI_API_KEY` (optional
 fallback; its absence is reported, never an error). Keys are never logged or

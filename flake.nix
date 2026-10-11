@@ -86,28 +86,37 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
-      in {
-        default = pkgs.rustPlatform.buildRustPackage {
-          name = "saccade";
-          src = ./.;
-          buildInputs = [];
-          # the api tests exercise real git worktrees under a
-          # writable home, through a real direnv layer
-          nativeBuildInputs = [
-            pkgs.git
-            pkgs.direnv
-          ];
-          # the pinned native pi this binary's start door launches;
-          # SACCADE_PI remains the development override
-          SACCADE_PI_BIN = "${llm-agents.packages.${system}.pi}/bin/pi";
-          preCheck = ''
-            export HOME=$(mktemp -d)
-          '';
-          cargoLock.lockFile = ./Cargo.lock;
-          meta.mainProgram = "sac";
-        };
-      }
+      in
+        {
+          default = pkgs.rustPlatform.buildRustPackage {
+            name = "saccade";
+            src = ./.;
+            buildInputs = [];
+            # the api tests exercise real git worktrees under a
+            # writable home, through a real direnv layer
+            nativeBuildInputs = [
+              pkgs.git
+              pkgs.direnv
+            ];
+            # the pinned native pi this binary's start door launches;
+            # SACCADE_PI remains the development override
+            SACCADE_PI_BIN = "${llm-agents.packages.${system}.pi}/bin/pi";
+            preCheck = ''
+              export HOME=$(mktemp -d)
+            '';
+            cargoLock.lockFile = ./Cargo.lock;
+            meta.mainProgram = "sac";
+          };
+        }
+        // (import ./nix/pi-extensions.nix {inherit lib pkgs saccade;})
     );
+
+    apps = forAllSystems (system: {
+      install-pi-extensions = {
+        type = "app";
+        program = "${self.packages.${system}.install-pi-extensions}/bin/install-pi-extensions";
+      };
+    });
 
     formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.alejandra);
   };

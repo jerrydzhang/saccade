@@ -63,6 +63,8 @@ it explicitly in Pi:
 Pi shows a one-time notice when an extension overrides the built-in `bash`
 tool; it is expected and harmless. Saccade does not install this extension and
 native `sac start` launches continue using the normally configured pinned Pi.
+The packaged path for the global copy is the Saccade installer,
+`nix run .#install-pi-extensions` (see `docs/pi-extensions.md`).
 
 ## Honest boundaries
 
