@@ -12,10 +12,10 @@ use axum::routing::get;
 use tracing::info;
 
 use crate::api::AppState;
-use crate::db::{self, ExecuteFail};
+use crate::db::ExecuteFail;
 use crate::objects::comment::{CommentKind, Target};
 use crate::objects::task::TaskId;
-use crate::views::{board, closed_tasks, next_panel, ribbon_marks, show_view, thread_view};
+use crate::views::{board, closed_tasks, comment_line, show_view, thread_view};
 use crate::web;
 use crate::{ActorName, Command, Context, Prose, RecordId, Reject, Tier};
 
@@ -162,7 +162,6 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
             );
         }
     };
-    let now = db::now_epoch();
     let focused = match focus_id.map(|n| focus(&snapshot.world, n)) {
         Some(Some(f)) => Some(f),
         Some(None) => {
@@ -181,8 +180,6 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
     let c = web::Console {
         board: board(&snapshot.world),
         closed: closed_tasks(&snapshot.world),
-        next: next_panel(&snapshot.world, now),
-        marks: ribbon_marks(&snapshot.world, now),
         focus: focused,
         form: web::FormState {
             who: req.actor.clone().unwrap_or_default(),
@@ -190,13 +187,10 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
         },
         store,
         repo_name: app.repo_name().cloned(),
-        now,
     };
     html(200, &web::page(&c))
 }
 
-/// The focused task's panel facts: identity, open judgment, clustered
-/// thread. The strip's movement marks are world-wide, not per focus.
 fn focus(world: &crate::store::World, n: usize) -> Option<web::Focus> {
     let show = show_view(world, TaskId(n))?;
     Some(web::Focus {
@@ -230,11 +224,11 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     let raw = form_field(fields, "body");
     let addr = web::compile(raw, Target::Task(TaskId(n)));
     if Prose::new(addr.body.clone()).is_err() {
-        return console_reject(req, app, n, fields, "a comment needs words");
+        return compose_reject(req, app, n, fields, "a comment needs words");
     }
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
-        Err(msg) => return console_reject(req, app, n, fields, &msg),
+        Err(msg) => return compose_reject(req, app, n, fields, &msg),
     };
     let command = Command::Comment {
         target: addr.target,
@@ -258,7 +252,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
             // not swap the new home's section into the old page: the fetch
             // follows the same 303 a plain form post would take
             if is_fetch(req) && root == n {
-                match thread_fragment(app, root, seq) {
+                match thread_fragment(app, root) {
                     Some(body) => {
                         let mut response = html(200, &body);
                         if let Some(name) = first_claim
@@ -274,7 +268,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
                 redirect(&format!("/t/{root}#c-{seq}"), first_claim.as_deref())
             }
         }
-        Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
+        Err(ExecuteFail::Reject(r)) => compose_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
             page(app, 503, &format!("world projection unavailable: {reason}"))
         }
@@ -284,18 +278,19 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
 
 /// The reject door: the form names the offer it was rendered against,
 /// the grounds are required, identity is claimed at the act. A stale
-/// form's offer meets the fold's stale-offer guard.
+/// form's offer meets the fold's stale-offer guard. A refusal re-renders
+/// the page with the reason beside the doors and the grounds kept.
 fn reject(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
     let Some(offer) = submitted_offer(n, fields) else {
-        return console_reject(req, app, n, fields, "the decision names no offer");
+        return judge_reject(req, app, n, fields, "the decision names no offer");
     };
     let grounds = form_field(fields, "grounds");
     if Prose::new(grounds.to_string()).is_err() {
-        return console_reject(req, app, n, fields, "a rejection needs grounds");
+        return judge_reject(req, app, n, fields, "a rejection needs grounds");
     }
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
-        Err(msg) => return console_reject(req, app, n, fields, &msg),
+        Err(msg) => return judge_reject(req, app, n, fields, &msg),
     };
     let command = Command::Comment {
         target: Target::Comment(offer),
@@ -306,7 +301,7 @@ fn reject(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
     };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(_) => redirect(&format!("/t/{n}"), first_claim.as_deref()),
-        Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
+        Err(ExecuteFail::Reject(r)) => judge_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
             page(app, 503, &format!("world projection unavailable: {reason}"))
         }
@@ -326,11 +321,11 @@ fn submitted_offer(n: usize, fields: &[(String, String)]) -> Option<crate::Comme
 /// task. A stale form's offer meets the fold's stale-offer guard.
 fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
     let Some(offer) = submitted_offer(n, fields) else {
-        return console_reject(req, app, n, fields, "the decision names no offer");
+        return judge_reject(req, app, n, fields, "the decision names no offer");
     };
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
-        Err(msg) => return console_reject(req, app, n, fields, &msg),
+        Err(msg) => return judge_reject(req, app, n, fields, &msg),
     };
     let command = Command::Comment {
         target: Target::Comment(offer),
@@ -338,7 +333,7 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
     };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(_) => redirect(&format!("/t/{n}"), first_claim.as_deref()),
-        Err(ExecuteFail::Reject(r)) => console_reject(req, app, n, fields, &reject_text(&r)),
+        Err(ExecuteFail::Reject(r)) => judge_reject(req, app, n, fields, &reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
             page(app, 503, &format!("world projection unavailable: {reason}"))
         }
@@ -349,17 +344,19 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
 /// The revise door: one comment, one body, one name. Identity is
 /// claimed at the act, the tier pinned human — the console revises
 /// any comment — and the 303 returns to the comment's home thread.
+/// A refusal re-renders with the reason and the kept draft at the
+/// comment's own reveal, so the wording stays editable in place.
 fn revise(req: &Req, app: &AppState, seq: usize, fields: &[(String, String)]) -> Response {
     let Some(root) = comment_root(app, seq) else {
         return page(app, 404, &format!("no comment c-{}", seq));
     };
     let body = form_field(fields, "body");
     if Prose::new(body.to_string()).is_err() {
-        return console_reject(req, app, root, fields, "a comment needs words");
+        return revise_reject(req, app, root, seq, body, fields, "a comment needs words");
     }
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
-        Err(msg) => return console_reject(req, app, root, fields, &msg),
+        Err(msg) => return revise_reject(req, app, root, seq, body, fields, &msg),
     };
     let command = Command::ReviseComment {
         id: crate::CommentId(RecordId(seq)),
@@ -367,12 +364,23 @@ fn revise(req: &Req, app: &AppState, seq: usize, fields: &[(String, String)]) ->
     };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(_) => redirect(&format!("/t/{root}#c-{seq}"), first_claim.as_deref()),
-        Err(ExecuteFail::Reject(r)) => console_reject(req, app, root, fields, &reject_text(&r)),
+        Err(ExecuteFail::Reject(r)) => {
+            revise_reject(req, app, root, seq, body, fields, &reject_text(&r))
+        }
         Err(ExecuteFail::Degraded(reason)) => {
             page(app, 503, &format!("world projection unavailable: {reason}"))
         }
         Err(ExecuteFail::Db(e)) => page(app, 500, &format!("database: {e}")),
     }
+}
+
+/// Whether the comment carries prose — a refused revise can only ride
+/// a row that has a reveal to carry it.
+fn comment_has_prose(app: &AppState, seq: usize) -> bool {
+    app.snapshot()
+        .ok()
+        .and_then(|s| comment_line(&s.world, crate::CommentId(RecordId(seq))))
+        .is_some_and(|l| !l.body.is_empty())
 }
 
 /// The thread a comment lives on, for routing the revise door's
@@ -387,21 +395,14 @@ fn comment_root(app: &AppState, seq: usize) -> Option<usize> {
         .map(|root| root.0)
 }
 
-/// The thread section alone, for the fetch swap, naming the comment
-/// the swap should land on.
-fn thread_fragment(app: &AppState, n: usize, landed: usize) -> Option<String> {
+fn thread_fragment(app: &AppState, n: usize) -> Option<String> {
     let snapshot = app.snapshot().ok()?;
     let f = focus(&snapshot.world, n)?;
     let store = match app.artifacts_dir() {
         Some(dir) => web::ArtifactStore::at(dir.to_path_buf()),
         None => web::ArtifactStore::default(),
     };
-    Some(web::thread_section(
-        &f,
-        &Default::default(),
-        Some(landed),
-        &store,
-    ))
+    Some(web::thread_section(&f, &Default::default(), &store))
 }
 
 /// The actor's identity is claimed at the act: cookie first, then the
@@ -428,49 +429,101 @@ fn identity(req: &Req, fields: &[(String, String)]) -> Result<(Context, Option<S
     ))
 }
 
-/// Re-render the console with the reason inline and the drafts preserved;
-/// a fetch gets the compose section alone.
-fn console_reject(
+fn form_who(req: &Req, fields: &[(String, String)]) -> String {
+    match req.actor.clone().filter(|a| !a.is_empty()) {
+        Some(who) => who,
+        None => form_field(fields, "who").to_string(),
+    }
+}
+
+/// A refused compose re-renders the console with the reason and the
+/// draft preserved in the dock; a fetch gets the compose section alone.
+fn compose_reject(
     req: &Req,
     app: &AppState,
     n: usize,
     fields: &[(String, String)],
     msg: &str,
 ) -> Response {
+    let form = web::FormState {
+        error: Some(msg.to_string()),
+        draft: form_field(fields, "body").to_string(),
+        who: form_who(req, fields),
+        ..Default::default()
+    };
     if is_fetch(req) {
-        let form = web::FormState {
-            error: Some(msg.to_string()),
-            draft: form_field(fields, "body").to_string(),
-            // the reject door's grounds ride the note draft verbatim:
-            // refused wording stays editable, never re-authored
-            note: form_field(fields, "grounds").to_string(),
-            who: req.actor.clone().unwrap_or_default(),
-        };
         return html(400, &web::compose_section(n, &form));
     }
+    reject_page(app, n, form)
+}
+
+/// A refused decision re-renders with the reason beside the doors; a
+/// world that moved past them between render and act drops it at the
+/// dock instead — an invisible refusal is the one wrong answer.
+fn judge_reject(
+    req: &Req,
+    app: &AppState,
+    n: usize,
+    fields: &[(String, String)],
+    msg: &str,
+) -> Response {
+    let standing = app
+        .snapshot()
+        .ok()
+        .and_then(|s| show_view(&s.world, TaskId(n)))
+        .is_some_and(|s| s.state == "offered");
+    let form = web::FormState {
+        judge_error: standing.then(|| msg.to_string()),
+        error: (!standing).then(|| msg.to_string()),
+        // the grounds ride the note draft verbatim: refused wording
+        // stays editable, never re-authored
+        note: form_field(fields, "grounds").to_string(),
+        who: form_who(req, fields),
+        ..Default::default()
+    };
+    reject_page(app, n, form)
+}
+
+/// A refused revise re-renders at the comment's own reveal; a
+/// bodyless row has none, so its refusal falls to the dock.
+fn revise_reject(
+    req: &Req,
+    app: &AppState,
+    n: usize,
+    seq: usize,
+    body: &str,
+    fields: &[(String, String)],
+    msg: &str,
+) -> Response {
+    let carried = comment_has_prose(app, seq);
+    let form = web::FormState {
+        revise: carried.then(|| web::ReviseForm {
+            seq,
+            draft: body.to_string(),
+            error: msg.to_string(),
+        }),
+        error: (!carried).then(|| msg.to_string()),
+        who: form_who(req, fields),
+        ..Default::default()
+    };
+    reject_page(app, n, form)
+}
+
+fn reject_page(app: &AppState, n: usize, form: web::FormState) -> Response {
     let snapshot = match app.snapshot() {
         Ok(s) => s,
         Err(_) => return page(app, 503, "world projection unavailable"),
     };
-    let now = db::now_epoch();
     let c = web::Console {
         board: board(&snapshot.world),
         closed: closed_tasks(&snapshot.world),
-        next: next_panel(&snapshot.world, now),
-        marks: ribbon_marks(&snapshot.world, now),
         focus: focus(&snapshot.world, n),
-        form: web::FormState {
-            error: Some(msg.to_string()),
-            draft: form_field(fields, "body").to_string(),
-            note: form_field(fields, "grounds").to_string(),
-            who: req.actor.clone().unwrap_or_default(),
-        },
+        form,
         store: match app.artifacts_dir() {
             Some(dir) => web::ArtifactStore::at(dir.to_path_buf()),
             None => web::ArtifactStore::default(),
         },
         repo_name: app.repo_name().cloned(),
-        now,
     };
     html(400, &web::page(&c))
 }

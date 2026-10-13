@@ -1059,8 +1059,7 @@ async fn compose_fetch_swaps_the_thread_section() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// The console GET: unfocused at /, focused and composed at /t/N; the
-/// strip renders ownership rows for owned tasks.
+/// The console GET: unfocused at / and focused and composed at /t/N.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_console_renders_board_and_focused_thread() {
     let db = scratch_db("console-read");
@@ -1085,9 +1084,9 @@ async fn the_console_renders_board_and_focused_thread() {
         "the board browses live work"
     );
     assert!(home.contains("no task focused"));
-    // the ownership row names the owner as a fact
-    assert!(home.contains("OWNED · LAST RECORD"), "{home}");
-    assert!(home.contains("owned by jerry"), "{home}");
+    // no strip section renders anywhere
+    assert!(!home.contains("OWNED · LAST RECORD"), "{home}");
+    assert!(!home.contains("SUPERVISION"), "{home}");
 
     let (status, focused) = get_html(&format!("{base}/t/0"));
     assert_eq!(status, 200);
@@ -1103,9 +1102,7 @@ async fn the_console_renders_board_and_focused_thread() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// A rehoming compose answers a fetch with the same 303 a form post
-/// takes: swapping the new task's section into the old page would leave
-/// url, ribbon, and composer stale, so the client navigates instead.
+/// A rehoming compose answers a fetch with the same 303 a form post takes.
 #[tokio::test(flavor = "multi_thread")]
 async fn compose_fetch_rehome_redirects_instead_of_swapping() {
     let db = scratch_db("console-rehome-fetch");
@@ -1137,8 +1134,6 @@ async fn every_task_href_the_console_emits_resolves() {
     let (base, state) = spawn_console(&db).await;
     seed_task(&state, "migrate floop");
     seed_task(&state, "other work");
-    // a claim feeds the strip's ownership rows, an offer feeds the
-    // standing-offer rows and the ribbon
     state
         .execute(
             &human_ctx(),
@@ -1163,14 +1158,14 @@ async fn every_task_href_the_console_emits_resolves() {
             bare_request(),
         )
         .unwrap();
-    // a comment so the focused thread and its anchors exist
+    // a comment citing the offer so the anchor link form lights up
     state
         .execute(
             &human_ctx(),
             Command::Comment {
                 target: Target::Task(TaskId(0)),
                 kind: CommentKind::Note {
-                    body: Prose::new("a note worth keeping".into()).unwrap(),
+                    body: Prose::new("a note worth keeping, per c-3".into()).unwrap(),
                 },
             },
             None,
@@ -1193,10 +1188,9 @@ async fn every_task_href_the_console_emits_resolves() {
     }
     hrefs.sort();
     hrefs.dedup();
-    // both link forms light up: bare task links (rail, strip) and
-    // record anchors (standing-offer rows, ribbon marks)
+    // both link forms light up
     assert!(
-        hrefs.len() >= 4 && hrefs.iter().any(|h| h.contains("#c-")),
+        hrefs.iter().any(|h| !h.contains('#')) && hrefs.iter().any(|h| h.contains("#c-")),
         "the fixture should light up every link form, got {hrefs:?}"
     );
     assert!(
@@ -1250,12 +1244,12 @@ async fn decision_forms_carry_the_actor_name() {
             bare_request(),
         )
         .unwrap();
-    // the focused page renders the decision doors with the who inputs
+    // the focused page renders the decision doors on the offer's row
     let (status, html) = get_html(&format!("{base}/t/0"));
     assert_eq!(status, 200);
     assert!(html.contains("● OFFERED"));
-    assert!(html.contains("action=\"/t/0/accept\""));
     assert!(html.contains("action=\"/t/0/reject\""));
+    assert!(html.contains("formaction=\"/t/0/accept\""));
 
     // a cookieless accept without a name refuses, naming the fix
     let (status, body, _) = post_form(&format!("{base}/t/0/accept"), &[], "accept=1&offer=2");
@@ -1384,12 +1378,17 @@ async fn decision_forms_carry_the_actor_name() {
         blank.matches("value=\"\"").count(),
         "blank for a fresh browser, never absent"
     );
-    // the decision form is the one the CSS themes
-    assert!(
-        blank.contains("<form class=\"jform\" method=\"post\" action=\"/t/1/accept\">"),
-        "the accept form lacks its themed class: {}",
-        &blank[..blank.len().min(400)]
-    );
+    // one form: reject the action, accept on formaction, one who field
+    let doors = blank
+        .split("class=\"jform\"")
+        .nth(1)
+        .expect("the decision doors render")
+        .split("</form>")
+        .next()
+        .unwrap();
+    assert_eq!(doors.split("name=\"who\"").count() - 1, 1, "{doors}");
+    assert!(doors.contains("name=\"accept\""), "{doors}");
+    assert!(doors.contains("name=\"reject\""), "{doors}");
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
