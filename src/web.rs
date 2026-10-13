@@ -389,9 +389,8 @@ pub fn thread_section(f: &Focus, form: &FormState, store: &ArtifactStore) -> Str
             prose_html(why, &f.refs, store),
         ));
     }
-    // the offered task's doors ride its standing offer's own row; the
-    // form names the offer it was rendered against, so a stale page
-    // cannot decide an account it never showed
+    // the form names the offer it was rendered against, so a stale
+    // page cannot decide an account it never showed
     let judge = (f.show.state == "offered")
         .then(|| Some((task_num(&f.show.id)?, f.show.offer?)))
         .flatten()
@@ -572,9 +571,8 @@ fn node_html(
     let extra = tag
         .map(|t| format!("<span class=\"nseq\">{}</span>", esc(t)))
         .unwrap_or_default();
-    // the standing offer's doors ride its own row: one form, one
-    // actor field, both buttons. Reject is the default button, so a
-    // stray Enter meets the grounds guard, never a silent acceptance.
+    // reject is the default button: a stray Enter meets the grounds
+    // guard, never a silent acceptance
     let doors = judge
         .filter(|j| j.offer == line.seq)
         .map(|j| {
@@ -592,8 +590,7 @@ fn node_html(
             )
         })
         .unwrap_or_default();
-    // the bodyless accept carries no prose to repair, so no reveal;
-    // a refused revise renders open, its draft kept and its reason near
+    // the bodyless accept carries no prose to repair, so no reveal
     let body = if line.body.is_empty() {
         String::new()
     } else {
@@ -725,10 +722,9 @@ fn http_s(dest: &str) -> bool {
     head(b"http://") || head(b"https://")
 }
 
-/// Math renders to MathML Core — inline for `$…$`, a display block for
-/// `$$…$$`; a parse that fails — or markup beyond the crate's own
-/// vocabulary — renders the literal source, the honest-miss shape
-/// artifacts already use. The conversion is unwound by catch: a parser
+/// A conversion that fails — or markup beyond the crate's own
+/// vocabulary — renders no math at all; the fence renderers fall back
+/// to the literal source. The conversion is unwound by catch: a parser
 /// panic on legal latex is a render miss, never a dead request.
 fn math_mml(src: &str, display: MathDisplay) -> Option<String> {
     let converted = LatexToMathML::new(Default::default()).ok().and_then(|c| {
@@ -1002,7 +998,11 @@ document.addEventListener('submit', (e) => {
     .then((r) => {
       // a rehome answers with the 303 to the comment's new home:
       // the section would land on a stale page, so navigate instead
-      if (r.redirected) { location.assign(r.url); return null; }
+      if (r.redirected) {
+        sessionStorage.setItem('action-return', '1');
+        location.assign(r.url);
+        return null;
+      }
       return r.text().then((html) => ({ r, html }));
     })
     .then((swap) => {
@@ -1015,36 +1015,42 @@ document.addEventListener('submit', (e) => {
         f.elements.body.value = '';
         document.getElementById('address').textContent = '';
       }
-      // the reader's place holds through the swap; the dock's error is
-      // already in view — no scroll may move either
       restoreReading(anchor);
     });
 });
 
-// the reading position: the topmost record meeting the eyes names the
-// place. Saved per task it survives swaps and full navigations, and
-// dies with the tab; an explicit #anchor navigation still wins.
+// the topmost visible record and its offset name the place; an
+// action's redirect is a return, not navigation — a chosen #anchor
+// still wins
 function readingAnchor() {
   const t = document.getElementById('thread');
   if (!t) return null;
   const top = t.getBoundingClientRect().top;
   for (const el of t.querySelectorAll('[id]')) {
-    if (el.getBoundingClientRect().bottom > top) return el.id;
+    if (el.getBoundingClientRect().bottom > top)
+      return { id: el.id, off: el.getBoundingClientRect().top - top };
   }
   return null;
 }
-function restoreReading(id) {
+function restoreReading(saved) {
+  let p;
+  try { p = typeof saved === 'string' ? JSON.parse(saved) : saved; } catch { return; }
   const t = document.getElementById('thread');
-  const el = id && document.getElementById(id);
+  const el = p && document.getElementById(p.id);
   if (!t || !el) return;
-  t.scrollTop = el.getBoundingClientRect().top - t.getBoundingClientRect().top + t.scrollTop;
+  t.scrollTop = el.getBoundingClientRect().top - t.getBoundingClientRect().top + t.scrollTop - p.off;
 }
+document.addEventListener('submit', (e) => {
+  if (e.target.id !== 'cform') sessionStorage.setItem('action-return', '1');
+});
 const rkey = 'reading:' + (document.getElementById('thread')?.dataset.task || '');
 addEventListener('pagehide', () => {
-  const a = readingAnchor();
-  if (a) sessionStorage.setItem(rkey, a);
+  const p = readingAnchor();
+  if (p) sessionStorage.setItem(rkey, JSON.stringify(p));
 });
-if (!location.hash) {
+const cameBack = sessionStorage.getItem('action-return');
+if (cameBack) sessionStorage.removeItem('action-return');
+if (cameBack || !location.hash) {
   // before load the grid is half-laid-out and the clamp eats the
   // restored position
   addEventListener('load', () => restoreReading(sessionStorage.getItem(rkey)));
@@ -1470,9 +1476,7 @@ mod tests {
 
     // ---- the frame ----
 
-    const NOW: u64 = 3_210 * 3600;
-
-    /// t-0 concluded; t-1 conversing; t-2 offered and long adrift.
+    /// t-0 concluded; t-1 conversing; t-2 offered.
     fn fixture() -> World {
         World::replay(vec![
             record(
@@ -1609,8 +1613,7 @@ mod tests {
             &Default::default(),
             &ArtifactStore::default(),
         );
-        // both doors post from one form on the standing offer's row:
-        // reject is the default action, accept rides formaction
+        // one form, reject the action, accept on formaction
         assert!(
             html.contains("<form class=\"jform\" method=\"post\" action=\"/t/2/reject\">"),
             "{html}"
@@ -2102,7 +2105,6 @@ mod tests {
 
     #[test]
     fn negative_space_after_a_scripted_group_renders() {
-        // the stiff-sindy inverse-Gram shape: 0.5.5 panicked here
         let html = prose_html_of(&prose_world("$G_{SS}^{-1}\\!x$ holds"));
         assert!(
             html.contains("<mspace style=\"margin-left:-0.16666667em;\"/>"),

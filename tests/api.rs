@@ -1088,7 +1088,7 @@ async fn the_console_renders_forest_and_focused_thread() {
         "the forest browses live work"
     );
     assert!(home.contains("no task focused"));
-    // the supervision strip is gone: no ownership rows anywhere
+    // no strip section renders anywhere
     assert!(!home.contains("OWNED · LAST RECORD"), "{home}");
     assert!(!home.contains("SUPERVISION"), "{home}");
 
@@ -1387,8 +1387,7 @@ async fn decision_forms_carry_the_actor_name() {
         blank.matches("value=\"\"").count(),
         "blank for a fresh browser, never absent"
     );
-    // the decision doors are one form: reject is the action, accept
-    // rides formaction, one shared actor field between them
+    // one form: reject the action, accept on formaction, one who field
     let doors = blank
         .split("class=\"jform\"")
         .nth(1)

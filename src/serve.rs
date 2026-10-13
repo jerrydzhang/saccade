@@ -397,8 +397,7 @@ fn comment_root(app: &AppState, seq: usize) -> Option<usize> {
         .map(|root| root.0)
 }
 
-/// The thread section alone, for the fetch swap; the reader's place
-/// rides with it, never a landing scroll.
+/// The thread section alone, for the fetch swap.
 fn thread_fragment(app: &AppState, n: usize) -> Option<String> {
     let snapshot = app.snapshot().ok()?;
     let f = focus(&snapshot.world, n)?;
@@ -433,9 +432,8 @@ fn identity(req: &Req, fields: &[(String, String)]) -> Result<(Context, Option<S
     ))
 }
 
-/// The actor name a re-render prefills: the cookie's value when one
-/// rides the request, else the name the act itself submitted — a
-/// refused attempt keeps its typed name, never re-asks for it.
+/// The actor name a re-render prefills: the cookie when one rides the
+/// request, else the submitted name — a refusal never re-asks.
 fn form_who(req: &Req, fields: &[(String, String)]) -> String {
     match req.actor.clone().filter(|a| !a.is_empty()) {
         Some(who) => who,
@@ -464,10 +462,9 @@ fn compose_reject(
     reject_page(app, n, form)
 }
 
-/// A refused decision re-renders with the reason beside the doors and
-/// the refused grounds kept editable — never feedback far from the act.
-/// When the world moved past the doors between render and act, the
-/// refusal falls to the dock: nowhere-hidden is the one wrong answer.
+/// A refused decision re-renders with the reason beside the doors; a
+/// world that moved past them between render and act drops it at the
+/// dock instead — an invisible refusal is the one wrong answer.
 fn judge_reject(
     req: &Req,
     app: &AppState,
@@ -492,9 +489,8 @@ fn judge_reject(
     reject_page(app, n, form)
 }
 
-/// A refused revise re-renders with the reason and the kept draft at
-/// the comment's own reveal; a bodyless row carries no reveal, so its
-/// refusal falls to the dock.
+/// A refused revise re-renders at the comment's own reveal; a
+/// bodyless row has none, so its refusal falls to the dock.
 fn revise_reject(
     req: &Req,
     app: &AppState,
