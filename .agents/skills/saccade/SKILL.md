@@ -322,7 +322,16 @@ the conditions from the attempts log.
   renders at its home position (CLI pointer line, console inline image
   via `/a/<hash>`), and the store write precedes the record so a crash
   orphans content, never points at absence.
-- Each repo has one tracker, served locally (`--server`, or
-  `SACCADE_SERVER`; default `127.0.0.1:8811`); its state root derives
-  from the repo path, never from your working directory — `--repo` or
-  `SACCADE_REPO` names the project when working from elsewhere.
+- Each repo has one tracker; its state root derives from the repo
+  path, never from your working directory — `--repo` or `SACCADE_REPO`
+  names the project when working from elsewhere. One destination per
+  command: `--db` selects local operations on that file, `--server`
+  selects a running server for reads, writes, and waits alike, and
+  both flags refuse together. With neither, the repo's usual database
+  is resolved and its server is discovered from the address hint
+  beside that database (`<db>.addr`, published by `sac serve` after it
+  binds) and verified to serve exactly that file — missing,
+  unreachable, or mismatched refuses; there is no default localhost
+  and no fallback to local writes. Scratch work names its own
+  destination explicitly: `sac serve --port 0 --db /tmp/scratch/x.db`
+  for the server, `--db` or `--server` for every client command.

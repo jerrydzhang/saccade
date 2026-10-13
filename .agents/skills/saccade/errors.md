@@ -65,6 +65,17 @@ finding — name it on the thread before proceeding.
   logs are not migrated. A 0.12.0/schema-2 log refuses as predating
   this binary: migrate a backup with `sac migrate`
   (`docs/migration.md`).
+- `server_undiscovered` — no address hint beside the resolved
+  database, so no server of that tracker was ever published; start one
+  beside it (`sac serve`) or name a destination explicitly.
+- `server_required` — an address existed but nothing answered there;
+  the hint is stale (stale files are never cleaned — start the server
+  or fix the destination).
+- `server_mismatch` — a server answered at the discovered address but
+  serves a different database than the one the hint sits beside.
+- `usage` — the command line itself is wrong; both explicit
+  destinations (`--db` with `--server`) refuse here, as do server-only
+  verbs (`start`, `open`) aimed at a local `--db`.
 
 When the tracker misbehaves or a refusal needs reproducing, read
 `diagnosing.md` beside this file: the attempts log reconstructs the

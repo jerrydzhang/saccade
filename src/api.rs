@@ -33,17 +33,16 @@ enum ServerState {
 
 struct Inner {
     conn: rusqlite::Connection,
-    world: World,
-    rows: Vec<StoredRecord>,
     /// The tracker's own db: the worktree home derives from it
     db_path: std::path::PathBuf,
 }
 
-/// The sole writer's state: writes refold rather than apply incrementally,
-/// so one definition of truth serves readers and writers alike.
+/// The sole writer's state: every face loads the log fresh under the
+/// one lock, so no read can serve a world the file contradicts.
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Mutex<ServerState>>,
+    db_path: std::path::PathBuf,
     attempts: Attempts,
     /// The artifact store the bytes door serves from; a server that
     /// was not told a repo root has none.
@@ -68,6 +67,24 @@ pub struct Degraded {
     pub rows: Vec<StoredRecord>,
 }
 
+/// A read that cannot present the world: the log will not fold (its
+/// raw rows still travel), or will not even load — corruption and
+/// storage failures are database errors, never an empty successful log.
+#[derive(Debug)]
+pub enum ReadFail {
+    Degraded(Degraded),
+    Db(String),
+}
+
+impl ReadFail {
+    pub fn reason(&self) -> &str {
+        match self {
+            ReadFail::Degraded(d) => &d.reason,
+            ReadFail::Db(reason) => reason,
+        }
+    }
+}
+
 impl AppState {
     pub fn open(db_path: &Path) -> Result<Self, String> {
         // the worktree home derives from the db's own directory, so the
@@ -88,23 +105,25 @@ impl AppState {
             canonical_parent.join(db_path.file_name().unwrap_or_default())
         };
         let conn = db::open(&canonical).map_err(|e| format!("database: {e}"))?;
-        let loadout = db::load(&conn).map_err(|e| format!("database: {e}"))?;
-        let state = match loadout.state {
-            db::LoadState::Full(world) => ServerState::Ready(Inner {
+        let state = match db::load(&conn).map_err(|e| format!("database: {e}"))?.state {
+            db::LoadState::Full(_) => ServerState::Ready(Inner {
                 conn,
-                world,
-                rows: loadout.rows,
-                db_path: canonical,
+                db_path: canonical.clone(),
             }),
             db::LoadState::Degraded(reason) => ServerState::Degraded(reason, conn),
         };
         Ok(AppState {
             inner: Arc::new(Mutex::new(state)),
+            db_path: canonical,
             attempts: Attempts::beside(db_path),
             artifacts: None,
             repo_root: None,
             repo_name: None,
         })
+    }
+
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
     }
 
     /// Name the artifact store this server serves bytes from.
@@ -141,31 +160,6 @@ impl AppState {
         self.artifacts.as_deref()
     }
 
-    /// Run against the sole writer's connection under the lock; blocking
-    /// work inside is the caller's discipline. Whatever the closure wrote
-    /// becomes the cache: readers never see a world the log contradicts.
-    pub fn with_conn<T>(
-        &self,
-        f: impl FnOnce(&mut rusqlite::Connection) -> T,
-    ) -> Result<T, String> {
-        let mut guard = self.inner.lock().expect("the writer lock is not poisoned");
-        match &mut *guard {
-            ServerState::Ready(inner) => {
-                let out = f(&mut inner.conn);
-                let loadout = db::load(&inner.conn).map_err(|e| e.to_string())?;
-                match loadout.state {
-                    db::LoadState::Full(world) => {
-                        inner.world = world;
-                        inner.rows = loadout.rows;
-                    }
-                    db::LoadState::Degraded(reason) => return Err(reason),
-                }
-                Ok(out)
-            }
-            ServerState::Degraded(reason, _) => Err(reason.clone()),
-        }
-    }
-
     /// The judging seam: one write attempt, one line in the attempts
     /// log, appended while the writer lock is held so the file's order
     /// is the judgment order. Duration includes the lock wait — the
@@ -179,10 +173,13 @@ impl AppState {
     ) -> Result<Vec<StoredRecord>, ExecuteFail> {
         let started = std::time::Instant::now();
         let mut guard = self.inner.lock().expect("the writer lock is not poisoned");
+        // the cursor names the log as it stands at judgment, external
+        // writes included
         let cursor = match &*guard {
-            ServerState::Ready(inner) => inner.rows.last().map(|r| r.seq),
+            ServerState::Ready(inner) => Some(db::last_seq(&inner.conn).map_err(ExecuteFail::Db)?),
             ServerState::Degraded(..) => None,
-        };
+        }
+        .flatten();
         let outcome = match &mut *guard {
             ServerState::Degraded(reason, _) => Err(ExecuteFail::Degraded(reason.clone())),
             ServerState::Ready(inner) => db::record(
@@ -191,11 +188,7 @@ impl AppState {
                 command,
                 at.unwrap_or_else(db::now_epoch),
             )
-            .map(|(stored, world)| {
-                inner.world = world;
-                inner.rows.extend(stored.iter().cloned());
-                stored
-            }),
+            .map(|(stored, _)| stored),
         };
         let duration_ms = started.elapsed().as_millis() as u64;
         let code = match &outcome {
@@ -227,17 +220,28 @@ impl AppState {
         outcome
     }
 
-    pub fn snapshot(&self) -> Result<Snapshot, Degraded> {
+    pub fn snapshot(&self) -> Result<Snapshot, ReadFail> {
         let guard = self.inner.lock().expect("the writer lock is not poisoned");
-        match &*guard {
-            ServerState::Ready(inner) => Ok(Snapshot {
-                world: inner.world.clone(),
-                rows: inner.rows.clone(),
-            }),
-            ServerState::Degraded(reason, conn) => Err(Degraded {
-                reason: reason.clone(),
-                rows: db::load(conn).map(|l| l.rows).unwrap_or_default(),
-            }),
+        let (boot_reason, conn) = match &*guard {
+            ServerState::Ready(inner) => (None, &inner.conn),
+            ServerState::Degraded(reason, conn) => (Some(reason.clone()), conn),
+        };
+        let loadout = db::load(conn).map_err(|e| ReadFail::Db(e.to_string()))?;
+        match loadout.state {
+            db::LoadState::Full(world) => match boot_reason {
+                None => Ok(Snapshot {
+                    world,
+                    rows: loadout.rows,
+                }),
+                Some(reason) => Err(ReadFail::Degraded(Degraded {
+                    reason,
+                    rows: loadout.rows,
+                })),
+            },
+            db::LoadState::Degraded(fresh) => Err(ReadFail::Degraded(Degraded {
+                reason: boot_reason.unwrap_or(fresh),
+                rows: loadout.rows,
+            })),
         }
     }
 }
@@ -439,6 +443,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/command", post(command))
+        .route("/api/v1/records", get(records))
         .route("/api/v1/workspace/start", post(workspace_start))
         .route("/api/v1/workspace/open", post(workspace_open))
         .route("/api/v1/version", get(version))
@@ -527,7 +532,10 @@ fn workspace_operation(
                 ApiFail::NoRepo => "workspace_no_repo",
             };
             let cursor = match guard {
-                ServerState::Ready(inner) => inner.rows.last().map(|r| r.seq),
+                ServerState::Ready(inner) => db::last_seq(&inner.conn)
+                    .map_err(|e| e.to_string())
+                    .ok()
+                    .flatten(),
                 ServerState::Degraded(..) => None,
             };
             app.attempts.append(
@@ -561,11 +569,23 @@ fn run_operation(
     let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
         return OperationOutcome::Failed(ApiFail::NoRepo);
     };
-    if inner.world.tasks.get(task).is_none() {
+    // the world as the file stands: a supported local write must be
+    // visible to the next operation
+    let loadout = match db::load(&inner.conn) {
+        Ok(loadout) => loadout,
+        Err(e) => return OperationOutcome::Failed(ApiFail::Db(e.to_string())),
+    };
+    let world = match loadout.state {
+        db::LoadState::Full(world) => world,
+        db::LoadState::Degraded(reason) => {
+            return OperationOutcome::Failed(ApiFail::Degraded(reason));
+        }
+    };
+    if world.tasks.get(task).is_none() {
         return OperationOutcome::Failed(ApiFail::Reject(Reject::InvalidTaskId, None));
     }
     let task_id = TaskId(task);
-    match inner.world.tasks[task].workspace.as_ref() {
+    match world.tasks[task].workspace.as_ref() {
         Some(recorded_ctx) => {
             // the association governs: recreate the checkout, never another birth
             let facts = workspace::recorded(task_id, recorded_ctx);
@@ -586,7 +606,7 @@ fn run_operation(
                 Ok(facts) => facts,
                 Err(fail) => return OperationOutcome::Failed(ApiFail::Workspace(fail)),
             };
-            let birth = RecordId(inner.rows.len());
+            let birth = RecordId(loadout.rows.len());
             let mut drafts = vec![db::RecordDraft {
                 context: Context::system(),
                 event: Event::WorkspaceEstablished {
@@ -614,23 +634,6 @@ fn run_operation(
                 Err(ExecuteFail::Db(e)) => OperationOutcome::Failed(ApiFail::Db(e.to_string())),
             }
         }
-    }
-}
-
-/// Refresh the cache after a landed operation, so readers never see a
-/// world the log contradicts.
-fn reload_inner(guard: &mut ServerState) -> Result<(), String> {
-    let ServerState::Ready(inner) = guard else {
-        return Ok(());
-    };
-    let loadout = db::load(&inner.conn).map_err(|e| e.to_string())?;
-    match loadout.state {
-        db::LoadState::Full(world) => {
-            inner.world = world;
-            inner.rows = loadout.rows;
-            Ok(())
-        }
-        db::LoadState::Degraded(reason) => Err(reason),
     }
 }
 
@@ -710,16 +713,11 @@ async fn workspace_open(State(app): State<AppState>, body: Bytes) -> Response {
     respond_operation(guard, outcome)
 }
 
-/// A landed operation refreshes the cache before answering.
 fn respond_operation(
-    mut guard: std::sync::MutexGuard<'_, ServerState>,
+    guard: std::sync::MutexGuard<'_, ServerState>,
     outcome: OperationOutcome,
 ) -> Response {
-    if let OperationOutcome::Done(_) = &outcome
-        && let Err(reason) = reload_inner(&mut guard)
-    {
-        return api_failure(ApiFail::Degraded(reason));
-    }
+    drop(guard);
     match outcome {
         OperationOutcome::Done(reply) => (
             StatusCode::OK,
@@ -740,6 +738,21 @@ fn api_failure(fail: ApiFail) -> Response {
 }
 
 /// The handshake surface: which build is serving, nothing more
-async fn version() -> Json<serde_json::Value> {
-    Json(json!({"version": env!("CARGO_PKG_VERSION")}))
+async fn version(State(app): State<AppState>) -> Json<serde_json::Value> {
+    Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "db": app.db_path().display().to_string(),
+    }))
+}
+
+async fn records(State(app): State<AppState>) -> Response {
+    match app.snapshot() {
+        Ok(s) => Json(json!({ "records": s.rows })).into_response(),
+        Err(ReadFail::Degraded(d)) => Json(json!({ "records": d.rows })).into_response(),
+        Err(ReadFail::Db(reason)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": {"code": "database_error", "detail": reason}})),
+        )
+            .into_response(),
+    }
 }
