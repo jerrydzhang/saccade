@@ -143,7 +143,7 @@ and reopening (`sac reopen t-N --explanation "…"`).
 
 | Command | Who | Notes |
 |---|---|---|
-| `sac create task "name" [--parent t-N]` | any tier | the reply names what was born |
+| `sac create task "name"` | any tier | the reply names what was born |
 | `sac claim t-N` | any tier | ownership transfer; never a state change |
 | `sac comment t-N "…"` / `sac comment c-<seq> "…"` | any tier | a note, parked or replied |
 | `sac request t-N "…"` / `sac request c-<seq> "…"` | any tier | prose seeking response; the reply names the record's position and the destination task's recorded workspace |
@@ -163,9 +163,10 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac exec t-N -- <command and argv>` | any tier | run a command inside the recorded workspace: identity and routing injected from the record, argv boundaries kept, nothing recorded |
 | `sac identity` | anonymous | report the environment-declared actor/tier, scope, and routing — disclosure, never a liveness claim |
 | `sac list` / `sac show <ids…>` / `sac log` | anonymous | the board, threads and records, raw events |
-| `sac search <terms…> [in:t-N by:NAME kind:K under:t-N] [-C N]` | anonymous | exact terms over titles, comment prose, explanations; kinds: task, note, request, offer, accept, reject, use, artifact, explanation |
+| `sac search <terms…> [in:t-N by:NAME kind:K] [-C N]` | anonymous | exact terms over titles, comment prose, explanations; kinds: task, note, request, offer, accept, reject, use, artifact, explanation |
 | `sac serve [--bind] [--port]` | — | the sole-writer HTTP server and console |
 | `sac clone --at <seq> --out <path>` | anonymous | copy the log's prefix into a fresh tracker |
+| `sac migrate --in <backup> --out <path>` | anonymous | copy a 0.12.0/schema-2 log backup to this binary's schema, stripping the retired task parents; the input is read-only, the output path must be fresh |
 | `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
 
 Not in this build (later slices, do not assume them): managed
@@ -199,7 +200,7 @@ one matched line each, in record order.
 - **Follow a reference**: an id term is a reference search — `c-907`
   finds every record citing that comment, `t-49` everything naming
   that task.
-- **Narrow**: `in:` `by:` `kind:` `under:` — only-show-me filters;
+- **Narrow**: `in:` `by:` `kind:` — only-show-me filters;
   every narrowing prints visible counts. `sac search --help` owns the
   grammar.
 - **Read the neighborhood**: `sac search c-907 -C 3`.

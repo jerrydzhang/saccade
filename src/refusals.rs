@@ -26,17 +26,6 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 ),
             })
         }
-        Reject::InvalidParentTaskId => {
-            let Command::CreateTask { parent_id, .. } = command else {
-                return None;
-            };
-            let id = (*parent_id)?;
-            Some(format!(
-                "no task t-{} to parent under; this tracker holds {}",
-                id.0,
-                task_count(world.tasks.len())
-            ))
-        }
         Reject::InvalidCommentId => {
             let seq = command_comment(command)?;
             if let Some(i) = world.tasks.iter().position(|ctx| ctx.birth == seq.0) {
@@ -218,14 +207,5 @@ fn state_word(ctx: &TaskContext) -> &'static str {
         crate::TaskState::Offered => "offered",
         crate::TaskState::Concluded => "concluded",
         crate::TaskState::Cancelled(_) => "cancelled",
-    }
-}
-
-/// The count as prose: "1 task" or "N tasks", never "1 tasks".
-fn task_count(n: usize) -> String {
-    match n {
-        0 => "no tasks yet".into(),
-        1 => "1 task".into(),
-        n => format!("{n} tasks"),
     }
 }

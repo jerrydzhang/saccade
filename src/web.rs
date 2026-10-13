@@ -1,4 +1,4 @@
-//! The console: one full-height instrument — supervision strip, forest
+//! The console: one full-height instrument — supervision strip, task
 //! rail, focused thread, docked compose. Every section is a renderer
 //! over view types; fragments are sections, so the compose fetch swaps
 //! what the page itself renders. The @-compiler is the composer's input
@@ -7,8 +7,8 @@
 //! as markdown with math on the way out, never in.
 
 use crate::views::{
-    ArtifactLine, CommentLine, ForestRow, MarkKind, NextPanel, RIBBON_WINDOW_SECS, RefTarget,
-    RibbonMark, ShowView, ThreadItem, ThreadView,
+    ArtifactLine, CommentLine, MarkKind, NextPanel, RIBBON_WINDOW_SECS, RefTarget, RibbonMark,
+    ShowView, TaskView, ThreadItem, ThreadView,
 };
 use crate::{CommentId, RecordId, Target, TaskId};
 use math_core::{LatexToMathML, MathDisplay};
@@ -88,8 +88,8 @@ const RIBBON_ROWS: usize = 3;
 const ROW_HEIGHT_PX: f64 = 13.0;
 
 pub struct Console {
-    pub forest: Vec<ForestRow>,
-    pub closed: Vec<ForestRow>,
+    pub board: Vec<TaskView>,
+    pub closed: Vec<TaskView>,
     pub next: NextPanel,
     /// The supervision strip's movement marks: every task's window.
     pub marks: Vec<RibbonMark>,
@@ -291,7 +291,7 @@ fn ago(secs: u64) -> String {
 
 pub fn page(c: &Console) -> String {
     let strip = strip_section(c);
-    let forest = forest_section(&c.forest, &c.closed, focus_num(c).as_deref());
+    let board = board_section(&c.board, &c.closed, focus_num(c).as_deref());
     let panel = match &c.focus {
         Some(f) => format!(
             "<div class=\"thead\"><span class=\"tstate\" style=\"color:{state_color}\">● {state}</span>\n<div class=\"ttitle\">{title}</div>\n<div class=\"tmeta mono\">{meta}</div>\n</div>\n{thread}{compose}",
@@ -322,7 +322,7 @@ pub fn page(c: &Console) -> String {
         None => "<header><span class=\"brand\">SACCADE · CONSOLE</span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>".into(),
     };
     format!(
-        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{STYLE}</style></head>\n<body>\n{header}\n<input type=\"checkbox\" id=\"nav\">\n<div class=\"if\">\n{strip}\n<div class=\"cols withforest\">\n{forest}\n<div class=\"tpanel\">\n{panel}\n</div>\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{STYLE}</style></head>\n<body>\n{header}\n<input type=\"checkbox\" id=\"nav\">\n<div class=\"if\">\n{strip}\n<div class=\"cols withboard\">\n{board}\n<div class=\"tpanel\">\n{panel}\n</div>\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
     )
 }
 
@@ -331,10 +331,7 @@ fn focus_num(c: &Console) -> Option<String> {
 }
 
 fn head_meta(show: &ShowView) -> String {
-    let lineage = match &show.parent {
-        Some(p) => format!("{} · under {}", show.id, p),
-        None => show.id.clone(),
-    };
+    let lineage = show.id.clone();
     let owned = match &show.owner {
         Some(owner) => format!("{lineage} · owned by {owner}"),
         None => lineage,
@@ -453,21 +450,20 @@ fn ribbon_section(c: &Console) -> String {
     s
 }
 
-// ---- the forest rail ----
+// ---- the task rail ----
 
-fn forest_section(rows: &[ForestRow], closed: &[ForestRow], focus: Option<&str>) -> String {
-    let mut s = String::from("<aside class=\"forest\">\n");
+fn board_section(rows: &[TaskView], closed: &[TaskView], focus: Option<&str>) -> String {
+    let mut s = String::from("<aside class=\"board\">\n");
     for row in rows {
-        let sel = focus == Some(row.task.id.as_str());
-        let pad = row.depth * 14;
+        let sel = focus == Some(row.id.as_str());
         s.push_str(&format!(
-            "<a class=\"frow{}\" style=\"margin-left:{pad}px\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{}\">{}</span><span class=\"fname\">{}</span></a>\n",
+            "<a class=\"frow{}\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{}\">{}</span><span class=\"fname\">{}</span></a>\n",
             if sel { " sel" } else { "" },
-            task_num(&row.task.id).unwrap_or(0),
-            esc(&row.task.id),
-            state_color(row.task.state),
-            esc(row.task.state.to_uppercase().as_str()),
-            esc(&row.task.name),
+            task_num(&row.id).unwrap_or(0),
+            esc(&row.id),
+            state_color(row.state),
+            esc(row.state.to_uppercase().as_str()),
+            esc(&row.name),
         ));
     }
     if rows.is_empty() {
@@ -476,21 +472,19 @@ fn forest_section(rows: &[ForestRow], closed: &[ForestRow], focus: Option<&str>)
     if !closed.is_empty() {
         s.push_str("<div class=\"fsect\">CLOSED</div>\n");
         for row in closed {
-            let pad = row.depth * 14;
             s.push_str(&format!(
-                "<a class=\"frow closed\" style=\"margin-left:{pad}px\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{}\">{}</span><span class=\"fname\">{}</span></a>\n",
-                task_num(&row.task.id).unwrap_or(0),
-                esc(&row.task.id),
-                state_color(row.task.state),
-                esc(row.task.state.to_uppercase().as_str()),
-                esc(&row.task.name),
+                "<a class=\"frow closed\" href=\"/t/{}\"><span class=\"fid mono\">{}</span><span class=\"schip\" style=\"color:{}\">{}</span><span class=\"fname\">{}</span></a>\n",
+                task_num(&row.id).unwrap_or(0),
+                esc(&row.id),
+                state_color(row.state),
+                esc(row.state.to_uppercase().as_str()),
+                esc(&row.name),
             ));
         }
     }
     s.push_str("</aside>\n");
     s
 }
-
 // ---- the thread panel ----
 
 /// `landed` names the comment a just-accepted compose created, so the
@@ -1082,9 +1076,9 @@ document.addEventListener('submit', (e) => {
 
 // sessionStorage: the position survives full navigations and dies with
 // the tab
-const fkey = 'forest-scroll';
+const fkey = 'board-scroll';
 addEventListener('pagehide', () => {
-  const f = document.querySelector('.forest');
+  const f = document.querySelector('.board');
   if (f) sessionStorage.setItem(fkey, String(f.scrollTop));
 });
 const saved = sessionStorage.getItem(fkey);
@@ -1092,7 +1086,7 @@ if (saved !== null) {
   // before load the grid is half-laid-out and the clamp eats the
   // saved position
   addEventListener('load', () => {
-    const f = document.querySelector('.forest');
+    const f = document.querySelector('.board');
     if (f) f.scrollTop = Number(saved);
   });
 }
@@ -1227,10 +1221,10 @@ header .rname {
 .mrk.run { background: #a2c4a3; }
 .mrk:hover { width: 3px; outline: 1px solid #e8e2dd; z-index: 2; }
 
-/* columns: forest surface | thread deep — tone separates, no dividers */
+/* columns: task rail | thread deep — tone separates, no dividers */
 .cols { display: grid; min-height: 0; }
-.cols.withforest { grid-template-columns: 252px 1fr; }
-.forest { background: #1b1918; overflow-y: auto; padding: 10px 8px; }
+.cols.withboard { grid-template-columns: 252px 1fr; }
+.board { background: #1b1918; overflow-y: auto; padding: 10px 8px; }
 .frow {
   display: flex; flex-wrap: nowrap; gap: 7px; align-items: center;
   padding: 4px 8px; border-radius: 3px; color: inherit;
@@ -1416,13 +1410,13 @@ input.who:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
 /* narrow: the rail collapses behind the mode-line toggle */
 @media (max-width: 1100px) {
   .fbtn { display: inline-block; }
-  .cols.withforest { grid-template-columns: 1fr; }
-  .forest {
+  .cols.withboard { grid-template-columns: 1fr; }
+  .board {
     position: fixed; left: 0; top: 41px; bottom: 0; width: 280px; z-index: 40;
     transform: translateX(-102%); transition: transform .15s ease;
     box-shadow: 8px 0 24px rgba(0,0,0,.6);
   }
-  #nav:checked ~ .if .forest { transform: none; }
+  #nav:checked ~ .if .board { transform: none; }
 }
 "#;
 
@@ -1437,7 +1431,7 @@ mod tests {
     use crate::store::{Context, Record, Tier, World};
     use crate::types::actor::ActorName;
     use crate::views::{
-        RIBBON_WINDOW_SECS, closed_tasks, forest, next_panel, ribbon_marks, show_view, thread_view,
+        RIBBON_WINDOW_SECS, board, closed_tasks, next_panel, ribbon_marks, show_view, thread_view,
     };
     use std::sync::OnceLock;
 
@@ -1556,7 +1550,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("ship it".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(
@@ -1594,7 +1587,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("build <foo>".into()).unwrap(),
-                    parent_id: Some(TaskId(0)),
                 },
             ),
             record(
@@ -1632,7 +1624,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("adrift work".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(
@@ -1667,7 +1658,7 @@ mod tests {
 
     fn console_of(world: &World, focus: Option<Focus>) -> Console {
         Console {
-            forest: forest(world),
+            board: board(world),
             closed: closed_tasks(world),
             next: next_panel(world, NOW),
             marks: ribbon_marks(world, NOW),
@@ -1681,7 +1672,7 @@ mod tests {
 
     fn console_at(world: &World, now: u64) -> Console {
         Console {
-            forest: forest(world),
+            board: board(world),
             closed: closed_tasks(world),
             next: next_panel(world, now),
             marks: ribbon_marks(world, now),
@@ -1742,7 +1733,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("stop it".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(
@@ -1767,12 +1757,12 @@ mod tests {
     }
 
     #[test]
-    fn the_head_names_state_title_and_lineage() {
+    fn the_head_names_state_title_and_id() {
         let world = fixture();
         let page = page(&console_of(&world, Some(focus_of(&world, 1))));
         assert!(page.contains(">● OPEN<"), "{page}");
         assert!(page.contains("build &lt;foo&gt;"), "{page}");
-        assert!(page.contains("t-1 · under t-0"), "{page}");
+        assert!(page.contains("t-1 ·"), "{page}");
     }
 
     #[test]
@@ -1829,7 +1819,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("live work".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(
@@ -1914,7 +1903,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("real work".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(
@@ -1957,7 +1945,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("real work".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(
@@ -2039,7 +2026,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("real work".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(2, 2, human(), Event::Commented { target: task(0), kind: offer_kind("suite green, per c-4") }),
@@ -2072,7 +2058,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("other work".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(
@@ -2133,7 +2118,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("real work".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(
@@ -2169,7 +2153,6 @@ mod tests {
                 human(),
                 Event::TaskCreated {
                     name: Prose::new("real work".into()).unwrap(),
-                    parent_id: None,
                 },
             ),
             record(

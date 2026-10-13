@@ -12,7 +12,6 @@ pub enum Event {
     // Task events
     TaskCreated {
         name: Prose,
-        parent_id: Option<TaskId>,
     },
     /// A transfer of whole-task responsibility: never a state
     /// transition, never a permission grant. The claim history
@@ -25,25 +24,43 @@ pub enum Event {
     },
     /// The human's stop of an unfinished undertaking, with the
     /// explanation that survives in the record.
-    TaskCancelled { id: TaskId, explanation: Prose },
+    TaskCancelled {
+        id: TaskId,
+        explanation: Prose,
+    },
     /// The human's explicit resumption of a cancelled undertaking,
     /// with the explanation of why it is pursued again.
-    TaskReopened { id: TaskId, explanation: Prose },
+    TaskReopened {
+        id: TaskId,
+        explanation: Prose,
+    },
     // Comment events
     /// The payload is its variant, body included; Accept carries none.
-    Commented { target: Target, kind: CommentKind },
+    Commented {
+        target: Target,
+        kind: CommentKind,
+    },
     /// A presentation repair, not a transition: the fold swaps the
     /// variant's prose and points at the latest revision record — the
     /// original bytes stay in their birth event, references never change.
-    CommentRevised { id: CommentId, body: Prose },
+    CommentRevised {
+        id: CommentId,
+        body: Prose,
+    },
     /// The standing-error repair: the deposit's implicit claim — this
     /// is reached, this earns residency — was false. The body leaves
     /// the fold's presentation, a tombstone stays; the log is
     /// untouched. Note deposits only.
-    CommentWithdrawn { id: CommentId, note: Prose },
+    CommentWithdrawn {
+        id: CommentId,
+        note: Prose,
+    },
     /// A thread holding an artifact: name and content identity, the
     /// bytes stay in the store. Authored like a comment, any tier.
-    ArtifactAdded { root: TaskId, artifact: Artifact },
+    ArtifactAdded {
+        root: TaskId,
+        artifact: Artifact,
+    },
     // Workspace events: the establishment is the machinery verb,
     // System-authored by role; the checkpoint is the exception any
     // tier may record
@@ -68,7 +85,6 @@ pub enum Command {
     // Task commands
     CreateTask {
         name: Prose,
-        parent_id: Option<TaskId>,
     },
     ClaimTask {
         id: TaskId,

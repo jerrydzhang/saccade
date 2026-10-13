@@ -18,7 +18,6 @@ use saccade::{
 #[derive(Clone, Debug)]
 enum Action {
     Create {
-        parent: u8,
         human: bool,
     },
     Claim {
@@ -76,7 +75,6 @@ impl Action {
 
     fn number(&self, role: &str) -> u8 {
         match self {
-            Action::Create { parent, .. } if role == "parent" => *parent,
             Action::Claim { task, .. }
             | Action::Cancel { task, .. }
             | Action::Reopen { task, .. }
@@ -165,15 +163,8 @@ fn incarnation_at(world: &World, task: TaskId, n: u8) -> Option<saccade::Incarna
 fn command_of(action: &Action, world: &World) -> Command {
     let task = task_at(world, action.number("task"));
     match action {
-        Action::Create { parent, .. } => Command::CreateTask {
+        Action::Create { .. } => Command::CreateTask {
             name: Prose::new("generated name".into()).unwrap(),
-            // the first task of a world is always a root; after that a quarter
-            // of creates stay roots and the rest resolve against the live world
-            parent_id: if world.tasks.is_empty() {
-                None
-            } else {
-                (parent % 4 == 0).then(|| task_at(world, *parent))
-            },
         },
         Action::Claim { incarnation, .. } => Command::ClaimTask {
             id: task,
@@ -300,8 +291,8 @@ fn human_coin() -> impl Strategy<Value = bool> {
 }
 
 fn create_strategy() -> BoxedStrategy<Action> {
-    (any::<u8>(), human_coin())
-        .prop_map(|(parent, human)| Action::Create { parent, human })
+    human_coin()
+        .prop_map(|human| Action::Create { human })
         .boxed()
 }
 
@@ -486,7 +477,6 @@ fn generator_reaches_deep_states() {
                     let kind = match r {
                         saccade::Reject::HumanOnly => "HumanOnly",
                         saccade::Reject::InvalidTaskId => "InvalidTaskId",
-                        saccade::Reject::InvalidParentTaskId => "InvalidParentTaskId",
                         saccade::Reject::InvalidCommentId => "InvalidCommentId",
                         saccade::Reject::NotAnOffer => "NotAnOffer",
                         saccade::Reject::NotCurrentOffer => "NotCurrentOffer",
@@ -552,7 +542,6 @@ fn generator_reaches_deep_states() {
     for kind in [
         "HumanOnly",
         "InvalidTaskId",
-        "InvalidParentTaskId",
         "InvalidCommentId",
         "NotAnOffer",
         "NotCurrentOffer",

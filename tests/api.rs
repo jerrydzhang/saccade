@@ -66,7 +66,7 @@ async fn commands_round_trip_over_the_wire() {
         &envelope(
             "human person",
             "human",
-            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+            json!({"create_task": {"name": "migrate floop"}}),
         ),
     );
     assert_eq!(status, 200);
@@ -128,7 +128,7 @@ async fn the_tier_law_holds_through_http() {
         &envelope(
             "human person",
             "human",
-            json!({"create_task": {"name": "implement foo", "parent_id": null}}),
+            json!({"create_task": {"name": "implement foo"}}),
         ),
     );
 
@@ -212,7 +212,7 @@ async fn a_request_reply_names_its_position_and_the_recorded_workspace() {
         &envelope(
             "human person",
             "human",
-            json!({"create_task": {"name": "hold the request door", "parent_id": null}}),
+            json!({"create_task": {"name": "hold the request door"}}),
         ),
     );
 
@@ -306,7 +306,7 @@ async fn malformed_bodies_get_typed_envelopes() {
         &envelope(
             "human person",
             "human",
-            json!({"create_task": {"name": "   ", "parent_id": null}}),
+            json!({"create_task": {"name": "   "}}),
         ),
     );
     assert_eq!(status, 400);
@@ -344,7 +344,6 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         &agent,
         Command::CreateTask {
             name: saccade::Prose::new("client smoke".into()).unwrap(),
-            parent_id: None,
         },
         Some(7),
     )
@@ -412,7 +411,6 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         &agent,
         Command::CreateTask {
             name: saccade::Prose::new("never lands".into()).unwrap(),
-            parent_id: None,
         },
         None,
     )
@@ -452,7 +450,7 @@ async fn a_refused_writes_line_replays_against_a_cursor_clone() {
         &envelope(
             "human person",
             "human",
-            json!({"create_task": {"name": "migrate floop", "parent_id": null}}),
+            json!({"create_task": {"name": "migrate floop"}}),
         ),
     );
     assert_eq!(status, 200);
@@ -578,7 +576,7 @@ async fn start_establishes_through_the_servers_git_effects() {
         &envelope(
             "human person",
             "human",
-            json!({"create_task": {"name": "migrate the floop guard", "parent_id": null}}),
+            json!({"create_task": {"name": "migrate the floop guard"}}),
         ),
     );
 
@@ -708,7 +706,7 @@ async fn the_branch_scheme_and_base_are_effects_not_claims() {
         &envelope(
             "human person",
             "human",
-            json!({"create_task": {"name": "stack work", "parent_id": null}}),
+            json!({"create_task": {"name": "stack work"}}),
         ),
     );
 
@@ -938,7 +936,6 @@ fn seed_task(state: &ConsoleState, name: &str) {
             &human_ctx(),
             Command::CreateTask {
                 name: Prose::new(name.into()).unwrap(),
-                parent_id: None,
             },
             None,
             bare_request(),
@@ -1065,7 +1062,7 @@ async fn compose_fetch_swaps_the_thread_section() {
 /// The console GET: unfocused at /, focused and composed at /t/N; the
 /// strip renders ownership rows for owned tasks.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_console_renders_forest_and_focused_thread() {
+async fn the_console_renders_board_and_focused_thread() {
     let db = scratch_db("console-read");
     let (base, state) = spawn_console(&db).await;
     seed_task(&state, "migrate floop");
@@ -1085,7 +1082,7 @@ async fn the_console_renders_forest_and_focused_thread() {
     assert_eq!(status, 200);
     assert!(
         home.contains("migrate floop"),
-        "the forest browses live work"
+        "the board browses live work"
     );
     assert!(home.contains("no task focused"));
     // the ownership row names the owner as a fact
@@ -1132,7 +1129,7 @@ async fn compose_fetch_rehome_redirects_instead_of_swapping() {
 
 /// Every /t/… href the console page emits resolves: the rail is the
 /// frame's navigation, so a dead link there is a dead frame. This pins
-/// the forest's token-vs-number contract (c-585) across every link
+/// the rail's token-vs-number contract (c-585) across every link
 /// form the page carries.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_task_href_the_console_emits_resolves() {
@@ -1624,13 +1621,10 @@ fn search_reads_the_record_through_the_cli_face() {
 
     // a birth renders as itself: header and relation, never the thread
     // behind it — the relation names t-N, t-N opens the thread
-    assert!(sac(&["create", "task", "guard child", "--parent", "t-1"]).0);
+    assert!(sac(&["create", "task", "guard the birth door"]).0);
     let (ok, out, _) = sac(&["show", "c-6"]);
     assert!(ok, "{out}");
-    assert_eq!(
-        out.trim_end(),
-        "c-6  task  pi\nbirth of t-2 (parent t-1)\ncursor 6"
-    );
+    assert_eq!(out.trim_end(), "c-6  task  pi\nbirth of t-2\ncursor 6");
     let (ok, out, _) = sac(&["show", "c-0"]);
     assert!(ok, "{out}");
     assert_eq!(out.trim_end(), "c-0  task  pi\nbirth of t-0\ncursor 6");
@@ -2040,7 +2034,7 @@ async fn offline_replies_match_the_wire() {
     let (_, body) = post_command(
         &served,
         &json!({"context": {"actor": "pi", "tier": "agent"},
-                 "command": {"create_task": {"name": "offline task", "parent_id": null}}}),
+                 "command": {"create_task": {"name": "offline task"}}}),
     );
     let created_served = json_of(&body);
     assert_eq!(created_offline["id"], created_served["id"]);

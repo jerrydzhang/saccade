@@ -64,7 +64,6 @@ impl TaskState {
 pub struct Task {
     pub state: TaskState,
     pub name: Prose,
-    pub parent_id: Option<TaskId>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskContext {
@@ -168,7 +167,6 @@ mod test {
         let events = [
             Event::TaskCreated {
                 name: Prose::new("filler".into()).unwrap(),
-                parent_id: None,
             },
             Event::TaskClaimed {
                 id: TaskId(0),

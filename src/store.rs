@@ -22,8 +22,6 @@ pub struct FoldError {
 
 #[derive(Debug)]
 pub enum Reason {
-    /// The parent task of a TaskCreated event does not exist.
-    InvalidParentTaskId,
     InvalidTaskId,
     InvalidCommentId,
     /// A decision or reliance names a comment that is not an offer.
@@ -56,7 +54,6 @@ impl From<Reason> for Reject {
     fn from(reason: Reason) -> Reject {
         match reason {
             Reason::InvalidTaskId => Reject::InvalidTaskId,
-            Reason::InvalidParentTaskId => Reject::InvalidParentTaskId,
             Reason::InvalidCommentId => Reject::InvalidCommentId,
             Reason::NotAnOffer => Reject::NotAnOffer,
             Reason::NotCurrentOffer => Reject::NotCurrentOffer,
@@ -182,19 +179,11 @@ impl World {
     fn apply_record(&mut self, record: Record) -> Result<(), Reason> {
         match record.event {
             // Task events
-            Event::TaskCreated {
-                name: task_name,
-                parent_id,
-            } => {
-                if parent_id.is_some_and(|parent| parent.0 >= self.tasks.len()) {
-                    return Err(Reason::InvalidParentTaskId);
-                }
-
+            Event::TaskCreated { name: task_name } => {
                 self.tasks.push(TaskContext {
                     task: Task {
                         state: TaskState::Open,
                         name: task_name,
-                        parent_id,
                     },
                     birth: record.id,
                     last_updated: record.id,
@@ -667,7 +656,6 @@ mod test {
             human_ctx.clone(),
             Command::CreateTask {
                 name: prose("implement foo"),
-                parent_id: None,
             },
             1,
         )
@@ -699,7 +687,6 @@ mod test {
             human_ctx.clone(),
             Command::CreateTask {
                 name: prose("fix bar"),
-                parent_id: None,
             },
             5,
         )
@@ -733,7 +720,6 @@ mod test {
             human_ctx.clone(),
             Command::CreateTask {
                 name: prose("migrate floop"),
-                parent_id: Some(TaskId(0)),
             },
             11,
         )
@@ -772,7 +758,6 @@ mod test {
             human_ctx.clone(),
             Command::CreateTask {
                 name: prose("adopt foo's account"),
-                parent_id: None,
             },
             15,
         )
@@ -843,10 +828,6 @@ mod test {
             Reject::InvalidTaskId
         ));
         assert!(matches!(
-            Reject::from(Reason::InvalidParentTaskId),
-            Reject::InvalidParentTaskId
-        ));
-        assert!(matches!(
             Reject::from(Reason::InvalidCommentId),
             Reject::InvalidCommentId
         ));
@@ -904,28 +885,12 @@ mod test {
     }
 
     #[test]
-    fn dangling_parent_fails_the_fold() {
-        let record = Record {
-            id: RecordId(0),
-            timestamp: 1,
-            context: agent(),
-            event: Event::TaskCreated {
-                name: prose("orphan task"),
-                parent_id: Some(TaskId(3)),
-            },
-        };
-        let err = World::new().apply(record).unwrap_err();
-        assert!(matches!(err.reason, Reason::InvalidParentTaskId));
-    }
-
-    #[test]
     fn an_offer_without_a_task_transition_fails_the_fold() {
         let mut log = Log::new();
         log.execute(
             human(),
             Command::CreateTask {
                 name: prose("implement foo"),
-                parent_id: None,
             },
             1,
         )
@@ -1497,7 +1462,6 @@ mod test {
             human(),
             Command::CreateTask {
                 name: prose("carry a merge through the worktree"),
-                parent_id: None,
             },
             1,
         )
@@ -1572,7 +1536,6 @@ mod test {
             human(),
             Command::CreateTask {
                 name: prose("carry a merge through the worktree"),
-                parent_id: None,
             },
             1,
         )
@@ -1609,7 +1572,6 @@ mod test {
             human(),
             Command::CreateTask {
                 name: prose("adopt the account"),
-                parent_id: None,
             },
             4,
         )
@@ -1659,7 +1621,6 @@ mod test {
             human(),
             Command::CreateTask {
                 name: prose("carry a merge through the worktree"),
-                parent_id: None,
             },
             1,
         )
