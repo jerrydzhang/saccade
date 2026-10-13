@@ -7,8 +7,7 @@
 //! as markdown with math on the way out, never in.
 
 use crate::views::{
-    ArtifactLine, CommentLine, ForestRow, MarkKind, NextPanel, RIBBON_WINDOW_SECS, RefTarget,
-    RibbonMark, ShowView, ThreadItem, ThreadView,
+    ArtifactLine, CommentLine, ForestRow, RefTarget, ShowView, ThreadItem, ThreadView,
 };
 use crate::{CommentId, RecordId, Target, TaskId};
 use math_core::{LatexToMathML, MathDisplay};
@@ -79,20 +78,9 @@ fn state_color(state: &str) -> &'static str {
     }
 }
 
-/// Ribbon layout: percent kept clear at each edge; a chip's footprint
-/// in percent — a chip landing on a covered row drops a row down, the
-/// only deviation from time-truth the bar allows.
-const PAD_PCT: f64 = 4.0;
-const CHIP_GAP_PCT: f64 = 3.0;
-const RIBBON_ROWS: usize = 3;
-const ROW_HEIGHT_PX: f64 = 13.0;
-
 pub struct Console {
     pub forest: Vec<ForestRow>,
     pub closed: Vec<ForestRow>,
-    pub next: NextPanel,
-    /// The supervision strip's movement marks: every task's window.
-    pub marks: Vec<RibbonMark>,
     /// The focused task's panel facts, when one is focused.
     pub focus: Option<Focus>,
     pub form: FormState,
@@ -102,9 +90,6 @@ pub struct Console {
     /// chrome names its instance by it, and pages built without one
     /// render the unnamed chrome of before.
     pub repo_name: Option<RepoName>,
-    /// The read's now, in epoch seconds; the ages and the ribbon window
-    /// hang off it.
-    pub now: u64,
 }
 
 /// The serving repo's name: the basename names the tab title and the
@@ -146,6 +131,14 @@ pub struct Focus {
     pub refs: BTreeMap<usize, RefTarget>,
 }
 
+/// A refused revise, rendered at its own comment's reveal: the draft
+/// stays editable and the reason sits beside it.
+pub struct ReviseForm {
+    pub seq: usize,
+    pub draft: String,
+    pub error: String,
+}
+
 #[derive(Default)]
 pub struct FormState {
     pub error: Option<String>,
@@ -154,6 +147,10 @@ pub struct FormState {
     /// The actor name prefilled into every act form — the cookie's
     /// value when one exists, blank for a fresh browser.
     pub who: String,
+    /// A refused decision: the reason rendered beside the doors.
+    pub judge_error: Option<String>,
+    /// A refused revise: the reason and the kept draft, at the row.
+    pub revise: Option<ReviseForm>,
 }
 
 pub struct Address {
@@ -264,33 +261,15 @@ fn fmt_t(ts: u64) -> String {
     local(ts).format(&desc).unwrap_or_default()
 }
 
-/// Sun Sep 20
+/// Sun Sep 20 — the thread's day dividers
 fn fmt_d(ts: u64) -> String {
     let desc = format_description!("[weekday repr:short] [month repr:short] [day]");
     local(ts).format(&desc).unwrap_or_default()
 }
 
-/// Sun Sep 20 18:02 — the strip's axis
-fn fmt_dt(ts: u64) -> String {
-    let desc = format_description!(
-        "[weekday repr:short] [month repr:short] [day] [hour repr:24]:[minute]"
-    );
-    local(ts).format(&desc).unwrap_or_default()
-}
-
-fn ago(secs: u64) -> String {
-    match secs {
-        0..=59 => "now".into(),
-        60..=3599 => format!("{}m", secs / 60),
-        3600..=86399 => format!("{}h", secs / 3600),
-        _ => format!("{}d", secs / 86400),
-    }
-}
-
 // ---- the page ----
 
 pub fn page(c: &Console) -> String {
-    let strip = strip_section(c);
     let forest = forest_section(&c.forest, &c.closed, focus_num(c).as_deref());
     let panel = match &c.focus {
         Some(f) => format!(
@@ -299,7 +278,7 @@ pub fn page(c: &Console) -> String {
             state = f.show.state.to_uppercase(),
             title = esc(&f.show.name),
             meta = esc(&head_meta(&f.show)),
-            thread = thread_section(f, &c.form, None, &c.store),
+            thread = thread_section(f, &c.form, &c.store),
             compose = compose_section(task_num(&f.show.id).unwrap_or(0), &c.form),
         ),
         None => "<div class=\"thead\"></div>\n<section id=\"thread\"><div class=\"nempty\">no task focused</div></section>\n".to_string(),
@@ -322,7 +301,7 @@ pub fn page(c: &Console) -> String {
         None => "<header><span class=\"brand\">SACCADE · CONSOLE</span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>".into(),
     };
     format!(
-        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{STYLE}</style></head>\n<body>\n{header}\n<input type=\"checkbox\" id=\"nav\">\n<div class=\"if\">\n{strip}\n<div class=\"cols withforest\">\n{forest}\n<div class=\"tpanel\">\n{panel}\n</div>\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{STYLE}</style></head>\n<body>\n{header}\n<input type=\"checkbox\" id=\"nav\">\n<div class=\"if\">\n<div class=\"cols withforest\">\n{forest}\n<div class=\"tpanel\">\n{panel}\n</div>\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
     )
 }
 
@@ -347,110 +326,6 @@ fn head_meta(show: &ShowView) -> String {
 
 fn task_num(id: &str) -> Option<usize> {
     id.strip_prefix("t-").and_then(|n| n.parse().ok())
-}
-
-// ---- the supervision strip ----
-
-fn strip_section(c: &Console) -> String {
-    let mut s = String::from("<div class=\"strip\">\n");
-    s.push_str(&format!(
-        "<div class=\"striphead\"><span class=\"strip-title\">SUPERVISION</span><span class=\"strip-axis mono\">{}</span></div>\n",
-        esc(&fmt_dt(c.now)),
-    ));
-    // offered rows are silent when the world is silent: they name the
-    // standing offers as facts, never a queue to clear
-    if !c.next.awaiting.is_empty() {
-        s.push_str("<div class=\"nsec\">OFFERED · STANDING OFFERS</div>\n");
-        for a in &c.next.awaiting {
-            let tint = if a.stale { " stale" } else { "" };
-            s.push_str(&format!(
-                "<a class=\"nxrow\" href=\"/t/{}\"><span class=\"nid mono\">{}</span><span class=\"nname\">{}</span><span class=\"nfact mono{tint}\">offered {} ago</span></a>\n",
-                task_num(&a.task).unwrap_or(0),
-                esc(&a.task),
-                esc(&a.name),
-                ago(a.offered_age),
-            ));
-        }
-    }
-    s.push_str("<div class=\"nsec\">OWNED · LAST RECORD</div>\n");
-    if c.next.candidates.is_empty() {
-        s.push_str("<div class=\"nempty\">nothing owned</div>\n");
-    }
-    for cand in &c.next.candidates {
-        let tint = if cand.adrift { " stale" } else { "" };
-        s.push_str(&format!(
-            "<a class=\"nxrow\" href=\"/t/{}\"><span class=\"nid mono\">{}</span><span class=\"nname\">{}</span><span class=\"nfact mono{tint}\">owned by {} · claim {} · last record {}</span></a>\n",
-            task_num(&cand.task).unwrap_or(0),
-            esc(&cand.task),
-            esc(&cand.name),
-            esc(&cand.owner),
-            ago(cand.claim_age),
-            ago(cand.last_record_age),
-        ));
-    }
-    s.push_str(&ribbon_section(c));
-    s.push_str("</div>\n");
-    s
-}
-
-fn ribbon_section(c: &Console) -> String {
-    let mut s = String::from(
-        "<div class=\"nsec ribhead\">MOVEMENT · 72H · <span class=\"k-human\">your notes</span> · <span class=\"k-agent\">agent notes</span> · <span class=\"k-request\">requests</span> · <span class=\"k-offer\">offers</span> · <span class=\"k-accept\">accepts</span> · <span class=\"k-reject\">rejects</span> · <span class=\"k-use\">uses</span></div>\n",
-    );
-    if c.marks.is_empty() {
-        s.push_str("<div class=\"rib\"></div>\n");
-        return s;
-    }
-    let start = c.now.saturating_sub(RIBBON_WINDOW_SECS);
-    let span = RIBBON_WINDOW_SECS.max(1);
-    // positions derive from event_time across the inset window. The
-    // only deviation from time-truth is vertical: a chip that would
-    // cover a newer one on its row drops a row down, so crowded marks
-    // stay individually visible without ever leaving the bar.
-    let mut last = [-f64::INFINITY; RIBBON_ROWS];
-    let mut placed: Vec<(&RibbonMark, f64, usize)> = Vec::with_capacity(c.marks.len());
-    for m in &c.marks {
-        let raw =
-            PAD_PCT + (m.at.saturating_sub(start)) as f64 / span as f64 * (100.0 - 2.0 * PAD_PCT);
-        // the first row with room; when every row is covered at this
-        // position, cycle rows so identical positions stack evenly
-        let row = (0..RIBBON_ROWS)
-            .find(|r| raw - last[*r] >= CHIP_GAP_PCT)
-            .unwrap_or(placed.len() % RIBBON_ROWS);
-        last[row] = raw;
-        placed.push((m, raw, row));
-    }
-    s.push_str("<div class=\"rib\">");
-    // 24h gridlines and the now marker
-    for hours in [24, 48] {
-        let pct = PAD_PCT
-            + (RIBBON_WINDOW_SECS - hours * 3600) as f64 / span as f64 * (100.0 - 2.0 * PAD_PCT);
-        s.push_str(&format!(
-            "<span class=\"rv\" style=\"left:{pct:.1}%\"></span>\n"
-        ));
-    }
-    s.push_str(&format!(
-        "<span class=\"rv now\" style=\"left:{:.1}%\"></span>\n",
-        100.0 - PAD_PCT
-    ));
-    for (m, left, row) in placed {
-        let (class, label) = match m.kind {
-            MarkKind::Note { human: true } => ("human", "note"),
-            MarkKind::Note { human: false } => ("agent", "note"),
-            MarkKind::Request => ("request", "request"),
-            MarkKind::Offer => ("offer", "offer"),
-            MarkKind::Accept => ("accept", "accept"),
-            MarkKind::Reject => ("reject", "reject"),
-            MarkKind::Use => ("use", "use"),
-        };
-        let top = row as f64 * ROW_HEIGHT_PX + 1.0;
-        s.push_str(&format!(
-            "<a class=\"mrk {class}\" style=\"left:{left:.1}%;top:{top:.0}px\" href=\"/t/{}#c-{}\" title=\"t-{} · {label} c-{} · {}\"></a>\n",
-            m.task, m.seq, m.task, m.seq, esc(&fmt_t(m.at)),
-        ));
-    }
-    s.push_str("</div>\n");
-    s
 }
 
 // ---- the forest rail ----
@@ -493,43 +368,46 @@ fn forest_section(rows: &[ForestRow], closed: &[ForestRow], focus: Option<&str>)
 
 // ---- the thread panel ----
 
-/// `landed` names the comment a just-accepted compose created, so the
-/// swap can meet the reader's eyes with it.
-pub fn thread_section(
-    f: &Focus,
-    form: &FormState,
-    landed: Option<usize>,
-    store: &ArtifactStore,
-) -> String {
-    let mut s = match landed {
-        Some(seq) => format!("<section id=\"thread\" data-focus=\"c-{seq}\">\n"),
-        None => String::from("<section id=\"thread\">\n"),
-    };
+/// The decision doors riding the standing offer's row: the task and
+/// offer they post against, the grounds draft, a refusal's reason, and
+/// the one shared actor field.
+struct Judge {
+    task: usize,
+    offer: usize,
+    grounds: String,
+    error: Option<String>,
+    who: String,
+}
+
+pub fn thread_section(f: &Focus, form: &FormState, store: &ArtifactStore) -> String {
+    let mut s = String::from("<section id=\"thread\" data-task=\"");
+    s.push_str(&f.show.id);
+    s.push_str("\">\n");
     if let Some(why) = &f.show.explanation {
         s.push_str(&format!(
             "<div class=\"receipt\"><span class=\"xk\" style=\"color:#dac09a\">EXPLANATION</span>\n<div class=\"nbody\">{}</div>\n</div>\n",
             prose_html(why, &f.refs, store),
         ));
     }
-    // an offered task renders its decision doors; each form carries the
-    // offer it was rendered against, so a stale page cannot decide an
-    // account it never showed
-    if f.show.state == "offered"
-        && let (Some(n), Some(offer)) = (task_num(&f.show.id), f.show.offer)
-    {
-        s.push_str(&format!(
-            "<div class=\"judge\"><span class=\"jhead mono\">DECIDE</span> <span class=\"jname\">the standing offer c-{offer}</span>\n<form class=\"jform\" method=\"post\" action=\"/t/{n}/accept\">\n<input type=\"hidden\" name=\"offer\" value=\"{offer}\">\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"accept\" value=\"1\" type=\"submit\">accept</button></div>\n</form>\n<form class=\"jform\" method=\"post\" action=\"/t/{n}/reject\">\n<input type=\"hidden\" name=\"offer\" value=\"{offer}\">\n<textarea name=\"grounds\" rows=\"2\" placeholder=\"grounds — what needs reconsideration\">{}</textarea>\n<div class=\"jbtns\">{}<button class=\"sendbtn\" name=\"reject\" value=\"1\" type=\"submit\">reject</button></div>\n</form>\n</div>\n",
-            who_input(&form.who),
-            esc(&form.note),
-            who_input(&form.who),
-        ));
-    }
+    // the offered task's doors ride its standing offer's own row; the
+    // form names the offer it was rendered against, so a stale page
+    // cannot decide an account it never showed
+    let judge = (f.show.state == "offered")
+        .then(|| Some((task_num(&f.show.id)?, f.show.offer?)))
+        .flatten()
+        .map(|(task, offer)| Judge {
+            task,
+            offer,
+            grounds: form.note.clone(),
+            error: form.judge_error.clone(),
+            who: form.who.clone(),
+        });
     let mut last_time: Option<u64> = None;
     for item in &f.thread.items {
         // artifacts carry no time in the fold; they ride beside the
         // utterances, never opening a gap
         if matches!(item, ThreadItem::Artifacts(_)) {
-            s.push_str(&item_html(item, &f.refs, &form.who, store));
+            s.push_str(&item_html(item, form, judge.as_ref(), &f.refs, store));
             continue;
         }
         let (first_at, last_at) = item_span(item);
@@ -542,7 +420,7 @@ pub fn thread_section(
             ));
         }
         last_time = Some(last_at);
-        s.push_str(&item_html(item, &f.refs, &form.who, store));
+        s.push_str(&item_html(item, form, judge.as_ref(), &f.refs, store));
     }
     if f.thread.items.is_empty() && f.show.explanation.is_none() {
         s.push_str("<div class=\"nempty\">no comments yet</div>\n");
@@ -565,8 +443,9 @@ fn item_span(item: &ThreadItem) -> (u64, u64) {
 
 fn item_html(
     item: &ThreadItem,
+    form: &FormState,
+    judge: Option<&Judge>,
     refs: &BTreeMap<usize, RefTarget>,
-    who: &str,
     store: &ArtifactStore,
 ) -> String {
     match item {
@@ -587,8 +466,9 @@ fn item_html(
                 0,
                 kind_chip(root.kind),
                 None,
+                form,
+                judge,
                 refs,
-                who,
                 store,
             ));
             for r in replies {
@@ -597,15 +477,25 @@ fn item_html(
                     r.depth.saturating_sub(2),
                     kind_chip(r.kind),
                     None,
+                    form,
+                    judge,
                     refs,
-                    who,
                     store,
                 ));
             }
             s.push_str("</div>\n");
             s
         }
-        ThreadItem::Note(line) => node_html(line, 0, kind_chip(line.kind), None, refs, who, store),
+        ThreadItem::Note(line) => node_html(
+            line,
+            0,
+            kind_chip(line.kind),
+            None,
+            form,
+            judge,
+            refs,
+            store,
+        ),
     }
 }
 
@@ -632,8 +522,9 @@ fn node_html(
     indent: usize,
     kind: Option<(&str, &str)>,
     tag: Option<&str>,
+    form: &FormState,
+    judge: Option<&Judge>,
     refs: &BTreeMap<usize, RefTarget>,
-    who: &str,
     store: &ArtifactStore,
 ) -> String {
     let chip = kind
@@ -681,20 +572,57 @@ fn node_html(
     let extra = tag
         .map(|t| format!("<span class=\"nseq\">{}</span>", esc(t)))
         .unwrap_or_default();
-    // the bodyless accept carries no prose to repair, so no reveal
+    // the standing offer's doors ride its own row: one form, one
+    // actor field, both buttons. Reject is the default button, so a
+    // stray Enter meets the grounds guard, never a silent acceptance.
+    let doors = judge
+        .filter(|j| j.offer == line.seq)
+        .map(|j| {
+            format!(
+                "<form class=\"jform\" method=\"post\" action=\"/t/{task}/reject\">\n<input type=\"hidden\" name=\"offer\" value=\"{offer}\">\n<textarea name=\"grounds\" rows=\"2\" placeholder=\"grounds — what needs reconsideration\">{grounds}</textarea>\n{err}<div class=\"jbtns\">{who}<button class=\"sendbtn\" name=\"reject\" value=\"1\" type=\"submit\">reject</button><button class=\"sendbtn\" name=\"accept\" value=\"1\" type=\"submit\" formaction=\"/t/{task}/accept\">accept</button></div>\n</form>\n",
+                task = j.task,
+                offer = j.offer,
+                grounds = esc(&j.grounds),
+                err = j
+                    .error
+                    .as_deref()
+                    .map(|e| format!("<div class=\"formerr\">{}</div>\n", esc(e)))
+                    .unwrap_or_default(),
+                who = who_input(&j.who),
+            )
+        })
+        .unwrap_or_default();
+    // the bodyless accept carries no prose to repair, so no reveal;
+    // a refused revise renders open, its draft kept and its reason near
     let body = if line.body.is_empty() {
         String::new()
     } else {
+        let refused = form
+            .revise
+            .as_ref()
+            .filter(|r| r.seq == line.seq)
+            .map(|r| format!("<div class=\"formerr\">{}</div>\n", esc(&r.error)))
+            .unwrap_or_default();
+        let draft = form
+            .revise
+            .as_ref()
+            .filter(|r| r.seq == line.seq)
+            .map(|r| esc(&r.draft))
+            .unwrap_or_else(|| esc(&line.body));
+        let open = if form.revise.as_ref().is_some_and(|r| r.seq == line.seq) {
+            " open"
+        } else {
+            ""
+        };
         format!(
-            "<div class=\"nbody\">{}</div>\n<details class=\"revise\"><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{current}</textarea>\n<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n",
+            "<div class=\"nbody\">{}</div>\n<details class=\"revise\"{open}><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{draft}</textarea>\n{refused}<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n",
             prose_html(&line.body, refs, store),
             seq = line.seq,
-            current = esc(&line.body),
-            who_input = who_input(who),
+            who_input = who_input(&form.who),
         )
     };
     format!(
-        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{target}{uses}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n{body}</div>\n",
+        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{target}{uses}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n{body}{doors}</div>\n",
         seq = line.seq,
         pad = 26 + indent * 22,
         tier = esc(&line.tier),
@@ -797,24 +725,35 @@ fn http_s(dest: &str) -> bool {
     head(b"http://") || head(b"https://")
 }
 
-/// Math renders to inline MathML Core; a parse that fails — or
-/// markup beyond the crate's own vocabulary — renders the literal
-/// source, the honest-miss shape artifacts already use.
-fn math_html(src: &str, fence: &str) -> String {
-    let converted = LatexToMathML::new(Default::default())
+/// Math renders to MathML Core — inline for `$…$`, a display block for
+/// `$$…$$`; a parse that fails — or markup beyond the crate's own
+/// vocabulary — renders the literal source, the honest-miss shape
+/// artifacts already use. The conversion is unwound by catch: a parser
+/// panic on legal latex is a render miss, never a dead request.
+fn math_mml(src: &str, display: MathDisplay) -> Option<String> {
+    let converted = LatexToMathML::new(Default::default()).ok().and_then(|c| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            c.convert_with_local_state(src, display)
+                .ok()
+                .map(|r| r.mathml)
+        }))
         .ok()
-        .and_then(|c| c.convert_with_local_counter(src, MathDisplay::Inline).ok());
-    match converted {
-        Some(m) if crate_authored(&m) => {
-            // the return path: a click on the formula copies these bytes
-            let raw = esc(src);
-            m.replacen(
-                "<math>",
-                &format!("<math data-raw=\"{raw}\" title=\"{raw}\">"),
-                1,
-            )
-        }
-        _ => format!("{fence}{}{fence}", esc(src)),
+        .flatten()
+    });
+    let m = converted.filter(|m| crate_authored(m))?;
+    // the return path: a click on the formula copies these bytes
+    let raw = esc(src);
+    Some(m.replacen(
+        "<math",
+        &format!("<math data-raw=\"{raw}\" title=\"{raw}\""),
+        1,
+    ))
+}
+
+fn math_html(src: &str, fence: &str, display: MathDisplay) -> String {
+    match math_mml(src, display) {
+        Some(m) => m,
+        None => format!("{fence}{}{fence}", esc(src)),
     }
 }
 
@@ -989,8 +928,12 @@ fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStor
                 }
             }
             MdEvent::Code(c) => out.push_str(&format!("<code>{}</code>", esc(&c))),
-            MdEvent::InlineMath(src) => out.push_str(&math_html(&src, "$")),
-            MdEvent::DisplayMath(src) => out.push_str(&math_html(&src, "$$")),
+            MdEvent::InlineMath(src) => out.push_str(&math_html(&src, "$", MathDisplay::Inline)),
+            MdEvent::DisplayMath(src) => match math_mml(&src, MathDisplay::Block) {
+                Some(m) => out.push_str(&format!("<span class=\"dmath\">{m}</span>")),
+                // a miss is literal bytes, not a broken block
+                None => out.push_str(&format!("$${}$$", esc(&src))),
+            },
             MdEvent::Html(h) | MdEvent::InlineHtml(h) => out.push_str(&esc(&h)),
             MdEvent::SoftBreak => out.push('\n'),
             MdEvent::HardBreak => out.push_str("<br />\n"),
@@ -1054,6 +997,7 @@ document.addEventListener('submit', (e) => {
   const f = e.target;
   if (f.id !== 'cform') return;
   e.preventDefault();
+  const anchor = readingAnchor();
   fetch('/compose', { method: 'POST', body: new URLSearchParams(new FormData(f)) })
     .then((r) => {
       // a rehome answers with the 303 to the comment's new home:
@@ -1070,15 +1014,41 @@ document.addEventListener('submit', (e) => {
       if (swap.r.ok) {
         f.elements.body.value = '';
         document.getElementById('address').textContent = '';
-        const landed = sec && sec.dataset.focus;
-        if (landed) document.getElementById(landed)
-          ?.scrollIntoView({ block: 'center' });
-      } else {
-        document.querySelector('.formerr')
-          ?.scrollIntoView({ block: 'center' });
       }
+      // the reader's place holds through the swap; the dock's error is
+      // already in view — no scroll may move either
+      restoreReading(anchor);
     });
 });
+
+// the reading position: the topmost record meeting the eyes names the
+// place. Saved per task it survives swaps and full navigations, and
+// dies with the tab; an explicit #anchor navigation still wins.
+function readingAnchor() {
+  const t = document.getElementById('thread');
+  if (!t) return null;
+  const top = t.getBoundingClientRect().top;
+  for (const el of t.querySelectorAll('[id]')) {
+    if (el.getBoundingClientRect().bottom > top) return el.id;
+  }
+  return null;
+}
+function restoreReading(id) {
+  const t = document.getElementById('thread');
+  const el = id && document.getElementById(id);
+  if (!t || !el) return;
+  t.scrollTop = el.getBoundingClientRect().top - t.getBoundingClientRect().top + t.scrollTop;
+}
+const rkey = 'reading:' + (document.getElementById('thread')?.dataset.task || '');
+addEventListener('pagehide', () => {
+  const a = readingAnchor();
+  if (a) sessionStorage.setItem(rkey, a);
+});
+if (!location.hash) {
+  // before load the grid is half-laid-out and the clamp eats the
+  // restored position
+  addEventListener('load', () => restoreReading(sessionStorage.getItem(rkey)));
+}
 
 // sessionStorage: the position survives full navigations and dies with
 // the tab
@@ -1154,7 +1124,7 @@ body {
   background: #100f0e; color: #d4ceca;
   font: 500 13.5px/1.55 "Noto Sans", system-ui, sans-serif;
 }
-.mono, .nseq, .nfact, .nid, .schip, .xd, .xmeta, .tmeta, .addrline, .gapdiv, .strip-axis, .strip-title, .nsec, .fsect, .jhead, .xk, .tstate {
+.mono, .nseq, .schip, .xd, .xmeta, .tmeta, .addrline, .gapdiv, .fsect, .xk, .tstate {
   font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 a { color: #a2c3c4; text-decoration: none; }
@@ -1180,56 +1150,14 @@ header .rname {
   color: #6d6562;
 }
 
-/* full-height frame: strip over (rail | thread) */
-.if { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 41px); }
+/* full-height frame: (rail | thread) under the mode line */
+.if { height: calc(100vh - 41px); }
 
-/* supervision strip: one surface band, dense rows */
-.strip { background: #1b1918; padding: 10px 16px 12px; }
-.striphead { display: flex; gap: 14px; align-items: baseline; }
-.strip-title { font: 600 10.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .2em; color: #6d6562; }
-.strip-axis { margin-left: auto; font-size: 10px; color: #4a4543; }
-.nsec { font: 600 9.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .16em; color: #6d6562; margin: 8px 0 2px; }
-.nxrow {
-  display: grid; grid-template-columns: 52px minmax(180px, 300px) 1fr; gap: 12px;
-  padding: 3px 6px; border-radius: 3px; align-items: baseline; color: inherit;
-}
-.nxrow:hover { background: #292624; }
-.nid { color: #dac09a; font-size: 11.5px; white-space: nowrap; }
-.nname { font-size: 12.5px; color: #d4ceca; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.nfact { font-size: 11px; color: #6d6562; text-align: right; }
-.nfact.stale { color: #dac09a; }
-.nempty { font-size: 11px; color: #4a4543; padding: 1px 6px 2px; }
-
-/* movement ribbon */
-.ribhead { margin-top: 12px; }
-.k-human { color: #c4a6a8; }
-.k-agent { color: #6d6562; }
-.k-request { color: #a2c3c4; }
-.k-offer { color: #dac09a; }
-.k-accept { color: #a2c4a3; }
-.k-reject { color: #c4a6a8; }
-.k-use { color: #a2a3c4; }
-.rib {
-  position: relative; height: 40px; background: #100f0e;
-  border-radius: 2px; margin-top: 4px;
-}
-.rv { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid #292624; }
-.rv.now { border-left: 2px solid #d4ceca; }
-.mrk { position: absolute; width: 2px; height: 11px; }
-.mrk.human { background: #c4a6a8; }
-.mrk.agent { background: #6d6562; }
-.mrk.request { background: #a2c3c4; }
-.mrk.offer { background: #dac09a; }
-.mrk.accept { background: #a2c4a3; }
-.mrk.reject { background: #c4a6a8; }
-.mrk.use { background: #a2a3c4; }
-.mrk.ask { background: #c9b8a0; }
-.mrk.run { background: #a2c4a3; }
-.mrk:hover { width: 3px; outline: 1px solid #e8e2dd; z-index: 2; }
-
-/* columns: forest surface | thread deep — tone separates, no dividers */
-.cols { display: grid; min-height: 0; }
-.cols.withforest { grid-template-columns: 252px 1fr; }
+/* columns: forest surface | thread deep — tone separates, no dividers;
+   the thread track is minmax(0,1fr) so wide math scrolls in its block,
+   never widens the frame */
+.cols { display: grid; min-height: 0; height: 100%; }
+.cols.withforest { grid-template-columns: 252px minmax(0, 1fr); }
 .forest { background: #1b1918; overflow-y: auto; padding: 10px 8px; }
 .frow {
   display: flex; flex-wrap: nowrap; gap: 7px; align-items: center;
@@ -1240,9 +1168,10 @@ header .rname {
 .frow.sel .fname { color: #e8e2dd; }
 .fid { color: #dac09a; font-size: 11.5px; white-space: nowrap; flex-shrink: 0; }
 .schip { white-space: nowrap; flex-shrink: 0; font: 500 9.5px/1.6 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .06em; }
-.fname { flex: 1; min-width: 0; font-size: 12.5px; color: #d4ceca; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fname { flex: 1; min-width: 0; font-size: 12.5px; color: #d4ceca; overflow-wrap: anywhere; }
 .fsect { font: 600 9.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .16em; color: #6d6562; margin: 16px 8px 4px; }
 .fgate-empty { padding: 4px 8px; font-size: 11.5px; color: #4a4543; }
+.nempty { font-size: 11px; color: #4a4543; padding: 1px 6px 2px; }
 .frow.closed .fname { color: #6d6562; }
 .frow.closed:hover .fname { color: #b3aca6; }
 
@@ -1254,8 +1183,6 @@ header .rname {
 .tstate { font: 600 10.5px "JetBrains Mono", ui-monospace, monospace; letter-spacing: .12em; }
 
 #thread { overflow-y: auto; min-height: 0; padding: 4px 0 12px; }
-
-/* day dividers at gaps */
 .gapdiv {
   display: flex; align-items: center; gap: 10px; margin: 12px 18px 6px;
   color: #4a4543; font-size: 10px; letter-spacing: .14em;
@@ -1296,6 +1223,13 @@ header .rname {
 math[data-raw] { cursor: copy; }
 math.copied { background: #2c2825; border-radius: 3px; }
 math.copyfail { outline: 1px dashed #b08a8a; }
+
+/* display math: its own centered block, long equations scroll inside */
+.dmath { display: block; overflow-x: auto; margin: .6em 0; }
+.dmath math[display="block"] {
+  width: max-content; margin-inline: auto;
+  max-width: none; text-align: left;
+}
 .copybtn {
   position: absolute; top: 4px; right: 4px;
   padding: 1px 6px; border: 1px solid #3a3531; border-radius: 4px;
@@ -1346,14 +1280,7 @@ pre:hover .copybtn, .copybtn:focus-visible { opacity: 1; }
 /* receipt and judgment: quiet gold facts */
 .receipt { margin: 4px 18px 6px 16px; background: #1e1c1a; border-radius: 6px; padding: 7px 12px; }
 .receipt .nbody { color: #b3aca6; margin-top: 2px; }
-.judge { margin: 4px 18px 8px 16px; background: #1e1c1a; border-radius: 6px; padding: 8px 12px; }
-.jhead { color: #6d6562; font-size: 11px; }
-.jname { color: #dac09a; overflow-wrap: anywhere; }
-.jrow {
-  display: flex; gap: 14px; align-items: flex-end; margin-top: 6px; flex-wrap: wrap;
-}
-.jrow form { margin: 0; display: flex; gap: 8px; align-items: flex-end; }
-.jform { flex: 1; min-width: 220px; }
+.nrow2 form.jform { margin: 6px 0 2px; }
 .jform textarea { width: 100%; }
 .jreject { display: flex; gap: 8px; align-items: flex-end; }
 input.who {
@@ -1416,7 +1343,7 @@ input.who:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
 /* narrow: the rail collapses behind the mode-line toggle */
 @media (max-width: 1100px) {
   .fbtn { display: inline-block; }
-  .cols.withforest { grid-template-columns: 1fr; }
+  .cols.withforest { grid-template-columns: minmax(0, 1fr); }
   .forest {
     position: fixed; left: 0; top: 41px; bottom: 0; width: 280px; z-index: 40;
     transform: translateX(-102%); transition: transform .15s ease;
@@ -1436,9 +1363,7 @@ mod tests {
     use crate::objects::comment::Target;
     use crate::store::{Context, Record, Tier, World};
     use crate::types::actor::ActorName;
-    use crate::views::{
-        RIBBON_WINDOW_SECS, closed_tasks, forest, next_panel, ribbon_marks, show_view, thread_view,
-    };
+    use crate::views::{closed_tasks, forest, show_view, thread_view};
     use std::sync::OnceLock;
 
     fn human() -> &'static Context {
@@ -1669,27 +1594,10 @@ mod tests {
         Console {
             forest: forest(world),
             closed: closed_tasks(world),
-            next: next_panel(world, NOW),
-            marks: ribbon_marks(world, NOW),
             focus,
             form: FormState::default(),
             store: ArtifactStore::default(),
             repo_name: None,
-            now: NOW,
-        }
-    }
-
-    fn console_at(world: &World, now: u64) -> Console {
-        Console {
-            forest: forest(world),
-            closed: closed_tasks(world),
-            next: next_panel(world, now),
-            marks: ribbon_marks(world, now),
-            focus: None,
-            form: FormState::default(),
-            store: ArtifactStore::default(),
-            repo_name: None,
-            now,
         }
     }
 
@@ -1699,13 +1607,48 @@ mod tests {
         let html = thread_section(
             &focus_of(&world, 2),
             &Default::default(),
-            None,
             &ArtifactStore::default(),
         );
-        assert!(html.contains("action=\"/t/2/accept\""), "{html}");
-        assert!(html.contains("action=\"/t/2/reject\""), "{html}");
-        assert!(html.contains("the standing offer c-10"), "{html}");
+        // both doors post from one form on the standing offer's row:
+        // reject is the default action, accept rides formaction
+        assert!(
+            html.contains("<form class=\"jform\" method=\"post\" action=\"/t/2/reject\">"),
+            "{html}"
+        );
+        assert!(html.contains("formaction=\"/t/2/accept\""), "{html}");
+        assert!(html.contains("name=\"offer\" value=\"10\""), "{html}");
         assert!(html.contains("placeholder=\"grounds"), "{html}");
+        // the doors ride the offer's own row
+        let offer_row = html
+            .split("id=\"c-10\"")
+            .nth(1)
+            .expect("the offer row renders");
+        assert!(offer_row.contains("/t/2/reject"), "{offer_row}");
+        // exactly one decision form, one shared actor field in it
+        let form_html = html
+            .split("class=\"jform\"")
+            .nth(1)
+            .expect("the doors render");
+        assert_eq!(
+            form_html.split("name=\"who\"").count() - 1,
+            1,
+            "{form_html}"
+        );
+    }
+
+    #[test]
+    fn a_refused_decision_renders_its_reason_beside_the_doors() {
+        let world = fixture();
+        let form = FormState {
+            judge_error: Some("a rejection needs grounds".into()),
+            note: "kept wording".into(),
+            who: "jerry".into(),
+            ..Default::default()
+        };
+        let html = thread_section(&focus_of(&world, 2), &form, &ArtifactStore::default());
+        assert!(html.contains("a rejection needs grounds"), "{html}");
+        // the refused grounds stay editable in the textarea
+        assert!(html.contains(">kept wording</textarea>"), "{html}");
     }
 
     #[test]
@@ -1714,23 +1657,12 @@ mod tests {
         let html = thread_section(
             &focus_of(&world, 0),
             &Default::default(),
-            None,
             &ArtifactStore::default(),
         );
         assert!(!html.contains("/accept\""), "{html}");
         assert!(!html.contains("/reject\""), "{html}");
         // the offer's prose renders as the account that concluded
         assert!(html.contains("suite green &lt;34&gt;"), "{html}");
-    }
-
-    #[test]
-    fn the_strip_carries_standing_offers_with_their_ages() {
-        let world = fixture();
-        let html = page(&console_of(&world, None));
-        assert!(html.contains("OFFERED · STANDING OFFERS"), "{html}");
-        assert!(html.contains("offered "), "{html}");
-        assert!(html.contains("OWNED · LAST RECORD"), "{html}");
-        assert!(html.contains("owned by jerry"), "{html}");
     }
 
     #[test]
@@ -1759,7 +1691,6 @@ mod tests {
         let html = thread_section(
             &focus_of(&world, 0),
             &Default::default(),
-            None,
             &ArtifactStore::default(),
         );
         assert!(html.contains("EXPLANATION"), "{html}");
@@ -1819,47 +1750,6 @@ mod tests {
     }
 
     #[test]
-    fn mark_chips_place_time_true() {
-        // a fresh window over recent births: the offer and its accept
-        // land as chips inside it
-        let world = World::replay(vec![
-            record(
-                0,
-                0,
-                human(),
-                Event::TaskCreated {
-                    name: Prose::new("live work".into()).unwrap(),
-                    parent_id: None,
-                },
-            ),
-            record(
-                1,
-                100,
-                agent(),
-                Event::Commented {
-                    target: task(0),
-                    kind: offer_kind("the account"),
-                },
-            ),
-            record(
-                2,
-                200,
-                human(),
-                Event::Commented {
-                    target: reply(1),
-                    kind: CommentKind::Accept {
-                        offer: CommentId(RecordId(1)),
-                    },
-                },
-            ),
-        ])
-        .unwrap();
-        let page = page(&console_at(&world, 200));
-        assert!(page.contains("class=\"mrk offer\""), "{page}");
-        assert!(page.contains("class=\"mrk accept\""), "{page}");
-    }
-
-    #[test]
     fn the_compose_dock_holds_the_grammar() {
         let page = compose_section(3, &Default::default());
         assert!(page.contains("action=\"/compose\""), "{page}");
@@ -1872,8 +1762,7 @@ mod tests {
         let form = FormState {
             error: Some("a comment needs words".into()),
             draft: "the draft".into(),
-            note: String::new(),
-            who: String::new(),
+            ..Default::default()
         };
         let html = compose_section(3, &form);
         assert!(html.contains("a comment needs words"), "{html}");
@@ -1886,7 +1775,6 @@ mod tests {
         let html = thread_section(
             &focus_of(&world, 1),
             &Default::default(),
-            None,
             &ArtifactStore::default(),
         );
         assert!(html.contains("<details class=\"revise\">"), "{html}");
@@ -1894,7 +1782,6 @@ mod tests {
         let html = thread_section(
             &focus_of(&world, 0),
             &Default::default(),
-            None,
             &ArtifactStore::default(),
         );
         // the offer and its replies reveal; the accept row is bodyless
@@ -1940,7 +1827,6 @@ mod tests {
         let html = thread_section(
             &focus_of(&world, 0),
             &Default::default(),
-            None,
             &ArtifactStore::default(),
         );
         assert!(html.contains("second take"), "{html}");
@@ -1983,7 +1869,6 @@ mod tests {
         let html = thread_section(
             &focus_of(&world, 0),
             &Default::default(),
-            None,
             &ArtifactStore::default(),
         );
         assert!(html.contains("withdrawn by jerry"), "{html}");
@@ -1999,18 +1884,6 @@ mod tests {
         let world = fixture();
         let page = page(&console_of(&world, None));
         assert!(page.contains("no task focused"), "{page}");
-    }
-
-    #[test]
-    fn the_ribbon_window_hides_old_marks() {
-        let world = fixture();
-        let marks = ribbon_marks(&world, NOW);
-        // the fixture's births at 0..30h sit outside a 72h window at NOW
-        assert!(
-            marks
-                .iter()
-                .all(|m| m.at > NOW.saturating_sub(RIBBON_WINDOW_SECS))
-        );
     }
 
     // ---- artifacts and the reading-side resolver ----
@@ -2097,7 +1970,7 @@ mod tests {
         let hash = crate::ContentHash::of(PNG_HEAD).as_str().to_string();
 
         // the foreign body: a comment mention is a pure link
-        let html = thread_section(&focus_of(&world, 1), &Default::default(), None, &store);
+        let html = thread_section(&focus_of(&world, 1), &Default::default(), &store);
         assert!(html.contains("<a href=\"/t/0#c-2\">c-2</a>"), "{html}");
         // an artifact mention is the card linking home
         assert!(
@@ -2115,7 +1988,7 @@ mod tests {
         assert!(!html.contains("pi<a"), "{html}");
 
         // the offer's prose resolves through the same rule
-        let html = thread_section(&focus_of(&world, 0), &Default::default(), None, &store);
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), &store);
         assert!(
             html.contains("suite green, per <a class=\"acard\" href=\"/t/0#a-4\""),
             "{html}"
@@ -2148,7 +2021,7 @@ mod tests {
         ])
         .unwrap();
         let (store, dir) = store_of(&[], "escape");
-        let html = thread_section(&focus_of(&world, 0), &Default::default(), None, &store);
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), &store);
         // the words escaped, and the bounded token still resolved
         assert!(
             html.contains("the &lt;b&gt;bold&lt;/b&gt; verdict &amp; <a href=\"/t/0#c-1\">c-1</a>"),
@@ -2189,7 +2062,6 @@ mod tests {
         thread_section(
             &focus_of(world, 0),
             &Default::default(),
-            None,
             &ArtifactStore::default(),
         )
     }
@@ -2203,6 +2075,78 @@ mod tests {
         assert!(html.contains("msup"), "{html}");
         // a parse that fails keeps its source bytes
         assert!(html.contains("$\\notacommand{x}$"), "{html}");
+    }
+
+    #[test]
+    fn display_math_renders_a_block_and_a_miss_keeps_its_fences() {
+        let html = prose_html_of(&prose_world("sets it out: $$a^2+b^2=c^2$$ done"));
+        // display math is its own block, distinct from inline
+        assert!(
+            html.contains("<span class=\"dmath\"><math data-raw=\"a^2+b^2=c^2\" title=\"a^2+b^2=c^2\" display=\"block\">"),
+            "{html}"
+        );
+        // a display miss keeps both fences and renders no block
+        let html = prose_html_of(&prose_world("$$\\notacommand{x}$$"));
+        assert!(html.contains("$$\\notacommand{x}$$"), "{html}");
+        assert!(!html.contains("dmath"), "{html}");
+    }
+
+    #[test]
+    fn aligned_derivations_render_inside_display_math() {
+        let body = "$$\\begin{aligned}\\sigma \\odot w_S &= 0\\\\G &= X^\\top X\\end{aligned}$$";
+        let html = prose_html_of(&prose_world(body));
+        assert!(html.contains("<mtable displaystyle=\"true\""), "{html}");
+        assert_eq!(html.matches("<mtr>").count(), 2, "{html}");
+        assert!(html.contains("<mtd"), "{html}");
+    }
+
+    #[test]
+    fn negative_space_after_a_scripted_group_renders() {
+        // the stiff-sindy inverse-Gram shape: 0.5.5 panicked here
+        let html = prose_html_of(&prose_world("$G_{SS}^{-1}\\!x$ holds"));
+        assert!(
+            html.contains("<mspace style=\"margin-left:-0.16666667em;\"/>"),
+            "{html}"
+        );
+        // the author bytes ride the data-raw copy hook, not the text
+        assert!(html.contains("title=\"G_{SS}^{-1}\\!x\""), "{html}");
+        assert!(!html.contains("<p>$G"), "{html}");
+    }
+
+    #[test]
+    fn markup_beyond_the_crate_vocabulary_stays_out() {
+        // the allow-list, not the converter, decides what passes
+        assert!(crate_authored("<math><mi>x</mi></math>"));
+        assert!(!crate_authored(
+            "<math><mi>x</mi><script>alert(1)</script></math>"
+        ));
+        assert!(!crate_authored("<math><foreignobject/></math>"));
+    }
+
+    #[test]
+    fn a_refused_revise_renders_open_at_its_row_with_the_draft_kept() {
+        let world = fixture();
+        let form = FormState {
+            revise: Some(ReviseForm {
+                seq: 5,
+                draft: "the refused wording".into(),
+                error: "a comment needs words".into(),
+            }),
+            ..Default::default()
+        };
+        let html = thread_section(&focus_of(&world, 1), &form, &ArtifactStore::default());
+        assert!(html.contains("<details class=\"revise\" open>"), "{html}");
+        assert!(html.contains("a comment needs words"), "{html}");
+        // the draft rides the textarea, never re-authored
+        assert!(html.contains(">the refused wording</textarea>"), "{html}");
+        // other rows keep their closed reveals
+        let html = thread_section(
+            &focus_of(&world, 1),
+            &Default::default(),
+            &ArtifactStore::default(),
+        );
+        assert!(html.contains("<details class=\"revise\">"), "{html}");
+        assert!(!html.contains("revise\" open"), "{html}");
     }
 
     #[test]
