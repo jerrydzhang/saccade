@@ -1062,8 +1062,7 @@ async fn compose_fetch_swaps_the_thread_section() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// The console GET: unfocused at /, focused and composed at /t/N; the
-/// forest browses live work and the head names the owner.
+/// The console GET: unfocused at / and focused and composed at /t/N.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_console_renders_forest_and_focused_thread() {
     let db = scratch_db("console-read");
@@ -1106,9 +1105,7 @@ async fn the_console_renders_forest_and_focused_thread() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// A rehoming compose answers a fetch with the same 303 a form post
-/// takes: swapping the new task's section into the old page would leave
-/// url and composer stale, so the client navigates instead.
+/// A rehoming compose answers a fetch with the same 303 a form post takes.
 #[tokio::test(flavor = "multi_thread")]
 async fn compose_fetch_rehome_redirects_instead_of_swapping() {
     let db = scratch_db("console-rehome-fetch");
@@ -1140,8 +1137,6 @@ async fn every_task_href_the_console_emits_resolves() {
     let (base, state) = spawn_console(&db).await;
     seed_task(&state, "migrate floop");
     seed_task(&state, "other work");
-    // a claim names the owner in the head, an offer feeds the decision
-    // doors on its own row
     state
         .execute(
             &human_ctx(),
@@ -1196,8 +1191,7 @@ async fn every_task_href_the_console_emits_resolves() {
     }
     hrefs.sort();
     hrefs.dedup();
-    // both link forms light up: bare task links (the rail) and
-    // record anchors (prose citations)
+    // both link forms light up
     assert!(
         hrefs.iter().any(|h| !h.contains('#')) && hrefs.iter().any(|h| h.contains("#c-")),
         "the fixture should light up every link form, got {hrefs:?}"

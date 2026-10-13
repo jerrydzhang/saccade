@@ -368,9 +368,6 @@ fn forest_section(rows: &[ForestRow], closed: &[ForestRow], focus: Option<&str>)
 
 // ---- the thread panel ----
 
-/// The decision doors riding the standing offer's row: the task and
-/// offer they post against, the grounds draft, a refusal's reason, and
-/// the one shared actor field.
 struct Judge {
     task: usize,
     offer: usize,
@@ -953,9 +950,6 @@ pub fn compose_section(task: usize, form: &FormState) -> String {
     )
 }
 
-/// Every act form carries the actor name: prefilled from the cookie
-/// when one exists, blank for a fresh browser — the no-JS path types
-/// its name and posts.
 fn who_input(prefill: &str) -> String {
     format!(
         "<input class=\"who\" name=\"who\" placeholder=\"your name\" autocomplete=\"name\" value=\"{}\">\n",

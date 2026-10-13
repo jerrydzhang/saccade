@@ -397,7 +397,6 @@ fn comment_root(app: &AppState, seq: usize) -> Option<usize> {
         .map(|root| root.0)
 }
 
-/// The thread section alone, for the fetch swap.
 fn thread_fragment(app: &AppState, n: usize) -> Option<String> {
     let snapshot = app.snapshot().ok()?;
     let f = focus(&snapshot.world, n)?;
@@ -432,8 +431,6 @@ fn identity(req: &Req, fields: &[(String, String)]) -> Result<(Context, Option<S
     ))
 }
 
-/// The actor name a re-render prefills: the cookie when one rides the
-/// request, else the submitted name — a refusal never re-asks.
 fn form_who(req: &Req, fields: &[(String, String)]) -> String {
     match req.actor.clone().filter(|a| !a.is_empty()) {
         Some(who) => who,
