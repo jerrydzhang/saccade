@@ -11,7 +11,7 @@
       # devShell wants it
       inputs.saccade.follows = "saccade";
     };
-    llm-agents.url = "github:numtide/llm-agents.nix";
+    wrapped-pi.url = "github:jerrydzhang/wrapped-pi";
     devenv.url = "github:cachix/devenv";
   };
 
@@ -21,17 +21,17 @@
   };
 
   outputs = {
-    self,
     nixpkgs,
     rust-overlay,
     saccade,
-    llm-agents,
+    wrapped-pi,
     devenv,
     ...
   } @ inputs: let
     inherit (nixpkgs) lib;
     forAllSystems = lib.genAttrs lib.systems.flakeExposed;
     overlays = [rust-overlay.overlays.default];
+    saccadePiExtensions = [];
   in {
     devShells = forAllSystems (
       system: let
@@ -49,17 +49,25 @@
         default = devenv.lib.mkShell {
           inherit inputs pkgs;
           modules = [
-            ({...}: {
+            ({config, ...}: let
+              devPi = pkgs.writeShellApplication {
+                name = "wrapped-pi";
+                text = ''
+                  exec ${wrapped-pi.packages.${system}.default}/bin/wrapped-pi ${lib.escapeShellArgs (lib.concatMap (path: ["-e" "${config.devenv.root}/${path}"]) saccadePiExtensions)} "$@"
+                '';
+              };
+            in {
               packages = with pkgs; [
                 rustToolchain
                 (pkgs.python3.withPackages (ps: [ps.playwright]))
                 prek
                 just
                 saccade.packages.${system}.default
-                llm-agents.packages.${system}.pi
+                devPi
               ];
 
               env = {
+                SACCADE_PI = "${devPi}/bin/wrapped-pi";
                 PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
               };
 
@@ -86,6 +94,9 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
+        pi = wrapped-pi.packages.${system}.default.override {
+          extraExtensions = map (path: ./. + "/${path}") saccadePiExtensions;
+        };
       in
         {
           default = pkgs.rustPlatform.buildRustPackage {
@@ -98,9 +109,9 @@
               pkgs.git
               pkgs.direnv
             ];
-            # the pinned native pi this binary's start door launches;
+            # the pinned harness this binary's start door launches;
             # SACCADE_PI remains the development override
-            SACCADE_PI_BIN = "${llm-agents.packages.${system}.pi}/bin/pi";
+            SACCADE_PI = "${pi}/bin/wrapped-pi";
             preCheck = ''
               export HOME=$(mktemp -d)
             '';
@@ -108,15 +119,7 @@
             meta.mainProgram = "sac";
           };
         }
-        // (import ./nix/pi-extensions.nix {inherit lib pkgs saccade;})
     );
-
-    apps = forAllSystems (system: {
-      install-pi-extensions = {
-        type = "app";
-        program = "${self.packages.${system}.install-pi-extensions}/bin/install-pi-extensions";
-      };
-    });
 
     formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.alejandra);
   };

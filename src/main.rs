@@ -1352,7 +1352,7 @@ fn pinned_pi() -> Result<PathBuf, Fail> {
     if let Some(path) = std::env::var_os("SACCADE_PI").filter(|p| !p.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    if let Some(path) = option_env!("SACCADE_PI_BIN") {
+    if let Some(path) = option_env!("SACCADE_PI") {
         return Ok(PathBuf::from(path));
     }
     Err(Fail::Usage(
