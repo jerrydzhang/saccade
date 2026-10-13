@@ -772,9 +772,7 @@ fn resolve_repo(cli: &Cli) -> Result<PathBuf, Fail> {
 }
 
 enum Destination {
-    /// The named database file: local reads and ordinary writes
     Local { db: PathBuf },
-    /// One selected server: reads, writes, and waits reach it alike
     Server { url: String },
 }
 
@@ -974,7 +972,6 @@ fn server_url(destination: &Destination, verb: &str) -> Result<String, Fail> {
     }
 }
 
-/// serve starts a server; --server never selects one for it.
 fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fail> {
     if cli.server.is_some() {
         return Err(Fail::Usage(
@@ -1031,11 +1028,6 @@ fn open_door(cli: &Cli, destination: &Destination, id: &str) -> Result<String, F
     render_workspace_reply(cli, &reply, &host)
 }
 
-/// The exec door: enter the checkout, inject identity over any stale
-/// inherited scope — routing is never inherited, it is cleared — and
-/// exec the argv with its boundaries intact. The actor is always
-/// supplied, so no session of the wrapper writes as an unpossessed
-/// human.
 fn exec_door(
     cli: &Cli,
     destination: &Destination,
@@ -1172,9 +1164,8 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
     Ok(out.join("\n"))
 }
 
-/// The environment a task's sessions run under: identity and the repo
-/// as project identity. Routing rides nothing — the session's sac
-/// commands discover from the repo.
+/// Routing rides nothing: the session's sac commands discover from
+/// the repo.
 fn injected_environment(
     task: TaskId,
     workspace: &saccade::objects::workspace::WorkspaceContext,

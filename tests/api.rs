@@ -1062,8 +1062,62 @@ async fn compose_fetch_swaps_the_thread_section() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// A supported local write shows on every server face: console,
-/// records, and the next refusal's cursor all read the file.
+/// A load failure refuses; a degraded log still serves its raw rows.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_records_face_keeps_degraded_rows_and_refuses_corruption() {
+    // a corrupt payload of a known kind: the log will not even load
+    let db = scratch_db("records-corrupt");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "before the damage");
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute(
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+             VALUES (1, 0, 0, 'pi', 'agent', 'commented', '{}', NULL)",
+            [],
+        )
+        .unwrap();
+    let mut r = ureq::get(&format!("{base}/api/v1/records"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 500);
+    let body = r.body_mut().read_to_string().unwrap();
+    assert_eq!(json_of(&body)["error"]["code"], "database_error");
+    let (_, html) = get_html(&format!("{base}/t/0"));
+    assert!(html.contains("corrupt"), "{html}");
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+
+    // an unknown kind: the world will not fold, the rows still travel
+    let db = scratch_db("records-degraded");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "before the damage");
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute(
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+             VALUES (1, 0, 0, 'pi', 'agent', 'time_travelled', '{}', NULL)",
+            [],
+        )
+        .unwrap();
+    let mut r = ureq::get(&format!("{base}/api/v1/records"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    let body = r.body_mut().read_to_string().unwrap();
+    assert_eq!(json_of(&body)["records"].as_array().unwrap().len(), 2);
+    let (_, html) = get_html(&format!("{base}/t/0"));
+    assert!(html.contains("unavailable"), "{html}");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// A supported local write shows on every server face.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_local_write_shows_on_every_server_face() {
     let db = scratch_db("local-visible");
@@ -2081,8 +2135,7 @@ fn the_binary_deploys_and_verifies_its_embedded_skill() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// The local reply shape is the wire's: one code path builds both, so
-/// a --db write and a served write answer identically.
+/// A --db write answers with the wire's own reply shape.
 #[tokio::test(flavor = "multi_thread")]
 async fn local_replies_match_the_wire() {
     let bin = env!("CARGO_BIN_EXE_sac");
@@ -2279,8 +2332,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
     assert!(!ok);
     assert!(stderr.contains("no task t-9"), "{stderr}");
 
-    // the same wait over the wire: a server-mode waiter wakes on the
-    // local write to the same tracker
+    // the same wait over the wire, waking on a local write
     let mut serve = std::process::Command::new(bin)
         .args(["serve", "--db"])
         .arg(&path)
@@ -3057,8 +3109,7 @@ fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
         )
     };
 
-    // the scratch create lands in the selected db, never on an
-    // inherited server or db
+    // the scratch create lands in the selected db, never the exported ones
     let (ok, _, err) = sac(
         &[
             "--db",
@@ -3091,8 +3142,7 @@ fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
     assert!(ok, "{err}");
     assert_eq!(task_names(&out), vec!["implement foo"]);
 
-    // the explicit server beats the exported db: the same name born on
-    // another tracker holds its own t-0
+    // the explicit server beats the exported db
     let (ok, _, err) = sac(
         &[
             "--server",
@@ -3179,8 +3229,7 @@ fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
     assert!(!ok);
     assert!(err.contains("runs through the server"), "{err}");
 
-    // serve selects a file to serve, never another server — with --db
-    // too, and alone
+    // serve refuses --server in any combination
     let (ok, _, err) = sac(&["--server", &url_a, "serve", "--port", "0"], &[]);
     assert!(!ok, "serve with --server must refuse");
     assert!(err.contains("serve starts a server"), "{err}");
@@ -3250,8 +3299,7 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
         .spawn()
         .expect("spawn serve");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    // the child resolves its state root from its own XDG_STATE_HOME;
-    // the hint is the one saccade.db.addr that appears there
+    // the hint is the one saccade.db.addr under the child's state root
     let hint = loop {
         let mut found = Vec::new();
         if let Ok(slugs) = std::fs::read_dir(state.join("saccade")) {
@@ -3297,8 +3345,7 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
     let (ok, _, err) = sac_in(&wt, &["--json", "list"], &state);
     assert!(ok, "worktree discovery: {err}");
 
-    // a scratch serve publishes beside the scratch db, never over the
-    // repo's hint, and a wildcard bind publishes the loopback
+    // a scratch serve never overwrites the repo's hint; wildcard publishes loopback
     let scratch_db = dir.join("scratch").join("saccade.db");
     let (mut scratch_serve, scratch_url) = spawn_serve(bin, &scratch_db, &["--bind", "0.0.0.0"]);
     assert!(
@@ -3312,8 +3359,7 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
         "the repo's hint stands"
     );
 
-    // the hint replaced on restart: the file names the server actually
-    // serving, the old process dead
+    // the hint replaced on restart: it names the server actually serving
     let _ = scratch_serve.kill();
     let _ = scratch_serve.wait();
     std::fs::remove_file(saccade::paths::address_at(&scratch_db)).unwrap();
@@ -3345,8 +3391,7 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// The serving repo is the declared one: Git effects, worktrees, and
-/// artifact bytes belong to --repo, never the server's or client's cwd.
+/// The serving repo is the declared one, never the cwd.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_declared_repo_carries_the_serving_effects() {
     let bin = env!("CARGO_BIN_EXE_sac");

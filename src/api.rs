@@ -42,8 +42,6 @@ struct Inner {
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Mutex<ServerState>>,
-    /// The served database's canonical path, named on the identity
-    /// face so a client verifies it found the right tracker.
     db_path: std::path::PathBuf,
     attempts: Attempts,
     /// The artifact store the bytes door serves from; a server that
@@ -67,6 +65,24 @@ pub struct Snapshot {
 pub struct Degraded {
     pub reason: String,
     pub rows: Vec<StoredRecord>,
+}
+
+/// A read that cannot present the world: the log will not fold (its
+/// raw rows still travel), or will not even load — corruption and
+/// storage failures are database errors, never an empty successful log.
+#[derive(Debug)]
+pub enum ReadFail {
+    Degraded(Degraded),
+    Db(String),
+}
+
+impl ReadFail {
+    pub fn reason(&self) -> &str {
+        match self {
+            ReadFail::Degraded(d) => &d.reason,
+            ReadFail::Db(reason) => reason,
+        }
+    }
 }
 
 impl AppState {
@@ -106,7 +122,6 @@ impl AppState {
         })
     }
 
-    /// The served database's canonical path.
     pub fn db_path(&self) -> &Path {
         &self.db_path
     }
@@ -205,31 +220,28 @@ impl AppState {
         outcome
     }
 
-    pub fn snapshot(&self) -> Result<Snapshot, Degraded> {
+    pub fn snapshot(&self) -> Result<Snapshot, ReadFail> {
         let guard = self.inner.lock().expect("the writer lock is not poisoned");
         let (boot_reason, conn) = match &*guard {
             ServerState::Ready(inner) => (None, &inner.conn),
             ServerState::Degraded(reason, conn) => (Some(reason.clone()), conn),
         };
-        let loadout = db::load(conn).map_err(|e| Degraded {
-            reason: e.to_string(),
-            rows: Vec::new(),
-        })?;
+        let loadout = db::load(conn).map_err(|e| ReadFail::Db(e.to_string()))?;
         match loadout.state {
             db::LoadState::Full(world) => match boot_reason {
                 None => Ok(Snapshot {
                     world,
                     rows: loadout.rows,
                 }),
-                Some(reason) => Err(Degraded {
+                Some(reason) => Err(ReadFail::Degraded(Degraded {
                     reason,
                     rows: loadout.rows,
-                }),
+                })),
             },
-            db::LoadState::Degraded(fresh) => Err(Degraded {
+            db::LoadState::Degraded(fresh) => Err(ReadFail::Degraded(Degraded {
                 reason: boot_reason.unwrap_or(fresh),
                 rows: loadout.rows,
-            }),
+            })),
         }
     }
 }
@@ -733,10 +745,14 @@ async fn version(State(app): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
-/// The raw log; the caller folds it with the local file's own code.
 async fn records(State(app): State<AppState>) -> Response {
     match app.snapshot() {
         Ok(s) => Json(json!({ "records": s.rows })).into_response(),
-        Err(degraded) => Json(json!({ "records": degraded.rows })).into_response(),
+        Err(ReadFail::Degraded(d)) => Json(json!({ "records": d.rows })).into_response(),
+        Err(ReadFail::Db(reason)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": {"code": "database_error", "detail": reason}})),
+        )
+            .into_response(),
     }
 }

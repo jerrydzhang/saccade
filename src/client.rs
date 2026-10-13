@@ -24,13 +24,10 @@ pub enum ClientFail {
     ServerUnreachable { url: String },
     /// The server answered and refused; `code` is its error code.
     Refused { code: String, detail: String },
-    /// No address hint beside the expected database.
     Undiscovered {
         db: std::path::PathBuf,
         hint: std::path::PathBuf,
     },
-    /// The discovered server serves a different database than the
-    /// hint's.
     Mismatch {
         url: String,
         serves: String,
@@ -238,7 +235,6 @@ fn canonical_db(db_path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf())
 }
 
-/// The raw log; the caller folds it with the local file's own code.
 pub fn records(url: &str) -> Result<Vec<StoredRecord>, ClientFail> {
     let mut response = ureq::get(&format!("{url}/api/v1/records"))
         .config()

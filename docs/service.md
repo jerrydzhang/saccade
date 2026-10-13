@@ -1,9 +1,9 @@
 # Serving as a service
 
 The dogfood server is infrastructure, not a dev artifact: the flake's
-devenv process manager runs it from the pinned release whenever the
-dev shell is up. The `sac` process is declared in `flake.nix`; this is
-the line it runs:
+devenv process manager runs it from the pinned release, started with
+`devenv up` in the project. The `sac` process is declared in
+`flake.nix`; this is the line it runs:
 
 ```
 sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811

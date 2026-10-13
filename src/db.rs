@@ -237,8 +237,6 @@ pub fn load(conn: &Connection) -> Result<Loadout, DbError> {
     fold_rows(rows)
 }
 
-/// The fold over rows already read — one implementation for the file
-/// and the fetched log.
 pub fn fold_rows(rows: Vec<StoredRecord>) -> Result<Loadout, DbError> {
     // Unknown kind/tier: stop at the first, keep rows, refuse the fold.
     // Malformed payload of a known kind: loud error, refuse everything.
@@ -359,8 +357,6 @@ pub fn clone(source: &Path, at: usize, out: &Path) -> Result<usize, DbError> {
     clone_rows(&rows, at, out)
 }
 
-/// The prefix writer behind `clone`: rows already read into a fresh
-/// tracker through `at`.
 pub fn clone_rows(rows: &[StoredRecord], at: usize, out: &Path) -> Result<usize, DbError> {
     if out.exists() {
         return Err(DbError::Io(format!(

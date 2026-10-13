@@ -177,11 +177,11 @@ fn artifact_bytes(app: &AppState, hash: &str) -> Response {
 fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
     let snapshot = match app.snapshot() {
         Ok(s) => s,
-        Err(degraded) => {
+        Err(fail) => {
             return page(
                 app,
                 503,
-                &format!("world projection unavailable: {}", degraded.reason),
+                &format!("world projection unavailable: {}", fail.reason()),
             );
         }
     };
