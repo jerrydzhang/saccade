@@ -21,13 +21,13 @@ use crate::{ActorName, Command, Context, Prose, RecordId, Reject, Tier};
 
 pub async fn run(
     db_path: &std::path::Path,
+    repo_root: Option<std::path::PathBuf>,
     bind: &str,
     port: u16,
 ) -> Result<std::convert::Infallible, String> {
     let addr = format!("{bind}:{port}");
-    // a scratch serve from outside any repo still serves its named db:
-    // the repo names artifacts and console chrome, never the tracker
-    let repo_root = crate::paths::repo_root(std::path::Path::new(".")).ok();
+    // the repo names artifacts and console chrome, never the tracker;
+    // a scratch serve outside any repo simply has none
     let repo_name = repo_root.as_deref().map(web::RepoName::of);
     let mut state = AppState::open(db_path)?;
     if let Some(root) = &repo_root {
@@ -54,9 +54,8 @@ pub async fn run(
     unreachable!("axum::serve returns only on shutdown")
 }
 
-/// The address hint: published only after a successful bind, replaced
-/// on every restart. A wildcard bind publishes the local loopback —
-/// never a connect target of all zeros.
+/// Published only after a successful bind; a wildcard bind publishes
+/// the local loopback, never a connect target of all zeros.
 fn publish_address(db_path: &std::path::Path, bound: &std::net::SocketAddr) -> Result<(), String> {
     let ip = if bound.ip().is_unspecified() {
         std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST)

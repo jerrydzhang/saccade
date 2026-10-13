@@ -771,7 +771,6 @@ fn resolve_repo(cli: &Cli) -> Result<PathBuf, Fail> {
     }
 }
 
-/// Where one command's reads and writes land.
 enum Destination {
     /// The named database file: local reads and ordinary writes
     Local { db: PathBuf },
@@ -779,9 +778,6 @@ enum Destination {
     Server { url: String },
 }
 
-/// The one destination: an explicit flag wins; otherwise the primary
-/// repo's usual database is resolved and its discovered server is
-/// verified. There is no implicit local fallback.
 fn resolve_destination(cli: &Cli) -> Result<Destination, Fail> {
     match (&cli.db, &cli.server) {
         (Some(_), Some(_)) => Err(Fail::Usage(
@@ -797,8 +793,6 @@ fn resolve_destination(cli: &Cli) -> Result<Destination, Fail> {
     }
 }
 
-/// The folded world for a read-shaped door: the selected file's rows,
-/// or the selected server's log folded with the same code.
 fn loadout_of(destination: &Destination) -> Result<saccade::db::Loadout, Fail> {
     match destination {
         Destination::Local { db } => {
@@ -971,8 +965,6 @@ fn start_door(
     render_workspace_reply(cli, &reply, &host)
 }
 
-/// The one server a server-only door may run through; local mode
-/// refuses clearly.
 fn server_url(destination: &Destination, verb: &str) -> Result<String, Fail> {
     match destination {
         Destination::Server { url } => Ok(url.clone()),
@@ -982,18 +974,27 @@ fn server_url(destination: &Destination, verb: &str) -> Result<String, Fail> {
     }
 }
 
-/// The serve door: start a server on the named file, or the primary
-/// repo's usual database. --server selects a server for clients; it is
-/// never a way to start another one.
+/// serve starts a server; --server never selects one for it.
 fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fail> {
-    let db_path = match (&cli.db, &cli.server) {
-        (Some(db), _) => db.clone(),
-        (None, Some(_)) => {
-            return Err(Fail::Usage(
-                "serve starts a server; --server selects one for clients (--db names the file to serve)".into(),
-            ));
+    if cli.server.is_some() {
+        return Err(Fail::Usage(
+            "serve starts a server; --server selects one for clients (--db names the file to serve)".into(),
+        ));
+    }
+    // the serving repo is the one resolved here — effects and bytes
+    // belong to the declared tracker, never the caller's cwd
+    let repo_root = resolve_repo(cli).ok();
+    let db_path = match &cli.db {
+        Some(db) => db.clone(),
+        None => {
+            let root = repo_root.as_ref().ok_or_else(|| {
+                Fail::Usage(
+                    "no repo resolved: --repo names the tracker, --db names the file to serve"
+                        .into(),
+                )
+            })?;
+            saccade::paths::db_at(root)
         }
-        (None, None) => saccade::paths::db_at(&resolve_repo(cli)?),
     };
     let _ = tracing_subscriber::fmt()
         .json()
@@ -1006,7 +1007,7 @@ fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fail> {
         .enable_all()
         .build()
         .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
-    match runtime.block_on(saccade::serve::run(&db_path, bind, *port)) {
+    match runtime.block_on(saccade::serve::run(&db_path, repo_root, bind, *port)) {
         Err(e) => Err(Fail::Usage(e)),
         Ok(infallible) => match infallible {},
     }
@@ -1033,9 +1034,8 @@ fn open_door(cli: &Cli, destination: &Destination, id: &str) -> Result<String, F
 /// The exec door: enter the checkout, inject identity over any stale
 /// inherited scope — routing is never inherited, it is cleared — and
 /// exec the argv with its boundaries intact. The actor is always
-/// supplied — the caller's declared attribution preserved, else the
-/// command's own label — so no session of the wrapper writes as an
-/// unpossessed human.
+/// supplied, so no session of the wrapper writes as an unpossessed
+/// human.
 fn exec_door(
     cli: &Cli,
     destination: &Destination,
@@ -1172,10 +1172,9 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
     Ok(out.join("\n"))
 }
 
-/// The environment a task's sessions run under, overwritten never
-/// merged: actor attribution and scope from the record, the repo as
-/// project identity. Routing rides nothing: the session's sac commands
-/// discover from the repo, and stale values are actively cleared.
+/// The environment a task's sessions run under: identity and the repo
+/// as project identity. Routing rides nothing — the session's sac
+/// commands discover from the repo.
 fn injected_environment(
     task: TaskId,
     workspace: &saccade::objects::workspace::WorkspaceContext,

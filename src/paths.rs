@@ -90,9 +90,8 @@ pub fn attempts_at(db_path: &Path) -> PathBuf {
     db_path.with_file_name("attempts.jsonl")
 }
 
-/// The served tracker's address hint: one disposable file beside the
-/// served database, named for it so two trackers in one directory
-/// never overwrite each other's hint.
+/// The address hint, named for its database: two trackers in one
+/// directory must never share one.
 pub fn address_at(db_path: &Path) -> PathBuf {
     let name = db_path
         .file_name()

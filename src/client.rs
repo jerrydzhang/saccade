@@ -24,14 +24,13 @@ pub enum ClientFail {
     ServerUnreachable { url: String },
     /// The server answered and refused; `code` is its error code.
     Refused { code: String, detail: String },
-    /// No address hint beside the expected database: no server of that
-    /// tracker was ever published.
+    /// No address hint beside the expected database.
     Undiscovered {
         db: std::path::PathBuf,
         hint: std::path::PathBuf,
     },
-    /// A server answered at the discovered address but serves a
-    /// different database than the one the hint sits beside.
+    /// The discovered server serves a different database than the
+    /// hint's.
     Mismatch {
         url: String,
         serves: String,
@@ -175,16 +174,12 @@ pub fn send(
     }
 }
 
-/// The server's self-naming: its binary version and the canonical
-/// database it serves.
 #[derive(Debug)]
 pub struct ServerIdentity {
     pub version: String,
     pub db: Option<String>,
 }
 
-/// GET the server's identity: version and served database, the facts
-/// discovery verifies against the tracker it expects.
 pub fn identity(url: &str) -> Result<ServerIdentity, ClientFail> {
     let mut response = ureq::get(&format!("{url}/api/v1/version"))
         .config()
@@ -210,10 +205,8 @@ pub fn identity(url: &str) -> Result<ServerIdentity, ClientFail> {
     })
 }
 
-/// Resolve a tracker's server: read the address hint beside the
-/// expected database, then verify the server there really serves that
-/// database. No fallback: a missing, unreachable, or mismatched server
-/// refuses.
+/// The hint beside the expected database, verified to serve it —
+/// missing, unreachable, or mismatched refuses; there is no fallback.
 pub fn discover(expected_db: &std::path::Path) -> Result<String, ClientFail> {
     let hint = crate::paths::address_at(expected_db);
     let url = std::fs::read_to_string(&hint)
@@ -241,14 +234,11 @@ pub fn discover(expected_db: &std::path::Path) -> Result<String, ClientFail> {
     Ok(url)
 }
 
-/// The canonical face of a db path: the file resolved, the raw path
-/// when it does not exist yet.
 fn canonical_db(db_path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf())
 }
 
-/// The raw log over the wire: rows only, folded by the caller with the
-/// local file's own code.
+/// The raw log; the caller folds it with the local file's own code.
 pub fn records(url: &str) -> Result<Vec<StoredRecord>, ClientFail> {
     let mut response = ureq::get(&format!("{url}/api/v1/records"))
         .config()

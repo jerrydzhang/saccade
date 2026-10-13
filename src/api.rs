@@ -33,19 +33,17 @@ enum ServerState {
 
 struct Inner {
     conn: rusqlite::Connection,
-    world: World,
-    rows: Vec<StoredRecord>,
     /// The tracker's own db: the worktree home derives from it
     db_path: std::path::PathBuf,
 }
 
-/// The sole writer's state: writes refold rather than apply incrementally,
-/// so one definition of truth serves readers and writers alike.
+/// The sole writer's state: every face loads the log fresh under the
+/// one lock, so no read can serve a world the file contradicts.
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Mutex<ServerState>>,
-    /// The served database's canonical path, named on the identity face
-    /// so a client can verify it found the right tracker.
+    /// The served database's canonical path, named on the identity
+    /// face so a client verifies it found the right tracker.
     db_path: std::path::PathBuf,
     attempts: Attempts,
     /// The artifact store the bytes door serves from; a server that
@@ -91,12 +89,9 @@ impl AppState {
             canonical_parent.join(db_path.file_name().unwrap_or_default())
         };
         let conn = db::open(&canonical).map_err(|e| format!("database: {e}"))?;
-        let loadout = db::load(&conn).map_err(|e| format!("database: {e}"))?;
-        let state = match loadout.state {
-            db::LoadState::Full(world) => ServerState::Ready(Inner {
+        let state = match db::load(&conn).map_err(|e| format!("database: {e}"))?.state {
+            db::LoadState::Full(_) => ServerState::Ready(Inner {
                 conn,
-                world,
-                rows: loadout.rows,
                 db_path: canonical.clone(),
             }),
             db::LoadState::Degraded(reason) => ServerState::Degraded(reason, conn),
@@ -150,31 +145,6 @@ impl AppState {
         self.artifacts.as_deref()
     }
 
-    /// Run against the sole writer's connection under the lock; blocking
-    /// work inside is the caller's discipline. Whatever the closure wrote
-    /// becomes the cache: readers never see a world the log contradicts.
-    pub fn with_conn<T>(
-        &self,
-        f: impl FnOnce(&mut rusqlite::Connection) -> T,
-    ) -> Result<T, String> {
-        let mut guard = self.inner.lock().expect("the writer lock is not poisoned");
-        match &mut *guard {
-            ServerState::Ready(inner) => {
-                let out = f(&mut inner.conn);
-                let loadout = db::load(&inner.conn).map_err(|e| e.to_string())?;
-                match loadout.state {
-                    db::LoadState::Full(world) => {
-                        inner.world = world;
-                        inner.rows = loadout.rows;
-                    }
-                    db::LoadState::Degraded(reason) => return Err(reason),
-                }
-                Ok(out)
-            }
-            ServerState::Degraded(reason, _) => Err(reason.clone()),
-        }
-    }
-
     /// The judging seam: one write attempt, one line in the attempts
     /// log, appended while the writer lock is held so the file's order
     /// is the judgment order. Duration includes the lock wait — the
@@ -188,10 +158,13 @@ impl AppState {
     ) -> Result<Vec<StoredRecord>, ExecuteFail> {
         let started = std::time::Instant::now();
         let mut guard = self.inner.lock().expect("the writer lock is not poisoned");
+        // the cursor names the log as it stands at judgment, external
+        // writes included
         let cursor = match &*guard {
-            ServerState::Ready(inner) => inner.rows.last().map(|r| r.seq),
+            ServerState::Ready(inner) => Some(db::last_seq(&inner.conn).map_err(ExecuteFail::Db)?),
             ServerState::Degraded(..) => None,
-        };
+        }
+        .flatten();
         let outcome = match &mut *guard {
             ServerState::Degraded(reason, _) => Err(ExecuteFail::Degraded(reason.clone())),
             ServerState::Ready(inner) => db::record(
@@ -200,11 +173,7 @@ impl AppState {
                 command,
                 at.unwrap_or_else(db::now_epoch),
             )
-            .map(|(stored, world)| {
-                inner.world = world;
-                inner.rows.extend(stored.iter().cloned());
-                stored
-            }),
+            .map(|(stored, _)| stored),
         };
         let duration_ms = started.elapsed().as_millis() as u64;
         let code = match &outcome {
@@ -238,29 +207,29 @@ impl AppState {
 
     pub fn snapshot(&self) -> Result<Snapshot, Degraded> {
         let guard = self.inner.lock().expect("the writer lock is not poisoned");
-        match &*guard {
-            ServerState::Ready(inner) => Ok(Snapshot {
-                world: inner.world.clone(),
-                rows: inner.rows.clone(),
+        let (boot_reason, conn) = match &*guard {
+            ServerState::Ready(inner) => (None, &inner.conn),
+            ServerState::Degraded(reason, conn) => (Some(reason.clone()), conn),
+        };
+        let loadout = db::load(conn).map_err(|e| Degraded {
+            reason: e.to_string(),
+            rows: Vec::new(),
+        })?;
+        match loadout.state {
+            db::LoadState::Full(world) => match boot_reason {
+                None => Ok(Snapshot {
+                    world,
+                    rows: loadout.rows,
+                }),
+                Some(reason) => Err(Degraded {
+                    reason,
+                    rows: loadout.rows,
+                }),
+            },
+            db::LoadState::Degraded(fresh) => Err(Degraded {
+                reason: boot_reason.unwrap_or(fresh),
+                rows: loadout.rows,
             }),
-            ServerState::Degraded(reason, conn) => Err(Degraded {
-                reason: reason.clone(),
-                rows: db::load(conn).map(|l| l.rows).unwrap_or_default(),
-            }),
-        }
-    }
-
-    /// The raw rows as they stand in the file, external writes included:
-    /// the log face reads the record, never the write path's cache.
-    pub fn rows(&self) -> Result<Vec<StoredRecord>, String> {
-        let guard = self.inner.lock().expect("the writer lock is not poisoned");
-        match &*guard {
-            ServerState::Ready(inner) => db::load(&inner.conn)
-                .map(|l| l.rows)
-                .map_err(|e| e.to_string()),
-            ServerState::Degraded(_, conn) => {
-                db::load(conn).map(|l| l.rows).map_err(|e| e.to_string())
-            }
         }
     }
 }
@@ -551,7 +520,10 @@ fn workspace_operation(
                 ApiFail::NoRepo => "workspace_no_repo",
             };
             let cursor = match guard {
-                ServerState::Ready(inner) => inner.rows.last().map(|r| r.seq),
+                ServerState::Ready(inner) => db::last_seq(&inner.conn)
+                    .map_err(|e| e.to_string())
+                    .ok()
+                    .flatten(),
                 ServerState::Degraded(..) => None,
             };
             app.attempts.append(
@@ -585,11 +557,23 @@ fn run_operation(
     let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
         return OperationOutcome::Failed(ApiFail::NoRepo);
     };
-    if inner.world.tasks.get(task).is_none() {
+    // the world as the file stands: a supported local write must be
+    // visible to the next operation
+    let loadout = match db::load(&inner.conn) {
+        Ok(loadout) => loadout,
+        Err(e) => return OperationOutcome::Failed(ApiFail::Db(e.to_string())),
+    };
+    let world = match loadout.state {
+        db::LoadState::Full(world) => world,
+        db::LoadState::Degraded(reason) => {
+            return OperationOutcome::Failed(ApiFail::Degraded(reason));
+        }
+    };
+    if world.tasks.get(task).is_none() {
         return OperationOutcome::Failed(ApiFail::Reject(Reject::InvalidTaskId, None));
     }
     let task_id = TaskId(task);
-    match inner.world.tasks[task].workspace.as_ref() {
+    match world.tasks[task].workspace.as_ref() {
         Some(recorded_ctx) => {
             // the association governs: recreate the checkout, never another birth
             let facts = workspace::recorded(task_id, recorded_ctx);
@@ -610,7 +594,7 @@ fn run_operation(
                 Ok(facts) => facts,
                 Err(fail) => return OperationOutcome::Failed(ApiFail::Workspace(fail)),
             };
-            let birth = RecordId(inner.rows.len());
+            let birth = RecordId(loadout.rows.len());
             let mut drafts = vec![db::RecordDraft {
                 context: Context::system(),
                 event: Event::WorkspaceEstablished {
@@ -638,23 +622,6 @@ fn run_operation(
                 Err(ExecuteFail::Db(e)) => OperationOutcome::Failed(ApiFail::Db(e.to_string())),
             }
         }
-    }
-}
-
-/// Refresh the cache after a landed operation, so readers never see a
-/// world the log contradicts.
-fn reload_inner(guard: &mut ServerState) -> Result<(), String> {
-    let ServerState::Ready(inner) = guard else {
-        return Ok(());
-    };
-    let loadout = db::load(&inner.conn).map_err(|e| e.to_string())?;
-    match loadout.state {
-        db::LoadState::Full(world) => {
-            inner.world = world;
-            inner.rows = loadout.rows;
-            Ok(())
-        }
-        db::LoadState::Degraded(reason) => Err(reason),
     }
 }
 
@@ -734,16 +701,11 @@ async fn workspace_open(State(app): State<AppState>, body: Bytes) -> Response {
     respond_operation(guard, outcome)
 }
 
-/// A landed operation refreshes the cache before answering.
 fn respond_operation(
-    mut guard: std::sync::MutexGuard<'_, ServerState>,
+    guard: std::sync::MutexGuard<'_, ServerState>,
     outcome: OperationOutcome,
 ) -> Response {
-    if let OperationOutcome::Done(_) = &outcome
-        && let Err(reason) = reload_inner(&mut guard)
-    {
-        return api_failure(ApiFail::Degraded(reason));
-    }
+    drop(guard);
     match outcome {
         OperationOutcome::Done(reply) => (
             StatusCode::OK,
@@ -771,15 +733,10 @@ async fn version(State(app): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
-/// The raw log: rows only, folded and rendered by the caller with the
-/// same code the local file feeds.
+/// The raw log; the caller folds it with the local file's own code.
 async fn records(State(app): State<AppState>) -> Response {
-    match app.rows() {
-        Ok(rows) => Json(json!({ "records": rows })).into_response(),
-        Err(reason) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": {"code": "database_error", "detail": reason}})),
-        )
-            .into_response(),
+    match app.snapshot() {
+        Ok(s) => Json(json!({ "records": s.rows })).into_response(),
+        Err(degraded) => Json(json!({ "records": degraded.rows })).into_response(),
     }
 }

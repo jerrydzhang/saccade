@@ -1062,6 +1062,85 @@ async fn compose_fetch_swaps_the_thread_section() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
+/// A supported local write shows on every server face: console,
+/// records, and the next refusal's cursor all read the file.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_write_shows_on_every_server_face() {
+    let db = scratch_db("local-visible");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "server-born task");
+
+    let local = Context {
+        actor: ActorName::new("pi".into()).unwrap(),
+        tier: Tier::Agent,
+        scope: None,
+    };
+    let mut conn = saccade::db::open(&db).unwrap();
+    saccade::db::record(
+        &mut conn,
+        &local,
+        Command::Comment {
+            target: Target::Task(TaskId(0)),
+            kind: CommentKind::Note {
+                body: Prose::new("LOCAL_MARKER".into()).unwrap(),
+            },
+        },
+        saccade::db::now_epoch(),
+    )
+    .unwrap();
+
+    let (_, html) = get_html(&format!("{base}/t/0"));
+    assert!(html.contains("LOCAL_MARKER"), "console reads the file");
+    let (_, body) = {
+        let mut r = ureq::get(&format!("{base}/api/v1/records"))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
+            .unwrap();
+        (r.status().as_u16(), r.body_mut().read_to_string().unwrap())
+    };
+    assert_eq!(json_of(&body)["records"].as_array().unwrap().len(), 2);
+
+    // the next server write folds the same file, never a stale world
+    state
+        .execute(
+            &human_ctx(),
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: None,
+            },
+            None,
+            bare_request(),
+        )
+        .expect("the server write lands");
+    let (_, html) = get_html(&format!("{base}/t/0"));
+    assert!(html.contains("LOCAL_MARKER"), "{html}");
+    assert!(html.contains("owned by"), "{html}");
+
+    // a refusal names the log's fresh cursor, external writes included
+    state
+        .execute(
+            &human_ctx(),
+            Command::ClaimTask {
+                id: TaskId(99),
+                incarnation: None,
+            },
+            None,
+            bare_request(),
+        )
+        .expect_err("no task t-99");
+    let lines = attempts_lines(&db);
+    let refused = lines
+        .iter()
+        .rev()
+        .find(|l| l["outcome"] == "refused")
+        .expect("the refusal took a line");
+    assert_eq!(refused["cursor"], 2);
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
 /// The console GET: unfocused at /, focused and composed at /t/N; the
 /// strip renders ownership rows for owned tasks.
 #[tokio::test(flavor = "multi_thread")]
@@ -3100,9 +3179,24 @@ fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
     assert!(!ok);
     assert!(err.contains("runs through the server"), "{err}");
 
-    // serve selects a file to serve, never another server
+    // serve selects a file to serve, never another server — with --db
+    // too, and alone
     let (ok, _, err) = sac(&["--server", &url_a, "serve", "--port", "0"], &[]);
     assert!(!ok, "serve with --server must refuse");
+    assert!(err.contains("serve starts a server"), "{err}");
+    let (ok, _, err) = sac(
+        &[
+            "--db",
+            db_a.to_str().unwrap(),
+            "--server",
+            &url_a,
+            "serve",
+            "--port",
+            "0",
+        ],
+        &[],
+    );
+    assert!(!ok, "serve with both flags must refuse");
     assert!(err.contains("serve starts a server"), "{err}");
 
     for serve in [&mut serve_a, &mut serve_b, &mut serve_c] {
@@ -3246,6 +3340,190 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
 
     let _ = scratch_serve.kill();
     let _ = scratch_serve.wait();
+    let _ = serve.kill();
+    let _ = serve.wait();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The serving repo is the declared one: Git effects, worktrees, and
+/// artifact bytes belong to --repo, never the server's or client's cwd.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_declared_repo_carries_the_serving_effects() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let dir = std::env::temp_dir().join(format!("sac-api-declared-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (root, _, _) = scratch_repo(&dir.join("a"));
+    let (other, _, _) = scratch_repo(&dir.join("b"));
+    let db = dir.join("served.db");
+    let state_home = dir.join("state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let host = fake_host(&dir);
+    let pi = stub_pi(&dir);
+    std::fs::write(dir.join("host.log"), b"").unwrap();
+    std::fs::write(dir.join("host-state"), b"").unwrap();
+
+    // repo-derived serve from outside any repo has no tracker to serve
+    let mut probe = std::process::Command::new(bin)
+        .args(["serve", "--port", "0"])
+        .env("XDG_STATE_HOME", &state_home)
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn serve");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let refused = loop {
+        match probe.try_wait().unwrap() {
+            Some(status) => break !status.success(),
+            None if std::time::Instant::now() >= deadline => {
+                let _ = probe.kill();
+                panic!("repo-less serve neither refused nor started cleanly");
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
+    assert!(refused, "repo-less serve must refuse");
+
+    let mut serve = std::process::Command::new(bin)
+        .args(["serve", "--port", "0", "--db"])
+        .arg(&db)
+        .arg("--repo")
+        .arg(&root)
+        .env("XDG_STATE_HOME", &state_home)
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn serve");
+    let hint = saccade::paths::address_at(&db);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let url = loop {
+        match std::fs::read_to_string(&hint) {
+            Ok(text) if !text.trim().is_empty() => break text.trim().to_string(),
+            _ if std::time::Instant::now() >= deadline => {
+                let _ = serve.kill();
+                panic!("serve never published {}", hint.display());
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
+
+    let run = |cwd: &std::path::Path, args: &[String]| {
+        let out = scrubbed(std::process::Command::new(bin))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    host.parent().unwrap().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("FAKE_ORCA_LOG", dir.join("host.log").display().to_string())
+            .env(
+                "FAKE_ORCA_STATE",
+                dir.join("host-state").display().to_string(),
+            )
+            .env("SACCADE_PI", &pi)
+            .env("XDG_STATE_HOME", &state_home)
+            .env("SACCADE_ACTOR", "pi")
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let at_repo = |sub: &[&str]| -> Vec<String> {
+        [
+            vec![
+                "--server".to_string(),
+                url.clone(),
+                "--repo".to_string(),
+                root.display().to_string(),
+            ],
+            sub.iter().map(|s| s.to_string()).collect(),
+        ]
+        .concat()
+    };
+
+    let (ok, _, err) = run(
+        &other,
+        &at_repo(&["--json", "create", "task", "declared work"]),
+    );
+    assert!(ok, "{err}");
+    let (ok, out, err) = run(&other, &at_repo(&["start", "t-0", "first request"]));
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert!(out.contains("workspace established"), "{out}");
+    assert!(
+        sh(&root, &["branch", "--list", "saccade/t-0"]).contains("saccade/t-0"),
+        "the branch is the declared repo's"
+    );
+    assert!(
+        !sh(&other, &["branch", "--list", "saccade/t-0"]).contains("saccade/t-0"),
+        "the client's cwd repo grew nothing"
+    );
+    assert!(
+        db.parent().unwrap().join("worktrees").join("t-0").exists(),
+        "the worktree sits beside the served db"
+    );
+
+    let note = dir.join("evidence.txt");
+    std::fs::write(&note, b"the bytes\n").unwrap();
+    let (ok, _, err) = run(
+        &other,
+        &at_repo(&[
+            "artifact",
+            "t-0",
+            note.to_str().unwrap(),
+            "--name",
+            "evidence",
+        ]),
+    );
+    assert!(ok, "{err}");
+    let mut store_files = Vec::new();
+    for slug in std::fs::read_dir(state_home.join("saccade")).unwrap() {
+        let store = slug.unwrap().path().join("artifacts");
+        if let Ok(files) = std::fs::read_dir(&store) {
+            for f in files.flatten() {
+                store_files.push(f.path());
+            }
+        }
+    }
+    assert_eq!(store_files.len(), 1, "bytes live in the declared store");
+    let hash = store_files[0]
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let mut r = ureq::get(&format!("{url}/a/{hash}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    assert_eq!(r.body_mut().read_to_string().unwrap(), "the bytes\n");
+
+    let (ok, _, err) = run(
+        &other,
+        &at_repo(&["--json", "create", "task", "second declared"]),
+    );
+    assert!(ok, "{err}");
+    let (ok, out, err) = run(&other, &at_repo(&["start", "t-1", "second request"]));
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    assert!(
+        sh(&root, &["branch", "--list", "saccade/t-1"]).contains("saccade/t-1"),
+        "still the declared repo"
+    );
+    assert!(
+        !sh(&other, &["branch", "--list", "saccade/t-1"]).contains("saccade/t-1"),
+        "still nothing in the cwd repo"
+    );
+
     let _ = serve.kill();
     let _ = serve.wait();
     std::fs::remove_dir_all(&dir).unwrap();
