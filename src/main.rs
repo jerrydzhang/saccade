@@ -250,11 +250,11 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Block until matching activity lands on the target: a task
-    /// wait matches records folding into the task, a comment wait
-    /// matches its reply chain (revisions and decisions included).
-    /// Matches are strictly after the given global position; nothing
-    /// is recorded
+    /// Block until a matching record lands on the target: activity
+    /// mode matches records folding into a task or a comment's
+    /// reply chain (revisions and decisions included); offer mode
+    /// matches an Offer born on the task. Matches are strictly after
+    /// the given global position; nothing is recorded
     Wait {
         /// The task (t-<n>) or comment (c-<seq>) to wait on
         target: String,
@@ -262,6 +262,10 @@ enum Cmd {
         /// cursor a read disclosed, never defaulted
         #[arg(long)]
         after: u64,
+        /// What wakes the wait — required, never chosen for you;
+        /// offer addresses a task only
+        #[arg(long)]
+        until: UntilMode,
     },
 }
 
@@ -277,6 +281,21 @@ enum SkillVerb {
 #[derive(Clone, Copy, ValueEnum)]
 enum ObjKind {
     Task,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum UntilMode {
+    Activity,
+    Offer,
+}
+
+impl UntilMode {
+    fn until(self) -> saccade::views::WaitUntil {
+        match self {
+            UntilMode::Activity => saccade::views::WaitUntil::Activity,
+            UntilMode::Offer => saccade::views::WaitUntil::Offer,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -509,7 +528,11 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::List { .. } | Cmd::Log | Cmd::Show { .. } | Cmd::Search { .. } => {
             return read_only(cli, &db_path);
         }
-        Cmd::Wait { target, after } => return wait_door(cli, &db_path, target, *after),
+        Cmd::Wait {
+            target,
+            after,
+            until,
+        } => return wait_door(cli, &db_path, target, *after, until.until()),
         Cmd::Start {
             id,
             body,
@@ -1546,8 +1569,17 @@ fn wait_door(
     db_path: &std::path::Path,
     target: &str,
     after: u64,
+    until: saccade::views::WaitUntil,
 ) -> Result<String, Fail> {
     let target = parse_target(target)?;
+    if matches!(
+        (target, until),
+        (Target::Comment(_), saccade::views::WaitUntil::Offer)
+    ) {
+        return Err(Fail::Usage(
+            "--until offer waits on a task (t-<n>); a comment wait is --until activity only".into(),
+        ));
+    }
     let conn = db::open_read(db_path).map_err(Fail::Db)?;
     loop {
         let loadout = db::load(&conn).map_err(Fail::Db)?;
@@ -1563,7 +1595,7 @@ fn wait_door(
             .filter(|r| {
                 let event =
                     wire::assemble(&r.kind, &r.payload).expect("a full fold assembled every row");
-                saccade::views::wait_matches(&world, RecordId(r.seq), &event, &target)
+                saccade::views::wait_matches(&world, RecordId(r.seq), &event, &target, until)
             })
             .cloned()
             .collect();

@@ -156,7 +156,7 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac revise c-<seq> "…"` (prose also by `--stdin` or `--body-file`) | any tier | presentation repair on prose-carrying variants; the fold names a reviser, `sac log` keeps the original |
 | `sac withdraw c-<seq> --note "…"` | any tier | the note's standing-error repair: body out, tombstone stays |
 | `sac artifact t-N <path> [--name …]` | any tier | park an artifact on the thread — the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
-| `sac wait t-N\|c-N --after <seq>` | anonymous | block until matching activity lands on the target; matches are strictly after the cursor; nothing is recorded |
+| `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task — either way strictly after the cursor; nothing is recorded |
 | `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace — none is created by checkpoint |
 | `sac start t-N "initial request"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects, record the request, assign the incarnation ownership, and submit the pinned native Pi into one host terminal with the request as its prompt; a repeat start reveals the standing workspace's live terminal or reports its address — no second launch, request, or ownership change |
 | `sac open t-N` | any tier | ensure the recorded environment exists (a missing checkout is recreated from its branch tip); a fresh association births the establishment alone, a standing one reveals its live terminal or reports its address — never a harness launch, request, or ownership change |
@@ -213,14 +213,24 @@ reads the raw record.
 
 ## Waiting
 
-`sac wait t-N|c-N --after <seq>` blocks until matching activity lands.
-A task wait matches every record folding into the task; a comment wait
+`sac wait t-N|c-N --after <seq> --until offer|activity` blocks until
+a match lands. Both flags are required: the cursor is never
+defaulted, the mode never chosen for you. In activity mode a task
+wait matches every record folding into the task; a comment wait
 matches its reply chain — replies at any depth, revisions and
 withdrawals of chain members, and decisions targeting it. Unrelated
 activity elsewhere on the task and prose-only citations never match.
 Any matching activity wakes, partial replies included; the result
 never claims the request is answered or the task complete — you
 interpret it and may wait again.
+
+In offer mode only an Offer born on the target task strictly after
+the cursor wakes the wait: every offer birth qualifies — the one
+standing, one already rejected, one long concluded — and no later
+decision filters an earlier birth. A revision of an offer is not a
+new birth, and notes, requests, use, decisions, and cancellation
+never match. Offer mode addresses a task (t-<n>) only: `--until
+offer` on a comment target refuses.
 
 The cursor is a global record position you supply, never defaulted:
 matches are strictly after it. Every read discloses the snapshot's
