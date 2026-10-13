@@ -222,17 +222,6 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Migrate a Saccade 0.12.0 log backup (schema 2) to this binary's
-    /// schema, stripping the retired task parent links; the input is
-    /// read-only, the output path must be fresh
-    Migrate {
-        /// The schema-2 backup to read; never written
-        #[arg(long = "in")]
-        source: PathBuf,
-        /// The fresh tracker to write; must not exist
-        #[arg(long)]
-        out: PathBuf,
-    },
     /// Deploy this binary's embedded skill, or verify the copy in this repo
     Skill {
         #[command(subcommand)]
@@ -584,38 +573,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                     "cloned {cloned} records through seq {at} to {}",
                     out.display()
                 )
-            });
-        }
-        Cmd::Migrate { source, out } => {
-            let report = db::migrate(source, out).map_err(Fail::Db)?;
-            return Ok(if cli.json {
-                serde_json::json!({
-                    "migrated": report.records,
-                    "schema": {"from": db::MIGRATED_FROM, "to": db::SCHEMA_VERSION},
-                    "stripped": report.stripped.iter().map(|l| serde_json::json!({
-                        "seq": l.seq,
-                        "task": l.task,
-                        "parent": l.parent,
-                    })).collect::<Vec<_>>(),
-                    "out": out.display().to_string(),
-                })
-                .to_string()
-            } else {
-                let mut lines = vec![format!(
-                    "migrated {} records to {} (schema {} → {}); {} parent links stripped",
-                    report.records,
-                    out.display(),
-                    db::MIGRATED_FROM,
-                    db::SCHEMA_VERSION,
-                    report.stripped.len()
-                )];
-                lines.extend(report.stripped.iter().map(|l| {
-                    format!(
-                        "  c-{} birth of t-{}, parented t-{}",
-                        l.seq, l.task, l.parent
-                    )
-                }));
-                lines.join("\n")
             });
         }
         Cmd::Skill { .. } => unreachable!("the skill door dispatches before the db doors"),

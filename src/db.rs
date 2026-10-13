@@ -15,7 +15,6 @@ const APPLICATION_ID: i32 = i32::from_be_bytes(*b"sacd");
 /// The schema this binary reads and writes.
 pub const SCHEMA_VERSION: i32 = 3;
 /// The schema the migration reads: Saccade 0.12.0's stamp.
-pub const MIGRATED_FROM: i32 = 2;
 
 #[derive(Debug)]
 pub enum DbError {
@@ -29,10 +28,6 @@ pub enum DbError {
     /// user_version behind this binary: an unmigrated log.
     OlderSchema(i32),
     /// the migration's source is not the schema it reads
-    WrongSchema {
-        found: i32,
-        reads: i32,
-    },
     /// Known kind, unparseable payload: corruption. Loading refuses.
     /// Read opened a path with no database; mutating commands create one.
     Missing(std::path::PathBuf),
@@ -59,15 +54,8 @@ impl std::fmt::Display for DbError {
                 write!(f, "database schema v{v} is newer than this binary; upgrade")
             }
             DbError::OlderSchema(v) => {
-                write!(
-                    f,
-                    "database schema v{v} predates this binary; sac migrate reads schema-2 logs"
-                )
+                write!(f, "database schema v{v} predates this binary")
             }
-            DbError::WrongSchema { found, reads } => write!(
-                f,
-                "log is schema v{found}; this migration reads schema v{reads}"
-            ),
             DbError::Missing(path) => write!(
                 f,
                 "no saccade database at {}\nany mutating command creates one",
@@ -426,186 +414,6 @@ pub fn clone_rows(rows: &[StoredRecord], at: usize, out: &Path) -> Result<usize,
     }
     txn.commit()?;
     Ok(copied)
-}
-
-/// One retired parent link, as the migration's report names it.
-#[derive(Debug, PartialEq)]
-pub struct StrippedLink {
-    pub seq: usize,
-    pub task: usize,
-    pub parent: usize,
-}
-
-/// What one migration did.
-#[derive(Debug)]
-pub struct MigrationReport {
-    /// Records copied, envelopes byte-identical
-    pub records: usize,
-    /// Parent links stripped from task-created payloads
-    pub stripped: Vec<StrippedLink>,
-}
-
-/// Migrate a schema-2 log into a fresh schema-3 tracker, rewriting
-/// nothing but the retired parent members. A rewrite that folds to a
-/// different world than the source's refuses before writing; a
-/// written file that fails its reload is removed.
-pub fn migrate(source: &Path, out: &Path) -> Result<MigrationReport, DbError> {
-    if out.exists() {
-        return Err(DbError::Io(format!(
-            "refusing to overwrite {}; migrate writes a fresh path",
-            out.display()
-        )));
-    }
-    let src = Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    src.busy_timeout(Duration::from_millis(5000))?;
-    let version: i32 = src.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    let app_id: i32 = src.query_row("PRAGMA application_id", [], |r| r.get(0))?;
-    if app_id != APPLICATION_ID {
-        return Err(DbError::NotSaccade);
-    }
-    if version != MIGRATED_FROM {
-        return Err(DbError::WrongSchema {
-            found: version,
-            reads: MIGRATED_FROM,
-        });
-    }
-    let rows = read_rows(&src)?;
-    let (source_records, degraded) = parse_rows(&rows)?;
-    let source_world = match degraded {
-        None => World::replay(source_records).map_err(|err| DbError::Corrupt {
-            seq: err.at.0,
-            kind: "replay".into(),
-            detail: format!("does not fold: {:?}", err.reason),
-        })?,
-        Some(reason) => {
-            return Err(DbError::Corrupt {
-                seq: 0,
-                kind: "source log".into(),
-                detail: reason,
-            });
-        }
-    };
-
-    let mut stripped = Vec::new();
-    let mut tasks = 0usize;
-    let mut rewritten: Vec<StoredRecord> = Vec::with_capacity(rows.len());
-    for mut row in rows {
-        if row.kind == "task_created" {
-            let (payload, parent) = strip_parent(&row.payload, row.seq)?;
-            if let Some(parent) = parent {
-                stripped.push(StrippedLink {
-                    seq: row.seq,
-                    task: tasks,
-                    parent,
-                });
-            }
-            row.payload = payload;
-            tasks += 1;
-        }
-        rewritten.push(row);
-    }
-
-    let (records, degraded) = parse_rows(&rewritten)?;
-    if let Some(reason) = degraded {
-        return Err(DbError::Corrupt {
-            seq: 0,
-            kind: "rewritten log".into(),
-            detail: reason,
-        });
-    }
-    let world = World::replay(records).map_err(|err| DbError::Corrupt {
-        seq: err.at.0,
-        kind: "replay".into(),
-        detail: format!("does not fold: {:?}", err.reason),
-    })?;
-    if world != source_world {
-        return Err(DbError::Io(
-            "the rewritten log folds to a different world; nothing written".into(),
-        ));
-    }
-
-    let mut dst = open(out)?;
-    let txn = dst.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    for row in &rewritten {
-        txn.execute(
-            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                row.seq as i64,
-                row.event_time as i64,
-                row.logged_time as i64,
-                row.actor,
-                row.tier,
-                row.kind,
-                row.payload,
-                row.scope
-            ],
-        )?;
-    }
-    txn.commit()?;
-
-    let check = open_read(out)?;
-    let loadout = load(&check)?;
-    let LoadState::Full(reloaded) = loadout.state else {
-        let _ = std::fs::remove_file(out);
-        return Err(DbError::Io(
-            "the migrated log does not reload; the output was removed".into(),
-        ));
-    };
-    if reloaded != world || loadout.rows != rewritten {
-        let _ = std::fs::remove_file(out);
-        return Err(DbError::Io(
-            "the migrated log reloads differently than it was written; the output was removed"
-                .into(),
-        ));
-    }
-    Ok(MigrationReport {
-        records: rewritten.len(),
-        stripped,
-    })
-}
-
-/// Remove the parent_id member from a task-created payload; returns
-/// the parent it named. Only the log writer's own compact shape is
-/// rewritten — any other serialization refuses, never rewrites the
-/// surviving bytes.
-fn strip_parent(payload: &str, seq: usize) -> Result<(String, Option<usize>), DbError> {
-    let value: serde_json::Value = serde_json::from_str(payload).map_err(|e| DbError::Corrupt {
-        seq,
-        kind: "task_created".into(),
-        detail: e.to_string(),
-    })?;
-    let Some(parent) = value.get("parent_id").cloned() else {
-        return Ok((payload.to_string(), None));
-    };
-    let named = match &parent {
-        serde_json::Value::Null => None,
-        serde_json::Value::Number(n) => Some(n.as_u64().ok_or_else(|| DbError::Corrupt {
-            seq,
-            kind: "task_created".into(),
-            detail: "parent_id is not a task id".into(),
-        })? as usize),
-        _ => {
-            return Err(DbError::Corrupt {
-                seq,
-                kind: "task_created".into(),
-                detail: "parent_id is not a task id".into(),
-            });
-        }
-    };
-    let needle = format!(",\"parent_id\":{parent}");
-    let Some(core) = payload
-        .strip_suffix('}')
-        .and_then(|core| core.strip_suffix(&needle))
-    else {
-        return Err(DbError::Corrupt {
-            seq,
-            kind: "task_created".into(),
-            detail: "not the log writer's compact shape; refusing to rewrite surviving bytes"
-                .into(),
-        });
-    };
-    Ok((format!("{core}}}"), named))
 }
 
 /// Fold-validated all-or-none append of a mixed-context batch; positional ids
@@ -1256,120 +1064,6 @@ mod test {
             )
             .unwrap();
         assert!(matches!(verify(&foreign), Err(DbError::NotSaccade)));
-    }
-
-    /// The migration strips the parent member alone; every other byte rides as written.
-    #[test]
-    fn migrate_strips_parents_and_preserves_the_log() {
-        let dir = std::env::temp_dir().join(format!("sac-migrate-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let source = dir.join("saccade.db");
-        {
-            let conn = open(&source).unwrap();
-            for sql in [
-                "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
-                 VALUES (0, 1, 1, 'jerry', 'human', 'task_created',
-                         '{\"name\":\"implement foo\",\"parent_id\":null}')",
-                "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
-                 VALUES (1, 2, 2, 'jerry', 'human', 'task_created',
-                         '{\"name\":\"migrate floop\",\"parent_id\":0}')",
-                "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
-                 VALUES (2, 3, 3, 'pi', 'agent', 'commented',
-                         '{\"kind\":{\"note\":{\"body\":\"the migration proceeds\"}},\"target\":{\"task\":1}}',
-                         '{\"task\":1,\"incarnation\":null,\"workspace\":null}')",
-            ] {
-                conn.execute(sql, []).unwrap();
-            }
-            conn.pragma_update(None, "user_version", MIGRATED_FROM)
-                .unwrap();
-        }
-
-        let out = dir.join("migrated.db");
-        let report = migrate(&source, &out).unwrap();
-        assert_eq!(report.records, 3);
-        assert_eq!(
-            report.stripped,
-            vec![StrippedLink {
-                seq: 1,
-                task: 1,
-                parent: 0
-            }]
-        );
-
-        let conn = open_read(&out).unwrap();
-        let version: i32 = conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
-        let loadout = load(&conn).unwrap();
-        let LoadState::Full(world) = loadout.state else {
-            panic!("the migrated log folds");
-        };
-        assert_eq!(world.tasks.len(), 2);
-        assert_eq!(loadout.rows[0].payload, "{\"name\":\"implement foo\"}");
-        assert_eq!(loadout.rows[1].payload, "{\"name\":\"migrate floop\"}");
-        assert_eq!(
-            loadout.rows[2].payload,
-            "{\"kind\":{\"note\":{\"body\":\"the migration proceeds\"}},\"target\":{\"task\":1}}"
-        );
-        assert_eq!(
-            loadout.rows[2].scope.as_deref(),
-            Some("{\"task\":1,\"incarnation\":null,\"workspace\":null}")
-        );
-        assert_eq!(
-            loadout
-                .rows
-                .iter()
-                .map(|r| (
-                    r.seq,
-                    r.event_time,
-                    r.logged_time,
-                    r.actor.as_str(),
-                    r.tier.as_str()
-                ))
-                .collect::<Vec<_>>(),
-            vec![
-                (0, 1, 1, "jerry", "human"),
-                (1, 2, 2, "jerry", "human"),
-                (2, 3, 3, "pi", "agent")
-            ]
-        );
-
-        // a taken output path and a non-schema-2 source both refuse
-        assert!(matches!(migrate(&source, &out), Err(DbError::Io(_))));
-        let again = dir.join("again.db");
-        assert!(matches!(
-            migrate(&out, &again),
-            Err(DbError::WrongSchema {
-                found: SCHEMA_VERSION,
-                reads: MIGRATED_FROM
-            })
-        ));
-        assert!(!again.exists(), "a refused migration writes nothing");
-
-        // a payload the log writer never wrote refuses rather than rewrite surviving bytes
-        let pretty = dir.join("pretty.db");
-        {
-            let conn = open(&pretty).unwrap();
-            conn.execute(
-                "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
-                 VALUES (0, 1, 1, 'jerry', 'human', 'task_created',
-                         '{\"name\":\n  \"implement foo\",\n  \"parent_id\": 0\n}')",
-                [],
-            )
-            .unwrap();
-            conn.pragma_update(None, "user_version", MIGRATED_FROM)
-                .unwrap();
-        }
-        let refused = dir.join("pretty-out.db");
-        assert!(matches!(
-            migrate(&pretty, &refused),
-            Err(DbError::Corrupt { seq: 0, .. })
-        ));
-        assert!(!refused.exists(), "a refused migration writes nothing");
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -67,8 +67,7 @@ finding — name it on the thread before proceeding.
   the pre-establishment workspace events degrades (unknown kind): the
   record's workspace lineage was born in no released world, so those
   logs are not migrated. A 0.12.0/schema-2 log refuses as predating
-  this binary: migrate a backup with `sac migrate`
-  (`docs/migration.md`).
+  this binary.
 - `server_undiscovered` — no address hint beside the resolved
   database, so no server of that tracker was ever published; start one
   beside it (`sac serve`) or name a destination explicitly.

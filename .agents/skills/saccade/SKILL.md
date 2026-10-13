@@ -167,7 +167,6 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac search <terms…> [in:t-N by:NAME kind:K] [-C N]` | anonymous | exact terms over titles, comment prose, explanations; kinds: task, note, request, offer, accept, reject, use, artifact, explanation |
 | `sac serve [--bind] [--port]` | — | the sole-writer HTTP server and console |
 | `sac clone --at <seq> --out <path>` | anonymous | copy the log's prefix into a fresh tracker |
-| `sac migrate --in <backup> --out <path>` | anonymous | copy a 0.12.0/schema-2 log backup to this binary's schema, stripping the retired task parents; the input is read-only, the output path must be fresh |
 | `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
 
 Not in this build (later slices, do not assume them): managed
