@@ -91,14 +91,7 @@ mod test {
     fn every_event_kind_round_trips() {
         let prose = || Prose::new("implement foo".into()).unwrap();
         let samples = [
-            Event::TaskCreated {
-                name: prose(),
-                parent_id: None,
-            },
-            Event::TaskCreated {
-                name: prose(),
-                parent_id: Some(TaskId(0)),
-            },
+            Event::TaskCreated { name: prose() },
             Event::TaskClaimed {
                 id: TaskId(0),
                 incarnation: None,

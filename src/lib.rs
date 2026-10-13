@@ -37,8 +37,6 @@ pub enum Reject {
     // Task
     #[error("no such task")]
     InvalidTaskId,
-    #[error("no such parent task")]
-    InvalidParentTaskId,
     #[error("no comment with that id")]
     InvalidCommentId,
     #[error("the referenced comment is not an offer")]
@@ -78,7 +76,6 @@ impl Reject {
     pub fn code(&self) -> &'static str {
         match self {
             Reject::InvalidTaskId => "invalid_task_id",
-            Reject::InvalidParentTaskId => "invalid_parent_task_id",
             Reject::InvalidCommentId => "invalid_comment_id",
             Reject::NotAnOffer => "not_an_offer",
             Reject::NotCurrentOffer => "not_current_offer",
@@ -106,7 +103,6 @@ mod test {
     fn refusal_codes_match_the_wire_names() {
         let every = [
             Reject::InvalidTaskId,
-            Reject::InvalidParentTaskId,
             Reject::InvalidCommentId,
             Reject::NotAnOffer,
             Reject::NotCurrentOffer,

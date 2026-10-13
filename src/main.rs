@@ -67,8 +67,6 @@ enum Cmd {
         #[arg(value_enum)]
         kind: ObjKind,
         name: String,
-        #[arg(long)]
-        parent: Option<String>,
     },
     /// Take whole-task responsibility; a transfer, never a state change
     Claim { id: String },
@@ -162,7 +160,6 @@ enum Cmd {
         ///   by:NAME    author, matched within names (by:pi finds pi/t-90-1)
         ///   kind:K     task, note, request, offer, accept, reject, use,
         ///              explanation, artifact
-        ///   under:t-N  the task's thread and its descendants' threads
         ///
         /// An id term — 'c-907' or 't-49' — is a reference search: every
         /// record citing it or addressing it
@@ -222,6 +219,17 @@ enum Cmd {
         /// The storage seq to copy through, inclusive
         #[arg(long)]
         at: u64,
+        /// The fresh tracker to write; must not exist
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Migrate a Saccade 0.12.0 log backup (schema 2) to this binary's
+    /// schema, stripping the retired task parent links; the input is
+    /// read-only, the output path must be fresh
+    Migrate {
+        /// The schema-2 backup to read; never written
+        #[arg(long = "in")]
+        source: PathBuf,
         /// The fresh tracker to write; must not exist
         #[arg(long)]
         out: PathBuf,
@@ -385,10 +393,8 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::Create {
             kind: ObjKind::Task,
             name,
-            parent,
         } => Command::CreateTask {
             name: Prose::new(name.clone())?,
-            parent_id: parent.as_deref().map(parse_task_id).transpose()?,
         },
         Cmd::Claim { id } => {
             let id = parse_task_id(id)?;
@@ -547,6 +553,38 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                     "cloned {cloned} records through seq {at} to {}",
                     out.display()
                 )
+            });
+        }
+        Cmd::Migrate { source, out } => {
+            let report = db::migrate(source, out).map_err(Fail::Db)?;
+            return Ok(if cli.json {
+                serde_json::json!({
+                    "migrated": report.records,
+                    "schema": {"from": db::MIGRATED_FROM, "to": db::SCHEMA_VERSION},
+                    "stripped": report.stripped.iter().map(|l| serde_json::json!({
+                        "seq": l.seq,
+                        "task": l.task,
+                        "parent": l.parent,
+                    })).collect::<Vec<_>>(),
+                    "out": out.display().to_string(),
+                })
+                .to_string()
+            } else {
+                let mut lines = vec![format!(
+                    "migrated {} records to {} (schema {} → {}); {} parent links stripped",
+                    report.records,
+                    out.display(),
+                    db::MIGRATED_FROM,
+                    db::SCHEMA_VERSION,
+                    report.stripped.len()
+                )];
+                lines.extend(report.stripped.iter().map(|l| {
+                    format!(
+                        "  c-{} birth of t-{}, parented t-{}",
+                        l.seq, l.task, l.parent
+                    )
+                }));
+                lines.join("\n")
             });
         }
         Cmd::Skill { .. } => unreachable!("the skill door dispatches before the db doors"),
@@ -1792,7 +1830,6 @@ fn render_tasks(cli: &Cli, world: &World, cursor: Option<usize>) -> String {
                 serde_json::json!({
                     "id": v.id,
                     "state": v.state,
-                    "parent": v.parent,
                     "name": v.name,
                     "owner": v.owner,
                     "offer": v.offer,
@@ -1811,10 +1848,9 @@ fn render_tasks(cli: &Cli, world: &World, cursor: Option<usize>) -> String {
         .iter()
         .map(|v| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}",
                 v.id,
                 v.state,
-                v.parent.clone().unwrap_or_else(|| "-".into()),
                 v.name,
                 v.owner.clone().unwrap_or_else(|| "-".into()),
                 if v.n_comments > 0 { "#" } else { "-" }
@@ -1842,9 +1878,6 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
         &format!("{}  {}  ", view.id, view.state),
         "  ",
     )];
-    if let Some(parent) = &view.parent {
-        out.push(format!("parent  {parent}"));
-    }
     if let Some(owner) = &view.owner {
         out.push(format!("owner  {owner}"));
     }
@@ -2008,12 +2041,8 @@ fn render_id(
             }
             if let Some(task) = world.task_born_at(id.0) {
                 let ctx = &world.tasks[task.0];
-                let parent = task_view(world, task)
-                    .and_then(|v| v.parent)
-                    .map(|p| format!(" (parent {p})"))
-                    .unwrap_or_default();
                 return Ok(format!(
-                    "c-{}  task  {}\nbirth of t-{}{parent}",
+                    "c-{}  task  {}\nbirth of t-{}",
                     ctx.birth.0,
                     ctx.birth_actor.as_str(),
                     task.0
@@ -2064,7 +2093,6 @@ fn show_value(
             Ok(serde_json::json!({
                 "id": view.id,
                 "state": view.state,
-                "parent": view.parent,
                 "name": view.name,
                 "owner": view.owner,
                 "offer": view.offer,
@@ -2081,13 +2109,11 @@ fn show_value(
             }
             if let Some(task) = world.task_born_at(id.0) {
                 let ctx = &world.tasks[task.0];
-                let parent = task_view(world, task).and_then(|v| v.parent);
                 return Ok(serde_json::json!({
                     "kind": "task",
                     "seq": id.0.0,
                     "actor": ctx.birth_actor.as_str(),
                     "task": format!("t-{}", task.0),
-                    "parent": parent,
                 }));
             }
             // the raw-id door's machine face: the log row's own grammar

@@ -10,7 +10,7 @@ finding — name it on the thread before proceeding.
 - `identity_fallback` — a write with no terminal on stdin, stdout, or
   stderr and no `SACCADE_ACTOR` refuses before any write lands (`--actor`
   rides the terminal arm); export `SACCADE_ACTOR=<name>`.
-- `invalid_task_id` / `invalid_parent_task_id` — no such task; ids are exact
+- `invalid_task_id` — no such task; ids are exact
   `t-N` tokens, not searches.
 - `invalid_comment_id` — the `c-N` target names no comment; a task birth
   is addressed `t-N`.
@@ -62,7 +62,9 @@ finding — name it on the thread before proceeding.
   into nonsense — this build starts a fresh record. A 0.10 log holding
   the pre-establishment workspace events degrades (unknown kind): the
   record's workspace lineage was born in no released world, so those
-  logs are not migrated.
+  logs are not migrated. A 0.12.0/schema-2 log refuses as predating
+  this binary: migrate a backup with `sac migrate`
+  (`docs/migration.md`).
 
 When the tracker misbehaves or a refusal needs reproducing, read
 `diagnosing.md` beside this file: the attempts log reconstructs the

@@ -110,7 +110,6 @@ fn chain_contains(world: &World, born: Target, watched: CommentId) -> bool {
 pub struct TaskView {
     pub id: String,
     pub state: &'static str,
-    pub parent: Option<String>,
     pub name: String,
     pub offer: Option<usize>,
     pub owner: Option<String>,
@@ -133,7 +132,6 @@ impl TaskView {
         TaskView {
             id: format!("t-{}", id.0),
             state: state_str(&ctx.task.state),
-            parent: ctx.task.parent_id.map(|p| format!("t-{}", p.0)),
             name: ctx.task.name.as_str().to_string(),
             offer: ctx.current_offer.map(|c| c.0.0),
             owner: current_owner(ctx).map(|o| owner_str(&o.owner)),
@@ -324,7 +322,6 @@ pub fn comment_line(world: &World, id: CommentId) -> Option<CommentLine> {
 pub struct ShowView {
     pub id: String,
     pub state: &'static str,
-    pub parent: Option<String>,
     pub name: String,
     /// The cancellation's recorded explanation, on a cancelled task
     pub explanation: Option<String>,
@@ -339,7 +336,6 @@ impl ShowView {
         ShowView {
             id: format!("t-{}", id.0),
             state: state_str(&ctx.task.state),
-            parent: ctx.task.parent_id.map(|p| format!("t-{}", p.0)),
             name: ctx.task.name.as_str().to_string(),
             explanation: match &ctx.task.state {
                 TaskState::Cancelled(why) => Some(why.as_str().to_string()),
@@ -487,41 +483,23 @@ fn root_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> Co
     current
 }
 
-/// One row of the forest: a live task and its depth in the parent tree.
-pub struct ForestRow {
-    pub task: TaskView,
-    pub depth: usize,
-}
-
-/// The live tree as navigation: open and offered tasks, parents
-/// before children. An offered task still takes findings and its
-/// accept.
-pub fn forest(world: &World) -> Vec<ForestRow> {
+/// The board: live tasks in identity order, flat. An offered task
+/// still takes findings and its accept.
+pub fn board(world: &World) -> Vec<TaskView> {
     world
         .tasks
         .iter()
         .enumerate()
         .filter(|(_, ctx)| matches!(ctx.task.state, TaskState::Open | TaskState::Offered))
-        .map(|(i, ctx)| {
-            let mut depth = 0;
-            let mut up = ctx.task.parent_id;
-            while let Some(parent) = up {
-                depth += 1;
-                up = world.tasks[parent.0].task.parent_id;
-            }
-            ForestRow {
-                task: TaskView::of(TaskId(i), ctx),
-                depth,
-            }
-        })
+        .map(|(i, ctx)| TaskView::of(TaskId(i), ctx))
         .collect()
 }
 
 /// The rail's archive: concluded and cancelled tasks, newest first —
 /// the sort key is last touch, which never sits earlier than the close
-/// itself. Depth is flattened: the archive is a list, not a forest.
-pub fn closed_tasks(world: &World) -> Vec<ForestRow> {
-    let mut rows: Vec<(u64, usize, ForestRow)> = world
+/// itself.
+pub fn closed_tasks(world: &World) -> Vec<TaskView> {
+    let mut rows: Vec<(u64, usize, TaskView)> = world
         .tasks
         .iter()
         .enumerate()
@@ -531,16 +509,7 @@ pub fn closed_tasks(world: &World) -> Vec<ForestRow> {
                 TaskState::Concluded | TaskState::Cancelled(_)
             )
         })
-        .map(|(i, ctx)| {
-            (
-                ctx.last_record_at,
-                i,
-                ForestRow {
-                    task: TaskView::of(TaskId(i), ctx),
-                    depth: 0,
-                },
-            )
-        })
+        .map(|(i, ctx)| (ctx.last_record_at, i, TaskView::of(TaskId(i), ctx)))
         .collect();
     rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
     rows.into_iter().map(|(_, _, row)| row).collect()
@@ -732,8 +701,6 @@ pub enum Facet {
     By(String),
     /// Only records of this kind; the vocabulary is SEARCH_KINDS
     Kind(&'static str),
-    /// Only records on this thread's task or any of its descendants
-    Under(TaskId),
 }
 
 /// The kinds a searched record can be — kind:'s whole vocabulary.
@@ -756,7 +723,7 @@ pub enum Term {
     Plain(String),
     /// c-N: prose citations of the comment, and replies addressing it
     Comment(RecordId),
-    /// t-N: prose namings of the task, births under it, comments
+    /// t-N: prose namings of the task, comments
     /// addressing it
     Task(TaskId),
 }
@@ -834,8 +801,6 @@ impl SearchQuery {
         for token in tokens {
             if let Some(rest) = token.strip_prefix("in:") {
                 query.facets.push(Facet::In(task_ref(rest, "in:")?));
-            } else if let Some(rest) = token.strip_prefix("under:") {
-                query.facets.push(Facet::Under(task_ref(rest, "under:")?));
             } else if let Some(rest) = token.strip_prefix("by:") {
                 if rest.is_empty() {
                     return Err(SearchFail::Usage(
@@ -871,7 +836,7 @@ impl SearchQuery {
         }
         if query.terms.is_empty() && query.facets.is_empty() {
             return Err(SearchFail::Usage(
-                "give at least one term or a facet (in:, by:, kind:, under:); the moves:\n  sac search telemetry      find where it was decided\n  sac search c-907         follow a reference\n  sac search floop in:t-0   narrow with facets\n  sac search c-907 -C 3    read the neighborhood".into(),
+                "give at least one term or a facet (in:, by:, kind:); the moves:\n  sac search telemetry      find where it was decided\n  sac search c-907         follow a reference\n  sac search floop in:t-0   narrow with facets\n  sac search c-907 -C 3    read the neighborhood".into(),
             ));
         }
         Ok(query)
@@ -965,7 +930,7 @@ pub struct SearchGroup {
 pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, SearchFail> {
     for facet in &query.facets {
         let asked = match facet {
-            Facet::In(id) | Facet::Under(id) => Some(*id),
+            Facet::In(id) => Some(*id),
             _ => None,
         };
         if let Some(id) = asked
@@ -981,13 +946,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
     let mut matches: Vec<(usize, SearchRecord)> = Vec::new();
     for (i, ctx) in world.tasks.iter().enumerate() {
         let title = ctx.task.name.as_str();
-        let refs = ctx
-            .task
-            .parent_id
-            .map(Ref::Task)
-            .into_iter()
-            .collect::<Vec<_>>();
-        if terms_match(query, title, &refs) {
+        if terms_match(query, title, &[]) {
             matches.push((
                 i,
                 SearchRecord {
@@ -1076,7 +1035,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
         let total = records.len();
         let records: Vec<SearchRecord> = records
             .into_iter()
-            .filter(|r| facets_pass(world, query, thread, r))
+            .filter(|r| facets_pass(query, thread, r))
             .collect();
         if facet_only && records.is_empty() {
             continue;
@@ -1096,27 +1055,15 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
     Ok(groups.into_iter().map(|(_, g)| g).collect())
 }
 
-fn facets_pass(world: &World, query: &SearchQuery, thread: usize, record: &SearchRecord) -> bool {
+fn facets_pass(query: &SearchQuery, thread: usize, record: &SearchRecord) -> bool {
     query.facets.iter().all(|facet| match facet {
         Facet::In(id) => thread == id.0,
-        Facet::Under(id) => under(world, thread, *id),
         Facet::By(name) => record
             .actor
             .as_deref()
             .is_some_and(|a| a.to_lowercase().contains(name)),
         Facet::Kind(kind) => record.kind == *kind,
     })
-}
-
-fn under(world: &World, thread: usize, root: TaskId) -> bool {
-    let mut up = Some(TaskId(thread));
-    while let Some(id) = up {
-        if id == root {
-            return true;
-        }
-        up = world.tasks[id.0].task.parent_id;
-    }
-    false
 }
 
 #[cfg(test)]
@@ -1136,7 +1083,6 @@ mod test {
             task: Task {
                 state,
                 name: Prose::new("implement foo".into()).unwrap(),
-                parent_id: None,
             },
             last_updated: RecordId(0),
             birth: RecordId(0),
@@ -1193,10 +1139,10 @@ mod test {
         }
     }
 
-    /// The forest is a walk: targets are stored, depth and membership
-    /// are derived, and each task owns exactly its own thread.
+    /// The board is flat: rows in identity order, and each task owns
+    /// exactly its own thread.
     #[test]
-    fn the_forest_is_derived_from_addresses() {
+    fn the_board_is_flat_in_identity_order() {
         let human = human();
         let agent = agent();
         let record = |id: usize, ctx: &Context, target: Target, body: &str| Record {
@@ -1216,7 +1162,6 @@ mod test {
             context: ctx.clone(),
             event: Event::TaskCreated {
                 name: Prose::new(name.into()).unwrap(),
-                parent_id: None,
             },
         };
         let world = World::replay(vec![
@@ -1276,11 +1221,11 @@ mod test {
         }
         assert_eq!(thread_view(&world, TaskId(1)).unwrap().items.len(), 1);
 
-        // the forest derives depth from the parent chain
-        let rows = forest(&world);
+        // the board lists live tasks flat, in identity order
+        let rows = board(&world);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].depth, 0);
-        assert_eq!(rows[0].task.id, "t-0");
+        assert_eq!(rows[0].id, "t-0");
+        assert_eq!(rows[1].id, "t-1");
     }
 
     #[test]
@@ -1293,7 +1238,6 @@ mod test {
                 context: human.clone(),
                 event: Event::TaskCreated {
                     name: Prose::new("real work".into()).unwrap(),
-                    parent_id: None,
                 },
             },
             Record {
@@ -1395,7 +1339,6 @@ mod test {
                 Tier::Human,
                 Event::TaskCreated {
                     name: Prose::new(name.into()).unwrap(),
-                    parent_id: None,
                 },
             )
         }
@@ -1538,12 +1481,12 @@ mod test {
 
             let rows = closed_tasks(&world);
             assert_eq!(
-                rows.iter().map(|r| r.task.id.as_str()).collect::<Vec<_>>(),
+                rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
                 vec!["t-1", "t-0"],
                 "newest close first"
             );
-            // the forest holds the live pair
-            let live: Vec<_> = forest(&world).into_iter().map(|r| r.task.id).collect();
+            // the board holds the live pair
+            let live: Vec<_> = board(&world).into_iter().map(|r| r.id).collect();
             assert_eq!(live, vec!["t-2".to_string(), "t-3".to_string()]);
         }
 
@@ -1793,14 +1736,13 @@ mod test {
             }
         }
 
-        fn task(seq: usize, at: u64, ctx: &Context, name: &str, parent: Option<TaskId>) -> Record {
+        fn task(seq: usize, at: u64, ctx: &Context, name: &str) -> Record {
             record(
                 seq,
                 at,
                 ctx,
                 Event::TaskCreated {
                     name: Prose::new(name.into()).unwrap(),
-                    parent_id: parent,
                 },
             )
         }
@@ -1832,8 +1774,8 @@ mod test {
             let bot = ctx(Tier::Agent, "saccade bot");
             let pi = ctx(Tier::Agent, "pi");
             World::replay(vec![
-                task(0, 0, &jerry, "implement foo", None),
-                task(1, 10, &bot, "migrate floop", Some(TaskId(0))),
+                task(0, 0, &jerry, "implement foo"),
+                task(1, 10, &bot, "migrate floop"),
                 note(
                     2,
                     20,
@@ -1848,7 +1790,7 @@ mod test {
                     Target::Comment(CommentId(RecordId(2))),
                     "the fluke is real; floop proceeds",
                 ),
-                task(4, 40, &jerry, "t-490 the id boundary guard", None),
+                task(4, 40, &jerry, "t-490 the id boundary guard"),
                 note(
                     5,
                     50,
@@ -1919,7 +1861,7 @@ mod test {
         fn artifact_names_are_searchable_and_kinded() {
             let jerry = ctx(Tier::Human, "jerry");
             let world = World::replay(vec![
-                task(0, 0, &jerry, "hold the sweep", None),
+                task(0, 0, &jerry, "hold the sweep"),
                 record(
                     1,
                     1,
@@ -1967,13 +1909,10 @@ mod test {
                     (1, vec!["c-8".into()])
                 ]
             );
-            // 't-0': c-1 names it as parent, c-5 in prose, c-2 by address
+            // 't-0': c-5 names it in prose, c-2 by address
             assert_eq!(
                 pointers(&search(&world, &q(&["t-0"])).unwrap()),
-                vec![
-                    (1, vec!["c-1".into(), "c-5".into()]),
-                    (0, vec!["c-2".into()])
-                ]
+                vec![(0, vec!["c-2".into()]), (1, vec!["c-5".into()])]
             );
         }
 
@@ -1981,7 +1920,7 @@ mod test {
         fn a_revised_body_is_what_search_reads() {
             let jerry = ctx(Tier::Human, "jerry");
             let world = World::replay(vec![
-                task(0, 0, &jerry, "hold the verdict", None),
+                task(0, 0, &jerry, "hold the verdict"),
                 note(
                     2,
                     2,
@@ -2013,7 +1952,7 @@ mod test {
             let jerry = ctx(Tier::Human, "jerry");
             let pi = ctx(Tier::Agent, "pi");
             let world = World::replay(vec![
-                task(0, 0, &jerry, "hold the verdict", None),
+                task(0, 0, &jerry, "hold the verdict"),
                 note(
                     2,
                     2,
@@ -2110,7 +2049,7 @@ mod test {
         fn plain_terms_read_titles_bodies_and_explanations() {
             let jerry = ctx(Tier::Human, "jerry");
             let world = World::replay(vec![
-                task(0, 0, &jerry, "implement foo", None),
+                task(0, 0, &jerry, "implement foo"),
                 record(
                     1,
                     1,
@@ -2149,7 +2088,6 @@ mod test {
                 seq,
                 Event::TaskCreated {
                     name: Prose::new(name.into()).unwrap(),
-                    parent_id: None,
                 },
             )
         }
@@ -2326,7 +2264,6 @@ mod test {
                     &jerry,
                     Event::TaskCreated {
                         name: Prose::new("implement foo".into()).unwrap(),
-                        parent_id: None,
                     },
                 ),
                 record(
@@ -2334,7 +2271,6 @@ mod test {
                     &jerry,
                     Event::TaskCreated {
                         name: Prose::new("migrate floop".into()).unwrap(),
-                        parent_id: None,
                     },
                 ),
                 record(

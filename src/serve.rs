@@ -15,7 +15,7 @@ use crate::api::AppState;
 use crate::db::{self, ExecuteFail};
 use crate::objects::comment::{CommentKind, Target};
 use crate::objects::task::TaskId;
-use crate::views::{closed_tasks, forest, next_panel, ribbon_marks, show_view, thread_view};
+use crate::views::{board, closed_tasks, next_panel, ribbon_marks, show_view, thread_view};
 use crate::web;
 use crate::{ActorName, Command, Context, Prose, RecordId, Reject, Tier};
 
@@ -179,7 +179,7 @@ fn console(req: &Req, app: &AppState, focus_id: Option<usize>) -> Response {
         None => web::ArtifactStore::default(),
     };
     let c = web::Console {
-        forest: forest(&snapshot.world),
+        board: board(&snapshot.world),
         closed: closed_tasks(&snapshot.world),
         next: next_panel(&snapshot.world, now),
         marks: ribbon_marks(&snapshot.world, now),
@@ -454,7 +454,7 @@ fn console_reject(
     };
     let now = db::now_epoch();
     let c = web::Console {
-        forest: forest(&snapshot.world),
+        board: board(&snapshot.world),
         closed: closed_tasks(&snapshot.world),
         next: next_panel(&snapshot.world, now),
         marks: ribbon_marks(&snapshot.world, now),
@@ -590,7 +590,6 @@ fn reject_text(r: &Reject) -> String {
              own conclusion"
                 .into()
         }
-        InvalidParentTaskId => "no such parent task".into(),
         other => format!("{other:?}"),
     }
 }

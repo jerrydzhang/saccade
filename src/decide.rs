@@ -40,7 +40,7 @@ pub(crate) fn enforce_tier(context: &Context, events: &[Event]) -> Result<(), Re
 /// Stateless command syntax: a command is its events, nothing else
 pub fn decide(command: Command) -> Vec<Event> {
     match command {
-        Command::CreateTask { name, parent_id } => vec![Event::TaskCreated { name, parent_id }],
+        Command::CreateTask { name } => vec![Event::TaskCreated { name }],
         Command::ClaimTask { id, incarnation } => vec![Event::TaskClaimed { id, incarnation }],
         Command::CancelTask { id, explanation } => vec![Event::TaskCancelled { id, explanation }],
         Command::ReopenTask { id, explanation } => vec![Event::TaskReopened { id, explanation }],
@@ -104,13 +104,7 @@ mod test {
         // Expected cells stated independently of required_tier.
         use Authority::*;
         let events: [(Event, Authority); 15] = [
-            (
-                Event::TaskCreated {
-                    name: prose(),
-                    parent_id: None,
-                },
-                AnyTier,
-            ),
+            (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
                     id: TaskId(0),
@@ -248,10 +242,7 @@ mod test {
     #[test]
     fn every_command_expands_to_its_single_event() {
         let commands = [
-            Command::CreateTask {
-                name: prose(),
-                parent_id: None,
-            },
+            Command::CreateTask { name: prose() },
             Command::ClaimTask {
                 id: TaskId(0),
                 incarnation: Some(IncarnationId(RecordId(9))),
