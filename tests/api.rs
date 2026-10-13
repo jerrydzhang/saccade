@@ -2229,7 +2229,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     assert_eq!(seqs, vec![8]);
     assert_eq!(cursor, 8);
 
-    // a revision of the offer is not a new birth: the wait stays down, and an interruption ends it landing nothing
+    // an offer revision is not a new birth; the interrupted wait lands nothing
     let mut child = spawn_waiter(&["t-0", "--after", "8", "--until", "offer"]);
     sac_quiet(&["revise", "c-8", "the account, restated"]); // seq 9
     std::thread::sleep(std::time::Duration::from_millis(800));

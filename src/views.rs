@@ -49,8 +49,6 @@ pub fn request_facts(world: &World, position: RecordId) -> Option<RequestFacts> 
     })
 }
 
-/// What a wait wakes on: the consumer's explicit choice, never
-/// defaulted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WaitUntil {
     Activity,
@@ -59,9 +57,6 @@ pub enum WaitUntil {
 
 /// A use never matches a comment wait: matching follows targets, and
 /// a use targets its consuming task, never the offer it names.
-/// An offer wait matches Offer births alone — every one qualifies,
-/// standing or long decided; later events never filter an earlier
-/// birth, and a revision is not a birth.
 pub fn wait_matches(
     world: &World,
     at: RecordId,
@@ -2194,7 +2189,7 @@ mod test {
             )
         }
 
-        // t-0 holds the waited offer, its sibling note, a two-link chain, revisions, a withdrawal, the accept, a claim, an artifact; t-1 holds a rejected offer superseded by a concluded one
+        // t-0 holds the waited offer, its sibling note, a two-link chain, revisions, a withdrawal, the accept, a claim, an artifact; t-1 a rejected offer and its concluded successor
         fn story() -> (World, Vec<(usize, Event)>) {
             let events = vec![
                 task(0, "implement foo"),
@@ -2361,7 +2356,7 @@ mod test {
             );
         }
 
-        // the offer wait matches every offer birth — the rejected one included — never its revision, decision, or any other kind
+        // the offer wait matches every offer birth and nothing else
         #[test]
         fn the_offer_wait_matches_every_offer_birth_and_nothing_else() {
             let (world, events) = story();
