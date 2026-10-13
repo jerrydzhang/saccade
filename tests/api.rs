@@ -771,6 +771,114 @@ async fn the_branch_scheme_and_base_are_effects_not_claims() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn clean_tears_the_workspace_down_and_keeps_the_lineage() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("clean-door");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+    post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "retire the floop"}}),
+        ),
+    );
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/start",
+        &json!({
+            "context": {"actor": "jerry", "tier": "human"},
+            "task": 0,
+            "request": "retire the floop, then the workspace"
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let birth = json_of(&body)["incarnation"].as_u64().unwrap() as usize;
+    let worktree = db.parent().unwrap().join("worktrees").join("t-0");
+    assert!(worktree.join("readme").is_file());
+
+    let sac = |args: &[&str]| {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.arg("--db")
+            .arg(&db)
+            .arg("--repo")
+            .arg(&root)
+            .arg("--json");
+        for var in [
+            "SACCADE_DB",
+            "SACCADE_REPO",
+            "SACCADE_ACTOR",
+            "SACCADE_TASK",
+            "SACCADE_INCARNATION",
+            "SACCADE_WORKSPACE",
+            "SACCADE_SERVER",
+            "SACCADE_PI",
+        ] {
+            cmd.env_remove(var);
+        }
+        let out = cmd.args(args).output().expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // untracked work refuses the teardown, nothing destructive runs
+    std::fs::write(worktree.join("stray.txt"), "untracked\n").unwrap();
+    let (ok, out, err) = sac(&["clean", "t-0"]);
+    assert!(!ok, "{out}{err}");
+    let refused: Value = serde_json::from_str(&err).expect("the refusal is typed json");
+    assert_eq!(refused["error"], "workspace_dirty");
+    assert!(worktree.join("readme").is_file());
+
+    // staged work refuses the same way
+    sh(&worktree, &["add", "stray.txt"]);
+    let (ok, _, err) = sac(&["clean", "t-0"]);
+    assert!(!ok);
+    assert!(err.contains("workspace_dirty"), "{err}");
+    assert!(worktree.join("stray.txt").is_file());
+
+    // committed, the teardown runs: checkout gone, branch and unmerged tip stand
+    std::fs::remove_file(worktree.join("stray.txt")).unwrap();
+    sh(&worktree, &["reset", "-q"]);
+    std::fs::write(worktree.join("readme"), "the project, retired\n").unwrap();
+    sh(&worktree, &["add", "readme"]);
+    sh(
+        &worktree,
+        &["commit", "-qm", "retirement work, never merged"],
+    );
+    let tip = sh(&worktree, &["rev-parse", "HEAD"]);
+    let (ok, out, err) = sac(&["clean", "t-0"]);
+    assert!(ok, "{err}");
+    let reply: Value = serde_json::from_str(&out).expect("the report is json");
+    assert_eq!(reply["checkout"], "removed");
+    assert_eq!(reply["branch"], "saccade/t-0");
+    assert_eq!(reply["tip"], tip);
+    assert!(!worktree.exists());
+    assert_eq!(sh(&root, &["rev-parse", "refs/heads/saccade/t-0"]), tip);
+
+    // a second clean succeeds on absence
+    let (ok, out, err) = sac(&["clean", "t-0"]);
+    assert!(ok, "{err}");
+    let reply: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(reply["checkout"], "absent");
+    assert_eq!(reply["tip"], tip);
+
+    // the retained association reopens the checkout on the same identity
+    let (status, body) = post_workspace(&base_url, "/api/v1/workspace/open", &json!({"task": 0}));
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["recreated"], true);
+    assert_eq!(reply["incarnation"].as_u64().unwrap(), birth as u64);
+    assert_eq!(reply["workspace"]["path"], worktree.display().to_string());
+    assert_eq!(sh(&worktree, &["rev-parse", "HEAD"]), tip);
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
 // ---- the console: compose through the real HTTP surface ----
 
 use saccade::CommentKind;

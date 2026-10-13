@@ -201,6 +201,12 @@ enum Cmd {
     /// environment exists (a missing checkout is recreated from its
     /// branch tip), launch no harness, land no records
     Open { id: String },
+    /// Tear a task's workspace down: its host terminals and running
+    /// work close, the checkout is removed, the branch (unmerged
+    /// commits included), records, checkpoints, and artifacts stand.
+    /// Staged, unstaged, or untracked work refuses first; nothing is
+    /// recorded
+    Clean { id: String },
     /// Run a command inside a task's workspace: resolve the recorded
     /// workspace/incarnation, enter the checkout, inject the identity
     /// and routing environment, and exec the argv as given
@@ -350,6 +356,9 @@ enum Fail {
         actor: String,
         tier: &'static str,
     },
+    /// A workspace effect refused or failed client-side; its codes
+    /// match the wire's.
+    Workspace(saccade::workspace::WorkspaceFail),
     Usage(String),
     Client(client::ClientFail),
 }
@@ -357,6 +366,12 @@ enum Fail {
 impl From<Reject> for Fail {
     fn from(r: Reject) -> Self {
         Fail::Reject(r)
+    }
+}
+
+impl From<saccade::workspace::WorkspaceFail> for Fail {
+    fn from(f: saccade::workspace::WorkspaceFail) -> Self {
+        Fail::Workspace(f)
     }
 }
 
@@ -378,6 +393,7 @@ impl Fail {
             Fail::Reject(r) => r.code(),
             Fail::Taught { code, .. } => code,
             Fail::IdentityFallback { .. } => "identity_fallback",
+            Fail::Workspace(f) => f.code(),
             Fail::Usage(_) => "usage",
             Fail::Client(c) => c.code(),
         }
@@ -400,6 +416,7 @@ impl std::fmt::Display for Fail {
                  attached (--actor rides the terminal arm); export SACCADE_ACTOR=<name>"
             ),
             Fail::Usage(m) => write!(f, "{m}"),
+            Fail::Workspace(w) => write!(f, "{}", w.detail()),
             Fail::Client(c) => write!(f, "{c}"),
         }
     }
@@ -540,6 +557,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             base,
         } => return start_door(cli, &db_path, id, body.clone(), *stdin, base.clone()),
         Cmd::Open { id } => return open_door(cli, &db_path, id),
+        Cmd::Clean { id } => return clean_door(cli, &db_path, id),
         Cmd::Exec { id, argv } => return exec_door(cli, &db_path, id, argv),
         Cmd::Identity => return identity_door(cli),
         Cmd::Serve { bind, port } => {
@@ -1041,6 +1059,127 @@ fn open_door(cli: &Cli, db_path: &std::path::Path, id: &str) -> Result<String, F
     render_workspace_reply(cli, &reply, &host)
 }
 
+/// The clean door: the recorded workspace's teardown. The dirty gate
+/// stands before every destructive host or git action; the host's
+/// terminals and running work close, git removes the checkout, the
+/// branch and every record stand; absence succeeds. Nothing is
+/// recorded, so no server, identity, or offline mode is involved.
+fn clean_door(cli: &Cli, db_path: &std::path::Path, id: &str) -> Result<String, Fail> {
+    let task = parse_task_id(id)?;
+    let repo_root = resolve_repo(cli)?;
+    let conn = db::open_read(db_path).map_err(Fail::Db)?;
+    let loadout = db::load(&conn).map_err(Fail::Db)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "clean needs the world; the log will not fold".into(),
+        ));
+    };
+    let ctx = world.tasks.get(task.0).ok_or(Reject::InvalidTaskId)?;
+    let recorded = ctx.workspace.as_ref().ok_or(Reject::WorkspaceMissing)?;
+    let facts = saccade::workspace::recorded(task, recorded);
+    let path = facts.worktree.as_path().display().to_string();
+    saccade::workspace::refuse_dirty(&facts)?;
+    let host = close_workspace_terminals(&path).map_err(Fail::Usage)?;
+    let removed = saccade::workspace::remove_checkout(&repo_root, &facts).map_err(|e| match e {
+        saccade::workspace::WorkspaceFail::Git(detail) => {
+            Fail::Workspace(saccade::workspace::WorkspaceFail::Git(format!(
+                "{detail}; the checkout stands at {path}"
+            )))
+        }
+        other => Fail::Workspace(other),
+    })?;
+    let registration = deregister_workspace(&path).map_err(|e| {
+        Fail::Usage(format!(
+            "the host registration could not be removed: {e}; the checkout {path} is removed, \
+             branch {} retained",
+            facts.branch.as_str()
+        ))
+    })?;
+    let tip = saccade::workspace::branch_tip(&repo_root, &facts.branch)?;
+    render_clean_report(
+        cli,
+        task,
+        &facts,
+        tip.as_ref(),
+        &host,
+        removed,
+        registration,
+    )
+}
+
+/// The clean report: what closed, what was removed, what stands.
+fn render_clean_report(
+    cli: &Cli,
+    task: TaskId,
+    facts: &saccade::workspace::Established,
+    tip: Option<&saccade::GitCommit>,
+    host: &HostClosed,
+    removed: bool,
+    registration: HostDeregister,
+) -> Result<String, Fail> {
+    let path = facts.worktree.as_path().display().to_string();
+    let checkout = if removed { "removed" } else { "absent" };
+    let registration = match registration {
+        HostDeregister::Removed => "removed",
+        HostDeregister::Nothing => "absent",
+    };
+    if cli.json {
+        let host_json = match host {
+            HostClosed::Terminals { tabs, stopped } => serde_json::json!({
+                "terminals": {"closed": tabs, "stopped": stopped},
+                "registration": registration,
+            }),
+            HostClosed::Nothing => serde_json::json!({
+                "terminals": null,
+                "registration": registration,
+            }),
+        };
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "task": format!("t-{}", task.0),
+            "path": path,
+            "branch": facts.branch.as_str(),
+            "tip": tip.map(|t| t.as_str()),
+            "checkout": checkout,
+            "host": host_json,
+        }))
+        .expect("the clean report is plain data"));
+    }
+    let mut out = vec![format!(
+        "t-{} workspace clean — checkout {checkout}",
+        task.0
+    )];
+    out.push(match tip {
+        Some(tip) => format!(
+            "  branch {} stands at {}",
+            facts.branch.as_str(),
+            tip.as_str()
+        ),
+        None => format!("  branch {} is gone", facts.branch.as_str()),
+    });
+    out.push(format!("  path {path}"));
+    out.push(match host {
+        HostClosed::Terminals { tabs, stopped } => {
+            let word = |n: u64, s: &str| {
+                if n == 1 {
+                    s.to_string()
+                } else {
+                    format!("{s}s")
+                }
+            };
+            format!(
+                "  host · {} {} closed, {} {} stopped",
+                tabs,
+                word(*tabs, "terminal tab"),
+                stopped,
+                word(*stopped, "process")
+            )
+        }
+        HostClosed::Nothing => "  host · nothing to close".to_string(),
+    });
+    out.push(format!("  host registration {registration}"));
+    Ok(out.join("\n"))
+}
+
 /// The exec door: enter the checkout, inject identity and routing over
 /// any stale inherited scope, and exec the argv with its boundaries
 /// intact. The actor is always supplied — the caller's declared
@@ -1319,6 +1458,100 @@ fn terminal_handle(stdout: &str) -> Result<String, String> {
                 .map(str::to_string)
         })
         .ok_or_else(|| "the terminal was created but the host named no handle".into())
+}
+
+/// One workspace-addressed host call: its result, a workspace the
+/// host holds nothing for (no host answered, or the selector names
+/// none), or the host's error.
+enum OrcaCall {
+    Result(serde_json::Value),
+    Nothing,
+    Failed(String),
+}
+
+fn orca_workspace_call(args: &[&str]) -> OrcaCall {
+    let out = match orca(args) {
+        Err(_) => return OrcaCall::Nothing,
+        Ok(out) => out,
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            return OrcaCall::Failed(format!(
+                "orca {}: {e} ({})",
+                args.first().unwrap_or(&""),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+    };
+    if parsed.get("ok").and_then(|o| o.as_bool()) == Some(true) {
+        return OrcaCall::Result(parsed["result"].clone());
+    }
+    if parsed["error"]["code"].as_str() == Some("selector_not_found") {
+        return OrcaCall::Nothing;
+    }
+    OrcaCall::Failed(
+        parsed["error"]["message"]
+            .as_str()
+            .unwrap_or("orca failed")
+            .to_string(),
+    )
+}
+
+/// What the host closed for a teardown.
+enum HostClosed {
+    Terminals {
+        tabs: u64,
+        stopped: u64,
+    },
+    /// The host holds no workspace at this path.
+    Nothing,
+}
+
+/// Stop every terminal and running work the host holds at the
+/// workspace: teardown's explicit authorization, never an inference.
+fn close_workspace_terminals(path: &str) -> Result<HostClosed, String> {
+    let selector = format!("path:{path}");
+    match orca_workspace_call(&[
+        "terminal",
+        "close",
+        "--worktree",
+        &selector,
+        "--all",
+        "--json",
+    ]) {
+        OrcaCall::Nothing => Ok(HostClosed::Nothing),
+        OrcaCall::Result(v) => Ok(HostClosed::Terminals {
+            tabs: v.get("closed").and_then(|c| c.as_u64()).unwrap_or(0),
+            stopped: v.get("stopped").and_then(|s| s.as_u64()).unwrap_or(0),
+        }),
+        OrcaCall::Failed(e) => Err(format!("orca terminal close failed: {e}")),
+    }
+}
+
+/// Whether the host's registration for the workspace is gone.
+enum HostDeregister {
+    Removed,
+    Nothing,
+}
+
+/// Deregister the workspace from the host: a pure host-bookkeeping
+/// call — git removal is saccade's own effect, and the host's removal
+/// door would take the checked-out branch with it.
+fn deregister_workspace(path: &str) -> Result<HostDeregister, String> {
+    let selector = format!("path:{path}");
+    match orca_workspace_call(&["worktree", "rm", "--worktree", &selector, "--json"]) {
+        OrcaCall::Nothing => Ok(HostDeregister::Nothing),
+        OrcaCall::Result(v) => {
+            if v.get("removed").and_then(|r| r.as_bool()) == Some(true) {
+                Ok(HostDeregister::Removed)
+            } else {
+                Err("the host reported no removal".into())
+            }
+        }
+        OrcaCall::Failed(e) => Err(e),
+    }
 }
 
 /// Open a workspace through the host: a live terminal is brought

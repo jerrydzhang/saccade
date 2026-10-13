@@ -47,6 +47,10 @@ finding — name it on the thread before proceeding.
   branch is not built.
 - `workspace_path_occupied` — the workspace's worktree path is already
   occupied on disk.
+- `workspace_dirty` — the workspace's checkout carries staged,
+  unstaged, or untracked work; clean refuses before anything
+  destructive runs. Commit or remove the work first; ignored files
+  don't count.
 - `workspace_effect` — a git effect failed; the detail carries git's
   own stderr.
 - `workspace_no_repo` — the serving edge resolved no repo root at boot,
