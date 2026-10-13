@@ -13,7 +13,7 @@ and server binary versions, duration.
   lines are thin** — the seqs the request became, never the payload:
   the journal already holds it.
 - **Reproduce a refusal**: take the logged line, `sac clone --at
-  <cursor> --out <path>`, serve the clone (`SACCADE_DB` names it),
+  <cursor> --out <path>`, serve the clone (`--db` names it),
   re-post the logged request — the same code fires. `clone` refuses an
   existing out and cursors beyond the log.
 - **One grep surface**: serve's warns (WARN and worse) tee into the same

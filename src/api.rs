@@ -44,6 +44,9 @@ struct Inner {
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Mutex<ServerState>>,
+    /// The served database's canonical path, named on the identity face
+    /// so a client can verify it found the right tracker.
+    db_path: std::path::PathBuf,
     attempts: Attempts,
     /// The artifact store the bytes door serves from; a server that
     /// was not told a repo root has none.
@@ -94,17 +97,23 @@ impl AppState {
                 conn,
                 world,
                 rows: loadout.rows,
-                db_path: canonical,
+                db_path: canonical.clone(),
             }),
             db::LoadState::Degraded(reason) => ServerState::Degraded(reason, conn),
         };
         Ok(AppState {
             inner: Arc::new(Mutex::new(state)),
+            db_path: canonical,
             attempts: Attempts::beside(db_path),
             artifacts: None,
             repo_root: None,
             repo_name: None,
         })
+    }
+
+    /// The served database's canonical path.
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
     }
 
     /// Name the artifact store this server serves bytes from.
@@ -238,6 +247,20 @@ impl AppState {
                 reason: reason.clone(),
                 rows: db::load(conn).map(|l| l.rows).unwrap_or_default(),
             }),
+        }
+    }
+
+    /// The raw rows as they stand in the file, external writes included:
+    /// the log face reads the record, never the write path's cache.
+    pub fn rows(&self) -> Result<Vec<StoredRecord>, String> {
+        let guard = self.inner.lock().expect("the writer lock is not poisoned");
+        match &*guard {
+            ServerState::Ready(inner) => db::load(&inner.conn)
+                .map(|l| l.rows)
+                .map_err(|e| e.to_string()),
+            ServerState::Degraded(_, conn) => {
+                db::load(conn).map(|l| l.rows).map_err(|e| e.to_string())
+            }
         }
     }
 }
@@ -439,6 +462,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/command", post(command))
+        .route("/api/v1/records", get(records))
         .route("/api/v1/workspace/start", post(workspace_start))
         .route("/api/v1/workspace/open", post(workspace_open))
         .route("/api/v1/version", get(version))
@@ -740,6 +764,22 @@ fn api_failure(fail: ApiFail) -> Response {
 }
 
 /// The handshake surface: which build is serving, nothing more
-async fn version() -> Json<serde_json::Value> {
-    Json(json!({"version": env!("CARGO_PKG_VERSION")}))
+async fn version(State(app): State<AppState>) -> Json<serde_json::Value> {
+    Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "db": app.db_path().display().to_string(),
+    }))
+}
+
+/// The raw log: rows only, folded and rendered by the caller with the
+/// same code the local file feeds.
+async fn records(State(app): State<AppState>) -> Response {
+    match app.rows() {
+        Ok(rows) => Json(json!({ "records": rows })).into_response(),
+        Err(reason) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": {"code": "database_error", "detail": reason}})),
+        )
+            .into_response(),
+    }
 }

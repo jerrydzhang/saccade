@@ -16,7 +16,12 @@ Environment=RUST_LOG=info
   db's repo is declared, not discovered from the working directory.
 - `--bind 0.0.0.0` spans loopback (CLI default) and the tailnet
   (dashboard). Any device that can reach the port writes at human tier
-  through the forms — the conceded boundary.
+  through the forms — the conceded boundary. The wildcard never lands
+  in the address hint: `serve` publishes `http://127.0.0.1:<port>`
+  beside the served database after a successful bind, and clients
+  discover the server from that file — no default port, no localhost
+  guess. A scratch `serve --db /tmp/scratch/x.db --port 0` publishes
+  beside the scratch file and never disturbs the repo's hint.
 - stderr goes to the journal; `journalctl --user -u saccade -p warning`
   is the audit path — and the warns land in the same
   `attempts.jsonl` beside the db as every judged write, so one

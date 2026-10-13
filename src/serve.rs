@@ -25,16 +25,22 @@ pub async fn run(
     port: u16,
 ) -> Result<std::convert::Infallible, String> {
     let addr = format!("{bind}:{port}");
-    let repo_root = crate::paths::repo_root(std::path::Path::new("."))
-        .map_err(|e| format!("the serving repo: {e}"))?;
-    let repo_name = web::RepoName::of(&repo_root);
-    let state = AppState::open(db_path)?
-        .with_artifacts(crate::paths::artifacts_at(&repo_root))
-        .with_repo_name(repo_name)
-        .with_repo_root(repo_root);
+    // a scratch serve from outside any repo still serves its named db:
+    // the repo names artifacts and console chrome, never the tracker
+    let repo_root = crate::paths::repo_root(std::path::Path::new(".")).ok();
+    let repo_name = repo_root.as_deref().map(web::RepoName::of);
+    let mut state = AppState::open(db_path)?;
+    if let Some(root) = &repo_root {
+        state = state
+            .with_artifacts(crate::paths::artifacts_at(root))
+            .with_repo_name(repo_name.expect("a root names a repo"))
+            .with_repo_root(root.clone());
+    }
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("cannot bind {addr}: {e}"))?;
+    let bound = listener.local_addr().map_err(|e| e.to_string())?;
+    publish_address(db_path, &bound)?;
     if !matches!(bind, "127.0.0.1" | "localhost" | "::1" | "[::1]") {
         eprintln!(
             "bound {bind}: any device that can reach port {port} can write events (human tier)"
@@ -46,6 +52,24 @@ pub async fn run(
         .await
         .expect("axum serves until killed");
     unreachable!("axum::serve returns only on shutdown")
+}
+
+/// The address hint: published only after a successful bind, replaced
+/// on every restart. A wildcard bind publishes the local loopback —
+/// never a connect target of all zeros.
+fn publish_address(db_path: &std::path::Path, bound: &std::net::SocketAddr) -> Result<(), String> {
+    let ip = if bound.ip().is_unspecified() {
+        std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST)
+    } else {
+        bound.ip()
+    };
+    let host = match ip {
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+        v6 => format!("[{v6}]"),
+    };
+    let url = format!("http://{host}:{}\n", bound.port());
+    std::fs::write(crate::paths::address_at(db_path), url)
+        .map_err(|e| format!("cannot write the address hint: {e}"))
 }
 
 /// The whole HTTP surface: the versioned API plus the console fallback.

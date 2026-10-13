@@ -90,6 +90,17 @@ pub fn attempts_at(db_path: &Path) -> PathBuf {
     db_path.with_file_name("attempts.jsonl")
 }
 
+/// The served tracker's address hint: one disposable file beside the
+/// served database, named for it so two trackers in one directory
+/// never overwrite each other's hint.
+pub fn address_at(db_path: &Path) -> PathBuf {
+    let name = db_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "saccade.db".into());
+    db_path.with_file_name(format!("{name}.addr"))
+}
+
 /// The artifact store: content-addressed bytes under the state root,
 /// one home per repo. The writer parks `<sha256>` files here; the read
 /// door serves them. Lifetime is store-wide, never per task.
@@ -116,5 +127,19 @@ mod test {
         assert_eq!(repo_hue(Path::new("/srv/hornet")), 324);
         // same basename, different roots: the hues split where the slugs do
         assert_eq!(repo_hue(Path::new("/home/j/hornet")), 153);
+    }
+
+    #[test]
+    fn the_hint_is_named_for_its_database() {
+        let dir = Path::new("/tmp/trackers");
+        assert_eq!(
+            address_at(&dir.join("saccade.db")),
+            dir.join("saccade.db.addr")
+        );
+        assert_ne!(
+            address_at(&dir.join("a.db")),
+            address_at(&dir.join("b.db")),
+            "two trackers in one directory hold two hints"
+        );
     }
 }

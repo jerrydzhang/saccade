@@ -63,6 +63,17 @@ finding — name it on the thread before proceeding.
   the pre-establishment workspace events degrades (unknown kind): the
   record's workspace lineage was born in no released world, so those
   logs are not migrated.
+- `server_undiscovered` — no address hint beside the resolved
+  database, so no server of that tracker was ever published; start one
+  beside it (`sac serve`) or name a destination explicitly.
+- `server_required` — an address existed but nothing answered there;
+  the hint is stale (stale files are never cleaned — start the server
+  or fix the destination).
+- `server_mismatch` — a server answered at the discovered address but
+  serves a different database than the one the hint sits beside.
+- `usage` — the command line itself is wrong; both explicit
+  destinations (`--db` with `--server`) refuse here, as do server-only
+  verbs (`start`, `open`) aimed at a local `--db`.
 
 When the tracker misbehaves or a refusal needs reproducing, read
 `diagnosing.md` beside this file: the attempts log reconstructs the

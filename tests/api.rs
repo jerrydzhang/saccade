@@ -1513,7 +1513,6 @@ fn search_reads_the_record_through_the_cli_face() {
         let out = std::process::Command::new(bin)
             .arg("--db")
             .arg(&path)
-            .arg("--offline")
             .env("SACCADE_ACTOR", "pi")
             .args(args)
             .output()
@@ -1684,7 +1683,6 @@ fn search_reads_the_record_through_the_cli_face() {
         let mut child = std::process::Command::new(bin)
             .arg("--db")
             .arg(&path)
-            .arg("--offline")
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1721,7 +1719,6 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
         let out = std::process::Command::new(bin)
             .arg("--db")
             .arg(&path)
-            .arg("--offline")
             .env("SACCADE_ACTOR", "pi")
             .args(args)
             .output()
@@ -1845,7 +1842,6 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
         let mut child = std::process::Command::new(bin)
             .arg("--db")
             .arg(&path)
-            .arg("--offline")
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1891,7 +1887,6 @@ fn create_reply_names_the_born_task() {
     let out = std::process::Command::new(bin)
         .arg("--db")
         .arg(&path)
-        .arg("--offline")
         .env("SACCADE_ACTOR", "assistant")
         .args(["create", "task", "migrate floop"])
         .output()
@@ -1912,7 +1907,6 @@ fn create_reply_names_the_born_task() {
     let out = std::process::Command::new(bin)
         .arg("--db")
         .arg(&path)
-        .arg("--offline")
         .arg("--json")
         .env("SACCADE_ACTOR", "assistant")
         .args(["claim", "t-0"])
@@ -1927,7 +1921,6 @@ fn create_reply_names_the_born_task() {
     let out = std::process::Command::new(bin)
         .arg("--db")
         .arg(&path)
-        .arg("--offline")
         .arg("--json")
         .env("SACCADE_ACTOR", "assistant")
         .args(["create", "task", "second scratch task"])
@@ -2009,19 +2002,18 @@ fn the_binary_deploys_and_verifies_its_embedded_skill() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// The offline reply shape is the wire's: one code path builds both,
-/// so a break-glass write and a served write answer identically.
+/// The local reply shape is the wire's: one code path builds both, so
+/// a --db write and a served write answer identically.
 #[tokio::test(flavor = "multi_thread")]
-async fn offline_replies_match_the_wire() {
+async fn local_replies_match_the_wire() {
     let bin = env!("CARGO_BIN_EXE_sac");
-    let offline_db = scratch_db("offline-shape");
+    let local_db = scratch_db("local-shape");
     let served_db = scratch_db("served-shape");
 
-    let offline = |db: &std::path::Path, args: &[&str]| {
+    let local = |db: &std::path::Path, args: &[&str]| {
         let out = std::process::Command::new(bin)
             .arg("--db")
             .arg(db)
-            .arg("--offline")
             .env("SACCADE_ACTOR", "pi")
             .args(args)
             .output()
@@ -2035,7 +2027,7 @@ async fn offline_replies_match_the_wire() {
     };
 
     // the create replies carry the born task's token, both paths
-    let created_offline = offline(&offline_db, &["--json", "create", "task", "offline task"]);
+    let created_local = local(&local_db, &["--json", "create", "task", "offline task"]);
     let served = spawn_server(&served_db).await;
     let (_, body) = post_command(
         &served,
@@ -2043,20 +2035,20 @@ async fn offline_replies_match_the_wire() {
                  "command": {"create_task": {"name": "offline task", "parent_id": null}}}),
     );
     let created_served = json_of(&body);
-    assert_eq!(created_offline["id"], created_served["id"]);
+    assert_eq!(created_local["id"], created_served["id"]);
     assert_eq!(
-        created_offline["records"][0]["kind"],
+        created_local["records"][0]["kind"],
         created_served["records"][0]["kind"]
     );
 
     // a comment and a claim answer with their records, both paths
-    let noted = offline(&offline_db, &["--json", "comment", "t-0", "the note"]);
+    let noted = local(&local_db, &["--json", "comment", "t-0", "the note"]);
     assert_eq!(noted["records"][0]["kind"], "commented");
-    let claimed = offline(&offline_db, &["--json", "claim", "t-0"]);
+    let claimed = local(&local_db, &["--json", "claim", "t-0"]);
     assert_eq!(claimed["records"][0]["kind"], "task_claimed");
 
     // a request names its position and root task on both paths, no workspace where none stands
-    let asked = offline(&offline_db, &["--json", "request", "t-0", "status?"]);
+    let asked = local(&local_db, &["--json", "request", "t-0", "status?"]);
     assert_eq!(asked["seq"], asked["records"][0]["seq"]);
     assert_eq!(asked["task"], 0);
     assert_eq!(asked["workspace"], Value::Null);
@@ -2070,7 +2062,7 @@ async fn offline_replies_match_the_wire() {
     assert_eq!(served_asked["task"], 0);
     assert_eq!(served_asked["workspace"], Value::Null);
 
-    std::fs::remove_dir_all(offline_db.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(local_db.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(served_db.parent().unwrap()).unwrap();
 }
 
@@ -2084,7 +2076,6 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
         let out = std::process::Command::new(bin)
             .arg("--db")
             .arg(&path)
-            .arg("--offline")
             .env("SACCADE_ACTOR", "pi")
             // a working session's declared scope must not leak in
             .env("SACCADE_TASK", "")
@@ -2108,7 +2099,6 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
         std::process::Command::new(bin)
             .arg("--db")
             .arg(&path)
-            .arg("--offline")
             .env("SACCADE_ACTOR", "pi")
             .env("SACCADE_TASK", "")
             .env("SACCADE_INCARNATION", "")
@@ -2209,6 +2199,50 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
     let (ok, _, stderr) = sac(&["wait", "t-9", "--after", "0"]);
     assert!(!ok);
     assert!(stderr.contains("no task t-9"), "{stderr}");
+
+    // the same wait over the wire: a server-mode waiter wakes on the
+    // local write to the same tracker
+    let mut serve = std::process::Command::new(bin)
+        .args(["serve", "--db"])
+        .arg(&path)
+        .args(["--port", "0"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn serve");
+    let hint = saccade::paths::address_at(&path);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let url = loop {
+        match std::fs::read_to_string(&hint) {
+            Ok(text) if !text.trim().is_empty() => break text.trim().to_string(),
+            _ if std::time::Instant::now() >= deadline => {
+                panic!("serve never published its address")
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    };
+    let mut wire_waiter = std::process::Command::new(bin)
+        .arg("--server")
+        .arg(&url)
+        .args(["--json", "wait", "t-0", "--after", "6"])
+        .env("SACCADE_ACTOR", "pi")
+        .env("SACCADE_TASK", "")
+        .env("SACCADE_INCARNATION", "")
+        .env("SACCADE_WORKSPACE", "")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the wire waiter");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(
+        wire_waiter.try_wait().unwrap().is_none(),
+        "the wire wait woke with nothing matching"
+    );
+    sac_quiet(&["comment", "t-0", "the served reply"]); // seq 7
+    let (seqs, cursor) = observed(wire_waiter);
+    assert_eq!(seqs, vec![7]);
+    assert_eq!(cursor, 7);
+    let _ = serve.kill();
+    let _ = serve.wait();
 
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
@@ -2339,12 +2373,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         )
     };
     let routed = |sub: &[&str]| -> Vec<String> {
-        let mut full = vec![
-            "--server".to_string(),
-            base_url.clone(),
-            "--db".to_string(),
-            db.display().to_string(),
-        ];
+        let mut full = vec!["--server".to_string(), base_url.clone()];
         full.extend(sub.iter().map(|s| s.to_string()));
         full
     };
@@ -2395,6 +2424,15 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         )),
         "{typed}"
     );
+    assert!(
+        typed.contains(&format!("--server {}", shell_quoted(&base_url))),
+        "the explicit destination rides the typed line: {typed}"
+    );
+    assert!(
+        typed.contains(&format!("--repo {}", root.display())),
+        "the repo rides as identity, never db routing: {typed}"
+    );
+    assert!(!typed.contains("--db"), "no db routing: {typed}");
     assert!(
         typed.ends_with(&shell_quoted("please fix it's 'the' flake now")),
         "the request survives verbatim: {typed}"
@@ -2460,8 +2498,14 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         line("SACCADE_WORKSPACE"),
         format!("SACCADE_WORKSPACE={}", worktree.display())
     );
-    assert_eq!(line("SACCADE_DB"), format!("SACCADE_DB={}", db.display()));
-    assert_eq!(line("SACCADE_SERVER"), format!("SACCADE_SERVER={base_url}"));
+    assert!(
+        !injected.lines().any(|l| l.starts_with("SACCADE_DB=")),
+        "routing never rides the injection: {injected}"
+    );
+    assert!(
+        !injected.lines().any(|l| l.starts_with("SACCADE_SERVER=")),
+        "routing never rides the injection: {injected}"
+    );
 
     // repeat start: the live terminal is revealed, nothing new created
     std::fs::write(&host_log, b"").unwrap();
@@ -2546,6 +2590,8 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
             ("SACCADE_TASK", "t-99"),
             ("SACCADE_INCARNATION", "i-999"),
             ("SACCADE_WORKSPACE", "/nowhere"),
+            ("SACCADE_DB", "/stale/routing.db"),
+            ("SACCADE_SERVER", "http://stale:1"),
         ];
         if let Some(actor) = actor {
             envs.push(("SACCADE_ACTOR", actor));
@@ -2593,20 +2639,18 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         env_line(&out, "SACCADE_REPO"),
         format!("SACCADE_REPO={}", root.display())
     );
-    assert_eq!(
-        env_line(&out, "SACCADE_DB"),
-        format!("SACCADE_DB={}", db.display())
+    assert!(
+        !out.lines().any(|l| l.starts_with("SACCADE_DB=")),
+        "stale routing is cleared, not passed: {out}"
     );
-    assert_eq!(
-        env_line(&out, "SACCADE_SERVER"),
-        format!("SACCADE_SERVER={base_url}")
+    assert!(
+        !out.lines().any(|l| l.starts_with("SACCADE_SERVER=")),
+        "stale routing is cleared, not passed: {out}"
     );
 
-    // a relative --db still names the same tracker after the chdir
+    // a relative --db names the same tracker from beside the file
     let out = std::process::Command::new(bin)
         .args([
-            "--server",
-            &base_url,
             "--db",
             "saccade.db",
             "--repo",
@@ -2618,7 +2662,6 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         ])
         .env("PATH", std::env::var("PATH").unwrap())
         .env_remove("SACCADE_ACTOR")
-        .env_remove("SACCADE_DB")
         .current_dir(db.parent().unwrap())
         .output()
         .expect("spawn sac");
@@ -2628,10 +2671,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         String::from_utf8_lossy(&out.stderr).into_owned(),
     );
     assert!(ok, "stdout: {out}\nstderr: {err}");
-    assert_eq!(
-        env_line(&out, "SACCADE_DB"),
-        format!("SACCADE_DB={}", db.display())
-    );
+    assert_eq!(env_line(&out, "SACCADE_TASK"), "SACCADE_TASK=t-0");
 
     // the working directory is the checkout
     let (ok, out, err) = run(
@@ -2796,7 +2836,6 @@ fn piped_human_prose_passes_and_unattended_refuses() {
     let seed = std::process::Command::new(bin)
         .arg("--db")
         .arg(&db)
-        .arg("--offline")
         .env("SACCADE_ACTOR", "pi")
         .args(["create", "task", "guarded writes"])
         .output()
@@ -2808,11 +2847,7 @@ fn piped_human_prose_passes_and_unattended_refuses() {
     );
 
     let args = |sub: &[&str]| {
-        let mut full = vec![
-            "--db".to_string(),
-            db.display().to_string(),
-            "--offline".to_string(),
-        ];
+        let mut full = vec!["--db".to_string(), db.display().to_string()];
         full.extend(sub.iter().map(|s| s.to_string()));
         full
     };
@@ -2860,4 +2895,358 @@ fn piped_human_prose_passes_and_unattended_refuses() {
     assert_eq!(world.tasks[0].thread.len(), 1);
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+// ---- the destination contract through the CLI face ----
+
+/// A real `sac serve` subprocess; the reply is the URL it published.
+fn spawn_serve(bin: &str, db: &std::path::Path, extra: &[&str]) -> (std::process::Child, String) {
+    let mut child = std::process::Command::new(bin)
+        .args(["serve", "--port", "0", "--db"])
+        .arg(db)
+        .args(extra)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn serve");
+    let hint = saccade::paths::address_at(db);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match std::fs::read_to_string(&hint) {
+            Ok(text) if !text.trim().is_empty() => {
+                return (child, text.trim().to_string());
+            }
+            _ if child.try_wait().unwrap().is_some() => {
+                panic!("serve exited without publishing {}", hint.display());
+            }
+            _ if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                panic!("serve never published {}", hint.display());
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+}
+
+/// A runner free of every inherited SACCADE_* value.
+fn scrubbed(mut cmd: std::process::Command) -> std::process::Command {
+    for key in [
+        "SACCADE_ACTOR",
+        "SACCADE_DB",
+        "SACCADE_SERVER",
+        "SACCADE_TASK",
+        "SACCADE_INCARNATION",
+        "SACCADE_WORKSPACE",
+        "SACCADE_REPO",
+    ] {
+        cmd.env_remove(key);
+    }
+    cmd
+}
+
+fn task_names(list_json: &str) -> Vec<String> {
+    let value: Value = serde_json::from_str(list_json).expect("the list face is json");
+    value["tasks"]
+        .as_array()
+        .expect("the list face names its tasks")
+        .iter()
+        .map(|t| t["name"].as_str().expect("a task names itself").to_string())
+        .collect()
+}
+
+#[test]
+fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let dir = std::env::temp_dir().join(format!("sac-api-dest-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (db_a, db_b, db_c) = (dir.join("a.db"), dir.join("b.db"), dir.join("c.db"));
+    let (mut serve_a, url_a) = spawn_serve(bin, &db_a, &[]);
+    let (mut serve_b, url_b) = spawn_serve(bin, &db_b, &[]);
+    let (mut serve_c, url_c) = spawn_serve(bin, &db_c, &[]);
+
+    let sac = |args: &[&str], envs: &[(&str, &str)]| {
+        let mut cmd = scrubbed(std::process::Command::new(bin));
+        cmd.args(args);
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // the scratch create lands in the selected db, never on an
+    // inherited server or db
+    let (ok, _, err) = sac(
+        &[
+            "--db",
+            db_a.to_str().unwrap(),
+            "--json",
+            "create",
+            "task",
+            "implement foo",
+        ],
+        &[
+            ("SACCADE_DB", db_b.to_str().unwrap()),
+            ("SACCADE_SERVER", &url_c),
+            ("SACCADE_ACTOR", "pi"),
+        ],
+    );
+    assert!(ok, "{err}");
+    let (ok, out, err) = sac(&["--server", &url_b, "--json", "list"], &[]);
+    assert!(ok, "{err}");
+    assert!(
+        task_names(&out).is_empty(),
+        "the exported db stayed empty: {out}"
+    );
+    let (ok, out, err) = sac(&["--server", &url_c, "--json", "list"], &[]);
+    assert!(ok, "{err}");
+    assert!(
+        task_names(&out).is_empty(),
+        "the exported server stayed empty: {out}"
+    );
+    let (ok, out, err) = sac(&["--server", &url_a, "--json", "list"], &[]);
+    assert!(ok, "{err}");
+    assert_eq!(task_names(&out), vec!["implement foo"]);
+
+    // the explicit server beats the exported db: the same name born on
+    // another tracker holds its own t-0
+    let (ok, _, err) = sac(
+        &[
+            "--server",
+            &url_b,
+            "--json",
+            "create",
+            "task",
+            "implement foo",
+        ],
+        &[
+            ("SACCADE_DB", db_c.to_str().unwrap()),
+            ("SACCADE_ACTOR", "pi"),
+        ],
+    );
+    assert!(ok, "{err}");
+    let (ok, out, err) = sac(&["--server", &url_b, "--json", "show", "t-0"], &[]);
+    assert!(ok, "{err}");
+    assert!(out.contains("implement foo"), "{out}");
+    let (ok, out, err) = sac(&["--server", &url_c, "--json", "list"], &[]);
+    assert!(ok, "{err}");
+    assert!(
+        task_names(&out).is_empty(),
+        "the exported db never grew: {out}"
+    );
+
+    // the server read agrees with the local read of the same file
+    let (ok, served, err) = sac(&["--server", &url_a, "--json", "list"], &[]);
+    assert!(ok, "{err}");
+    let (ok, local, err) = sac(&["--db", db_a.to_str().unwrap(), "--json", "list"], &[]);
+    assert!(ok, "{err}");
+    assert_eq!(task_names(&served), task_names(&local));
+
+    // a local write rides the selected file; the server read sees it
+    let (ok, _, err) = sac(
+        &[
+            "--db",
+            db_a.to_str().unwrap(),
+            "comment",
+            "t-0",
+            "a local note",
+        ],
+        &[("SACCADE_ACTOR", "pi")],
+    );
+    assert!(ok, "{err}");
+    let (ok, out, err) = sac(&["--server", &url_a, "--json", "show", "t-0"], &[]);
+    assert!(ok, "{err}");
+    assert!(out.contains("a local note"), "{out}");
+
+    // both explicit destinations refuse, on the json face too
+    let (ok, _, err) = sac(
+        &["--db", db_a.to_str().unwrap(), "--server", &url_a, "list"],
+        &[],
+    );
+    assert!(!ok);
+    assert!(err.contains("both explicit destinations"), "{err}");
+    let (ok, out, err) = sac(
+        &[
+            "--db",
+            db_a.to_str().unwrap(),
+            "--server",
+            &url_a,
+            "--json",
+            "list",
+        ],
+        &[],
+    );
+    assert!(!ok);
+    assert!(err.contains("\"error\":\"usage\""), "{out}{err}");
+
+    // the server-only verbs refuse local mode
+    let (ok, _, err) = sac(
+        &[
+            "--db",
+            db_a.to_str().unwrap(),
+            "start",
+            "t-0",
+            "local start",
+        ],
+        &[("SACCADE_ACTOR", "pi")],
+    );
+    assert!(!ok);
+    assert!(err.contains("runs through the server"), "{err}");
+    let (ok, _, err) = sac(&["--db", db_a.to_str().unwrap(), "open", "t-0"], &[]);
+    assert!(!ok);
+    assert!(err.contains("runs through the server"), "{err}");
+
+    // serve selects a file to serve, never another server
+    let (ok, _, err) = sac(&["--server", &url_a, "serve", "--port", "0"], &[]);
+    assert!(!ok, "serve with --server must refuse");
+    assert!(err.contains("serve starts a server"), "{err}");
+
+    for serve in [&mut serve_a, &mut serve_b, &mut serve_c] {
+        let _ = serve.kill();
+        let _ = serve.wait();
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let dir = std::env::temp_dir().join(format!("sac-api-disc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (root, _, _) = scratch_repo(&dir);
+    let state = dir.join("state");
+    let empty_state = dir.join("empty-state");
+    std::fs::create_dir_all(&empty_state).unwrap();
+
+    let sac_in = |cwd: &std::path::Path, args: &[&str], state_home: &std::path::Path| {
+        let out = scrubbed(std::process::Command::new(bin))
+            .args(args)
+            .env("XDG_STATE_HOME", state_home)
+            .env("SACCADE_ACTOR", "pi")
+            .current_dir(cwd)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // no server ever started: discovery refuses, nothing implicit
+    let (ok, _, err) = sac_in(&root, &["--json", "list"], &empty_state);
+    assert!(!ok);
+    assert!(err.contains("server_undiscovered"), "{err}");
+    let (ok, out, err) = sac_in(&root, &["--json", "identity"], &empty_state);
+    assert!(ok, "identity is a read: {out}{err}");
+    assert!(out.contains("unresolved"), "{out}");
+
+    // the repo-derived serve publishes beside its db; the client finds it
+    let mut serve = std::process::Command::new(bin)
+        .args(["serve", "--port", "0"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .env("XDG_STATE_HOME", &state)
+        .env("SACCADE_ACTOR", "pi")
+        .current_dir(&root)
+        .spawn()
+        .expect("spawn serve");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    // the child resolves its state root from its own XDG_STATE_HOME;
+    // the hint is the one saccade.db.addr that appears there
+    let hint = loop {
+        let mut found = Vec::new();
+        if let Ok(slugs) = std::fs::read_dir(state.join("saccade")) {
+            for slug in slugs.flatten() {
+                let candidate = slug.path().join("saccade.db.addr");
+                if candidate.is_file() {
+                    found.push(candidate);
+                }
+            }
+        }
+        if found.len() == 1 {
+            break found.remove(0);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = serve.kill();
+            panic!("serve never published a hint under {}", state.display());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let published = std::fs::read_to_string(&hint).unwrap();
+    let published = published.trim().to_string();
+    let (ok, _, err) = sac_in(&root, &["--json", "list"], &state);
+    assert!(ok, "{err}");
+    let (ok, out, err) = sac_in(&root, &["--json", "identity"], &state);
+    assert!(ok, "{err}");
+    assert!(out.contains("discovered-server"), "{out}");
+    assert!(out.contains(&published), "{out}");
+    assert!(published.starts_with("http://127.0.0.1:"), "{published}");
+
+    // a worktree resolves the same common dir, so the same server
+    let wt = dir.join("wt");
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "side"])
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "worktree add: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (ok, _, err) = sac_in(&wt, &["--json", "list"], &state);
+    assert!(ok, "worktree discovery: {err}");
+
+    // a scratch serve publishes beside the scratch db, never over the
+    // repo's hint, and a wildcard bind publishes the loopback
+    let scratch_db = dir.join("scratch").join("saccade.db");
+    let (mut scratch_serve, scratch_url) = spawn_serve(bin, &scratch_db, &["--bind", "0.0.0.0"]);
+    assert!(
+        scratch_url.starts_with("http://127.0.0.1:"),
+        "{scratch_url}"
+    );
+    assert_ne!(scratch_url, published, "the scratch port is its own");
+    assert_eq!(
+        std::fs::read_to_string(&hint).unwrap().trim(),
+        published,
+        "the repo's hint stands"
+    );
+
+    // the hint replaced on restart: the file names the server actually
+    // serving, the old process dead
+    let _ = scratch_serve.kill();
+    let _ = scratch_serve.wait();
+    std::fs::remove_file(saccade::paths::address_at(&scratch_db)).unwrap();
+    let (mut scratch_serve, republished) = spawn_serve(bin, &scratch_db, &[]);
+    let (ok, _, err) = sac_in(&root, &["--server", &republished, "--json", "log"], &state);
+    assert!(ok, "the republished hint answers: {err}");
+    assert_eq!(
+        std::fs::read_to_string(&hint).unwrap().trim(),
+        published,
+        "the scratch restart never touched the repo's hint"
+    );
+
+    // a stale hint pointing at a dead port refuses, no local fallback
+    std::fs::write(&hint, "http://127.0.0.1:9\n").unwrap();
+    let (ok, _, err) = sac_in(&root, &["--json", "list"], &state);
+    assert!(!ok);
+    assert!(err.contains("server_required"), "{err}");
+
+    // a mismatched hint pointing at another tracker refuses
+    std::fs::write(&hint, format!("{republished}\n")).unwrap();
+    let (ok, _, err) = sac_in(&root, &["--json", "list"], &state);
+    assert!(!ok);
+    assert!(err.contains("server_mismatch"), "{err}");
+
+    let _ = scratch_serve.kill();
+    let _ = scratch_serve.wait();
+    let _ = serve.kill();
+    let _ = serve.wait();
+    std::fs::remove_dir_all(&dir).unwrap();
 }

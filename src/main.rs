@@ -23,8 +23,9 @@ mod skill;
 #[derive(Parser)]
 #[command(name = "sac", version, about = "Saccade: awesome issue tracker")]
 struct Cli {
-    /// Path to the event database (defaults to the repo's state root)
-    #[arg(long, global = true, env = "SACCADE_DB")]
+    /// Select local operations on this database file, ignoring every
+    /// discovered or inherited server
+    #[arg(long, global = true)]
     db: Option<PathBuf>,
 
     /// The tracker's repo, when the working directory is not inside it
@@ -43,18 +44,9 @@ struct Cli {
     #[arg(long, global = true)]
     at: Option<u64>,
 
-    /// Write directly to the db, bypassing the server (break-glass)
+    /// Select this running server for reads, writes, and waits alike
     #[arg(long, global = true)]
-    offline: bool,
-
-    /// Base URL of the running server for writes
-    #[arg(
-        long,
-        global = true,
-        env = "SACCADE_SERVER",
-        default_value = "http://127.0.0.1:8811"
-    )]
-    server: String,
+    server: Option<String>,
 
     #[command(subcommand)]
     command: Cmd,
@@ -175,7 +167,8 @@ enum Cmd {
         #[arg(long)]
         withdrawn: bool,
     },
-    /// Serve the console and /api/v1 over HTTP (127.0.0.1 by default)
+    /// Serve the console and /api/v1 over HTTP (the repo's tracker by
+    /// default; --db names a different file)
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
         bind: String,
@@ -379,8 +372,16 @@ impl std::fmt::Display for Fail {
 }
 
 fn run(cli: &Cli) -> Result<String, Fail> {
-    // the db default is the repo's state root, not the working tree
-    let db_path = resolve_db(cli)?;
+    // identity is the lenient read: it discloses the destination
+    // outcome, refusal included, so diagnosis survives broken routing
+    if let Cmd::Identity = &cli.command {
+        return identity_door(cli);
+    }
+    // serve starts a server, so it never resolves a client destination
+    if let Cmd::Serve { bind, port } = &cli.command {
+        return serve_door(cli, bind, port);
+    }
+    let destination = resolve_destination(cli)?;
     let command = match &cli.command {
         Cmd::Create {
             kind: ObjKind::Task,
@@ -501,40 +502,29 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             Command::Artifact { root: id, artifact }
         }
         Cmd::List { .. } | Cmd::Log | Cmd::Show { .. } | Cmd::Search { .. } => {
-            return read_only(cli, &db_path);
+            return read_only(cli, &loadout_of(&destination)?);
         }
-        Cmd::Wait { target, after } => return wait_door(cli, &db_path, target, *after),
+        Cmd::Wait { target, after } => return wait_door(cli, &destination, target, *after),
         Cmd::Start {
             id,
             body,
             stdin,
             base,
-        } => return start_door(cli, &db_path, id, body.clone(), *stdin, base.clone()),
-        Cmd::Open { id } => return open_door(cli, &db_path, id),
-        Cmd::Exec { id, argv } => return exec_door(cli, &db_path, id, argv),
-        Cmd::Identity => return identity_door(cli),
-        Cmd::Serve { bind, port } => {
-            let _ = tracing_subscriber::fmt()
-                .json()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| "info".into()),
-                )
-                .with_writer(saccade::attempts::WarnsTee::beside(&db_path))
-                .try_init();
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
-            return match runtime.block_on(saccade::serve::run(&db_path, bind, *port)) {
-                Err(e) => Err(Fail::Usage(e)),
-                Ok(infallible) => match infallible {},
-            };
-        }
+        } => return start_door(cli, &destination, id, body.clone(), *stdin, base.clone()),
+        Cmd::Open { id } => return open_door(cli, &destination, id),
+        Cmd::Exec { id, argv } => return exec_door(cli, &destination, id, argv),
+        Cmd::Identity => unreachable!("identity dispatches before the destination resolves"),
+        Cmd::Serve { .. } => unreachable!("serve dispatches before the destination resolves"),
         Cmd::Clone { at, out } => {
             // the reproduction recipe's cursor half: the clone names the
             // world a refused request died against
-            let cloned = db::clone(&db_path, *at as usize, out).map_err(Fail::Db)?;
+            let cloned = match &destination {
+                Destination::Local { db } => db::clone(db, *at as usize, out).map_err(Fail::Db)?,
+                Destination::Server { url } => {
+                    let rows = client::records(url).map_err(Fail::Client)?;
+                    db::clone_rows(&rows, *at as usize, out).map_err(Fail::Db)?
+                }
+            };
             return Ok(if cli.json {
                 serde_json::json!({
                     "cloned": cloned,
@@ -562,8 +552,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                     )
                 })?,
             };
-            let conn = db::open_read(&db_path).map_err(Fail::Db)?;
-            let loadout = db::load(&conn).map_err(Fail::Db)?;
+            let loadout = loadout_of(&destination)?;
             let LoadState::Full(world) = loadout.state else {
                 return Err(Fail::Degraded(
                     "checkpoint needs the world; the log will not fold".into(),
@@ -600,34 +589,37 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     let creates = matches!(command, Command::CreateTask { .. });
     let mut born: Option<String> = None;
     let mut request: Option<RequestFacts> = None;
-    let stored = if cli.offline {
-        let now = cli.at.unwrap_or_else(db::now_epoch);
-        let mut conn = db::open(&db_path).map_err(Fail::Db)?;
-        match db::record(&mut conn, &context, command.clone(), now) {
-            Ok((stored, world)) => {
-                if creates {
-                    born = born_of(&stored, &world);
+    let stored = match &destination {
+        Destination::Local { db } => {
+            let now = cli.at.unwrap_or_else(db::now_epoch);
+            let mut conn = db::open(db).map_err(Fail::Db)?;
+            match db::record(&mut conn, &context, command.clone(), now) {
+                Ok((stored, world)) => {
+                    if creates {
+                        born = born_of(&stored, &world);
+                    }
+                    request = request_of(&command, &stored, |seq| {
+                        saccade::views::request_facts(&world, seq)
+                    });
+                    stored
                 }
-                request = request_of(&command, &stored, |seq| {
-                    saccade::views::request_facts(&world, seq)
-                });
-                stored
+                Err(ExecuteFail::Reject(reject)) => return Err(refused(&conn, &command, reject)),
+                Err(other) => return Err(Fail::from(other)),
             }
-            Err(ExecuteFail::Reject(reject)) => return Err(refused(&conn, &command, reject)),
-            Err(other) => return Err(Fail::from(other)),
         }
-    } else {
-        client::handshake(&cli.server);
-        let reply = client::send(&cli.server, &context, command, cli.at).map_err(Fail::Client)?;
-        born = reply.id;
-        if let Some(seq) = reply.seq {
-            request = Some(RequestFacts {
-                seq,
-                task: reply.task.expect("a request reply names its task"),
-                workspace: reply.workspace,
-            });
+        Destination::Server { url } => {
+            client::handshake(url);
+            let reply = client::send(url, &context, command, cli.at).map_err(Fail::Client)?;
+            born = reply.id;
+            if let Some(seq) = reply.seq {
+                request = Some(RequestFacts {
+                    seq,
+                    task: reply.task.expect("a request reply names its task"),
+                    workspace: reply.workspace,
+                });
+            }
+            reply.records
         }
-        reply.records
     };
     Ok(render_records(
         cli,
@@ -768,19 +760,56 @@ fn is_ancestor(root: &std::path::Path, ancestor: &str, descendant: &str) -> bool
         .unwrap_or(false)
 }
 
-/// The db default: explicit path, else the named repo's state root,
-/// else the repo containing the working directory.
-fn resolve_db(cli: &Cli) -> Result<PathBuf, Fail> {
-    if let Some(path) = &cli.db {
-        return Ok(path.clone());
-    }
-    let root = match &cli.repo {
+/// The primary repo root: --repo names it, else the repo containing
+/// the working directory (a worktree resolves to its main checkout).
+fn resolve_repo(cli: &Cli) -> Result<PathBuf, Fail> {
+    match &cli.repo {
         Some(repo) => repo
             .canonicalize()
-            .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display())))?,
-        None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage)?,
-    };
-    Ok(saccade::paths::db_at(&root))
+            .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display()))),
+        None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage),
+    }
+}
+
+/// Where one command's reads and writes land.
+enum Destination {
+    /// The named database file: local reads and ordinary writes
+    Local { db: PathBuf },
+    /// One selected server: reads, writes, and waits reach it alike
+    Server { url: String },
+}
+
+/// The one destination: an explicit flag wins; otherwise the primary
+/// repo's usual database is resolved and its discovered server is
+/// verified. There is no implicit local fallback.
+fn resolve_destination(cli: &Cli) -> Result<Destination, Fail> {
+    match (&cli.db, &cli.server) {
+        (Some(_), Some(_)) => Err(Fail::Usage(
+            "--db and --server are both explicit destinations; pass one".into(),
+        )),
+        (Some(db), None) => Ok(Destination::Local { db: db.clone() }),
+        (None, Some(url)) => Ok(Destination::Server { url: url.clone() }),
+        (None, None) => {
+            let db = saccade::paths::db_at(&resolve_repo(cli)?);
+            let url = client::discover(&db).map_err(Fail::Client)?;
+            Ok(Destination::Server { url })
+        }
+    }
+}
+
+/// The folded world for a read-shaped door: the selected file's rows,
+/// or the selected server's log folded with the same code.
+fn loadout_of(destination: &Destination) -> Result<saccade::db::Loadout, Fail> {
+    match destination {
+        Destination::Local { db } => {
+            let conn = db::open_read(db).map_err(Fail::Db)?;
+            db::load(&conn).map_err(Fail::Db)
+        }
+        Destination::Server { url } => {
+            let rows = client::records(url).map_err(Fail::Client)?;
+            db::fold_rows(rows).map_err(Fail::Db)
+        }
+    }
 }
 
 fn parse_comment_id(token: &str) -> Result<CommentId, Fail> {
@@ -902,16 +931,6 @@ fn identity_fallback_notice(context: &Context) -> String {
         saccade::wire::tier_of(&context.tier)
     )
 }
-/// The primary repo root: --repo names it, else the repo containing
-/// the working directory (a worktree resolves to its main checkout).
-fn resolve_repo(cli: &Cli) -> Result<PathBuf, Fail> {
-    match &cli.repo {
-        Some(repo) => repo
-            .canonicalize()
-            .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display()))),
-        None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage),
-    }
-}
 
 /// The db anchored absolute: a relative --db must still name the same
 /// tracker once the session sits inside the checkout.
@@ -925,27 +944,22 @@ fn canonical_db(db_path: &std::path::Path) -> PathBuf {
 /// already holding a workspace is reported — nothing duplicated.
 fn start_door(
     cli: &Cli,
-    db_path: &std::path::Path,
+    destination: &Destination,
     id: &str,
     body: Option<String>,
     stdin: bool,
     base: Option<String>,
 ) -> Result<String, Fail> {
-    if cli.offline {
-        return Err(Fail::Usage(
-            "start runs through the server: the sole writer establishes workspaces; --offline cannot".into(),
-        ));
-    }
+    let url = server_url(destination, "start")?;
     let task = parse_task_id(id)?;
     let request = Prose::new(start_body(body, stdin)?)?;
     let context = context_of(cli)?;
     identity_fallback_guard(cli, &context, attached_terminal())?;
-    client::handshake(&cli.server);
-    let reply = client::start_workspace(&cli.server, &context, task.0, base.as_deref(), &request)
+    client::handshake(&url);
+    let reply = client::start_workspace(&url, &context, task.0, base.as_deref(), &request)
         .map_err(Fail::Client)?;
-    let db_path = canonical_db(db_path);
     let host = if reply.established {
-        launch_harness(cli, &db_path, task, &reply, &request)?
+        launch_harness(cli, destination, task, &reply, &request)?
     } else {
         open_through_host(&reply.workspace.path, false).map_err(|e| {
             Fail::Usage(format!(
@@ -957,20 +971,56 @@ fn start_door(
     render_workspace_reply(cli, &reply, &host)
 }
 
+/// The one server a server-only door may run through; local mode
+/// refuses clearly.
+fn server_url(destination: &Destination, verb: &str) -> Result<String, Fail> {
+    match destination {
+        Destination::Server { url } => Ok(url.clone()),
+        Destination::Local { .. } => Err(Fail::Usage(format!(
+            "{verb} runs through the server: the sole writer establishes workspaces; --db cannot"
+        ))),
+    }
+}
+
+/// The serve door: start a server on the named file, or the primary
+/// repo's usual database. --server selects a server for clients; it is
+/// never a way to start another one.
+fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fail> {
+    let db_path = match (&cli.db, &cli.server) {
+        (Some(db), _) => db.clone(),
+        (None, Some(_)) => {
+            return Err(Fail::Usage(
+                "serve starts a server; --server selects one for clients (--db names the file to serve)".into(),
+            ));
+        }
+        (None, None) => saccade::paths::db_at(&resolve_repo(cli)?),
+    };
+    let _ = tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with_writer(saccade::attempts::WarnsTee::beside(&db_path))
+        .try_init();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
+    match runtime.block_on(saccade::serve::run(&db_path, bind, *port)) {
+        Err(e) => Err(Fail::Usage(e)),
+        Ok(infallible) => match infallible {},
+    }
+}
+
 /// The open door: ensure the recorded environment exists (a missing
 /// checkout is recreated from its branch tip, identity unchanged); an
 /// unestablished task births the association alone. No harness launch,
 /// no request, no ownership change.
-fn open_door(cli: &Cli, db_path: &std::path::Path, id: &str) -> Result<String, Fail> {
-    let _ = db_path;
-    if cli.offline {
-        return Err(Fail::Usage(
-            "open runs through the server: the sole writer establishes workspaces; --offline cannot".into(),
-        ));
-    }
+fn open_door(cli: &Cli, destination: &Destination, id: &str) -> Result<String, Fail> {
+    let url = server_url(destination, "open")?;
     let task = parse_task_id(id)?;
-    client::handshake(&cli.server);
-    let reply = client::open_workspace(&cli.server, task.0).map_err(Fail::Client)?;
+    client::handshake(&url);
+    let reply = client::open_workspace(&url, task.0).map_err(Fail::Client)?;
     let host = open_through_host(&reply.workspace.path, reply.established).map_err(|e| {
         Fail::Usage(format!(
             "workspace stands at {}; the host would not open it: {e}",
@@ -980,14 +1030,15 @@ fn open_door(cli: &Cli, db_path: &std::path::Path, id: &str) -> Result<String, F
     render_workspace_reply(cli, &reply, &host)
 }
 
-/// The exec door: enter the checkout, inject identity and routing over
-/// any stale inherited scope, and exec the argv with its boundaries
-/// intact. The actor is always supplied — the caller's declared
-/// attribution preserved, else the command's own label — so no session
-/// of the wrapper writes as an unpossessed human.
+/// The exec door: enter the checkout, inject identity over any stale
+/// inherited scope — routing is never inherited, it is cleared — and
+/// exec the argv with its boundaries intact. The actor is always
+/// supplied — the caller's declared attribution preserved, else the
+/// command's own label — so no session of the wrapper writes as an
+/// unpossessed human.
 fn exec_door(
     cli: &Cli,
-    db_path: &std::path::Path,
+    destination: &Destination,
     id: &str,
     argv: &[String],
 ) -> Result<String, Fail> {
@@ -995,9 +1046,7 @@ fn exec_door(
         return Err(Fail::Usage("exec needs a command after --".into()));
     };
     let task = parse_task_id(id)?;
-    let conn = db::open_read(db_path).map_err(Fail::Db)?;
-    let loadout = db::load(&conn).map_err(Fail::Db)?;
-    let LoadState::Full(world) = loadout.state else {
+    let LoadState::Full(world) = loadout_of(destination)?.state else {
         return Err(Fail::Degraded(
             "exec needs the world; the log will not fold".into(),
         ));
@@ -1005,12 +1054,11 @@ fn exec_door(
     let ctx = world.tasks.get(task.0).ok_or(Reject::InvalidTaskId)?;
     let workspace = ctx.workspace.as_ref().ok_or(Reject::WorkspaceMissing)?;
     let repo = resolve_repo(cli)?;
-    let db_path = canonical_db(db_path);
     let actor = std::env::var("SACCADE_ACTOR")
         .ok()
         .filter(|a| !a.is_empty())
         .unwrap_or_else(|| command_label(program));
-    let env = injected_environment(task, workspace, &actor, &repo, &db_path, &cli.server);
+    let env = injected_environment(task, workspace, &actor, &repo);
     let checkout = workspace.workspace.worktree.as_path();
     std::env::set_current_dir(checkout).map_err(|e| {
         Fail::Usage(format!(
@@ -1020,7 +1068,11 @@ fn exec_door(
         ))
     })?;
     let err = std::os::unix::process::CommandExt::exec(
-        std::process::Command::new(program).args(rest).envs(env),
+        std::process::Command::new(program)
+            .args(rest)
+            .envs(env)
+            .env_remove("SACCADE_DB")
+            .env_remove("SACCADE_SERVER"),
     );
     Err(Fail::Usage(format!("cannot exec {program}: {err}")))
 }
@@ -1040,7 +1092,38 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
     let context = context_of(cli)?;
     let scope = context.scope.clone();
     let repo = resolve_repo(cli).ok();
-    let db_path = resolve_db(cli).ok().map(|p| canonical_db(&p));
+    let db_path = cli
+        .db
+        .clone()
+        .or_else(|| repo.as_ref().map(|r| saccade::paths::db_at(r)))
+        .map(|p| canonical_db(&p));
+    // the destination's outcome is the disclosure: a broken discovery
+    // is reported, never silently replaced with a local default
+    let (mode, server, detail) = if cli.db.is_some() && cli.server.is_some() {
+        (
+            "conflict",
+            None,
+            Some("--db and --server are both explicit destinations; pass one".to_string()),
+        )
+    } else if let Some(url) = &cli.server {
+        ("server", Some(url.clone()), None)
+    } else if cli.db.is_some() {
+        ("local", None, None)
+    } else {
+        match repo
+            .as_ref()
+            .map(|r| saccade::paths::db_at(r))
+            .map(|db| client::discover(&db))
+        {
+            Some(Ok(url)) => ("discovered-server", Some(url), None),
+            Some(Err(e)) => ("unresolved", None, Some(e.to_string())),
+            None => (
+                "unresolved",
+                None,
+                Some("no repo resolved, so no tracker to discover".to_string()),
+            ),
+        }
+    };
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "actor": context.actor.as_str(),
@@ -1050,7 +1133,9 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
             "workspace": scope.as_ref().and_then(|s| s.workspace.as_ref().map(|w| w.as_path().display().to_string())),
             "repo": repo.map(|p| p.display().to_string()),
             "db": db_path.map(|p| p.display().to_string()),
-            "server": cli.server,
+            "destination": mode,
+            "server": server,
+            "server_detail": detail,
         }))
         .expect("identity is plain data"));
     }
@@ -1077,19 +1162,25 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
     if let Some(db) = db_path {
         out.push(format!("db  {}", db.display()));
     }
-    out.push(format!("server  {}", cli.server));
+    match server {
+        Some(url) => out.push(format!("destination  {mode} {url}")),
+        None => match detail {
+            Some(detail) => out.push(format!("destination  {mode}: {detail}")),
+            None => out.push(format!("destination  {mode}")),
+        },
+    }
     Ok(out.join("\n"))
 }
 
 /// The environment a task's sessions run under, overwritten never
-/// merged: actor attribution, scope from the record, tracker routing.
+/// merged: actor attribution and scope from the record, the repo as
+/// project identity. Routing rides nothing: the session's sac commands
+/// discover from the repo, and stale values are actively cleared.
 fn injected_environment(
     task: TaskId,
     workspace: &saccade::objects::workspace::WorkspaceContext,
     actor: &str,
     repo: &std::path::Path,
-    db_path: &std::path::Path,
-    server: &str,
 ) -> Vec<(String, String)> {
     vec![
         ("SACCADE_ACTOR".into(), actor.to_string()),
@@ -1103,8 +1194,6 @@ fn injected_environment(
             workspace.workspace.worktree.as_path().display().to_string(),
         ),
         ("SACCADE_REPO".into(), repo.display().to_string()),
-        ("SACCADE_DB".into(), db_path.display().to_string()),
-        ("SACCADE_SERVER".into(), server.to_string()),
     ]
 }
 
@@ -1305,7 +1394,7 @@ fn open_through_host(path: &str, create_when_none: bool) -> Result<HostOpen, Str
 /// .envrc, the harness's label supplied as the session's actor.
 fn launch_harness(
     cli: &Cli,
-    db_path: &std::path::Path,
+    destination: &Destination,
     task: TaskId,
     reply: &client::WorkspaceReply,
     request: &Prose,
@@ -1318,11 +1407,12 @@ fn launch_harness(
     // never passes through the word quoting below
     let assignment = format!("SACCADE_ACTOR={}", shell_quote(&label));
     let mut argv = vec![sac.display().to_string()];
+    // the child's explicit destination rides only when the caller named
+    // one; a discovered server is re-found from the repo it serves
+    if let (Destination::Server { url }, true) = (destination, cli.server.is_some()) {
+        argv.extend(["--server".to_string(), url.clone()]);
+    }
     argv.extend([
-        "--server".to_string(),
-        cli.server.clone(),
-        "--db".to_string(),
-        db_path.display().to_string(),
         "--repo".to_string(),
         repo.display().to_string(),
         "exec".to_string(),
@@ -1431,9 +1521,7 @@ fn render_workspace_reply(
     Ok(out.join("\n"))
 }
 
-fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
-    let conn = db::open_read(db_path).map_err(Fail::Db)?;
-    let loadout = db::load(&conn).map_err(Fail::Db)?;
+fn read_only(cli: &Cli, loadout: &db::Loadout) -> Result<String, Fail> {
     let cursor = loadout.rows.last().map(|r| r.seq);
     match &cli.command {
         Cmd::Log => {
@@ -1446,23 +1534,23 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
             };
             Ok(render_log(cli, &loadout.rows, &threads, cursor))
         }
-        Cmd::List { .. } => match loadout.state {
-            LoadState::Full(world) => Ok(render_tasks(cli, &world, cursor)),
-            LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+        Cmd::List { .. } => match &loadout.state {
+            LoadState::Full(world) => Ok(render_tasks(cli, world, cursor)),
+            LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
         },
         Cmd::Show {
             ids,
             stdin,
             withdrawn,
-        } => match loadout.state {
+        } => match &loadout.state {
             LoadState::Full(world) => {
                 if *stdin {
-                    return show_stdin(cli, &world, &loadout.rows, ids, *withdrawn, cursor);
+                    return show_stdin(cli, world, &loadout.rows, ids, *withdrawn, cursor);
                 }
                 if cli.json {
                     let blocks: Vec<serde_json::Value> = ids
                         .iter()
-                        .map(|token| show_value(&world, &loadout.rows, token, *withdrawn))
+                        .map(|token| show_value(world, &loadout.rows, token, *withdrawn))
                         .collect::<Result<_, _>>()?;
                     return Ok(serde_json::to_string_pretty(&serde_json::json!({
                         "blocks": blocks,
@@ -1472,11 +1560,11 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
                 }
                 let mut blocks = Vec::new();
                 for token in ids {
-                    blocks.push(render_id(&world, &loadout.rows, token, *withdrawn)?);
+                    blocks.push(render_id(world, &loadout.rows, token, *withdrawn)?);
                 }
                 Ok(format!("{}\n{}", blocks.join("\n\n"), cursor_line(cursor)))
             }
-            LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+            LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
         },
         Cmd::Search {
             terms,
@@ -1486,15 +1574,15 @@ fn read_only(cli: &Cli, db_path: &std::path::Path) -> Result<String, Fail> {
             let mut query = SearchQuery::parse(terms).map_err(|f| Fail::Usage(f.to_string()))?;
             query.withdrawn = *withdrawn;
             if let Some(around) = context {
-                let anchor = anchor_seq(&loadout, &query)?;
+                let anchor = anchor_seq(loadout, &query)?;
                 return Ok(render_anchor(cli, &loadout.rows, anchor, *around, cursor));
             }
-            match loadout.state {
+            match &loadout.state {
                 LoadState::Full(world) => {
-                    let groups = search(&world, &query).map_err(|f| Fail::Usage(f.to_string()))?;
+                    let groups = search(world, &query).map_err(|f| Fail::Usage(f.to_string()))?;
                     Ok(render_search(cli, &groups, terms, &query, cursor))
                 }
-                LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+                LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
             }
         }
         _ => unreachable!("read_only reached from a mutating command"),
@@ -1505,14 +1593,13 @@ const WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn wait_door(
     cli: &Cli,
-    db_path: &std::path::Path,
+    destination: &Destination,
     target: &str,
     after: u64,
 ) -> Result<String, Fail> {
     let target = parse_target(target)?;
-    let conn = db::open_read(db_path).map_err(Fail::Db)?;
     loop {
-        let loadout = db::load(&conn).map_err(Fail::Db)?;
+        let loadout = loadout_of(destination)?;
         let world = match loadout.state {
             LoadState::Full(world) => world,
             LoadState::Degraded(reason) => return Err(Fail::Degraded(reason)),
@@ -2523,8 +2610,7 @@ mod test {
             actor: actor.map(str::to_owned),
             json: false,
             at: None,
-            offline: true,
-            server: String::new(),
+            server: None,
             command: Cmd::Log,
         };
         let unnamed = cli_of(None);

@@ -234,7 +234,12 @@ pub fn load(conn: &Connection) -> Result<Loadout, DbError> {
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    fold_rows(rows)
+}
 
+/// The fold over rows already read: one semantic implementation serves
+/// the local file and the fetched log alike.
+pub fn fold_rows(rows: Vec<StoredRecord>) -> Result<Loadout, DbError> {
     // Unknown kind/tier: stop at the first, keep rows, refuse the fold.
     // Malformed payload of a known kind: loud error, refuse everything.
     let mut degraded: Option<String> = None;
@@ -340,18 +345,23 @@ pub fn record(
 /// agree. In-place truncation is impossible (the append-only triggers),
 /// so a clone is always a fresh file.
 pub fn clone(source: &Path, at: usize, out: &Path) -> Result<usize, DbError> {
+    let src = open_read(source)?;
+    let rows = load(&src)?.rows;
+    clone_rows(&rows, at, out)
+}
+
+/// The prefix writer behind `clone`: rows already read, local or
+/// fetched, into a fresh tracker through `at`.
+pub fn clone_rows(rows: &[StoredRecord], at: usize, out: &Path) -> Result<usize, DbError> {
     if out.exists() {
         return Err(DbError::Io(format!(
             "refusing to overwrite {}; clone to a fresh path",
             out.display()
         )));
     }
-    let src = open_read(source)?;
-    let rows = load(&src)?.rows;
     let Some(last) = rows.last() else {
         return Err(DbError::Io(format!(
-            "{} holds no records; --at {at} names nothing",
-            source.display()
+            "the log holds no records; --at {at} names nothing"
         )));
     };
     if at > last.seq {

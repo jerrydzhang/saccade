@@ -24,6 +24,19 @@ pub enum ClientFail {
     ServerUnreachable { url: String },
     /// The server answered and refused; `code` is its error code.
     Refused { code: String, detail: String },
+    /// No address hint beside the expected database: no server of that
+    /// tracker was ever published.
+    Undiscovered {
+        db: std::path::PathBuf,
+        hint: std::path::PathBuf,
+    },
+    /// A server answered at the discovered address but serves a
+    /// different database than the one the hint sits beside.
+    Mismatch {
+        url: String,
+        serves: String,
+        expected: std::path::PathBuf,
+    },
 }
 
 impl ClientFail {
@@ -31,6 +44,8 @@ impl ClientFail {
         match self {
             ClientFail::ServerUnreachable { .. } => "server_required",
             ClientFail::Refused { .. } => "server_refused",
+            ClientFail::Undiscovered { .. } => "server_undiscovered",
+            ClientFail::Mismatch { .. } => "server_mismatch",
         }
     }
 }
@@ -40,10 +55,24 @@ impl std::fmt::Display for ClientFail {
         match self {
             ClientFail::ServerUnreachable { url } => write!(
                 f,
-                "no server answered at {url}: start one (`sac serve`), \
-                 or pass --offline to write directly to the db"
+                "no server answered at {url}: start one (`sac serve`) or pass the right --server"
             ),
             ClientFail::Refused { code, detail } => write!(f, "{code}: {detail}"),
+            ClientFail::Undiscovered { db, hint } => write!(
+                f,
+                "no server discovered for {}: no address hint at {}; start one beside that tracker (`sac serve`)",
+                db.display(),
+                hint.display()
+            ),
+            ClientFail::Mismatch {
+                url,
+                serves,
+                expected,
+            } => write!(
+                f,
+                "the server at {url} serves {serves}, not {}; the address hint is stale or points elsewhere",
+                expected.display()
+            ),
         }
     }
 }
@@ -146,33 +175,122 @@ pub fn send(
     }
 }
 
-/// The handshake's client half: warn once when this binary and the
-/// server disagree. A fetch that fails stays quiet — the send that
-/// follows reports an unreachable server without our duplication.
-pub fn handshake(url: &str) {
-    let Ok(mut response) = ureq::get(&format!("{url}/api/v1/version"))
+/// The server's self-naming: its binary version and the canonical
+/// database it serves.
+#[derive(Debug)]
+pub struct ServerIdentity {
+    pub version: String,
+    pub db: Option<String>,
+}
+
+/// GET the server's identity: version and served database, the facts
+/// discovery verifies against the tracker it expects.
+pub fn identity(url: &str) -> Result<ServerIdentity, ClientFail> {
+    let mut response = ureq::get(&format!("{url}/api/v1/version"))
         .config()
         .http_status_as_error(false)
         .build()
         .call()
-    else {
-        return;
-    };
-    let Ok(text) = response.body_mut().read_to_string() else {
-        return;
-    };
-    let Ok(body) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return;
-    };
-    let mine = env!("CARGO_PKG_VERSION");
-    if body["version"]
-        .as_str()
-        .is_some_and(|theirs| theirs != mine)
-    {
-        eprintln!(
-            "warning: server runs sac {theirs}, this binary is sac {mine}; a mismatch may refuse",
-            theirs = body["version"].as_str().unwrap_or_default()
-        );
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    let body: serde_json::Value = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
+        code: "malformed_response".into(),
+        detail: e.to_string(),
+    })?;
+    Ok(ServerIdentity {
+        version: body["version"].as_str().unwrap_or_default().to_string(),
+        db: body["db"].as_str().map(str::to_string),
+    })
+}
+
+/// Resolve a tracker's server: read the address hint beside the
+/// expected database, then verify the server there really serves that
+/// database. No fallback: a missing, unreachable, or mismatched server
+/// refuses.
+pub fn discover(expected_db: &std::path::Path) -> Result<String, ClientFail> {
+    let hint = crate::paths::address_at(expected_db);
+    let url = std::fs::read_to_string(&hint)
+        .map_err(|_| ClientFail::Undiscovered {
+            db: expected_db.to_path_buf(),
+            hint: hint.clone(),
+        })?
+        .trim()
+        .to_string();
+    if url.is_empty() {
+        return Err(ClientFail::Undiscovered {
+            db: expected_db.to_path_buf(),
+            hint,
+        });
+    }
+    let id = identity(&url)?;
+    let expected = canonical_db(expected_db);
+    if id.db.as_deref() != Some(expected.to_string_lossy().as_ref()) {
+        return Err(ClientFail::Mismatch {
+            url,
+            serves: id.db.unwrap_or_else(|| "an unnamed database".into()),
+            expected,
+        });
+    }
+    Ok(url)
+}
+
+/// The canonical face of a db path: the file resolved, the raw path
+/// when it does not exist yet.
+fn canonical_db(db_path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf())
+}
+
+/// The raw log over the wire: rows only, folded by the caller with the
+/// local file's own code.
+pub fn records(url: &str) -> Result<Vec<StoredRecord>, ClientFail> {
+    let mut response = ureq::get(&format!("{url}/api/v1/records"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    let status = response.status().as_u16();
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    if status != 200 {
+        return Err(error_of(&text));
+    }
+    #[derive(Deserialize)]
+    struct RecordsBody {
+        records: Vec<StoredRecord>,
+    }
+    let body: RecordsBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
+        code: "malformed_response".into(),
+        detail: e.to_string(),
+    })?;
+    Ok(body.records)
+}
+
+/// The handshake's client half: warn once when this binary and the
+/// server disagree. A fetch that fails stays quiet — the send that
+/// follows reports an unreachable server without our duplication.
+pub fn handshake(url: &str) {
+    if let Ok(id) = identity(url) {
+        let mine = env!("CARGO_PKG_VERSION");
+        if id.version != mine {
+            eprintln!(
+                "warning: server runs sac {}, this binary is sac {mine}; a mismatch may refuse",
+                id.version
+            );
+        }
     }
 }
 
