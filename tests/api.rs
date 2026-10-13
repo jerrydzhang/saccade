@@ -2077,7 +2077,7 @@ async fn offline_replies_match_the_wire() {
 // ---- the wait door through the CLI face: committed, delayed, mute ----
 
 #[test]
-fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
+fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("wait-door");
     let sac = |args: &[&str]| {
@@ -2153,7 +2153,9 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
     sac_quiet(&["comment", "t-0", "the opening note"]); // seq 1 -> c-1
 
     // activity that committed before the wait: caught, never blocked
-    let (seqs, cursor) = observed(spawn_waiter(&["t-0", "--after", "0"]));
+    let (seqs, cursor) = observed(spawn_waiter(&[
+        "t-0", "--after", "0", "--until", "activity",
+    ]));
     assert_eq!(seqs, vec![1]);
     assert_eq!(cursor, 1);
 
@@ -2164,12 +2166,14 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
     let log: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(log["cursor"], 2);
     sac_quiet(&["comment", "t-0", "a late addition"]); // seq 3
-    let (seqs, cursor) = observed(spawn_waiter(&["t-0", "--after", "2"]));
+    let (seqs, cursor) = observed(spawn_waiter(&[
+        "t-0", "--after", "2", "--until", "activity",
+    ]));
     assert_eq!(seqs, vec![3]);
     assert_eq!(cursor, 3);
 
     // the blocked wait wakes on another process's committed write
-    let mut child = spawn_waiter(&["c-1", "--after", "3"]);
+    let mut child = spawn_waiter(&["c-1", "--after", "3", "--until", "activity"]);
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert!(
         child.try_wait().unwrap().is_none(),
@@ -2182,12 +2186,14 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
 
     // a completed wait lands nothing
     let before = row_count();
-    let (_, cursor) = observed(spawn_waiter(&["t-0", "--after", "3"]));
+    let (_, cursor) = observed(spawn_waiter(&[
+        "t-0", "--after", "3", "--until", "activity",
+    ]));
     assert_eq!(cursor, 4);
     assert_eq!(row_count(), before, "the wait landed nothing");
 
     // the sibling neither wakes the comment wait nor rides in its records
-    let mut child = spawn_waiter(&["c-1", "--after", "4"]);
+    let mut child = spawn_waiter(&["c-1", "--after", "4", "--until", "activity"]);
     sac_quiet(&["comment", "t-0", "an unrelated sibling"]); // seq 5
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert!(
@@ -2200,13 +2206,55 @@ fn the_wait_door_wakes_on_committed_and_delayed_activity_and_lands_nothing() {
     assert_eq!(cursor, 6);
 
     // the text face: matched record lines, then the cursor for the next wait
-    let (ok, out, _) = sac(&["wait", "t-0", "--after", "5"]);
+    let (ok, out, _) = sac(&["wait", "t-0", "--after", "5", "--until", "activity"]);
     assert!(ok, "{out}");
     assert!(out.contains("c-6"), "{out}");
     assert!(out.trim_end().ends_with("cursor 6"), "{out}");
 
+    // the offer wait stays down through a note and wakes on the offer's birth
+    let mut child = spawn_waiter(&["t-0", "--after", "6", "--until", "offer"]);
+    sac_quiet(&["comment", "t-0", "still only chatter"]); // seq 7
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "a note woke the offer wait"
+    );
+    sac_quiet(&["offer", "t-0", "the account, ready for review"]); // seq 8
+    let (seqs, cursor) = observed(child);
+    assert_eq!(seqs, vec![8]);
+    assert_eq!(cursor, 8);
+
+    // the committed offer is caught before any blocking
+    let (seqs, cursor) = observed(spawn_waiter(&["t-0", "--after", "7", "--until", "offer"]));
+    assert_eq!(seqs, vec![8]);
+    assert_eq!(cursor, 8);
+
+    // a revision of the offer is not a new birth: the wait stays down, and an interruption ends it landing nothing
+    let mut child = spawn_waiter(&["t-0", "--after", "8", "--until", "offer"]);
+    sac_quiet(&["revise", "c-8", "the account, restated"]); // seq 9
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "a revision woke the offer wait"
+    );
+    child.kill().unwrap();
+    let _ = child.wait();
+    assert_eq!(row_count(), 10, "the interrupted wait landed nothing");
+
+    // offer mode addresses a task only
+    let (ok, _, stderr) = sac(&["wait", "c-1", "--after", "0", "--until", "offer"]);
+    assert!(!ok);
+    assert!(stderr.contains("--until offer"), "{stderr}");
+    assert!(stderr.contains("activity"), "{stderr}");
+
+    // neither the cursor nor the mode is ever chosen for the caller
+    let (ok, _, stderr) = sac(&["wait", "t-0", "--after", "0"]);
+    assert!(!ok, "a wait without --until ran: {stderr}");
+    let (ok, _, stderr) = sac(&["wait", "t-0", "--until", "activity"]);
+    assert!(!ok, "a wait without --after ran: {stderr}");
+
     // a missing target refuses at the read door
-    let (ok, _, stderr) = sac(&["wait", "t-9", "--after", "0"]);
+    let (ok, _, stderr) = sac(&["wait", "t-9", "--after", "0", "--until", "activity"]);
     assert!(!ok);
     assert!(stderr.contains("no task t-9"), "{stderr}");
 

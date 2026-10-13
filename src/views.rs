@@ -49,9 +49,35 @@ pub fn request_facts(world: &World, position: RecordId) -> Option<RequestFacts> 
     })
 }
 
+/// What a wait wakes on: the consumer's explicit choice, never
+/// defaulted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitUntil {
+    Activity,
+    Offer,
+}
+
 /// A use never matches a comment wait: matching follows targets, and
 /// a use targets its consuming task, never the offer it names.
-pub fn wait_matches(world: &World, at: RecordId, event: &Event, target: &Target) -> bool {
+/// An offer wait matches Offer births alone — every one qualifies,
+/// standing or long decided; later events never filter an earlier
+/// birth, and a revision is not a birth.
+pub fn wait_matches(
+    world: &World,
+    at: RecordId,
+    event: &Event,
+    target: &Target,
+    until: WaitUntil,
+) -> bool {
+    if matches!(until, WaitUntil::Offer) {
+        return matches!(
+            event,
+            Event::Commented {
+                kind: CommentKind::Offer { .. },
+                target: born,
+            } if *born == *target
+        );
+    }
     match event {
         Event::TaskCreated { .. } => match target {
             Target::Task(task) => world.task_born_at(at) == Some(*task),
@@ -2168,7 +2194,7 @@ mod test {
             )
         }
 
-        // t-0 holds the waited offer, its sibling note, a two-link chain, revisions, a withdrawal, the accept, a claim, an artifact
+        // t-0 holds the waited offer, its sibling note, a two-link chain, revisions, a withdrawal, the accept, a claim, an artifact; t-1 holds a rejected offer superseded by a concluded one
         fn story() -> (World, Vec<(usize, Event)>) {
             let events = vec![
                 task(0, "implement foo"),
@@ -2245,6 +2271,35 @@ mod test {
                         note: Prose::new("asked in the wrong place".into()).unwrap(),
                     },
                 ),
+                comment(
+                    14,
+                    Target::Task(TaskId(1)),
+                    CommentKind::Offer {
+                        body: Prose::new("floop migrated, review welcome".into()).unwrap(),
+                    },
+                ),
+                comment(
+                    15,
+                    Target::Comment(CommentId(RecordId(14))),
+                    CommentKind::Reject {
+                        offer: CommentId(RecordId(14)),
+                        grounds: Prose::new("the floop index is missing".into()).unwrap(),
+                    },
+                ),
+                comment(
+                    16,
+                    Target::Task(TaskId(1)),
+                    CommentKind::Offer {
+                        body: Prose::new("the index rides along now".into()).unwrap(),
+                    },
+                ),
+                comment(
+                    17,
+                    Target::Comment(CommentId(RecordId(16))),
+                    CommentKind::Accept {
+                        offer: CommentId(RecordId(16)),
+                    },
+                ),
             ];
             let records = events
                 .iter()
@@ -2258,10 +2313,15 @@ mod test {
             (World::replay(records).unwrap(), events)
         }
 
-        fn matching(world: &World, events: &[(usize, Event)], target: &Target) -> Vec<usize> {
+        fn matching(
+            world: &World,
+            events: &[(usize, Event)],
+            target: &Target,
+            until: WaitUntil,
+        ) -> Vec<usize> {
             events
                 .iter()
-                .filter(|(seq, event)| wait_matches(world, RecordId(*seq), event, target))
+                .filter(|(seq, event)| wait_matches(world, RecordId(*seq), event, target, until))
                 .map(|(seq, _)| *seq)
                 .collect()
         }
@@ -2271,12 +2331,22 @@ mod test {
         fn the_task_wait_matches_exactly_its_own_records() {
             let (world, events) = story();
             assert_eq!(
-                matching(&world, &events, &Target::Task(TaskId(0))),
+                matching(
+                    &world,
+                    &events,
+                    &Target::Task(TaskId(0)),
+                    WaitUntil::Activity
+                ),
                 vec![0, 1, 2, 3, 5, 6, 7, 10, 11, 12, 13]
             );
             assert_eq!(
-                matching(&world, &events, &Target::Task(TaskId(1))),
-                vec![4, 8, 9]
+                matching(
+                    &world,
+                    &events,
+                    &Target::Task(TaskId(1)),
+                    WaitUntil::Activity
+                ),
+                vec![4, 8, 9, 14, 15, 16, 17]
             );
         }
 
@@ -2285,7 +2355,33 @@ mod test {
         fn the_comment_wait_matches_only_its_chain() {
             let (world, events) = story();
             let offer = Target::Comment(CommentId(RecordId(1)));
-            assert_eq!(matching(&world, &events, &offer), vec![3, 5, 6, 7, 12, 13]);
+            assert_eq!(
+                matching(&world, &events, &offer, WaitUntil::Activity),
+                vec![3, 5, 6, 7, 12, 13]
+            );
+        }
+
+        // the offer wait matches every offer birth — the rejected one included — never its revision, decision, or any other kind
+        #[test]
+        fn the_offer_wait_matches_every_offer_birth_and_nothing_else() {
+            let (world, events) = story();
+            assert_eq!(
+                matching(&world, &events, &Target::Task(TaskId(0)), WaitUntil::Offer),
+                vec![1]
+            );
+            assert_eq!(
+                matching(&world, &events, &Target::Task(TaskId(1)), WaitUntil::Offer),
+                vec![14, 16]
+            );
+            assert_eq!(
+                matching(
+                    &world,
+                    &events,
+                    &Target::Comment(CommentId(RecordId(1))),
+                    WaitUntil::Offer
+                ),
+                Vec::<usize>::new()
+            );
         }
     }
 
