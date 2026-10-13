@@ -1333,8 +1333,7 @@ mod test {
         ));
         assert!(!again.exists(), "a refused migration writes nothing");
 
-        // a payload the log writer never wrote (here pretty-printed)
-        // refuses rather than rewrite surviving bytes
+        // a payload the log writer never wrote refuses rather than rewrite surviving bytes
         let pretty = dir.join("pretty.db");
         {
             let conn = open(&pretty).unwrap();

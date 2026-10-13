@@ -14,15 +14,17 @@ and all other payloads ride byte-identical, so task, comment, and
 incarnation ids never move. Historical parent links are dropped as
 grouping facts; they translate to nothing.
 
-Stop the service first. A clean stop checkpoints the WAL away; the
-rest of the sequence relies on no sidecars lingering beside the main
-file — SQLite would apply an old `saccade.db-wal` to whatever main
-file carries that name, so a stale sidecar must never meet the
+Stop the tracker's service first — however this host actually runs it
+(process manager, devenv service, direct invocation); stop that and
+wait for the process to exit. A clean stop checkpoints the WAL away;
+the rest of the sequence relies on no sidecars lingering beside the
+main file — SQLite would apply an old `saccade.db-wal` to whatever
+main file carries that name, so a stale sidecar must never meet the
 migrated file. Sidecars always retire together with the main file
 they belong to.
 
 ```
-systemctl --user stop saccade
+<stop the tracker's process manager/service; wait for exit>
 cd <state dir holding saccade.db>
 ls saccade.db-wal saccade.db-shm 2>/dev/null    # a clean stop lists nothing
 
@@ -48,6 +50,7 @@ task-created payload in a serialization the log writer never produced,
 and any rewrite whose folded world differs from the source's — a
 refused migration writes nothing.
 
-Rollback is the retired directory: stop the service, remove the new
-`saccade.db`, move the retired set back, run the 0.12.0 binary. Keep
-the retired directory and the backup.
+Rollback: stop the service again, retire the new set the same way —
+the new `saccade.db` plus any new `-wal`/`-shm` beside it — then move
+the old set back and run the 0.12.0 binary. Keep the retired
+directory and the backup.
