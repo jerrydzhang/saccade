@@ -14,26 +14,40 @@ and all other payloads ride byte-identical, so task, comment, and
 incarnation ids never move. Historical parent links are dropped as
 grouping facts; they translate to nothing.
 
-Work on backup copies — the live file stays untouched throughout:
+Stop the service first. A clean stop checkpoints the WAL away; the
+rest of the sequence relies on no sidecars lingering beside the main
+file — SQLite would apply an old `saccade.db-wal` to whatever main
+file carries that name, so a stale sidecar must never meet the
+migrated file. Sidecars always retire together with the main file
+they belong to.
 
 ```
-# stop the tracker's server, then take a consistent snapshot
-# (.backup is SQLite's online backup API, safe on a WAL database)
-sqlite3 /path/to/saccade.db ".backup '/path/to/backup.db'"
+systemctl --user stop saccade
+cd <state dir holding saccade.db>
+ls saccade.db-wal saccade.db-shm 2>/dev/null    # a clean stop lists nothing
 
-# migrate the backup into a fresh output file
-sac migrate --in /path/to/backup.db --out /path/to/migrated.db
+# retire the original whole — main file plus any sidecars — together
+mkdir ../saccade-0.12
+mv saccade.db saccade.db-wal saccade.db-shm ../saccade-0.12/ 2>/dev/null
 
-# verify with the new binary, then cut over
-sac --db /path/to/migrated.db list
-mv /path/to/saccade.db /path/to/saccade.db.0.12  # keep the original
-mv /path/to/migrated.db /path/to/saccade.db
+# snapshot the retired log (.backup is SQLite's online backup API)
+sqlite3 ../saccade-0.12/saccade.db ".backup 'backup.db'"
+
+# migrate into a fresh file and verify it with the new binary
+sac migrate --in backup.db --out migrated.db
+sac --db migrated.db list
+
+# swap in; migrate's connection closed cleanly, so it carries no sidecars
+mv migrated.db saccade.db
 ```
 
-`sac migrate` prints what it did, naming every stripped link
-(`c-<seq> birth of t-<n>, parented t-<m>`); `--json` emits the same
-report as data. It refuses an existing output path, a source that is
-not a schema-2 saccade log, and any rewrite whose folded world differs
-from the source's — a refused migration writes nothing. Keep the
-original backup; it is the rollback (restore it and run the 0.12.0
-binary).
+`sac migrate` names every stripped link in its report
+(`c-<seq> birth of t-<n>, parented t-<m>`); it refuses an existing
+output path, a source that is not a schema-2 saccade log, a
+task-created payload in a serialization the log writer never produced,
+and any rewrite whose folded world differs from the source's — a
+refused migration writes nothing.
+
+Rollback is the retired directory: stop the service, remove the new
+`saccade.db`, move the retired set back, run the 0.12.0 binary. Keep
+the retired directory and the backup.

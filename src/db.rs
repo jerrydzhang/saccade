@@ -12,8 +12,7 @@ use crate::wire;
 
 /// file-header stamp identifying a Saccade database.
 const APPLICATION_ID: i32 = i32::from_be_bytes(*b"sacd");
-/// The schema this binary writes; 0.13.0 retired task parents from
-/// task-created payloads.
+/// The schema this binary reads and writes.
 pub const SCHEMA_VERSION: i32 = 3;
 /// The schema the migration reads: Saccade 0.12.0's stamp.
 pub const MIGRATED_FROM: i32 = 2;
@@ -62,7 +61,7 @@ impl std::fmt::Display for DbError {
             DbError::OlderSchema(v) => {
                 write!(
                     f,
-                    "database schema v{v} predates this binary; migrate the log with sac migrate"
+                    "database schema v{v} predates this binary; sac migrate reads schema-2 logs"
                 )
             }
             DbError::WrongSchema { found, reads } => write!(
@@ -417,29 +416,24 @@ pub fn clone(source: &Path, at: usize, out: &Path) -> Result<usize, DbError> {
 /// One retired parent link, as the migration's report names it.
 #[derive(Debug, PartialEq)]
 pub struct StrippedLink {
-    /// The birth record's position
     pub seq: usize,
-    /// The task the birth folds into
     pub task: usize,
-    /// The parent it named
     pub parent: usize,
 }
 
 /// What one migration did.
 #[derive(Debug)]
 pub struct MigrationReport {
-    /// Records copied, all of them, envelopes byte-identical
+    /// Records copied, envelopes byte-identical
     pub records: usize,
     /// Parent links stripped from task-created payloads
     pub stripped: Vec<StrippedLink>,
 }
 
-/// Migrate a schema-2 log into a fresh schema-3 tracker: every record
-/// copied with its envelope untouched, the retired parent member
-/// removed from task-created payloads. The source is opened read-only
-/// and never written; the output must be a fresh path. Nothing lands
-/// unless the rewritten log folds to the same world the source folds
-/// to, and the written file reloads through the ordinary open path.
+/// Migrate a schema-2 log into a fresh schema-3 tracker, rewriting
+/// nothing but the retired parent members. A rewrite that folds to a
+/// different world than the source's refuses before writing; a
+/// written file that fails its reload is removed.
 pub fn migrate(source: &Path, out: &Path) -> Result<MigrationReport, DbError> {
     if out.exists() {
         return Err(DbError::Io(format!(
@@ -477,7 +471,6 @@ pub fn migrate(source: &Path, out: &Path) -> Result<MigrationReport, DbError> {
         }
     };
 
-    // rewrite task-created payloads; every other column rides verbatim
     let mut stripped = Vec::new();
     let mut tasks = 0usize;
     let mut rewritten: Vec<StoredRecord> = Vec::with_capacity(rows.len());
@@ -497,7 +490,6 @@ pub fn migrate(source: &Path, out: &Path) -> Result<MigrationReport, DbError> {
         rewritten.push(row);
     }
 
-    // the rewritten log must fold to the same world the source does
     let (records, degraded) = parse_rows(&rewritten)?;
     if let Some(reason) = degraded {
         return Err(DbError::Corrupt {
@@ -537,8 +529,6 @@ pub fn migrate(source: &Path, out: &Path) -> Result<MigrationReport, DbError> {
     }
     txn.commit()?;
 
-    // the written file reloads through the ordinary open path, and
-    // every reloaded row equals the rewritten one
     let check = open_read(out)?;
     let loadout = load(&check)?;
     let LoadState::Full(reloaded) = loadout.state else {
@@ -560,9 +550,10 @@ pub fn migrate(source: &Path, out: &Path) -> Result<MigrationReport, DbError> {
     })
 }
 
-/// Remove the parent_id member from a task-created payload: the
-/// surviving bytes stay as the source wrote them. Returns the parent
-/// the member named.
+/// Remove the parent_id member from a task-created payload; returns
+/// the parent it named. Only the log writer's own compact shape is
+/// rewritten — any other serialization refuses, never rewrites the
+/// surviving bytes.
 fn strip_parent(payload: &str, seq: usize) -> Result<(String, Option<usize>), DbError> {
     let value: serde_json::Value = serde_json::from_str(payload).map_err(|e| DbError::Corrupt {
         seq,
@@ -587,26 +578,19 @@ fn strip_parent(payload: &str, seq: usize) -> Result<(String, Option<usize>), Db
             });
         }
     };
-    // the log's writer serialized members sorted and compact, so the
-    // member sits as a trailing comma segment before the closing brace
     let needle = format!(",\"parent_id\":{parent}");
-    let surgical = payload
+    let Some(core) = payload
         .strip_suffix('}')
         .and_then(|core| core.strip_suffix(&needle))
-        .map(|core| format!("{core}}}"));
-    let stripped = match surgical {
-        Some(p) => p,
-        // a payload in some other shape: rebuild the object without the
-        // member, the remaining members re-sorted
-        None => {
-            let mut map = value;
-            map.as_object_mut()
-                .expect("the value parsed from an object payload")
-                .remove("parent_id");
-            serde_json::to_string(&map).expect("plain data")
-        }
+    else {
+        return Err(DbError::Corrupt {
+            seq,
+            kind: "task_created".into(),
+            detail: "not the log writer's compact shape; refusing to rewrite surviving bytes"
+                .into(),
+        });
     };
-    Ok((stripped, named))
+    Ok((format!("{core}}}"), named))
 }
 
 /// Fold-validated all-or-none append of a mixed-context batch; positional ids
@@ -1227,8 +1211,7 @@ mod test {
         assert!(matches!(refused, Err(ExecuteFail::Degraded(_))));
     }
 
-    /// A schema stamp this binary does not hold refuses by name in
-    /// both directions; a foreign stamp is not a saccade database.
+    /// A schema stamp this binary does not hold refuses by name; a foreign stamp is not a saccade database.
     #[test]
     fn pre_replacement_schema_is_refused() {
         let stamped = |version: i32| {
@@ -1260,9 +1243,7 @@ mod test {
         assert!(matches!(verify(&foreign), Err(DbError::NotSaccade)));
     }
 
-    /// The migration strips the retired parent member and nothing
-    /// else: envelopes ride verbatim, the output opens through this
-    /// binary's ordinary path.
+    /// The migration strips the parent member alone; every other byte rides as written.
     #[test]
     fn migrate_strips_parents_and_preserves_the_log() {
         let dir = std::env::temp_dir().join(format!("sac-migrate-test-{}", std::process::id()));
@@ -1311,8 +1292,6 @@ mod test {
             panic!("the migrated log folds");
         };
         assert_eq!(world.tasks.len(), 2);
-        // the parent member leaves every task-created payload; all other
-        // bytes ride as written
         assert_eq!(loadout.rows[0].payload, "{\"name\":\"implement foo\"}");
         assert_eq!(loadout.rows[1].payload, "{\"name\":\"migrate floop\"}");
         assert_eq!(
@@ -1353,6 +1332,28 @@ mod test {
             })
         ));
         assert!(!again.exists(), "a refused migration writes nothing");
+
+        // a payload the log writer never wrote (here pretty-printed)
+        // refuses rather than rewrite surviving bytes
+        let pretty = dir.join("pretty.db");
+        {
+            let conn = open(&pretty).unwrap();
+            conn.execute(
+                "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
+                 VALUES (0, 1, 1, 'jerry', 'human', 'task_created',
+                         '{\"name\":\n  \"implement foo\",\n  \"parent_id\": 0\n}')",
+                [],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", MIGRATED_FROM)
+                .unwrap();
+        }
+        let refused = dir.join("pretty-out.db");
+        assert!(matches!(
+            migrate(&pretty, &refused),
+            Err(DbError::Corrupt { seq: 0, .. })
+        ));
+        assert!(!refused.exists(), "a refused migration writes nothing");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
