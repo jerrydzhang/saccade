@@ -199,13 +199,15 @@ pub fn ensure_checkout(root: &Path, facts: &Established) -> Result<bool, Workspa
 
 /// The teardown gate: a checkout carrying staged, unstaged, or
 /// untracked work refuses cleanup before anything destructive runs;
-/// ignored files are not work, and an absent checkout has none.
+/// ignored files are not work, and an absent checkout has none. The
+/// untracked inventory is forced on, so a display config like
+/// status.showUntrackedFiles=no cannot hide work from the gate.
 pub fn refuse_dirty(facts: &Established) -> Result<(), WorkspaceFail> {
     let path = facts.worktree.as_path();
     if !path.is_dir() {
         return Ok(());
     }
-    let out = git(path, &["status", "--porcelain"])?;
+    let out = git(path, &["status", "--porcelain", "--untracked-files=all"])?;
     let files: Vec<String> = out.lines().map(str::to_string).collect();
     if files.is_empty() {
         return Ok(());
@@ -216,8 +218,6 @@ pub fn refuse_dirty(facts: &Established) -> Result<(), WorkspaceFail> {
     })
 }
 
-/// Remove the recorded checkout; the branch is never touched. An
-/// absent checkout is already removed.
 pub fn remove_checkout(root: &Path, facts: &Established) -> Result<bool, WorkspaceFail> {
     let path = facts.worktree.as_path();
     if !path.is_dir() {
@@ -227,7 +227,6 @@ pub fn remove_checkout(root: &Path, facts: &Established) -> Result<bool, Workspa
     Ok(true)
 }
 
-/// The branch's current tip, or none when the branch is gone.
 pub fn branch_tip(root: &Path, branch: &GitBranch) -> Result<Option<GitCommit>, WorkspaceFail> {
     if !branch_exists(root, branch) {
         return Ok(None);
@@ -382,8 +381,15 @@ mod test {
         let refused = refuse_dirty(&facts);
         assert!(matches!(refused, Err(WorkspaceFail::Dirty { .. })));
 
-        // ignored files are not work
+        // untracked work refuses even when the display config hides it
         std::fs::remove_file(wt.join("stray.txt")).unwrap();
+        git(&root, &["config", "status.showUntrackedFiles", "no"]).unwrap();
+        std::fs::write(wt.join("hidden.txt"), "untracked\n").unwrap();
+        let refused = refuse_dirty(&facts);
+        assert!(matches!(refused, Err(WorkspaceFail::Dirty { .. })));
+        std::fs::remove_file(wt.join("hidden.txt")).unwrap();
+
+        // ignored files are not work
         std::fs::write(wt.join(".gitignore"), "ignored.log\n").unwrap();
         git(wt, &["add", ".gitignore"]).unwrap();
         git(wt, &["commit", "-qm", "ignore pattern"]).unwrap();
