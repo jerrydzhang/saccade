@@ -160,6 +160,7 @@ and reopening (`sac reopen t-N --explanation "…"`).
 | `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace — none is created by checkpoint |
 | `sac start t-N "initial request"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects, record the request, assign the incarnation ownership, and submit the pinned native Pi into one host terminal with the request as its prompt; a repeat start reveals the standing workspace's live terminal or reports its address — no second launch, request, or ownership change |
 | `sac open t-N` | any tier | ensure the recorded environment exists (a missing checkout is recreated from its branch tip); a fresh association births the establishment alone, a standing one reveals its live terminal or reports its address — never a harness launch, request, or ownership change |
+| `sac clean t-N` | any tier | stop the workspace's host terminals and running work, remove the checkout; the branch (unmerged commits included), records, checkpoints, and artifacts stand; a checkout with staged, unstaged, or untracked work refuses first; nothing is recorded |
 | `sac exec t-N -- <command and argv>` | any tier | run a command inside the recorded workspace: identity and routing injected from the record, argv boundaries kept, nothing recorded |
 | `sac identity` | anonymous | report the environment-declared actor/tier, scope, and routing — disclosure, never a liveness claim |
 | `sac list` / `sac show <ids…>` / `sac log` | anonymous | the board, threads and records, raw events |
@@ -280,6 +281,18 @@ advancement survives, identity never changes — and leave a present
 checkout's files, uncommitted changes, programs, and ownership alone.
 A branch that no longer exists refuses (`workspace_branch_missing`);
 recovery beyond that is not built.
+
+`sac clean t-N` tears the recorded workspace down: the host's terminals
+and running work in it stop, git removes the checkout, and the branch —
+unmerged commits included — stands with every record, checkpoint, and
+artifact. A checkout carrying staged, unstaged, or untracked work
+refuses (`workspace_dirty`) before anything destructive runs; ignored
+files are not work. A vanished checkout and registration clean again
+as success, and `sac open` afterwards recreates the checkout from the
+retained branch under the same workspace/incarnation identity — never
+a successor. Nothing is recorded and no task state gates it: teardown
+is explicit authorization to terminate running work, never an inference
+about the work's completion, and no state transition fires it.
 
 `sac exec t-N -- <argv>` is the harness-agnostic door into a
 workspace: it injects the session's identity and routing

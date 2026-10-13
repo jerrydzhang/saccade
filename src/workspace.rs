@@ -18,6 +18,8 @@ pub enum WorkspaceFail {
     BranchMissing(GitBranch),
     /// The workspace's path is already occupied on disk.
     PathOccupied(PathBuf),
+    /// The checkout carries staged, unstaged, or untracked work.
+    Dirty { path: PathBuf, files: Vec<String> },
     /// A git command failed; the detail is its stderr.
     Git(String),
 }
@@ -28,6 +30,7 @@ impl WorkspaceFail {
             WorkspaceFail::BranchExists(_) => "workspace_branch_exists",
             WorkspaceFail::BranchMissing(_) => "workspace_branch_missing",
             WorkspaceFail::PathOccupied(_) => "workspace_path_occupied",
+            WorkspaceFail::Dirty { .. } => "workspace_dirty",
             WorkspaceFail::Git(_) => "workspace_effect",
         }
     }
@@ -44,6 +47,25 @@ impl WorkspaceFail {
             ),
             WorkspaceFail::PathOccupied(path) => {
                 format!("workspace path {} is already occupied", path.display())
+            }
+            WorkspaceFail::Dirty { path, files } => {
+                let listed = files
+                    .iter()
+                    .take(8)
+                    .map(|f| f.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let rest = files.len().saturating_sub(8);
+                let more = if rest > 0 {
+                    format!(", and {rest} more")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "workspace {} carries staged, unstaged, or untracked work: {listed}{more}; \
+                     commit or remove it before cleanup",
+                    path.display()
+                )
             }
             WorkspaceFail::Git(detail) => detail.clone(),
         }
@@ -175,6 +197,53 @@ pub fn ensure_checkout(root: &Path, facts: &Established) -> Result<bool, Workspa
     }
 }
 
+/// The teardown gate: a checkout carrying staged, unstaged, or
+/// untracked work refuses cleanup before anything destructive runs;
+/// ignored files are not work, and an absent checkout has none. The
+/// untracked inventory is forced on, so a display config like
+/// status.showUntrackedFiles=no cannot hide work from the gate.
+pub fn refuse_dirty(facts: &Established) -> Result<(), WorkspaceFail> {
+    let path = facts.worktree.as_path();
+    if !path.is_dir() {
+        return Ok(());
+    }
+    let out = git(path, &["status", "--porcelain", "--untracked-files=all"])?;
+    let files: Vec<String> = out.lines().map(str::to_string).collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    Err(WorkspaceFail::Dirty {
+        path: path.to_path_buf(),
+        files,
+    })
+}
+
+pub fn remove_checkout(root: &Path, facts: &Established) -> Result<bool, WorkspaceFail> {
+    let path = facts.worktree.as_path();
+    if !path.is_dir() {
+        return Ok(false);
+    }
+    git(root, &["worktree", "remove", &path.display().to_string()])?;
+    Ok(true)
+}
+
+pub fn branch_tip(root: &Path, branch: &GitBranch) -> Result<Option<GitCommit>, WorkspaceFail> {
+    if !branch_exists(root, branch) {
+        return Ok(None);
+    }
+    let tip = git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{}", branch.as_str()),
+        ],
+    )?;
+    GitCommit::new(tip)
+        .map(Some)
+        .map_err(|e| WorkspaceFail::Git(format!("git gave no commit: {e:?}")))
+}
+
 /// A recorded workspace's facts read back for the effects.
 pub fn recorded(
     task: TaskId,
@@ -281,6 +350,79 @@ mod test {
         git(&root, &["branch", "-qD", facts.branch.as_str()]).unwrap();
         let refused = ensure_checkout(&root, &facts);
         assert!(matches!(refused, Err(WorkspaceFail::BranchMissing(_))));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_teardown_gate_refuses_work_but_lets_ignored_files_pass() {
+        let root = scratch_repo("gate");
+        let home = root.join("worktrees");
+        let facts = establish(&root, &home, TaskId(0), None).unwrap();
+        let wt = facts.worktree.as_path();
+
+        // a clean checkout passes
+        refuse_dirty(&facts).unwrap();
+
+        // unstaged work refuses
+        std::fs::write(wt.join("f.txt"), "edited\n").unwrap();
+        let refused = refuse_dirty(&facts);
+        assert!(matches!(refused, Err(WorkspaceFail::Dirty { .. })));
+
+        // staged work refuses
+        git(wt, &["add", "f.txt"]).unwrap();
+        let refused = refuse_dirty(&facts);
+        assert!(matches!(refused, Err(WorkspaceFail::Dirty { .. })));
+
+        // untracked work refuses
+        git(wt, &["reset", "-q"]).unwrap();
+        git(wt, &["checkout", "-q", "--", "f.txt"]).unwrap();
+        std::fs::write(wt.join("stray.txt"), "untracked\n").unwrap();
+        let refused = refuse_dirty(&facts);
+        assert!(matches!(refused, Err(WorkspaceFail::Dirty { .. })));
+
+        // untracked work refuses even when the display config hides it
+        std::fs::remove_file(wt.join("stray.txt")).unwrap();
+        git(&root, &["config", "status.showUntrackedFiles", "no"]).unwrap();
+        std::fs::write(wt.join("hidden.txt"), "untracked\n").unwrap();
+        let refused = refuse_dirty(&facts);
+        assert!(matches!(refused, Err(WorkspaceFail::Dirty { .. })));
+        std::fs::remove_file(wt.join("hidden.txt")).unwrap();
+
+        // ignored files are not work
+        std::fs::write(wt.join(".gitignore"), "ignored.log\n").unwrap();
+        git(wt, &["add", ".gitignore"]).unwrap();
+        git(wt, &["commit", "-qm", "ignore pattern"]).unwrap();
+        std::fs::write(wt.join("ignored.log"), "noise\n").unwrap();
+        refuse_dirty(&facts).unwrap();
+
+        // an absent checkout has nothing to refuse
+        std::fs::remove_dir_all(wt).unwrap();
+        refuse_dirty(&facts).unwrap();
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn checkout_removal_keeps_the_branch_and_its_unmerged_commit() {
+        let root = scratch_repo("remove");
+        let home = root.join("worktrees");
+        let facts = establish(&root, &home, TaskId(0), None).unwrap();
+        let wt = facts.worktree.as_path();
+        std::fs::write(wt.join("f.txt"), "unmerged\n").unwrap();
+        git(wt, &["commit", "-qam", "unmerged work"]).unwrap();
+        let tip = resolve_commit(wt, None).unwrap();
+
+        assert!(remove_checkout(&root, &facts).unwrap());
+        assert!(!wt.exists());
+        assert_eq!(branch_tip(&root, &facts.branch).unwrap(), Some(tip.clone()));
+
+        // an absent checkout is already removed
+        assert!(!remove_checkout(&root, &facts).unwrap());
+
+        // the branch survives: the checkout is recreated from its tip
+        assert!(ensure_checkout(&root, &facts).unwrap());
+        assert_eq!(resolve_commit(wt, None).unwrap(), tip);
 
         std::fs::remove_dir_all(&root).unwrap();
     }
