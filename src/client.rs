@@ -339,13 +339,32 @@ fn error_of(text: &str) -> ClientFail {
     let body: ErrorBody = serde_json::from_str(text).unwrap_or(ErrorBody {
         error: ErrorDetail {
             code: "malformed_response".into(),
-            detail: serde_json::Value::String(text.into()),
+            detail: serde_json::Value::String(bound(text)),
         },
     });
     ClientFail::Refused {
         code: body.error.code,
-        detail: body.error.detail.to_string(),
+        detail: bound(&body.error.detail.to_string()),
     }
+}
+
+/// A refusal's detail stays readable: an HTML 404 from a server that
+/// does not know a route is noise, not a message.
+fn bound(detail: &str) -> String {
+    const LIMIT: usize = 240;
+    let flat: String = detail
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect();
+    if flat.len() <= LIMIT {
+        return flat;
+    }
+    let cut = flat
+        .char_indices()
+        .nth(LIMIT)
+        .map(|(i, _)| i)
+        .unwrap_or(LIMIT);
+    format!("{}…", &flat[..cut])
 }
 
 /// The start operation: first sight establishes the workspace, records
