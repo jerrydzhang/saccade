@@ -1,0 +1,9 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"paths": {
+			"@earendil-works/pi-coding-agent": ["/nix/store/jp0c26ch45nmrcgi0akq2965nz71r9vr-pi-1.2.0/lib/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"],
+			"typebox": ["/nix/store/jp0c26ch45nmrcgi0akq2965nz71r9vr-pi-1.2.0/lib/pi/node_modules/typebox"]
+		}
+	}
+}

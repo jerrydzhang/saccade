@@ -5,7 +5,14 @@
 // interrupting other work.
 import { closeSync, openSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type, type Static } from "typebox";
+import type {
+	ExtensionContext,
+	ExtensionToolContext,
+	ExtensionAPI,
+	InputEvent,
+	SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
 
 const POLL_MS = 1500;
 // the automatic actor fallback: agent possession when the launch did
@@ -89,6 +96,19 @@ export function takeGuardLock(fd: number): boolean | undefined {
 	}
 }
 
+const IdentityParams = Type.Object({});
+const SendParams = Type.Object({
+	to: Type.String({ description: "recipient incarnation, i-<n>" }),
+	body: Type.String({ description: "the message body" }),
+	reply_to: Type.String({ description: "the message answered, m-<n>" }),
+	task: Type.String({ description: "task context, t-<n>" }),
+});
+const WaitParams = Type.Object({
+	reply_to: Type.String({
+		description: "only messages answering m-<n> release the wait",
+	}),
+});
+
 export default function saccadeIntegration(pi: ExtensionAPI) {
 	// the session's association: resolved or registered fresh at every
 	// session start by the session's actual native id and locator
@@ -167,9 +187,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// actual native id and saved locator - never from a remembered
 	// attachment. The reply is the machine identity, and the env channel
 	// rides it for `sac`.
-	async function attach(ctx: {
-		sessionManager: { getSessionId(): string | undefined; getSessionFile(): string | undefined };
-	}): Promise<Association | null> {
+	async function attach(ctx: ExtensionContext): Promise<Association | null> {
 		detach();
 		if (!server()) {
 			attachError = "no SACCADE_SERVER routing; the session stays unregistered";
@@ -206,8 +224,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					guardFd = null;
 					attachError =
 						"duplicate: this native session's guard is held by a live process";
-					pi.appendEntry("saccade_attach", { error: attachError });
-					pi.shutdown();
+					// the supported termination path: the duplicate exits
+					// before any model work, on the context, not the pi
+					ctx.shutdown();
 					return null;
 				}
 				if (taken === undefined) {
@@ -235,9 +254,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 
 	// An attached session stays attached; a failed attach retries here,
 	// so explicit later tools recover when the tracker returns.
-	async function ensureAttached(ctx: {
-		sessionManager: { getSessionId(): string | undefined; getSessionFile(): string | undefined };
-	}): Promise<Association | null> {
+	async function ensureAttached(ctx: ExtensionContext): Promise<Association | null> {
 		return association ?? (await attach(ctx));
 	}
 
@@ -329,11 +346,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// session is truly idle means the queued input was refused before
 	// insertion or discarded after queueing. The next drain delivers
 	// again - recoverability over the once-flag, no timers.
-	function reconcileDiscarded(ctx: {
-		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
-		isIdle?: () => boolean;
-		hasPendingMessages?: () => boolean;
-	}): boolean {
+	function reconcileDiscarded(ctx: ExtensionContext): boolean {
 		if (ctx.isIdle?.() !== true || ctx.hasPendingMessages?.() !== false) {
 			return false;
 		}
@@ -351,9 +364,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// Extension message events are not proof of insertion - the
 	// message_end hook runs before the SessionManager append - so
 	// confirmation reads the saved entries themselves.
-	function savedEntryHas(ctx: {
-		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
-	}, envelope: string): boolean {
+	function savedEntryHas(ctx: ExtensionContext, envelope: string): boolean {
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "message") continue;
 			const message = entry.message;
@@ -371,11 +382,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// re-post on later boundaries until the next resume clears it:
 	// limited retry-on-later-boundary bookkeeping, not convergence and
 	// not an exactly-once promise.
-	function confirmDeliveries(ctx: {
-		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
-		isIdle?: () => boolean;
-		hasPendingMessages?: () => boolean;
-	}): void {
+	function confirmDeliveries(ctx: ExtensionContext): void {
 		reconcileDiscarded(ctx);
 		for (const delivery of [...deliveries]) {
 			if (
@@ -402,15 +409,15 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 
 	// The confirmation boundaries: any later message end, run end, or
 	// settle - each checks the saved entries, never an event alone.
-	pi.on("message_end", (_event, ctx) => {
+	pi.on("message_end", (_event: unknown, ctx: ExtensionContext) => {
 		confirmDeliveries(ctx);
 		return undefined;
 	});
-	pi.on("agent_end", (_event, ctx) => {
+	pi.on("agent_end", (_event: unknown, ctx: ExtensionContext) => {
 		confirmDeliveries(ctx);
 		return undefined;
 	});
-	pi.on("agent_settled", (_event, ctx) => {
+	pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
 		confirmDeliveries(ctx);
 		return undefined;
 	});
@@ -458,8 +465,8 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		label: "Saccade identity",
 		description:
 			"Report this session's registered saccade identity: the incarnation's public number i-<n> that others address, and whether it registered now or resolved an existing registration.",
-		parameters: { type: "object", properties: {} },
-		execute: async (_id, _params, _signal, ctx) => {
+		parameters: IdentityParams,
+		execute: async (_id, _params: Static<typeof IdentityParams>, _signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
 			if (!who) return failed(`not registered: ${attachError}`);
 			return text(
@@ -491,7 +498,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			},
 			required: ["to", "body"],
 		},
-		execute: async (_id, params, _signal, ctx) => {
+		execute: async (_id, params: Static<typeof SendParams>, _signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
 			if (!who) return failed(`not sent: ${attachError}`);
 			try {
@@ -541,7 +548,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				},
 			},
 		},
-		execute: async (_id, params, signal, ctx) => {
+		execute: async (_id, params: Static<typeof WaitParams>, signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
 			if (!who) return failed(`cannot wait: ${attachError}`);
 			// an explicit wait is a supported recovery boundary: refused
@@ -625,7 +632,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
 		// every start reassociates by the session's actual native id and
 		// locator - new, fork, resume, and reload alike - and the old
 		// association's waits and queued deliveries die with it, never
@@ -662,12 +669,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// input - so the wait releases with the message's correlation; a
 	// human typing keeps the human wording. Neither reading claims a
 	// reply was satisfied.
-	pi.on("input", async (event, ctx) => {
-		const source = (event as { source?: string }).source;
-		if (source === "extension") {
-			const text = typeof (event as { text?: unknown }).text === "string"
-				? (event as { text: string }).text
-				: "";
+	pi.on("input", async (event: InputEvent, ctx: ExtensionContext) => {
+		if (event.source === "extension") {
+			const text = event.text;
 			const correlated = [...queued.values()].find(
 				(message) => envelopeText(message) === text,
 			);

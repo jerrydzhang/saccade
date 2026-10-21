@@ -3,6 +3,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { closeSync, existsSync, openSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ExtensionToolContext,
+	SessionEntry,
+	Theme,
+	ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import {
 	envelopeText,
 	incomingFor,
@@ -20,7 +28,7 @@ function mail(overrides: Record<string, unknown>) {
 		to: { seq: 0, num: 0 },
 		reply_to: null,
 		task: null,
-		state: "pending",
+		state: "pending" as const,
 		body: "the smoke request",
 		born_at: 1,
 		...overrides,
@@ -97,10 +105,7 @@ test("user text flattens string and block content", () => {
 	);
 });
 
-interface SessionEntryLike {
-	type: string;
-	message?: { role: string; content: unknown };
-}
+type SessionEntryLike = { type: string; message?: { role: string; content: unknown } };
 
 class FakeSession {
 	entries: SessionEntryLike[] = [];
@@ -122,8 +127,8 @@ class FakeSession {
 }
 
 // The fake queue drains only after a run ends, firing events before the append.
-class FakePi {
-	tools = new Map<string, any>();
+class FakePi implements ExtensionAPI {
+	tools = new Map<string, ToolDefinition>();
 	handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
 	followUps: string[] = [];
 	session: FakeSession;
@@ -160,20 +165,115 @@ class FakePi {
 		}
 		this.followUps.push(content);
 	}
-	appendEntry(_type: string, _data?: unknown) {}
+	appendEntry<T = unknown>(_customType: string, _data?: T): void {}
+	// every other ExtensionAPI member: present on the real surface,
+	// never part of this test's exercised surface
+	exec(): never {
+		throw new Error("fake pi: exec");
+	}
+	getActiveTools(): never {
+		throw new Error("fake pi: getActiveTools");
+	}
+	getAllTools(): never {
+		throw new Error("fake pi: getAllTools");
+	}
+	getCommands(): never {
+		throw new Error("fake pi: getCommands");
+	}
+	getFlag(): never {
+		throw new Error("fake pi: getFlag");
+	}
+	getMcpServers(): never {
+		throw new Error("fake pi: getMcpServers");
+	}
+	getSessionName(): never {
+		throw new Error("fake pi: getSessionName");
+	}
+	getSettings(): never {
+		throw new Error("fake pi: getSettings");
+	}
+	getThinkingLevel(): never {
+		throw new Error("fake pi: getThinkingLevel");
+	}
+	registerCommand(): never {
+		throw new Error("fake pi: registerCommand");
+	}
+	registerEntryRenderer(): never {
+		throw new Error("fake pi: registerEntryRenderer");
+	}
+	registerFlag(): never {
+		throw new Error("fake pi: registerFlag");
+	}
+	registerMarkdownTransformer(): never {
+		throw new Error("fake pi: registerMarkdownTransformer");
+	}
+	registerMcpServer(): never {
+		throw new Error("fake pi: registerMcpServer");
+	}
+	registerMessageRenderer(): never {
+		throw new Error("fake pi: registerMessageRenderer");
+	}
+	registerProvider(): never {
+		throw new Error("fake pi: registerProvider");
+	}
+	registerShortcut(): never {
+		throw new Error("fake pi: registerShortcut");
+	}
+	registerToolRenderer(): never {
+		throw new Error("fake pi: registerToolRenderer");
+	}
+	registerVirtualModel(): never {
+		throw new Error("fake pi: registerVirtualModel");
+	}
+	sendMessage(): never {
+		throw new Error("fake pi: sendMessage");
+	}
+	setActiveTools(): never {
+		throw new Error("fake pi: setActiveTools");
+	}
+	setLabel(): never {
+		throw new Error("fake pi: setLabel");
+	}
+	setModel(): never {
+		throw new Error("fake pi: setModel");
+	}
+	setSessionName(): never {
+		throw new Error("fake pi: setSessionName");
+	}
+	setThinkingLevel(): never {
+		throw new Error("fake pi: setThinkingLevel");
+	}
+	unregisterMcpServer(): never {
+		throw new Error("fake pi: unregisterMcpServer");
+	}
+	unregisterProvider(): never {
+		throw new Error("fake pi: unregisterProvider");
+	}
+	unregisterVirtualModel(): never {
+		throw new Error("fake pi: unregisterVirtualModel");
+	}
+	events = {
+		emit: (): void => {},
+		on: (): (() => void) => () => {},
+	};
+
 	shutdown() {
 		this.shutdowns += 1;
 	}
 
 	async emit(event: string, extra: Record<string, unknown> = {}) {
-		const ctx = {
-			sessionManager: this.session,
-			isIdle: () => this.idle,
-			hasPendingMessages: () => this.pendingNative,
-		};
+		const ctx = this.context();
 		for (const handler of this.handlers.get(event) ?? []) {
 			await handler({ type: event, ...extra }, ctx);
 		}
+	}
+
+	context(): ExtensionContext {
+		return fakeContext(this, this.session);
+	}
+
+	toolContext(): ExtensionToolContext {
+		return this.context() as ExtensionToolContext;
 	}
 
 	// the queue drains after the tool call returned, events before the append
@@ -279,7 +379,85 @@ class FakeTracker {
 interface Harness {
 	pi: FakePi;
 	tracker: FakeTracker;
-	tools: (name: string) => any;
+	tools: (name: string) => ToolDefinition;
+	ctx: () => ExtensionContext;
+}
+
+// The context the fake hands to handlers and tools: the faithful
+// ExtensionContext surface (typed against the pinned SDK), with the
+// members the tests control wired and everything else refusing.
+function fakeContext(pi: FakePi, session: FakeSession): ExtensionContext {
+	const unimplemented = (name: string) => (): never => {
+		throw new Error(`fake context: ${name} is not part of this test`);
+	};
+	return {
+		sessionManager: {
+			getCwd: () => "/",
+			getSessionDir: () => "/sessions",
+			getSessionId: () => session.nativeId,
+			getSessionFile: () => session.file,
+			getLeafId: () => null,
+			getLeafEntry: () => undefined,
+			getEntry: () => undefined,
+			getLabel: () => undefined,
+			getBranch: () => [],
+			buildContextEntries: () => [],
+			buildSessionProjection: () => unimplemented("buildSessionProjection")(),
+			getHeader: () => null,
+			getEntries: () => session.entries as unknown as SessionEntry[],
+			getTree: () => unimplemented("getTree")(),
+			getSessionName: () => undefined,
+		},
+		ui: {
+			select: () => unimplemented("ui.select")(),
+			confirm: () => unimplemented("ui.confirm")(),
+			input: () => unimplemented("ui.input")(),
+			notify: () => unimplemented("ui.notify")(),
+			onTerminalInput: () => unimplemented("ui.onTerminalInput")(),
+			setStatus: () => unimplemented("ui.setStatus")(),
+			setWorkingMessage: () => unimplemented("ui.setWorkingMessage")(),
+			setWorkingVisible: () => unimplemented("ui.setWorkingVisible")(),
+			setWorkingIndicator: () => unimplemented("ui.setWorkingIndicator")(),
+			setHiddenThinkingLabel: () =>
+				unimplemented("ui.setHiddenThinkingLabel")(),
+			setWidget: () => unimplemented("ui.setWidget")(),
+			setFooter: () => unimplemented("ui.setFooter")(),
+			setHeader: () => unimplemented("ui.setHeader")(),
+			setTitle: () => unimplemented("ui.setTitle")(),
+			custom: () => unimplemented("ui.custom")(),
+			pasteToEditor: () => unimplemented("ui.pasteToEditor")(),
+			setEditorText: () => unimplemented("ui.setEditorText")(),
+			getEditorText: () => unimplemented("ui.getEditorText")(),
+			editor: () => unimplemented("ui.editor")(),
+			addAutocompleteProvider: () =>
+				unimplemented("ui.addAutocompleteProvider")(),
+			setEditorComponent: () => unimplemented("ui.setEditorComponent")(),
+			getEditorComponent: () => unimplemented("ui.getEditorComponent")(),
+			theme: undefined as unknown as Theme,
+			getAllThemes: () => unimplemented("ui.getAllThemes")(),
+			getTheme: () => unimplemented("ui.getTheme")(),
+			setTheme: () => unimplemented("ui.setTheme")(),
+			getToolsExpanded: () => unimplemented("ui.getToolsExpanded")(),
+			setToolsExpanded: () => unimplemented("ui.setToolsExpanded")(),
+		},
+		mode: "tui",
+		hasUI: true,
+		cwd: "/",
+		modelRegistry: {} as never,
+		model: undefined,
+		scopedModels: [],
+		getSystemPrompt: () => "",
+		isIdle: () => pi.idle,
+		isProjectTrusted: () => true,
+		signal: undefined,
+		abort: () => unimplemented("abort")(),
+		hasPendingMessages: () => pi.pendingNative,
+		shutdown: () => {
+			pi.shutdowns += 1;
+		},
+		getContextUsage: () => undefined,
+		compact: () => unimplemented("compact")(),
+	};
 }
 
 function harness(
@@ -294,14 +472,19 @@ function harness(
 		process.env.SACCADE_ACTOR = actor;
 	}
 	const pi = new FakePi(nativeId, file);
-	saccadeIntegration(pi as any);
+	saccadeIntegration(pi);
 	const tracker = shared ?? new FakeTracker();
 	tracker.install();
 	process.env.SACCADE_SERVER = tracker.url();
 	return {
 		pi,
 		tracker,
-		tools: (name: string) => pi.tools.get(name),
+		tools: (name: string) => {
+			const def = pi.tools.get(name);
+			assert.ok(def, `the fake registered ${name}`);
+			return def;
+		},
+		ctx: () => fakeContext(pi, pi.session),
 	};
 }
 
@@ -319,6 +502,16 @@ const boundary = <T>(promise: Promise<T>, ms: number, what: string) =>
 	]);
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+// The text of a tool result: results arrive typed as the SDK's
+// AgentToolResult and this is the one place their content is unpacked.
+function resultText(result: unknown): string {
+	const r = result as { content: Array<{ type: string; text: string }> };
+	return r.content
+		.filter((c) => c.type === "text")
+		.map((c) => c.text)
+		.join("");
+}
 
 // End a harness's session: loops stop, guards release, and no leaked
 // activity from one test reaches another through the global fetch.
@@ -362,12 +555,12 @@ test("the wait tool returns while the queue is still undrained", async () => {
 	const wait = h.tools("saccade_wait");
 	const controller = new AbortController();
 	const result = await boundary(
-		wait.execute("t1", {}, controller.signal, { sessionManager: h.pi.session }),
+		wait.execute("t1", {}, controller.signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) }),
 		8000,
 		"saccade_wait",
 	);
 	// the tool returned before any queue processing
-	assert.ok(String(result.content[0].text).includes("received m-9"));
+	assert.ok(resultText(result).includes("received m-9"));
 	assert.equal(h.pi.followUps.length, 1);
 	assert.equal(h.tracker.submissions.length, 0);
 	// and the queued delivery still confirms after the run
@@ -385,13 +578,17 @@ test("the wait finishes cancelled when the call aborts, queueing nothing", async
 
 	const wait = h.tools("saccade_wait");
 	const controller = new AbortController();
-	const running = wait.execute("t1", {}, controller.signal, {
-		sessionManager: h.pi.session,
-	});
+	const running = wait.execute(
+		"t1",
+		{},
+		controller.signal,
+		undefined,
+		{ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
+	);
 	controller.abort();
 	const result = await boundary(running, 8000, "aborted saccade_wait");
 	assert.ok(
-		String(result.content[0].text).includes("the call was cancelled"),
+		resultText(result).includes("the call was cancelled"),
 	);
 	assert.equal(h.pi.followUps.length, 0);
 	await h.pi.runQueue();
@@ -473,11 +670,11 @@ test("background arrival and the wait tool queue a message once", async () => {
 	// its own queueing is a no-op: one envelope, one path
 	const wait = h.tools("saccade_wait");
 	const result = await boundary(
-		wait.execute("t1", {}, new AbortController().signal, { sessionManager: h.pi.session }),
+		wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) }),
 		8000,
 		"saccade_wait",
 	);
-	assert.ok(String(result.content[0].text).includes("received m-6"));
+	assert.ok(resultText(result).includes("received m-6"));
 	assert.equal(h.pi.followUps.length, 1);
 	await stop(h);
 });
@@ -536,9 +733,7 @@ test("an extension-source input releases the wait as the message, not as human i
 	const h = harness("sac-test-11", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	const wait = h.tools("saccade_wait");
-	const running = wait.execute("t1", {}, new AbortController().signal, {
-		sessionManager: h.pi.session,
-	});
+	const running = wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
 	h.tracker.land(0, mail({ seq: 70, num: 4, to: { seq: 0, num: 0 } }));
 	await tick();
 	// the queued envelope enters the session as an extension-source input
@@ -546,7 +741,7 @@ test("an extension-source input releases the wait as the message, not as human i
 	assert.ok(envelope, "the bridge queued the delivery");
 	await h.pi.emit("input", { source: "extension", text: envelope });
 	const result = await boundary(running, 8000, "saccade_wait");
-	const text = String(result.content[0].text);
+	const text = resultText(result);
 	assert.ok(text.includes("received m-4"), text);
 	assert.ok(!text.includes("human"), `mislabelled as human: ${text}`);
 	await stop(h);
@@ -556,13 +751,11 @@ test("interactive input keeps the human wording and no correlation", async () =>
 	const h = harness("sac-test-12", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	const wait = h.tools("saccade_wait");
-	const running = wait.execute("t1", {}, new AbortController().signal, {
-		sessionManager: h.pi.session,
-	});
+	const running = wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
 	await tick();
 	await h.pi.emit("input", { source: "interactive", text: "typing over it" });
 	const result = await boundary(running, 8000, "saccade_wait");
-	const text = String(result.content[0].text);
+	const text = resultText(result);
 	assert.ok(text.includes("native human input arrived"), text);
 	assert.equal(h.pi.followUps.length, 0);
 	await stop(h);
@@ -647,10 +840,10 @@ test("missing-auth failure with no settle recovers at an explicit wait", async (
 	const wait = h.tools("saccade_wait");
 	h.pi.idle = true;
 	h.pi.pendingNative = false;
-	const running = wait.execute("t1", {}, new AbortController().signal, {
-		sessionManager: h.pi.session,
-		isIdle: () => h.pi.idle,
-		hasPendingMessages: () => h.pi.pendingNative,
+	const running = wait.execute("t1", {}, new AbortController().signal, undefined, {
+		...h.ctx(),
+		tools: [],
+		executeTool: () => Promise.resolve({} as never),
 	});
 	h.tracker.wake();
 	const deadline = Date.now() + 8000;
@@ -660,7 +853,7 @@ test("missing-auth failure with no settle recovers at an explicit wait", async (
 	}
 	assert.equal(h.pi.followUps.length, 1, "the explicit wait re-delivered");
 	const result = await boundary(running, 8000, "saccade_wait");
-	assert.ok(String(result.content[0].text).includes("received m-7"));
+	assert.ok(resultText(result).includes("received m-7"));
 	await stop(h);
 });
 
@@ -668,9 +861,7 @@ test("another extension's input yields our wait with generic native wording", as
 	const h = harness("sac-test-16", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	const wait = h.tools("saccade_wait");
-	const running = wait.execute("t1", {}, new AbortController().signal, {
-		sessionManager: h.pi.session,
-	});
+	const running = wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
 	await tick();
 	// not our envelope: another native extension's message
 	await h.pi.emit("input", {
@@ -678,7 +869,7 @@ test("another extension's input yields our wait with generic native wording", as
 		text: "[some other extension] probe",
 	});
 	const result = await boundary(running, 8000, "saccade_wait");
-	const text = String(result.content[0].text);
+	const text = resultText(result);
 	assert.ok(text.includes("native input arrived through the integration"), text);
 	assert.ok(!text.includes("human"), `fabricated human origin: ${text}`);
 	assert.ok(!text.includes("received m-"), `fabricated correlation: ${text}`);
@@ -710,7 +901,8 @@ test("the declared task anchors scope; an explicit task argument is message cont
 		"t1",
 		{ to: "i-1", body: "the answer", task: "t-2" },
 		undefined,
-		{ sessionManager: h.pi.session },
+		undefined,
+		{ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
 	);
 	const sent = h.tracker.sent[h.tracker.sent.length - 1];
 	// scope.task reads the declared environment alone
@@ -724,7 +916,8 @@ test("the declared task anchors scope; an explicit task argument is message cont
 		"t2",
 		{ to: "i-1", body: "another", task: "t-2" },
 		undefined,
-		{ sessionManager: h.pi.session },
+		undefined,
+		{ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
 	);
 	const second = h.tracker.sent[h.tracker.sent.length - 1];
 	assert.equal(second.context.scope.task, null);
@@ -781,10 +974,14 @@ test("a held guard shuts the duplicate down before any model work", async () => 
 	// the duplicate never participated: its identity names the held
 	// guard, and nothing registered
 	const identity = duplicate.tools("saccade_identity");
-	const result = await identity.execute("t1", {}, undefined, {
-		sessionManager: duplicate.pi.session,
-	});
-	const text = String(result.content[0].text);
+	const result = await identity.execute(
+		"t1",
+		{},
+		undefined,
+		undefined,
+		{ ...duplicate.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
+	);
+	const text = resultText(result);
 	assert.ok(text.includes("not registered"), text);
 	assert.ok(text.includes("duplicate"), `the refusal names the held guard: ${text}`);
 	// the original is untouched and still holds its guard

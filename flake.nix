@@ -63,6 +63,7 @@
                 (pkgs.python3.withPackages (ps: [ps.playwright]))
                 prek
                 just
+                typescript
                 saccade.packages.${system}.default
                 devPi
               ];

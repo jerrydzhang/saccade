@@ -30,7 +30,8 @@ pub fn guard_path(repo_root: &Path, native_id: &str) -> PathBuf {
 /// the session's integration holds an exclusive kernel flock on this
 /// file from association until death, so a failed non-blocking take is
 /// session-specific live evidence - a held lock means a live holder,
-/// and any death releases it. None when the guard cannot be probed.
+/// and any death releases it. Only the documented would-block conflict
+/// reads as held; every other failure leaves the answer unknown.
 pub fn guard_held(guard: &Path) -> Option<bool> {
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -39,7 +40,14 @@ pub fn guard_held(guard: &Path) -> Option<bool> {
         .open(guard)
         .ok()?;
     let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    Some(taken != 0)
+    if taken == 0 {
+        return Some(false);
+    }
+    let errno = std::io::Error::last_os_error().raw_os_error()?;
+    match errno {
+        libc::EWOULDBLOCK => Some(true),
+        _ => None,
+    }
 }
 
 /// Everything the decision needs about one recipient, resolved by the

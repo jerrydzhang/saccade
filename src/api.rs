@@ -1033,12 +1033,18 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
         &request.session_file,
     );
     // the guard's parent must exist before the integration opens it: a
-    // cold state root is readiness, not an error
-    if let (Ok(reply), Some(_repo)) = (&outcome, app.repo_root()) {
+    // cold state root is readiness, and an uncreatable one is a
+    // refusal - never a reply naming a path that cannot exist
+    if let (Ok(reply), Some(repo)) = (&outcome, app.repo_root()) {
         if let Some(guard) = &reply.guard {
             if let Some(parent) = Path::new(guard).parent() {
-                let _ = std::fs::create_dir_all(parent);
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return api_failure(ApiFail::Db(format!(
+                        "the session guard's directory cannot be created: {e}"
+                    )));
+                }
             }
+            let _ = repo;
         }
     }
     integration_outcome(&app, &guard, None, &received, started, &outcome);
