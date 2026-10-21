@@ -51,6 +51,17 @@ interface WaitState {
 	settle: (outcome: Outcome) => void;
 }
 
+// An envelope queued natively whose submission still awaits confirmed
+// insertion into the saved session history. Bound to the association
+// it was queued under, so a reassociated session never submits as a
+// stale recipient.
+interface QueuedDelivery {
+	envelope: string;
+	messageSeq: number;
+	incarnation: number;
+	sessionFile: string;
+}
+
 export default function saccadeIntegration(pi: ExtensionAPI) {
 	// the session's association: resolved or registered fresh at every
 	// session start by the session's actual native id and locator
@@ -58,6 +69,16 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	let attachError: string | null = null;
 	// the waits this integration currently owns
 	const waits = new Set<WaitState>();
+	// envelopes queued natively, submissions not yet confirmed
+	const deliveries = new Set<QueuedDelivery>();
+
+	// agent possession is set at load, before any attach: a tracker
+	// outage must still leave nested sac calls acting as the agent, and
+	// an injected name always wins
+	const injectedActor = process.env.SACCADE_ACTOR;
+	if (injectedActor === undefined || injectedActor.trim() === "") {
+		process.env.SACCADE_ACTOR = FALLBACK_ACTOR;
+	}
 
 	const server = () => {
 		const url = process.env.SACCADE_SERVER;
@@ -85,17 +106,19 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	}
 
 	// Detach whatever this session carried: the identity channel goes
-	// with it, so nothing nested can act as a previous incarnation.
+	// with it, and queued deliveries die unsubmitted - a reassociated
+	// session never submits as the previous incarnation.
 	function detach() {
 		association = null;
 		attachError = null;
+		deliveries.clear();
 		delete process.env.SACCADE_INCARNATION_SEQ;
 	}
 
 	// Resolve-or-register this session's incarnation from the session's
 	// actual native id and saved locator - never from a remembered
 	// attachment. The reply is the machine identity, and the env channel
-	// rides it for `sac`; agent possession falls back when uninjected.
+	// rides it for `sac`.
 	async function attach(ctx: {
 		sessionManager: { getSessionId(): string | undefined; getSessionFile(): string | undefined };
 	}): Promise<Association | null> {
@@ -117,10 +140,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			});
 			association = { ...reply, nativeId: sessionId, sessionFile };
 			process.env.SACCADE_INCARNATION_SEQ = String(reply.incarnation);
-			const injected = process.env.SACCADE_ACTOR;
-			if (injected === undefined || injected.trim() === "") {
-				process.env.SACCADE_ACTOR = FALLBACK_ACTOR;
-			}
 			return association;
 		} catch (error) {
 			attachError = errorText(error);
@@ -136,37 +155,21 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return association ?? (await attach(ctx));
 	}
 
-	// Deliver one message natively, and record the submission only once
-	// the envelope is in the saved session history - pi's message events
-	// never describe messages the session tree does not contain, so the
-	// observed message_start is the insertion. The bookkeeping never
-	// claims reading, agreement, completion, or exactly-once: a crash
-	// before the submit leaves the mail pending for the next drain.
-	function deliver(message: MailboxMessage): Promise<void> {
-		const envelope = envelopeText(message);
-		return new Promise<void>((resolve, reject) => {
-			const off = pi.on("message_start", (event) => {
-				if (event.message.role !== "user") return;
-				if (userText(event.message as any) !== envelope) return;
-				off();
-				tracker("/api/v1/messages/submit", {
-					method: "POST",
-					body: JSON.stringify({
-						incarnation: association!.incarnation,
-						message: message.seq,
-					}),
-				}).then(
-					() => resolve(),
-					(error) => reject(error instanceof Error ? error : new Error(String(error))),
-				);
-			});
-			try {
-				pi.sendUserMessage(envelope, { deliverAs: "followUp" });
-			} catch (error) {
-				off();
-				throw error;
-			}
-		});
+	function envelopeText(message: MailboxMessage): string {
+		let head = `[saccade message m-${message.num} | from i-${message.from.num}`;
+		if (message.reply_to !== null) head += ` | replying to m-${message.reply_to}`;
+		if (message.task !== null) head += ` | task t-${message.task}`;
+		head += "]";
+		return `${head}\n\n${message.body}`;
+	}
+
+	// The addressee's mail alone: the mailbox reads both directions, and
+	// delivery filters on the recipient - a self-addressed message is
+	// incoming mail like any other.
+	function incomingFor(incarnation: number, messages: MailboxMessage[]): MailboxMessage[] {
+		return messages.filter(
+			(m) => m.state === "pending" && m.to.seq === incarnation,
+		);
 	}
 
 	async function mailbox(incarnation: number): Promise<MailboxMessage[]> {
@@ -176,12 +179,84 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return reply.messages;
 	}
 
-	async function drain(incarnation: number): Promise<void> {
-		const incoming = incomingFor(incarnation, await mailbox(incarnation));
-		for (const message of incoming) {
-			await deliver(message);
+	// Queue one message natively and return: the wait tool must never
+	// block on what the native queue does after the current run. The
+	// submission is confirmed separately, by the delivery observers.
+	function queueDelivery(message: MailboxMessage): void {
+		if (association === null) return;
+		const delivery: QueuedDelivery = {
+			envelope: envelopeText(message),
+			messageSeq: message.seq,
+			incarnation: association.incarnation,
+			sessionFile: association.sessionFile,
+		};
+		deliveries.add(delivery);
+		pi.sendUserMessage(delivery.envelope, { deliverAs: "followUp" });
+	}
+
+	// The saved session's user entries carry the envelope?
+	// Extension message events are NOT proof of insertion: in pinned
+	// 1.2.0 the message_end hook runs before the SessionManager append,
+	// so confirmation reads the saved entries themselves at a later
+	// boundary and never an event alone.
+	function savedEntryHas(ctx: {
+		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
+	}, envelope: string): boolean {
+		for (const entry of ctx.sessionManager.getEntries()) {
+			if (entry.type !== "message") continue;
+			const message = entry.message;
+			if (message && message.role === "user" && userText(message) === envelope) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Confirm what the saved history actually holds: a delivery whose
+	// envelope is in the saved entries submits; a delivery bound to an
+	// association that is no longer live cancels. A failed submit goes
+	// back to the queue - the tracker refuses a second submission of
+	// submitted mail itself, so retries converge.
+	function confirmDeliveries(ctx: {
+		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
+	}): void {
+		for (const delivery of [...deliveries]) {
+			if (
+				association === null ||
+				association.incarnation !== delivery.incarnation ||
+				association.sessionFile !== delivery.sessionFile
+			) {
+				deliveries.delete(delivery);
+				continue;
+			}
+			if (!savedEntryHas(ctx, delivery.envelope)) continue;
+			deliveries.delete(delivery);
+			tracker("/api/v1/messages/submit", {
+				method: "POST",
+				body: JSON.stringify({
+					incarnation: delivery.incarnation,
+					message: delivery.messageSeq,
+				}),
+			}).catch(() => {
+				deliveries.add(delivery);
+			});
 		}
 	}
+
+	// The confirmation boundaries: any later message end, run end, or
+	// settle - each checks the saved entries, never an event alone.
+	pi.on("message_end", (_event, ctx) => {
+		confirmDeliveries(ctx);
+		return undefined;
+	});
+	pi.on("agent_end", (_event, ctx) => {
+		confirmDeliveries(ctx);
+		return undefined;
+	});
+	pi.on("agent_settled", (_event, ctx) => {
+		confirmDeliveries(ctx);
+		return undefined;
+	});
 
 	function text(content: string) {
 		return {
@@ -236,6 +311,14 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		},
 	});
 
+	// The environment-declared task: context.scope.task reads this
+	// alone. A tool argument names the message's task context, never a
+	// scope rebind.
+	function declaredTask(): number | null {
+		const value = process.env.SACCADE_TASK;
+		return value && value.trim() !== "" ? numToken(value, "t-") : null;
+	}
+
 	pi.registerTool({
 		name: "saccade_send",
 		label: "Saccade send",
@@ -256,10 +339,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			if (!who) return failed(`not sent: ${attachError}`);
 			try {
 				const to = numToken(params.to, "i-");
-				// the declared scope rides: the explicit task argument
-				// wins, the session's declared task and workspace carry
-				// when the argument is absent
-				const taskToken = params.task ?? process.env.SACCADE_TASK;
 				const reply = await tracker<SendReply>("/api/v1/messages/send", {
 					method: "POST",
 					body: JSON.stringify({
@@ -267,7 +346,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 							actor: actor(),
 							tier: "agent",
 							scope: {
-								task: taskToken ? numToken(taskToken, "t-") : null,
+								task: declaredTask(),
 								incarnation: who.incarnation,
 								workspace: process.env.SACCADE_WORKSPACE ?? null,
 							},
@@ -365,9 +444,12 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					"the wait ended because this session's saccade association changed; nothing was delivered - saccade_identity to re-check, saccade_wait to receive",
 				);
 			}
+			// queue and return: the native queue drains after this tool
+			// call is done, and the submission confirms asynchronously
+			// from the saved history, never inside this call
 			const delivered = state.mail ?? [];
 			for (const message of delivered) {
-				await deliver(message);
+				queueDelivery(message);
 			}
 			const named = delivered
 				.map((m) => `m-${m.num} from i-${m.from.num}`)
@@ -381,8 +463,8 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		// every start reassociates by the session's actual native id and
 		// locator - new, fork, resume, and reload alike - and the old
-		// association's waits die with it, never delivering into a
-		// session this incarnation is not
+		// association's waits and queued deliveries die with it, never
+		// submitting or delivering into a session this incarnation is not
 		cancelAllWaits();
 		const who = await attach(ctx);
 		if (!who) {
@@ -391,7 +473,13 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		}
 		// activation at a supported boundary: the mailbox drains at start
 		try {
-			await drain(who.incarnation);
+			const incoming = incomingFor(
+				who.incarnation,
+				await mailbox(who.incarnation),
+			);
+			for (const message of incoming) {
+				queueDelivery(message);
+			}
 		} catch (error) {
 			pi.appendEntry("saccade_attach", {
 				incarnation: who.incarnation,
@@ -401,8 +489,8 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
-		// idempotent teardown: waits finish, the association and its env
-		// channel go with the session
+		// idempotent teardown: waits finish, queued deliveries cancel,
+		// the association and its env channel go with the session
 		cancelAllWaits();
 		detach();
 		return undefined;
