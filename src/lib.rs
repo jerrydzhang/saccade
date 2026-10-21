@@ -8,6 +8,7 @@ pub mod decide;
 pub mod events;
 pub mod objects;
 pub mod paths;
+pub mod pi_session;
 pub mod refusals;
 pub mod serve;
 pub mod skill;
