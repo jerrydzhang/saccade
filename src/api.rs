@@ -137,7 +137,7 @@ pub struct AppState {
     attempts: Attempts,
     /// The native bridge's operational cache: delivery-connection
     /// liveness, launch tokens, and the wake for parked mailbox reads.
-    bridge: BridgeCache,
+    pub bridge: BridgeCache,
     /// The artifact store the bytes door serves from; a server that
     /// was not told a repo root has none.
     artifacts: Option<std::path::PathBuf>,
@@ -969,9 +969,14 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = attach_operation(&mut guard, &request.native_id, &request.session_file);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    // only a fresh birth claims the launch mapping: an existing or
+    // forked session reattaching under a stale token must never
+    // silently overwrite the door's correlation
     if let (Ok(reply), Some(token)) = (&outcome, request.launch_token) {
-        app.bridge
-            .remember_launch(token, reply.incarnation, reply.num);
+        if reply.registered {
+            app.bridge
+                .remember_launch(token, reply.incarnation, reply.num);
+        }
     }
     match outcome {
         Ok(reply) => (
@@ -1081,6 +1086,20 @@ async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
                     "seq": mctx.message.from.0 .0,
                     "num": numbers.incarnation_num(mctx.message.from),
                 },
+            });
+            // one activation mechanism for every entrance: the landed
+            // write itself wakes the host - CLI, native tool, and API
+            // client alike - never the face that used it. Fire and
+            // forget: the reply never waits on host mechanics.
+            let app_for_activation = app.clone();
+            let to_id_for_activation = to_id;
+            let to_num_for_activation = request.to;
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::activate::after_send(
+                    &app_for_activation,
+                    to_id_for_activation,
+                    to_num_for_activation,
+                );
             });
             (StatusCode::OK, Json(reply)).into_response()
         }

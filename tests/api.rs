@@ -3364,6 +3364,78 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     assert_eq!(status, 404, "{body}");
     assert_eq!(json_of(&body)["error"]["code"], "launch_unknown");
 
+    // an existing session reattaching under a fresh token never
+    // overwrites the door's mapping: only a fresh birth claims it
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "cccc3333",
+            "session_file": "/sessions/cccc3333.jsonl",
+            "launch_token": "launch-hijack",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["registered"], false);
+    let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-hijack");
+    assert_eq!(status, 404, "{body}");
+    let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-hex");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["incarnation"], 3);
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wire_send_to_a_stopped_peer_holds_when_the_host_cannot_vouch() {
+    let db = scratch_db("wire-activation");
+    let base_url = spawn_server(&db).await;
+
+    // the recipient's saved session points where nothing exists: the
+    // shared activation decides Hold and submits no launch
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "away00001", "session_file": "/sessions/gone/away00001.jsonl"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "home00001", "session_file": "/sessions/home00001.jsonl"}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": 1, "workspace": null}},
+            "to": 0,
+            "body": "the wire itself should try to wake this peer",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // the activation ran under the session's lock and held: no grace
+    // marker was ever written, and the mail stays pending
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let marker = std::env::temp_dir()
+        .join("saccade-activation")
+        .join("away00001.launched");
+    assert!(
+        !marker.exists(),
+        "an unverifiable recipient launched nothing"
+    );
+    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=0");
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    assert!(
+        mail.iter()
+            .any(|m| m["to"]["seq"] == 0 && m["state"] == "pending"),
+        "{body}"
+    );
+
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
@@ -3504,8 +3576,9 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
     assert_eq!(mail[0]["state"], "pending");
     assert_eq!(mail[0]["body"], "what holds at the failing edge case?");
 
-    // the send door reports activation honestly: this peer's saved
-    // session is not on this host, so activation is not attempted
+    // a server-routed send delegates activation to the wire handler -
+    // one mechanism for every entrance - so the door prints the plain
+    // pending line and the wire's own decision runs server-side
     let out = std::process::Command::new(bin)
         .args([
             "--server",
@@ -3530,8 +3603,7 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
     );
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(text.contains("sent m-"), "{text}");
-    assert!(text.contains("activation not attempted"), "{text}");
-    assert!(text.contains("stays pending"), "{text}");
+    assert!(!text.contains("activation"), "{text}");
 
     // without a declared incarnation the ask door refuses, taught
     let out = std::process::Command::new(bin)

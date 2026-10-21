@@ -2256,14 +2256,23 @@ fn send_door(
     // delivery activation: a running peer's bridge delivers; a stopped
     // one resumes from its exact saved session; every doubt stays
     // pending and says so - the send itself never un-lands
-    let activation = activate_recipient(cli, &destination, to_num);
+    // server-routed sends are activated by the wire handler after the
+    // same landed write - one mechanism for every entrance; the local
+    // door activates only when no server holds the write
+    let activation = match &destination {
+        Destination::Server { .. } => None,
+        Destination::Local { .. } => Some(activate_locally(cli, destination, to_num)),
+    };
     if cli.json {
         let mut reply = serde_json::to_value(&sent).expect("the send reply is plain data");
-        reply["activation"] = serde_json::json!({
-            "state": activation.state,
-            "detail": activation.detail,
-            "terminal": activation.terminal,
-        });
+        reply["activation"] = match &activation {
+            Some(note) => serde_json::json!({
+                "state": note.state,
+                "detail": note.detail,
+                "terminal": note.terminal,
+            }),
+            None => serde_json::json!({"state": "on the server"}),
+        };
         return Ok(serde_json::to_string_pretty(&reply).expect("plain data"));
     }
     let mut out = format!(
@@ -2273,11 +2282,77 @@ fn send_door(
             .map(|n| n.to_string())
             .unwrap_or_else(|| format!("(seq {})", sent.message.seq)),
     );
-    if let Some(line) = activation.line(to_num) {
-        out.push('\n');
-        out.push_str(&line);
+    if let Some(note) = &activation {
+        if let Some(line) = note.line(to_num) {
+            out.push('\n');
+            out.push_str(&line);
+        }
     }
     Ok(out)
+}
+
+/// The local mode's activation: no server holds the bridge cache or
+/// the write, so the door decides and launches itself, synchronously,
+/// under the shared per-session lock.
+fn activate_locally(cli: &Cli, destination: &Destination, to_num: usize) -> ActivationNote {
+    let world = match loadout_of(destination) {
+        Ok(loadout) => match loadout.state {
+            saccade::db::LoadState::Full(world) => world,
+            saccade::db::LoadState::Degraded(_) => {
+                return ActivationNote {
+                    state: "hold",
+                    detail: Some(
+                        "the log will not fold; the recipient's session is unknown".into(),
+                    ),
+                    terminal: None,
+                };
+            }
+        },
+        Err(e) => {
+            return ActivationNote {
+                state: "hold",
+                detail: Some(e.to_string()),
+                terminal: None,
+            };
+        }
+    };
+    let Some(id) = world.incarnation_at_num(to_num) else {
+        return ActivationNote {
+            state: "hold",
+            detail: Some(format!("i-{to_num} is not a registered incarnation")),
+            terminal: None,
+        };
+    };
+    let ctx = &world.incarnations[&id];
+    let saccade::Incarnation::Native {
+        native_id,
+        saved_session,
+    } = &ctx.incarnation
+    else {
+        // historical attribution identities have no session to activate
+        return ActivationNote::silent();
+    };
+    let recipient = saccade::activate::Recipient {
+        num: to_num,
+        native_id: native_id.as_str().to_string(),
+        saved_session: saved_session.as_path().to_path_buf(),
+    };
+    let captured = std::cell::RefCell::new(None::<String>);
+    let mut launch = || -> Result<(), String> {
+        let (_, terminal) = integrate_launch(
+            cli,
+            destination,
+            None,
+            Some(&format!("i-{to_num}")),
+            &[],
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+        *captured.borrow_mut() = Some(terminal);
+        Ok(())
+    };
+    let decision = saccade::activate::activate(&recipient, false, &mut launch);
+    ActivationNote::of(decision, captured.into_inner())
 }
 
 /// The mailbox door: the messages an incarnation participates in, in
@@ -2551,98 +2626,10 @@ fn launch_token() -> String {
 /// per /proc entry. A heuristic in the safe direction - any doubt
 /// reads as alive, and the caller leaves mail pending rather than
 /// spawning a duplicate into a running session.
-fn pi_alive_in(dir: &std::path::Path) -> bool {
-    let mut names: Vec<String> = vec!["pi".into(), "saccade-pi".into()];
-    if let Some(base) = pinned_pi()
-        .ok()
-        .and_then(|pinned| pinned.file_name().map(|n| n.to_string_lossy().into_owned()))
-    {
-        names.push(base);
-    }
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let pid = match entry.file_name().to_string_lossy().parse::<u32>() {
-            Ok(pid) => pid,
-            Err(_) => continue,
-        };
-        if std::fs::read_link(format!("/proc/{pid}/cwd")).is_ok_and(|cwd| cwd == dir)
-            && std::fs::read(format!("/proc/{pid}/cmdline"))
-                .ok()
-                .and_then(|raw| {
-                    raw.split(|b| *b == 0)
-                        .next()
-                        .map(|argv0| {
-                            let os: &std::ffi::OsStr =
-                                std::os::unix::ffi::OsStrExt::from_bytes(argv0);
-                            std::path::Path::new(os)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().into_owned())
-                        })
-                        .unwrap_or(None)
-                })
-                .is_some_and(|base| names.contains(&base))
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// What a sender's post-send activation may do: runtime facts only,
-/// and every doubt leaves the mail pending - a duplicate native
-/// process in a running session is the one unforgivable outcome.
-enum Activation {
-    /// a delivery bridge holds a connection; delivery happens in-session
-    Connected,
-    /// no bridge, and the workspace is not on this host: safety is
-    /// unverifiable from here
-    Unverifiable(String),
-    /// a native Pi process lives in the workspace without a bridge
-    /// connection: active or unknown, never resumed into
-    LiveUnbridged,
-    /// no bridge and no Pi process: the exact session resumes
-    Resumable,
-}
-
-/// The activation decision for one recipient: the bridge cache first,
-/// then the saved header's own workspace, then the process table.
-fn activation_for(
-    bridge_connected: bool,
-    saved_session: &std::path::Path,
-    native_id: &str,
-) -> Activation {
-    if bridge_connected {
-        return Activation::Connected;
-    }
-    let header = match saccade::pi_session::read_header(saved_session) {
-        Ok(header) => header,
-        Err(e) => {
-            return Activation::Unverifiable(format!("their saved session cannot be read: {e}"));
-        }
-    };
-    if header.id != native_id {
-        return Activation::Unverifiable(format!(
-            "their saved session carries id {}, not {}",
-            header.id, native_id
-        ));
-    }
-    let workspace = std::path::PathBuf::from(&header.cwd);
-    if !workspace.is_dir() {
-        return Activation::Unverifiable(format!(
-            "their workspace {} is not on this host; safety cannot be verified",
-            workspace.display()
-        ));
-    }
-    if pi_alive_in(&workspace) {
-        return Activation::LiveUnbridged;
-    }
-    Activation::Resumable
-}
-
 /// One activation outcome as the send door reports it: descriptive
-/// facts only, never a judgment about the recipient's work.
+/// facts only, never a judgment about the recipient's work. A submitted
+/// launch is exactly that - submitted; reattachment is observed later,
+/// never assumed here.
 struct ActivationNote {
     state: &'static str,
     detail: Option<String>,
@@ -2658,120 +2645,52 @@ impl ActivationNote {
         }
     }
 
+    fn of(decision: saccade::activate::Decision, terminal: Option<String>) -> Self {
+        match decision {
+            saccade::activate::Decision::Connected => Self::silent(),
+            saccade::activate::Decision::ResumeSubmitted => Self {
+                state: "resume_submitted",
+                detail: None,
+                terminal,
+            },
+            saccade::activate::Decision::LiveUnbridged => Self {
+                state: "live_unbridged",
+                detail: None,
+                terminal: None,
+            },
+            saccade::activate::Decision::InFlight => Self {
+                state: "in_flight",
+                detail: None,
+                terminal: None,
+            },
+            saccade::activate::Decision::Hold(reason) => Self {
+                state: "hold",
+                detail: Some(reason),
+                terminal: None,
+            },
+        }
+    }
+
     fn line(&self, to_num: usize) -> Option<String> {
         match self.state {
             "connected" => None,
-            "resumed" => Some(format!(
-                "  their session was not live: resumed i-{to_num} from its saved session (terminal {}) - pending mail delivers at start",
+            "resume_submitted" => Some(format!(
+                "  their session was not live: resume launch submitted for i-{to_num} (terminal {}) - pending mail delivers once their session registers and drains",
                 self.terminal.as_deref().unwrap_or("?")
             )),
             "live_unbridged" => Some(
-                "  their session looks live but its delivery bridge is not connected; the message stays pending".into(),
+                "  their session looks live but its delivery bridge is not connected; the message stays pending"
+                    .into(),
+            ),
+            "in_flight" => Some(
+                "  another activation is already handling their session; the message stays pending"
+                    .into(),
             ),
             _ => Some(format!(
                 "  activation not attempted: {} - the message stays pending",
                 self.detail.as_deref().unwrap_or("the host state is unknown")
             )),
         }
-    }
-}
-
-/// The sender's door activation after a landed send: connect or resume
-/// or hold, per the decision. A resume failure reports exactly and
-/// leaves the mail pending - the send itself never un-lands.
-fn activate_recipient(cli: &Cli, destination: &Destination, to_num: usize) -> ActivationNote {
-    let url = match server_url(destination, "send") {
-        Ok(url) => url,
-        Err(e) => {
-            return ActivationNote {
-                state: "unverifiable",
-                detail: Some(e.to_string()),
-                terminal: None,
-            };
-        }
-    };
-    let connected = match client::bridge_connections(&url) {
-        Ok(connected) => connected,
-        Err(e) => {
-            return ActivationNote {
-                state: "unverifiable",
-                detail: Some(e.to_string()),
-                terminal: None,
-            };
-        }
-    };
-    let world = match loadout_of(destination) {
-        Ok(loadout) => match loadout.state {
-            saccade::db::LoadState::Full(world) => world,
-            saccade::db::LoadState::Degraded(_) => {
-                return ActivationNote {
-                    state: "unverifiable",
-                    detail: Some(
-                        "the log will not fold; the recipient's session is unknown".into(),
-                    ),
-                    terminal: None,
-                };
-            }
-        },
-        Err(e) => {
-            return ActivationNote {
-                state: "unverifiable",
-                detail: Some(e.to_string()),
-                terminal: None,
-            };
-        }
-    };
-    let Some(id) = world.incarnation_at_num(to_num) else {
-        return ActivationNote {
-            state: "unverifiable",
-            detail: Some(format!("i-{to_num} is not a registered incarnation")),
-            terminal: None,
-        };
-    };
-    let ctx = &world.incarnations[&id];
-    let saccade::Incarnation::Native {
-        native_id,
-        saved_session,
-    } = &ctx.incarnation
-    else {
-        // historical attribution identities have no session to activate
-        return ActivationNote::silent();
-    };
-    match activation_for(
-        connected.contains(&id.0.0),
-        saved_session.as_path(),
-        native_id.as_str(),
-    ) {
-        Activation::Connected => ActivationNote::silent(),
-        Activation::Unverifiable(detail) => ActivationNote {
-            state: "unverifiable",
-            detail: Some(detail),
-            terminal: None,
-        },
-        Activation::LiveUnbridged => ActivationNote {
-            state: "live_unbridged",
-            detail: None,
-            terminal: None,
-        },
-        Activation::Resumable => match integrate_launch(
-            cli,
-            destination,
-            None,
-            Some(&format!("i-{to_num}")),
-            &[],
-            None,
-        ) {
-            Ok((_, terminal)) => ActivationNote {
-                state: "resumed",
-                detail: None,
-                terminal: Some(terminal),
-            },
-            Err(e) => ActivationNote {
-                state: "unverifiable",
-                detail: Some(format!("resume refused: {}", e)),
-                terminal: None,
-            },
-        },
     }
 }
 
@@ -2809,6 +2728,18 @@ fn ask_door(
     if !world.incarnations.contains_key(&creator) {
         return Err(Fail::Reject(Reject::InvalidIncarnationId));
     }
+    // preflight before anything launches: the creator is a registered
+    // NATIVE session (a historical attribution identity cannot create),
+    // and the question is prose that can exist
+    match &world.incarnations[&creator].incarnation {
+        saccade::Incarnation::Native { .. } => {}
+        saccade::Incarnation::Established { .. } => {
+            return Err(Fail::Usage(
+                "integrate --ask creates from a live native session; this attribution identity carries no saved native session to create from".into(),
+            ));
+        }
+    }
+    let body = Prose::new(question.to_string())?;
     let creator_num = world
         .incarnation_num(creator)
         .map(|n| format!("i-{n}"))
@@ -2830,7 +2761,6 @@ fn ask_door(
             None => std::thread::sleep(std::time::Duration::from_millis(400)),
         }
     };
-    let body = Prose::new(question.to_string())?;
     let sent = client::send_message(&url, &context, num, None, scope.task.map(|t| t.0), &body)
         .map_err(Fail::Client)?;
     let answer = sent

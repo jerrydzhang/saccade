@@ -1,5 +1,6 @@
 //! Saccade - issue tracker (idk what makes it special yet other than it's mine)
 
+pub mod activate;
 pub mod api;
 pub mod attempts;
 pub mod client;

@@ -257,9 +257,12 @@ completion, or task acceptance. A sent message activates its recipient
 at supported boundaries: a running peer's delivery bridge parks on the
 tracker and delivers into the live queue, or starts a turn when the
 session is idle; while it waits, the wait releases; a peer that is not
-running resumes its exact saved session at the next send, and every
+running has its exact saved session's resume launched by the next
+send from any face (submission, not reattachment - the mail stays
+pending until the resumed session registers and drains), and every
 doubt about liveness leaves the mail pending - a transient disconnect
-never spawns a duplicate into a running session. Submission confirms
+never spawns a duplicate into a running session, and simultaneous
+senders serialize per native session. Submission confirms
 from the saved session history at later boundaries. The mailbox read is
 `sac messages`.
 

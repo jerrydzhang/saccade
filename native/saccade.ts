@@ -71,10 +71,13 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	const waits = new Set<WaitState>();
 	// envelopes queued natively, submissions not yet confirmed
 	const deliveries = new Set<QueuedDelivery>();
-	// message seqs already queued under this association: startup,
-	// the wait tool, and the background bridge all drain the same
-	// mailbox, and a message enters the native queue exactly once
-	const queuedSeqs = new Set<number>();
+	// message seqs already queued under this association, with the
+	// message itself for correlation: startup, the wait tool, and the
+	// background bridge all drain the same mailbox, and a message
+	// enters the native queue exactly once - until reality disagrees
+	// (the send was refused, or the queued input was discarded), at
+	// which point the guard releases and the next drain delivers again
+	const queued = new Map<number, MailboxMessage>();
 
 	// agent possession is set at load, before any attach: a tracker
 	// outage must still leave nested sac calls acting as the agent, and
@@ -116,7 +119,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		association = null;
 		attachError = null;
 		deliveries.clear();
-		queuedSeqs.clear();
+		queued.clear();
 		delete process.env.SACCADE_INCARNATION_SEQ;
 	}
 
@@ -229,11 +232,12 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 
 	// Queue one message natively and return: never block on what the
 	// native queue does after the current run. The submission is
-	// confirmed separately, by the delivery observers.
+	// confirmed separately, by the delivery observers. A refused send
+	// releases its guard, so the next drain delivers again.
 	function queueDelivery(message: MailboxMessage): void {
 		if (association === null) return;
-		if (queuedSeqs.has(message.seq)) return;
-		queuedSeqs.add(message.seq);
+		if (queued.has(message.seq)) return;
+		queued.set(message.seq, message);
 		const delivery: QueuedDelivery = {
 			envelope: envelopeText(message),
 			messageSeq: message.seq,
@@ -241,7 +245,18 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			sessionFile: association.sessionFile,
 		};
 		deliveries.add(delivery);
-		pi.sendUserMessage(delivery.envelope, { deliverAs: "followUp" });
+		try {
+			const accepted = pi.sendUserMessage(delivery.envelope, { deliverAs: "followUp" });
+			Promise.resolve(accepted).catch(() => {
+				// the native side refused before queue or history: the
+				// mail is still pending and must stay deliverable
+				deliveries.delete(delivery);
+				queued.delete(message.seq);
+			});
+		} catch {
+			deliveries.delete(delivery);
+			queued.delete(message.seq);
+		}
 	}
 
 	// Extension message events are not proof of insertion - the
@@ -267,9 +282,17 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// re-post on later boundaries until the next resume clears it:
 	// limited retry-on-later-boundary bookkeeping, not convergence and
 	// not an exactly-once promise.
+	// At a true idle settle, a delivery that is neither persisted nor
+	// natively pending was discarded (interrupted input, cleared
+	// queue): its guard releases so the next drain delivers again -
+	// recoverability over the once-flag.
 	function confirmDeliveries(ctx: {
 		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
+		isIdle?: () => boolean;
+		hasPendingMessages?: () => boolean;
 	}): void {
+		const idleAndEmpty =
+			ctx.isIdle?.() === true && ctx.hasPendingMessages?.() === false;
 		for (const delivery of [...deliveries]) {
 			if (
 				association === null ||
@@ -279,7 +302,13 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				deliveries.delete(delivery);
 				continue;
 			}
-			if (!savedEntryHas(ctx, delivery.envelope)) continue;
+			if (!savedEntryHas(ctx, delivery.envelope)) {
+				if (idleAndEmpty) {
+					deliveries.delete(delivery);
+					queued.delete(delivery.messageSeq);
+				}
+				continue;
+			}
 			deliveries.delete(delivery);
 			tracker("/api/v1/messages/submit", {
 				method: "POST",
@@ -540,9 +569,29 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return undefined;
 	});
 
-	// native human input releases this integration's own waits, before
-	// the input queues; the input itself proceeds untouched
-	pi.on("input", async () => {
+	// native input releases this integration's own waits, before the
+	// input queues; the input itself proceeds untouched. Source matters:
+	// an extension-source input IS this integration's own delivery
+	// entering the session - an agent message arriving, never human
+	// input - so the wait releases with the message's correlation; a
+	// human typing keeps the human wording. Neither reading claims a
+	// reply was satisfied.
+	pi.on("input", async (event, _ctx) => {
+		const source = (event as { source?: string }).source;
+		if (source === "extension") {
+			const text = typeof (event as { text?: unknown }).text === "string"
+				? (event as { text: string }).text
+				: "";
+			const correlated = [...queued.values()].find(
+				(message) => envelopeText(message) === text,
+			);
+			if (correlated) {
+				for (const state of [...waits]) {
+					finish(state, "message", [correlated]);
+				}
+			}
+			return { action: "continue" };
+		}
 		for (const state of [...waits]) {
 			finish(state, "input", []);
 		}

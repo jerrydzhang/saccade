@@ -124,6 +124,10 @@ class FakePi {
 	handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
 	followUps: string[] = [];
 	session: FakeSession;
+	// the next sendUserMessage is refused before queue or history
+	failNextSend = 0;
+	idle = false;
+	pendingNative = false;
 
 	constructor(nativeId: string, file: string) {
 		this.session = new FakeSession(nativeId, file);
@@ -142,13 +146,23 @@ class FakePi {
 		};
 	}
 	sendUserMessage(content: string, _opts?: unknown) {
+		if (this.failNextSend > 0) {
+			this.failNextSend -= 1;
+			return Promise.reject(new Error("no auth: the provider refused"));
+		}
 		this.followUps.push(content);
+		return Promise.resolve();
 	}
 	appendEntry(_type: string, _data?: unknown) {}
 
 	async emit(event: string, extra: Record<string, unknown> = {}) {
+		const ctx = {
+			sessionManager: this.session,
+			isIdle: () => this.idle,
+			hasPendingMessages: () => this.pendingNative,
+		};
 		for (const handler of this.handlers.get(event) ?? []) {
-			await handler({ type: event, ...extra }, { sessionManager: this.session });
+			await handler({ type: event, ...extra }, ctx);
 		}
 	}
 
@@ -183,6 +197,11 @@ class FakeTracker {
 
 	private reply(body: unknown, status = 200) {
 		return { status, json: async () => body };
+	}
+
+	// wake parked reads without landing anything
+	wake() {
+		for (const resolve of this.parked.splice(0)) resolve();
 	}
 
 	// a landed record wakes every parked read, like the server's notify
@@ -480,6 +499,92 @@ test("reassociation strands the old bridge: no stale delivery, no stale submit",
 	h.tracker.land(1, mail({ seq: 66, num: 2, to: { seq: 1, num: 1 } }));
 	await tick();
 	assert.equal(h.pi.followUps.length, 1);
+});
+
+test("an extension-source input releases the wait as the message, not as human input", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	const wait = h.tools("saccade_wait");
+	const running = wait.execute("t1", {}, new AbortController().signal, {
+		sessionManager: h.pi.session,
+	});
+	h.tracker.land(0, mail({ seq: 70, num: 4, to: { seq: 0, num: 0 } }));
+	await tick();
+	// the queued envelope enters the session as an extension-source input
+	const envelope = h.pi.followUps[0];
+	assert.ok(envelope, "the bridge queued the delivery");
+	await h.pi.emit("input", { source: "extension", text: envelope });
+	const result = await boundary(running, 8000, "saccade_wait");
+	const text = String(result.content[0].text);
+	assert.ok(text.includes("received m-4"), text);
+	assert.ok(!text.includes("human"), `mislabelled as human: ${text}`);
+});
+
+test("interactive input keeps the human wording and no correlation", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	const wait = h.tools("saccade_wait");
+	const running = wait.execute("t1", {}, new AbortController().signal, {
+		sessionManager: h.pi.session,
+	});
+	await tick();
+	await h.pi.emit("input", { source: "interactive", text: "typing over it" });
+	const result = await boundary(running, 8000, "saccade_wait");
+	const text = String(result.content[0].text);
+	assert.ok(text.includes("native human input arrived"), text);
+	assert.equal(h.pi.followUps.length, 0);
+});
+
+test("a refused native send releases the guard and delivers again", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	h.pi.failNextSend = 1;
+	h.tracker.land(0, mail({ seq: 71, num: 5, to: { seq: 0, num: 0 } }));
+	await tick();
+	await tick();
+	assert.equal(h.pi.followUps.length, 0, "the refused send queued nothing");
+	// the guard releases a moment after the refusal; once the settle
+	// cadence passes, the next read re-delivers the same message
+	h.tracker.wake();
+	const deadline = Date.now() + 8000;
+	while (h.pi.followUps.length === 0 && Date.now() < deadline) {
+		h.tracker.wake();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	assert.equal(h.pi.followUps.length, 1, "the released guard re-delivered");
+	assert.equal(h.tracker.submissions.length, 0);
+});
+
+test("a discarded queued delivery reconciles at an idle settle and redelivers", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	h.tracker.land(0, mail({ seq: 72, num: 6, to: { seq: 0, num: 0 } }));
+	await tick();
+	assert.equal(h.pi.followUps.length, 1);
+	// user interruption discarded the queued input: idle, nothing
+	// natively pending, and the envelope never reached saved history
+	h.pi.idle = true;
+	h.pi.pendingNative = false;
+	await h.pi.emit("agent_settled");
+	await tick();
+	assert.equal(h.tracker.submissions.length, 0);
+	// the released guard lets the next read deliver again, after the
+	// settle cadence
+	h.tracker.wake();
+	const redeliver = Date.now() + 8000;
+	while (h.pi.followUps.length < 2 && Date.now() < redeliver) {
+		h.tracker.wake();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	assert.equal(h.pi.followUps.length, 2);
+	// and the redelivered envelope still confirms from saved history
+	h.pi.session.entries.push({
+		type: "message",
+		message: { role: "user", content: h.pi.followUps[1] },
+	});
+	await h.pi.emit("agent_settled");
+	await tick();
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 72 }]);
 });
 
 test("the attach carries the launch token it was launched with", async () => {
