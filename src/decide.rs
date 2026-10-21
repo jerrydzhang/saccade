@@ -16,13 +16,17 @@ fn required_tier(event: &Event) -> Authority {
         | Event::Commented { .. }
         | Event::UseBound { .. }
         | Event::ArtifactAdded { .. }
-        | Event::TaskWorkspaceCheckpointed { .. } => Authority::AnyTier,
+        | Event::TaskWorkspaceCheckpointed { .. }
+        | Event::MessageSent { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
         Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
         // a presentation repair may come from any judgment tier
         Event::CommentRevised { .. } | Event::CommentWithdrawn { .. } => Authority::AnyTier,
-        // the machinery's establishment is provisioning by role
-        Event::WorkspaceEstablished { .. } => Authority::Require(Tier::System),
+        // provisioning by role: the machinery's establishment, the
+        // native registration, and the recipient's delivery record
+        Event::WorkspaceEstablished { .. }
+        | Event::IncarnationRegistered { .. }
+        | Event::MessageSubmitted { .. } => Authority::Require(Tier::System),
     }
 }
 
@@ -76,6 +80,27 @@ pub fn decide(command: Command) -> Vec<Event> {
             task_id,
             checkpoint,
         }],
+        Command::RegisterIncarnation {
+            native_id,
+            saved_session,
+        } => vec![Event::IncarnationRegistered {
+            native_id,
+            saved_session,
+        }],
+        Command::SendMessage {
+            from,
+            to,
+            reply_to,
+            task,
+            body,
+        } => vec![Event::MessageSent {
+            from,
+            to,
+            reply_to,
+            task,
+            body,
+        }],
+        Command::SubmitMessage { id, by } => vec![Event::MessageSubmitted { id, by }],
     }
 }
 
@@ -84,9 +109,12 @@ mod test {
     use super::*;
     use crate::objects::comment::{CommentId, CommentKind};
     use crate::objects::incarnation::IncarnationId;
+    use crate::objects::message::MessageId;
     use crate::types::actor::ActorName;
     use crate::types::artifact::Artifact;
-    use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
+    use crate::types::pointers::{
+        GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath,
+    };
     use crate::{ContentHash, Prose, RecordId, TaskId};
 
     fn agent() -> Context {
@@ -113,7 +141,9 @@ mod test {
     fn authority_table_gates_exactly_the_gated_events() {
         // Expected cells stated independently of required_tier.
         use Authority::*;
-        let events: [(Event, Authority); 16] = [
+        let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
+        let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
+        let events: [(Event, Authority); 18] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -140,14 +170,6 @@ mod test {
                 Event::Commented {
                     home: TaskId(0),
                     kind: CommentKind::Note { body: prose() },
-                    references: Vec::new(),
-                },
-                AnyTier,
-            ),
-            (
-                Event::Commented {
-                    home: TaskId(0),
-                    kind: CommentKind::Request { body: prose() },
                     references: Vec::new(),
                 },
                 AnyTier,
@@ -242,6 +264,32 @@ mod test {
                 },
                 AnyTier,
             ),
+            // The native registration and the delivery record are the
+            // machinery's; a message is its sending session's act.
+            (
+                Event::IncarnationRegistered {
+                    native_id: native_id(),
+                    saved_session: locator(),
+                },
+                Require(Tier::System),
+            ),
+            (
+                Event::MessageSent {
+                    from: IncarnationId(RecordId(0)),
+                    to: IncarnationId(RecordId(1)),
+                    reply_to: None,
+                    task: None,
+                    body: prose(),
+                },
+                AnyTier,
+            ),
+            (
+                Event::MessageSubmitted {
+                    id: MessageId(RecordId(1)),
+                    by: IncarnationId(RecordId(1)),
+                },
+                Require(Tier::System),
+            ),
         ];
 
         for (event, expected) in &events {
@@ -314,6 +362,21 @@ mod test {
             Command::CheckpointWorkspace {
                 task_id: TaskId(0),
                 checkpoint: GitCommit::new("abc123".into()).unwrap(),
+            },
+            Command::RegisterIncarnation {
+                native_id: NativeSessionId::new("a1b2c3d4".into()).unwrap(),
+                saved_session: SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap(),
+            },
+            Command::SendMessage {
+                from: IncarnationId(RecordId(0)),
+                to: IncarnationId(RecordId(1)),
+                reply_to: Some(MessageId(RecordId(2))),
+                task: Some(TaskId(0)),
+                body: prose(),
+            },
+            Command::SubmitMessage {
+                id: MessageId(RecordId(2)),
+                by: IncarnationId(RecordId(1)),
             },
         ];
         for command in commands {

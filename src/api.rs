@@ -18,10 +18,9 @@ use crate::ActorName;
 use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::events::Event;
-use crate::objects::comment::CommentKind;
 use crate::objects::task::TaskId;
 use crate::store::{Context, RecordId, Scope, Tier, World};
-use crate::views::{self, WorkspaceFacts};
+use crate::views::WorkspaceFacts;
 use crate::web;
 use crate::workspace::{self, Established, WorkspaceFail};
 use crate::{Command, Reject};
@@ -398,23 +397,24 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                     .expect("the birth record folds into its task");
                 reply["id"] = json!(format!("t-{}", born.0));
             }
-            if matches!(
-                &command,
-                Command::Comment {
-                    kind: CommentKind::Request { .. },
-                    ..
-                }
-            ) {
-                let request = stored.first().expect("a comment lands its one record");
-                let facts = app
+            if matches!(command, Command::SendMessage { .. }) {
+                let numbers = app
                     .snapshot()
                     .expect("a landed write leaves a foldable world")
                     .world;
-                let facts = views::request_facts(&facts, RecordId(request.seq))
-                    .expect("the landed comment folds in");
-                reply["seq"] = json!(facts.seq);
-                reply["task"] = json!(facts.task);
-                reply["workspace"] = json!(facts.workspace);
+                let sent = stored.first().expect("a message lands its one record").seq;
+                let mctx = numbers
+                    .messages
+                    .get(&crate::MessageId(RecordId(sent)))
+                    .expect("the landed message folds in");
+                reply["message"] = json!({
+                    "seq": sent,
+                    "num": numbers.message_num(crate::MessageId(RecordId(sent))),
+                });
+                reply["from"] = json!({
+                    "seq": mctx.message.from.0 .0,
+                    "num": numbers.incarnation_num(mctx.message.from),
+                });
             }
             (StatusCode::OK, Json(reply)).into_response()
         }
@@ -446,6 +446,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/records", get(records))
         .route("/api/v1/workspace/start", post(workspace_start))
         .route("/api/v1/workspace/open", post(workspace_open))
+        .route("/api/v1/native/attach", post(native_attach))
+        .route("/api/v1/messages/send", post(message_send))
+        .route("/api/v1/messages/submit", post(message_submit))
+        .route("/api/v1/messages/pending", get(messages_pending))
         .route("/api/v1/version", get(version))
 }
 
@@ -480,7 +484,6 @@ struct StartRequest {
     task: usize,
     #[serde(default)]
     base: Option<String>,
-    request: crate::Prose,
     #[serde(default)]
     client: Option<String>,
 }
@@ -657,7 +660,6 @@ async fn workspace_start(State(app): State<AppState>, body: Bytes) -> Response {
     };
     let task = request.task;
     let base = request.base;
-    let prose = request.request;
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = workspace_operation(
         &app,
@@ -666,27 +668,7 @@ async fn workspace_start(State(app): State<AppState>, body: Bytes) -> Response {
         &received,
         task,
         base.as_deref(),
-        |birth| {
-            vec![
-                db::RecordDraft {
-                    context: caller.clone(),
-                    event: Event::Commented {
-                        home: TaskId(task),
-                        kind: CommentKind::Request {
-                            body: prose.clone(),
-                        },
-                        references: Vec::new(),
-                    },
-                },
-                db::RecordDraft {
-                    context: caller,
-                    event: Event::TaskClaimed {
-                        id: TaskId(task),
-                        incarnation: Some(crate::IncarnationId(birth)),
-                    },
-                },
-            ]
-        },
+        |_| Vec::new(),
     );
     respond_operation(guard, outcome)
 }
@@ -712,6 +694,388 @@ async fn workspace_open(State(app): State<AppState>, body: Bytes) -> Response {
         |_| Vec::new(),
     );
     respond_operation(guard, outcome)
+}
+
+// -- the native integration's doors -------------------------------------
+
+/// One native integration attempt's outcome, logged like every
+/// workspace operation: the attempts log is the diagnoser's memory.
+fn integration_outcome<T>(
+    app: &AppState,
+    guard: &ServerState,
+    actor: Option<String>,
+    received: &AsReceived,
+    started: std::time::Instant,
+    outcome: &Result<T, ApiFail>,
+) {
+    let duration_ms = started.elapsed().as_millis() as u64;
+    match outcome {
+        Ok(_) => {
+            let cursor = match guard {
+                ServerState::Ready(inner) => db::last_seq(&inner.conn).ok().flatten(),
+                ServerState::Degraded(..) => None,
+            };
+            app.attempts.append(
+                actor.as_deref(),
+                received.client.as_deref(),
+                duration_ms,
+                Outcome::Landed {
+                    seqs: &cursor.map(|c| vec![c]).unwrap_or_default(),
+                },
+            );
+        }
+        Err(fail) => {
+            let code = match fail {
+                ApiFail::Reject(reject, _) => reject.code(),
+                ApiFail::Degraded(_) => "degraded",
+                ApiFail::Db(_) => "storage",
+                ApiFail::Malformed(_) => "malformed_request",
+                ApiFail::Workspace(effect) => effect.code(),
+                ApiFail::NoRepo => "workspace_no_repo",
+            };
+            let cursor = match guard {
+                ServerState::Ready(inner) => db::last_seq(&inner.conn).ok().flatten(),
+                ServerState::Degraded(..) => None,
+            };
+            app.attempts.append(
+                actor.as_deref(),
+                received.client.as_deref(),
+                duration_ms,
+                Outcome::Refused {
+                    code,
+                    cursor,
+                    request: &received.raw,
+                },
+            );
+        }
+    }
+}
+
+/// What the integration learns when its session attaches.
+#[derive(Serialize)]
+pub struct AttachReply {
+    /// Whether this call birthed the registration; an existing exact
+    /// native session resolves, never a second incarnation
+    pub registered: bool,
+    /// The birth record position: the machine identity channel
+    pub incarnation: usize,
+    /// The incarnation's dense public number, the human-facing i-N
+    pub num: usize,
+    pub records: Vec<StoredRecord>,
+}
+
+#[derive(Deserialize)]
+struct AttachRequest {
+    native_id: crate::NativeSessionId,
+    session_file: crate::SessionLocator,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+fn attach_operation(
+    guard: &mut ServerState,
+    native_id: &crate::NativeSessionId,
+    saved_session: &crate::SessionLocator,
+) -> Result<AttachReply, ApiFail> {
+    let ServerState::Ready(inner) = guard else {
+        let ServerState::Degraded(reason, _) = guard else {
+            unreachable!("the state is one of the two")
+        };
+        return Err(ApiFail::Degraded(reason.clone()));
+    };
+    let loadout = db::load(&inner.conn).map_err(|e| ApiFail::Db(e.to_string()))?;
+    let world = match loadout.state {
+        db::LoadState::Full(world) => world,
+        db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
+    };
+    // an existing exact native session is the same incarnation
+    let existing = world
+        .incarnations
+        .iter()
+        .find(|(_, ctx)| ctx.incarnation.native_id() == Some(native_id));
+    if let Some((id, _)) = existing {
+        return Ok(AttachReply {
+            registered: false,
+            incarnation: id.0.0,
+            num: world
+                .incarnation_num(*id)
+                .expect("a resident incarnation holds a number"),
+            records: Vec::new(),
+        });
+    }
+    let (stored, _) = db::record(
+        &mut inner.conn,
+        &Context::system(),
+        Command::RegisterIncarnation {
+            native_id: native_id.clone(),
+            saved_session: saved_session.clone(),
+        },
+        db::now_epoch(),
+    )?;
+    let birth = RecordId(stored[0].seq);
+    let reloaded = db::load(&inner.conn).map_err(|e| ApiFail::Db(e.to_string()))?;
+    let db::LoadState::Full(world) = reloaded.state else {
+        return Err(ApiFail::Degraded("the log will not fold".into()));
+    };
+    Ok(AttachReply {
+        registered: true,
+        incarnation: birth.0,
+        num: world
+            .incarnation_num(crate::IncarnationId(birth))
+            .expect("the landed registration folds in"),
+        records: stored,
+    })
+}
+
+async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: AttachRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
+    let started = std::time::Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = attach_operation(&mut guard, &request.native_id, &request.session_file);
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+#[derive(Deserialize)]
+struct MessageSendRequest {
+    context: WireContext,
+    /// The recipient's public number, the human-facing i-N — the same
+    /// token every envelope and contact names
+    to: usize,
+    #[serde(default)]
+    reply_to: Option<usize>,
+    #[serde(default)]
+    task: Option<usize>,
+    body: crate::Prose,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: MessageSendRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
+    // the sender is the sending session's registered identity, read
+    // from the declared scope — never caller-authored prose
+    let Some(from) = request.context.scope.as_ref().and_then(|s| s.incarnation) else {
+        return api_failure(ApiFail::Reject(
+            Reject::InvalidIncarnationId,
+            Some(
+                "messages send as a registered incarnation: the sending session declares \
+                 SACCADE_INCARNATION_SEQ"
+                    .into(),
+            ),
+        ));
+    };
+    let context = Context {
+        actor: request.context.actor,
+        tier: match request.context.tier {
+            WireTier::Human => Tier::Human,
+            WireTier::Agent => Tier::Agent,
+        },
+        scope: request.context.scope,
+    };
+    // the public numbers resolve against the fold before the write
+    let resolved = (|| {
+        let snapshot = app.snapshot().map_err(|read_fail| match read_fail {
+            ReadFail::Degraded(d) => ApiFail::Degraded(d.reason),
+            ReadFail::Db(reason) => ApiFail::Db(reason),
+        })?;
+        let to = snapshot
+            .world
+            .incarnation_at_num(request.to)
+            .ok_or(ApiFail::Reject(Reject::InvalidIncarnationId, None))?;
+        let reply_to = match request.reply_to {
+            Some(n) => Some(
+                snapshot
+                    .world
+                    .message_at_num(n)
+                    .ok_or(ApiFail::Reject(Reject::InvalidMessageId, None))?,
+            ),
+            None => None,
+        };
+        Ok((to, reply_to))
+    })();
+    let (to_id, reply_to) = match resolved {
+        Ok(resolved) => resolved,
+        Err(fail) => return api_failure(fail),
+    };
+    let command = Command::SendMessage {
+        from,
+        to: to_id,
+        reply_to,
+        task: request.task.map(crate::TaskId),
+        body: request.body,
+    };
+    match app.execute(&context, command.clone(), None, received) {
+        Ok(stored) => {
+            let sent = stored.first().expect("a message lands its one record").seq;
+            let numbers = app
+                .snapshot()
+                .expect("a landed write leaves a foldable world")
+                .world;
+            let mctx = numbers
+                .messages
+                .get(&crate::MessageId(RecordId(sent)))
+                .expect("the landed message folds in");
+            let reply = json!({
+                "records": stored,
+                "message": {
+                    "seq": sent,
+                    "num": numbers.message_num(crate::MessageId(RecordId(sent))),
+                },
+                "from": {
+                    "seq": mctx.message.from.0 .0,
+                    "num": numbers.incarnation_num(mctx.message.from),
+                },
+            });
+            (StatusCode::OK, Json(reply)).into_response()
+        }
+        Err(e) => {
+            let (status, code, detail) = match e {
+                ExecuteFail::Reject(reject) => {
+                    let taught = app
+                        .snapshot()
+                        .ok()
+                        .and_then(|s| crate::refusals::teach(&s.world, &command, &reject));
+                    ApiFail::Reject(reject, taught).parts()
+                }
+                other => ApiFail::from(other).parts(),
+            };
+            (
+                status,
+                Json(json!({"error": {"code": code, "detail": detail}})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MessageSubmitRequest {
+    /// The submitting session's incarnation: the addressee
+    incarnation: usize,
+    message: usize,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+async fn message_submit(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: MessageSubmitRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
+    // the delivery record is machinery's own act, like the registration
+    let command = Command::SubmitMessage {
+        id: crate::MessageId(RecordId(request.message)),
+        by: crate::IncarnationId(RecordId(request.incarnation)),
+    };
+    match app.execute(&Context::system(), command, None, received) {
+        Ok(stored) => (StatusCode::OK, Json(json!({"records": stored}))).into_response(),
+        Err(e) => {
+            let (status, code, detail) = ApiFail::from(e).parts();
+            (
+                status,
+                Json(json!({"error": {"code": code, "detail": detail}})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MailboxQuery {
+    /// The reader's own incarnation: a bare birth-record position, the
+    /// machine identity channel the session attaches with
+    incarnation: usize,
+}
+
+/// The reader's own mail, in birth order, any state: a read the
+/// integration polls, never a subscription the tracker keeps.
+async fn messages_pending(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<MailboxQuery>,
+) -> Response {
+    let snapshot = match app.snapshot() {
+        Ok(s) => s,
+        Err(read_fail) => {
+            let (status, code, detail) = match read_fail {
+                ReadFail::Degraded(d) => ApiFail::Degraded(d.reason).parts(),
+                ReadFail::Db(reason) => ApiFail::Db(reason).parts(),
+            };
+            return (
+                status,
+                Json(json!({"error": {"code": code, "detail": detail}})),
+            )
+                .into_response();
+        }
+    };
+    let world = snapshot.world;
+    let id = crate::IncarnationId(RecordId(query.incarnation));
+    if !world.incarnations.contains_key(&id) {
+        return api_failure(ApiFail::Reject(Reject::InvalidIncarnationId, None));
+    }
+    let messages: Vec<serde_json::Value> = world
+        .messages
+        .iter()
+        .filter(|(_, mctx)| mctx.message.to == id || mctx.message.from == id)
+        .map(|(mid, mctx)| {
+            let sender = &mctx.message.from;
+            json!({
+                "seq": mid.0 .0,
+                "num": world.message_num(*mid),
+                "from": {
+                    "seq": sender.0 .0,
+                    "num": world.incarnation_num(*sender),
+                    "actor": mctx.actor.as_str(),
+                },
+                "to": {
+                    "seq": mctx.message.to.0 .0,
+                    "num": world.incarnation_num(mctx.message.to),
+                },
+                "reply_to": mctx.message.reply_to.map(|r| world.message_num(r)),
+                "task": mctx.message.task.map(|t| t.0),
+                "state": match mctx.state {
+                    crate::MessageState::Pending => "pending",
+                    crate::MessageState::Submitted => "submitted",
+                },
+                "body": mctx.message.body.as_str(),
+                "born_at": mctx.born_at,
+            })
+        })
+        .collect();
+    let cursor = snapshot.rows.last().map(|r| r.seq);
+    (
+        StatusCode::OK,
+        Json(json!({"messages": messages, "cursor": cursor})),
+    )
+        .into_response()
 }
 
 fn respond_operation(

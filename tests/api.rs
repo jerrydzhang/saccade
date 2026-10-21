@@ -218,84 +218,227 @@ async fn the_tier_law_holds_through_http() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_request_reply_names_its_position_and_the_recorded_workspace() {
-    let db = scratch_db("request-reply");
-    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
-    let base_url = spawn_workspace_server(&db, &root).await;
+async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
+    let db = scratch_db("native-messages");
+    let base_url = spawn_server(&db).await;
 
+    // a fresh native session registers: the machinery's own act
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "aaaa1111",
+            "session_file": "/sessions/aaaa1111.jsonl",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["registered"], true);
+    assert_eq!(reply["incarnation"], 0);
+    assert_eq!(reply["num"], 0);
+    let (_, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "bbbb2222",
+            "session_file": "/sessions/bbbb2222.jsonl",
+        }),
+    );
+    assert_eq!(json_of(&body)["num"], 1);
+
+    // an existing exact native session resolves, never a second birth
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "aaaa1111",
+            "session_file": "/sessions/aaaa1111.jsonl",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["registered"], false);
+    assert_eq!(reply["incarnation"], 0);
+    assert_eq!(reply["records"].as_array().unwrap().len(), 0);
+
+    // a task for context, and a message without any
     post_command(
         &base_url,
         &envelope(
             "human person",
             "human",
-            json!({"create_task": {"name": "hold the request door"}}),
+            json!({"create_task": {"name": "hold the failing edge case"}}),
         ),
     );
 
-    // no recorded workspace: the request names its position, its root task, no workspace
-    let (status, body) = post_command(
+    // an unscoped caller has no sender identity
+    let (status, body) = post_json(
         &base_url,
-        &envelope(
-            "pi",
-            "agent",
-            json!({"comment": {"home": 0, "kind": {"request": {"body": "status?"}}, "references": []}}),
-        ),
-    );
-    assert_eq!(status, 200, "{body}");
-    let reply = json_of(&body);
-    assert_eq!(reply["seq"], reply["records"][0]["seq"]);
-    assert_eq!(reply["task"], 0);
-    assert_eq!(reply["workspace"], Value::Null);
-
-    // the workspace stands: the same request names the recorded facts
-    let (_, body) = post_workspace(
-        &base_url,
-        "/api/v1/workspace/start",
+        "/api/v1/messages/send",
         &json!({
-            "context": {"actor": "jerry", "tier": "human"},
-            "task": 0,
-            "base": null,
-            "request": "begin the work"
+            "context": {"actor": "pi", "tier": "agent", "scope": null},
+            "to": 1,
+            "body": "status?",
         }),
     );
-    let expected = json_of(&body)["workspace"].clone();
-    let (status, body) = post_command(
-        &base_url,
-        &envelope(
-            "pi",
-            "agent",
-            json!({"comment": {"home": 0, "kind": {"request": {"body": "where do you stand?"}}, "references": []}}),
-        ),
-    );
-    assert_eq!(status, 200, "{body}");
-    let reply = json_of(&body);
-    assert_eq!(reply["task"], 0);
-    assert_eq!(reply["workspace"], expected);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_incarnation_id");
 
-    // a comment target resolves through its root task
-    let (_, body) = post_command(
+    // the registered session sends: the sender rides the scope
+    let (status, body) = post_json(
         &base_url,
-        &envelope(
-            "jerry",
-            "human",
-            json!({"comment": {"home": 0, "kind": {"note": {"body": "context note"}}, "references": []}}),
-        ),
-    );
-    let note = json_of(&body)["records"][0]["seq"].as_u64().unwrap();
-    let (status, body) = post_command(
-        &base_url,
-        &envelope(
-            "pi",
-            "agent",
-            json!({"comment": {"home": 0, "kind": {"request": {"body": "on the note"}}, "references": [note]}}),
-        ),
+        "/api/v1/messages/send",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
+            "to": 1,
+            "task": 0,
+            "body": "please look at the failing edge case",
+        }),
     );
     assert_eq!(status, 200, "{body}");
     let reply = json_of(&body);
-    assert_eq!(reply["task"], 0);
-    assert_eq!(reply["workspace"], expected);
+    assert_eq!(reply["message"]["seq"], 3);
+    assert_eq!(reply["message"]["num"], 0);
+    assert_eq!(reply["from"]["seq"], 0);
+    assert_eq!(reply["from"]["num"], 0);
+
+    // the reply names the message it answers by its public number
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": 1, "workspace": null}},
+            "to": 0,
+            "reply_to": 0,
+            "body": "the edge case held under review",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["message"]["seq"], 4);
+    assert_eq!(reply["message"]["num"], 1);
+
+    // the mailbox read returns both directions in birth order; the
+    // integration filters its own pending inbound
+    let (status, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    assert_eq!(status, 200, "{body}");
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    assert_eq!(mail.len(), 2);
+    assert_eq!(mail[0]["seq"], 3);
+    assert_eq!(mail[0]["num"], 0);
+    assert_eq!(mail[0]["from"]["seq"], 0);
+    assert_eq!(mail[0]["from"]["num"], 0);
+    assert_eq!(mail[0]["from"]["actor"], "pi");
+    assert_eq!(mail[0]["task"], 0);
+    assert_eq!(mail[0]["state"], "pending");
+    assert_eq!(mail[0]["body"], "please look at the failing edge case");
+    assert_eq!(mail[1]["seq"], 4);
+    assert_eq!(mail[1]["from"]["num"], 1);
+    assert_eq!(mail[1]["to"]["num"], 0);
+    assert_eq!(mail[1]["reply_to"], 0);
+
+    // unknown recipients refuse the read
+    let (status, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=99");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_incarnation_id");
+
+    // submission is the addressee's machinery act; judgment tiers are
+    // refused at the authority table
+    let (status, body) = post_command(
+        &base_url,
+        &envelope("pi", "agent", json!({"submit_message": {"id": 3, "by": 1}})),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "human_only");
+
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/messages/submit",
+        &json!({"incarnation": 1, "message": 3}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["records"][0]["kind"], "message_submitted");
+
+    // submission is a state, not an address change: the mail reads
+    // submitted, and only the pending inbound goes
+    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    let inbound_pending: Vec<&Value> = mail
+        .iter()
+        .filter(|m| m["to"]["seq"] == 1 && m["state"] == "pending")
+        .collect();
+    assert!(inbound_pending.is_empty());
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/messages/submit",
+        &json!({"incarnation": 1, "message": 4}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_message_id");
+
+    // the sender's own mail reads in the mailbox too, with its state
+    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=0");
+    let mine = json_of(&body)["messages"].as_array().unwrap().clone();
+    let sent_by_me: Vec<&Value> = mine.iter().filter(|m| m["from"]["seq"] == 0).collect();
+    assert_eq!(sent_by_me.len(), 1);
+    assert_eq!(sent_by_me[0]["seq"], 3);
+    // one shared delivery state: the recipient's submission reads here too
+    assert_eq!(sent_by_me[0]["state"], "submitted");
+    assert_eq!(sent_by_me[0]["to"]["num"], 1);
+
+    // the messages are durable, addressed, and home-free: the raw log
+    // holds them off every task thread
+    let mut response = ureq::get(&format!("{base_url}/api/v1/records"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    let rows: Value = serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap();
+    let sent = rows["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "message_sent")
+        .expect("the message rides the raw log");
+    assert_eq!(
+        sent["payload"]["task"], 0,
+        "the task context rides without publication"
+    );
+    assert_eq!(
+        sent["payload"]["body"],
+        "please look at the failing edge case"
+    );
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// Post one JSON body to a path: the typed envelope either way.
+fn post_json(base_url: &str, path: &str, body: &Value) -> (u16, String) {
+    let mut response = ureq::post(&format!("{base_url}{path}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(body.clone())
+        .expect("the server answers");
+    let status = response.status().as_u16();
+    let text = response.body_mut().read_to_string().unwrap();
+    (status, text)
+}
+
+/// Get one JSON path.
+fn get_json(base_url: &str, path: &str) -> (u16, String) {
+    let mut response = ureq::get(&format!("{base_url}{path}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .expect("the server answers");
+    let status = response.status().as_u16();
+    let text = response.body_mut().read_to_string().unwrap();
+    (status, text)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -595,15 +738,14 @@ async fn start_establishes_through_the_servers_git_effects() {
         ),
     );
 
-    // first start: establishment, caller request, incarnation ownership
+    // first start: the establishment alone — no request, no ownership
     let (status, body) = post_workspace(
         &base_url,
         "/api/v1/workspace/start",
         &json!({
             "context": {"actor": "jerry", "tier": "human"},
             "task": 0,
-            "base": null,
-            "request": "migrate the floop guard"
+            "base": null
         }),
     );
     assert_eq!(status, 200, "{body}");
@@ -612,25 +754,22 @@ async fn start_establishes_through_the_servers_git_effects() {
     assert_eq!(reply["recreated"], false);
     assert_eq!(reply["workspace"]["branch"], "saccade/t-0");
     assert_eq!(reply["workspace"]["base"], head.as_str());
-    let records = reply["records"].as_array().expect("three records");
+    let records = reply["records"].as_array().expect("one record");
     let kinds: Vec<&str> = records
         .iter()
         .map(|r| r["kind"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        kinds,
-        ["workspace_established", "commented", "task_claimed"]
-    );
+    assert_eq!(kinds, ["workspace_established"]);
     let actors: Vec<&str> = records
         .iter()
         .map(|r| r["actor"].as_str().unwrap())
         .collect();
-    assert_eq!(actors, ["saccade", "jerry", "jerry"]);
+    assert_eq!(actors, ["saccade"]);
     let tiers: Vec<&str> = records
         .iter()
         .map(|r| r["tier"].as_str().unwrap())
         .collect();
-    assert_eq!(tiers, ["system", "human", "human"]);
+    assert_eq!(tiers, ["system"]);
     let birth = records[0]["seq"].as_u64().unwrap() as usize;
     assert_eq!(reply["incarnation"].as_u64().unwrap(), birth as u64);
 
@@ -642,22 +781,15 @@ async fn start_establishes_through_the_servers_git_effects() {
         "saccade/t-0"
     );
 
-    // ownership names the incarnation; the request kept its human author
+    // the establishment births the historical attribution identity;
+    // no ownership transfer and no thread publication rode it
     let conn = saccade::db::open_read(&db).unwrap();
     let world = match saccade::db::load(&conn).unwrap().state {
         saccade::db::LoadState::Full(world) => world,
         _ => panic!("the log folds"),
     };
-    assert!(matches!(
-        world.tasks[0].ownership[0].owner,
-        saccade::Owner::Incarnation(_)
-    ));
-    assert_eq!(
-        world.comments[&saccade::CommentId(saccade::RecordId(birth + 1))]
-            .actor
-            .as_str(),
-        "jerry"
-    );
+    assert!(world.tasks[0].ownership.is_empty());
+    assert!(world.tasks[0].thread.is_empty());
 
     // repeat start: nothing lands, nothing launches — the association governs
     std::fs::write(worktree.join("dirty.txt"), "uncommitted\n").unwrap();
@@ -666,15 +798,14 @@ async fn start_establishes_through_the_servers_git_effects() {
         "/api/v1/workspace/start",
         &json!({
             "context": {"actor": "jerry", "tier": "human"},
-            "task": 0,
-            "request": "a second request that must not land"
+            "task": 0
         }),
     );
     assert_eq!(status, 200, "{body}");
     let reply = json_of(&body);
     assert_eq!(reply["established"], false);
     assert_eq!(reply["records"].as_array().unwrap().len(), 0);
-    assert_eq!(saccade::db::load(&conn).unwrap().rows.len(), 4);
+    assert_eq!(saccade::db::load(&conn).unwrap().rows.len(), 2);
     assert_eq!(
         std::fs::read_to_string(worktree.join("dirty.txt")).unwrap(),
         "uncommitted\n"
@@ -695,10 +826,7 @@ async fn start_establishes_through_the_servers_git_effects() {
         saccade::db::LoadState::Full(world) => world,
         _ => panic!("the log folds"),
     };
-    assert!(matches!(
-        world.tasks[0].ownership[0].owner,
-        saccade::Owner::Incarnation(_)
-    ));
+    assert!(world.tasks[0].ownership.is_empty());
 
     // a vanished branch is a named refusal, never invented recovery
     std::fs::remove_dir_all(&worktree).unwrap();
@@ -733,7 +861,6 @@ async fn the_branch_scheme_and_base_are_effects_not_claims() {
         &json!({
             "context": {"actor": "jerry", "tier": "human"},
             "task": 0,
-            "request": "will not land",
             "client": "test-runner"
         }),
     );
@@ -749,7 +876,7 @@ async fn the_branch_scheme_and_base_are_effects_not_claims() {
     assert!(
         refused["request"]
             .as_str()
-            .is_some_and(|r| r.contains("will not land")),
+            .is_some_and(|r| r.contains("\"task\": 0")),
         "{refused}"
     );
     sh(&root, &["branch", "-qD", "saccade/t-0"]);
@@ -761,8 +888,7 @@ async fn the_branch_scheme_and_base_are_effects_not_claims() {
         &json!({
             "context": {"actor": "jerry", "tier": "human"},
             "task": 0,
-            "base": "HEAD~1",
-            "request": "stacked work"
+            "base": "HEAD~1"
         }),
     );
     assert_eq!(status, 200, "{body}");
@@ -775,8 +901,7 @@ async fn the_branch_scheme_and_base_are_effects_not_claims() {
         "/api/v1/workspace/start",
         &json!({
             "context": {"actor": "jerry", "tier": "human"},
-            "task": 9,
-            "request": "no such task"
+            "task": 9
         }),
     );
     assert_eq!(status, 400, "{body}");
@@ -826,7 +951,7 @@ async fn clean_tears_the_workspace_down_and_keeps_the_lineage() {
             "SACCADE_REPO",
             "SACCADE_ACTOR",
             "SACCADE_TASK",
-            "SACCADE_INCARNATION",
+            "SACCADE_INCARNATION_SEQ",
             "SACCADE_WORKSPACE",
             "SACCADE_SERVER",
             "SACCADE_PI",
@@ -2307,20 +2432,19 @@ async fn local_replies_match_the_wire() {
     let claimed = local(&local_db, &["--json", "claim", "t-0"]);
     assert_eq!(claimed["records"][0]["kind"], "task_claimed");
 
-    // a request names its position and root task on both paths, no workspace where none stands
-    let asked = local(&local_db, &["--json", "request", "t-0", "status?"]);
-    assert_eq!(asked["seq"], asked["records"][0]["seq"]);
-    assert_eq!(asked["task"], 0);
-    assert_eq!(asked["workspace"], Value::Null);
+    // an offer answers with its records, both paths, identical shapes
+    let offered = local(&local_db, &["--json", "offer", "t-0", "suite green"]);
+    assert_eq!(offered["records"][0]["kind"], "commented");
     let (_, body) = post_command(
         &served,
         &json!({"context": {"actor": "pi", "tier": "agent"},
-                 "command": {"comment": {"home": 0, "kind": {"request": {"body": "status?"}}, "references": []}}}),
+                 "command": {"comment": {"home": 0, "kind": {"offer": {"body": "suite green"}}, "references": []}}}),
     );
-    let served_asked = json_of(&body);
-    assert_eq!(served_asked["seq"], served_asked["records"][0]["seq"]);
-    assert_eq!(served_asked["task"], 0);
-    assert_eq!(served_asked["workspace"], Value::Null);
+    let served_offered = json_of(&body);
+    assert_eq!(
+        served_offered["records"][0]["kind"],
+        offered["records"][0]["kind"]
+    );
 
     std::fs::remove_dir_all(local_db.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(served_db.parent().unwrap()).unwrap();
@@ -2339,7 +2463,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
             .env("SACCADE_ACTOR", "pi")
             // a working session's declared scope must not leak in
             .env("SACCADE_TASK", "")
-            .env("SACCADE_INCARNATION", "")
+            .env("SACCADE_INCARNATION_SEQ", "")
             .env("SACCADE_WORKSPACE", "")
             .args(args)
             .output()
@@ -2361,7 +2485,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
             .arg(&path)
             .env("SACCADE_ACTOR", "pi")
             .env("SACCADE_TASK", "")
-            .env("SACCADE_INCARNATION", "")
+            .env("SACCADE_INCARNATION_SEQ", "")
             .env("SACCADE_WORKSPACE", "")
             .args(["--json", "wait"])
             .args(args)
@@ -2536,7 +2660,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
         ])
         .env("SACCADE_ACTOR", "pi")
         .env("SACCADE_TASK", "")
-        .env("SACCADE_INCARNATION", "")
+        .env("SACCADE_INCARNATION_SEQ", "")
         .env("SACCADE_WORKSPACE", "")
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -2667,7 +2791,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         .env_remove("SACCADE_DB")
         .env_remove("SACCADE_SERVER")
         .env_remove("SACCADE_TASK")
-        .env_remove("SACCADE_INCARNATION")
+        .env_remove("SACCADE_INCARNATION_SEQ")
         .env_remove("SACCADE_WORKSPACE")
         .current_dir(&root);
         cmd.args(args);
@@ -2707,8 +2831,8 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         &[("SACCADE_ACTOR", "pi")],
     );
     assert!(ok, "stdout: {out}\nstderr: {err}");
-    assert!(out.contains("workspace established"), "{out}");
-    assert!(out.contains("ownership names i-1"), "{out}");
+    assert!(out.contains("no request or ownership recorded"), "{out}");
+    assert!(!out.contains("ownership names"), "{out}");
     assert!(
         out.contains("term_actual_shape_1"),
         "the host's handle: {out}"
@@ -2766,7 +2890,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         .env("PI_DUMP", dump.display().to_string())
         .env_remove("SACCADE_ACTOR")
         .env_remove("SACCADE_TASK")
-        .env_remove("SACCADE_INCARNATION")
+        .env_remove("SACCADE_INCARNATION_SEQ")
         .env_remove("SACCADE_WORKSPACE")
         .env_remove("SACCADE_REPO")
         .env_remove("SACCADE_DB")
@@ -2802,7 +2926,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     assert_eq!(line("SACCADE_ACTOR"), "SACCADE_ACTOR=pi dump");
     assert_eq!(line("SACCADE_ENVRC_LAYER"), "SACCADE_ENVRC_LAYER=envrc");
     assert_eq!(line("SACCADE_TASK"), "SACCADE_TASK=t-0");
-    assert_eq!(line("SACCADE_INCARNATION"), "SACCADE_INCARNATION=i-1");
+    assert_eq!(line("SACCADE_INCARNATION_SEQ"), "SACCADE_INCARNATION_SEQ=1");
     assert_eq!(
         line("SACCADE_WORKSPACE"),
         format!("SACCADE_WORKSPACE={}", worktree.display())
@@ -2870,8 +2994,8 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     );
     let (ok, out, err) = run(&routed(&["open", "t-1"]), &[("SACCADE_ACTOR", "pi")]);
     assert!(ok, "stdout: {out}\nstderr: {err}");
-    assert!(out.contains("association born"), "{out}");
-    assert!(out.contains("no request or ownership"), "{out}");
+    assert!(out.contains("workspace established"), "{out}");
+    assert!(out.contains("no request or ownership recorded"), "{out}");
     assert!(out.contains("term_actual_shape"), "{out}");
     assert!(out.contains("· shell"), "{out}");
     let asked = std::fs::read_to_string(&host_log).unwrap();
@@ -2887,7 +3011,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         &[
             ("SACCADE_ACTOR", "pi"),
             ("SACCADE_TASK", "t-99"),
-            ("SACCADE_INCARNATION", "i-999"),
+            ("SACCADE_INCARNATION_SEQ", "999"),
             ("SACCADE_WORKSPACE", "/nowhere"),
         ],
     );
@@ -2897,7 +3021,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     let env_run = |actor: Option<&str>| {
         let mut envs: Vec<(&str, &str)> = vec![
             ("SACCADE_TASK", "t-99"),
-            ("SACCADE_INCARNATION", "i-999"),
+            ("SACCADE_INCARNATION_SEQ", "999"),
             ("SACCADE_WORKSPACE", "/nowhere"),
             ("SACCADE_DB", "/stale/routing.db"),
             ("SACCADE_SERVER", "http://stale:1"),
@@ -2924,7 +3048,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         &[
             ("SACCADE_ACTOR", "pi"),
             ("SACCADE_TASK", "t-99"),
-            ("SACCADE_INCARNATION", "i-999"),
+            ("SACCADE_INCARNATION_SEQ", "999"),
             ("SACCADE_WORKSPACE", "/nowhere"),
         ],
     );
@@ -2937,8 +3061,8 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     };
     assert_eq!(env_line(&out, "SACCADE_TASK"), "SACCADE_TASK=t-0");
     assert_eq!(
-        env_line(&out, "SACCADE_INCARNATION"),
-        "SACCADE_INCARNATION=i-1"
+        env_line(&out, "SACCADE_INCARNATION_SEQ"),
+        "SACCADE_INCARNATION_SEQ=1"
     );
     assert_eq!(
         env_line(&out, "SACCADE_WORKSPACE"),
@@ -3007,11 +3131,11 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
 
     // identity: the environment's declaration, read-only
     let (ok, out, err) = run(
-        &routed(&["identity", "--json"]),
+        &at_repo(routed(&["identity", "--json"])),
         &[
             ("SACCADE_ACTOR", "pi"),
             ("SACCADE_TASK", "t-0"),
-            ("SACCADE_INCARNATION", "i-1"),
+            ("SACCADE_INCARNATION_SEQ", "1"),
             ("SACCADE_WORKSPACE", worktree.to_str().unwrap()),
         ],
     );
@@ -3020,7 +3144,9 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     assert_eq!(identity["actor"], "pi");
     assert_eq!(identity["tier"], "agent");
     assert_eq!(identity["task"], "t-0");
-    assert_eq!(identity["incarnation"], "i-1");
+    // the declared birth position resolves to the dense public number
+    assert_eq!(identity["incarnation"], "i-0");
+    assert_eq!(identity["incarnation_seq"], 1);
     assert_eq!(identity["workspace"], worktree.display().to_string());
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
@@ -3113,7 +3239,7 @@ fn run_with_terminals(
     cmd.args(args)
         .env_remove("SACCADE_ACTOR")
         .env_remove("SACCADE_TASK")
-        .env_remove("SACCADE_INCARNATION")
+        .env_remove("SACCADE_INCARNATION_SEQ")
         .env_remove("SACCADE_WORKSPACE")
         .stdin(std::process::Stdio::piped())
         .stdout(if stdout_tty {

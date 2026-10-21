@@ -61,6 +61,17 @@ enum Action {
     Establish {
         task: u8,
     },
+    Register {
+        draw: u8,
+    },
+    Send {
+        from: u8,
+        to: u8,
+        reply: u8,
+    },
+    Submit {
+        message: u8,
+    },
 }
 
 impl Action {
@@ -75,7 +86,10 @@ impl Action {
             | Action::Revise { human, .. }
             | Action::WithdrawComment { human, .. }
             | Action::Artifact { human, .. } => *human,
-            Action::Establish { .. } => false,
+            Action::Establish { .. }
+            | Action::Register { .. }
+            | Action::Send { .. }
+            | Action::Submit { .. } => false,
         }
     }
 
@@ -180,13 +194,18 @@ fn reliable_offer_at(world: &World, n: u8) -> Option<CommentId> {
     ids.get(slot).copied()
 }
 
-/// The live incarnation bound to a task, if one is born; the sentinel
-/// slot draws a guaranteed-absent reference.
+/// The historical incarnation born with a task's establishment; the
+/// sentinel slot draws a guaranteed-absent reference.
 fn incarnation_at(world: &World, task: TaskId, n: u8) -> Option<saccade::IncarnationId> {
     let born: Vec<saccade::IncarnationId> = world
         .incarnations
         .iter()
-        .filter(|(_, ctx)| ctx.incarnation.task == task)
+        .filter(|(_, ctx)| {
+            matches!(
+                ctx.incarnation,
+                saccade::Incarnation::Established { task: born, .. } if born == task
+            )
+        })
         .map(|(id, _)| *id)
         .collect();
     let slot = n as usize % (born.len() + 1);
@@ -195,6 +214,25 @@ fn incarnation_at(world: &World, task: TaskId, n: u8) -> Option<saccade::Incarna
     } else {
         Some(born[slot])
     }
+}
+
+/// The registered native identities, in birth order.
+fn native_at(world: &World, n: u8) -> Option<saccade::IncarnationId> {
+    let born: Vec<saccade::IncarnationId> = world
+        .incarnations
+        .iter()
+        .filter(|(_, ctx)| matches!(ctx.incarnation, saccade::Incarnation::Native { .. }))
+        .map(|(id, _)| *id)
+        .collect();
+    let slot = n as usize % (born.len() + 1);
+    born.get(slot).copied()
+}
+
+/// The messages the fold holds, with a one-past-the-end sentinel.
+fn message_at(world: &World, n: u8) -> Option<saccade::MessageId> {
+    let ids: Vec<saccade::MessageId> = world.messages.keys().copied().collect();
+    let slot = n as usize % (ids.len() + 1);
+    ids.get(slot).copied()
 }
 
 fn command_of(action: &Action, world: &World, records: usize) -> Command {
@@ -231,8 +269,8 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             };
             // notes and requests cite earlier records through their
             // mappings: births and record facts alike
-            let references: Vec<RecordId> = match variant % 6 {
-                0 | 1 => cites.iter().map(|n| record_ref_at(records, *n)).collect(),
+            let references: Vec<RecordId> = match variant % 5 {
+                0 => cites.iter().map(|n| record_ref_at(records, *n)).collect(),
                 _ => Vec::new(),
             };
             // a decision homes on the task of the offer it names; the
@@ -242,26 +280,23 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
                 .get(&decision_ref)
                 .map(|c| c.comment.home)
                 .unwrap_or(task);
-            let home = match variant % 6 {
-                3 | 4 => decision_home,
+            let home = match variant % 5 {
+                2 | 3 => decision_home,
                 _ => task,
             };
             Command::Comment {
                 home,
-                kind: match variant % 6 {
+                kind: match variant % 5 {
                     0 => CommentKind::Note {
                         body: Prose::new("generated note".into()).unwrap(),
                     },
-                    1 => CommentKind::Request {
-                        body: Prose::new("generated request".into()).unwrap(),
-                    },
-                    2 => CommentKind::Offer {
+                    1 => CommentKind::Offer {
                         body: Prose::new("generated account".into()).unwrap(),
                     },
-                    3 => CommentKind::Accept {
+                    2 => CommentKind::Accept {
                         offer: decision_ref,
                     },
-                    4 => CommentKind::Reject {
+                    3 => CommentKind::Reject {
                         offer: decision_ref,
                         grounds: Prose::new("generated grounds".into()).unwrap(),
                     },
@@ -277,11 +312,27 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
         }
         Action::BindUse {
             use_draw, offer, ..
-        } => Command::BindUse {
-            id: use_comment_at(world, *use_draw),
-            offer: reliable_offer_at(world, *offer).unwrap_or(CommentId(RecordId(usize::MAX))),
-            grounds: Prose::new("generated grounds".into()).unwrap(),
-        },
+        } => {
+            // the selection names the use's declared source task's
+            // standing account: the draw targets the real seam, and a
+            // zero offer byte keeps the sentinel's refusal traffic
+            let id = use_comment_at(world, *use_draw);
+            let source = world
+                .comments
+                .get(&id)
+                .and_then(|c| c.comment.kind.source());
+            let selected = match offer {
+                0 => None,
+                _ => source
+                    .and_then(|src| world.tasks.get(src.0))
+                    .and_then(|t| t.current_offer),
+            };
+            Command::BindUse {
+                id,
+                offer: selected.unwrap_or(CommentId(RecordId(usize::MAX))),
+                grounds: Prose::new("generated grounds".into()).unwrap(),
+            }
+        }
         Action::Revise { .. } => Command::ReviseComment {
             id: comment_at(world, action.number("comment")),
             body: Prose::new("generated revision".into()).unwrap(),
@@ -304,13 +355,53 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             worktree: saccade::WorktreePath::new(format!("/generated/wt/t-{}", task.0).into())
                 .unwrap(),
         },
+        Action::Register { draw } => Command::RegisterIncarnation {
+            native_id: saccade::NativeSessionId::new(format!("native-{draw:02}")).unwrap(),
+            saved_session: saccade::SessionLocator::new(
+                format!("/generated/sessions/native-{draw:02}.jsonl").into(),
+            )
+            .unwrap(),
+        },
+        Action::Send { from, to, reply } => Command::SendMessage {
+            from: native_at(world, *from).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
+            to: native_at(world, *to).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
+            reply_to: message_at(world, *reply),
+            task: None,
+            body: saccade::Prose::new("generated message".into()).unwrap(),
+        },
+        Action::Submit { message } => {
+            let id = message_at(world, *message);
+            let by = id
+                .and_then(|mid| world.messages.get(&mid))
+                .map(|m| m.message.to);
+            Command::SubmitMessage {
+                id: id.unwrap_or(saccade::MessageId(RecordId(usize::MAX))),
+                by: by.unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
+            }
+        }
     }
 }
 
 fn context(action: &Action, world: &World) -> Context {
-    // the establishment is the machinery's own act
-    if let Action::Establish { .. } = action {
+    // provisioning and delivery bookkeeping are the machinery's own acts
+    if let Action::Establish { .. } | Action::Register { .. } | Action::Submit { .. } = action {
         return Context::system();
+    }
+    // a send rides its sender's registered native identity
+    if let Action::Send { from, .. } = action {
+        return match native_at(world, *from) {
+            Some(id) => Context {
+                actor: ActorName::new("saccade bot".into()).unwrap(),
+                tier: Tier::Agent,
+                scope: Some(Scope {
+                    task: None,
+                    incarnation: Some(id),
+                    workspace: None,
+                }),
+            },
+            // no registered sender: the draw lands as a refused system write
+            None => Context::system(),
+        };
     }
     let human = action.human();
     let base = Context {
@@ -327,7 +418,7 @@ fn context(action: &Action, world: &World) -> Context {
     if let Action::Comment { scoped: true, .. } = action {
         Context {
             scope: Some(Scope {
-                task: task_at(world, action.number("task")),
+                task: Some(task_at(world, action.number("task"))),
                 incarnation: None,
                 workspace: None,
             }),
@@ -379,7 +470,7 @@ fn action_strategy() -> BoxedStrategy<Action> {
                     cites,
                 }
             }),
-        3 => (any::<u8>(), any::<u8>(), human_coin()).prop_map(|(use_draw, offer, human)| {
+        4 => (any::<u8>(), any::<u8>(), human_coin()).prop_map(|(use_draw, offer, human)| {
             Action::BindUse {
                 use_draw,
                 offer,
@@ -390,6 +481,13 @@ fn action_strategy() -> BoxedStrategy<Action> {
         2 => id(|comment, human| Action::WithdrawComment { comment, human }),
         2 => id(|task, human| Action::Artifact { task, human }),
         2 => any::<u8>().prop_map(|task| Action::Establish { task }),
+        2 => any::<u8>().prop_map(|draw| Action::Register { draw }),
+        3 => (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(from, to, reply)| Action::Send {
+            from,
+            to,
+            reply,
+        }),
+        2 => any::<u8>().prop_map(|message| Action::Submit { message }),
     ]
     .boxed()
 }
@@ -514,12 +612,11 @@ fn generator_reaches_deep_states() {
                         }
                         Action::Comment { variant, .. } => {
                             // the variant grammar must actually land
-                            let name = match variant % 6 {
+                            let name = match variant % 5 {
                                 0 => "note comment",
-                                1 => "request comment",
-                                2 => "offer comment",
-                                3 => "accept comment",
-                                4 => "reject comment",
+                                1 => "offer comment",
+                                2 => "accept comment",
+                                3 => "reject comment",
                                 _ => "use comment",
                             };
                             *milestones.entry(name).or_default() += 1;
@@ -541,6 +638,21 @@ fn generator_reaches_deep_states() {
                         Action::WithdrawComment { .. } => {
                             *milestones.entry("comment withdraw").or_default() += 1;
                         }
+                        Action::Register { .. } => {
+                            if last.kind == "incarnation_registered" {
+                                *milestones.entry("native registered").or_default() += 1;
+                            }
+                        }
+                        Action::Send { .. } => {
+                            if last.kind == "message_sent" {
+                                *milestones.entry("message sent").or_default() += 1;
+                            }
+                        }
+                        Action::Submit { .. } => {
+                            if last.kind == "message_submitted" {
+                                *milestones.entry("message submitted").or_default() += 1;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -556,6 +668,8 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::SelfAcceptance => "SelfAcceptance",
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::InvalidIncarnationId => "InvalidIncarnationId",
+                        saccade::Reject::DuplicateNativeSession => "DuplicateNativeSession",
+                        saccade::Reject::InvalidMessageId => "InvalidMessageId",
                         saccade::Reject::InvalidActor => "InvalidActor",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
                         saccade::Reject::WorkspaceAlreadyExists => "WorkspaceAlreadyExists",
@@ -596,7 +710,9 @@ fn generator_reaches_deep_states() {
         ("accept comment", 0.03),
         ("reject comment", 0.03),
         ("use comment", 0.05),
-        ("request comment", 0.10),
+        ("native registered", 0.15),
+        ("message sent", 0.01),
+        ("message submitted", 0.005),
         ("artifact", 0.05),
         ("revise", 0.05),
         ("comment withdraw", 0.015),

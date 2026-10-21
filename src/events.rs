@@ -1,8 +1,9 @@
 use crate::objects::comment::{CommentId, CommentKind};
 use crate::objects::incarnation::IncarnationId;
+use crate::objects::message::MessageId;
 use crate::objects::task::TaskId;
 use crate::types::artifact::Artifact;
-use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
+use crate::types::pointers::{GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath};
 use crate::types::prose::Prose;
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +90,35 @@ pub enum Event {
         task_id: TaskId,
         checkpoint: GitCommit,
     },
+    // Incarnation and message events: registration and submission are
+    // machinery verbs, System-authored by role; a message is authored
+    // by its sending session's registered identity
+    /// The native-session birth: the durable native id and the
+    /// saved-session locator ordinary resume validates. No task, no
+    /// workspace, no home; registering an already-known native
+    /// session is resolved by the effect, never a second birth.
+    IncarnationRegistered {
+        native_id: NativeSessionId,
+        saved_session: SessionLocator,
+    },
+    /// A durable addressed message. The sender is the sending
+    /// session's registered identity, never authored prose; the body
+    /// is the only caller-authored field. Task context may ride
+    /// without publication; no thread home exists.
+    MessageSent {
+        from: IncarnationId,
+        to: IncarnationId,
+        reply_to: Option<MessageId>,
+        task: Option<TaskId>,
+        body: Prose,
+    },
+    /// The recipient's integration handed the message to its native
+    /// session: ordinary pending/submission bookkeeping, never a
+    /// claim of reading, agreement, completion, or task acceptance.
+    MessageSubmitted {
+        id: MessageId,
+        by: IncarnationId,
+    },
 }
 
 /// A stable internal reference: the birth record of the thing cited.
@@ -148,5 +178,26 @@ pub enum Command {
     CheckpointWorkspace {
         task_id: TaskId,
         checkpoint: GitCommit,
+    },
+    // Registration and submission are machinery verbs: System
+    // authorship comes from the role, never input. A message is
+    // authored by its sending session's registered identity.
+    RegisterIncarnation {
+        native_id: NativeSessionId,
+        saved_session: SessionLocator,
+    },
+    /// The sending side: `from` is the registered session's own
+    /// identity, matched against the caller's declared scope at the
+    /// store, never free authorship
+    SendMessage {
+        from: IncarnationId,
+        to: IncarnationId,
+        reply_to: Option<MessageId>,
+        task: Option<TaskId>,
+        body: Prose,
+    },
+    SubmitMessage {
+        id: MessageId,
+        by: IncarnationId,
     },
 }

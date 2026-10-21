@@ -9,8 +9,9 @@ use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{
-    ArtifactLine, CommentLine, RequestFacts, SearchGroup, SearchQuery, TaskView, Term, ThreadItem,
-    comment_line, matched_line, search, show_view, task_view, thread_index, thread_view,
+    ArtifactLine, CommentLine, MessageLine, SearchGroup, SearchQuery, TaskView, Term, ThreadItem,
+    comment_line, mailbox, matched_line, message_line, search, show_view, task_view, thread_index,
+    thread_view,
 };
 use saccade::{
     ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, GitCommit,
@@ -83,9 +84,33 @@ enum Cmd {
         #[arg(long = "ref", value_name = "REF")]
         refs: Vec<String>,
     },
-    /// Attach a request — prose seeking response, recording why work
-    /// happened — to a task (t-<n>) or beside a comment (c-<n>)
-    Request { target: String, body: String },
+    /// Send a durable addressed message from this session's registered
+    /// incarnation: the sender rides the environment (never authored),
+    /// delivery is the recipient's integration's act
+    Send {
+        /// The recipient (i-<n>)
+        #[arg(long)]
+        to: String,
+        /// The message this one answers (m-<n>)
+        #[arg(long)]
+        reply: Option<String>,
+        /// Task context riding the exchange, without publication (t-<n>)
+        #[arg(long)]
+        task: Option<String>,
+        /// The body, quoted
+        #[arg(required_unless_present = "stdin", conflicts_with = "stdin")]
+        body: Option<String>,
+        /// Read the body from stdin instead of an argument
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Show the messages an incarnation participates in, in record
+    /// order, with their delivery state; the mailbox defaults to this
+    /// session's declared incarnation
+    Messages {
+        /// The incarnation (i-<n>); defaults to the declared scope
+        mailbox: Option<String>,
+    },
     /// Offer the whole-task closing account (t-<n> only: a broadcast)
     Offer { id: String, body: String },
     /// Accept an offered conclusion: the offer it accepts (c-<n>)
@@ -170,7 +195,7 @@ enum Cmd {
         /// only-show-me facets:
         ///   in:t-N     one thread's records only
         ///   by:NAME    author, matched within names (by:pi finds pi/t-90-1)
-        ///   kind:K     task, note, request, offer, accept, reject, use,
+        ///   kind:K     task, note, offer, accept, reject, use,
         ///              explanation, artifact
         ///
         /// An id term — 'c-907' or 't-49' — is a reference search: every
@@ -195,14 +220,15 @@ enum Cmd {
     /// Record a task's current branch tip as its checkpoint
     Checkpoint { id: String },
     /// Establish a task's workspace and launch the pinned harness with
-    /// the initial request; a task already holding a workspace is
+    /// the prompt as its native first input; no comment publication, no
+    /// ownership transfer. A task already holding a workspace is
     /// reported and opened, never duplicated
     Start {
         id: String,
-        /// The initial request, quoted
+        /// The initial prompt, quoted
         #[arg(required_unless_present = "stdin", conflicts_with = "stdin")]
         body: Option<String>,
-        /// Read the initial request from stdin instead of an argument
+        /// Read the initial prompt from stdin instead of an argument
         #[arg(long)]
         stdin: bool,
         /// The Git base for the new branch: a ref, defaulting to the
@@ -228,6 +254,22 @@ enum Cmd {
         /// The command and its arguments, after --
         #[arg(last = true)]
         argv: Vec<String>,
+    },
+    /// Launch the composed native Pi in an explicit existing
+    /// workspace, task-free: a fresh session registers itself as a new
+    /// incarnation; --resume continues a saved one from its recorded
+    /// locator. No task, claim, or request is provisioned
+    Integrate {
+        /// The workspace directory to work in; it must already exist
+        #[arg(long, conflicts_with = "resume")]
+        workspace: Option<PathBuf>,
+        /// Continue this saved incarnation (i-<n>) from its recorded
+        /// native session, validated against the saved header
+        #[arg(long, conflicts_with = "workspace")]
+        resume: Option<String>,
+        /// The initial prompt, quoted; native human input when omitted
+        #[arg(last = true)]
+        prompt: Vec<String>,
     },
     /// Report this session's environment-declared identity and routing:
     /// disclosure, never a liveness claim or proof of ownership
@@ -480,16 +522,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 references,
             }
         }
-        Cmd::Request { target, body } => {
-            let world = world_of(&destination)?;
-            let (home, references) = comment_address(&world, target)?;
-            let body = Prose::new(body.clone())?;
-            Command::Comment {
-                home,
-                kind: CommentKind::Request { body },
-                references,
-            }
-        }
         Cmd::Offer { id, body } => {
             let body = Prose::new(body.clone())?;
             Command::Comment {
@@ -608,6 +640,37 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             after,
             until,
         } => return wait_door(cli, &destination, target, *after, until.until()),
+        Cmd::Send {
+            to,
+            reply,
+            task,
+            body,
+            stdin,
+        } => {
+            return send_door(
+                cli,
+                &destination,
+                to,
+                reply.as_deref(),
+                task.as_deref(),
+                body.clone(),
+                *stdin,
+            );
+        }
+        Cmd::Messages { mailbox } => return messages_door(cli, &destination, mailbox.as_deref()),
+        Cmd::Integrate {
+            workspace,
+            resume,
+            prompt,
+        } => {
+            return integrate_door(
+                cli,
+                &destination,
+                workspace.as_deref(),
+                resume.as_deref(),
+                prompt,
+            );
+        }
         Cmd::Start {
             id,
             body,
@@ -703,7 +766,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     identity_fallback_guard(cli, &context, attached_terminal())?;
     let creates = matches!(command, Command::CreateTask { .. });
     let mut born: Option<String> = None;
-    let mut request: Option<RequestFacts> = None;
     let stored = match &destination {
         Destination::Local { db } => {
             let now = cli.at.unwrap_or_else(db::now_epoch);
@@ -713,9 +775,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                     if creates {
                         born = born_of(&stored, &world);
                     }
-                    request = request_of(&command, &stored, |seq| {
-                        saccade::views::request_facts(&world, seq)
-                    });
                     stored
                 }
                 Err(ExecuteFail::Reject(reject)) => return Err(refused(&conn, &command, reject)),
@@ -726,40 +785,10 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             client::handshake(url);
             let reply = client::send(url, &context, command, cli.at).map_err(Fail::Client)?;
             born = reply.id;
-            if let Some(seq) = reply.seq {
-                request = Some(RequestFacts {
-                    seq,
-                    task: reply.task.expect("a request reply names its task"),
-                    workspace: reply.workspace,
-                });
-            }
             reply.records
         }
     };
-    Ok(render_records(
-        cli,
-        &stored,
-        born.as_deref(),
-        request.as_ref(),
-    ))
-}
-
-fn request_of(
-    command: &Command,
-    stored: &[db::StoredRecord],
-    facts: impl FnOnce(RecordId) -> Option<RequestFacts>,
-) -> Option<RequestFacts> {
-    if !matches!(
-        command,
-        Command::Comment {
-            kind: CommentKind::Request { .. },
-            ..
-        }
-    ) {
-        return None;
-    }
-    let record = stored.first()?;
-    facts(RecordId(record.seq))
+    Ok(render_records(cli, &stored, born.as_deref()))
 }
 
 /// A refusal the world can teach: the expected format and, where the
@@ -1019,25 +1048,26 @@ fn context_of(cli: &Cli) -> Result<Context, Fail> {
     })
 }
 
-/// The environment-declared scope: SACCADE_TASK anchors it
-/// ("t-<n>"), SACCADE_INCARNATION names a record-derived worker
-/// ("i-<seq>", the establishment birth's position), SACCADE_WORKSPACE
-/// names the workspace address (an absolute path). Disclosure riding
-/// every record, never proof; the incarnation and workspace keys ride
-/// only with the task anchor.
+/// The environment-declared scope: SACCADE_TASK ("t-<n>"),
+/// SACCADE_INCARNATION_SEQ (a bare birth-record position — the
+/// machine identity channel; the public i-N stays the fold's dense
+/// numbering), SACCADE_WORKSPACE (an absolute path). Any one present
+/// declares a scope: native participation precedes any task, so the
+/// task binding is optional. Disclosure riding every record, never
+/// proof.
 fn context_scope() -> Result<Option<Scope>, Fail> {
-    let Some(task) = std::env::var("SACCADE_TASK").ok().filter(|t| !t.is_empty()) else {
-        return Ok(None);
+    let task = match std::env::var("SACCADE_TASK") {
+        Ok(value) if !value.is_empty() => Some(parse_task_id(&value)?),
+        _ => None,
     };
-    let task = parse_task_id(&task)?;
-    let incarnation = match std::env::var("SACCADE_INCARNATION") {
+    let incarnation = match std::env::var("SACCADE_INCARNATION_SEQ") {
         Ok(value) if !value.is_empty() => {
-            let id = parse_incarnation_ref(&value).map_err(|_| {
+            let seq: usize = value.parse().map_err(|_| {
                 Fail::Usage(format!(
-                    "SACCADE_INCARNATION='{value}' is not an i-<seq> reference"
+                    "SACCADE_INCARNATION_SEQ='{value}' is not a bare birth-record position"
                 ))
             })?;
-            Some(id)
+            Some(IncarnationId(RecordId(seq)))
         }
         _ => None,
     };
@@ -1051,6 +1081,9 @@ fn context_scope() -> Result<Option<Scope>, Fail> {
         }
         _ => None,
     };
+    if task.is_none() && incarnation.is_none() && workspace.is_none() {
+        return Ok(None);
+    }
     Ok(Some(Scope {
         task,
         incarnation,
@@ -1106,10 +1139,11 @@ fn canonical_db(db_path: &std::path::Path) -> PathBuf {
     std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf())
 }
 
-/// The start door: the server establishes through its own Git effects
-/// and lands the caller's request with the incarnation ownership; the
-/// host then carries one terminal carrying the pinned harness. A task
-/// already holding a workspace is reported — nothing duplicated.
+/// The start door: the server establishes through its own Git effects;
+/// the host then carries one terminal running the pinned harness with
+/// the given prompt as its native initial input — no request comment,
+/// no ownership transfer. A task already holding a workspace is
+/// reported — nothing duplicated.
 fn start_door(
     cli: &Cli,
     destination: &Destination,
@@ -1120,14 +1154,14 @@ fn start_door(
 ) -> Result<String, Fail> {
     let url = server_url(destination, "start")?;
     let task = parse_task_id(id)?;
-    let request = Prose::new(start_body(body, stdin)?)?;
+    let prompt = start_body(body, stdin)?;
     let context = context_of(cli)?;
     identity_fallback_guard(cli, &context, attached_terminal())?;
     client::handshake(&url);
-    let reply = client::start_workspace(&url, &context, task.0, base.as_deref(), &request)
-        .map_err(Fail::Client)?;
+    let reply =
+        client::start_workspace(&url, &context, task.0, base.as_deref()).map_err(Fail::Client)?;
     let host = if reply.established {
-        launch_harness(cli, destination, task, &reply, &request)?
+        launch_harness(cli, destination, task, &reply, &Prose::new(prompt)?)?
     } else {
         open_through_host(&reply.workspace.path, false).map_err(|e| {
             Fail::Usage(format!(
@@ -1401,12 +1435,33 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
             ),
         }
     };
+    // the declared incarnation is a birth-record position; its dense
+    // public number resolves through the disclosed destination's fold
+    let dense = |seq: usize| -> Option<String> {
+        let loadout = match &server {
+            Some(url) => client::records(url)
+                .ok()
+                .and_then(|rows| db::fold_rows(rows).ok()),
+            None => {
+                let db = db_path.as_ref()?;
+                let conn = db::open_read(db).ok()?;
+                db::load(&conn).ok()
+            }
+        }?;
+        let db::LoadState::Full(world) = loadout.state else {
+            return None;
+        };
+        world
+            .incarnation_num(IncarnationId(RecordId(seq)))
+            .map(|n| format!("i-{n}"))
+    };
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "actor": context.actor.as_str(),
             "tier": saccade::wire::tier_of(&context.tier),
-            "task": scope.as_ref().map(|s| format!("t-{}", s.task.0)),
-            "incarnation": scope.as_ref().and_then(|s| s.incarnation.map(|i| format!("i-{}", i.0 .0))),
+            "task": scope.as_ref().and_then(|s| s.task).map(|t| format!("t-{}", t.0)),
+            "incarnation": scope.as_ref().and_then(|s| s.incarnation).and_then(|i| dense(i.0 .0)),
+            "incarnation_seq": scope.as_ref().and_then(|s| s.incarnation).map(|i| i.0 .0),
             "workspace": scope.as_ref().and_then(|s| s.workspace.as_ref().map(|w| w.as_path().display().to_string())),
             "repo": repo.map(|p| p.display().to_string()),
             "db": db_path.map(|p| p.display().to_string()),
@@ -1423,9 +1478,20 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
     )];
     match &scope {
         Some(scope) => {
-            out.push(format!("task  t-{}", scope.task.0));
+            out.push(match scope.task {
+                Some(task) => format!("task  t-{}", task.0),
+                None => "task  none declared".into(),
+            });
             if let Some(incarnation) = scope.incarnation {
-                out.push(format!("incarnation  i-{}", incarnation.0.0));
+                out.push(match dense(incarnation.0.0) {
+                    Some(number) => {
+                        format!("incarnation  {number} (birth seq {})", incarnation.0.0)
+                    }
+                    None => format!(
+                        "incarnation  birth seq {} (the fold is unreadable)",
+                        incarnation.0.0
+                    ),
+                });
             }
             if let Some(workspace) = &scope.workspace {
                 out.push(format!("workspace  {}", workspace.as_path().display()));
@@ -1460,9 +1526,11 @@ fn injected_environment(
     vec![
         ("SACCADE_ACTOR".into(), actor.to_string()),
         ("SACCADE_TASK".into(), format!("t-{}", task.0)),
+        // the machine identity channel: a bare birth-record position;
+        // the public i-N stays the fold's dense numbering
         (
-            "SACCADE_INCARNATION".into(),
-            format!("i-{}", workspace.birth.0),
+            "SACCADE_INCARNATION_SEQ".into(),
+            workspace.birth.0.to_string(),
         ),
         (
             "SACCADE_WORKSPACE".into(),
@@ -1472,18 +1540,16 @@ fn injected_environment(
     ]
 }
 
-/// The start door's body source: the quoted argument or the pipe.
+/// The start and send doors' body source: the quoted argument or the pipe.
 fn start_body(body: Option<String>, stdin: bool) -> Result<String, Fail> {
     if stdin {
         if std::io::stdin().is_terminal() {
-            return Err(Fail::Usage(
-                "nothing piped: --stdin reads the request".into(),
-            ));
+            return Err(Fail::Usage("nothing piped: --stdin reads the body".into()));
         }
         return std::io::read_to_string(std::io::stdin())
             .map_err(|e| Fail::Usage(format!("stdin: {e}")));
     }
-    body.ok_or_else(|| Fail::Usage("the request comes quoted or through --stdin".into()))
+    body.ok_or_else(|| Fail::Usage("the body comes quoted or through --stdin".into()))
 }
 
 /// The pinned native Pi: the development override first, then the
@@ -1759,7 +1825,7 @@ fn open_through_host(path: &str, create_when_none: bool) -> Result<HostOpen, Str
 }
 
 /// Submit the pinned harness into a new host terminal at the workspace,
-/// the request as its literal prompt: a self-contained sac exec
+/// the prompt as its literal first input: a self-contained sac exec
 /// invocation, dev environment activated when the worktree carries an
 /// .envrc, the harness's label supplied as the session's actor.
 fn launch_harness(
@@ -1841,16 +1907,9 @@ fn render_workspace_reply(
         return Ok(serde_json::to_string_pretty(&value).expect("plain data"));
     }
     let mut out = Vec::new();
-    let requested = reply.records.iter().any(|r| r.kind == "commented");
-    let claimed = reply.records.iter().any(|r| r.kind == "task_claimed");
-    if reply.established && requested && claimed {
+    if reply.established {
         out.push(format!(
-            "t-{} workspace established — request recorded, ownership names i-{}",
-            reply.workspace.task, reply.incarnation
-        ));
-    } else if reply.established {
-        out.push(format!(
-            "t-{} workspace association born — no request or ownership recorded",
+            "t-{} workspace established — no request or ownership recorded",
             reply.workspace.task
         ));
     } else if reply.recreated {
@@ -2144,17 +2203,292 @@ fn cursor_line(cursor: Option<usize>) -> String {
     }
 }
 
-/// The 'i-<seq>' face the incarnation reference carries.
-fn parse_incarnation_ref(token: &str) -> Result<IncarnationId, Fail> {
+/// A public dense token's number: the wire carries what the human
+/// typed, and the server resolves it against its own fold.
+fn dense_token(token: &str, prefix: &str) -> Result<usize, Fail> {
+    let n = token.strip_prefix(prefix).ok_or_else(|| {
+        Fail::Usage(format!(
+            "'{token}' is not an {}<n> reference",
+            prefix.strip_suffix('-').unwrap_or(prefix)
+        ))
+    })?;
+    n.parse()
+        .map_err(|_| Fail::Usage(format!("'{token}' is not an {prefix}<n> reference")))
+}
+
+/// The incarnation a public i-N names: dense birth order against the fold.
+fn resolve_incarnation(world: &World, token: &str) -> Result<IncarnationId, Fail> {
     let n = token.strip_prefix("i-").ok_or_else(|| {
         Fail::Usage(format!(
-            "'{token}' is not an incarnation reference (expected i-<seq>)"
+            "'{token}' is not an incarnation reference (expected i-<n>)"
         ))
     })?;
     let n: usize = n
         .parse()
         .map_err(|_| Fail::Usage(format!("'{token}' is not an incarnation reference")))?;
-    Ok(IncarnationId(RecordId(n)))
+    world.incarnation_at_num(n).ok_or_else(|| {
+        Fail::Usage(format!(
+            "i-{n} names no incarnation; this fold holds {} incarnations",
+            world.incarnations.len()
+        ))
+    })
+}
+
+/// The send door: a durable addressed message from this session's
+/// registered incarnation. Nonblocking by law — the sender chooses
+/// its own waiting, never this verb.
+fn send_door(
+    cli: &Cli,
+    destination: &Destination,
+    to: &str,
+    reply: Option<&str>,
+    task: Option<&str>,
+    body: Option<String>,
+    stdin: bool,
+) -> Result<String, Fail> {
+    let url = server_url(destination, "send")?;
+    // the public tokens ride as typed: the server resolves them
+    // against its own fold — one resolver, taught refusals
+    let to_num = dense_token(to, "i-")?;
+    let reply_num = match reply {
+        Some(token) => Some(dense_token(token, "m-")?),
+        None => None,
+    };
+    let task_num = match task {
+        Some(token) => Some(parse_task_id(token)?.0),
+        None => None,
+    };
+    let context = context_of(cli)?;
+    identity_fallback_guard(cli, &context, attached_terminal())?;
+    let body = Prose::new(start_body(body, stdin)?)?;
+    client::handshake(&url);
+    let sent = client::send_message(&url, &context, to_num, reply_num, task_num, &body)
+        .map_err(Fail::Client)?;
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(
+            &serde_json::to_value(&sent).expect("the send reply is plain data"),
+        )
+        .expect("plain data"));
+    }
+    Ok(format!(
+        "sent m-{} to i-{to_num} — pending until the recipient's integration submits it",
+        sent.message
+            .num
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("(seq {})", sent.message.seq)),
+    ))
+}
+
+/// The mailbox door: the messages an incarnation participates in, in
+/// record order, with their delivery state — a descriptive read.
+fn messages_door(
+    cli: &Cli,
+    destination: &Destination,
+    mailbox_token: Option<&str>,
+) -> Result<String, Fail> {
+    let loadout = loadout_of(destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "messages needs the world; the log will not fold".into(),
+        ));
+    };
+    let id = match mailbox_token {
+        Some(token) => resolve_incarnation(&world, token)?,
+        None => context_scope()?
+            .and_then(|s| s.incarnation)
+            .ok_or_else(|| {
+                Fail::Usage(
+                    "no mailbox declared: pass i-<n> or declare SACCADE_INCARNATION_SEQ".into(),
+                )
+            })?,
+    };
+    if !world.incarnations.contains_key(&id) {
+        return Err(Fail::Reject(Reject::InvalidIncarnationId));
+    }
+    let lines: Vec<MessageLine> = mailbox(&world, id)
+        .iter()
+        .map(|m| message_line(&world, *m).expect("a resident message renders"))
+        .collect();
+    let num = world.incarnation_num(id);
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "incarnation": {"seq": id.0.0, "num": num},
+            "messages": lines,
+        }))
+        .expect("plain data"));
+    }
+    let mut out = vec![match num {
+        Some(n) => format!("i-{n} (birth seq {}) mailbox", id.0.0),
+        None => format!("incarnation birth seq {} mailbox", id.0.0),
+    }];
+    if lines.is_empty() {
+        out.push("  no messages".into());
+    }
+    for line in lines {
+        let mut head = format!(
+            "m-{}  i-{} → i-{} · {}",
+            line.num, line.from, line.to, line.state
+        );
+        if let Some(reply) = line.reply_to {
+            head.push_str(&format!(" · replies to m-{reply}"));
+        }
+        if let Some(task) = line.task {
+            head.push_str(&format!(" · context t-{task}"));
+        }
+        out.push(head);
+        out.push(format!("      {}", line.body));
+    }
+    out.push(cursor_line(loadout.rows.last().map(|r| r.seq)));
+    Ok(out.join("\n"))
+}
+
+/// The integrate door: the composed native Pi in an explicit existing
+/// workspace, task-free. A fresh launch registers a new incarnation at
+/// session start; --resume continues a saved one, validated against
+/// its recorded native session before anything launches.
+fn integrate_door(
+    cli: &Cli,
+    destination: &Destination,
+    workspace: Option<&std::path::Path>,
+    resume: Option<&str>,
+    prompt: &[String],
+) -> Result<String, Fail> {
+    let url = server_url(destination, "integrate")?;
+    let pi = pinned_pi()?;
+    let repo = resolve_repo(cli)?;
+    let label = command_label(&pi.display().to_string());
+    // routing rides the launch line: the integration reaches the
+    // tracker's server directly, the repo names the tracker besides
+    let routing = format!(
+        "SACCADE_ACTOR={} SACCADE_SERVER={} SACCADE_REPO={}",
+        shell_quote(&label),
+        shell_quote(&url),
+        shell_quote(&repo.display().to_string()),
+    );
+    let prompt_text = prompt.join(" ");
+    let (dir, argv, title) = match (workspace, resume) {
+        (Some(dir), None) => {
+            let dir = dir
+                .canonicalize()
+                .map_err(|e| Fail::Usage(format!("workspace {}: {e}", dir.display())))?;
+            if !dir.is_dir() {
+                return Err(Fail::Usage(format!(
+                    "{} is not an existing directory; integrate selects an explicit existing workspace, it never creates one",
+                    dir.display()
+                )));
+            }
+            let mut argv = vec![pi.display().to_string()];
+            if !prompt_text.is_empty() {
+                argv.push(prompt_text);
+            }
+            (dir, argv, "sac integrate".to_string())
+        }
+        (None, Some(token)) => {
+            let loadout = loadout_of(destination)?;
+            let LoadState::Full(world) = loadout.state else {
+                return Err(Fail::Degraded(
+                    "resume needs the world; the log will not fold".into(),
+                ));
+            };
+            let id = resolve_incarnation(&world, token)?;
+            let ctx = &world.incarnations[&id];
+            let saccade::Incarnation::Native {
+                native_id,
+                saved_session,
+            } = &ctx.incarnation
+            else {
+                return Err(Fail::Usage(format!(
+                    "i-{} carries no saved native session to resume; historical attribution identities have none",
+                    token
+                )));
+            };
+            // strict resume: the saved file must exist and carry the
+            // recorded native id — a missing file refuses, it never
+            // fabricates fresh state under the same identity
+            let header = saccade::pi_session::read_header(saved_session.as_path())
+                .map_err(|e| Fail::Usage(format!("{token}'s saved session cannot resume: {e}")))?;
+            if header.id != native_id.as_str() {
+                return Err(Fail::Usage(format!(
+                    "{token}'s saved session carries id {}, not {}",
+                    header.id,
+                    native_id.as_str()
+                )));
+            }
+            let dir = std::path::PathBuf::from(&header.cwd);
+            if !dir.is_dir() {
+                return Err(Fail::Usage(format!(
+                    "the saved session's workspace {} is missing; resume starts from the header cwd, never a substitute",
+                    dir.display()
+                )));
+            }
+            let locator = saved_session
+                .as_path()
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let mut argv = vec![
+                pi.display().to_string(),
+                "--session".to_string(),
+                native_id.as_str().to_string(),
+                "--session-dir".to_string(),
+                locator,
+            ];
+            if !prompt_text.is_empty() {
+                argv.push(prompt_text);
+            }
+            (dir, argv, format!("sac resume i-{token}"))
+        }
+        _ => {
+            return Err(Fail::Usage(
+                "integrate needs an explicit choice: --workspace <dir> for a fresh session, \
+                 --resume i-<n> for a saved one"
+                    .into(),
+            ));
+        }
+    };
+    let dir_str = dir.display().to_string();
+    // the terminal starts at the chosen workspace; the session header
+    // records that cwd, and a resume validates against it
+    let command = format!(
+        "cd {} && {} {}",
+        shell_quote(&dir_str),
+        routing,
+        argv.iter()
+            .map(|w| shell_quote(w))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    orca_await_worktree(&dir_str).map_err(Fail::Usage)?;
+    let out = orca(&[
+        "terminal",
+        "create",
+        "--worktree",
+        &format!("path:{dir_str}"),
+        "--title",
+        &title,
+        "--command",
+        &command,
+        "--json",
+    ])
+    .map_err(|e| Fail::Usage(format!("orca terminal create: {e}")))?;
+    if !out.status.success() {
+        return Err(Fail::Usage(format!(
+            "orca terminal create failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let terminal = terminal_handle(&String::from_utf8_lossy(&out.stdout)).map_err(Fail::Usage)?;
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "workspace": dir_str,
+            "terminal": terminal,
+            "command": command,
+        }))
+        .expect("plain data"));
+    }
+    Ok(format!(
+        "integrated pi launching at {dir_str} — terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+    ))
 }
 
 fn parse_task_id(token: &str) -> Result<TaskId, Fail> {
@@ -2208,23 +2542,13 @@ fn born_of(stored: &[StoredRecord], world: &World) -> Option<String> {
         .map(|id| format!("t-{}", id.0))
 }
 
-fn render_records(
-    cli: &Cli,
-    stored: &[StoredRecord],
-    born: Option<&str>,
-    request: Option<&RequestFacts>,
-) -> String {
+fn render_records(cli: &Cli, stored: &[StoredRecord], born: Option<&str>) -> String {
     if cli.json {
         // the wire's reply shape: records always, the born task's token
         // only on a create
         let mut reply = serde_json::json!({"records": stored});
         if let Some(id) = born {
             reply["id"] = serde_json::json!(id);
-        }
-        if let Some(request) = request {
-            reply["seq"] = serde_json::json!(request.seq);
-            reply["task"] = serde_json::json!(request.task);
-            reply["workspace"] = serde_json::json!(request.workspace);
         }
         return serde_json::to_string_pretty(&reply).expect("records are plain data");
     }
@@ -2233,12 +2557,6 @@ fn render_records(
         lines.push(id.to_string());
     }
     lines.extend(stored.iter().map(record_line));
-    if let Some(workspace) = request.and_then(|r| r.workspace.as_ref()) {
-        lines.push(format!(
-            "  workspace t-{} · {} · {}",
-            workspace.task, workspace.branch, workspace.path
-        ));
-    }
     lines.join("\n")
 }
 
@@ -2447,12 +2765,33 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
     out
 }
 
+/// One message's block: the addressed endpoints, the delivery state —
+/// bookkeeping, never a claim of reading or agreement — and the body.
+fn message_block(line: &MessageLine) -> Vec<String> {
+    let mut head = format!(
+        "  m-{}  i-{} → i-{} · {}",
+        line.num, line.from, line.to, line.state
+    );
+    if let Some(reply) = line.reply_to {
+        head.push_str(&format!(" · replies to m-{reply}"));
+    }
+    if let Some(task) = line.task {
+        head.push_str(&format!(" · context t-{task}"));
+    }
+    let mut out = vec![head, format!("    by {}", line.actor)];
+    if !line.body.is_empty() {
+        out.push(wrap(&line.body, WIDTH, "  ", "  "));
+    }
+    out
+}
+
 /// A citation target's public name.
 fn ref_str(target: &saccade::views::RefTarget) -> String {
     match target {
         saccade::views::RefTarget::Comment { num, .. } => format!("c-{num}"),
         saccade::views::RefTarget::Task { task } => format!("t-{task}"),
         saccade::views::RefTarget::Incarnation { num, .. } => format!("i-{num}"),
+        saccade::views::RefTarget::Message { num } => format!("m-{num}"),
         saccade::views::RefTarget::Artifact { seq, .. } => format!("seq {seq}"),
         saccade::views::RefTarget::Record { seq, .. } => format!("seq {seq}"),
     }
@@ -2465,6 +2804,8 @@ enum ShowId {
     Thread(TaskId),
     /// c-<n>: the presentation the comment earns, by public number
     Record(usize),
+    /// m-<n>: the message's presentation, by public number
+    Message(usize),
     /// bare <seq>: the raw event at that position
     Position(RecordId),
 }
@@ -2479,6 +2820,9 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
     }
     if let Some(rest) = token.strip_prefix("c-").filter(|n| numeric(n)) {
         return Ok(ShowId::Record(rest.parse().expect("digits checked")));
+    }
+    if let Some(rest) = token.strip_prefix("m-").filter(|n| numeric(n)) {
+        return Ok(ShowId::Message(rest.parse().expect("digits checked")));
     }
     if token.starts_with("t-") {
         return Ok(ShowId::Thread(parse_task_id(token)?));
@@ -2524,6 +2868,17 @@ fn render_id(
             let line = comment_line(world, id)
                 .ok_or_else(|| Fail::Usage(format!("c-{num} folds into no comment")))?;
             Ok(comment_block(&line, withdrawn_bodies).join("\n"))
+        }
+        ShowId::Message(num) => {
+            let id = world.message_at_num(num).ok_or_else(|| {
+                Fail::Usage(format!(
+                    "m-{num} names no message; this fold holds {} messages",
+                    world.messages.len()
+                ))
+            })?;
+            let line = message_line(world, id)
+                .ok_or_else(|| Fail::Usage(format!("m-{num} folds into no message")))?;
+            Ok(message_block(&line).join("\n"))
         }
         ShowId::Position(id) => match rows.get(id.0) {
             Some(row) => Ok(raw_event(row)),
@@ -2577,6 +2932,17 @@ fn show_value(
             let line = comment_line(world, id)
                 .ok_or_else(|| Fail::Usage(format!("c-{num} folds into no comment")))?;
             Ok(comment_value(&line, withdrawn_bodies))
+        }
+        ShowId::Message(num) => {
+            let id = world.message_at_num(num).ok_or_else(|| {
+                Fail::Usage(format!(
+                    "m-{num} names no message; this fold holds {} messages",
+                    world.messages.len()
+                ))
+            })?;
+            let line = message_line(world, id)
+                .ok_or_else(|| Fail::Usage(format!("m-{num} folds into no message")))?;
+            Ok(serde_json::to_value(&line).expect("the message line is plain data"))
         }
         ShowId::Position(id) => match rows.get(id.0) {
             Some(row) => Ok(serde_json::to_value(row).expect("records are plain data")),
@@ -2917,13 +3283,13 @@ mod test {
     fn possession_fixes_the_tier_and_the_scope_reads_the_environment() {
         let saved_actor = std::env::var("SACCADE_ACTOR").ok();
         let saved_task = std::env::var("SACCADE_TASK").ok();
-        let saved_incarnation = std::env::var("SACCADE_INCARNATION").ok();
+        let saved_incarnation = std::env::var("SACCADE_INCARNATION_SEQ").ok();
         let saved_workspace = std::env::var("SACCADE_WORKSPACE").ok();
         let restore = || {
             for (key, saved) in [
                 ("SACCADE_ACTOR", &saved_actor),
                 ("SACCADE_TASK", &saved_task),
-                ("SACCADE_INCARNATION", &saved_incarnation),
+                ("SACCADE_INCARNATION_SEQ", &saved_incarnation),
                 ("SACCADE_WORKSPACE", &saved_workspace),
             ] {
                 match saved {
@@ -2936,7 +3302,7 @@ mod test {
         unsafe {
             std::env::remove_var("SACCADE_ACTOR");
             std::env::remove_var("SACCADE_TASK");
-            std::env::remove_var("SACCADE_INCARNATION");
+            std::env::remove_var("SACCADE_INCARNATION_SEQ");
             std::env::remove_var("SACCADE_WORKSPACE");
         }
         let bare = Cli::try_parse_from(["sac", "list"]).unwrap();
@@ -2957,21 +3323,27 @@ mod test {
         let ctx = context_of(&named).unwrap_or_else(|f| panic!("{f}"));
         assert_eq!((ctx.tier, ctx.actor.as_str()), (Tier::Human, "saccade bot"));
 
-        // the scope: no anchor yields none, and the riders ride only
-        // with the anchor
-        unsafe { std::env::set_var("SACCADE_INCARNATION", "i-9") };
-        assert!(context_scope().unwrap().is_none());
-        unsafe { std::env::remove_var("SACCADE_INCARNATION") };
+        // the scope: any declared key anchors it; the machine identity
+        // channel is a bare birth-record position
+        unsafe { std::env::set_var("SACCADE_INCARNATION_SEQ", "9") };
+        let scope = context_scope()
+            .unwrap()
+            .expect("a task-free session declares a scope");
+        assert_eq!(
+            (scope.task, scope.incarnation, scope.workspace),
+            (None, Some(IncarnationId(RecordId(9))), None)
+        );
+        unsafe { std::env::remove_var("SACCADE_INCARNATION_SEQ") };
 
         unsafe { std::env::set_var("SACCADE_TASK", "t-125") };
         let scope = context_scope().unwrap().expect("the anchor yields a scope");
         assert_eq!(
             (scope.task, scope.incarnation, scope.workspace),
-            (TaskId(125), None, None)
+            (Some(TaskId(125)), None, None)
         );
 
         unsafe {
-            std::env::set_var("SACCADE_INCARNATION", "i-9");
+            std::env::set_var("SACCADE_INCARNATION_SEQ", "9");
             std::env::set_var("SACCADE_WORKSPACE", "/repo/wt/t-125");
         }
         let scope = context_scope().unwrap().expect("the anchor yields a scope");
@@ -2983,6 +3355,9 @@ mod test {
 
         // malformed values are loud, never silently dropped
         unsafe { std::env::set_var("SACCADE_TASK", "t-one") };
+        assert!(context_scope().is_err());
+        unsafe { std::env::set_var("SACCADE_TASK", "t-125") };
+        unsafe { std::env::set_var("SACCADE_INCARNATION_SEQ", "i-9") };
         assert!(context_scope().is_err());
 
         restore();

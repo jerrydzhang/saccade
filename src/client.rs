@@ -80,12 +80,6 @@ struct RecordsBody {
     /// that predate it omit the field
     #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
-    seq: Option<usize>,
-    #[serde(default)]
-    task: Option<usize>,
-    #[serde(default)]
-    workspace: Option<WorkspaceFacts>,
 }
 
 #[derive(Deserialize)]
@@ -105,9 +99,6 @@ struct ErrorBody {
 pub struct Reply {
     pub records: Vec<StoredRecord>,
     pub id: Option<String>,
-    pub seq: Option<usize>,
-    pub task: Option<usize>,
-    pub workspace: Option<WorkspaceFacts>,
 }
 
 /// Sends one command and returns the records it landed
@@ -155,9 +146,6 @@ pub fn send(
         Ok(Reply {
             records: body.records,
             id: body.id,
-            seq: body.seq,
-            task: body.task,
-            workspace: body.workspace,
         })
     } else {
         let body: ErrorBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
@@ -353,15 +341,15 @@ fn bound(detail: &str) -> String {
     format!("{}…", &flat[..cut])
 }
 
-/// The start operation: first sight establishes the workspace, records
-/// the caller's request, and assigns the incarnation ownership; a task
-/// already holding a workspace is ensured and reported, nothing landed.
+/// The start operation: first sight establishes the workspace; a task
+/// already holding a workspace is ensured and reported, nothing
+/// landed. No request, comment, or ownership rides it — the prompt is
+/// native input at launch, never a publication.
 pub fn start_workspace(
     url: &str,
     context: &Context,
     task: usize,
     base: Option<&str>,
-    request: &crate::Prose,
 ) -> Result<WorkspaceReply, ClientFail> {
     post_json(
         url,
@@ -378,10 +366,165 @@ pub fn start_workspace(
             },
             "task": task,
             "base": base,
-            "request": request.as_str(),
             "client": env!("CARGO_PKG_VERSION"),
         }),
     )
+}
+
+// -- the native integration's client half -------------------------------
+
+/// What the native integration learns when its session attaches.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AttachReply {
+    pub registered: bool,
+    /// The birth record position: the machine identity channel
+    pub incarnation: usize,
+    /// The incarnation's dense public number, the human-facing i-N
+    pub num: usize,
+    pub records: Vec<StoredRecord>,
+}
+
+/// Attach a native session: an existing exact native session resolves
+/// its incarnation, a fresh one registers — the machinery's own act.
+pub fn attach(
+    url: &str,
+    native_id: &str,
+    session_file: &std::path::Path,
+) -> Result<AttachReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/native/attach",
+        serde_json::json!({
+            "native_id": native_id,
+            "session_file": session_file.display().to_string(),
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
+}
+
+/// One sent message's facts: its stable birth position and the dense
+/// m-N, plus the sender's resolved identity.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MessageFacts {
+    pub seq: usize,
+    pub num: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SendMessageReply {
+    pub records: Vec<StoredRecord>,
+    pub message: MessageFacts,
+    pub from: MessageFacts,
+}
+
+/// Send a durable addressed message from the declared incarnation;
+/// `to` and `reply_to` are the public dense numbers every face names.
+pub fn send_message(
+    url: &str,
+    context: &Context,
+    to: usize,
+    reply_to: Option<usize>,
+    task: Option<usize>,
+    body: &crate::Prose,
+) -> Result<SendMessageReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/messages/send",
+        serde_json::json!({
+            "context": {
+                "actor": context.actor.as_str(),
+                "tier": match context.tier {
+                    Tier::Human => "human",
+                    Tier::Agent => "agent",
+                    Tier::System => unreachable!("the API has no system tier"),
+                },
+                "scope": context.scope,
+            },
+            "to": to,
+            "reply_to": reply_to,
+            "task": task,
+            "body": body.as_str(),
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
+}
+
+/// Record the recipient's submission: the delivery machinery's act.
+pub fn submit_message(
+    url: &str,
+    incarnation: usize,
+    message: usize,
+) -> Result<Vec<StoredRecord>, ClientFail> {
+    #[derive(Deserialize)]
+    struct SubmitBody {
+        records: Vec<StoredRecord>,
+    }
+    let body: SubmitBody = post_json(
+        url,
+        "/api/v1/messages/submit",
+        serde_json::json!({
+            "incarnation": incarnation,
+            "message": message,
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )?;
+    Ok(body.records)
+}
+
+/// One message as the mailbox read returns it: the stable birth
+/// position, the dense endpoints, and the delivery state.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MailboxMessage {
+    pub seq: usize,
+    pub num: Option<usize>,
+    pub from: MailboxEndpoint,
+    pub to: MailboxEndpoint,
+    pub reply_to: Option<usize>,
+    pub task: Option<usize>,
+    pub state: String,
+    pub body: String,
+    pub born_at: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MailboxEndpoint {
+    pub seq: usize,
+    pub num: Option<usize>,
+    pub actor: String,
+}
+
+/// The reader's own mail, in birth order, any state: a read the
+/// integration polls, never a subscription the tracker keeps.
+pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, ClientFail> {
+    #[derive(Deserialize)]
+    struct MailboxBody {
+        messages: Vec<MailboxMessage>,
+    }
+    let mut response = ureq::get(&format!(
+        "{url}/api/v1/messages/pending?incarnation={incarnation}"
+    ))
+    .config()
+    .http_status_as_error(false)
+    .build()
+    .call()
+    .map_err(|_| ClientFail::ServerUnreachable {
+        url: url.to_string(),
+    })?;
+    let status = response.status().as_u16();
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    if status != 200 {
+        return Err(error_of(&text));
+    }
+    let body: MailboxBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
+        code: "malformed_response".into(),
+        detail: e.to_string(),
+    })?;
+    Ok(body.messages)
 }
 
 /// The open operation: ensure the recorded environment exists (a

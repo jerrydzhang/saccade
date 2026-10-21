@@ -38,9 +38,6 @@ pub enum CommentKind {
     Note {
         body: Prose,
     },
-    Request {
-        body: Prose,
-    },
     /// The whole-task closing account: broadcast, never a point reply
     Offer {
         body: Prose,
@@ -69,9 +66,7 @@ impl CommentKind {
     /// None for the bodyless Accept, which the revision door refuses.
     pub fn prose(&self) -> Option<&Prose> {
         match self {
-            CommentKind::Note { body }
-            | CommentKind::Request { body }
-            | CommentKind::Offer { body } => Some(body),
+            CommentKind::Note { body } | CommentKind::Offer { body } => Some(body),
             CommentKind::Accept { .. } => None,
             CommentKind::Reject { grounds, .. } => Some(grounds),
             CommentKind::Use { reason, .. } => Some(reason),
@@ -109,7 +104,6 @@ pub struct Comment {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommentState {
     Note,
-    Request,
     Offer,
     Accept,
     Reject,
@@ -154,7 +148,6 @@ impl CommentState {
     pub fn of(kind: &CommentKind) -> CommentState {
         match kind {
             CommentKind::Note { .. } => CommentState::Note,
-            CommentKind::Request { .. } => CommentState::Request,
             CommentKind::Offer { .. } => CommentState::Offer,
             CommentKind::Accept { .. } => CommentState::Accept,
             CommentKind::Reject { .. } => CommentState::Reject,
@@ -294,12 +287,6 @@ mod tables {
         }
     }
 
-    fn request() -> CommentKind {
-        CommentKind::Request {
-            body: Prose::new("filler".into()).unwrap(),
-        }
-    }
-
     fn withdrawn() -> CommentState {
         CommentState::Withdrawn(Prose::new("parked in the wrong place".into()).unwrap())
     }
@@ -313,7 +300,6 @@ mod tables {
             Some(withdrawn())
         );
         let others = [
-            CommentState::Request,
             CommentState::Offer,
             CommentState::Accept,
             CommentState::Reject,
@@ -345,7 +331,6 @@ mod tables {
         );
         let others = [
             CommentState::Note,
-            CommentState::Request,
             CommentState::Offer,
             CommentState::Accept,
             CommentState::Reject,
@@ -363,7 +348,6 @@ mod tables {
     fn births_revisions_and_task_events_move_no_comment_state() {
         let states = [
             CommentState::Note,
-            CommentState::Request,
             CommentState::Offer,
             CommentState::Accept,
             CommentState::Reject,
@@ -373,7 +357,6 @@ mod tables {
         ];
         let events = [
             comment_event(note()),
-            comment_event(request()),
             comment_event(offer()),
             comment_event(accept()),
             comment_event(reject()),
@@ -404,7 +387,6 @@ mod tables {
     fn the_birth_state_mirrors_the_variant() {
         for (kind, state) in [
             (note(), CommentState::Note),
-            (request(), CommentState::Request),
             (offer(), CommentState::Offer),
             (accept(), CommentState::Accept),
             (reject(), CommentState::Reject),
@@ -427,14 +409,13 @@ mod tables {
     #[test]
     fn prose_and_offer_surface_of_each_variant() {
         assert!(accept().prose().is_none());
-        for kind in [note(), request(), offer(), reject(), use_of()] {
+        for kind in [note(), offer(), reject(), use_of()] {
             assert!(kind.prose().is_some(), "{kind:?} carries prose");
         }
         assert_eq!(accept().offer(), Some(CommentId(RecordId(1))));
         assert_eq!(reject().offer(), Some(CommentId(RecordId(1))));
         assert_eq!(use_of().offer(), None);
         assert_eq!(note().offer(), None);
-        assert_eq!(request().offer(), None);
         assert_eq!(offer().offer(), None);
         assert_eq!(use_of().source(), Some(crate::TaskId(1)));
         assert_eq!(note().source(), None);

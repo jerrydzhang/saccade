@@ -29,11 +29,12 @@ pub use objects::comment::{
     Binding, Comment, CommentContext, CommentId, CommentKind, CommentState, Target, UseBinding,
 };
 pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
+pub use objects::message::{Message, MessageContext, MessageId, MessageState};
 pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 pub use store::{Context, Record, RecordId, Scope, Tier, World};
 pub use types::actor::ActorName;
 pub use types::artifact::{Artifact, ContentHash};
-pub use types::pointers::{GitBranch, GitCommit, WorktreePath};
+pub use types::pointers::{GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath};
 pub use types::prose::Prose;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, thiserror::Error)]
@@ -56,10 +57,14 @@ pub enum Reject {
     SelfAcceptance,
     #[error("no such incarnation")]
     InvalidIncarnationId,
+    #[error("an incarnation already carries this native session")]
+    DuplicateNativeSession,
     #[error(
         "a citation does not resolve: its target is no earlier record, or its marker has no reference"
     )]
     InvalidReference,
+    #[error("no such message for this recipient")]
+    InvalidMessageId,
     // Permissions
     #[error("human-only act")]
     HumanOnly,
@@ -91,7 +96,9 @@ impl Reject {
             Reject::SelfReliance => "self_reliance",
             Reject::SelfAcceptance => "self_acceptance",
             Reject::InvalidIncarnationId => "invalid_incarnation_id",
+            Reject::DuplicateNativeSession => "duplicate_native_session",
             Reject::InvalidReference => "invalid_reference",
+            Reject::InvalidMessageId => "invalid_message_id",
             Reject::HumanOnly => "human_only",
             Reject::WorkspaceAlreadyExists => "workspace_already_exists",
             Reject::WorkspaceMissing => "workspace_missing",
@@ -119,7 +126,9 @@ mod test {
             Reject::SelfReliance,
             Reject::SelfAcceptance,
             Reject::InvalidIncarnationId,
+            Reject::DuplicateNativeSession,
             Reject::InvalidReference,
+            Reject::InvalidMessageId,
             Reject::HumanOnly,
             Reject::WorkspaceAlreadyExists,
             Reject::WorkspaceMissing,

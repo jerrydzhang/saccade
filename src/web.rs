@@ -465,7 +465,6 @@ fn item_html(
 /// it always was.
 fn kind_chip(kind: &str) -> Option<(&'static str, &'static str)> {
     match kind {
-        "request" => Some(("REQUEST", "#a2c3c4")),
         "offer" => Some(("OFFER", "#dac09a")),
         "accept" => Some(("ACCEPT", "#a2c4a3")),
         "reject" => Some(("REJECT", "#c4a6a8")),
@@ -608,9 +607,11 @@ fn ref_chip(target: &RefTarget) -> String {
         RefTarget::Task { task } => {
             format!("<a class=\"nseq mono\" href=\"/t/{task}\">→t-{task}</a>")
         }
-        RefTarget::Incarnation { num, task } => {
-            format!("<a class=\"nseq mono\" href=\"/t/{task}\">→i-{num}</a>")
-        }
+        RefTarget::Incarnation { num, task } => match task {
+            Some(task) => format!("<a class=\"nseq mono\" href=\"/t/{task}\">→i-{num}</a>"),
+            None => format!("<span class=\"nseq mono\">→i-{num}</span>"),
+        },
+        RefTarget::Message { num } => format!("<span class=\"nseq mono\">→m-{num}</span>"),
         RefTarget::Artifact { seq, task, .. } => {
             format!("<a class=\"nseq mono\" href=\"/t/{task}#a-{seq}\">→seq {seq}</a>")
         }
@@ -705,8 +706,14 @@ fn marker_link(k: usize, target: &RefTarget, store: &ArtifactStore) -> String {
         RefTarget::Task { task } => {
             format!("<a class=\"mref\" href=\"/t/{task}\">[^{k}]</a>")
         }
-        RefTarget::Incarnation { num, task } => {
-            format!("<a class=\"mref\" href=\"/t/{task}\" title=\"i-{num}\">[^{k}]</a>")
+        RefTarget::Incarnation { num, task } => match task {
+            Some(task) => {
+                format!("<a class=\"mref\" href=\"/t/{task}\" title=\"i-{num}\">[^{k}]</a>")
+            }
+            None => format!("<span class=\"mref dead\" title=\"i-{num}\">[^{k}]</span>"),
+        },
+        RefTarget::Message { num } => {
+            format!("<span class=\"mref dead\" title=\"m-{num}\">[^{k}]</span>")
         }
         RefTarget::Artifact {
             seq,

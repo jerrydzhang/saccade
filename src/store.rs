@@ -9,6 +9,7 @@ use crate::objects::comment::{
     Binding, Comment, CommentContext, CommentId, CommentKind, CommentState, Revision, Withdrawal,
 };
 use crate::objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
+use crate::objects::message::{Message, MessageContext, MessageId, MessageState};
 use crate::objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 use crate::objects::workspace::{Workspace, WorkspaceContext};
 use crate::types::actor::ActorName;
@@ -35,12 +36,20 @@ pub enum Reason {
     /// The actor's declared task scope covers the offered task: a
     /// task-bound producer cannot accept its own conclusion.
     SelfAcceptance,
-    /// A claim names an incarnation the record never birthed, or one
-    /// bound to another task.
+    /// A claim names an incarnation the record never birthed, or a
+    /// historical establishment bound to another task.
     InvalidIncarnationId,
+    /// A registration names a native session an incarnation already
+    /// carries: the effect resolves the existing incarnation, it
+    /// never births again.
+    DuplicateNativeSession,
     /// A citation names a record that is not an earlier birth: stable
     /// internal references identify birth records.
     InvalidReference,
+    /// A message's reply or submit names a message the record never
+    /// birthed, or a submission by an incarnation it does not
+    /// address.
+    InvalidMessageId,
     InvalidStateTransition,
     /// The task already holds a workspace: one lineage per task.
     WorkspaceAlreadyExists,
@@ -63,7 +72,9 @@ impl From<Reason> for Reject {
             Reason::SelfReliance => Reject::SelfReliance,
             Reason::SelfAcceptance => Reject::SelfAcceptance,
             Reason::InvalidIncarnationId => Reject::InvalidIncarnationId,
+            Reason::DuplicateNativeSession => Reject::DuplicateNativeSession,
             Reason::InvalidReference => Reject::InvalidReference,
+            Reason::InvalidMessageId => Reject::InvalidMessageId,
             Reason::InvalidStateTransition => Reject::InvalidStateTransition,
             Reason::WorkspaceAlreadyExists => Reject::WorkspaceAlreadyExists,
             Reason::WorkspaceMissing => Reject::WorkspaceMissing,
@@ -82,10 +93,13 @@ pub enum Tier {
 
 /// An environment-declared binding: what the acting session's
 /// environment claims it is scoped to. Disclosure riding the record,
-/// never proof — the one gate it feeds is the self-acceptance refusal.
+/// never proof — the one gate it feeds is the self-acceptance
+/// refusal. Native participation can precede any task: the task
+/// binding is optional, the incarnation and workspace disclosures
+/// stand alone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Scope {
-    pub task: TaskId,
+    pub task: Option<TaskId>,
     pub incarnation: Option<IncarnationId>,
     pub workspace: Option<WorktreePath>,
 }
@@ -123,9 +137,11 @@ pub struct Record {
 pub struct World {
     pub tasks: Vec<TaskContext>,
     pub comments: BTreeMap<CommentId, CommentContext>,
-    /// Record-derived worker identities, born one-to-one with the
-    /// workspace establishments
+    /// Record-derived identities: historical establishment births and
+    /// registered native sessions, in birth order
     pub incarnations: BTreeMap<IncarnationId, IncarnationContext>,
+    /// Durable addressed messages, in birth order
+    pub messages: BTreeMap<MessageId, MessageContext>,
     /// Every applied record: existence for the citation guard, its
     /// home thread where the fold gives one. A record without a home
     /// still exists. No residency — the named record stays the event
@@ -139,6 +155,7 @@ impl World {
             tasks: Vec::new(),
             comments: BTreeMap::new(),
             incarnations: BTreeMap::new(),
+            messages: BTreeMap::new(),
             provenance: BTreeMap::new(),
         }
     }
@@ -188,6 +205,21 @@ impl World {
     /// The incarnation holding this public number, resolved from the fold.
     pub fn incarnation_at_num(&self, n: usize) -> Option<IncarnationId> {
         self.incarnations.keys().nth(n).copied()
+    }
+
+    /// The message's public number: its position in message birth
+    /// order, the number the human-facing m-N carries. Births do not
+    /// carry their own ids; the fold derives them.
+    pub fn message_num(&self, id: MessageId) -> Option<usize> {
+        if !self.messages.contains_key(&id) {
+            return None;
+        }
+        Some(self.messages.range(..id).count())
+    }
+
+    /// The message holding this public number, resolved from the fold.
+    pub fn message_at_num(&self, n: usize) -> Option<MessageId> {
+        self.messages.keys().nth(n).copied()
     }
 
     /// Only valid path for world mutation
@@ -269,7 +301,11 @@ impl World {
                         .incarnations
                         .get(&inc)
                         .ok_or(Reason::InvalidIncarnationId)?;
-                    if born.incarnation.task != id {
+                    // a historical establishment is bound to its birth
+                    // task; a native identity is task-free by law
+                    if let Incarnation::Established { task, .. } = &born.incarnation
+                        && *task != id
+                    {
                         return Err(Reason::InvalidIncarnationId);
                     }
                 }
@@ -312,9 +348,7 @@ impl World {
                     }
                 }
                 match kind {
-                    CommentKind::Note { .. }
-                    | CommentKind::Request { .. }
-                    | CommentKind::Offer { .. } => {}
+                    CommentKind::Note { .. } | CommentKind::Offer { .. } => {}
                     CommentKind::Accept { offer } | CommentKind::Reject { offer, .. } => {
                         // a decision lives on the task of the offer it names
                         let offer_ctx = self.comments.get(offer).ok_or(Reason::InvalidCommentId)?;
@@ -330,7 +364,8 @@ impl World {
                                 .context
                                 .scope
                                 .as_ref()
-                                .is_some_and(|scope| scope.task == offer_ctx.comment.home)
+                                .and_then(|scope| scope.task)
+                                .is_some_and(|scoped| scoped == offer_ctx.comment.home)
                         {
                             return Err(Reason::SelfAcceptance);
                         }
@@ -430,7 +465,6 @@ impl World {
                 // the bodyless Accept carries no prose to repair
                 match &mut comment_ctx.comment.kind {
                     CommentKind::Note { body: prose }
-                    | CommentKind::Request { body: prose }
                     | CommentKind::Offer { body: prose }
                     | CommentKind::Reject { grounds: prose, .. }
                     | CommentKind::Use { reason: prose, .. } => *prose = body.clone(),
@@ -517,12 +551,13 @@ impl World {
                     birth: record.id,
                     heads: vec![base.clone()],
                 });
-                // the same birth is the task-bound worker's identity:
-                // one record position, both names
+                // the same birth is the historical attribution identity:
+                // one record position, both names. It carries no native
+                // session binding and births no message sender.
                 self.incarnations.insert(
                     IncarnationId(record.id),
                     IncarnationContext {
-                        incarnation: Incarnation {
+                        incarnation: Incarnation::Established {
                             task: task_id,
                             workspace: worktree.clone(),
                         },
@@ -556,6 +591,97 @@ impl World {
                 }
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
+            }
+            // Incarnation and message events
+            Event::IncarnationRegistered {
+                ref native_id,
+                ref saved_session,
+            } => {
+                // registering an existing exact native session resolves
+                // at the effect; the fold refuses the second birth
+                let known = self
+                    .incarnations
+                    .values()
+                    .any(|ctx| ctx.incarnation.native_id() == Some(native_id));
+                if known {
+                    return Err(Reason::DuplicateNativeSession);
+                }
+                // a birth without a home still exists
+                self.provenance.insert(record.id, None);
+                self.incarnations.insert(
+                    IncarnationId(record.id),
+                    IncarnationContext {
+                        incarnation: Incarnation::Native {
+                            native_id: native_id.clone(),
+                            saved_session: saved_session.clone(),
+                        },
+                        born_at: record.timestamp,
+                    },
+                );
+            }
+            Event::MessageSent {
+                from,
+                to,
+                reply_to,
+                task,
+                ref body,
+            } => {
+                // the sender is the session's own registered identity:
+                // machine-supplied from the declared scope, never prose
+                if record.context.scope.as_ref().and_then(|s| s.incarnation) != Some(from) {
+                    return Err(Reason::InvalidIncarnationId);
+                }
+                let sender = self
+                    .incarnations
+                    .get(&from)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                if sender.incarnation.native_id().is_none() {
+                    return Err(Reason::InvalidIncarnationId);
+                }
+                if !self.incarnations.contains_key(&to) {
+                    return Err(Reason::InvalidIncarnationId);
+                }
+                if reply_to.is_some_and(|m| !self.messages.contains_key(&m)) {
+                    return Err(Reason::InvalidMessageId);
+                }
+                if task.is_some_and(|t| self.tasks.get(t.0).is_none()) {
+                    return Err(Reason::InvalidTaskId);
+                }
+                // messages take no task-thread home, whatever context rides
+                self.provenance.insert(record.id, None);
+                self.messages.insert(
+                    MessageId(record.id),
+                    MessageContext {
+                        message: Message {
+                            from,
+                            to,
+                            reply_to,
+                            task,
+                            body: body.clone(),
+                        },
+                        state: MessageState::Pending,
+                        actor: record.context.actor.clone(),
+                        tier: record.context.tier,
+                        born_at: record.timestamp,
+                    },
+                );
+            }
+            Event::MessageSubmitted { id, by } => {
+                // submission is the recipient's machinery act: the
+                // submitter is the addressee, the mail is pending
+                let msg = self.messages.get(&id).ok_or(Reason::InvalidMessageId)?;
+                if msg.message.to != by {
+                    return Err(Reason::InvalidMessageId);
+                }
+                if !self.incarnations.contains_key(&by) {
+                    return Err(Reason::InvalidIncarnationId);
+                }
+                self.provenance.insert(record.id, None);
+                let msg = self.messages.get_mut(&id).expect("resident above");
+                msg.state = msg
+                    .state
+                    .transition(&record.event)
+                    .ok_or(Reason::InvalidStateTransition)?;
             }
         }
 
@@ -727,7 +853,7 @@ mod test {
             actor: ActorName::new("pi".into()).unwrap(),
             tier: Tier::Agent,
             scope: Some(Scope {
-                task: TaskId(task),
+                task: Some(TaskId(task)),
                 incarnation: None,
                 workspace: None,
             }),
@@ -902,13 +1028,7 @@ mod test {
         .unwrap();
         log.execute(
             agent_ctx.clone(),
-            Command::Comment {
-                home: TaskId(2),
-                kind: CommentKind::Request {
-                    body: prose("please resume the migration"),
-                },
-                references: Vec::new(),
-            },
+            note(TaskId(2), "the migration waits on a decision"),
             13,
         )
         .unwrap();
@@ -1072,8 +1192,16 @@ mod test {
             Reject::InvalidIncarnationId
         ));
         assert!(matches!(
+            Reject::from(Reason::DuplicateNativeSession),
+            Reject::DuplicateNativeSession
+        ));
+        assert!(matches!(
             Reject::from(Reason::InvalidReference),
             Reject::InvalidReference
+        ));
+        assert!(matches!(
+            Reject::from(Reason::InvalidMessageId),
+            Reject::InvalidMessageId
         ));
         assert!(matches!(
             Reject::from(Reason::InvalidStateTransition),
@@ -1390,19 +1518,9 @@ mod test {
             TaskState::Cancelled(prose("the consumer need dissolved"))
         );
 
-        // a request never reopens a cancelled task
-        log.execute(
-            agent(),
-            Command::Comment {
-                home: TaskId(3),
-                kind: CommentKind::Request {
-                    body: prose("please resume the adoption"),
-                },
-                references: Vec::new(),
-            },
-            100,
-        )
-        .unwrap();
+        // a comment never reopens a cancelled task
+        log.execute(agent(), note(TaskId(3), "please resume the adoption"), 100)
+            .unwrap();
         assert!(matches!(
             log.world().tasks[3].task.state,
             TaskState::Cancelled(_)
@@ -2141,8 +2259,11 @@ mod test {
         assert_eq!(ctx.workspace.as_ref().unwrap().birth, birth);
         let inc = &log.world().incarnations[&IncarnationId(birth)];
         assert_eq!(
-            (inc.incarnation.task, inc.incarnation.workspace.as_path()),
-            (TaskId(0), worktree.as_path())
+            inc.incarnation,
+            Incarnation::Established {
+                task: TaskId(0),
+                workspace: worktree.clone(),
+            }
         );
 
         // one lineage per task
@@ -2255,6 +2376,319 @@ mod test {
             .collect();
         assert!(matches!(owners[0], Owner::Human(_)));
         assert!(matches!(owners[1], Owner::External(_)));
+    }
+
+    // -- the native communication contracts --------------------------
+
+    use crate::NativeSessionId;
+    use crate::SessionLocator;
+    use crate::objects::message::MessageState;
+
+    fn registered(id: &str) -> Command {
+        Command::RegisterIncarnation {
+            native_id: NativeSessionId::new(id.into()).unwrap(),
+            saved_session: SessionLocator::new(format!("/sessions/{id}.jsonl").into()).unwrap(),
+        }
+    }
+
+    /// The session a registered native incarnation sends and waits as.
+    fn native_session(birth: usize) -> Context {
+        Context {
+            actor: ActorName::new("pi".into()).unwrap(),
+            tier: Tier::Agent,
+            scope: Some(Scope {
+                task: None,
+                incarnation: Some(IncarnationId(RecordId(birth))),
+                workspace: None,
+            }),
+        }
+    }
+
+    fn message(from: usize, to: usize, reply_to: Option<usize>) -> Command {
+        Command::SendMessage {
+            from: IncarnationId(RecordId(from)),
+            to: IncarnationId(RecordId(to)),
+            reply_to: reply_to.map(|r| crate::objects::message::MessageId(RecordId(r))),
+            task: None,
+            body: prose("please look at the failing edge case"),
+        }
+    }
+
+    /// A task-free registration births a native identity with no home:
+    /// the record exists, the provenance index holds None, and the
+    /// same native session never registers twice.
+    #[test]
+    fn registration_births_a_homeless_native_identity_once() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        log.execute_system(registered("bbbb2222"), 2).unwrap();
+
+        let world = log.world();
+        assert_eq!(world.incarnations.len(), 2);
+        let birth = RecordId(0);
+        assert_eq!(world.provenance[&birth], None);
+        assert_eq!(
+            world.incarnations[&IncarnationId(birth)].incarnation,
+            Incarnation::Native {
+                native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
+                saved_session: SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap(),
+            }
+        );
+
+        // the same native session resolves at the effect; a second
+        // birth refuses the fold
+        let refused = log.execute_system(registered("aaaa1111"), 3);
+        assert!(matches!(refused, Err(Reject::DuplicateNativeSession)));
+        assert_eq!(log.records().len(), 2);
+
+        // the registration verb rejects judgment tiers
+        for ctx in [human(), agent()] {
+            let refused = log.execute(ctx, registered("cccc3333"), 3);
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
+        }
+        assert_eq!(log.records().len(), 2);
+    }
+
+    /// A message's guards: the sender is the session's own registered
+    /// native identity; the recipient, reply, and task references all
+    /// resolve; the message takes no thread home.
+    #[test]
+    fn messages_guard_their_references_and_take_no_home() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        log.execute_system(registered("bbbb2222"), 2).unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("implement foo"),
+            },
+            3,
+        )
+        .unwrap();
+
+        // a scoped registered sender delivers
+        log.execute(native_session(0), message(0, 1, None), 4)
+            .unwrap();
+        assert_eq!(log.world().messages.len(), 1);
+        let mctx = &log.world().messages[&crate::objects::message::MessageId(RecordId(3))];
+        assert_eq!(mctx.state, MessageState::Pending);
+        assert_eq!(log.world().provenance[&RecordId(3)], None);
+
+        // an unscoped caller claims no sender identity
+        let refused = log.execute(agent(), message(0, 1, None), 5);
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+        // the declared identity is the sender: another session's birth refuses
+        let refused = log.execute(native_session(1), message(0, 1, None), 5);
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+        // a historical establishment is no message sender
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("migrate floop"),
+            },
+            5,
+        )
+        .unwrap();
+        log.execute_system(
+            Command::EstablishWorkspace {
+                task_id: TaskId(1),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-1".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-1".into()).unwrap(),
+            },
+            6,
+        )
+        .unwrap();
+        let establishment = log.records().len() - 1;
+        let refused = log.execute(
+            native_session(establishment),
+            message(establishment, 0, None),
+            7,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+
+        // the recipient must exist
+        let refused = log.execute(native_session(0), message(0, 9, None), 7);
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+        // the reply reference must exist
+        let refused = log.execute(native_session(1), message(1, 0, Some(99)), 7);
+        assert!(matches!(refused, Err(Reject::InvalidMessageId)));
+        // the task context must exist
+        let refused = log.execute(
+            native_session(0),
+            Command::SendMessage {
+                from: IncarnationId(RecordId(0)),
+                to: IncarnationId(RecordId(1)),
+                reply_to: None,
+                task: Some(TaskId(9)),
+                body: prose("context on nothing"),
+            },
+            7,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidTaskId)));
+        assert_eq!(log.records().len(), 6);
+    }
+
+    /// The reply chain and the delivery record: a reply names an
+    /// existing message, submission is the addressee's machinery act,
+    /// and submission never repeats.
+    #[test]
+    fn replies_and_submissions_bookkeep_the_delivery() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        log.execute_system(registered("bbbb2222"), 2).unwrap();
+        log.execute(native_session(0), message(0, 1, None), 3)
+            .unwrap();
+        // the recipient answers: the reply names the message it answers
+        log.execute(native_session(1), message(1, 0, Some(2)), 4)
+            .unwrap();
+
+        // submission is the addressee's act, machinery-recorded
+        log.execute_system(
+            Command::SubmitMessage {
+                id: crate::objects::message::MessageId(RecordId(2)),
+                by: IncarnationId(RecordId(1)),
+            },
+            5,
+        )
+        .unwrap();
+        let mctx = &log.world().messages[&crate::objects::message::MessageId(RecordId(2))];
+        assert_eq!(mctx.state, MessageState::Submitted);
+        assert_eq!(log.world().provenance[&RecordId(4)], None);
+
+        // the sender's own mail is not the recipient's to submit
+        let refused = log.execute_system(
+            Command::SubmitMessage {
+                id: crate::objects::message::MessageId(RecordId(2)),
+                by: IncarnationId(RecordId(0)),
+            },
+            6,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidMessageId)));
+        // an unknown message refuses
+        let refused = log.execute_system(
+            Command::SubmitMessage {
+                id: crate::objects::message::MessageId(RecordId(99)),
+                by: IncarnationId(RecordId(1)),
+            },
+            6,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidMessageId)));
+        // submission never repeats: the table holds on submitted mail
+        let refused = log.execute_system(
+            Command::SubmitMessage {
+                id: crate::objects::message::MessageId(RecordId(2)),
+                by: IncarnationId(RecordId(1)),
+            },
+            6,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        // judgment tiers refuse the delivery record at the authority table
+        for ctx in [human(), agent()] {
+            let refused = log.execute(
+                ctx,
+                Command::SubmitMessage {
+                    id: crate::objects::message::MessageId(RecordId(3)),
+                    by: IncarnationId(RecordId(0)),
+                },
+                7,
+            );
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
+        }
+        assert_eq!(log.records().len(), 5);
+    }
+
+    /// A task-free scope accepts what it did not produce: the
+    /// self-acceptance gate reads the task binding alone.
+    #[test]
+    fn a_task_free_scope_accepts_freely() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("implement foo"),
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(agent(), offer(TaskId(0), "suite green, 55 tests"), 3)
+            .unwrap();
+
+        // the native session declares no task: its scope covers nothing
+        let mut session = native_session(0);
+        session.actor = agent().actor;
+        log.execute(session, accept_on(TaskId(0), 2), 4).unwrap();
+        assert_eq!(log.world().tasks[0].task.state, TaskState::Concluded);
+
+        // the task-scoped producer still cannot accept its own offer
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("fix bar"),
+            },
+            5,
+        )
+        .unwrap();
+        let scoped = scoped_agent(1);
+        log.execute(scoped.clone(), offer(TaskId(1), "bar fixed"), 6)
+            .unwrap();
+        let refused = log.execute(scoped, accept_on(TaskId(1), 5), 7);
+        assert!(matches!(refused, Err(Reject::SelfAcceptance)));
+    }
+
+    /// A native identity is task-free: it claims through the explicit
+    /// door alone, and never inherits an establishment's task.
+    #[test]
+    fn native_identities_claim_through_the_explicit_door() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("carry a merge through the worktree"),
+            },
+            1,
+        )
+        .unwrap();
+        log.execute_system(registered("aaaa1111"), 2).unwrap();
+        log.execute_system(registered("bbbb2222"), 3).unwrap();
+        log.execute_system(
+            Command::EstablishWorkspace {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            4,
+        )
+        .unwrap();
+        let establishment = log.records().len() - 1;
+
+        // a native identity claims any task that exists
+        log.execute(
+            native_session(1),
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: Some(IncarnationId(RecordId(1))),
+            },
+            5,
+        )
+        .unwrap();
+        assert!(matches!(
+            log.world().tasks[0].ownership[0].owner,
+            Owner::Incarnation(IncarnationId(RecordId(1)))
+        ));
+
+        // the historical establishment is bound to its birth task
+        let refused = log.execute(
+            human(),
+            Command::ClaimTask {
+                id: TaskId(9),
+                incarnation: Some(IncarnationId(RecordId(establishment))),
+            },
+            6,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
     }
 
     #[test]

@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 
 use crate::events::Event;
 use crate::objects::comment::{CommentContext, CommentId, CommentKind, CommentState, Target};
+use crate::objects::incarnation::IncarnationId;
+use crate::objects::message::{MessageId, MessageState};
 use crate::objects::task::{Owner, OwnerEntry, TaskContext, TaskId, TaskState};
 use crate::store::{RecordId, World};
 use crate::types::artifact::Artifact;
@@ -18,30 +20,54 @@ pub struct WorkspaceFacts {
     pub path: String,
 }
 
+/// One message as the mailbox face renders it: the dense birth
+/// number, the addressed endpoints by theirs, and the delivery state
+/// — bookkeeping, never a claim of reading or agreement.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RequestFacts {
+pub struct MessageLine {
+    pub num: usize,
     pub seq: usize,
-    pub task: usize,
-    pub workspace: Option<WorkspaceFacts>,
+    pub from: usize,
+    pub to: usize,
+    pub reply_to: Option<usize>,
+    pub task: Option<usize>,
+    pub state: &'static str,
+    pub actor: String,
+    pub body: String,
+    pub born_at: u64,
 }
 
-pub fn request_facts(world: &World, position: RecordId) -> Option<RequestFacts> {
-    let comment = world.comments.get(&CommentId(position))?;
-    let task = comment.comment.home.0;
-    let workspace = world.tasks[task]
-        .workspace
-        .as_ref()
-        .map(|w| WorkspaceFacts {
-            task,
-            base: w.workspace.base.as_str().to_string(),
-            branch: w.workspace.branch.as_str().to_string(),
-            path: w.workspace.worktree.as_path().display().to_string(),
-        });
-    Some(RequestFacts {
-        seq: position.0,
-        task,
-        workspace,
+pub fn message_line(world: &World, id: MessageId) -> Option<MessageLine> {
+    let mctx = world.messages.get(&id)?;
+    Some(MessageLine {
+        num: world.message_num(id)?,
+        seq: id.0.0,
+        from: world.incarnation_num(mctx.message.from)?,
+        to: world.incarnation_num(mctx.message.to)?,
+        reply_to: mctx.message.reply_to.and_then(|r| world.message_num(r)),
+        task: mctx.message.task.map(|t| t.0),
+        state: match mctx.state {
+            MessageState::Pending => "pending",
+            MessageState::Submitted => "submitted",
+        },
+        actor: mctx.actor.as_str().to_string(),
+        body: mctx.message.body.as_str().to_string(),
+        born_at: mctx.born_at,
     })
+}
+
+/// The messages an incarnation participates in, in record order:
+/// everything addressed to it plus everything it sent.
+pub fn mailbox(world: &World, id: IncarnationId) -> Vec<MessageId> {
+    world
+        .messages
+        .keys()
+        .copied()
+        .filter(|m| {
+            let mctx = &world.messages[m];
+            mctx.message.from == id || mctx.message.to == id
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +144,10 @@ pub fn wait_matches(
         Event::ArtifactAdded { root, .. } => *target == Target::Task(*root),
         Event::WorkspaceEstablished { task_id, .. }
         | Event::TaskWorkspaceCheckpointed { task_id, .. } => *target == Target::Task(*task_id),
+        // messages take no thread home; they are never task activity
+        Event::IncarnationRegistered { .. }
+        | Event::MessageSent { .. }
+        | Event::MessageSubmitted { .. } => false,
     }
 }
 
@@ -257,7 +287,6 @@ pub struct ThreadView {
 pub fn kind_of(kind: &CommentKind) -> &'static str {
     match kind {
         CommentKind::Note { .. } => "note",
-        CommentKind::Request { .. } => "request",
         CommentKind::Offer { .. } => "offer",
         CommentKind::Accept { .. } => "accept",
         CommentKind::Reject { .. } => "reject",
@@ -502,7 +531,12 @@ pub enum RefTarget {
     },
     Incarnation {
         num: usize,
-        task: usize,
+        /// The birth task a historical establishment carries; a
+        /// registered native identity has none
+        task: Option<usize>,
+    },
+    Message {
+        num: usize,
     },
     Artifact {
         seq: usize,
@@ -535,7 +569,15 @@ pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
     if let Some(ictx) = world.incarnations.get(&crate::IncarnationId(rid)) {
         return Some(RefTarget::Incarnation {
             num: world.incarnation_num(crate::IncarnationId(rid))?,
-            task: ictx.incarnation.task.0,
+            task: match &ictx.incarnation {
+                crate::Incarnation::Established { task, .. } => Some(task.0),
+                crate::Incarnation::Native { .. } => None,
+            },
+        });
+    }
+    if world.messages.contains_key(&crate::MessageId(rid)) {
+        return Some(RefTarget::Message {
+            num: world.message_num(crate::MessageId(rid))?,
         });
     }
     for (i, ctx) in world.tasks.iter().enumerate() {
@@ -577,10 +619,9 @@ pub enum Facet {
 }
 
 /// The kinds a searched record can be — kind:'s whole vocabulary.
-pub const SEARCH_KINDS: [&str; 9] = [
+pub const SEARCH_KINDS: [&str; 8] = [
     "task",
     "note",
-    "request",
     "offer",
     "accept",
     "reject",
@@ -1434,7 +1475,10 @@ mod test {
                     line.references,
                     vec![
                         RefTarget::Task { task: 0 },
-                        RefTarget::Incarnation { num: 0, task: 0 },
+                        RefTarget::Incarnation {
+                            num: 0,
+                            task: Some(0)
+                        },
                         RefTarget::Artifact {
                             seq: 2,
                             task: 0,
@@ -1586,7 +1630,7 @@ mod test {
                 actor: ActorName::new("pi".into()).unwrap(),
                 tier: Tier::Agent,
                 scope: Some(Scope {
-                    task: TaskId(0),
+                    task: Some(TaskId(0)),
                     incarnation: None,
                     workspace: None,
                 }),
@@ -2364,11 +2408,13 @@ mod test {
         }
     }
 
-    // -- the request write's reply facts -----------------------------
+    // -- the message fold's numbers and mailbox ----------------------
 
-    mod request_reply {
+    mod messages {
         use super::*;
-        use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
+        use crate::objects::message::MessageState;
+        use crate::store::Scope;
+        use crate::types::pointers::{NativeSessionId, SessionLocator};
 
         fn ctx(name: &str) -> Context {
             Context {
@@ -2378,112 +2424,156 @@ mod test {
             }
         }
 
-        fn record(seq: usize, ctx: &Context, event: Event) -> Record {
+        fn registered(seq: usize, id: &str) -> Event {
+            Event::IncarnationRegistered {
+                native_id: NativeSessionId::new(id.into()).unwrap(),
+                saved_session: SessionLocator::new(format!("/sessions/{id}.jsonl").into()).unwrap(),
+            }
+        }
+
+        fn sent(from: usize, to: usize, reply_to: Option<usize>, task: Option<usize>) -> Event {
+            Event::MessageSent {
+                from: IncarnationId(RecordId(from)),
+                to: IncarnationId(RecordId(to)),
+                reply_to: reply_to.map(|r| MessageId(RecordId(r))),
+                task: task.map(TaskId),
+                body: Prose::new("the failing edge case".into()).unwrap(),
+            }
+        }
+
+        fn record(seq: usize, context: &Context, event: Event) -> Record {
             Record {
                 id: RecordId(seq),
                 timestamp: seq as u64,
-                context: ctx.clone(),
+                context: context.clone(),
                 event,
             }
         }
 
-        fn comment(
-            seq: usize,
-            ctx: &Context,
-            home: TaskId,
-            kind: CommentKind,
-            references: Vec<RecordId>,
-        ) -> Record {
-            record(
-                seq,
-                ctx,
-                Event::Commented {
-                    home,
-                    kind,
-                    references,
-                },
-            )
+        /// A send rides its sender's declared identity: the store
+        /// matches the event's from against the scope.
+        fn sender(seq: usize, incarnation: usize) -> Context {
+            Context {
+                actor: ActorName::new("pi".into()).unwrap(),
+                tier: Tier::Agent,
+                scope: Some(Scope {
+                    task: None,
+                    incarnation: Some(IncarnationId(RecordId(incarnation))),
+                    workspace: None,
+                }),
+            }
         }
 
-        // the request resolves through its home task; a task with no
-        // workspace returns none
+        /// The dense message numbers and the mailbox's order: births
+        /// count births of their kind, never record positions.
         #[test]
-        fn the_request_facts_resolve_the_home_and_the_recorded_workspace() {
-            let jerry = ctx("jerry");
-            let world = World::replay(vec![
-                record(
+        fn message_numbers_count_births_and_mailboxes_order_them() {
+            let mut world = World::new();
+            for (seq, event) in [
+                (0, registered(0, "aaaa1111")),
+                (1, registered(1, "bbbb2222")),
+                (2, sent(0, 1, None, None)),
+                (3, sent(1, 0, Some(2), None)),
+            ] {
+                let context = match event {
+                    Event::MessageSent { from, .. } => sender(seq, from.0.0),
+                    _ => ctx("pi"),
+                };
+                world = world
+                    .apply(record(seq, &context, event))
+                    .expect("the story folds");
+            }
+            assert_eq!(world.message_num(MessageId(RecordId(2))), Some(0));
+            assert_eq!(world.message_num(MessageId(RecordId(3))), Some(1));
+            assert_eq!(world.message_at_num(1), Some(MessageId(RecordId(3))));
+            assert_eq!(world.message_num(MessageId(RecordId(9))), None);
+
+            // the mailbox reads both directions in record order
+            let box_of_one = mailbox(&world, IncarnationId(RecordId(1)));
+            assert_eq!(
+                box_of_one,
+                vec![MessageId(RecordId(2)), MessageId(RecordId(3))]
+            );
+
+            // the lines carry dense endpoints and the pending state
+            let line = message_line(&world, MessageId(RecordId(3))).unwrap();
+            assert_eq!((line.num, line.from, line.to), (1, 1, 0));
+            assert_eq!(line.reply_to, Some(0));
+            assert_eq!(line.state, "pending");
+        }
+
+        /// A submitted message reads submitted: bookkeeping, never a
+        /// claim of reading or agreement.
+        #[test]
+        fn the_line_names_the_delivery_state() {
+            let mut world = World::new();
+            for (seq, event) in [
+                (0, registered(0, "aaaa1111")),
+                (1, registered(1, "bbbb2222")),
+                (2, sent(0, 1, None, None)),
+                (
+                    3,
+                    Event::MessageSubmitted {
+                        id: MessageId(RecordId(2)),
+                        by: IncarnationId(RecordId(1)),
+                    },
+                ),
+            ] {
+                let context = if seq == 2 { sender(seq, 0) } else { ctx("pi") };
+                world = world
+                    .apply(record(seq, &context, event))
+                    .expect("the story folds");
+            }
+            let line = message_line(&world, MessageId(RecordId(2))).unwrap();
+            assert_eq!(line.state, "submitted");
+            let mctx = &world.messages[&MessageId(RecordId(2))];
+            assert_eq!(mctx.state, MessageState::Submitted);
+        }
+
+        /// Messages take no thread home: a task context rides without
+        /// publication, and the provenance index stays None.
+        #[test]
+        fn messages_take_no_thread_home() {
+            let mut world = World::new();
+            for (seq, event) in [
+                (
                     0,
-                    &jerry,
                     Event::TaskCreated {
                         name: Prose::new("implement foo".into()).unwrap(),
                     },
                 ),
-                record(
-                    1,
-                    &jerry,
-                    Event::TaskCreated {
-                        name: Prose::new("migrate floop".into()).unwrap(),
-                    },
-                ),
-                record(
-                    2,
-                    &jerry,
-                    Event::WorkspaceEstablished {
-                        task_id: TaskId(0),
-                        base: GitCommit::new("abc123".into()).unwrap(),
-                        branch: GitBranch::new("saccade/t-0".into()).unwrap(),
-                        worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
-                    },
-                ),
-                comment(
-                    3,
-                    &jerry,
-                    TaskId(1),
-                    CommentKind::Note {
-                        body: Prose::new("context for the migration".into()).unwrap(),
-                    },
-                    Vec::new(),
-                ),
-                comment(
-                    4,
-                    &jerry,
-                    TaskId(0),
-                    CommentKind::Request {
-                        body: Prose::new("where do you stand?".into()).unwrap(),
-                    },
-                    Vec::new(),
-                ),
-                comment(
-                    5,
-                    &jerry,
-                    TaskId(1),
-                    CommentKind::Request {
-                        body: Prose::new("and beside the note?".into()).unwrap(),
-                    },
-                    vec![RecordId(3)],
-                ),
-            ])
-            .unwrap();
+                (1, registered(1, "aaaa1111")),
+                (2, registered(2, "bbbb2222")),
+                (3, sent(1, 2, None, Some(0))),
+            ] {
+                let context = if seq == 3 { sender(seq, 1) } else { ctx("pi") };
+                world = world
+                    .apply(record(seq, &context, event))
+                    .expect("the story folds");
+            }
+            assert_eq!(world.provenance[&RecordId(1)], None);
+            assert_eq!(world.provenance[&RecordId(3)], None);
+            // the task's thread stays empty whatever context rode
+            assert!(world.tasks[0].thread.is_empty());
+            // the wait door never matches message traffic
+            let event = wire_event(&world.messages[&MessageId(RecordId(3))]);
+            assert!(!wait_matches(
+                &world,
+                RecordId(3),
+                &event,
+                &Target::Task(TaskId(0)),
+                WaitUntil::Activity
+            ));
+        }
 
-            let facts = request_facts(&world, RecordId(4)).expect("the request folds in");
-            assert_eq!(facts.seq, 4);
-            assert_eq!(facts.task, 0);
-            let ws = facts.workspace.expect("the recorded workspace returns");
-            assert_eq!(
-                (ws.task, ws.branch, ws.base, ws.path),
-                (
-                    0,
-                    "saccade/t-0".into(),
-                    "abc123".into(),
-                    "/repo/wt/t-0".into()
-                )
-            );
-
-            // a request homed on a task without a workspace returns none
-            let facts = request_facts(&world, RecordId(5)).expect("the request folds in");
-            assert_eq!(facts.seq, 5);
-            assert_eq!(facts.task, 1);
-            assert!(facts.workspace.is_none());
+        fn wire_event(mctx: &crate::objects::message::MessageContext) -> Event {
+            Event::MessageSent {
+                from: mctx.message.from,
+                to: mctx.message.to,
+                reply_to: mctx.message.reply_to,
+                task: mctx.message.task,
+                body: mctx.message.body.clone(),
+            }
         }
     }
 }

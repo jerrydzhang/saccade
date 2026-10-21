@@ -547,7 +547,7 @@ mod test {
             actor: ActorName::new("pi".into()).unwrap(),
             tier: Tier::Agent,
             scope: Some(Scope {
-                task: TaskId(0),
+                task: Some(TaskId(0)),
                 incarnation: None,
                 workspace: Some(WorktreePath::new("/repo/wt/t-0".into()).unwrap()),
             }),
@@ -657,13 +657,7 @@ mod test {
         record(
             &mut conn,
             &agent(),
-            Command::Comment {
-                home: TaskId(2),
-                kind: CommentKind::Request {
-                    body: prose("please resume the migration"),
-                },
-                references: Vec::new(),
-            },
+            note("the migration waits on a decision"),
             20,
         )
         .unwrap();
@@ -845,12 +839,69 @@ mod test {
         )
         .unwrap();
 
+        // the native families ride the same round-trip: registration,
+        // an addressed message, the recipient's submission
+        record(
+            &mut conn,
+            &system,
+            Command::RegisterIncarnation {
+                native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
+                saved_session: crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into())
+                    .unwrap(),
+            },
+            33,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::RegisterIncarnation {
+                native_id: crate::NativeSessionId::new("bbbb2222".into()).unwrap(),
+                saved_session: crate::SessionLocator::new("/sessions/bbbb2222.jsonl".into())
+                    .unwrap(),
+            },
+            33,
+        )
+        .unwrap();
+        let sender = Context {
+            actor: ActorName::new("pi".into()).unwrap(),
+            tier: Tier::Agent,
+            scope: Some(Scope {
+                task: None,
+                incarnation: Some(IncarnationId(RecordId(35))),
+                workspace: None,
+            }),
+        };
+        record(
+            &mut conn,
+            &sender,
+            Command::SendMessage {
+                from: IncarnationId(RecordId(35)),
+                to: IncarnationId(RecordId(36)),
+                reply_to: None,
+                task: Some(TaskId(0)),
+                body: prose("please look at the failing edge case"),
+            },
+            34,
+        )
+        .unwrap();
+        let (_, returned) = record(
+            &mut conn,
+            &system,
+            Command::SubmitMessage {
+                id: crate::MessageId(RecordId(37)),
+                by: IncarnationId(RecordId(36)),
+            },
+            35,
+        )
+        .unwrap();
+
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 35);
+        assert_eq!(loadout.rows.len(), 39);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
@@ -864,10 +915,11 @@ mod test {
         assert_eq!(loadout.rows[19].kind, "task_workspace_checkpointed");
         assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
         assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(18))]
-                .incarnation
-                .workspace,
-            WorktreePath::new("/repo/wt/t-0".into()).unwrap()
+            world.incarnations[&IncarnationId(RecordId(18))].incarnation,
+            crate::Incarnation::Established {
+                task: TaskId(0),
+                workspace: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            }
         );
         assert_eq!(
             world.tasks[0].workspace.as_ref().unwrap().birth,
@@ -893,7 +945,7 @@ mod test {
             (3, "offer"),
             (4, "accept"),
             (7, "reject"),
-            (13, "request"),
+            (13, "note"),
             (15, "use"),
         ] {
             assert_eq!(loadout.rows[seq].kind, "commented");
@@ -988,6 +1040,42 @@ mod test {
             CommentState::Withdrawn(_)
         ));
         assert!(loadout.rows[25].payload.contains("parked mid-flight"));
+        // the native families: machinery registration, the addressed
+        // message from its scoped sender, the recipient's submission
+        assert_eq!(loadout.rows[35].kind, "incarnation_registered");
+        assert_eq!(loadout.rows[36].kind, "incarnation_registered");
+        assert_eq!(loadout.rows[35].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[37].kind, "message_sent");
+        assert!(loadout.rows[37].payload.contains("failing edge case"));
+        assert!(
+            loadout.rows[37]
+                .scope
+                .as_deref()
+                .is_some_and(|s| s.contains("35"))
+        );
+        assert_eq!(
+            loadout.rows[37].scope.as_deref(),
+            sender
+                .scope
+                .as_ref()
+                .map(|s| serde_json::to_string(s).unwrap())
+                .as_deref()
+        );
+        assert_eq!(loadout.rows[38].kind, "message_submitted");
+        // the registration births a native identity; the message
+        // answers by reference and the submission reads submitted
+        assert_eq!(
+            world.incarnations[&IncarnationId(RecordId(35))].incarnation,
+            crate::Incarnation::Native {
+                native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
+                saved_session: crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into())
+                    .unwrap(),
+            }
+        );
+        assert_eq!(world.messages.len(), 1);
+        let mctx = &world.messages[&crate::MessageId(RecordId(37))];
+        assert_eq!(mctx.state, crate::MessageState::Submitted);
+        assert_eq!(mctx.message.task, Some(TaskId(0)));
         // the artifact family: pointer only
         assert_eq!(loadout.rows[17].kind, "artifact_added");
         assert!(loadout.rows[17].payload.contains("sweep figure"));

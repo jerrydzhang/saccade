@@ -28,6 +28,12 @@ pointer!(
     "Absolute path to a task's worktree."
 );
 pointer!(
+    SessionLocator,
+    PathBuf,
+    "PathBuf",
+    "Absolute path to a native session's saved file."
+);
+pointer!(
     GitCommit,
     String,
     "String",
@@ -39,12 +45,32 @@ pointer!(
     "String",
     "Branch name; canonicalized by Git before append."
 );
+pointer!(
+    NativeSessionId,
+    String,
+    "String",
+    "The durable native session identity an incarnation carries."
+);
 
 impl TryFrom<PathBuf> for WorktreePath {
     type Error = String;
 
     fn try_from(path: PathBuf) -> Result<Self, String> {
         WorktreePath::new(path).map_err(|e| format!("{e:?}"))
+    }
+}
+
+impl TryFrom<PathBuf> for SessionLocator {
+    type Error = String;
+
+    fn try_from(path: PathBuf) -> Result<Self, String> {
+        SessionLocator::new(path).map_err(|e| format!("{e:?}"))
+    }
+}
+
+impl From<SessionLocator> for PathBuf {
+    fn from(p: SessionLocator) -> PathBuf {
+        p.0
     }
 }
 
@@ -82,6 +108,20 @@ impl From<GitBranch> for String {
     }
 }
 
+impl TryFrom<String> for NativeSessionId {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, String> {
+        NativeSessionId::new(value).map_err(|e| format!("{e:?}"))
+    }
+}
+
+impl From<NativeSessionId> for String {
+    fn from(p: NativeSessionId) -> String {
+        p.0
+    }
+}
+
 impl WorktreePath {
     pub fn new(path: PathBuf) -> Result<Self, PointerError> {
         if !path.is_absolute() {
@@ -92,6 +132,34 @@ impl WorktreePath {
 
     /// The runner executes git here; executors read their session pointer.
     pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl SessionLocator {
+    pub fn new(path: PathBuf) -> Result<Self, PointerError> {
+        if !path.is_absolute() {
+            return Err(PointerError::Relative);
+        }
+        Ok(Self(path))
+    }
+
+    /// The resume door reads the header here; the native id validates it.
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl NativeSessionId {
+    pub fn new(value: String) -> Result<Self, PointerError> {
+        if value.is_empty() {
+            return Err(PointerError::Empty);
+        }
+        Ok(Self(value))
+    }
+
+    /// Resume validates the saved header against this id.
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -163,6 +231,16 @@ mod test {
         assert!(GitBranch::new("refs/heads/main".into()).is_ok());
         assert!(matches!(
             GitBranch::new(String::new()),
+            Err(PointerError::Empty)
+        ));
+        assert!(matches!(
+            SessionLocator::new(PathBuf::from("sessions/x.jsonl")),
+            Err(PointerError::Relative)
+        ));
+        assert!(SessionLocator::new(PathBuf::from("/sessions/x.jsonl")).is_ok());
+        assert!(NativeSessionId::new("a1b2c3d4".into()).is_ok());
+        assert!(matches!(
+            NativeSessionId::new(String::new()),
             Err(PointerError::Empty)
         ));
     }

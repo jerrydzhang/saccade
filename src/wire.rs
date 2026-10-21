@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 11] = [
+const KINDS: [&str; 14] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -38,6 +38,9 @@ const KINDS: [&str; 11] = [
     "artifact_added",
     "workspace_established",
     "task_workspace_checkpointed",
+    "incarnation_registered",
+    "message_sent",
+    "message_submitted",
 ];
 
 /// Split an event into its db columns. The on-disk shape is serde's
@@ -74,7 +77,10 @@ fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
 mod test {
     use super::*;
     use crate::objects::comment::{CommentId, CommentKind};
+    use crate::objects::incarnation::IncarnationId;
+    use crate::objects::message::MessageId;
     use crate::objects::task::TaskId;
+    use crate::types::pointers::{NativeSessionId, SessionLocator};
     use crate::types::prose::Prose;
 
     #[test]
@@ -111,13 +117,6 @@ mod test {
                     body: Prose::new("leaning sections, owner: jerry".into()).unwrap(),
                 },
                 references: vec![RecordId(3)],
-            },
-            Event::Commented {
-                home: TaskId(0),
-                kind: CommentKind::Request {
-                    body: Prose::new("please land the sweep".into()).unwrap(),
-                },
-                references: Vec::new(),
             },
             Event::Commented {
                 home: TaskId(0),
@@ -191,6 +190,31 @@ mod test {
             Event::TaskWorkspaceCheckpointed {
                 task_id: TaskId(0),
                 checkpoint: GitCommit::new("def456".into()).unwrap(),
+            },
+            Event::IncarnationRegistered {
+                native_id: NativeSessionId::new("a1b2c3d4-evil".into()).unwrap(),
+                saved_session: SessionLocator::new(
+                    "/home/story/.pi/agent/sessions/a1b2c3d4.jsonl".into(),
+                )
+                .unwrap(),
+            },
+            Event::MessageSent {
+                from: IncarnationId(RecordId(16)),
+                to: IncarnationId(RecordId(17)),
+                reply_to: None,
+                task: Some(TaskId(0)),
+                body: Prose::new("please look at the failing edge case".into()).unwrap(),
+            },
+            Event::MessageSent {
+                from: IncarnationId(RecordId(17)),
+                to: IncarnationId(RecordId(16)),
+                reply_to: Some(MessageId(RecordId(18))),
+                task: None,
+                body: Prose::new("the edge case held under review".into()).unwrap(),
+            },
+            Event::MessageSubmitted {
+                id: MessageId(RecordId(18)),
+                by: IncarnationId(RecordId(17)),
             },
         ];
 
