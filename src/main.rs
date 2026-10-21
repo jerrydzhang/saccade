@@ -1383,7 +1383,10 @@ fn exec_door(
             .args(rest)
             .envs(env)
             .env_remove("SACCADE_DB")
-            .env_remove("SACCADE_SERVER"),
+            .env_remove("SACCADE_SERVER")
+            // the retired spelling never reaches a child: the machine
+            // channel is SACCADE_INCARNATION_SEQ alone
+            .env_remove("SACCADE_INCARNATION"),
     );
     Err(Fail::Usage(format!("cannot exec {program}: {err}")))
 }
@@ -1435,32 +1438,11 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
             ),
         }
     };
-    // the declared incarnation is a birth-record position; its dense
-    // public number resolves through the disclosed destination's fold
-    let dense = |seq: usize| -> Option<String> {
-        let loadout = match &server {
-            Some(url) => client::records(url)
-                .ok()
-                .and_then(|rows| db::fold_rows(rows).ok()),
-            None => {
-                let db = db_path.as_ref()?;
-                let conn = db::open_read(db).ok()?;
-                db::load(&conn).ok()
-            }
-        }?;
-        let db::LoadState::Full(world) = loadout.state else {
-            return None;
-        };
-        world
-            .incarnation_num(IncarnationId(RecordId(seq)))
-            .map(|n| format!("i-{n}"))
-    };
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "actor": context.actor.as_str(),
             "tier": saccade::wire::tier_of(&context.tier),
             "task": scope.as_ref().and_then(|s| s.task).map(|t| format!("t-{}", t.0)),
-            "incarnation": scope.as_ref().and_then(|s| s.incarnation).and_then(|i| dense(i.0 .0)),
             "incarnation_seq": scope.as_ref().and_then(|s| s.incarnation).map(|i| i.0 .0),
             "workspace": scope.as_ref().and_then(|s| s.workspace.as_ref().map(|w| w.as_path().display().to_string())),
             "repo": repo.map(|p| p.display().to_string()),
@@ -1483,15 +1465,7 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
                 None => "task  none declared".into(),
             });
             if let Some(incarnation) = scope.incarnation {
-                out.push(match dense(incarnation.0.0) {
-                    Some(number) => {
-                        format!("incarnation  {number} (birth seq {})", incarnation.0.0)
-                    }
-                    None => format!(
-                        "incarnation  birth seq {} (the fold is unreadable)",
-                        incarnation.0.0
-                    ),
-                });
+                out.push(format!("incarnation seq {}", incarnation.0.0));
             }
             if let Some(workspace) = &scope.workspace {
                 out.push(format!("workspace  {}", workspace.as_path().display()));
@@ -2448,9 +2422,12 @@ fn integrate_door(
     };
     let dir_str = dir.display().to_string();
     // the terminal starts at the chosen workspace; the session header
-    // records that cwd, and a resume validates against it
+    // records that cwd, and a resume validates against it. The launch
+    // scrubs stale inherited identity, task, workspace, and database
+    // routing the child never selected; the routing it does select
+    // rides the line explicitly.
     let command = format!(
-        "cd {} && {} {}",
+        "cd {} && env -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB {} {}",
         shell_quote(&dir_str),
         routing,
         argv.iter()

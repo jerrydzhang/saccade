@@ -60,6 +60,10 @@ pub enum Reject {
     #[error("an incarnation already carries this native session")]
     DuplicateNativeSession,
     #[error(
+        "this native session id is already recorded with a different saved session; only the exact recorded association resolves"
+    )]
+    SavedSessionMismatch,
+    #[error(
         "a citation does not resolve: its target is no earlier record, or its marker has no reference"
     )]
     InvalidReference,
@@ -97,6 +101,7 @@ impl Reject {
             Reject::SelfAcceptance => "self_acceptance",
             Reject::InvalidIncarnationId => "invalid_incarnation_id",
             Reject::DuplicateNativeSession => "duplicate_native_session",
+            Reject::SavedSessionMismatch => "saved_session_mismatch",
             Reject::InvalidReference => "invalid_reference",
             Reject::InvalidMessageId => "invalid_message_id",
             Reject::HumanOnly => "human_only",
@@ -127,6 +132,7 @@ mod test {
             Reject::SelfAcceptance,
             Reject::InvalidIncarnationId,
             Reject::DuplicateNativeSession,
+            Reject::SavedSessionMismatch,
             Reject::InvalidReference,
             Reject::InvalidMessageId,
             Reject::HumanOnly,

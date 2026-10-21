@@ -788,12 +788,32 @@ fn attach_operation(
         db::LoadState::Full(world) => world,
         db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
     };
-    // an existing exact native session is the same incarnation
+    // an existing exact native session is the same incarnation: the
+    // recorded association is native id AND saved locator; a reused
+    // id with a different file binds other history, it never resolves
     let existing = world
         .incarnations
         .iter()
         .find(|(_, ctx)| ctx.incarnation.native_id() == Some(native_id));
-    if let Some((id, _)) = existing {
+    if let Some((id, ctx)) = existing {
+        if ctx.incarnation.saved_session() != Some(saved_session) {
+            return Err(ApiFail::Reject(
+                crate::Reject::SavedSessionMismatch,
+                Some(format!(
+                    "native session {} is already registered as i-{} from {}; attach carries {}",
+                    native_id.as_str(),
+                    world
+                        .incarnation_num(*id)
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| id.0.0.to_string()),
+                    ctx.incarnation
+                        .saved_session()
+                        .map(|l| l.as_path().display().to_string())
+                        .unwrap_or_default(),
+                    saved_session.as_path().display().to_string(),
+                )),
+            ));
+        }
         return Ok(AttachReply {
             registered: false,
             incarnation: id.0.0,

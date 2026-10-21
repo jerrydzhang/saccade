@@ -261,6 +261,24 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     assert_eq!(reply["incarnation"], 0);
     assert_eq!(reply["records"].as_array().unwrap().len(), 0);
 
+    // the same native id carrying a different saved locator is not
+    // the recorded association: it refuses, it never rebinds history
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "aaaa1111",
+            "session_file": "/elsewhere/aaaa1111.jsonl",
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["error"]["code"], "saved_session_mismatch");
+    let detail = reply["error"]["detail"].as_str().unwrap();
+    assert!(detail.contains("i-0"), "{detail}");
+    assert!(detail.contains("/sessions/aaaa1111.jsonl"), "{detail}");
+    assert!(detail.contains("/elsewhere/aaaa1111.jsonl"), "{detail}");
+
     // a task for context, and a message without any
     post_command(
         &base_url,
@@ -3144,10 +3162,98 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     assert_eq!(identity["actor"], "pi");
     assert_eq!(identity["tier"], "agent");
     assert_eq!(identity["task"], "t-0");
-    // the declared birth position resolves to the dense public number
-    assert_eq!(identity["incarnation"], "i-0");
+    // the machine channel discloses the birth position as a number;
+    // the public i-N is the fold's dense numbering, never this face
     assert_eq!(identity["incarnation_seq"], 1);
+    assert!(identity.get("incarnation").is_none());
     assert_eq!(identity["workspace"], worktree.display().to_string());
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// A fresh integrate launch scrubs stale inherited identity, task,
+/// workspace, and db routing the child never selected; the routing it
+/// does select rides the launch line.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_integrate_launch_scrubs_stale_inheritance() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("integrate-scrub");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    let host = fake_host(db.parent().unwrap());
+    let pi = stub_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    let host_state = db.parent().unwrap().join("host-state");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+
+    let workspace = db.parent().unwrap().join("chosen-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let out = std::process::Command::new(bin)
+        .args([
+            "--server",
+            &base_url,
+            "--repo",
+            root.to_str().unwrap(),
+            "integrate",
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--",
+            "register and wait",
+        ])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                host.parent().unwrap().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env("FAKE_ORCA_LOG", host_log.display().to_string())
+        .env("FAKE_ORCA_STATE", host_state.display().to_string())
+        .env("SACCADE_PI", &pi)
+        // everything stale the launching shell happens to carry
+        .env("SACCADE_INCARNATION_SEQ", "999")
+        .env("SACCADE_TASK", "t-0")
+        .env("SACCADE_WORKSPACE", "/nowhere")
+        .env("SACCADE_DB", "/stale/routing.db")
+        .output()
+        .expect("spawn sac");
+    let ok = out.status.success();
+    let (out, err) = (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+
+    let typed = command_of(&host_log, &format!("path:{}", workspace.display()));
+    let expected_scrub = "env -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ \
+                         -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB";
+    assert!(
+        typed.contains(expected_scrub),
+        "the launch scrubs stale inheritance: {typed}"
+    );
+    assert!(
+        typed.contains(&format!(
+            "SACCADE_ACTOR={}",
+            shell_quoted(&command_label(&pi.display().to_string()))
+        )),
+        "the launch names the harness as the acting agent: {typed}"
+    );
+    assert!(
+        typed.contains(&format!("SACCADE_SERVER={}", shell_quoted(&base_url))),
+        "{typed}"
+    );
+    assert!(
+        typed.contains(&format!("SACCADE_REPO={}", root.display())),
+        "{typed}"
+    );
+    assert!(
+        typed.ends_with(&shell_quoted("register and wait")),
+        "{typed}"
+    );
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -3371,6 +3477,7 @@ fn scrubbed(mut cmd: std::process::Command) -> std::process::Command {
         "SACCADE_SERVER",
         "SACCADE_TASK",
         "SACCADE_INCARNATION",
+        "SACCADE_INCARNATION_SEQ",
         "SACCADE_WORKSPACE",
         "SACCADE_REPO",
     ] {
@@ -3593,15 +3700,15 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
     assert!(out.contains("unresolved"), "{out}");
 
     // the repo-derived serve publishes beside its db; the client finds it
-    let mut serve = std::process::Command::new(bin)
+    let mut serve_cmd = scrubbed(std::process::Command::new(bin));
+    serve_cmd
         .args(["serve", "--port", "0"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .env("XDG_STATE_HOME", &state)
         .env("SACCADE_ACTOR", "pi")
-        .current_dir(&root)
-        .spawn()
-        .expect("spawn serve");
+        .current_dir(&root);
+    let mut serve = serve_cmd.spawn().expect("spawn serve");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     // the hint is the one saccade.db.addr under the child's state root
     let hint = loop {
@@ -3712,14 +3819,14 @@ async fn the_declared_repo_carries_the_serving_effects() {
     std::fs::write(dir.join("host-state"), b"").unwrap();
 
     // repo-derived serve from outside any repo has no tracker to serve
-    let mut probe = std::process::Command::new(bin)
+    let mut probe_cmd = scrubbed(std::process::Command::new(bin));
+    probe_cmd
         .args(["serve", "--port", "0"])
-        .env("XDG_STATE_HOME", &state_home)
-        .current_dir(&dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn serve");
+        .env("XDG_STATE_HOME", &state_home)
+        .current_dir(&dir);
+    let mut probe = probe_cmd.spawn().expect("spawn serve");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let refused = loop {
         match probe.try_wait().unwrap() {

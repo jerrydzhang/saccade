@@ -43,6 +43,10 @@ pub enum Reason {
     /// carries: the effect resolves the existing incarnation, it
     /// never births again.
     DuplicateNativeSession,
+    /// A registration names a native session already recorded under a
+    /// different saved locator: only the exact recorded association
+    /// resolves, a reused id never rebinds to other history.
+    SavedSessionMismatch,
     /// A citation names a record that is not an earlier birth: stable
     /// internal references identify birth records.
     InvalidReference,
@@ -73,6 +77,7 @@ impl From<Reason> for Reject {
             Reason::SelfAcceptance => Reject::SelfAcceptance,
             Reason::InvalidIncarnationId => Reject::InvalidIncarnationId,
             Reason::DuplicateNativeSession => Reject::DuplicateNativeSession,
+            Reason::SavedSessionMismatch => Reject::SavedSessionMismatch,
             Reason::InvalidReference => Reject::InvalidReference,
             Reason::InvalidMessageId => Reject::InvalidMessageId,
             Reason::InvalidStateTransition => Reject::InvalidStateTransition,
@@ -598,13 +603,18 @@ impl World {
                 ref saved_session,
             } => {
                 // registering an existing exact native session resolves
-                // at the effect; the fold refuses the second birth
+                // at the effect; the fold refuses the second birth, and
+                // a reused id with a different locator never rebinds
                 let known = self
                     .incarnations
                     .values()
-                    .any(|ctx| ctx.incarnation.native_id() == Some(native_id));
-                if known {
-                    return Err(Reason::DuplicateNativeSession);
+                    .find(|ctx| ctx.incarnation.native_id() == Some(native_id));
+                match known {
+                    Some(ctx) if ctx.incarnation.saved_session() == Some(saved_session) => {
+                        return Err(Reason::DuplicateNativeSession);
+                    }
+                    Some(_) => return Err(Reason::SavedSessionMismatch),
+                    None => {}
                 }
                 // a birth without a home still exists
                 self.provenance.insert(record.id, None);
@@ -639,6 +649,12 @@ impl World {
                     return Err(Reason::InvalidIncarnationId);
                 }
                 if !self.incarnations.contains_key(&to) {
+                    return Err(Reason::InvalidIncarnationId);
+                }
+                // the recipient must be a registered native session:
+                // historical attribution identities have no execution
+                // boundary, so mail to them could never be submitted
+                if self.incarnations[&to].incarnation.native_id().is_none() {
                     return Err(Reason::InvalidIncarnationId);
                 }
                 if reply_to.is_some_and(|m| !self.messages.contains_key(&m)) {
@@ -735,11 +751,10 @@ pub fn execute(
 ) -> Result<(World, Vec<Record>), Reject> {
     let events = decide(command.clone());
     enforce_tier(context, &events)?;
-    // The authoring ingress, after authority: a live use is born
-    // prospective — the born-bound shape belongs to migrated history
-    // alone — and every marker resolves through its mapping: a new
-    // comment against the mapping it carries, a revision against the
-    // one it cannot change. The fold replays old text unlinked.
+    // The authoring ingress, after the tier gate: a live use is born
+    // prospective (the born-bound shape is migrated history's), and
+    // every marker resolves through its mapping. The fold replays
+    // historical text unlinked.
     match &command {
         Command::Comment {
             kind: CommentKind::Use { bound: Some(_), .. },
@@ -756,6 +771,8 @@ pub fn execute(
         }
         Command::ReviseComment { id, body } => {
             if let Some(ctx) = world.comments.get(id)
+                && ctx.comment.kind.prose().is_some()
+                && !matches!(&ctx.comment.state, CommentState::Withdrawn(_))
                 && crate::markers::first_unresolved(body.as_str(), ctx.references.len()).is_some()
             {
                 return Err(Reject::InvalidReference);
@@ -1194,6 +1211,10 @@ mod test {
         assert!(matches!(
             Reject::from(Reason::DuplicateNativeSession),
             Reject::DuplicateNativeSession
+        ));
+        assert!(matches!(
+            Reject::from(Reason::SavedSessionMismatch),
+            Reject::SavedSessionMismatch
         ));
         assert!(matches!(
             Reject::from(Reason::InvalidReference),
@@ -2015,12 +2036,13 @@ mod test {
             })
         );
 
-        // the bodyless Accept carries no prose to repair
+        // the bodyless Accept carries no prose to repair: marker
+        // validation skips it, the transition refusal still lands
         let refused = log.execute(
             human(),
             Command::ReviseComment {
                 id: CommentId(RecordId(10)),
-                body: prose("no prose to swap"),
+                body: prose("no prose to swap [^1]"),
             },
             100,
         );
@@ -2031,7 +2053,7 @@ mod test {
             human(),
             Command::ReviseComment {
                 id: CommentId(RecordId(99)),
-                body: prose("addresses nothing"),
+                body: prose("addresses nothing [^1]"),
             },
             101,
         );
@@ -2097,7 +2119,7 @@ mod test {
             },
             Command::ReviseComment {
                 id: note_id,
-                body: prose("repair in place"),
+                body: prose("repair in place [^1]"),
             },
         ] {
             let refused = log.execute(agent(), command, 100);
@@ -2441,6 +2463,16 @@ mod test {
         assert!(matches!(refused, Err(Reject::DuplicateNativeSession)));
         assert_eq!(log.records().len(), 2);
 
+        // a reused native id with a different saved locator is not the
+        // recorded association: it refuses, it never rebinds history
+        let relocated = Command::RegisterIncarnation {
+            native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
+            saved_session: SessionLocator::new("/elsewhere/aaaa1111.jsonl".into()).unwrap(),
+        };
+        let refused = log.execute_system(relocated, 3);
+        assert!(matches!(refused, Err(Reject::SavedSessionMismatch)));
+        assert_eq!(log.records().len(), 2);
+
         // the registration verb rejects judgment tiers
         for ctx in [human(), agent()] {
             let refused = log.execute(ctx, registered("cccc3333"), 3);
@@ -2510,6 +2542,17 @@ mod test {
         // the recipient must exist
         let refused = log.execute(native_session(0), message(0, 9, None), 7);
         assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+        // the recipient must be a registered native session: a
+        // historical establishment has no boundary mail could reach
+        let refused = log.execute(native_session(0), message(0, establishment, None), 7);
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+        // a session may address itself: delivery filters on the
+        // addressee, never on a no-self authority rule
+        log.execute(native_session(0), message(0, 0, None), 7)
+            .unwrap();
+        let self_mail = &log.world().messages[&crate::objects::message::MessageId(RecordId(6))];
+        assert_eq!(self_mail.message.from, self_mail.message.to);
+        assert_eq!(self_mail.state, MessageState::Pending);
         // the reply reference must exist
         let refused = log.execute(native_session(1), message(1, 0, Some(99)), 7);
         assert!(matches!(refused, Err(Reject::InvalidMessageId)));
@@ -2526,7 +2569,7 @@ mod test {
             7,
         );
         assert!(matches!(refused, Err(Reject::InvalidTaskId)));
-        assert_eq!(log.records().len(), 6);
+        assert_eq!(log.records().len(), 7);
     }
 
     /// The reply chain and the delivery record: a reply names an

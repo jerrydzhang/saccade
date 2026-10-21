@@ -39,6 +39,15 @@ impl Incarnation {
             Incarnation::Established { .. } => None,
         }
     }
+
+    /// The locator a native incarnation resumes from; historical
+    /// establishments carry none.
+    pub fn saved_session(&self) -> Option<&SessionLocator> {
+        match self {
+            Incarnation::Native { saved_session, .. } => Some(saved_session),
+            Incarnation::Established { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

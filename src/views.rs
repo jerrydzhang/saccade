@@ -2424,7 +2424,7 @@ mod test {
             }
         }
 
-        fn registered(seq: usize, id: &str) -> Event {
+        fn registered(_seq: usize, id: &str) -> Event {
             Event::IncarnationRegistered {
                 native_id: NativeSessionId::new(id.into()).unwrap(),
                 saved_session: SessionLocator::new(format!("/sessions/{id}.jsonl").into()).unwrap(),
@@ -2452,7 +2452,7 @@ mod test {
 
         /// A send rides its sender's declared identity: the store
         /// matches the event's from against the scope.
-        fn sender(seq: usize, incarnation: usize) -> Context {
+        fn sender(_seq: usize, incarnation: usize) -> Context {
             Context {
                 actor: ActorName::new("pi".into()).unwrap(),
                 tier: Tier::Agent,

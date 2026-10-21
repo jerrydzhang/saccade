@@ -825,7 +825,7 @@ mod test {
         )
         .unwrap();
         // a citation rides its mapping through the wire
-        let (_, returned) = record(
+        let _ = record(
             &mut conn,
             &agent(),
             Command::Comment {

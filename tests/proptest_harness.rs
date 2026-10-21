@@ -669,6 +669,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::InvalidIncarnationId => "InvalidIncarnationId",
                         saccade::Reject::DuplicateNativeSession => "DuplicateNativeSession",
+                        saccade::Reject::SavedSessionMismatch => "SavedSessionMismatch",
                         saccade::Reject::InvalidMessageId => "InvalidMessageId",
                         saccade::Reject::InvalidActor => "InvalidActor",
                         saccade::Reject::ReasonRequired => "ReasonRequired",
