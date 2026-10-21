@@ -1,8 +1,8 @@
 //! The write-attempt record: one line per request the server judges,
-//! appended beside the tracker. Refusals are fat — the request as
+//! appended beside the tracker. Refusals are fat - the request as
 //! received plus the storage-seq cursor they died against, because a
 //! refusal enters no journal and the line is the only place its shape
-//! survives. Acceptances are thin — the seqs the request became; the
+//! survives. Acceptances are thin - the seqs the request became; the
 //! journal already holds the payload, and the record-duplicate law
 //! cuts anything it can restate. The reader is the incident-time
 //! diagnoser; the moment is the judgment.
@@ -185,7 +185,7 @@ mod test {
     }
 
     /// The record-duplicate law: a landed line is the correlation and
-    /// nothing else — no payload, no request echo, no fields the
+    /// nothing else - no payload, no request echo, no fields the
     /// journal can restate.
     #[test]
     fn a_landed_line_carries_no_payload() {

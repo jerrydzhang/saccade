@@ -63,13 +63,13 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             };
             match task.current_offer {
                 Some(current) => Some(format!(
-                    "c-{} is no longer current on t-{}; the standing offer is c-{} — {what}",
+                    "c-{} is no longer current on t-{}; the standing offer is c-{} - {what}",
                     num_of(world, offer),
                     ctx.comment.home.0,
                     num_of(world, current)
                 )),
                 None => Some(format!(
-                    "c-{} was superseded: t-{} holds no standing offer — to replace an account, reject it while it stands, then offer anew",
+                    "c-{} was superseded: t-{} holds no standing offer - to replace an account, reject it while it stands, then offer anew",
                     num_of(world, offer),
                     ctx.comment.home.0
                 )),
@@ -82,7 +82,7 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             let offer = command_offer(command)?;
             let ctx = world.comments.get(&offer)?;
             Some(format!(
-                "the declared task scope covers t-{}: a task-bound producer cannot accept its own conclusion — acceptance is an outside consumer's act",
+                "the declared task scope covers t-{}: a task-bound producer cannot accept its own conclusion - acceptance is an outside consumer's act",
                 ctx.comment.home.0
             ))
         }
@@ -111,7 +111,7 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             let revising = matches!(command, Command::ReviseComment { .. });
             match unresolvable {
                 Some(marker) if revising => Some(format!(
-                    "marker [^{marker}] has no reference to resolve; a revision keeps the mapping it was born with — a retargeted citation is a new comment"
+                    "marker [^{marker}] has no reference to resolve; a revision keeps the mapping it was born with - a retargeted citation is a new comment"
                 )),
                 Some(marker) => Some(format!(
                     "marker [^{marker}] has no reference to resolve; cite with @c-<n> or --ref so the mapping carries it"
@@ -130,7 +130,7 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                     },
                 ..
             } => Some(
-                "a live use is born prospective; the born-bound shape belongs to migrated history — bind after the birth".into(),
+                "a live use is born prospective; the born-bound shape belongs to migrated history - bind after the birth".into(),
             ),
             Command::Comment { kind, home, .. } => match kind {
                 crate::CommentKind::Offer { .. } => {
@@ -186,12 +186,12 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 let ctx = world.comments.get(id)?;
                 if ctx.withdrawn.is_some() {
                     Some(format!(
-                        "c-{} is withdrawn; the door is terminal — a reached conclusion is a new deposit",
+                        "c-{} is withdrawn; the door is terminal - a reached conclusion is a new deposit",
                         num_of(world, *id)
                     ))
                 } else {
                     Some(format!(
-                        "c-{} is a {}; withdrawal repairs a note deposit — the other variants keep their verdicts",
+                        "c-{} is a {}; withdrawal repairs a note deposit - the other variants keep their verdicts",
                         num_of(world, *id),
                         crate::views::kind_of(&ctx.comment.kind)
                     ))
@@ -201,7 +201,7 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 let ctx = world.comments.get(id)?;
                 if ctx.withdrawn.is_some() {
                     return Some(format!(
-                        "c-{} is withdrawn; the door is terminal — a reached conclusion is a new deposit",
+                        "c-{} is withdrawn; the door is terminal - a reached conclusion is a new deposit",
                         num_of(world, *id)
                     ));
                 }
@@ -227,7 +227,7 @@ fn num_of(world: &World, id: CommentId) -> String {
         .unwrap_or_else(|| format!("? (record {})", id.0.0))
 }
 
-/// The task a refusal names, when the command carries one — every
+/// The task a refusal names, when the command carries one - every
 /// command shape that can raise an id-or-state refusal routes here,
 /// so no door escapes the teaching by shape.
 fn command_task(world: &World, command: &Command) -> Option<TaskId> {

@@ -311,7 +311,7 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
                         "scope": {"task": null, "incarnation": 0, "workspace": null}},
             "to": 1,
             "task": 0,
-            "body": "please look at the failing edge case",
+            "body": "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix",
         }),
     );
     assert_eq!(status, 200, "{body}");
@@ -351,7 +351,10 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     assert_eq!(mail[0]["from"]["actor"], "pi");
     assert_eq!(mail[0]["task"], 0);
     assert_eq!(mail[0]["state"], "pending");
-    assert_eq!(mail[0]["body"], "please look at the failing edge case");
+    assert_eq!(
+        mail[0]["body"],
+        "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix"
+    );
     assert_eq!(mail[1]["seq"], 4);
     assert_eq!(mail[1]["from"]["num"], 1);
     assert_eq!(mail[1]["to"]["num"], 0);
@@ -427,7 +430,7 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     );
     assert_eq!(
         sent["payload"]["body"],
-        "please look at the failing edge case"
+        "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix"
     );
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
@@ -613,7 +616,7 @@ fn attempts_lines(db: &std::path::Path) -> Vec<Value> {
 }
 
 /// The reproduction recipe end to end: a refused write's logged line,
-/// cloned against its own cursor and replayed, refuses identically —
+/// cloned against its own cursor and replayed, refuses identically -
 /// and a landed line is the correlation and nothing else.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refused_writes_line_replays_against_a_cursor_clone() {
@@ -756,7 +759,7 @@ async fn start_establishes_through_the_servers_git_effects() {
         ),
     );
 
-    // first start: the establishment alone — no request, no ownership
+    // first start: the establishment alone - no request, no ownership
     let (status, body) = post_workspace(
         &base_url,
         "/api/v1/workspace/start",
@@ -809,7 +812,7 @@ async fn start_establishes_through_the_servers_git_effects() {
     assert!(world.tasks[0].ownership.is_empty());
     assert!(world.tasks[0].thread.is_empty());
 
-    // repeat start: nothing lands, nothing launches — the association governs
+    // repeat start: nothing lands, nothing launches - the association governs
     std::fs::write(worktree.join("dirty.txt"), "uncommitted\n").unwrap();
     let (status, body) = post_workspace(
         &base_url,
@@ -1484,14 +1487,14 @@ async fn the_console_renders_board_and_focused_thread() {
     );
     assert!(home.contains("no task focused"));
     // no strip section renders anywhere
-    assert!(!home.contains("OWNED · LAST RECORD"), "{home}");
+    assert!(!home.contains("OWNED | LAST RECORD"), "{home}");
     assert!(!home.contains("SUPERVISION"), "{home}");
 
     let (status, focused) = get_html(&format!("{base}/t/0"));
     assert_eq!(status, 200);
     assert!(focused.contains("migrate floop"));
     assert!(
-        focused.contains("t-0 · owned by jerry"),
+        focused.contains("t-0 | owned by jerry"),
         "the head names the owner"
     );
 
@@ -1523,7 +1526,7 @@ async fn compose_fetch_rehome_redirects_instead_of_swapping() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// Every /t/… href the console page emits resolves: the rail is the
+/// Every /t/... href the console page emits resolves: the rail is the
 /// frame's navigation, so a dead link there is a dead frame. This pins
 /// the rail's token-vs-number contract (c-585) across every link
 /// form the page carries.
@@ -1575,7 +1578,7 @@ async fn every_task_href_the_console_emits_resolves() {
         )
         .unwrap();
 
-    // harvest every /t/… href from the unfocused and focused pages
+    // harvest every /t/... href from the unfocused and focused pages
     let mut hrefs: Vec<String> = Vec::new();
     for path in ["/", "/t/0"] {
         let (_, html) = get_html(&format!("{base}{path}"));
@@ -1650,7 +1653,7 @@ async fn decision_forms_carry_the_actor_name() {
     // the focused page renders the decision doors on the offer's row
     let (status, html) = get_html(&format!("{base}/t/0"));
     assert_eq!(status, 200);
-    assert!(html.contains("● OFFERED"));
+    assert!(html.contains("* OFFERED"));
     assert!(html.contains("action=\"/t/0/reject\""));
     assert!(html.contains("formaction=\"/t/0/accept\""));
 
@@ -1800,7 +1803,7 @@ async fn decision_forms_carry_the_actor_name() {
 /// A console refusal through judgment leaves its fat line: the raw form
 /// body, the code, and no client binary to name. The stale-form
 /// scenario rides here: a page rendered for one offer cannot decide its
-/// replacement — the form names the offer it showed, and the fold's
+/// replacement - the form names the offer it showed, and the fold's
 /// stale-offer guard refuses it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refused_console_decision_leaves_its_line() {
@@ -2002,7 +2005,7 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(err.contains("c-907 -C 3"), "{err}");
 
     // show opens comments by their public number in the thread view's
-    // body format — the multi-line note is the tracker's third comment
+    // body format - the multi-line note is the tracker's third comment
     let (ok, out, _) = sac(&["show", "c-2"]);
     assert!(ok, "{out}");
     assert_eq!(
@@ -2192,7 +2195,7 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     assert_eq!(json["blocks"][0]["payload"]["references"], json!([1]));
 
     // the log's json face carries folded thread membership: a reply's
-    // target is its comment, its thread is still t-0 — and the cursor
+    // target is its comment, its thread is still t-0 - and the cursor
     // the read inspected through rides beside the rows
     let (ok, out, _) = sac(&["log", "--json"]);
     assert!(ok, "{out}");
@@ -2337,8 +2340,8 @@ fn create_reply_names_the_born_task() {
 }
 
 /// The skill ships with the binary: install deploys the embedded
-/// copy — the on-disk source byte for byte, SKILL.md stamped with the
-/// binary's version inside its frontmatter — and check verifies the
+/// copy - the on-disk source byte for byte, SKILL.md stamped with the
+/// binary's version inside its frontmatter - and check verifies the
 /// deployed copy through both of its doors.
 #[test]
 fn the_binary_deploys_and_verifies_its_embedded_skill() {
@@ -2385,7 +2388,7 @@ fn the_binary_deploys_and_verifies_its_embedded_skill() {
     assert!(!ok);
     assert_eq!(
         err.trim_end(),
-        "error: .agents/skills/saccade differs from this binary's skill — delete the directory and run sac skill install to deploy this version"
+        "error: .agents/skills/saccade differs from this binary's skill - delete the directory and run sac skill install to deploy this version"
     );
     let (ok, out, _) = sac(&["skill", "check"]);
     assert!(!ok, "{out}");
@@ -2700,7 +2703,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
 
 // ---- the workspace doors through the CLI face: a fake host, real exec ----
 
-/// A fake `orca` with pinned wire shapes; shebang /bin/sh — the sandbox has no /usr/bin/env.
+/// A fake `orca` with pinned wire shapes; shebang /bin/sh - the sandbox has no /usr/bin/env.
 fn fake_host(dir: &std::path::Path) -> std::path::PathBuf {
     let bin_dir = dir.join("host-bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -3015,7 +3018,7 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     assert!(out.contains("workspace established"), "{out}");
     assert!(out.contains("no request or ownership recorded"), "{out}");
     assert!(out.contains("term_actual_shape"), "{out}");
-    assert!(out.contains("· shell"), "{out}");
+    assert!(out.contains("| shell"), "{out}");
     let asked = std::fs::read_to_string(&host_log).unwrap();
     assert!(asked.contains("create"), "{asked}");
     // and the records show the birth alone
@@ -4084,14 +4087,11 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     );
     let (ok, out, _) = sac(&["show", "t-1"]);
     assert!(ok, "{out}");
-    assert!(out.contains("\u{2192}c-3"), "{out}");
+    assert!(out.contains("->c-3"), "{out}");
     assert!(sac(&["comment", "c-0", "replying to the account"]).0);
     let (ok, out, _) = sac(&["show", "t-0"]);
     assert!(ok, "{out}");
-    assert!(
-        out.contains("\u{2192}c-0"),
-        "the reply cites its parent: {out}"
-    );
+    assert!(out.contains("->c-0"), "the reply cites its parent: {out}");
     let (ok, _, err) = sac(&["comment", "t-1", "dangling [^2]", "--ref", "c-3"]);
     assert!(!ok, "{err}");
     assert!(err.contains("marker [^2]"), "{err}");
@@ -4213,10 +4213,7 @@ fn the_migrate_door_rewrites_a_schema3_tracker() {
     assert!(out.contains("uses t-0"), "{out}");
     assert!(out.contains("bound c-1"), "{out}");
     // the mapping stayed empty: no graph edges were invented
-    assert!(
-        !out.contains("\u{2192}"),
-        "old comments cite nothing: {out}"
-    );
+    assert!(!out.contains("->"), "old comments cite nothing: {out}");
 
     // seqs and timestamps preserved: the log rides whole
     let (ok, out, _) = show(&["log", "--json"]);

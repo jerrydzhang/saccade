@@ -143,7 +143,7 @@ fn respond_get(req: &Req, app: &AppState) -> Response {
         Route::Home => console(req, app, None),
         Route::Task(n) => console(req, app, Some(n)),
         Route::Artifact(hash) => artifact_bytes(app, &hash),
-        Route::NotFound => page(app, 404, "nothing here — try /"),
+        Route::NotFound => page(app, 404, "nothing here - try /"),
     }
 }
 
@@ -153,7 +153,7 @@ fn respond_get(req: &Req, app: &AppState) -> Response {
 fn artifact_bytes(app: &AppState, hash: &str) -> Response {
     let valid = hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !valid {
-        return page(app, 404, "nothing here — try /");
+        return page(app, 404, "nothing here - try /");
     }
     let Some(dir) = app.artifacts_dir() else {
         return page(app, 404, "artifact unavailable");
@@ -235,7 +235,7 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
         PostRoute::Accept(n) => accept(req, app, n, &fields),
         PostRoute::Reject(n) => reject(req, app, n, &fields),
         PostRoute::Revise(seq) => revise(req, app, seq, &fields),
-        PostRoute::NotFound => page(app, 404, "nothing here — try /"),
+        PostRoute::NotFound => page(app, 404, "nothing here - try /"),
     }
 }
 
@@ -349,7 +349,7 @@ fn reject(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
 
 /// The home a decision carries: the task of the offer it names. A
 /// stale form's offer names no comment and falls back to the page's
-/// task — the fold's guards do the refusing either way.
+/// task - the fold's guards do the refusing either way.
 fn decision_home(app: &AppState, offer: crate::CommentId) -> TaskId {
     app.snapshot()
         .ok()
@@ -357,7 +357,7 @@ fn decision_home(app: &AppState, offer: crate::CommentId) -> TaskId {
         .unwrap_or(TaskId(0))
 }
 
-/// The offer a decision form names — the one its page rendered, never
+/// The offer a decision form names - the one its page rendered, never
 /// silently the currently standing one.
 fn submitted_offer(n: usize, fields: &[(String, String)]) -> Option<crate::CommentId> {
     let seq = form_field(fields, "offer").parse::<usize>().ok()?;
@@ -393,8 +393,8 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
 
 /// The revise door: one comment, one body, one name. The URL carries
 /// the comment's public number, resolved against the fold. Identity is
-/// claimed at the act, the tier pinned human — the console revises
-/// any comment — and the 303 returns to the comment's home thread.
+/// claimed at the act, the tier pinned human - the console revises
+/// any comment - and the 303 returns to the comment's home thread.
 /// A refusal re-renders with the reason and the kept draft at the
 /// comment's own reveal, so the wording stays editable in place.
 fn revise(req: &Req, app: &AppState, num: usize, fields: &[(String, String)]) -> Response {
@@ -433,7 +433,7 @@ fn comment_of(app: &AppState, num: usize) -> Option<(usize, crate::CommentId)> {
     Some((root, id))
 }
 
-/// Whether the comment carries prose — a refused revise can only ride
+/// Whether the comment carries prose - a refused revise can only ride
 /// a row that has a reveal to carry it.
 fn comment_has_prose(app: &AppState, num: usize) -> bool {
     app.snapshot()
@@ -507,7 +507,7 @@ fn compose_reject(
 
 /// A refused decision re-renders with the reason beside the doors; a
 /// world that moved past them between render and act drops it at the
-/// dock instead — an invisible refusal is the one wrong answer.
+/// dock instead - an invisible refusal is the one wrong answer.
 fn judge_reject(
     req: &Req,
     app: &AppState,
@@ -774,7 +774,7 @@ fn page(app: &AppState, status: u16, msg: &str) -> Response {
     response(
         status,
         &format!(
-            "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{}</style></head>\n<body>\n<div class=\"err\">{} · <a href=\"/\">console</a></div>\n</body></html>\n",
+            "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{}</style></head>\n<body>\n<div class=\"err\">{} | <a href=\"/\">console</a></div>\n</body></html>\n",
             web::STYLE,
             esc(msg),
             title = title,

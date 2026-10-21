@@ -22,7 +22,7 @@ pub struct WorkspaceFacts {
 
 /// One message as the mailbox face renders it: the dense birth
 /// number, the addressed endpoints by theirs, and the delivery state
-/// — bookkeeping, never a claim of reading or agreement.
+/// - bookkeeping, never a claim of reading or agreement.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageLine {
     pub num: usize,
@@ -203,7 +203,7 @@ fn owner_str(world: &World, owner: &Owner) -> String {
 }
 
 /// A row of the task's thread view. The home task is explicit at
-/// birth; there is no reply parenting — a reply is a comment citing
+/// birth; there is no reply parenting - a reply is a comment citing
 /// its parent through the reference mapping.
 #[derive(Debug)]
 pub struct CommentLine {
@@ -227,13 +227,13 @@ pub struct CommentLine {
     /// The descriptive mark: the fold presents a revised body
     pub revised: bool,
     /// The reviser's name, when the body was revised by an actor who
-    /// is not the birth author — a record fact, never a judgment
+    /// is not the birth author - a record fact, never a judgment
     pub reviser: Option<String>,
     /// The standing-error repair: the body left the fold's default
     /// presentation, the tombstone holds its place
     pub withdrawn: bool,
     /// The withdrawer's name, when the withdrawal was by an actor who
-    /// is not the birth author — a record fact, never a judgment
+    /// is not the birth author - a record fact, never a judgment
     pub withdrawer: Option<String>,
     /// The tombstone's note
     pub withdrawal_note: Option<String>,
@@ -249,7 +249,7 @@ pub struct LineBinding {
 }
 
 /// An artifact's thread line: its position and its pointer. The fold
-/// keeps no author and no time for an artifact — the record names
+/// keeps no author and no time for an artifact - the record names
 /// content, not a moment of speech.
 #[derive(Debug, PartialEq)]
 pub struct ArtifactLine {
@@ -271,7 +271,7 @@ impl ArtifactLine {
 pub enum ThreadItem {
     Note(CommentLine),
     /// Artifacts clustered within themselves: consecutive artifact
-    /// records as one item, never attached to a comment's row —
+    /// records as one item, never attached to a comment's row -
     /// association with a comment is what citing is for.
     Artifacts(Vec<ArtifactLine>),
 }
@@ -282,7 +282,7 @@ pub struct ThreadView {
     pub items: Vec<ThreadItem>,
 }
 
-/// The variant a comment carries — the kind never moves; a withdrawn
+/// The variant a comment carries - the kind never moves; a withdrawn
 /// deposit is still the note it was born.
 pub fn kind_of(kind: &CommentKind) -> &'static str {
     match kind {
@@ -368,7 +368,7 @@ fn artifact_line_of(seq: usize, artifact: &Artifact) -> ArtifactLine {
 }
 
 /// One artifact as the thread view renders it, whatever thread holds
-/// it — the pointer format `show` prints for a record id.
+/// it - the pointer format `show` prints for a record id.
 pub fn artifact_line(world: &World, id: RecordId) -> Option<ArtifactLine> {
     world.tasks.iter().find_map(|ctx| {
         ctx.artifacts
@@ -379,7 +379,7 @@ pub fn artifact_line(world: &World, id: RecordId) -> Option<ArtifactLine> {
 }
 
 /// One comment as the thread view renders it, whatever thread it lives
-/// on — the body format `show` prints for a pointer.
+/// on - the body format `show` prints for a pointer.
 pub fn comment_line(world: &World, id: CommentId) -> Option<CommentLine> {
     world.comments.contains_key(&id).then(|| line_of(world, id))
 }
@@ -410,7 +410,7 @@ impl ShowView {
             offer: ctx.current_offer.map(|c| c.0.0),
             workspace: ctx.workspace.as_ref().map(|w| {
                 format!(
-                    "{} · {}",
+                    "{} | {}",
                     w.workspace.branch.as_str(),
                     w.workspace.worktree.as_path().display()
                 )
@@ -444,7 +444,7 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
     }
     // the thread's utterances merged by position; artifacts never join
     // a comment's row. Consecutive artifacts accumulate into one
-    // cluster and any comment closes it — the thread-top cluster and
+    // cluster and any comment closes it - the thread-top cluster and
     // the mid-stream one are the same path.
     let mut stream: Vec<(usize, Member)> = ctx
         .thread
@@ -495,7 +495,7 @@ pub fn board(world: &World) -> Vec<TaskView> {
         .collect()
 }
 
-/// The rail's archive: concluded and cancelled tasks, newest first —
+/// The rail's archive: concluded and cancelled tasks, newest first -
 /// the sort key is last touch, which never sits earlier than the close
 /// itself.
 pub fn closed_tasks(world: &World) -> Vec<TaskView> {
@@ -544,7 +544,7 @@ pub enum RefTarget {
         name: String,
         hash: String,
     },
-    /// Any other record fact a citation names — a claim, a revision,
+    /// Any other record fact a citation names - a claim, a revision,
     /// a binding, a checkpoint: its position and its home thread,
     /// None when the fold gives it none
     Record {
@@ -598,8 +598,8 @@ pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
 
 /// Each record's home thread, where the fold gives it one: a task by
 /// its birth, a comment by its home, an artifact by the thread it
-/// rides. Records about a member — a revision, a withdrawal, a
-/// binding — carry none: they fold into the member, not the thread.
+/// rides. Records about a member - a revision, a withdrawal, a
+/// binding - carry none: they fold into the member, not the thread.
 pub fn thread_index(world: &World) -> BTreeMap<usize, TaskId> {
     world
         .provenance
@@ -618,7 +618,7 @@ pub enum Facet {
     Kind(&'static str),
 }
 
-/// The kinds a searched record can be — kind:'s whole vocabulary.
+/// The kinds a searched record can be - kind:'s whole vocabulary.
 pub const SEARCH_KINDS: [&str; 8] = [
     "task",
     "note",
@@ -658,7 +658,7 @@ impl Term {
 pub struct SearchQuery {
     pub terms: Vec<Term>,
     pub facets: Vec<Facet>,
-    /// Withdrawn bodies join the match set — they are omitted by
+    /// Withdrawn bodies join the match set - they are omitted by
     /// default, the tombstone never speaks for the body it evicted
     pub withdrawn: bool,
 }
@@ -965,7 +965,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
         by_thread.entry(thread).or_default().push(record);
     }
     // a facet-only query has no terms, so a thread it filters out holds
-    // nothing worth a count row — only the threads it matches render
+    // nothing worth a count row - only the threads it matches render
     let facet_only = query.terms.is_empty();
     let mut groups: Vec<(usize, SearchGroup)> = Vec::new();
     for (thread, mut records) in by_thread {
@@ -1417,7 +1417,7 @@ mod test {
         }
 
         /// Citations may name task births, artifact births, and
-        /// incarnation births — not only comments.
+        /// incarnation births - not only comments.
         #[test]
         fn citations_name_any_birth() {
             use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
@@ -2032,7 +2032,7 @@ mod test {
                 ),
             ])
             .unwrap();
-            // the withdrawn body matches nothing by default — and the
+            // the withdrawn body matches nothing by default - and the
             // tombstone's note never speaks for the body it evicted
             assert!(search(&world, &q(&["floop"])).unwrap().is_empty());
             assert!(search(&world, &q(&["parked"])).unwrap().is_empty());
@@ -2358,7 +2358,7 @@ mod test {
         }
 
         // the comment wait wakes on the comment's own repairs, the
-        // records citing it, and the decisions naming it — not the
+        // records citing it, and the decisions naming it - not the
         // birth, sibling, prose-only mention, or a binding elsewhere
         #[test]
         fn the_comment_wait_matches_only_its_structural_edges() {

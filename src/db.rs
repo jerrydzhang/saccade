@@ -364,7 +364,7 @@ pub fn record(
 }
 
 /// Clone the log's prefix through `at` into a fresh tracker at `out`:
-/// the schema and identity stamps first, then the rows in order — the
+/// the schema and identity stamps first, then the rows in order - the
 /// cursor-cloning recipe as one verb. The cursor is the storage seq
 /// read from the rows, never a record id; the two series need not
 /// agree. In-place truncation is impossible (the append-only triggers),
@@ -880,7 +880,9 @@ mod test {
                 to: IncarnationId(RecordId(36)),
                 reply_to: None,
                 task: Some(TaskId(0)),
-                body: prose("please look at the failing edge case"),
+                body: prose(
+                    "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix",
+                ),
             },
             34,
         )
@@ -972,7 +974,7 @@ mod test {
             );
         }
         // the world folds the bindings: the state carries the
-        // selection, the context its attribution — foo's account,
+        // selection, the context its attribution - foo's account,
         // then the replacement
         assert_eq!(
             world.comments[&CommentId(RecordId(15))]
@@ -1046,7 +1048,13 @@ mod test {
         assert_eq!(loadout.rows[36].kind, "incarnation_registered");
         assert_eq!(loadout.rows[35].actor.as_str(), "saccade");
         assert_eq!(loadout.rows[37].kind, "message_sent");
-        assert!(loadout.rows[37].payload.contains("failing edge case"));
+        // user data stays Unicode-capable: the body rides storage and
+        // the fold byte-exact, authored here by escape
+        assert!(
+            loadout.rows[37]
+                .payload
+                .contains("please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix")
+        );
         assert!(
             loadout.rows[37]
                 .scope

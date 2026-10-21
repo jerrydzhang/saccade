@@ -1,9 +1,9 @@
 //! The offline migration: one schema-3 log rewritten into schema 4.
 //! The source is never touched; seq and timestamps carry over
 //! unchanged; typed stored reference values stay birth references.
-//! Prose is renumbered onto the fold's public numbering — comment
+//! Prose is renumbered onto the fold's public numbering - comment
 //! births to their dense c-N, non-comment records to `seq N`, ranges
-//! to `seq N–M` — and every token that cannot be identified stays
+//! to `seq N..M` - and every token that cannot be identified stays
 //! visibly legacy, reported for human review rather than reassigned.
 
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ use crate::db::{self, StoredRecord};
 const FROM_VERSION: i32 = db::MIGRATE_FROM_VERSION;
 
 /// The v3 log's event vocabulary, exactly as Saccade 0.13.0 wrote it:
-/// read here, never folded — the shapes live only as long as the
+/// read here, never folded - the shapes live only as long as the
 /// migration needs them.
 mod v3 {
     use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ pub enum MigrateFail {
         seq: usize,
         detail: String,
     },
-    /// a rewritten record does not fold under the new law — the
+    /// a rewritten record does not fold under the new law - the
     /// output is never written
     Unfoldable {
         seq: usize,
@@ -105,7 +105,7 @@ pub struct Report {
     pub comment_refs_renumbered: usize,
     /// c-N tokens naming non-comment records, rewritten as `seq N`
     pub record_refs_rewritten: usize,
-    /// ranges rewritten as `seq N–M`
+    /// ranges rewritten as `seq N..M`
     pub ranges_rewritten: usize,
     /// i-N tokens renumbered onto the dense incarnation numbering
     pub incarnation_refs_renumbered: usize,
@@ -310,7 +310,7 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
     // scope JSON rides typed values: birth references, never renumbered
 
     // the rewritten log must fold under the new law before anything
-    // is written — a migration that cannot fold writes nothing
+    // is written - a migration that cannot fold writes nothing
     let loadout = db::fold_rows(out_rows.clone()).map_err(MigrateFail::Db)?;
     match loadout.state {
         db::LoadState::Full(_) => {}
@@ -375,7 +375,7 @@ fn rewrite_field(
 
 /// The v3 commented payload onto the v4 law: one home task, the
 /// variant (requests become notes, uses carry their historical
-/// binding at birth), and an empty citation mapping — old comments
+/// binding at birth), and an empty citation mapping - old comments
 /// never gain graph edges.
 fn rewrite_commented(
     row: &StoredRecord,
@@ -437,7 +437,7 @@ fn rewrite_commented(
         "request" => {
             rewrite_variant(&mut kind, "body", renumber, report);
             // a historical request becomes the note it reads as, its
-            // body, attribution, and home preserved — no fabricated
+            // body, attribution, and home preserved - no fabricated
             // message or graph edge
             let body = kind
                 .get("request")
@@ -470,7 +470,7 @@ fn rewrite_commented(
                     detail: "the relied-on offer resolves to no task".into(),
                 })?;
             // born bound to the historical selection, the original
-            // grounds preserved — no new human judgment anywhere
+            // grounds preserved - no new human judgment anywhere
             kind = serde_json::json!({
                 "use": {
                     "source": source,
@@ -515,9 +515,9 @@ struct Renumber<'a> {
 
 /// Rewrite one prose field's c-N and i-N tokens onto the public
 /// numbering. Identified tokens renumber; ranges of local records
-/// ride the raw spelling end to end (`seq N–M`) unless both ends are
-/// comment births; tokens this log cannot identify — and tokens
-/// already carrying the legacy mark — stay visibly legacy and join
+/// ride the raw spelling end to end (`seq N..M`) unless both ends are
+/// comment births; tokens this log cannot identify - and tokens
+/// already carrying the legacy mark - stay visibly legacy and join
 /// the report, never re-qualified.
 fn rewrite_prose(
     text: &str,
@@ -551,38 +551,41 @@ fn rewrite_prose(
                 // stands: reported, never rewritten again
                 let already_marked = out.ends_with("legacy ")
                     || (out.ends_with("legacy") && chars.get(i - 1) == Some(&' '));
-                // a range: c-A–c-B or c-A..c-B
+                // a range: same-letter tokens joined by the legacy
+                // dash or by ..
                 let range = range_after(&chars, end, letter);
-                if let Some((far_digits, stop)) = range {
+                if let Some((far_digits, stop, sep)) = range {
                     let near = local(&digits);
                     let far = local(&far_digits);
                     let both_comments = near
                         .filter(|n| (ctx.is_comment)(*n))
                         .zip(far.filter(|n| (ctx.is_comment)(*n)));
                     if already_marked {
-                        out.push_str(&format!("{letter}-{digits}–{letter}-{far_digits}"));
+                        out.push_str(&format!("{letter}-{digits}{sep}{letter}-{far_digits}"));
                         report.legacy.push(LegacyRef {
                             seq,
                             field: field.to_string(),
-                            token: format!("{letter}-{digits}–{letter}-{far_digits}"),
+                            token: format!("{letter}-{digits}{sep}{letter}-{far_digits}"),
                         });
                     } else if let Some((a, b)) = both_comments {
                         out.push_str(&format!(
-                            "c-{}–c-{}",
+                            "c-{}..c-{}",
                             ctx.comment_number[&a], ctx.comment_number[&b]
                         ));
                         report.comment_refs_renumbered += 2;
                     } else if let (Some(a), Some(b)) = (near, far) {
                         // local and mixed, or raw end to end: the range
                         // rides the raw spelling
-                        out.push_str(&format!("seq {}–{}", a.min(b), a.max(b)));
+                        out.push_str(&format!("seq {}..{}", a.min(b), a.max(b)));
                         report.ranges_rewritten += 1;
                     } else {
-                        out.push_str(&format!("legacy {letter}-{digits}–{letter}-{far_digits}"));
+                        out.push_str(&format!(
+                            "legacy {letter}-{digits}{sep}{letter}-{far_digits}"
+                        ));
                         report.legacy.push(LegacyRef {
                             seq,
                             field: field.to_string(),
-                            token: format!("{letter}-{digits}–{letter}-{far_digits}"),
+                            token: format!("{letter}-{digits}{sep}{letter}-{far_digits}"),
                         });
                     }
                     i = stop;
@@ -614,7 +617,7 @@ fn rewrite_prose(
                     }
                 // c-N was the all-purpose record prefix: a local
                 // non-comment rides the raw spelling. i-N names
-                // incarnations — local membership at a non-establishment
+                // incarnations - local membership at a non-establishment
                 // record proves nothing about its provenance, so it
                 // stays legacy and reported, never remapped.
                 } else if let Some(n) = near.filter(|_| letter == 'c') {
@@ -639,14 +642,15 @@ fn rewrite_prose(
     out
 }
 
-/// Whether `end` begins a same-letter range (`–` or `..` then the
-/// same c-/i- token), returning the far number and the end position.
-fn range_after(chars: &[char], end: usize, letter: char) -> Option<(String, usize)> {
+/// Whether `end` begins a same-letter range (the legacy dash or `..`
+/// then the same c-/i- token), returning the far number, the end
+/// position, and the raw separator the prose carries.
+fn range_after(chars: &[char], end: usize, letter: char) -> Option<(String, usize, &'static str)> {
     let word = |c: char| c.is_alphanumeric() || matches!(c, '-' | '#' | '_');
-    let after = if chars.get(end) == Some(&'–') {
-        end + 1
+    let (after, sep) = if chars.get(end) == Some(&'\u{2013}') {
+        (end + 1, "\u{2013}")
     } else if chars.get(end) == Some(&'.') && chars.get(end + 1) == Some(&'.') {
-        end + 2
+        (end + 2, "..")
     } else {
         return None;
     };
@@ -668,7 +672,7 @@ fn range_after(chars: &[char], end: usize, letter: char) -> Option<(String, usiz
         return None;
     }
     let stop = after + 2 + digits.len();
-    Some((digits, stop))
+    Some((digits, stop, sep))
 }
 
 #[cfg(test)]
@@ -737,7 +741,10 @@ mod test {
         insert(
             7,
             "task_created",
-            r#"{"name":"consume foo, ranges c-2–c-3 and c-0..c-2 mixed"}"#,
+            &format!(
+                r#"{{"name":"consume foo, ranges c-2{D}c-3 and c-0..c-2 mixed"}}"#,
+                D = "\u{2013}"
+            ),
             None,
         );
         insert(
@@ -804,8 +811,8 @@ mod test {
         // c-1 (a claim record) and c-0 (a raw task birth) are
         // non-comment records: rewritten as seq
         assert!(report.record_refs_rewritten >= 2);
-        // c-2–c-3 renumbered as a comment range; the mixed-local
-        // c-0..c-2 rides the raw spelling end to end
+        // the legacy-dash range renumbered as a comment range; the
+        // mixed-local c-0..c-2 rides the raw spelling end to end
         assert_eq!(report.ranges_rewritten, 1);
         // c-99 out of range stays legacy and reported
         assert!(
@@ -838,6 +845,15 @@ mod test {
                 .as_str()
                 .unwrap()
                 .contains("c-0")
+        );
+        // migration's own spellings are ASCII: the renumbered range
+        // carries .. whatever dash the old prose rode
+        assert!(
+            loadout.rows[7]
+                .payload
+                .contains("ranges c-0..c-1 and seq 0..2 mixed"),
+            "{}",
+            loadout.rows[7].payload
         );
         // the reply became a home note with an empty mapping
         let reply = serde_json::from_str::<serde_json::Value>(&loadout.rows[6].payload).unwrap();
@@ -933,14 +949,19 @@ mod test {
         // word boundaries hold: c-20 is not c-2
         assert_eq!(rewrite("c-20 stays", &mut report), "legacy c-20 stays");
         // ranges: both comments renumber; local raw or mixed ranges
-        // ride the raw spelling end to end
-        assert_eq!(rewrite("c-2–c-3", &mut report), "c-0–c-1");
-        assert_eq!(rewrite("c-0..c-4", &mut report), "seq 0–4");
-        assert_eq!(rewrite("c-2–c-4", &mut report), "seq 2–4");
-        // a range with a foreign end stays legacy, reported
-        assert_eq!(rewrite("c-2–c-99", &mut report), "legacy c-2–c-99");
+        // ride the raw spelling end to end; the legacy dash survives
+        // recognition by escape, the renumbered spelling is ASCII
+        assert_eq!(rewrite("c-2\u{2013}c-3", &mut report), "c-0..c-1");
+        assert_eq!(rewrite("c-0..c-4", &mut report), "seq 0..4");
+        assert_eq!(rewrite("c-2\u{2013}c-4", &mut report), "seq 2..4");
+        // a range with a foreign end stays legacy in its raw spelling
+        assert_eq!(
+            rewrite("c-2\u{2013}c-99", &mut report),
+            "legacy c-2\u{2013}c-99"
+        );
+        assert_eq!(rewrite("c-2..c-99", &mut report), "legacy c-2..c-99");
         assert!(
-            report.legacy.iter().any(|l| l.token == "c-2–c-99"),
+            report.legacy.iter().any(|l| l.token == "c-2\u{2013}c-99"),
             "{report:?}"
         );
         // incarnations renumber; foreign ones stay legacy

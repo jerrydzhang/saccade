@@ -135,7 +135,7 @@ fn comment_at(world: &World, n: u8) -> CommentId {
     }
 }
 
-/// The standing offers of offered tasks — the only offers a decision
+/// The standing offers of offered tasks - the only offers a decision
 /// can move, the delivered tasks of the old law.
 fn standing_offer_at(world: &World, n: u8) -> Option<CommentId> {
     let ids: Vec<CommentId> = world
@@ -165,8 +165,8 @@ fn use_comment_at(world: &World, n: u8) -> CommentId {
     }
 }
 
-/// Any record position the log already holds — births and record
-/// facts alike — with a one-past-the-end sentinel that exercises the
+/// Any record position the log already holds - births and record
+/// facts alike - with a one-past-the-end sentinel that exercises the
 /// citation guard. `records` is the log's own length.
 fn record_ref_at(records: usize, n: u8) -> RecordId {
     let slot = n as usize % (records + 1);

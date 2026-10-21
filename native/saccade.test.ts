@@ -59,8 +59,10 @@ test("the envelope carries the machine-supplied origin in ASCII", () => {
 		"[saccade message m-4 | from i-1 | replying to m-5 | task t-2]\n\nthe smoke request",
 	);
 	// the body is user data and rides byte for byte
-	const unicode = mail({ body: "résumé — ✓" });
-	assert.ok(envelopeText(unicode).endsWith("résumé — ✓"));
+	// the body is user data and rides byte for byte: Unicode data
+	// pinned through the envelope, the source staying ASCII
+	const unicode = mail({ body: "r\u00e9sum\u00e9 \u2014 \u2713" });
+	assert.ok(envelopeText(unicode).endsWith("r\u00e9sum\u00e9 \u2014 \u2713"));
 });
 
 test("delivery filters on the addressee, self-addressed included", () => {

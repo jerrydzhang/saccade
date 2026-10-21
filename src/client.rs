@@ -190,7 +190,7 @@ pub fn identity(url: &str) -> Result<ServerIdentity, ClientFail> {
     })
 }
 
-/// The hint beside the expected database, verified to serve it —
+/// The hint beside the expected database, verified to serve it -
 /// missing, unreachable, or mismatched refuses; there is no fallback.
 pub fn discover(expected_db: &std::path::Path) -> Result<String, ClientFail> {
     let hint = crate::paths::address_at(expected_db);
@@ -254,7 +254,7 @@ pub fn records(url: &str) -> Result<Vec<StoredRecord>, ClientFail> {
 }
 
 /// The handshake's client half: warn once when this binary and the
-/// server disagree. A fetch that fails stays quiet — the send that
+/// server disagree. A fetch that fails stays quiet - the send that
 /// follows reports an unreachable server without our duplication.
 pub fn handshake(url: &str) {
     if let Ok(id) = identity(url) {
@@ -338,12 +338,12 @@ fn bound(detail: &str) -> String {
         .nth(LIMIT)
         .map(|(i, _)| i)
         .unwrap_or(LIMIT);
-    format!("{}…", &flat[..cut])
+    format!("{}...", &flat[..cut])
 }
 
 /// The start operation: first sight establishes the workspace; a task
 /// already holding a workspace is ensured and reported, nothing
-/// landed. No request, comment, or ownership rides it — the prompt is
+/// landed. No request, comment, or ownership rides it - the prompt is
 /// native input at launch, never a publication.
 pub fn start_workspace(
     url: &str,
@@ -385,7 +385,7 @@ pub struct AttachReply {
 }
 
 /// Attach a native session: an existing exact native session resolves
-/// its incarnation, a fresh one registers — the machinery's own act.
+/// its incarnation, a fresh one registers - the machinery's own act.
 pub fn attach(
     url: &str,
     native_id: &str,

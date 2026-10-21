@@ -1,12 +1,12 @@
-# AGENTS.md — how agents work in this repo
+# AGENTS.md - how agents work in this repo
 
 Saccade is an opinionated, agent-native issue tracker: one Rust binary, an
 append-only SQLite event log, a world that is a fold of that log. Read
-`AXIOMS.md` before proposing anything architectural — it is the framework
+`AXIOMS.md` before proposing anything architectural - it is the framework
 the project exists under, not a suggestion. Ratified decisions live in the
 tracker's own threads (`sac log`, `sac show t-N`); standing law lives in
 this file. Working context for in-flight tasks lives
-as comments on the tasks themselves (`sac comment t-N "…"`). The dogfood
+as comments on the tasks themselves (`sac comment t-N "..."`). The dogfood
 tracker (`sac`, repo's own `saccade.db`) is where
 work is claimed and closed; see `.agents/skills/saccade/SKILL.md` for the CLI
 discipline.
@@ -14,8 +14,8 @@ discipline.
 ## How decisions happen
 
 - One decision at a time, in conversation. The human ratifies; then it lands
-  in the record — the task's thread, AXIOMS.md, or standing law below, by
-  kind. Arguments are welcome — when a counter-argument lands,
+  in the record - the task's thread, AXIOMS.md, or standing law below, by
+  kind. Arguments are welcome - when a counter-argument lands,
   concede cleanly and record why.
 - The problem is never silently modified. Deviations get announced before
   enactment. Success claims name their evidence (tests run and counts, files
@@ -40,7 +40,7 @@ discipline.
   place, sweep the other in the same change.
 - Do not import conversational coinage into code or docs. A term earns its
   place by being ratified, and check for collisions with standing law
-  ("no learn semantics anywhere" — don't add one).
+  ("no learn semantics anywhere" - don't add one).
 - In-memory types take the width of their job: `usize` for indices and counts,
   `u64` for absolute times. Storage/wire convert explicitly at the boundary.
 
@@ -85,20 +85,29 @@ with them.
   line above.
 - Rendering is descriptive, never persuasive: deterministic grouping,
   ordering, staleness, and standing-offer projection present record
-  facts — neutral local cardinality included. No unread or aggregate
+  facts - neutral local cardinality included. No unread or aggregate
   counts of tasks, states, incarnations, or records; no detached badges, urgency
   emphasis, inferred priority/progress/success/correctness, or narrative
   annotations. Outreach is an attending actor's judgment, never a
   projection; the pull UI never competes or coerces.
+- Repository-authored text is ASCII: source, identifiers, comments, docs,
+  CLI and web output, UI labels, and agent-visible envelopes carry
+  ordinary ASCII punctuation, and a repository check holds every tracked
+  text file to the rule. User data stays Unicode-capable and is preserved
+  verbatim - messages, comments, paths, artifact bytes, historical
+  records; never bulk-transliterated. Runtime Unicode needed to recognize
+  or test inbound data enters source as escape sequences, and authored
+  runtime labels and typography are ASCII bytes themselves, never escaped
+  or encoded decoration.
 - Every capability that reduces contact must add record in the same change;
   comprehension rides the record, never the conversation.
 - Every telemetry emit names its reader and the moment they read it, the
   way comments earn bytes; lines duplicating the record or outliving
   their consumer are cut in the same change that notices them. The
-  destination story (and any spans) waits for the consumer — a standing
+  destination story (and any spans) waits for the consumer - a standing
   service, not before.
 - Single authority is the honest homelab contract; distributed replicas are a
-  non-goal (IDs break first if that changes — accepted).
+  non-goal (IDs break first if that changes - accepted).
 - Native Pi stays the pinned harness, never the ambient binary. Its
   Saccade-integrated composition is separately callable, not a replacement
   for ordinary Pi. The host launches and resumes; the integration associates
@@ -138,13 +147,13 @@ with them.
 - Comments land at the tier they describe: work facts on the work thread,
   episode facts on the episode's container, direction facts on the direction
   home; session-shaped work writes no thread summary unless it changed
-  law — the commit is the record.
+  law - the commit is the record.
 
 ## Test philosophy
 
 Placement is a contract:
 
-- Unit tests also encode invariants — the authority and transition tables
+- Unit tests also encode invariants - the authority and transition tables
   are invariants, pinned where they live. Placement is by entry point, not
   by invariant-hood.
 
@@ -152,26 +161,26 @@ Placement is a contract:
   object the module defines.
 - `src/decide.rs` tests: pure command translation and authority; the
   authority inventory states its expected cells independently of the
-  table it pins; fixtures are constructed events and `World::new()` —
+  table it pins; fixtures are constructed events and `World::new()` -
   never a `Log`.
-- `src/store.rs` tests: the law's contracts over `store::execute` — cross-object
-  invariants, authority ordering, the lifecycle and reliance guards — driven
+- `src/store.rs` tests: the law's contracts over `store::execute` - cross-object
+  invariants, authority ordering, the lifecycle and reliance guards - driven
   through the in-memory `Log` fixture (test-private, no storage layer)
   against the shared `populate_log` story; plus every `Reason` pinned
   and the command translation table.
 - `src/views.rs` tests: view derivations over folded worlds, including
   the ownership and standing-offer panels.
-- `src/db.rs` tests: the persistence layer — one all-event round-trip; new
+- `src/db.rs` tests: the persistence layer - one all-event round-trip; new
   event families ride the existing round-trip, they don't get their own.
 - `tests/proptest_harness.rs`: random legal sequences never panic the fold,
   and the world `db::record` returns equals replay and reload.
-- `tests/api.rs`: server, wire, and console contracts over HTTP — command
+- `tests/api.rs`: server, wire, and console contracts over HTTP - command
   round-trips, the tier law through the wire, malformed bodies, client send,
   and the CLI face through a real subprocess.
 
 Rules:
 
-- New family, same contract → grow the existing test. New contract → new
+- New family, same contract -> grow the existing test. New contract -> new
   test. Agent-written tests were deleted in one review round by this
   rule; consolidation is a win, bloat is watched.
 - Exhaustive contract tests (authority table, transition tables) are
@@ -180,7 +189,7 @@ Rules:
   `test task 2`. The log is a story even in tests.
 - Keep the suite green and honest:
   a failing suite from a fixture change means the fixture changed a contract
-  — find out which before editing assertions.
+  - find out which before editing assertions.
 
 ## Comment law
 
@@ -202,7 +211,7 @@ Rules:
   positions, dense by construction. Stored comment, incarnation, and message
   references identify birth records; displayed numbers count births of each
   kind, not global record positions.
-- Validation depends on tier, never actor identity — the exception is the
+- Validation depends on tier, never actor identity - the exception is the
   self-acceptance door: an agent whose environment-declared task scope
   covers the offered task cannot accept it. Scope is disclosure riding
   the record, never ownership or incarnation identity. The CLI has no
@@ -220,12 +229,12 @@ Rules:
 
 ## Edit mechanics (scar tissue)
 
-- Re-read the exact lines immediately before every edit — files change live
+- Re-read the exact lines immediately before every edit - files change live
   during review sessions. Read regions fully; a truncated read once anchored
   an edit on a wrong assumption about test structure.
 - Edit-tool batches are atomic: one failed hunk rolls back the whole call.
   Unicode quirks (ellipsis, em-dash) in anchor text are a known failure
-  family — sed by line number is the fallback.
+  family - sed by line number is the fallback.
 - `cargo build` is the judge, not grep (brace-list imports defeat grep).
 - Verify each change before stacking the next: build, then suite, then a CLI
   smoke on a throwaway db for anything touching verbs or wire.

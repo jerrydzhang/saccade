@@ -39,7 +39,7 @@ pub fn repo_basename(repo_root: &Path) -> String {
 }
 
 /// The favicon's hue for a repo: the same root hash the state-dir
-/// slug tails, reduced to degrees — one hash, two faces.
+/// slug tails, reduced to degrees - one hash, two faces.
 pub fn repo_hue(repo_root: &Path) -> u32 {
     fnv1a(repo_root.to_string_lossy().as_bytes()) % 360
 }

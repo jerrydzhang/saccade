@@ -175,9 +175,9 @@ enum Cmd {
     /// Everything about tasks and records, many at once; bare seqs show
     /// the raw event, t-<n> shows the task plus its thread
     Show {
-        /// Ids in any mix: c-<seq> a record — comments and artifacts as
-        /// their blocks, every other event as itself — bare <seq> the
-        /// raw event at that position — t-<n> a whole thread
+        /// Ids in any mix: c-<seq> a record - comments and artifacts as
+        /// their blocks, every other event as itself - bare <seq> the
+        /// raw event at that position - t-<n> a whole thread
         #[arg(required_unless_present = "stdin")]
         ids: Vec<String>,
         /// Read one id per line from stdin instead of arguments; blank
@@ -198,7 +198,7 @@ enum Cmd {
         ///   kind:K     task, note, offer, accept, reject, use,
         ///              explanation, artifact
         ///
-        /// An id term — 'c-907' or 't-49' — is a reference search: every
+        /// An id term - 'c-907' or 't-49' - is a reference search: every
         /// record citing it or addressing it
         #[arg(verbatim_doc_comment)]
         terms: Vec<String>,
@@ -299,7 +299,7 @@ enum Cmd {
         verb: SkillVerb,
     },
     /// Park an artifact on a task's thread: hash the file into the
-    /// store, record the pointer — the bytes never ride the wire
+    /// store, record the pointer - the bytes never ride the wire
     Artifact {
         /// The task whose thread holds it (t-<n>)
         task: String,
@@ -311,18 +311,18 @@ enum Cmd {
     },
     /// Block until a matching record lands on the target: activity
     /// mode matches records folding into a task, or the records
-    /// structurally tied to a comment — its citations, repairs, and
+    /// structurally tied to a comment - its citations, repairs, and
     /// decisions; offer mode matches an Offer born on the task.
     /// Matches are strictly after the given global position; nothing
     /// is recorded
     Wait {
         /// The task (t-<n>) or comment (c-<seq>) to wait on
         target: String,
-        /// The global record position matched strictly after — the
+        /// The global record position matched strictly after - the
         /// cursor a read disclosed, never defaulted
         #[arg(long)]
         after: u64,
-        /// What wakes the wait — required, never chosen for you;
+        /// What wakes the wait - required, never chosen for you;
         /// offer addresses a task only
         #[arg(long)]
         until: UntilMode,
@@ -463,7 +463,7 @@ impl std::fmt::Display for Fail {
                 "world projection unavailable: {r}\nraw records via 'sac log'; repair the record or upgrade this binary to resume"
             ),
             Fail::Reject(r) => write!(f, "rejected: {}", r.code()),
-            Fail::Taught { code, text } => write!(f, "rejected: {code} — {text}"),
+            Fail::Taught { code, text } => write!(f, "rejected: {code} - {text}"),
             Fail::IdentityFallback { actor, tier } => write!(
                 f,
                 "this write would record {actor}/{tier} with no SACCADE_ACTOR and no terminal \
@@ -807,8 +807,8 @@ fn refused(conn: &rusqlite::Connection, command: &Command, reject: Reject) -> Fa
     }
 }
 
-/// The skill verbs' output door: the verdict lands on stdout — drift
-/// and absence are findings, not failures — and the exit code carries
+/// The skill verbs' output door: the verdict lands on stdout - drift
+/// and absence are findings, not failures - and the exit code carries
 /// it for scripts.
 fn skill_door(json: bool, verb: SkillVerb) -> ExitCode {
     let cwd = std::path::Path::new(".");
@@ -866,7 +866,7 @@ fn skill_door(json: bool, verb: SkillVerb) -> ExitCode {
                     );
                 } else {
                     println!(
-                        "skill absent: no {} in this directory — sac skill install deploys this binary's copy",
+                        "skill absent: no {} in this directory - sac skill install deploys this binary's copy",
                         skill::HOME
                     );
                 }
@@ -983,7 +983,7 @@ fn resolve_comment(world: &World, token: &str) -> Result<CommentId, Fail> {
 }
 
 /// A comment door's address: t-N homes there bare, c-N homes on that
-/// comment's task and cites it — the reply as an explicit reference.
+/// comment's task and cites it - the reply as an explicit reference.
 fn comment_address(world: &World, token: &str) -> Result<(TaskId, Vec<RecordId>), Fail> {
     if token.starts_with("c-") {
         let id = resolve_comment(world, token)?;
@@ -994,7 +994,7 @@ fn comment_address(world: &World, token: &str) -> Result<(TaskId, Vec<RecordId>)
 }
 
 /// A citation token to the record it names: c-N a comment by its
-/// public number, t-N a task's birth, a bare N any record position —
+/// public number, t-N a task's birth, a bare N any record position -
 /// the fold refuses positions this log does not hold.
 fn resolve_ref(world: &World, token: &str) -> Result<RecordId, Fail> {
     let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
@@ -1049,7 +1049,7 @@ fn context_of(cli: &Cli) -> Result<Context, Fail> {
 }
 
 /// The environment-declared scope: SACCADE_TASK ("t-<n>"),
-/// SACCADE_INCARNATION_SEQ (a bare birth-record position — the
+/// SACCADE_INCARNATION_SEQ (a bare birth-record position - the
 /// machine identity channel; the public i-N stays the fold's dense
 /// numbering), SACCADE_WORKSPACE (an absolute path). Any one present
 /// declares a scope: native participation precedes any task, so the
@@ -1099,8 +1099,8 @@ fn attached_terminal() -> bool {
 
 /// The write door's guard: possession passes any context; without it,
 /// a terminal attached anywhere or nothing. A terminal attached to
-/// any of stdin, stdout, or stderr earns the write — the unnamed
-/// fallback on one notice line, a named --actor silently — and a
+/// any of stdin, stdout, or stderr earns the write - the unnamed
+/// fallback on one notice line, a named --actor silently - and a
 /// caller with no terminal and no SACCADE_ACTOR (scripts, spawned
 /// agents that forgot their identity) refuses before any write,
 /// taught the fix. Possession is read from the context's tier, never
@@ -1141,9 +1141,9 @@ fn canonical_db(db_path: &std::path::Path) -> PathBuf {
 
 /// The start door: the server establishes through its own Git effects;
 /// the host then carries one terminal running the pinned harness with
-/// the given prompt as its native initial input — no request comment,
+/// the given prompt as its native initial input - no request comment,
 /// no ownership transfer. A task already holding a workspace is
-/// reported — nothing duplicated.
+/// reported - nothing duplicated.
 fn start_door(
     cli: &Cli,
     destination: &Destination,
@@ -1188,7 +1188,7 @@ fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fail> {
             "serve starts a server; --server selects one for clients (--db names the file to serve)".into(),
         ));
     }
-    // the serving repo is the one resolved here — effects and bytes
+    // the serving repo is the one resolved here - effects and bytes
     // belong to the declared tracker, never the caller's cwd
     let repo_root = resolve_repo(cli).ok();
     let db_path = match &cli.db {
@@ -1316,7 +1316,7 @@ fn render_clean_report(
         .expect("the clean report is plain data"));
     }
     let mut out = vec![format!(
-        "t-{} workspace clean — checkout {checkout}",
+        "t-{} workspace clean - checkout {checkout}",
         task.0
     )];
     out.push(match tip {
@@ -1334,14 +1334,14 @@ fn render_clean_report(
                 if n == 1 { one } else { many }
             }
             format!(
-                "  host · {} {} closed, {} {} stopped",
+                "  host | {} {} closed, {} {} stopped",
                 tabs,
                 word(*tabs, "terminal tab", "terminal tabs"),
                 stopped,
                 word(*stopped, "process", "processes")
             )
         }
-        HostClosed::Nothing => "  host · nothing to close".to_string(),
+        HostClosed::Nothing => "  host | nothing to close".to_string(),
     });
     out.push(format!("  host registration {registration}"));
     Ok(out.join("\n"))
@@ -1373,7 +1373,7 @@ fn exec_door(
     let checkout = workspace.workspace.worktree.as_path();
     std::env::set_current_dir(checkout).map_err(|e| {
         Fail::Usage(format!(
-            "the checkout {} is missing: 'sac open t-{}' recreates it from the branch — {e}",
+            "the checkout {} is missing: 'sac open t-{}' recreates it from the branch - {e}",
             checkout.display(),
             task.0
         ))
@@ -1567,7 +1567,7 @@ fn shell_quote(word: &str) -> String {
 #[serde(tag = "action", rename_all = "snake_case")]
 enum HostOpen {
     /// First start: the harness command was submitted into a new
-    /// terminal — acceptance is the evidence, execution is unobserved.
+    /// terminal - acceptance is the evidence, execution is unobserved.
     Launched { terminal: String, command: String },
     /// A new shell terminal in the worktree (a birth's open).
     Created { terminal: String },
@@ -1740,7 +1740,7 @@ enum HostDeregister {
 }
 
 /// Deregister the workspace from the host: a pure host-bookkeeping
-/// call — git removal is saccade's own effect, and the host's removal
+/// call - git removal is saccade's own effect, and the host's removal
 /// door would take the checked-out branch with it.
 fn deregister_workspace(path: &str) -> Result<HostDeregister, String> {
     let selector = format!("path:{path}");
@@ -1759,7 +1759,7 @@ fn deregister_workspace(path: &str) -> Result<HostDeregister, String> {
 
 /// Open a workspace through the host: a live terminal is brought
 /// forward only on the host's confirmed navigation, and only a birth's
-/// open creates one — a standing workspace is reported, never grown
+/// open creates one - a standing workspace is reported, never grown
 /// another tab.
 fn open_through_host(path: &str, create_when_none: bool) -> Result<HostOpen, String> {
     if let Some(handle) = live_terminal(path)? {
@@ -1835,7 +1835,7 @@ fn launch_harness(
     let direnv = std::path::Path::new(worktree).join(".envrc");
     if direnv.is_file() {
         // the assignment leads the typed line and the dev environment
-        // wraps the command: SACCADE_ACTOR=… direnv exec <wt> <sac> …
+        // wraps the command: SACCADE_ACTOR=... direnv exec <wt> <sac> ...
         argv.splice(
             0..0,
             ["direnv".to_string(), "exec".to_string(), worktree.clone()],
@@ -1883,41 +1883,41 @@ fn render_workspace_reply(
     let mut out = Vec::new();
     if reply.established {
         out.push(format!(
-            "t-{} workspace established — no request or ownership recorded",
+            "t-{} workspace established - no request or ownership recorded",
             reply.workspace.task
         ));
     } else if reply.recreated {
         out.push(format!(
-            "t-{} workspace stands — checkout recreated from the branch tip, no duplicate records",
+            "t-{} workspace stands - checkout recreated from the branch tip, no duplicate records",
             reply.workspace.task
         ));
     } else {
         out.push(format!(
-            "t-{} workspace stands — no duplicate launch, request, or ownership change",
+            "t-{} workspace stands - no duplicate launch, request, or ownership change",
             reply.workspace.task
         ));
     }
     out.push(format!(
-        "  branch {} · base {}",
+        "  branch {} | base {}",
         reply.workspace.branch, reply.workspace.base
     ));
     out.push(format!("  path {}", reply.workspace.path));
     match host {
         HostOpen::Launched { terminal, .. } => out.push(format!(
-            "  host terminal {terminal} · harness command submitted (execution unobserved)"
+            "  host terminal {terminal} | harness command submitted (execution unobserved)"
         )),
-        HostOpen::Created { terminal } => out.push(format!("  host terminal {terminal} · shell")),
+        HostOpen::Created { terminal } => out.push(format!("  host terminal {terminal} | shell")),
         HostOpen::Revealed { terminal } => {
-            out.push(format!("  host terminal {terminal} · revealed"))
+            out.push(format!("  host terminal {terminal} | revealed"))
         }
         HostOpen::Reported { path, live: None } => out.push(format!(
-            "  host · no live terminal; the workspace stands at {path}"
+            "  host | no live terminal; the workspace stands at {path}"
         )),
         HostOpen::Reported {
             path,
             live: Some(handle),
         } => out.push(format!(
-            "  host · terminal {handle} stands at {path}; the host would not bring it forward"
+            "  host | terminal {handle} stands at {path}; the host would not bring it forward"
         )),
     }
     out.extend(reply.records.iter().map(record_line));
@@ -1959,11 +1959,11 @@ fn migrate_door(
         out.display()
     )];
     lines.push(format!(
-        "  {} requests became notes · {} replies rehomed · {} uses born bound",
+        "  {} requests became notes | {} replies rehomed | {} uses born bound",
         report.requests_became_notes, report.replies_rehomed, report.uses_born_bound
     ));
     lines.push(format!(
-        "  {} comment refs renumbered · {} record refs as seq · {} ranges · {} incarnation refs",
+        "  {} comment refs renumbered | {} record refs as seq | {} ranges | {} incarnation refs",
         report.comment_refs_renumbered,
         report.record_refs_rewritten,
         report.ranges_rewritten,
@@ -1973,7 +1973,7 @@ fn migrate_door(
         lines.push("  no unresolved references".into());
     } else {
         lines.push(format!(
-            "  {} unresolved references stay legacy — review each:",
+            "  {} unresolved references stay legacy - review each:",
             report.legacy.len()
         ));
         for l in &report.legacy {
@@ -2209,7 +2209,7 @@ fn resolve_incarnation(world: &World, token: &str) -> Result<IncarnationId, Fail
 }
 
 /// The send door: a durable addressed message from this session's
-/// registered incarnation. Nonblocking by law — the sender chooses
+/// registered incarnation. Nonblocking by law - the sender chooses
 /// its own waiting, never this verb.
 fn send_door(
     cli: &Cli,
@@ -2222,7 +2222,7 @@ fn send_door(
 ) -> Result<String, Fail> {
     let url = server_url(destination, "send")?;
     // the public tokens ride as typed: the server resolves them
-    // against its own fold — one resolver, taught refusals
+    // against its own fold - one resolver, taught refusals
     let to_num = dense_token(to, "i-")?;
     let reply_num = match reply {
         Some(token) => Some(dense_token(token, "m-")?),
@@ -2245,7 +2245,7 @@ fn send_door(
         .expect("plain data"));
     }
     Ok(format!(
-        "sent m-{} to i-{to_num} — pending until the recipient's integration submits it",
+        "sent m-{} to i-{to_num} - pending until the recipient's integration submits it",
         sent.message
             .num
             .map(|n| n.to_string())
@@ -2254,7 +2254,7 @@ fn send_door(
 }
 
 /// The mailbox door: the messages an incarnation participates in, in
-/// record order, with their delivery state — a descriptive read.
+/// record order, with their delivery state - a descriptive read.
 fn messages_door(
     cli: &Cli,
     destination: &Destination,
@@ -2300,14 +2300,14 @@ fn messages_door(
     }
     for line in lines {
         let mut head = format!(
-            "m-{}  i-{} → i-{} · {}",
+            "m-{}  i-{} -> i-{} | {}",
             line.num, line.from, line.to, line.state
         );
         if let Some(reply) = line.reply_to {
-            head.push_str(&format!(" · replies to m-{reply}"));
+            head.push_str(&format!(" | replies to m-{reply}"));
         }
         if let Some(task) = line.task {
-            head.push_str(&format!(" · context t-{task}"));
+            head.push_str(&format!(" | context t-{task}"));
         }
         out.push(head);
         out.push(format!("      {}", line.body));
@@ -2377,7 +2377,7 @@ fn integrate_door(
                 )));
             };
             // strict resume: the saved file must exist and carry the
-            // recorded native id — a missing file refuses, it never
+            // recorded native id - a missing file refuses, it never
             // fabricates fresh state under the same identity
             let header = saccade::pi_session::read_header(saved_session.as_path())
                 .map_err(|e| Fail::Usage(format!("{token}'s saved session cannot resume: {e}")))?;
@@ -2464,7 +2464,7 @@ fn integrate_door(
         .expect("plain data"));
     }
     Ok(format!(
-        "integrated pi launching at {dir_str} — terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+        "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
     ))
 }
 
@@ -2494,7 +2494,7 @@ fn hashed_task_note(token: &str) -> String {
 }
 
 /// The revise door's body sources: the argument, the pipe, or the file
-/// — one of the three, the bytes landing verbatim.
+/// - one of the three, the bytes landing verbatim.
 fn revise_body(body: Option<String>, stdin: bool, file: Option<PathBuf>) -> Result<String, Fail> {
     if stdin {
         if std::io::stdin().is_terminal() {
@@ -2627,7 +2627,7 @@ fn render_tasks(cli: &Cli, world: &World, cursor: Option<usize>) -> String {
 const WIDTH: usize = 80;
 /// The thread header's indent ceiling: deep chains stop marching right.
 /// The inspector dock as text: everything about the one thing. The
-/// thread renders the addressed forest — items in first-record order,
+/// thread renders the addressed forest - items in first-record order,
 /// replies carrying their target chip, prose at one constant margin.
 fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     let view =
@@ -2667,24 +2667,24 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     Ok(out.join("\n"))
 }
 
-/// An artifact's body format: the pointer line — name and short hash.
+/// An artifact's body format: the pointer line - name and short hash.
 fn artifact_block(line: &ArtifactLine) -> Vec<String> {
     vec![
         format!("seq {}  artifact", line.seq),
-        format!("  {} · {}", line.name, line.short_hash()),
+        format!("  {} | {}", line.name, line.short_hash()),
     ]
 }
 
-/// A thread view's body format for one comment: its header line —
+/// A thread view's body format for one comment: its header line -
 /// the public number, the citation chips naming what its mapping
-/// cites, a use's chips naming its source task and bound selection —
+/// cites, a use's chips naming its source task and bound selection -
 /// the wrapped prose at a constant margin. A withdrawn note renders
 /// its tombstone, the body only when revealed.
 fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
     let chips: String = line
         .references
         .iter()
-        .map(|target| format!("→{}  ", ref_str(target)))
+        .map(|target| format!("->{}  ", ref_str(target)))
         .collect();
     let uses = line
         .source
@@ -2696,7 +2696,7 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
         .map(|b| format!("  bound c-{}", b.offer))
         .unwrap_or_default();
     // the withdrawal is terminal, so its mark replaces the revised one:
-    // the body is gone, its provenance mark would narrate absence —
+    // the body is gone, its provenance mark would narrate absence -
     // and a withdrawer who differs from the birth author is named
     let mark = if line.withdrawn {
         match line.withdrawer.as_deref() {
@@ -2721,7 +2721,7 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
     )];
     if let Some(binding) = &line.binding {
         out.push(wrap(
-            &format!("bound c-{} · {}", binding.offer, binding.grounds),
+            &format!("bound c-{} | {}", binding.offer, binding.grounds),
             WIDTH,
             "    ",
             "    ",
@@ -2742,18 +2742,18 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
     out
 }
 
-/// One message's block: the addressed endpoints, the delivery state —
-/// bookkeeping, never a claim of reading or agreement — and the body.
+/// One message's block: the addressed endpoints, the delivery state -
+/// bookkeeping, never a claim of reading or agreement - and the body.
 fn message_block(line: &MessageLine) -> Vec<String> {
     let mut head = format!(
-        "  m-{}  i-{} → i-{} · {}",
+        "  m-{}  i-{} -> i-{} | {}",
         line.num, line.from, line.to, line.state
     );
     if let Some(reply) = line.reply_to {
-        head.push_str(&format!(" · replies to m-{reply}"));
+        head.push_str(&format!(" | replies to m-{reply}"));
     }
     if let Some(task) = line.task {
-        head.push_str(&format!(" · context t-{task}"));
+        head.push_str(&format!(" | context t-{task}"));
     }
     let mut out = vec![head, format!("    by {}", line.actor)];
     if !line.body.is_empty() {
@@ -2814,7 +2814,7 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
     )))
 }
 
-/// Render one id: a thread whole, or a record as itself — a comment
+/// Render one id: a thread whole, or a record as itself - a comment
 /// as its block, an artifact as its pointer line, a task's birth as
 /// the literal event (header and relation, no thread substitution:
 /// the relation names t-N, and the taught law does the rest), and
@@ -2865,7 +2865,7 @@ fn render_id(
 }
 
 /// One id as the json face shows it: the text door's same walk with
-/// bodies byte-exact — no wrap, no elision — and the fold's facts as
+/// bodies byte-exact - no wrap, no elision - and the fold's facts as
 /// fields. One requested id, one array element; the caller assembles.
 fn show_value(
     world: &World,
@@ -2933,7 +2933,7 @@ fn show_value(
 }
 
 /// A comment as the json face renders it: the thread line's facts with
-/// the prose whole — the folded bytes, never the wrapped ones. A
+/// the prose whole - the folded bytes, never the wrapped ones. A
 /// withdrawn note's body is null unless revealed; the tombstone's
 /// facts ride beside it.
 fn comment_value(line: &CommentLine, reveal: bool) -> serde_json::Value {
@@ -3071,8 +3071,8 @@ fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
 }
 
 /// The search door as text: thread groups of pointers, one matched
-/// line each. Counts ride the headers only when the query narrows —
-/// narrowing's visibility, never an aggregate badge — and a query
+/// line each. Counts ride the headers only when the query narrows -
+/// narrowing's visibility, never an aggregate badge - and a query
 /// that matched nothing says so in one line.
 fn render_search(
     cli: &Cli,
@@ -3168,7 +3168,7 @@ fn anchor_seq(loadout: &db::Loadout, query: &SearchQuery) -> Result<usize, Fail>
     }
 }
 
-/// The anchor's window: the record, N before, N after — one line each,
+/// The anchor's window: the record, N before, N after - one line each,
 /// straight off the log's own rows.
 fn render_anchor(
     cli: &Cli,
@@ -3211,7 +3211,7 @@ fn render_anchor(
     lines.join("\n")
 }
 
-/// The record's own first text line — the same fields the log prints.
+/// The record's own first text line - the same fields the log prints.
 fn row_line(row: &StoredRecord) -> String {
     let payload: serde_json::Value = match serde_json::from_str(&row.payload) {
         Ok(v) => v,
@@ -3245,7 +3245,7 @@ fn glimpse(line: &str, budget: usize) -> String {
         line.to_string()
     } else {
         let mut cut: String = line.chars().take(budget.saturating_sub(1)).collect();
-        cut.push('…');
+        cut.push_str("...");
         cut
     }
 }
@@ -3470,7 +3470,7 @@ mod test {
     }
 
     /// The revise door's body lands verbatim: the argument as given, the
-    /// file's bytes exact — quotes, backslashes, newlines and all.
+    /// file's bytes exact - quotes, backslashes, newlines and all.
     #[test]
     fn the_revise_body_lands_verbatim_from_its_sources() {
         assert_eq!(

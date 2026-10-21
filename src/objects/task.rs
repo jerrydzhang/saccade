@@ -92,7 +92,7 @@ pub struct TaskContext {
     pub workspace: Option<WorkspaceContext>,
 }
 
-/// The owner an ownership entry names — exactly the ratified kinds.
+/// The owner an ownership entry names - exactly the ratified kinds.
 /// An incarnation owner is a record-derived reference, never inferred
 /// from declared scope: a task-scoped helper claiming without the
 /// reference owns as the named external agent it is.
@@ -104,7 +104,7 @@ pub enum Owner {
 }
 
 /// One holding of whole-task responsibility: who held it, the record
-/// that transferred it, when. Ownership is separate from state — no
+/// that transferred it, when. Ownership is separate from state - no
 /// claim is a state transition, no state gates a claim.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OwnerEntry {

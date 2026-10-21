@@ -9,7 +9,7 @@ use std::path::Path;
 pub const HOME: &str = ".agents/skills/saccade";
 
 /// The refusal at a differing copy: deletion is the force flag.
-pub const DIFFERS: &str = ".agents/skills/saccade differs from this binary's skill — delete the directory and run sac skill install to deploy this version";
+pub const DIFFERS: &str = ".agents/skills/saccade differs from this binary's skill - delete the directory and run sac skill install to deploy this version";
 
 /// The deployed version line's key, as it stands in SKILL.md's frontmatter.
 const VERSION_KEY: &str = "x-saccade-version:";

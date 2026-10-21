@@ -67,7 +67,7 @@ pub struct Degraded {
 }
 
 /// A read that cannot present the world: the log will not fold (its
-/// raw rows still travel), or will not even load — corruption and
+/// raw rows still travel), or will not even load - corruption and
 /// storage failures are database errors, never an empty successful log.
 #[derive(Debug)]
 pub enum ReadFail {
@@ -87,7 +87,7 @@ impl ReadFail {
 impl AppState {
     pub fn open(db_path: &Path) -> Result<Self, String> {
         // the worktree home derives from the db's own directory, so the
-        // path is absolute from the start — a fresh tracker resolves
+        // path is absolute from the start - a fresh tracker resolves
         // through its parent, an existing one canonically
         let canonical = if db_path.exists() {
             std::fs::canonicalize(db_path)
@@ -161,7 +161,7 @@ impl AppState {
 
     /// The judging seam: one write attempt, one line in the attempts
     /// log, appended while the writer lock is held so the file's order
-    /// is the judgment order. Duration includes the lock wait — the
+    /// is the judgment order. Duration includes the lock wait - the
     /// queueing a request met is part of what the diagnoser wants.
     pub fn execute(
         &self,
@@ -874,7 +874,7 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
 #[derive(Deserialize)]
 struct MessageSendRequest {
     context: WireContext,
-    /// The recipient's public number, the human-facing i-N — the same
+    /// The recipient's public number, the human-facing i-N - the same
     /// token every envelope and contact names
     to: usize,
     #[serde(default)]
@@ -897,7 +897,7 @@ async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
         raw,
     };
     // the sender is the sending session's registered identity, read
-    // from the declared scope — never caller-authored prose
+    // from the declared scope - never caller-authored prose
     let Some(from) = request.context.scope.as_ref().and_then(|s| s.incarnation) else {
         return api_failure(ApiFail::Reject(
             Reject::InvalidIncarnationId,

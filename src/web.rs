@@ -2,7 +2,7 @@
 //! Every section is a renderer
 //! over view types; fragments are sections, so the compose fetch swaps
 //! what the page itself renders. The @-compiler is the composer's input
-//! syntax over Commented events — the parse lives here, never in the
+//! syntax over Commented events - the parse lives here, never in the
 //! record. So does the prose renderer: bodies and explanations parse
 //! as markdown with math on the way out, never in.
 
@@ -20,7 +20,7 @@ use time::macros::format_description;
 
 /// The artifact store's render-side face: where the bytes live, whether
 /// they are present, and whether they sniff as an image. The one sniff
-/// definition — the read door serves the same content types it inlines.
+/// definition - the read door serves the same content types it inlines.
 #[derive(Clone, Default)]
 pub struct ArtifactStore {
     dir: Option<PathBuf>,
@@ -37,7 +37,7 @@ impl ArtifactStore {
     }
 
     /// Some(true): present and an image. Some(false): present, other
-    /// content. None: absent — the honest miss.
+    /// content. None: absent - the honest miss.
     pub fn probe(&self, hash: &str) -> Option<bool> {
         let mut prefix = [0u8; 16];
         let read = std::fs::File::open(self.path(hash)?)
@@ -48,7 +48,7 @@ impl ArtifactStore {
     }
 }
 
-/// Content type by magic bytes — the formats the console inlines.
+/// Content type by magic bytes - the formats the console inlines.
 pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
@@ -93,8 +93,8 @@ pub struct Console {
 }
 
 /// The serving repo's name: the basename names the tab title and the
-/// header mark, and the hue — the same root hash the state-dir slug
-/// tails — dots the favicon.
+/// header mark, and the hue - the same root hash the state-dir slug
+/// tails - dots the favicon.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepoName {
     pub basename: String,
@@ -111,7 +111,7 @@ impl RepoName {
 
     /// The tab title a full document carries under this name.
     pub fn tab_title(&self) -> String {
-        format!("{} · saccade", esc(&self.basename))
+        format!("{} | saccade", esc(&self.basename))
     }
 }
 
@@ -142,7 +142,7 @@ pub struct FormState {
     pub error: Option<String>,
     pub draft: String,
     pub note: String,
-    /// The actor name prefilled into every act form — the cookie's
+    /// The actor name prefilled into every act form - the cookie's
     /// value when one exists, blank for a fresh browser.
     pub who: String,
     /// A refused decision: the reason rendered beside the doors.
@@ -274,7 +274,7 @@ fn fmt_t(ts: u64) -> String {
     local(ts).format(&desc).unwrap_or_default()
 }
 
-/// Sun Sep 20 — the thread's day dividers
+/// Sun Sep 20 - the thread's day dividers
 fn fmt_d(ts: u64) -> String {
     let desc = format_description!("[weekday repr:short] [month repr:short] [day]");
     local(ts).format(&desc).unwrap_or_default()
@@ -286,7 +286,7 @@ pub fn page(c: &Console) -> String {
     let board = board_section(&c.board, &c.closed, focus_num(c).as_deref());
     let panel = match &c.focus {
         Some(f) => format!(
-            "<div class=\"thead\"><span class=\"tstate\" style=\"color:{state_color}\">● {state}</span>\n<div class=\"ttitle\">{title}</div>\n<div class=\"tmeta mono\">{meta}</div>\n</div>\n{thread}{compose}",
+            "<div class=\"thead\"><span class=\"tstate\" style=\"color:{state_color}\">* {state}</span>\n<div class=\"ttitle\">{title}</div>\n<div class=\"tmeta mono\">{meta}</div>\n</div>\n{thread}{compose}",
             state_color = state_color(f.show.state),
             state = f.show.state.to_uppercase(),
             title = esc(&f.show.name),
@@ -300,7 +300,7 @@ pub fn page(c: &Console) -> String {
         .repo_name
         .as_ref()
         .map(|n| n.tab_title())
-        .unwrap_or_else(|| "saccade · console".into());
+        .unwrap_or_else(|| "saccade | console".into());
     let favicon = c
         .repo_name
         .as_ref()
@@ -308,10 +308,10 @@ pub fn page(c: &Console) -> String {
         .unwrap_or_default();
     let header = match &c.repo_name {
         Some(n) => format!(
-            "<header><span class=\"hgroup\"><span class=\"brand\">SACCADE · CONSOLE</span><span class=\"rname\">{name}</span></span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>",
+            "<header><span class=\"hgroup\"><span class=\"brand\">SACCADE | CONSOLE</span><span class=\"rname\">{name}</span></span><span><label class=\"fbtn\" for=\"nav\">tasks &gt;</label></span></header>",
             name = esc(&n.basename)
         ),
-        None => "<header><span class=\"brand\">SACCADE · CONSOLE</span><span><label class=\"fbtn\" for=\"nav\">tasks ▸</label></span></header>".into(),
+        None => "<header><span class=\"brand\">SACCADE | CONSOLE</span><span><label class=\"fbtn\" for=\"nav\">tasks &gt;</label></span></header>".into(),
     };
     format!(
         "<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>{favicon}<style>{STYLE}</style></head>\n<body>\n{header}\n<input type=\"checkbox\" id=\"nav\">\n<div class=\"if\">\n<div class=\"cols withboard\">\n{board}\n<div class=\"tpanel\">\n{panel}\n</div>\n</div>\n</div>\n<script>{JS}</script>\n</body></html>\n"
@@ -325,11 +325,11 @@ fn focus_num(c: &Console) -> Option<String> {
 fn head_meta(show: &ShowView) -> String {
     let lineage = show.id.clone();
     let owned = match &show.owner {
-        Some(owner) => format!("{lineage} · owned by {owner}"),
+        Some(owner) => format!("{lineage} | owned by {owner}"),
         None => lineage,
     };
     match &show.workspace {
-        Some(workspace) => format!("{owned} · {workspace}"),
+        Some(workspace) => format!("{owned} | {workspace}"),
         None => owned,
     }
 }
@@ -461,7 +461,7 @@ fn item_html(
     }
 }
 
-/// The chip each variant carries; a note carries none — the plain row
+/// The chip each variant carries; a note carries none - the plain row
 /// it always was.
 fn kind_chip(kind: &str) -> Option<(&'static str, &'static str)> {
     match kind {
@@ -476,8 +476,8 @@ fn kind_chip(kind: &str) -> Option<(&'static str, &'static str)> {
 /// One comment row: kind chip, whisper mono meta (actor, number,
 /// time), full body. The body renders its `[^k]` markers through the
 /// comment's own reference mapping; bare ids stay the words they
-/// were. Every live row carries the revise reveal — the human
-/// surface's inline door — and a withdrawn note renders its tombstone
+/// were. Every live row carries the revise reveal - the human
+/// surface's inline door - and a withdrawn note renders its tombstone
 /// instead, with no door: repair of a withdrawn deposit is a new
 /// deposit.
 fn node_html(
@@ -517,7 +517,7 @@ fn node_html(
         })
         .unwrap_or_default();
     if line.withdrawn {
-        // the tombstone: one line, the note — and a withdrawer who
+        // the tombstone: one line, the note - and a withdrawer who
         // differs from the birth author is named
         let withdrawn = match line.withdrawer.as_deref() {
             Some(who) => format!("<span class=\"nseq\">withdrawn by {}</span>", esc(who)),
@@ -548,7 +548,7 @@ fn node_html(
         .filter(|j| j.offer == line.seq)
         .map(|j| {
             format!(
-                "<form class=\"jform\" method=\"post\" action=\"/t/{task}/reject\">\n<input type=\"hidden\" name=\"offer\" value=\"{offer}\">\n<textarea name=\"grounds\" rows=\"2\" placeholder=\"grounds — what needs reconsideration\">{grounds}</textarea>\n{err}<div class=\"jbtns\">{who}<button class=\"sendbtn\" name=\"reject\" value=\"1\" type=\"submit\">reject</button><button class=\"sendbtn\" name=\"accept\" value=\"1\" type=\"submit\" formaction=\"/t/{task}/accept\">accept</button></div>\n</form>\n",
+                "<form class=\"jform\" method=\"post\" action=\"/t/{task}/reject\">\n<input type=\"hidden\" name=\"offer\" value=\"{offer}\">\n<textarea name=\"grounds\" rows=\"2\" placeholder=\"grounds - what needs reconsideration\">{grounds}</textarea>\n{err}<div class=\"jbtns\">{who}<button class=\"sendbtn\" name=\"reject\" value=\"1\" type=\"submit\">reject</button><button class=\"sendbtn\" name=\"accept\" value=\"1\" type=\"submit\" formaction=\"/t/{task}/accept\">accept</button></div>\n</form>\n",
                 task = j.task,
                 offer = j.offer,
                 grounds = esc(&j.grounds),
@@ -602,24 +602,24 @@ fn node_html(
 fn ref_chip(target: &RefTarget) -> String {
     match target {
         RefTarget::Comment { num, task } => {
-            format!("<a class=\"nseq mono\" href=\"/t/{task}#c-{num}\">→c-{num}</a>")
+            format!("<a class=\"nseq mono\" href=\"/t/{task}#c-{num}\">->c-{num}</a>")
         }
         RefTarget::Task { task } => {
-            format!("<a class=\"nseq mono\" href=\"/t/{task}\">→t-{task}</a>")
+            format!("<a class=\"nseq mono\" href=\"/t/{task}\">->t-{task}</a>")
         }
         RefTarget::Incarnation { num, task } => match task {
-            Some(task) => format!("<a class=\"nseq mono\" href=\"/t/{task}\">→i-{num}</a>"),
-            None => format!("<span class=\"nseq mono\">→i-{num}</span>"),
+            Some(task) => format!("<a class=\"nseq mono\" href=\"/t/{task}\">->i-{num}</a>"),
+            None => format!("<span class=\"nseq mono\">->i-{num}</span>"),
         },
-        RefTarget::Message { num } => format!("<span class=\"nseq mono\">→m-{num}</span>"),
+        RefTarget::Message { num } => format!("<span class=\"nseq mono\">->m-{num}</span>"),
         RefTarget::Artifact { seq, task, .. } => {
-            format!("<a class=\"nseq mono\" href=\"/t/{task}#a-{seq}\">→seq {seq}</a>")
+            format!("<a class=\"nseq mono\" href=\"/t/{task}#a-{seq}\">->seq {seq}</a>")
         }
         RefTarget::Record { seq, task } => match task {
             Some(task) => {
-                format!("<a class=\"nseq mono\" href=\"/t/{task}\">→seq {seq}</a>")
+                format!("<a class=\"nseq mono\" href=\"/t/{task}\">->seq {seq}</a>")
             }
-            None => format!("<span class=\"nseq mono\">→seq {seq}</span>"),
+            None => format!("<span class=\"nseq mono\">->seq {seq}</span>"),
         },
     }
 }
@@ -637,10 +637,10 @@ fn artifact_html(line: &ArtifactLine, indent: usize, store: &ArtifactStore) -> S
             hash = esc(&line.hash),
         ),
         Some(false) => format!(
-            "<a class=\"afile\" href=\"/a/{hash}\">{name} · {short}</a>\n",
+            "<a class=\"afile\" href=\"/a/{hash}\">{name} | {short}</a>\n",
             hash = esc(&line.hash),
         ),
-        None => format!("<span class=\"acap\">{name} · unavailable</span>\n"),
+        None => format!("<span class=\"acap\">{name} | unavailable</span>\n"),
     };
     format!(
         "<div class=\"nrow2 arow\" id=\"a-{seq}\" style=\"padding-left:{pad}px\">\n{figure}<div class=\"nmeta\"><span class=\"xk\" style=\"color:#a2c3c4\">ARTIFACT</span><span class=\"nseq mono\">c-{seq}</span></div>\n</div>\n",
@@ -660,16 +660,16 @@ fn mention_card(seq: usize, task: usize, name: &str, hash: &str, store: &Artifac
             "<a class=\"acard\" href=\"{home}\"><img src=\"/a/{hash}\" alt=\"{caption}\"><span class=\"acap\">{caption}</span></a>"
         ),
         Some(false) => format!(
-            "<a class=\"acard file\" href=\"{home}\"><span class=\"acap\">{caption} · {short}</span></a>"
+            "<a class=\"acard file\" href=\"{home}\"><span class=\"acap\">{caption} | {short}</span></a>"
         ),
         None => format!(
-            "<a class=\"acard miss\" href=\"{home}\"><span class=\"acap\">{caption} · unavailable</span></a>"
+            "<a class=\"acard miss\" href=\"{home}\"><span class=\"acap\">{caption} | unavailable</span></a>"
         ),
     }
 }
 
 /// The reading-side resolver over escaped text: a `[^k]` marker whose
-/// comment carries a reference at that position resolves — a comment
+/// comment carries a reference at that position resolves - a comment
 /// to its home anchor, an artifact to its card, a task or incarnation
 /// birth to its thread; every other token stays the words it was.
 /// Bare c-N tokens are prose: navigation follows the mapping, never
@@ -726,21 +726,21 @@ fn marker_link(k: usize, target: &RefTarget, store: &ArtifactStore) -> String {
         ),
         RefTarget::Record { seq, task } => match task {
             Some(task) => format!("<a class=\"mref\" href=\"/t/{task}\">[^{k}]</a>"),
-            None => format!("<span class=\"mref dead\">[^{k}] · seq {seq}</span>"),
+            None => format!("<span class=\"mref dead\">[^{k}] | seq {seq}</span>"),
         },
     }
 }
 
 /// The one scheme door for a markdown link: http or https renders as a
-/// link; every other scheme — and no scheme — renders as words.
+/// link; every other scheme - and no scheme - renders as words.
 fn http_s(dest: &str) -> bool {
     let d = dest.as_bytes();
     let head = |p: &[u8]| d.len() >= p.len() && d[..p.len()].eq_ignore_ascii_case(p);
     head(b"http://") || head(b"https://")
 }
 
-/// A conversion that fails — or markup beyond the crate's own
-/// vocabulary — renders no math at all; the fence renderers fall back
+/// A conversion that fails - or markup beyond the crate's own
+/// vocabulary - renders no math at all; the fence renderers fall back
 /// to the literal source. The conversion is unwound by catch: a parser
 /// panic on legal latex is a render miss, never a dead request.
 fn math_mml(src: &str, display: MathDisplay) -> Option<String> {
@@ -822,7 +822,7 @@ fn crate_authored(mathml: &str) -> bool {
 }
 
 /// The prose renderer over raw bytes: CommonMark with tables and
-/// math, the same law as the @-compiler and the marker resolver — the
+/// math, the same law as the @-compiler and the marker resolver - the
 /// parse lives here, never in the record. Text events escape and
 /// resolve `[^k]` markers through the given mapping; code spans and
 /// code blocks are verbatim; raw HTML never passes, rendering as the
@@ -1009,10 +1009,10 @@ function resolve(text, home) {
     else if (rehomed === null) rehomed = m[2];
   }
   const parts = [];
-  if (rehomed) parts.push('home \u2192 ' + rehomed);
-  else parts.push('home \u2192 t-' + home);
+  if (rehomed) parts.push('home -> ' + rehomed);
+  else parts.push('home -> t-' + home);
   if (cite.length) parts.push('cites ' + cite.join(' '));
-  return parts.join(' \u00b7 ');
+  return parts.join(' | ');
 }
 document.addEventListener('input', (e) => {
   if (e.target.id !== 'body') return;
@@ -1051,7 +1051,7 @@ document.addEventListener('submit', (e) => {
 });
 
 // the topmost visible record and its offset name the place; an
-// action's redirect is a return, not navigation — a chosen #anchor
+// action's redirect is a return, not navigation - a chosen #anchor
 // still wins
 function readingAnchor() {
   const t = document.getElementById('thread');
@@ -1106,11 +1106,11 @@ if (saved !== null) {
 
 // the return path: rendered math and code carry their author bytes in
 // data-raw; a click on a formula copies them whole, and code blocks
-// get a corner button — clicks inside code stay free to anchor partial
+// get a corner button - clicks inside code stay free to anchor partial
 // selections. Nothing is sent anywhere; the clipboard is the only exit.
 function sacCopy(text, done) {
   // the legacy door: plain http off localhost has no async clipboard,
-  // and some engines refuse writeText even in a gesture — the
+  // and some engines refuse writeText even in a gesture - the
   // synchronous path still works there
   const legacy = () => {
     const t = document.createElement('textarea');
@@ -1142,11 +1142,11 @@ document.querySelectorAll('pre[data-raw]').forEach((pre) => {
   b.className = 'copybtn';
   b.title = 'copy code';
   b.setAttribute('aria-label', 'copy code');
-  b.textContent = '\u29C9';
+  b.textContent = 'copy';
   b.addEventListener('click', () => {
     sacCopy(pre.getAttribute('data-raw'), (ok) => {
-      b.textContent = ok ? '\u2713' : '\u2717';
-      setTimeout(() => { b.textContent = '\u29C9'; }, 900);
+      b.textContent = ok ? 'ok' : 'err';
+      setTimeout(() => { b.textContent = 'copy'; }, 900);
     });
   });
   pre.appendChild(b);
@@ -1790,7 +1790,7 @@ mod tests {
     fn the_head_names_state_title_and_id() {
         let world = fixture();
         let page = page(&console_of(&world, Some(focus_of(&world, 1))));
-        assert!(page.contains(">● OPEN<"), "{page}");
+        assert!(page.contains(">* OPEN<"), "{page}");
         assert!(page.contains("build &lt;foo&gt;"), "{page}");
         assert!(
             page.contains("<div class=\"tmeta mono\">t-1</div>"),
@@ -1807,7 +1807,7 @@ mod tests {
             hue: 210,
         });
         let page = page(&c);
-        assert!(page.contains("<title>saccade · saccade</title>"), "{page}");
+        assert!(page.contains("<title>saccade | saccade</title>"), "{page}");
         assert!(
             page.contains("<span class=\"rname\">saccade</span>"),
             "{page}"
@@ -1819,7 +1819,7 @@ mod tests {
     fn the_unnamed_page_keeps_the_chrome_of_before() {
         let world = fixture();
         let page = page(&console_of(&world, None));
-        assert!(page.contains("SACCADE · CONSOLE"), "{page}");
+        assert!(page.contains("SACCADE | CONSOLE"), "{page}");
         assert!(!page.contains("class=\"rname\""), "{page}");
     }
 
@@ -2040,7 +2040,7 @@ mod tests {
                 6,
                 human(),
                 TaskId(1),
-                "see c-0 and the figure — no links, just words; c-99 unresolved",
+                "see c-0 and the figure - no links, just words; c-99 unresolved",
                 Vec::new(),
             ),
         ])

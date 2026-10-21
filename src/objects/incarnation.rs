@@ -8,7 +8,7 @@ use crate::types::pointers::{NativeSessionId, SessionLocator, WorktreePath};
 #[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Hash)]
 pub struct IncarnationId(pub RecordId);
 
-/// An incarnation identifies a native agent session — never a task, a
+/// An incarnation identifies a native agent session - never a task, a
 /// workspace, or a running process. Two births carry one: the
 /// workspace establishment births a historical attribution identity,
 /// the registration births a native session identity. A native

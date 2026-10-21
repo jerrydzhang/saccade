@@ -1,6 +1,6 @@
 //! The citation-marker interpretation, shared by every boundary that
 //! judges one: the prose's markdown structure decides what a marker
-//! is — text runs carry markers, code spans, code blocks, and math
+//! is - text runs carry markers, code spans, code blocks, and math
 //! are literal, never citations. Numbers parse fallibly: a token too
 //! large for an index is an unresolved marker, not a panic.
 
@@ -46,7 +46,7 @@ pub(crate) fn tokens_in_run(run: &str) -> Vec<Token> {
 
 /// The first marker of the prose that no reference in a mapping of
 /// `references` entries resolves: its literal digits, for the refusal
-/// to name. None when every marker resolves — and prose whose markers
+/// to name. None when every marker resolves - and prose whose markers
 /// live only in code or math always reads as resolving.
 pub fn first_unresolved(raw: &str, references: usize) -> Option<String> {
     let mut opts = Options::empty();

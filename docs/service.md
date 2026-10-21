@@ -13,15 +13,15 @@ with `restart.on = "on_failure"` (max 10) and a readiness probe on
 `GET /` at port 8811.
 
 - `--repo` names the tracker: the shell may sit anywhere, so the db's
-  repo is declared, not discovered from the working directory — and
+  repo is declared, not discovered from the working directory - and
   the declared root carries the workspace Git effects, artifact store,
   and console chrome, whatever cwd the server was started from.
 - `--bind 0.0.0.0` spans loopback (CLI default) and the tailnet
   (dashboard). Any device that can reach the port writes at human tier
-  through the forms — the conceded boundary. The wildcard never lands
+  through the forms - the conceded boundary. The wildcard never lands
   in the address hint: `serve` publishes `http://127.0.0.1:<port>`
   beside the served database after a successful bind, and clients
-  discover the server from that file — no default port, no localhost
+  discover the server from that file - no default port, no localhost
   guess. A scratch `serve --db /tmp/scratch/x.db --port 0` publishes
   beside the scratch file and never disturbs the repo's hint.
 - The process manager holds the process output; the warns also land in
@@ -32,11 +32,11 @@ with `restart.on = "on_failure"` (max 10) and a readiness probe on
   refusal with `sac clone --at <cursor> --out <path>`, serve the
   clone (`--db` names it), and re-post the logged request.
 - Stop is the process manager stopping the process. The server owns no
-  child processes — this build runs no sessions. The workspace
+  child processes - this build runs no sessions. The workspace
   operations spawn one-shot git runs under the writer lock; nothing
   long-lived is ever kept.
 
 Consumers pin a release with a flake input:
-`saccade.url = "github:jerrydzhang/saccade/v0.1.0"` — the lockfile is
+`saccade.url = "github:jerrydzhang/saccade/v0.1.0"` - the lockfile is
 the version identity, a bump is a config commit, and from the first
 tag onward old logs must always load.

@@ -98,7 +98,7 @@ pub enum Tier {
 
 /// An environment-declared binding: what the acting session's
 /// environment claims it is scoped to. Disclosure riding the record,
-/// never proof — the one gate it feeds is the self-acceptance
+/// never proof - the one gate it feeds is the self-acceptance
 /// refusal. Native participation can precede any task: the task
 /// binding is optional, the incarnation and workspace disclosures
 /// stand alone.
@@ -149,7 +149,7 @@ pub struct World {
     pub messages: BTreeMap<MessageId, MessageContext>,
     /// Every applied record: existence for the citation guard, its
     /// home thread where the fold gives one. A record without a home
-    /// still exists. No residency — the named record stays the event
+    /// still exists. No residency - the named record stays the event
     /// it is.
     pub provenance: BTreeMap<RecordId, Option<TaskId>>,
 }
@@ -235,7 +235,7 @@ impl World {
         Ok(self)
     }
 
-    /// The owner a claim names — exactly the ratified kinds. The
+    /// The owner a claim names - exactly the ratified kinds. The
     /// incarnation reference, never the caller's tier, names a
     /// task-bound worker: a claim that rides one holds as the
     /// incarnation whoever requested it; a claim without the
@@ -256,7 +256,7 @@ impl World {
     /// offer named is an Offer of the use's declared source task and
     /// that task's standing Offered or Concluded account. A bound use
     /// keeps its selection when that offer is later rejected or
-    /// replaced — nothing here follows the source forward.
+    /// replaced - nothing here follows the source forward.
     fn check_binding(&self, source: TaskId, offer: CommentId) -> Result<(), Reason> {
         let offer_ctx = self.comments.get(&offer).ok_or(Reason::InvalidCommentId)?;
         if !matches!(offer_ctx.comment.kind, CommentKind::Offer { .. }) {
@@ -389,8 +389,8 @@ impl World {
                         if self.tasks.get(source.0).is_none() {
                             return Err(Reason::InvalidTaskId);
                         }
-                        // a birth may carry its initial binding — the
-                        // shape a historical log migrates into — under
+                        // a birth may carry its initial binding - the
+                        // shape a historical log migrates into - under
                         // the same eligibility a later binding preserves
                         if let Some(binding) = bound {
                             self.check_binding(*source, binding.offer)?;
@@ -739,7 +739,7 @@ impl Default for World {
 }
 
 /// Steps the world by a command, returning the new world and the records
-/// that were produced. Takes the world as given — the caller owns its
+/// that were produced. Takes the world as given - the caller owns its
 /// truth; `db::record` reconstructs it from the log under the write lock
 /// before calling.
 pub fn execute(
@@ -1336,7 +1336,7 @@ mod test {
         assert_eq!(world.task_born_at(RecordId(2)), None);
 
         // public numbers derive from birth order: the comments in the
-        // story are seq 2,3,4,7,8,9,10,13,17,19,21,22,24,25 — the use
+        // story are seq 2,3,4,7,8,9,10,13,17,19,21,22,24,25 - the use
         // born at 17 is the ninth comment, c-8 to a human
         assert_eq!(world.comment_at_num(8), Some(CommentId(RecordId(17))));
         assert_eq!(world.comment_num(CommentId(RecordId(17))), Some(8));
@@ -1937,7 +1937,7 @@ mod test {
         populate_log(&mut log);
 
         // a comment birth, a task birth, an artifact birth, and the
-        // record facts — a claim and a binding — all cite
+        // record facts - a claim and a binding - all cite
         let artifact = Artifact {
             name: prose("sweep figure"),
             hash: ContentHash::of(b"figure bytes"),
@@ -2018,7 +2018,7 @@ mod test {
             agent(),
             Command::ReviseComment {
                 id: CommentId(RecordId(9)),
-                body: prose("edge case held, suite green — 56 tests"),
+                body: prose("edge case held, suite green - 56 tests"),
             },
             99,
         )
@@ -2815,7 +2815,7 @@ mod test {
         );
 
         // a rewind names a head the record left: the base, the recovered
-        // head — refused at both explicit tiers, writing nothing
+        // head - refused at both explicit tiers, writing nothing
         for rewind in [base, recovery] {
             for ctx in [agent(), human()] {
                 let refused = log.execute(

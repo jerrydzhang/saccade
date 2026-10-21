@@ -3,7 +3,7 @@ use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
 /// The task's working environment, born once by the establishment
 /// record: the facts that record established, never a promise that
-/// a directory or process still exists — existence checks live in
+/// a directory or process still exists - existence checks live in
 /// effects, not the fold. The birth record's position is the shared
 /// workspace/incarnation identity.
 #[derive(Clone, Debug, PartialEq)]

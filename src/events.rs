@@ -45,14 +45,14 @@ pub enum Event {
         references: Vec<RecordRef>,
     },
     /// A presentation repair, not a transition: the fold swaps the
-    /// variant's prose and points at the latest revision record — the
+    /// variant's prose and points at the latest revision record - the
     /// original bytes stay in their birth event, references never change.
     CommentRevised {
         id: CommentId,
         body: Prose,
     },
-    /// The standing-error repair: the deposit's implicit claim — this
-    /// is reached, this earns residency — was false. The body leaves
+    /// The standing-error repair: the deposit's implicit claim - this
+    /// is reached, this earns residency - was false. The body leaves
     /// the fold's presentation, a tombstone stays; the log is
     /// untouched. Note deposits only.
     CommentWithdrawn {

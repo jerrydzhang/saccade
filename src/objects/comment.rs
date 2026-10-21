@@ -20,8 +20,8 @@ pub enum Target {
 }
 
 /// A use's selection of a conclusion: the offer named and the grounds
-/// for selecting it. A birth may carry one already bound — the shape a
-/// historical log migrates into — every later selection is its own
+/// for selecting it. A birth may carry one already bound - the shape a
+/// historical log migrates into - every later selection is its own
 /// binding record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UseBinding {
@@ -74,7 +74,7 @@ impl CommentKind {
     }
 
     /// The offer a decision names; a use names its source task, not an
-    /// offer — its selection rides the binding records.
+    /// offer - its selection rides the binding records.
     pub fn offer(&self) -> Option<CommentId> {
         match self {
             CommentKind::Accept { offer } | CommentKind::Reject { offer, .. } => Some(*offer),
@@ -160,7 +160,7 @@ impl CommentState {
 }
 
 /// The latest revision of a folded comment's prose: the record that
-/// swapped it in and the actor who did — disclosure is a fold fact,
+/// swapped it in and the actor who did - disclosure is a fold fact,
 /// named whenever the reviser differs from the birth author.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Revision {
@@ -178,7 +178,7 @@ pub struct Withdrawal {
 }
 
 /// A use's last binding's attribution: the record that selected and
-/// the actor who did. The selection itself — offer and grounds — is
+/// the actor who did. The selection itself - offer and grounds - is
 /// the state's payload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
@@ -194,11 +194,11 @@ pub struct CommentContext {
     pub scope: Option<crate::store::Scope>,
     /// Event time of the comment's birth record
     pub born_at: u64,
-    /// The latest revision of the prose, when it was ever revised —
+    /// The latest revision of the prose, when it was ever revised -
     /// a pointer with its reviser, never the payload it swapped in
     pub revised: Option<Revision>,
     /// The standing-error repair's pointer, when the deposit was
-    /// withdrawn — beside the revised pointer it mirrors
+    /// withdrawn - beside the revised pointer it mirrors
     pub withdrawn: Option<Withdrawal>,
     /// The use's current selection, when a binding has landed; a
     /// rebinding replaces it, the log keeps every earlier one
@@ -312,7 +312,7 @@ mod tables {
         }
     }
 
-    /// Binding is the use's door alone — prospective or already bound,
+    /// Binding is the use's door alone - prospective or already bound,
     /// a binding selects again; every other variant holds.
     #[test]
     fn binding_is_the_use_door_alone() {
@@ -381,7 +381,7 @@ mod tables {
         }
     }
 
-    /// The birth state mirrors the variant, one for one — including
+    /// The birth state mirrors the variant, one for one - including
     /// the born-bound use a historical log carries.
     #[test]
     fn the_birth_state_mirrors_the_variant() {
