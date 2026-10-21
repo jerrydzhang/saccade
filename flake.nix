@@ -31,7 +31,8 @@
     inherit (nixpkgs) lib;
     forAllSystems = lib.genAttrs lib.systems.flakeExposed;
     overlays = [rust-overlay.overlays.default];
-    saccadePiExtensions = [];
+    # the native integration the composed harness loads
+    saccadePiExtensions = ["native/saccade.ts"];
   in {
     devShells = forAllSystems (
       system: let
