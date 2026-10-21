@@ -1,11 +1,14 @@
 // Saccade's native integration, loaded by the saccade-pi composition:
 // the session attaches as an incarnation, sends durable addressed
 // messages, and waits that incoming messages or native human input
-// release — releasing only this integration's own wait, never
+// release - releasing only this integration's own wait, never
 // interrupting other work.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const POLL_MS = 1500;
+// the automatic actor fallback: agent possession when the launch did
+// not inject a name; an injected SACCADE_ACTOR always wins
+const FALLBACK_ACTOR = "saccade-pi";
 
 interface AttachReply {
 	registered: boolean;
@@ -30,24 +33,38 @@ interface MailboxMessage {
 	born_at: number;
 }
 
+interface Association extends AttachReply {
+	nativeId: string;
+	sessionFile: string;
+}
+
+// One wait tool call owns one of these; nothing about a wait lives in
+// shared state, so a stale poll can never observe or strand a newer
+// wait's release.
+type Outcome = "message" | "input" | "cancelled" | "detached";
+
+interface WaitState {
+	timer: ReturnType<typeof setInterval> | null;
+	offSignal: (() => void) | null;
+	done: boolean;
+	mail: MailboxMessage[] | null;
+	settle: (outcome: Outcome) => void;
+}
+
 export default function saccadeIntegration(pi: ExtensionAPI) {
-	// attachment state: one incarnation per native session, resolved or
-	// registered at session start
-	let attached: AttachReply | null = null;
+	// the session's association: resolved or registered fresh at every
+	// session start by the session's actual native id and locator
+	let association: Association | null = null;
 	let attachError: string | null = null;
-	// the integration's own wait: released by incoming mail or native
-	// human input, never by aborting other work
-	let waitRelease: ((reason: "message" | "input") => void) | null = null;
-	let waitTimer: ReturnType<typeof setInterval> | null = null;
-	// the mail a released wait holds for delivery
-	let held: MailboxMessage[] = [];
+	// the waits this integration currently owns
+	const waits = new Set<WaitState>();
 
 	const server = () => {
 		const url = process.env.SACCADE_SERVER;
 		return url && url.trim() !== "" ? url.trim() : undefined;
 	};
 
-	const actor = () => process.env.SACCADE_ACTOR || "saccade-pi";
+	const actor = () => process.env.SACCADE_ACTOR || FALLBACK_ACTOR;
 
 	async function tracker<T>(path: string, init?: RequestInit): Promise<T> {
 		const url = server();
@@ -67,12 +84,22 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return body as T;
 	}
 
-	/// Resolve-or-register this session's incarnation; the reply is
-	/// the machine identity, and the env channel rides it for `sac`.
+	// Detach whatever this session carried: the identity channel goes
+	// with it, so nothing nested can act as a previous incarnation.
+	function detach() {
+		association = null;
+		attachError = null;
+		delete process.env.SACCADE_INCARNATION_SEQ;
+	}
+
+	// Resolve-or-register this session's incarnation from the session's
+	// actual native id and saved locator - never from a remembered
+	// attachment. The reply is the machine identity, and the env channel
+	// rides it for `sac`; agent possession falls back when uninjected.
 	async function attach(ctx: {
 		sessionManager: { getSessionId(): string | undefined; getSessionFile(): string | undefined };
-	}): Promise<AttachReply | null> {
-		if (attached || attachError) return attached;
+	}): Promise<Association | null> {
+		detach();
 		if (!server()) {
 			attachError = "no SACCADE_SERVER routing; the session stays unregistered";
 			return null;
@@ -84,48 +111,76 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			return null;
 		}
 		try {
-			attached = await tracker<AttachReply>("/api/v1/native/attach", {
+			const reply = await tracker<AttachReply>("/api/v1/native/attach", {
 				method: "POST",
 				body: JSON.stringify({ native_id: sessionId, session_file: sessionFile }),
 			});
-			process.env.SACCADE_INCARNATION_SEQ = String(attached.incarnation);
-			return attached;
+			association = { ...reply, nativeId: sessionId, sessionFile };
+			process.env.SACCADE_INCARNATION_SEQ = String(reply.incarnation);
+			const injected = process.env.SACCADE_ACTOR;
+			if (injected === undefined || injected.trim() === "") {
+				process.env.SACCADE_ACTOR = FALLBACK_ACTOR;
+			}
+			return association;
 		} catch (error) {
 			attachError = errorText(error);
 			return null;
 		}
 	}
 
-	function envelopeText(message: MailboxMessage): string {
-		let head = `[saccade message m-${message.num} · from i-${message.from.num}`;
-		if (message.reply_to !== null) head += ` · replying to m-${message.reply_to}`;
-		if (message.task !== null) head += ` · task t-${message.task}`;
-		head += "]";
-		return `${head}\n\n${message.body}`;
+	// An attached session stays attached; a failed attach retries here,
+	// so explicit later tools recover when the tracker returns.
+	async function ensureAttached(ctx: {
+		sessionManager: { getSessionId(): string | undefined; getSessionFile(): string | undefined };
+	}): Promise<Association | null> {
+		return association ?? (await attach(ctx));
 	}
 
-	/// Deliver one message natively, then record the submission: the
-	/// bookkeeping never claims reading, agreement, or completion.
-	async function deliver(message: MailboxMessage): Promise<void> {
-		pi.sendUserMessage(envelopeText(message), { deliverAs: "followUp" });
-		await tracker("/api/v1/messages/submit", {
-			method: "POST",
-			body: JSON.stringify({
-				incarnation: attached!.incarnation,
-				message: message.seq,
-			}),
+	// Deliver one message natively, and record the submission only once
+	// the envelope is in the saved session history - pi's message events
+	// never describe messages the session tree does not contain, so the
+	// observed message_start is the insertion. The bookkeeping never
+	// claims reading, agreement, completion, or exactly-once: a crash
+	// before the submit leaves the mail pending for the next drain.
+	function deliver(message: MailboxMessage): Promise<void> {
+		const envelope = envelopeText(message);
+		return new Promise<void>((resolve, reject) => {
+			const off = pi.on("message_start", (event) => {
+				if (event.message.role !== "user") return;
+				if (userText(event.message as any) !== envelope) return;
+				off();
+				tracker("/api/v1/messages/submit", {
+					method: "POST",
+					body: JSON.stringify({
+						incarnation: association!.incarnation,
+						message: message.seq,
+					}),
+				}).then(
+					() => resolve(),
+					(error) => reject(error instanceof Error ? error : new Error(String(error))),
+				);
+			});
+			try {
+				pi.sendUserMessage(envelope, { deliverAs: "followUp" });
+			} catch (error) {
+				off();
+				throw error;
+			}
 		});
 	}
 
-	async function mailbox(): Promise<MailboxMessage[]> {
+	async function mailbox(incarnation: number): Promise<MailboxMessage[]> {
 		const reply = await tracker<{ messages: MailboxMessage[] }>(
-			`/api/v1/messages/pending?incarnation=${attached!.incarnation}`,
+			`/api/v1/messages/pending?incarnation=${incarnation}`,
 		);
 		return reply.messages;
 	}
 
-	function requires(): string | null {
-		return attached ? null : (attachError ?? "not attached yet");
+	async function drain(incarnation: number): Promise<void> {
+		const incoming = incomingFor(incarnation, await mailbox(incarnation));
+		for (const message of incoming) {
+			await deliver(message);
+		}
 	}
 
 	function text(content: string) {
@@ -139,10 +194,30 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return { ...text(content), isError: true } as const;
 	}
 
-	function stopWaiting() {
-		if (waitTimer !== null) {
-			clearInterval(waitTimer);
-			waitTimer = null;
+	// Finish a wait exactly once and take its machinery down with it:
+	// timer, signal listener, and the active set. A finished wait's
+	// callbacks are inert, so it can never consume a newer wait's
+	// release.
+	function finish(state: WaitState, outcome: Outcome, mail: MailboxMessage[]) {
+		if (state.done) return;
+		state.done = true;
+		if (state.timer !== null) {
+			clearInterval(state.timer);
+			state.timer = null;
+		}
+		if (state.offSignal !== null) {
+			const off = state.offSignal;
+			state.offSignal = null;
+			off();
+		}
+		waits.delete(state);
+		state.mail = mail;
+		state.settle(outcome);
+	}
+
+	function cancelAllWaits() {
+		for (const state of [...waits]) {
+			finish(state, "detached", []);
 		}
 	}
 
@@ -153,7 +228,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			"Report this session's registered saccade identity: the incarnation's public number i-<n> that others address, and whether it registered now or resolved an existing registration.",
 		parameters: { type: "object", properties: {} },
 		execute: async (_id, _params, _signal, ctx) => {
-			const who = await attach(ctx);
+			const who = await ensureAttached(ctx);
 			if (!who) return failed(`not registered: ${attachError}`);
 			return text(
 				`this session is i-${who.num} (birth seq ${who.incarnation}${who.registered ? ", registered now" : ", already registered"}); others address it as i-${who.num}`,
@@ -177,10 +252,14 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			required: ["to", "body"],
 		},
 		execute: async (_id, params, _signal, ctx) => {
-			const who = await attach(ctx);
+			const who = await ensureAttached(ctx);
 			if (!who) return failed(`not sent: ${attachError}`);
 			try {
 				const to = numToken(params.to, "i-");
+				// the declared scope rides: the explicit task argument
+				// wins, the session's declared task and workspace carry
+				// when the argument is absent
+				const taskToken = params.task ?? process.env.SACCADE_TASK;
 				const reply = await tracker<SendReply>("/api/v1/messages/send", {
 					method: "POST",
 					body: JSON.stringify({
@@ -188,9 +267,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 							actor: actor(),
 							tier: "agent",
 							scope: {
-								task: null,
+								task: taskToken ? numToken(taskToken, "t-") : null,
 								incarnation: who.incarnation,
-								workspace: null,
+								workspace: process.env.SACCADE_WORKSPACE ?? null,
 							},
 						},
 						to,
@@ -226,40 +305,67 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				},
 			},
 		},
-		execute: async (_id, params, _signal, ctx) => {
-			const who = await attach(ctx);
+		execute: async (_id, params, signal, ctx) => {
+			const who = await ensureAttached(ctx);
 			if (!who) return failed(`cannot wait: ${attachError}`);
 			const wantReply = params.reply_to ? numToken(params.reply_to, "m-") : null;
-			const released = await new Promise<"message" | "input">((resolve) => {
-				waitRelease = resolve;
-				waitTimer = setInterval(() => {
-					mailbox()
-						.then((incoming) => {
-							const mine = incoming.filter(
-								(m) =>
-									m.state === "pending" &&
-									m.from.seq !== who.incarnation &&
-									(wantReply === null || m.reply_to === wantReply),
-							);
-							if (mine.length > 0 && waitRelease) {
-								held = mine;
-								stopWaiting();
-								waitRelease = null;
-								resolve("message");
-							}
-						})
-						.catch(() => {
-							// a poll that cannot reach the tracker keeps waiting
-						});
-				}, POLL_MS);
+			const incarnation = who.incarnation;
+			const state: WaitState = {
+				timer: null,
+				offSignal: null,
+				done: false,
+				mail: null,
+				settle: () => {},
+			};
+			const released = await new Promise<Outcome>((resolve) => {
+				state.settle = (outcome) => resolve(outcome);
+				waits.add(state);
+				// the tool call's own cancellation finishes the wait; the
+				// listener comes off in finish, so no path leaks it
+				if (signal) {
+					const onAbort = () => finish(state, "cancelled", []);
+					if (signal.aborted) {
+						onAbort();
+						return;
+					}
+					signal.addEventListener("abort", onAbort);
+					state.offSignal = () => signal.removeEventListener("abort", onAbort);
+				}
+				const poll = async () => {
+					if (state.done) return;
+					try {
+						const incoming = incomingFor(
+							incarnation,
+							await mailbox(incarnation),
+						);
+						const mine =
+							wantReply === null
+								? incoming
+								: incoming.filter((m) => m.reply_to === wantReply);
+						if (mine.length > 0) finish(state, "message", mine);
+					} catch {
+						// a poll that cannot reach the tracker keeps waiting
+					}
+				};
+				state.timer = setInterval(poll, POLL_MS);
 			});
+			// whatever the path, the wait's machinery is already down
 			if (released === "input") {
 				return text(
-					"the wait ended because native human input arrived; any pending messages stay in the mailbox — saccade_wait again to receive them",
+					"the wait ended because native human input arrived; any pending messages stay in the mailbox - saccade_wait again to receive them",
 				);
 			}
-			const delivered = held;
-			held = [];
+			if (released === "cancelled") {
+				return text(
+					"the wait ended without a message (the call was cancelled); any pending messages stay in the mailbox - saccade_wait again to receive them",
+				);
+			}
+			if (released === "detached") {
+				return text(
+					"the wait ended because this session's saccade association changed; nothing was delivered - saccade_identity to re-check, saccade_wait to receive",
+				);
+			}
+			const delivered = state.mail ?? [];
 			for (const message of delivered) {
 				await deliver(message);
 			}
@@ -267,12 +373,17 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				.map((m) => `m-${m.num} from i-${m.from.num}`)
 				.join(", ");
 			return text(
-				`received ${named}; delivered into your session as your next input — reply through saccade_send with reply_to`,
+				`received ${named}; delivered into your session as your next input - reply through saccade_send with reply_to`,
 			);
 		},
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		// every start reassociates by the session's actual native id and
+		// locator - new, fork, resume, and reload alike - and the old
+		// association's waits die with it, never delivering into a
+		// session this incarnation is not
+		cancelAllWaits();
 		const who = await attach(ctx);
 		if (!who) {
 			if (attachError) pi.appendEntry("saccade_attach", { error: attachError });
@@ -280,12 +391,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		}
 		// activation at a supported boundary: the mailbox drains at start
 		try {
-			const incoming = (await mailbox()).filter(
-				(m) => m.state === "pending" && m.from.seq !== who.incarnation,
-			);
-			for (const message of incoming) {
-				await deliver(message);
-			}
+			await drain(who.incarnation);
 		} catch (error) {
 			pi.appendEntry("saccade_attach", {
 				incarnation: who.incarnation,
@@ -294,25 +400,72 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		}
 	});
 
-	// native human input releases only this integration's own wait,
-	// before the input queues; the input itself proceeds untouched
+	pi.on("session_shutdown", async () => {
+		// idempotent teardown: waits finish, the association and its env
+		// channel go with the session
+		cancelAllWaits();
+		detach();
+		return undefined;
+	});
+
+	// native human input releases this integration's own waits, before
+	// the input queues; the input itself proceeds untouched
 	pi.on("input", async () => {
-		if (waitRelease) {
-			const release = waitRelease;
-			waitRelease = null;
-			stopWaiting();
-			release("input");
+		for (const state of [...waits]) {
+			finish(state, "input", []);
 		}
 		return { action: "continue" };
 	});
 }
 
-function numToken(token: string, prefix: string): number {
+// The envelope a delivery injects: machine-supplied origin, ASCII
+// separators, the body untouched.
+export function envelopeText(message: MailboxMessage): string {
+	let head = `[saccade message m-${message.num} | from i-${message.from.num}`;
+	if (message.reply_to !== null) head += ` | replying to m-${message.reply_to}`;
+	if (message.task !== null) head += ` | task t-${message.task}`;
+	head += "]";
+	return `${head}\n\n${message.body}`;
+}
+
+// The user-facing text of a native user message, whatever content
+// shape pi handed in.
+export function userText(message: { role: string; content: unknown }): string {
+	if (typeof message.content === "string") return message.content;
+	if (Array.isArray(message.content)) {
+		return message.content
+			.filter((block: any) => block?.type === "text")
+			.map((block: any) => String(block.text ?? ""))
+			.join("");
+	}
+	return "";
+}
+
+// The addressee's mail alone: the mailbox reads both directions, and
+// delivery filters on the recipient - a self-addressed message is
+// incoming mail like any other.
+export function incomingFor(
+	incarnation: number,
+	messages: MailboxMessage[],
+): MailboxMessage[] {
+	return messages.filter((m) => m.state === "pending" && m.to.seq === incarnation);
+}
+
+// An address is exactly <prefix><ASCII digits>: no bare number, no
+// empty tail, no signs, exponents, or other Number coercions, and the
+// value must be a safe integer so no address ever rounds or rebinds.
+export function numToken(token: string, prefix: string): number {
 	const trimmed = token.trim();
-	const bare = trimmed.startsWith(prefix) ? trimmed.slice(prefix.length) : trimmed;
-	const n = Number(bare);
-	if (!Number.isInteger(n) || n < 0) {
-		throw new Error(`'${token}' is not a ${prefix}<n> reference`);
+	if (!trimmed.startsWith(prefix)) {
+		throw new Error(`'${token}' is not an ${prefix}<n> reference`);
+	}
+	const digits = trimmed.slice(prefix.length);
+	if (!/^[0-9]+$/.test(digits)) {
+		throw new Error(`'${token}' is not an ${prefix}<n> reference`);
+	}
+	const n = Number(digits);
+	if (!Number.isSafeInteger(n) || n < 0) {
+		throw new Error(`'${token}' is not an ${prefix}<n> reference`);
 	}
 	return n;
 }
