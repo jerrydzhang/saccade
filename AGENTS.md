@@ -63,14 +63,18 @@ with them.
 - No learn semantics anywhere: the system never infers from use; standing
   things are admitted by ratification, never by recurrence.
 - Pointers, never payloads: artifact bytes live outside the record; the
-  tracker stores claims, pointers, and outcome summaries.
+  tracker stores claims, pointers, and outcome summaries. Publish an artifact
+  when the object itself is useful to inspect or reuse, not merely because
+  it was produced during execution.
 - No LLM calls in any read path; no LLM classification at capture or import.
 - The journal stays agent-free; the tracker sees only operationalized
   instances, never theory.
 - Workflow fires on triggers, not clocks.
-- Identity follows reference: dense ids for things cited daily by humans
-  (tasks); record-derived identity for things born once (comments,
-  incarnations).
+- Identity follows reference: task ids are dense fold-derived positions;
+  comments, incarnations, and messages have stable birth-record references.
+  Their human-facing numbers are dense within each kind, derived by the fold,
+  never competing persisted counters. Record seq remains provenance, not a
+  human-facing object number.
 - Breaking payload changes are allowed while this repo is the sole consumer;
   the promise that old logs always load begins at external adoption or
   painful volume, whichever comes first.
@@ -95,18 +99,42 @@ with them.
   service, not before.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes — accepted).
-- Native pi stays the pinned harness, a flake input — never the
-  ambient binary. The tracker supervises nothing: no managed RPC, no
-  session ownership, no spawn-time lever composition — start asks the
-  host for one terminal and never manages it. An incarnation is a
-  record-derived identity (its birth record — the workspace
-  establishment, one task, one workspace address) with no lifecycle
-  and no session pointer; attachment effects beyond the submitted
-  launch remain unbuilt.
-- Attention routes through declared dependency and chain judgment,
-  never addressing. No comment names a recipient. The human is reached
-  by the descriptive pull surface; blocking CLI waits ride record
-  cursors (read-side, no residency), and push signals are unbuilt.
+- Native Pi stays the pinned harness, never the ambient binary. Its
+  Saccade-integrated composition is separately callable, not a replacement
+  for ordinary Pi. The host launches and resumes; the integration associates
+  native sessions, delivers messages, and yields its own waits to input.
+  There is no tracker-owned model loop or managed RPC harness.
+- An incarnation identifies a native session, not a task, workspace, or
+  running process, and has no lifecycle in the tracker. Turns, compaction,
+  resume, and workspace handoff retain identity; fresh sessions and forks
+  create another. Historical existence asserts no current execution.
+  Native-session associations and saved locations are record facts;
+  terminal handles are runtime information.
+- Tasks, incarnations, and workspaces have separate identities. Participation
+  need not begin with a task, and launching never transfers whole-task
+  ownership implicitly. An incarnation can select, create, and switch
+  workspaces; several incarnations can use one. New versus existing workspace
+  choice is explicit. Established branch/path names survive task and session
+  changes and do not derive from task or incarnation numbering.
+- Messages are durable communication, never comment variants or implicit
+  thread publications. Agent messages carry machine-supplied sender,
+  message, and reply references; native human input remains native. Known
+  contacts come from creation, contact, or explicit introduction, not a
+  global directory, authority, expertise, or an obligation to work.
+- Messages activate recipients at supported execution boundaries. Sending
+  and waiting are separate; integration-owned waits yield to incoming input,
+  not by aborting arbitrary work. Waits are read-side, not resident workflow
+  objects. The human participates through native conversation and the
+  descriptive pull surface, not unsolicited push signals.
+- The requesting incarnation interprets returned contributions against its
+  goal and retains continuation unless explicitly handed onward. Delivery
+  supplies activation, never judgment or a successor goal. A use records
+  reliance, not an execution subscription or automatic continuation agent.
+- Comments add information rather than repeat prior accounts. Explicit
+  structured references connect contributions; their explanations remain
+  prose. Presentation revision never retargets them, substantive corrections
+  are new contributions, and historical prose does not acquire inferred
+  graph edges.
 - Comments land at the tier they describe: work facts on the work thread,
   episode facts on the episode's container, direction facts on the direction
   home; session-shaped work writes no thread summary unless it changed
@@ -171,8 +199,9 @@ Rules:
   so authority always precedes it, and every command is its events with no
   expansion. Do not give decide a world "for convenience."
 - No birth event carries its id; references do. Task ids are fold-derived push
-  positions, dense by construction; comment and incarnation ids are the
-  record positions of their births, with no counter.
+  positions, dense by construction. Stored comment, incarnation, and message
+  references identify birth records; displayed numbers count births of each
+  kind, not global record positions.
 - Validation depends on tier, never actor identity — the exception is the
   self-acceptance door: an agent whose environment-declared task scope
   covers the offered task cannot accept it. Scope is disclosure riding
@@ -180,12 +209,14 @@ Rules:
   tier argument: `SACCADE_ACTOR` presence is agent tier, its absence
   human. Judgment acts (cancel, reopen) are human-only and executed
   with an explanation, never proposed.
-- Comments carry a payload variant — note, request, offer, accept,
-  reject, use — never an address. Offer addresses its whole task;
-  accept and reject address the offer they name and refuse a stale
-  one; use lives on the consuming task, names another task's standing
-  Offered or Concluded account, and never creates the acceptance;
-  acceptance never creates the use.
+- Comments carry note, offer, accept, reject, or use payloads, an explicit
+  home task, and structured citation mappings, never a recipient. Requests
+  are messages. Offer addresses its whole task; accept and reject name its
+  current offer. A use declares a fixed other source task; explicit binding
+  or rebinding selects that task's current Offered or Concluded account with
+  grounds. Earlier selections remain recorded, and source replacement or
+  acceptance never changes the selection automatically. Changing source
+  task creates another use. Use never creates acceptance, nor acceptance use.
 
 ## Edit mechanics (scar tissue)
 
