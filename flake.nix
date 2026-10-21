@@ -51,7 +51,7 @@
           modules = [
             ({config, ...}: let
               devPi = pkgs.writeShellApplication {
-                name = "wrapped-pi";
+                name = "saccade-pi";
                 text = ''
                   exec ${wrapped-pi.packages.${system}.default}/bin/wrapped-pi ${lib.escapeShellArgs (lib.concatMap (path: ["-e" "${config.devenv.root}/${path}"]) saccadePiExtensions)} "$@"
                 '';
@@ -67,7 +67,7 @@
               ];
 
               env = {
-                SACCADE_PI = "${devPi}/bin/wrapped-pi";
+                SACCADE_PI = "${devPi}/bin/saccade-pi";
                 PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
               };
 
@@ -97,28 +97,40 @@
         pi = wrapped-pi.packages.${system}.default.override {
           extraExtensions = map (path: ./. + "/${path}") saccadePiExtensions;
         };
-      in
-        {
-          default = pkgs.rustPlatform.buildRustPackage {
-            name = "saccade";
-            src = ./.;
-            buildInputs = [];
-            # the api tests exercise real git worktrees under a
-            # writable home, through a real direnv layer
-            nativeBuildInputs = [
-              pkgs.git
-              pkgs.direnv
-            ];
-            # the pinned harness this binary's start door launches;
-            # SACCADE_PI remains the development override
-            SACCADE_PI = "${pi}/bin/wrapped-pi";
-            preCheck = ''
-              export HOME=$(mktemp -d)
-            '';
-            cargoLock.lockFile = ./Cargo.lock;
-            meta.mainProgram = "sac";
-          };
-        }
+        saccadePi = pkgs.writeShellApplication {
+          name = "saccade-pi";
+          text = ''
+            exec ${pi}/bin/wrapped-pi "$@"
+          '';
+        };
+        sac = pkgs.rustPlatform.buildRustPackage {
+          name = "saccade";
+          src = ./.;
+          buildInputs = [];
+          # the api tests exercise real git worktrees under a
+          # writable home, through a real direnv layer
+          nativeBuildInputs = [
+            pkgs.git
+            pkgs.direnv
+          ];
+          # the pinned harness this binary's start door launches;
+          # SACCADE_PI remains the development override
+          SACCADE_PI = "${saccadePi}/bin/saccade-pi";
+          preCheck = ''
+            export HOME=$(mktemp -d)
+          '';
+          cargoLock.lockFile = ./Cargo.lock;
+          meta.mainProgram = "sac";
+        };
+      in {
+        saccade-pi = saccadePi;
+
+        default = pkgs.symlinkJoin {
+          name = "saccade";
+          paths = [sac saccadePi];
+          meta.mainProgram = "sac";
+        };
+      }
     );
 
     formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.alejandra);
