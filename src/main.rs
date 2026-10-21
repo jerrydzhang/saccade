@@ -267,6 +267,12 @@ enum Cmd {
         /// native session, validated against the saved header
         #[arg(long, conflicts_with = "workspace")]
         resume: Option<String>,
+        /// The initial question: the launching incarnation sends it as
+        /// a durable addressed message to the newborn peer. The creator
+        /// must be registered (SACCADE_INCARNATION_SEQ); conflicts with
+        /// a positional prompt and with --resume
+        #[arg(long, conflicts_with = "resume")]
+        ask: Option<String>,
         /// The initial prompt, quoted; native human input when omitted
         #[arg(last = true)]
         prompt: Vec<String>,
@@ -661,8 +667,17 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::Integrate {
             workspace,
             resume,
+            ask,
             prompt,
         } => {
+            if let Some(question) = ask.as_deref() {
+                let Some(workspace) = workspace.as_deref() else {
+                    return Err(Fail::Usage(
+                        "integrate --ask launches a fresh peer: pass --workspace <dir>".into(),
+                    ));
+                };
+                return ask_door(cli, &destination, workspace, question);
+            }
             return integrate_door(
                 cli,
                 &destination,
@@ -2238,19 +2253,31 @@ fn send_door(
     client::handshake(&url);
     let sent = client::send_message(&url, &context, to_num, reply_num, task_num, &body)
         .map_err(Fail::Client)?;
+    // delivery activation: a running peer's bridge delivers; a stopped
+    // one resumes from its exact saved session; every doubt stays
+    // pending and says so - the send itself never un-lands
+    let activation = activate_recipient(cli, &destination, to_num);
     if cli.json {
-        return Ok(serde_json::to_string_pretty(
-            &serde_json::to_value(&sent).expect("the send reply is plain data"),
-        )
-        .expect("plain data"));
+        let mut reply = serde_json::to_value(&sent).expect("the send reply is plain data");
+        reply["activation"] = serde_json::json!({
+            "state": activation.state,
+            "detail": activation.detail,
+            "terminal": activation.terminal,
+        });
+        return Ok(serde_json::to_string_pretty(&reply).expect("plain data"));
     }
-    Ok(format!(
+    let mut out = format!(
         "sent m-{} to i-{to_num} - pending until the recipient's integration submits it",
         sent.message
             .num
             .map(|n| n.to_string())
             .unwrap_or_else(|| format!("(seq {})", sent.message.seq)),
-    ))
+    );
+    if let Some(line) = activation.line(to_num) {
+        out.push('\n');
+        out.push_str(&line);
+    }
+    Ok(out)
 }
 
 /// The mailbox door: the messages an incarnation participates in, in
@@ -2319,7 +2346,9 @@ fn messages_door(
 /// The integrate door: the composed native Pi in an explicit existing
 /// workspace, task-free. A fresh launch registers a new incarnation at
 /// session start; --resume continues a saved one, validated against
-/// its recorded native session before anything launches.
+/// its recorded native session before anything launches. A launch
+/// token, when given, rides the routing so the launching door can
+/// learn which incarnation registered under its launch.
 fn integrate_door(
     cli: &Cli,
     destination: &Destination,
@@ -2327,18 +2356,45 @@ fn integrate_door(
     resume: Option<&str>,
     prompt: &[String],
 ) -> Result<String, Fail> {
+    let (dir_str, terminal) = integrate_launch(cli, destination, workspace, resume, prompt, None)?;
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "workspace": dir_str,
+            "terminal": terminal,
+        }))
+        .expect("plain data"));
+    }
+    Ok(format!(
+        "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+    ))
+}
+
+/// One compose launch through the host: the exact workspace, the
+/// terminal handle, the command line. Mechanics only - rendering and
+/// any follow-on act belong to the calling door.
+fn integrate_launch(
+    cli: &Cli,
+    destination: &Destination,
+    workspace: Option<&std::path::Path>,
+    resume: Option<&str>,
+    prompt: &[String],
+    launch_token: Option<&str>,
+) -> Result<(String, String), Fail> {
     let url = server_url(destination, "integrate")?;
     let pi = pinned_pi()?;
     let repo = resolve_repo(cli)?;
     let label = command_label(&pi.display().to_string());
     // routing rides the launch line: the integration reaches the
     // tracker's server directly, the repo names the tracker besides
-    let routing = format!(
+    let mut routing = format!(
         "SACCADE_ACTOR={} SACCADE_SERVER={} SACCADE_REPO={}",
         shell_quote(&label),
         shell_quote(&url),
         shell_quote(&repo.display().to_string()),
     );
+    if let Some(token) = launch_token {
+        routing.push_str(&format!(" SACCADE_LAUNCH_TOKEN={}", shell_quote(token)));
+    }
     let prompt_text = prompt.join(" ");
     let (dir, argv, title) = match (workspace, resume) {
         (Some(dir), None) => {
@@ -2427,7 +2483,7 @@ fn integrate_door(
     // routing the child never selected; the routing it does select
     // rides the line explicitly.
     let command = format!(
-        "cd {} && env -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB {} {}",
+        "cd {} && env -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB -u SACCADE_LAUNCH_TOKEN {} {}",
         shell_quote(&dir_str),
         routing,
         argv.iter()
@@ -2455,16 +2511,344 @@ fn integrate_door(
         )));
     }
     let terminal = terminal_handle(&String::from_utf8_lossy(&out.stdout)).map_err(Fail::Usage)?;
+    Ok((dir_str, terminal))
+}
+
+/// A fresh random launch token: self-generated correlation only, never
+/// printed into the session and never a record.
+fn launch_token() -> String {
+    let mut bytes = [0u8; 16];
+    // exactly sixteen bytes: /dev/urandom never ends, so anything
+    // read-to-EOF here would allocate forever
+    let filled = std::fs::File::open("/dev/urandom")
+        .is_ok_and(|mut file| std::io::Read::read_exact(&mut file, &mut bytes).is_ok());
+    if !filled {
+        // no urandom: nanos and pid distinguish concurrent doors well
+        // enough for an in-memory cache, and the door refuses on a
+        // collision anyway
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mix = nanos ^ ((std::process::id() as u128) << 64);
+        for (at, piece) in bytes.chunks_mut(8).enumerate() {
+            let shift = 8 * at;
+            for (i, slot) in piece.iter_mut().enumerate() {
+                *slot = (mix >> (shift + 8 * i)) as u8;
+            }
+        }
+    }
+    let mut token = String::with_capacity(32);
+    for b in bytes {
+        token.push_str(&format!("{b:02x}"));
+    }
+    token
+}
+
+/// Whether a native Pi process lives in this exact workspace right
+/// now, read from the host's process table: cwd symlink and argv[0]
+/// per /proc entry. A heuristic in the safe direction - any doubt
+/// reads as alive, and the caller leaves mail pending rather than
+/// spawning a duplicate into a running session.
+fn pi_alive_in(dir: &std::path::Path) -> bool {
+    let mut names: Vec<String> = vec!["pi".into(), "saccade-pi".into()];
+    if let Some(base) = pinned_pi()
+        .ok()
+        .and_then(|pinned| pinned.file_name().map(|n| n.to_string_lossy().into_owned()))
+    {
+        names.push(base);
+    }
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let pid = match entry.file_name().to_string_lossy().parse::<u32>() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        if std::fs::read_link(format!("/proc/{pid}/cwd")).is_ok_and(|cwd| cwd == dir)
+            && std::fs::read(format!("/proc/{pid}/cmdline"))
+                .ok()
+                .and_then(|raw| {
+                    raw.split(|b| *b == 0)
+                        .next()
+                        .map(|argv0| {
+                            let os: &std::ffi::OsStr =
+                                std::os::unix::ffi::OsStrExt::from_bytes(argv0);
+                            std::path::Path::new(os)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                        })
+                        .unwrap_or(None)
+                })
+                .is_some_and(|base| names.contains(&base))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// What a sender's post-send activation may do: runtime facts only,
+/// and every doubt leaves the mail pending - a duplicate native
+/// process in a running session is the one unforgivable outcome.
+enum Activation {
+    /// a delivery bridge holds a connection; delivery happens in-session
+    Connected,
+    /// no bridge, and the workspace is not on this host: safety is
+    /// unverifiable from here
+    Unverifiable(String),
+    /// a native Pi process lives in the workspace without a bridge
+    /// connection: active or unknown, never resumed into
+    LiveUnbridged,
+    /// no bridge and no Pi process: the exact session resumes
+    Resumable,
+}
+
+/// The activation decision for one recipient: the bridge cache first,
+/// then the saved header's own workspace, then the process table.
+fn activation_for(
+    bridge_connected: bool,
+    saved_session: &std::path::Path,
+    native_id: &str,
+) -> Activation {
+    if bridge_connected {
+        return Activation::Connected;
+    }
+    let header = match saccade::pi_session::read_header(saved_session) {
+        Ok(header) => header,
+        Err(e) => {
+            return Activation::Unverifiable(format!("their saved session cannot be read: {e}"));
+        }
+    };
+    if header.id != native_id {
+        return Activation::Unverifiable(format!(
+            "their saved session carries id {}, not {}",
+            header.id, native_id
+        ));
+    }
+    let workspace = std::path::PathBuf::from(&header.cwd);
+    if !workspace.is_dir() {
+        return Activation::Unverifiable(format!(
+            "their workspace {} is not on this host; safety cannot be verified",
+            workspace.display()
+        ));
+    }
+    if pi_alive_in(&workspace) {
+        return Activation::LiveUnbridged;
+    }
+    Activation::Resumable
+}
+
+/// One activation outcome as the send door reports it: descriptive
+/// facts only, never a judgment about the recipient's work.
+struct ActivationNote {
+    state: &'static str,
+    detail: Option<String>,
+    terminal: Option<String>,
+}
+
+impl ActivationNote {
+    fn silent() -> Self {
+        Self {
+            state: "connected",
+            detail: None,
+            terminal: None,
+        }
+    }
+
+    fn line(&self, to_num: usize) -> Option<String> {
+        match self.state {
+            "connected" => None,
+            "resumed" => Some(format!(
+                "  their session was not live: resumed i-{to_num} from its saved session (terminal {}) - pending mail delivers at start",
+                self.terminal.as_deref().unwrap_or("?")
+            )),
+            "live_unbridged" => Some(
+                "  their session looks live but its delivery bridge is not connected; the message stays pending".into(),
+            ),
+            _ => Some(format!(
+                "  activation not attempted: {} - the message stays pending",
+                self.detail.as_deref().unwrap_or("the host state is unknown")
+            )),
+        }
+    }
+}
+
+/// The sender's door activation after a landed send: connect or resume
+/// or hold, per the decision. A resume failure reports exactly and
+/// leaves the mail pending - the send itself never un-lands.
+fn activate_recipient(cli: &Cli, destination: &Destination, to_num: usize) -> ActivationNote {
+    let url = match server_url(destination, "send") {
+        Ok(url) => url,
+        Err(e) => {
+            return ActivationNote {
+                state: "unverifiable",
+                detail: Some(e.to_string()),
+                terminal: None,
+            };
+        }
+    };
+    let connected = match client::bridge_connections(&url) {
+        Ok(connected) => connected,
+        Err(e) => {
+            return ActivationNote {
+                state: "unverifiable",
+                detail: Some(e.to_string()),
+                terminal: None,
+            };
+        }
+    };
+    let world = match loadout_of(destination) {
+        Ok(loadout) => match loadout.state {
+            saccade::db::LoadState::Full(world) => world,
+            saccade::db::LoadState::Degraded(_) => {
+                return ActivationNote {
+                    state: "unverifiable",
+                    detail: Some(
+                        "the log will not fold; the recipient's session is unknown".into(),
+                    ),
+                    terminal: None,
+                };
+            }
+        },
+        Err(e) => {
+            return ActivationNote {
+                state: "unverifiable",
+                detail: Some(e.to_string()),
+                terminal: None,
+            };
+        }
+    };
+    let Some(id) = world.incarnation_at_num(to_num) else {
+        return ActivationNote {
+            state: "unverifiable",
+            detail: Some(format!("i-{to_num} is not a registered incarnation")),
+            terminal: None,
+        };
+    };
+    let ctx = &world.incarnations[&id];
+    let saccade::Incarnation::Native {
+        native_id,
+        saved_session,
+    } = &ctx.incarnation
+    else {
+        // historical attribution identities have no session to activate
+        return ActivationNote::silent();
+    };
+    match activation_for(
+        connected.contains(&id.0.0),
+        saved_session.as_path(),
+        native_id.as_str(),
+    ) {
+        Activation::Connected => ActivationNote::silent(),
+        Activation::Unverifiable(detail) => ActivationNote {
+            state: "unverifiable",
+            detail: Some(detail),
+            terminal: None,
+        },
+        Activation::LiveUnbridged => ActivationNote {
+            state: "live_unbridged",
+            detail: None,
+            terminal: None,
+        },
+        Activation::Resumable => match integrate_launch(
+            cli,
+            destination,
+            None,
+            Some(&format!("i-{to_num}")),
+            &[],
+            None,
+        ) {
+            Ok((_, terminal)) => ActivationNote {
+                state: "resumed",
+                detail: None,
+                terminal: Some(terminal),
+            },
+            Err(e) => ActivationNote {
+                state: "unverifiable",
+                detail: Some(format!("resume refused: {}", e)),
+                terminal: None,
+            },
+        },
+    }
+}
+
+/// The ask door: cheap peer creation with an initial question. The
+/// creator is a registered incarnation; the question is durable
+/// addressed communication from its own scope - machine-supplied
+/// origin on the record - never argv shaped into native human input.
+/// The newborn's address arrives by launch-token correlation; knowing
+/// it confers nothing beyond the reply surface.
+fn ask_door(
+    cli: &Cli,
+    destination: &Destination,
+    workspace: &std::path::Path,
+    question: &str,
+) -> Result<String, Fail> {
+    let url = server_url(destination, "integrate")?;
+    let context = context_of(cli)?;
+    let scope = context.scope.clone().ok_or_else(|| {
+        Fail::Usage(
+            "integrate --ask sends as a registered incarnation: declare SACCADE_INCARNATION_SEQ (a human launch needs no question - pass the prompt positionally instead)".into(),
+        )
+    })?;
+    let creator = scope.incarnation.ok_or_else(|| {
+        Fail::Usage(
+            "integrate --ask sends as a registered incarnation: declare SACCADE_INCARNATION_SEQ"
+                .into(),
+        )
+    })?;
+    let loadout = loadout_of(destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "integrate --ask needs the world; the log will not fold".into(),
+        ));
+    };
+    if !world.incarnations.contains_key(&creator) {
+        return Err(Fail::Reject(Reject::InvalidIncarnationId));
+    }
+    let creator_num = world
+        .incarnation_num(creator)
+        .map(|n| format!("i-{n}"))
+        .unwrap_or_else(|| format!("seq {}", creator.0.0));
+    let token = launch_token();
+    let (dir_str, terminal) =
+        integrate_launch(cli, destination, Some(workspace), None, &[], Some(&token))?;
+    // the newborn announces itself through the launch cache; the poll
+    // is transport with a hard stop, not a subscription
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let (birth, num) = loop {
+        match client::launch_of(&url, &token).map_err(Fail::Client)? {
+            Some(found) => break found,
+            None if std::time::Instant::now() >= deadline => {
+                return Err(Fail::Usage(format!(
+                    "the composed session at {dir_str} did not register within 20s (terminal {terminal}); nothing was sent - it may still register, and a later `sac send --to` reaches it"
+                )));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(400)),
+        }
+    };
+    let body = Prose::new(question.to_string())?;
+    let sent = client::send_message(&url, &context, num, None, scope.task.map(|t| t.0), &body)
+        .map_err(Fail::Client)?;
+    let answer = sent
+        .message
+        .num
+        .map(|n| format!("m-{n}"))
+        .unwrap_or_else(|| format!("seq {}", sent.message.seq));
+
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "workspace": dir_str,
             "terminal": terminal,
-            "command": command,
+            "incarnation": {"seq": birth, "num": num},
+            "question": {"num": sent.message.num, "seq": sent.message.seq},
         }))
         .expect("plain data"));
     }
     Ok(format!(
-        "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+        "i-{num} registered at {dir_str} (terminal {terminal}); your question went as {answer} from {creator_num}; they receive it natively"
     ))
 }
 

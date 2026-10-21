@@ -2,8 +2,10 @@
 //! here: the wire tier admits only human and agent, so no request can
 //! present the machinery's author.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -36,6 +38,96 @@ struct Inner {
     db_path: std::path::PathBuf,
 }
 
+/// One launch registration: the claiming incarnation's birth seq and
+/// public number, held until the token expires.
+type LaunchEntry = (usize, usize, std::time::Instant);
+
+/// The native bridge's operational cache: which incarnations hold a
+/// live delivery connection right now, and the launch tokens a compose
+/// door is waiting on. Runtime facts only - transport state and
+/// correlation, never record identity, authority, or obligation; lost
+/// on restart and rebuilt by the sessions themselves.
+#[derive(Clone, Default)]
+pub struct BridgeCache {
+    /// wakes parked delivery polls when a record lands
+    notify: Arc<tokio::sync::Notify>,
+    /// incarnation birth seq -> live delivery connections
+    live: Arc<std::sync::Mutex<HashMap<usize, usize>>>,
+    /// launch token -> (incarnation seq, public number), expiring
+    launches: Arc<Mutex<HashMap<String, LaunchEntry>>>,
+}
+
+impl BridgeCache {
+    /// A record landed: every parked mailbox poll re-checks its
+    /// predicate against the new fold.
+    pub fn wake(&self) {
+        self.notify.notify_waiters();
+    }
+
+    /// Remember which incarnation claimed a compose launch token; the
+    /// launching door polls this to learn the birth it caused.
+    pub fn remember_launch(&self, token: String, incarnation: usize, num: usize) {
+        let mut launches = self.launches.lock().expect("the launch cache holds");
+        launches.retain(|_, (_, _, at)| at.elapsed() < std::time::Duration::from_secs(900));
+        launches.insert(token, (incarnation, num, Instant::now()));
+    }
+
+    /// The incarnation that registered under a launch token, if the
+    /// token is still fresh.
+    pub fn launch(&self, token: &str) -> Option<(usize, usize)> {
+        let mut launches = self.launches.lock().expect("the launch cache holds");
+        launches.retain(|_, (_, _, at)| at.elapsed() < std::time::Duration::from_secs(900));
+        launches.get(token).map(|(i, n, _)| (*i, *n))
+    }
+
+    /// The incarnations holding at least one delivery connection: the
+    /// activation decision's operational input, never a liveness proof.
+    pub fn connected(&self) -> Vec<(usize, usize)> {
+        let live = self.live.lock().expect("the live cache holds");
+        let mut entries: Vec<(usize, usize)> = live
+            .iter()
+            .filter(|(_, c)| **c > 0)
+            .map(|(i, c)| (*i, *c))
+            .collect();
+        entries.sort();
+        entries
+    }
+}
+
+/// Counts one delivery connection for its scope: parked poll or
+/// immediate read, the bridge announces itself for the call's duration.
+struct BridgeLive {
+    live: Arc<std::sync::Mutex<HashMap<usize, usize>>>,
+    incarnation: usize,
+}
+
+impl BridgeLive {
+    fn new(cache: &BridgeCache, incarnation: usize) -> Self {
+        *cache
+            .live
+            .lock()
+            .expect("the live cache holds")
+            .entry(incarnation)
+            .or_insert(0) += 1;
+        Self {
+            live: Arc::clone(&cache.live),
+            incarnation,
+        }
+    }
+}
+
+impl Drop for BridgeLive {
+    fn drop(&mut self) {
+        let mut live = self.live.lock().expect("the live cache holds");
+        if let Some(count) = live.get_mut(&self.incarnation) {
+            *count -= 1;
+            if *count == 0 {
+                live.remove(&self.incarnation);
+            }
+        }
+    }
+}
+
 /// The sole writer's state: every face loads the log fresh under the
 /// one lock, so no read can serve a world the file contradicts.
 #[derive(Clone)]
@@ -43,6 +135,9 @@ pub struct AppState {
     inner: Arc<Mutex<ServerState>>,
     db_path: std::path::PathBuf,
     attempts: Attempts,
+    /// The native bridge's operational cache: delivery-connection
+    /// liveness, launch tokens, and the wake for parked mailbox reads.
+    bridge: BridgeCache,
     /// The artifact store the bytes door serves from; a server that
     /// was not told a repo root has none.
     artifacts: Option<std::path::PathBuf>,
@@ -115,6 +210,7 @@ impl AppState {
             inner: Arc::new(Mutex::new(state)),
             db_path: canonical,
             attempts: Attempts::beside(db_path),
+            bridge: BridgeCache::default(),
             artifacts: None,
             repo_root: None,
             repo_name: None,
@@ -170,7 +266,7 @@ impl AppState {
         at: Option<u64>,
         received: AsReceived,
     ) -> Result<Vec<StoredRecord>, ExecuteFail> {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let mut guard = self.inner.lock().expect("the writer lock is not poisoned");
         // the cursor names the log as it stands at judgment, external
         // writes included
@@ -197,14 +293,19 @@ impl AppState {
             Err(ExecuteFail::Db(_)) => Some("storage"),
         };
         match &outcome {
-            Ok(stored) => self.attempts.append(
-                Some(context.actor.as_str()),
-                received.client.as_deref(),
-                duration_ms,
-                Outcome::Landed {
-                    seqs: &stored.iter().map(|s| s.seq).collect::<Vec<_>>(),
-                },
-            ),
+            Ok(stored) => {
+                // a landed write may be mail a parked delivery poll is
+                // waiting on: the landing is the wake, never a timer
+                self.bridge.notify.notify_waiters();
+                self.attempts.append(
+                    Some(context.actor.as_str()),
+                    received.client.as_deref(),
+                    duration_ms,
+                    Outcome::Landed {
+                        seqs: &stored.iter().map(|s| s.seq).collect::<Vec<_>>(),
+                    },
+                );
+            }
             Err(_) => self.attempts.append(
                 Some(context.actor.as_str()),
                 received.client.as_deref(),
@@ -447,6 +548,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/workspace/start", post(workspace_start))
         .route("/api/v1/workspace/open", post(workspace_open))
         .route("/api/v1/native/attach", post(native_attach))
+        .route("/api/v1/native/bridge", get(native_bridge))
+        .route("/api/v1/native/launch", get(native_launch))
         .route("/api/v1/messages/send", post(message_send))
         .route("/api/v1/messages/submit", post(message_submit))
         .route("/api/v1/messages/pending", get(messages_pending))
@@ -512,7 +615,7 @@ fn workspace_operation(
     base: Option<&str>,
     caller_records: impl FnOnce(RecordId) -> Vec<db::RecordDraft>,
 ) -> OperationOutcome {
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let outcome = run_operation(app, guard, task, base, caller_records);
     let duration_ms = started.elapsed().as_millis() as u64;
     match &outcome {
@@ -768,6 +871,11 @@ pub struct AttachReply {
 struct AttachRequest {
     native_id: crate::NativeSessionId,
     session_file: crate::SessionLocator,
+    /// A compose launch's correlation token: the launching door learns
+    /// which incarnation registered under its launch. Runtime plumbing
+    /// only - nothing lands in the log with it.
+    #[serde(default)]
+    launch_token: Option<String>,
     #[serde(default)]
     client: Option<String>,
 }
@@ -857,10 +965,14 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
         client: request.client,
         raw,
     };
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = attach_operation(&mut guard, &request.native_id, &request.session_file);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if let (Ok(reply), Some(token)) = (&outcome, request.launch_token) {
+        app.bridge
+            .remember_launch(token, reply.incarnation, reply.num);
+    }
     match outcome {
         Ok(reply) => (
             StatusCode::OK,
@@ -1034,34 +1146,24 @@ struct MailboxQuery {
     /// The reader's own incarnation: a bare birth-record position, the
     /// machine identity channel the session attaches with
     incarnation: usize,
+    /// Park until incoming pending mail exists or this many
+    /// milliseconds pass, capped at 30s: the delivery bridge's parked
+    /// read, woken by the record's landing, never a timer over the log.
+    /// Absent, the read returns immediately.
+    #[serde(default)]
+    wait_ms: Option<u64>,
+    /// Announce a delivery bridge connection for the call's duration:
+    /// the operational liveness the activation decision reads. "1" or
+    /// "true"; the integration sends the digit.
+    #[serde(default)]
+    bridge: Option<String>,
 }
 
-/// The reader's own mail, in birth order, any state: a read the
-/// integration polls, never a subscription the tracker keeps.
-async fn messages_pending(
-    State(app): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<MailboxQuery>,
-) -> Response {
-    let snapshot = match app.snapshot() {
-        Ok(s) => s,
-        Err(read_fail) => {
-            let (status, code, detail) = match read_fail {
-                ReadFail::Degraded(d) => ApiFail::Degraded(d.reason).parts(),
-                ReadFail::Db(reason) => ApiFail::Db(reason).parts(),
-            };
-            return (
-                status,
-                Json(json!({"error": {"code": code, "detail": detail}})),
-            )
-                .into_response();
-        }
-    };
-    let world = snapshot.world;
-    let id = crate::IncarnationId(RecordId(query.incarnation));
-    if !world.incarnations.contains_key(&id) {
-        return api_failure(ApiFail::Reject(Reject::InvalidIncarnationId, None));
-    }
-    let messages: Vec<serde_json::Value> = world
+/// The mailbox JSON: the reader's mail in birth order, any state, both
+/// directions, with the log's cursor.
+fn mailbox_view(snapshot: &Snapshot, id: crate::IncarnationId) -> Value {
+    let world = &snapshot.world;
+    let messages: Vec<Value> = world
         .messages
         .iter()
         .filter(|(_, mctx)| mctx.message.to == id || mctx.message.from == id)
@@ -1090,12 +1192,107 @@ async fn messages_pending(
             })
         })
         .collect();
-    let cursor = snapshot.rows.last().map(|r| r.seq);
-    (
-        StatusCode::OK,
-        Json(json!({"messages": messages, "cursor": cursor})),
-    )
-        .into_response()
+    json!({ "messages": messages, "cursor": snapshot.rows.last().map(|r| r.seq) })
+}
+
+/// Whether mail sits unsubmitted for this incarnation: the predicate a
+/// parked bridge read waits on.
+fn has_pending_incoming(world: &World, id: crate::IncarnationId) -> bool {
+    world
+        .messages
+        .values()
+        .any(|mctx| mctx.message.to == id && mctx.state == crate::MessageState::Pending)
+}
+
+/// The reader's own mail, in birth order, any state. A read the
+/// integration polls - parked at most wait_ms when asked, woken by the
+/// record's landing - never a subscription the tracker keeps.
+async fn messages_pending(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<MailboxQuery>,
+) -> Response {
+    let _live = if matches!(query.bridge.as_deref(), Some("1") | Some("true")) {
+        Some(BridgeLive::new(&app.bridge, query.incarnation))
+    } else {
+        None
+    };
+    let wait_ms = query.wait_ms.unwrap_or(0).min(30_000);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
+    let id = crate::IncarnationId(RecordId(query.incarnation));
+    loop {
+        // armed before the read so a landing between the read and the
+        // park cannot be missed
+        let wake = app.bridge.notify.notified();
+        tokio::pin!(wake);
+        wake.as_mut().enable();
+        let snapshot = match app.snapshot() {
+            Ok(s) => s,
+            Err(read_fail) => {
+                let (status, code, detail) = match read_fail {
+                    ReadFail::Degraded(d) => ApiFail::Degraded(d.reason).parts(),
+                    ReadFail::Db(reason) => ApiFail::Db(reason).parts(),
+                };
+                return (
+                    status,
+                    Json(json!({"error": {"code": code, "detail": detail}})),
+                )
+                    .into_response();
+            }
+        };
+        if !snapshot.world.incarnations.contains_key(&id) {
+            return api_failure(ApiFail::Reject(Reject::InvalidIncarnationId, None));
+        }
+        let satisfied = has_pending_incoming(&snapshot.world, id);
+        if satisfied || wait_ms == 0 || tokio::time::Instant::now() >= deadline {
+            return (StatusCode::OK, Json(mailbox_view(&snapshot, id))).into_response();
+        }
+        let _ = tokio::time::timeout_at(deadline, wake).await;
+    }
+}
+
+/// The bridge liveness cache as a read: which incarnations hold a
+/// delivery connection right now. Operational only - absence is not
+/// proof a native process exited.
+async fn native_bridge(State(app): State<AppState>) -> Json<Value> {
+    let incarnations: Vec<Value> = app
+        .bridge
+        .connected()
+        .into_iter()
+        .map(|(incarnation, connections)| {
+            json!({"incarnation": incarnation, "connections": connections})
+        })
+        .collect();
+    Json(json!({ "incarnations": incarnations }))
+}
+
+#[derive(Deserialize)]
+struct LaunchQuery {
+    token: String,
+}
+
+/// Which incarnation registered under a compose launch token: how the
+/// launching door learns the birth it caused. Runtime correlation only.
+async fn native_launch(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<LaunchQuery>,
+) -> Response {
+    match app.bridge.launch(&query.token) {
+        Some((incarnation, num)) => (
+            StatusCode::OK,
+            Json(json!({"incarnation": incarnation, "num": num})),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": {
+                    "code": "launch_unknown",
+                    "detail": "no composed session registered under this launch token"
+                }
+            })),
+        )
+            .into_response(),
+    }
 }
 
 fn respond_operation(

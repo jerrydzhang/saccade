@@ -171,7 +171,11 @@ class FakeTracker {
 	mailboxes = new Map<number, any[]>();
 	submissions: Array<{ incarnation: number; message: number }> = [];
 	sent: any[] = [];
+	attachBodies: any[] = [];
 	attachFails = false;
+	failNext = 0;
+	// parked bridge reads: held until a record lands or the test wakes them
+	parked: Array<() => void> = [];
 
 	url() {
 		return "http://tracker.test";
@@ -181,10 +185,23 @@ class FakeTracker {
 		return { status, json: async () => body };
 	}
 
+	// a landed record wakes every parked read, like the server's notify
+	land(incarnation: number, message: any) {
+		const box = this.mailboxes.get(incarnation) ?? [];
+		box.push(message);
+		this.mailboxes.set(incarnation, box);
+		for (const wake of this.parked.splice(0)) wake();
+	}
+
 	handle = async (rawUrl: any, init?: any) => {
 		const path = new URL(String(rawUrl)).pathname;
 		const body = init?.body ? JSON.parse(init.body) : {};
+		if (this.failNext > 0) {
+			this.failNext -= 1;
+			throw new Error("tracker unreachable");
+		}
 		if (path === "/api/v1/native/attach") {
+			this.attachBodies.push(body);
 			if (this.attachFails) {
 				return this.reply({ error: { code: "degraded", detail: "down" } }, 503);
 			}
@@ -197,7 +214,16 @@ class FakeTracker {
 			return this.reply({ registered: true, ...fresh });
 		}
 		if (path === "/api/v1/messages/pending") {
-			const incarnation = Number(new URL(String(rawUrl)).searchParams.get("incarnation"));
+			const url = new URL(String(rawUrl));
+			const incarnation = Number(url.searchParams.get("incarnation"));
+			const mine = (this.mailboxes.get(incarnation) ?? []).filter(
+				(m: any) => m.state === "pending" && m.to.seq === incarnation,
+			);
+			const waitMs = Number(url.searchParams.get("wait_ms") ?? 0);
+			if (waitMs > 0 && mine.length === 0) {
+				// the parked read: held until a record lands
+				await new Promise<void>((resolve) => this.parked.push(resolve));
+			}
 			return this.reply({ messages: this.mailboxes.get(incarnation) ?? [] });
 		}
 		if (path === "/api/v1/messages/send") {
@@ -372,6 +398,97 @@ test("agent possession survives a tracker outage; injected actors win", async ()
 	injected.tracker.attachFails = true;
 	await injected.pi.emit("session_start");
 	assert.equal(process.env.SACCADE_ACTOR, "worker");
+});
+
+test("a running registered peer receives without any wait tool", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	assert.equal(h.pi.followUps.length, 0);
+	// the bridge holds a parked read; the record's landing wakes it
+	h.tracker.land(0, mail({ seq: 60, num: 5, to: { seq: 0, num: 0 } }));
+	await tick();
+	assert.equal(h.pi.followUps.length, 1);
+	assert.ok(h.pi.followUps[0].includes("[saccade message m-5"));
+	assert.equal(h.tracker.submissions.length, 0);
+	// the queued envelope still confirms from saved history
+	await h.pi.runQueue();
+	await tick();
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 60 }]);
+});
+
+test("background arrival and the wait tool queue a message once", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	h.tracker.land(0, mail({ seq: 61, num: 6, to: { seq: 0, num: 0 } }));
+	await tick();
+	assert.equal(h.pi.followUps.length, 1);
+	// the wait tool sees the same pending message and releases, but
+	// its own queueing is a no-op: one envelope, one path
+	const wait = h.tools("saccade_wait");
+	const result = await boundary(
+		wait.execute("t1", {}, new AbortController().signal, { sessionManager: h.pi.session }),
+		8000,
+		"saccade_wait",
+	);
+	assert.ok(String(result.content[0].text).includes("received m-6"));
+	assert.equal(h.pi.followUps.length, 1);
+});
+
+test("a failed bridge read reconnects and keeps delivering", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	// the read after the parked one fails, then transport recovers
+	h.tracker.failNext = 1;
+	h.tracker.land(0, mail({ seq: 62, num: 7, to: { seq: 0, num: 0 } }));
+	await tick();
+	assert.equal(h.pi.followUps.length, 1, "the landing delivered before the failure");
+	// mail landing while the bridge is in its backoff still arrives
+	const later = mail({ seq: 63, num: 8, to: { seq: 0, num: 0 } });
+	const before = h.pi.followUps.length;
+	const deadline = Date.now() + 8000;
+	while (h.pi.followUps.length === before && Date.now() < deadline) {
+		h.tracker.land(0, later);
+		await new Promise((resolve) => setTimeout(resolve, 150));
+	}
+	assert.ok(h.pi.followUps.length > before, "the reconnected bridge delivered");
+});
+
+test("session shutdown stops the bridge: nothing delivers after it", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	await h.pi.emit("session_shutdown");
+	assert.equal(h.pi.followUps.length, 0);
+	h.tracker.land(0, mail({ seq: 64, num: 9, to: { seq: 0, num: 0 } }));
+	await tick();
+	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.tracker.submissions.length, 0);
+});
+
+test("reassociation strands the old bridge: no stale delivery, no stale submit", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	// a new native session reassociates; the old bridge's parked read dies
+	h.pi.session = new FakeSession("bbbb2222", "/sessions/bbbb2222.jsonl");
+	await h.pi.emit("session_start");
+	assert.equal(h.tracker.attachments.size, 2);
+	// mail for the OLD incarnation lands and wakes every parked read
+	h.tracker.land(0, mail({ seq: 65, num: 1, to: { seq: 0, num: 0 } }));
+	await tick();
+	assert.equal(h.pi.followUps.length, 0, "the old bridge delivered nothing");
+	assert.equal(h.tracker.submissions.length, 0);
+	// and the new association still delivers its own
+	h.tracker.land(1, mail({ seq: 66, num: 2, to: { seq: 1, num: 1 } }));
+	await tick();
+	assert.equal(h.pi.followUps.length, 1);
+});
+
+test("the attach carries the launch token it was launched with", async () => {
+	process.env.SACCADE_LAUNCH_TOKEN = "launch-abc123";
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	assert.equal(h.tracker.attachBodies.length, 1);
+	assert.equal(h.tracker.attachBodies[0].launch_token, "launch-abc123");
+	delete process.env.SACCADE_LAUNCH_TOKEN;
 });
 
 test("the declared task anchors scope; an explicit task argument is message context", async () => {

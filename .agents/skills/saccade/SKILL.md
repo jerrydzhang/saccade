@@ -164,6 +164,7 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace - none is created by checkpoint |
 | `sac start t-N "initial prompt"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects and submit the pinned native Pi into one host terminal with the prompt as its native first input - no comment publication, no ownership transfer; a repeat start reveals the standing workspace's live terminal or reports its address |
 | `sac integrate --workspace <dir> [-- prompt]` | any tier | launch the composed native Pi in an explicit existing directory, task-free: a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. Never creates a workspace, task, claim, or request |
+| `sac integrate --workspace <dir> --ask "question"` | a registered incarnation | cheap peer creation with an initial question: launches the peer, and once it registers the question goes to it as a durable addressed message from your own scope - the newborn's address is your reply surface. Requires SACCADE_INCARNATION_SEQ; never argv-shaped human input, never a task or ownership |
 | `sac open t-N` | any tier | ensure the recorded environment exists (a missing checkout is recreated from its branch tip); a fresh association births the establishment alone, a standing one reveals its live terminal or reports its address - never a harness launch or ownership change |
 | `sac clean t-N` | any tier | stop the workspace's host terminals and running work, remove the checkout; the branch (unmerged commits included), records, checkpoints, and artifacts stand; a checkout with staged, unstaged, or untracked work refuses first; nothing is recorded |
 | `sac exec t-N -- <command and argv>` | any tier | run a command inside the recorded workspace: identity and routing injected from the record, argv boundaries kept, nothing recorded |
@@ -253,8 +254,14 @@ Delivery facts for messages are small and ordinary: a message reads
 `pending` until the recipient's integration hands it to its native
 session, then `submitted` - never a claim of reading, agreement,
 completion, or task acceptance. A sent message activates its recipient
-only at supported boundaries: while the recipient waits, or at its next
-session start. The mailbox read is `sac messages`.
+at supported boundaries: a running peer's delivery bridge parks on the
+tracker and delivers into the live queue, or starts a turn when the
+session is idle; while it waits, the wait releases; a peer that is not
+running resumes its exact saved session at the next send, and every
+doubt about liveness leaves the mail pending - a transient disconnect
+never spawns a duplicate into a running session. Submission confirms
+from the saved session history at later boundaries. The mailbox read is
+`sac messages`.
 
 ## Hygiene
 

@@ -3261,6 +3261,307 @@ async fn the_integrate_launch_scrubs_stale_inheritance() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
+    let db = scratch_db("native-bridge");
+    let base_url = spawn_server(&db).await;
+
+    // two registered peers: the addressee parks a bridge read
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "aaaa1111", "session_file": "/sessions/aaaa1111.jsonl"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "bbbb2222", "session_file": "/sessions/bbbb2222.jsonl"}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // a parked read holds while the mailbox is empty and announces its
+    // incarnation for the call's duration
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let url = base_url.clone();
+    std::thread::spawn(move || {
+        let (status, body) = get_json(
+            &url,
+            "/api/v1/messages/pending?incarnation=1&wait_ms=10000&bridge=1",
+        );
+        done_tx.send((status, body)).unwrap();
+    });
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    if let Ok((status, body)) = done_rx.try_recv() {
+        panic!("the parked read returned early: {status} {body}");
+    }
+    let (_, body) = get_json(&base_url, "/api/v1/native/bridge");
+    let live = json_of(&body)["incarnations"].as_array().unwrap().clone();
+    assert_eq!(live.len(), 1, "{body}");
+    assert_eq!(live[0]["incarnation"], 1);
+    assert_eq!(live[0]["connections"], 1);
+
+    // a landed record wakes the parked read - the landing is the
+    // trigger, never a timer over the log
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
+            "to": 1,
+            "body": "the bridge wakes on the landing",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = done_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the landing woke the parked read");
+    assert_eq!(status, 200, "{body}");
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    assert!(
+        mail.iter()
+            .any(|m| m["to"]["seq"] == 1 && m["state"] == "pending"),
+        "{body}"
+    );
+
+    // pending mail keeps a re-read immediate; the connection went with
+    // the finished read
+    let start = std::time::Instant::now();
+    let (status, _) = get_json(
+        &base_url,
+        "/api/v1/messages/pending?incarnation=1&wait_ms=10000&bridge=1",
+    );
+    assert_eq!(status, 200);
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let (_, body) = get_json(&base_url, "/api/v1/native/bridge");
+    assert!(
+        json_of(&body)["incarnations"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{body}"
+    );
+
+    // a compose launch token maps to the incarnation that claimed it
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "cccc3333",
+            "session_file": "/sessions/cccc3333.jsonl",
+            "launch_token": "launch-hex",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-hex");
+    assert_eq!(status, 200, "{body}");
+    // the reply names the birth record's seq and the dense public number
+    assert_eq!(json_of(&body)["incarnation"], 3);
+    assert_eq!(json_of(&body)["num"], 2);
+    let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-unknown");
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "launch_unknown");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_send_door_activates_and_the_ask_door_introduces() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("activation-cli");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    let host = fake_host(db.parent().unwrap());
+    let pi = stub_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    let host_state = db.parent().unwrap().join("host-state");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    let host_path = format!(
+        "{}:{}",
+        host.parent().unwrap().display(),
+        std::env::var("PATH").unwrap()
+    );
+
+    // the creator registers directly; the ask door launches the peer
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "creator0001",
+            "session_file": "/sessions/creator0001.jsonl",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["num"], 0);
+
+    let workspace = db.parent().unwrap().join("peer-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let ask_out = db.parent().unwrap().join("ask.out");
+    let ask_err = db.parent().unwrap().join("ask.err");
+    let launched = std::thread::spawn({
+        let bin = bin.to_string();
+        let base_url = base_url.clone();
+        let root = root.clone();
+        let host_path = host_path.clone();
+        let host_log = host_log.display().to_string();
+        let host_state = host_state.display().to_string();
+        let pi = pi.display().to_string();
+        let workspace = workspace.display().to_string();
+        let ask_out = ask_out.display().to_string();
+        let ask_err = ask_err.display().to_string();
+        move || {
+            let out = std::fs::File::create(&ask_out).unwrap();
+            let err = std::fs::File::create(&ask_err).unwrap();
+            std::process::Command::new(&bin)
+                .args([
+                    "--server",
+                    &base_url,
+                    "--repo",
+                    root.to_str().unwrap(),
+                    "integrate",
+                    "--workspace",
+                    &workspace,
+                    "--ask",
+                    "what holds at the failing edge case?",
+                ])
+                .env("PATH", &host_path)
+                .env("FAKE_ORCA_LOG", &host_log)
+                .env("FAKE_ORCA_STATE", &host_state)
+                .env("SACCADE_PI", &pi)
+                .env("SACCADE_ACTOR", "creator")
+                .env("SACCADE_INCARNATION_SEQ", "0")
+                .env("SACCADE_TASK", "")
+                .stdout(std::process::Stdio::from(out))
+                .stderr(std::process::Stdio::from(err))
+                .status()
+                .expect("spawn sac")
+        }
+    });
+
+    // the launch line carries the correlation token (the fake host
+    // logged it); the session's attach claims it, and the door learns
+    // the birth
+    let mut token = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while token.is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the launch line never carried a token; log: {:?}; state: {:?}; sac stderr: {:?}; sac stdout: {:?}",
+            std::fs::read_to_string(&host_log).unwrap_or_default(),
+            std::fs::read_to_string(&host_state).unwrap_or_default(),
+            std::fs::read_to_string(&ask_err).unwrap_or_default(),
+            std::fs::read_to_string(&ask_out).unwrap_or_default(),
+        );
+        if let Ok(text) = std::fs::read_to_string(&host_log) {
+            for line in text.lines() {
+                if let Some(at) = line.find("SACCADE_LAUNCH_TOKEN=") {
+                    let raw = &line[at + "SACCADE_LAUNCH_TOKEN=".len()..];
+                    let trimmed = raw.trim_matches('\'');
+                    let end = trimmed.find(' ').unwrap_or(trimmed.len());
+                    token = trimmed[..end].to_string();
+                }
+            }
+        }
+        if token.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "peer00000001",
+            "session_file": "/sessions/peer00000001.jsonl",
+            "launch_token": token,
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["num"], 1);
+
+    let status = launched.join().unwrap();
+    let (out_text, err) = (
+        std::fs::read_to_string(&ask_out).unwrap_or_default(),
+        std::fs::read_to_string(&ask_err).unwrap_or_default(),
+    );
+    assert!(status.success(), "stdout: {out_text}\nstderr: {err}");
+    assert!(out_text.contains("i-1 registered"), "{out_text}");
+    assert!(
+        out_text.contains("your question went as m-0 from i-0"),
+        "{out_text}"
+    );
+
+    // the question is durable addressed communication from the
+    // creator's own scope, never argv-shaped human input
+    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    assert_eq!(mail.len(), 1, "{body}");
+    assert_eq!(mail[0]["from"]["num"], 0);
+    assert_eq!(mail[0]["to"]["num"], 1);
+    assert_eq!(mail[0]["state"], "pending");
+    assert_eq!(mail[0]["body"], "what holds at the failing edge case?");
+
+    // the send door reports activation honestly: this peer's saved
+    // session is not on this host, so activation is not attempted
+    let out = std::process::Command::new(bin)
+        .args([
+            "--server",
+            &base_url,
+            "--repo",
+            root.to_str().unwrap(),
+            "send",
+            "--to",
+            "i-1",
+            "status check",
+        ])
+        .env("PATH", &host_path)
+        .env("SACCADE_ACTOR", "creator")
+        .env("SACCADE_INCARNATION_SEQ", "0")
+        .env("SACCADE_TASK", "")
+        .output()
+        .expect("spawn sac");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(text.contains("sent m-"), "{text}");
+    assert!(text.contains("activation not attempted"), "{text}");
+    assert!(text.contains("stays pending"), "{text}");
+
+    // without a declared incarnation the ask door refuses, taught
+    let out = std::process::Command::new(bin)
+        .args([
+            "--server",
+            &base_url,
+            "--repo",
+            root.to_str().unwrap(),
+            "integrate",
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--ask",
+            "nobody sent this",
+        ])
+        .env("PATH", &host_path)
+        .env("FAKE_ORCA_LOG", &host_log)
+        .env("FAKE_ORCA_STATE", &host_state)
+        .env("SACCADE_PI", &pi)
+        .env("SACCADE_ACTOR", "creator")
+        .env("SACCADE_INCARNATION_SEQ", "")
+        .env("SACCADE_TASK", "")
+        .output()
+        .expect("spawn sac");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("SACCADE_INCARNATION_SEQ"), "{err}");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
 /// The typed command the host was asked to run, from the per-line log.
 fn command_of(log: &std::path::Path, _selector: &str) -> String {
     let logged = std::fs::read_to_string(log).unwrap();

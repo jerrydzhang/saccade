@@ -71,6 +71,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	const waits = new Set<WaitState>();
 	// envelopes queued natively, submissions not yet confirmed
 	const deliveries = new Set<QueuedDelivery>();
+	// message seqs already queued under this association: startup,
+	// the wait tool, and the background bridge all drain the same
+	// mailbox, and a message enters the native queue exactly once
+	const queuedSeqs = new Set<number>();
 
 	// agent possession is set at load, before any attach: a tracker
 	// outage must still leave nested sac calls acting as the agent, and
@@ -112,6 +116,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		association = null;
 		attachError = null;
 		deliveries.clear();
+		queuedSeqs.clear();
 		delete process.env.SACCADE_INCARNATION_SEQ;
 	}
 
@@ -136,10 +141,15 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		try {
 			const reply = await tracker<AttachReply>("/api/v1/native/attach", {
 				method: "POST",
-				body: JSON.stringify({ native_id: sessionId, session_file: sessionFile }),
+				body: JSON.stringify({
+					native_id: sessionId,
+					session_file: sessionFile,
+					launch_token: process.env.SACCADE_LAUNCH_TOKEN || undefined,
+				}),
 			});
 			association = { ...reply, nativeId: sessionId, sessionFile };
 			process.env.SACCADE_INCARNATION_SEQ = String(reply.incarnation);
+			startBridge(association);
 			return association;
 		} catch (error) {
 			attachError = errorText(error);
@@ -162,11 +172,68 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return reply.messages;
 	}
 
-	// Queue one message natively and return: the wait tool must never
-	// block on what the native queue does after the current run. The
-	// submission is confirmed separately, by the delivery observers.
+	// Filter to the addressee and queue each new message natively - the
+	// queueing half of the one incoming path.
+	function queueIncoming(messages: MailboxMessage[]): MailboxMessage[] {
+		const who = association;
+		if (!who) return [];
+		const incoming = incomingFor(who.incarnation, messages);
+		for (const message of incoming) {
+			queueDelivery(message);
+		}
+		return incoming;
+	}
+
+	// The one incoming read: startup, the wait tool, and the background
+	// bridge all come through here; the queued-once guard keeps a
+	// message to a single envelope.
+	async function drainIncoming(): Promise<MailboxMessage[]> {
+		const who = association;
+		if (!who) return [];
+		return queueIncoming(await mailbox(who.incarnation));
+	}
+
+	// The background bridge: one parked read per association, woken by
+	// the record's landing server-side, delivering at whatever native
+	// boundary the session supports - into the running queue, or as a
+	// turn when idle. The loop dies with its association, so a
+	// reassociated session never delivers as a stale recipient, and a
+	// failed read reconnects with backoff - transport, nothing more.
+	const bridgeLoops = new Set<Association>();
+	function startBridge(assoc: Association): void {
+		if (bridgeLoops.has(assoc)) return;
+		bridgeLoops.add(assoc);
+		void (async () => {
+			let backoff = 500;
+			while (association === assoc) {
+				try {
+					const reply = await tracker<{ messages: MailboxMessage[] }>(
+						`/api/v1/messages/pending?incarnation=${assoc.incarnation}&wait_ms=25000&bridge=1`,
+					);
+					backoff = 500;
+					const delivered = queueIncoming(reply.messages);
+					if (delivered.length > 0) {
+						// the parked read signals landings; pending mail that
+						// awaits its own submission re-reads at the ordinary
+						// cadence, never a hot loop against the tracker
+						await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+					}
+				} catch {
+					await new Promise((resolve) => setTimeout(resolve, backoff));
+					backoff = Math.min(backoff * 2, 15000);
+				}
+			}
+			bridgeLoops.delete(assoc);
+		})();
+	}
+
+	// Queue one message natively and return: never block on what the
+	// native queue does after the current run. The submission is
+	// confirmed separately, by the delivery observers.
 	function queueDelivery(message: MailboxMessage): void {
 		if (association === null) return;
+		if (queuedSeqs.has(message.seq)) return;
+		queuedSeqs.add(message.seq);
 		const delivery: QueuedDelivery = {
 			envelope: envelopeText(message),
 			messageSeq: message.seq,
@@ -456,13 +523,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		}
 		// activation at a supported boundary: the mailbox drains at start
 		try {
-			const incoming = incomingFor(
-				who.incarnation,
-				await mailbox(who.incarnation),
-			);
-			for (const message of incoming) {
-				queueDelivery(message);
-			}
+			await drainIncoming();
 		} catch (error) {
 			pi.appendEntry("saccade_attach", {
 				incarnation: who.incarnation,
