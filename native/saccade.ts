@@ -155,23 +155,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return association ?? (await attach(ctx));
 	}
 
-	function envelopeText(message: MailboxMessage): string {
-		let head = `[saccade message m-${message.num} | from i-${message.from.num}`;
-		if (message.reply_to !== null) head += ` | replying to m-${message.reply_to}`;
-		if (message.task !== null) head += ` | task t-${message.task}`;
-		head += "]";
-		return `${head}\n\n${message.body}`;
-	}
-
-	// The addressee's mail alone: the mailbox reads both directions, and
-	// delivery filters on the recipient - a self-addressed message is
-	// incoming mail like any other.
-	function incomingFor(incarnation: number, messages: MailboxMessage[]): MailboxMessage[] {
-		return messages.filter(
-			(m) => m.state === "pending" && m.to.seq === incarnation,
-		);
-	}
-
 	async function mailbox(incarnation: number): Promise<MailboxMessage[]> {
 		const reply = await tracker<{ messages: MailboxMessage[] }>(
 			`/api/v1/messages/pending?incarnation=${incarnation}`,
@@ -194,11 +177,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		pi.sendUserMessage(delivery.envelope, { deliverAs: "followUp" });
 	}
 
-	// The saved session's user entries carry the envelope?
-	// Extension message events are NOT proof of insertion: in pinned
-	// 1.2.0 the message_end hook runs before the SessionManager append,
-	// so confirmation reads the saved entries themselves at a later
-	// boundary and never an event alone.
+	// Extension message events are not proof of insertion - the
+	// message_end hook runs before the SessionManager append - so
+	// confirmation reads the saved entries themselves.
 	function savedEntryHas(ctx: {
 		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
 	}, envelope: string): boolean {
@@ -214,9 +195,11 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 
 	// Confirm what the saved history actually holds: a delivery whose
 	// envelope is in the saved entries submits; a delivery bound to an
-	// association that is no longer live cancels. A failed submit goes
-	// back to the queue - the tracker refuses a second submission of
-	// submitted mail itself, so retries converge.
+	// association that is no longer live cancels. A failed submit - or
+	// a success whose response is lost - goes back to the queue and may
+	// re-post on later boundaries until the next resume clears it:
+	// limited retry-on-later-boundary bookkeeping, not convergence and
+	// not an exactly-once promise.
 	function confirmDeliveries(ctx: {
 		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
 	}): void {

@@ -1,9 +1,4 @@
-// The pure mechanics and the runtime contracts of the native
-// integration, pinned against a stateful fake of the actual native
-// queue: the followUp queue drains only after a tool call returns, and
-// extension message events fire before the entry is appended to the
-// saved session. Run with
-// `node --experimental-strip-types --test native/saccade.test.ts`.
+// The integration's mechanics and queue contract, pinned against a stateful fake of the native followUp queue.
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -13,8 +8,6 @@ import {
 	userText,
 	default as saccadeIntegration,
 } from "./saccade.ts";
-
-// ---- pure mechanics ----------------------------------------------------
 
 function mail(overrides: Record<string, unknown>) {
 	return {
@@ -39,8 +32,7 @@ test("an address is exactly the prefix and ASCII digits", () => {
 	assert.throws(() => numToken("i-", "i-"));
 	assert.throws(() => numToken("i", "i-"));
 	assert.throws(() => numToken("", "i-"));
-	// no coercive forms: signs, exponents, hex, decimals, whitespace
-	// inside the digits
+	// coercive forms refuse: signs, exponents, hex, decimals, inner whitespace
 	assert.throws(() => numToken("i-+5", "i-"));
 	assert.throws(() => numToken("i--5", "i-"));
 	assert.throws(() => numToken("i-1e3", "i-"));
@@ -64,8 +56,7 @@ test("the envelope carries the machine-supplied origin in ASCII", () => {
 		envelopeText(full),
 		"[saccade message m-4 | from i-1 | replying to m-5 | task t-2]\n\nthe smoke request",
 	);
-	// the body is user data and rides byte for byte: Unicode data
-	// pinned through the envelope, the source staying ASCII
+	// the body is user data riding byte for byte
 	const unicode = mail({ body: "r\u00e9sum\u00e9 \u2014 \u2713" });
 	assert.ok(envelopeText(unicode).endsWith("r\u00e9sum\u00e9 \u2014 \u2713"));
 });
@@ -103,8 +94,6 @@ test("user text flattens string and block content", () => {
 	);
 });
 
-// ---- the stateful native queue fake ------------------------------------
-
 interface SessionEntryLike {
 	type: string;
 	message?: { role: string; content: unknown };
@@ -129,9 +118,7 @@ class FakeSession {
 	}
 }
 
-// The queue drains only after a run ends, and a queued message enters
-// the saved history with its extension events fired BEFORE the append
-// - the ordering pinned in 1.2.0 agent-session.js.
+// The fake queue drains only after a run ends, firing events before the append.
 class FakePi {
 	tools = new Map<string, any>();
 	handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
@@ -165,8 +152,7 @@ class FakePi {
 		}
 	}
 
-	// the queue drains after the tool call returned: each envelope
-	// fires start and end first, then lands in the saved entries
+	// the queue drains after the tool call returned, events before the append
 	async runQueue() {
 		const queued = this.followUps.splice(0);
 		for (const text of queued) {
@@ -273,8 +259,6 @@ const boundary = <T>(promise: Promise<T>, ms: number, what: string) =>
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
 
-// ---- runtime contracts -------------------------------------------------
-
 test("a released wait queues and returns; the submission confirms from saved history", async () => {
 	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
@@ -285,8 +269,7 @@ test("a released wait queues and returns; the submission confirms from saved his
 	assert.equal(h.pi.followUps.length, 1);
 	assert.equal(h.tracker.submissions.length, 0);
 
-	// the queue drains after the run: start and end fire before the
-	// append, so neither event alone may submit
+	// events before the append submit nothing
 	const envelope = h.pi.followUps[0];
 	const message = { role: "user", content: envelope };
 	await h.pi.emit("message_start", { message });
@@ -315,8 +298,7 @@ test("the wait tool returns while the queue is still undrained", async () => {
 		8000,
 		"saccade_wait",
 	);
-	// the tool returned before any queue processing: the result is its
-	// own, nothing natively happened yet
+	// the tool returned before any queue processing
 	assert.ok(String(result.content[0].text).includes("received m-9"));
 	assert.equal(h.pi.followUps.length, 1);
 	assert.equal(h.tracker.submissions.length, 0);
@@ -356,14 +338,12 @@ test("reassociation cancels a queued delivery: no stale recipient submits", asyn
 	await h.pi.emit("session_start");
 	assert.equal(h.pi.followUps.length, 1);
 
-	// a new native session reassociates the process: the old
-	// association's queued delivery dies unsubmitted
+	// a new native session cancels the old association's queued delivery
 	h.pi.session = new FakeSession("bbbb2222", "/sessions/bbbb2222.jsonl");
 	await h.pi.emit("session_start");
 	assert.equal(h.tracker.attachments.size, 2);
 
-	// even if the old envelope lands in saved history afterwards, no
-	// boundary submits it for the new association
+	// a later boundary never submits the cancelled delivery
 	h.pi.followUps = [];
 	h.pi.session.entries.push({
 		type: "message",
@@ -379,8 +359,7 @@ test("agent possession survives a tracker outage; injected actors win", async ()
 	assert.equal(process.env.SACCADE_ACTOR, "saccade-pi");
 	h.tracker.attachFails = true;
 	await h.pi.emit("session_start");
-	// the attach failed and the session is unregistered, but nested sac
-	// calls still run agent-tier
+	// a failed attach still leaves nested sac calls agent-tier
 	assert.equal(process.env.SACCADE_ACTOR, "saccade-pi");
 	assert.equal(
 		Object.prototype.hasOwnProperty.call(process.env, "SACCADE_INCARNATION_SEQ"),
