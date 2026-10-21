@@ -50,12 +50,12 @@
           inherit inputs pkgs;
           modules = [
             ({config, ...}: let
-              devPi = pkgs.writeShellApplication {
+              devPi = lib.hiPrio (pkgs.writeShellApplication {
                 name = "saccade-pi";
                 text = ''
                   exec ${wrapped-pi.packages.${system}.default}/bin/wrapped-pi ${lib.escapeShellArgs (lib.concatMap (path: ["-e" "${config.devenv.root}/${path}"]) saccadePiExtensions)} "$@"
                 '';
-              };
+              });
             in {
               packages = with pkgs; [
                 rustToolchain
