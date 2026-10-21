@@ -93,10 +93,12 @@ with them.
 - Repository-authored text is ASCII: source, identifiers, comments, docs,
   CLI and web output, UI labels, and agent-visible envelopes carry
   ordinary ASCII punctuation, and a repository check holds every tracked
-  text file to the rule. User data stays Unicode-capable and is preserved
-  verbatim - messages, comments, paths, artifact bytes, historical
-  records; never bulk-transliterated. Runtime Unicode needed to recognize
-  or test inbound data enters source as escape sequences, and authored
+  text file to the rule. The rule reaches authored text only: Unicode
+  data - messages, comments, paths, names, artifact bytes, record
+  content - stays Unicode-capable, and this rule never transliterates or
+  rewrites it. Separately ratified semantic migrations keep their own
+  authority over record content. Runtime Unicode needed to recognize or
+  test inbound data enters source as escape sequences, and authored
   runtime labels and typography are ASCII bytes themselves, never escaped
   or encoded decoration.
 - Every capability that reduces contact must add record in the same change;

@@ -811,8 +811,7 @@ mod test {
         // c-1 (a claim record) and c-0 (a raw task birth) are
         // non-comment records: rewritten as seq
         assert!(report.record_refs_rewritten >= 2);
-        // the legacy-dash range renumbered as a comment range; the
-        // mixed-local c-0..c-2 rides the raw spelling end to end
+        // the legacy-dash range renumbers as comments; the mixed c-0..c-2 rides raw
         assert_eq!(report.ranges_rewritten, 1);
         // c-99 out of range stays legacy and reported
         assert!(
@@ -846,8 +845,7 @@ mod test {
                 .unwrap()
                 .contains("c-0")
         );
-        // migration's own spellings are ASCII: the renumbered range
-        // carries .. whatever dash the old prose rode
+        // migration's own spellings are ASCII: the range renumbers onto ..
         assert!(
             loadout.rows[7]
                 .payload
@@ -948,9 +946,7 @@ mod test {
         );
         // word boundaries hold: c-20 is not c-2
         assert_eq!(rewrite("c-20 stays", &mut report), "legacy c-20 stays");
-        // ranges: both comments renumber; local raw or mixed ranges
-        // ride the raw spelling end to end; the legacy dash survives
-        // recognition by escape, the renumbered spelling is ASCII
+        // ranges renumber; raw or mixed ranges ride raw; the legacy dash is escape-recognized
         assert_eq!(rewrite("c-2\u{2013}c-3", &mut report), "c-0..c-1");
         assert_eq!(rewrite("c-0..c-4", &mut report), "seq 0..4");
         assert_eq!(rewrite("c-2\u{2013}c-4", &mut report), "seq 2..4");

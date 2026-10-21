@@ -1048,8 +1048,7 @@ mod test {
         assert_eq!(loadout.rows[36].kind, "incarnation_registered");
         assert_eq!(loadout.rows[35].actor.as_str(), "saccade");
         assert_eq!(loadout.rows[37].kind, "message_sent");
-        // user data stays Unicode-capable: the body rides storage and
-        // the fold byte-exact, authored here by escape
+        // real Unicode user data rides storage and the fold byte-exact, by escape
         assert!(
             loadout.rows[37]
                 .payload
