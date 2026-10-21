@@ -1,10 +1,13 @@
 // The integration's mechanics and queue contract, pinned against a stateful fake of the native followUp queue.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { closeSync, existsSync, openSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import {
 	envelopeText,
 	incomingFor,
 	numToken,
+	takeGuardLock,
 	userText,
 	default as saccadeIntegration,
 } from "./saccade.ts";
@@ -148,6 +151,7 @@ class FakePi {
 	// the pinned contract: void, and internal failures vanish into the
 	// runtime's own error sink - the extension cannot observe them
 	errors: string[] = [];
+	shutdowns = 0;
 	sendUserMessage(content: string, _opts?: unknown) {
 		if (this.failNextSend > 0) {
 			this.failNextSend -= 1;
@@ -157,6 +161,9 @@ class FakePi {
 		this.followUps.push(content);
 	}
 	appendEntry(_type: string, _data?: unknown) {}
+	shutdown() {
+		this.shutdowns += 1;
+	}
 
 	async emit(event: string, extra: Record<string, unknown> = {}) {
 		const ctx = {
@@ -227,13 +234,14 @@ class FakeTracker {
 			if (this.attachFails) {
 				return this.reply({ error: { code: "degraded", detail: "down" } }, 503);
 			}
+			const guard = "/tmp/saccade-fake-guard-" + body.native_id + ".guard";
 			const known = this.attachments.get(body.native_id);
 			if (known) {
-				return this.reply({ registered: false, ...known });
+				return this.reply({ registered: false, ...known, guard });
 			}
 			const fresh = { incarnation: this.attachments.size, num: this.attachments.size };
 			this.attachments.set(body.native_id, fresh);
-			return this.reply({ registered: true, ...fresh });
+			return this.reply({ registered: true, ...fresh, guard });
 		}
 		if (path === "/api/v1/messages/pending") {
 			const url = new URL(String(rawUrl));
@@ -274,7 +282,12 @@ interface Harness {
 	tools: (name: string) => any;
 }
 
-function harness(nativeId: string, file: string, actor?: string): Harness {
+function harness(
+	nativeId: string,
+	file: string,
+	actor?: string,
+	shared?: FakeTracker,
+): Harness {
 	if (actor === undefined) {
 		delete process.env.SACCADE_ACTOR;
 	} else {
@@ -282,7 +295,7 @@ function harness(nativeId: string, file: string, actor?: string): Harness {
 	}
 	const pi = new FakePi(nativeId, file);
 	saccadeIntegration(pi as any);
-	const tracker = new FakeTracker();
+	const tracker = shared ?? new FakeTracker();
 	tracker.install();
 	process.env.SACCADE_SERVER = tracker.url();
 	return {
@@ -307,10 +320,16 @@ const boundary = <T>(promise: Promise<T>, ms: number, what: string) =>
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
 
+// End a harness's session: loops stop, guards release, and no leaked
+// activity from one test reaches another through the global fetch.
+async function stop(h: Harness): Promise<void> {
+	await h.pi.emit("session_shutdown");
+}
+
 test("a released wait queues and returns; the submission confirms from saved history", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-01", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("aaaa1111", me);
+	h.tracker.attachments.set("sac-test-01", me);
 	h.tracker.mailboxes.set(0, [mail({ seq: 50, to: { seq: 0, num: 0 } })]);
 	// the start drain queues the mail natively; nothing submitted yet
 	await h.pi.emit("session_start");
@@ -330,12 +349,13 @@ test("a released wait queues and returns; the submission confirms from saved his
 	await h.pi.emit("agent_settled");
 	await tick();
 	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 50 }]);
+	await stop(h);
 });
 
 test("the wait tool returns while the queue is still undrained", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-02", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("aaaa1111", me);
+	h.tracker.attachments.set("sac-test-02", me);
 	await h.pi.emit("session_start");
 	h.tracker.mailboxes.set(0, [mail({ seq: 51, num: 9, to: { seq: 0, num: 0 } })]);
 
@@ -354,12 +374,13 @@ test("the wait tool returns while the queue is still undrained", async () => {
 	await h.pi.runQueue();
 	await tick();
 	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 51 }]);
+	await stop(h);
 });
 
 test("the wait finishes cancelled when the call aborts, queueing nothing", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-03", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("aaaa1111", me);
+	h.tracker.attachments.set("sac-test-03", me);
 	await h.pi.emit("session_start");
 
 	const wait = h.tools("saccade_wait");
@@ -376,12 +397,13 @@ test("the wait finishes cancelled when the call aborts, queueing nothing", async
 	await h.pi.runQueue();
 	await tick();
 	assert.equal(h.tracker.submissions.length, 0);
+	await stop(h);
 });
 
 test("reassociation cancels a queued delivery: no stale recipient submits", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-04", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("aaaa1111", me);
+	h.tracker.attachments.set("sac-test-04", me);
 	h.tracker.mailboxes.set(0, [mail({ seq: 52, to: { seq: 0, num: 0 } })]);
 	await h.pi.emit("session_start");
 	assert.equal(h.pi.followUps.length, 1);
@@ -400,10 +422,11 @@ test("reassociation cancels a queued delivery: no stale recipient submits", asyn
 	await h.pi.emit("agent_settled");
 	await tick();
 	assert.equal(h.tracker.submissions.length, 0);
+	await stop(h);
 });
 
 test("agent possession survives a tracker outage; injected actors win", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-05", "/sessions/aaaa1111.jsonl");
 	assert.equal(process.env.SACCADE_ACTOR, "saccade-pi");
 	h.tracker.attachFails = true;
 	await h.pi.emit("session_start");
@@ -420,10 +443,11 @@ test("agent possession survives a tracker outage; injected actors win", async ()
 	injected.tracker.attachFails = true;
 	await injected.pi.emit("session_start");
 	assert.equal(process.env.SACCADE_ACTOR, "worker");
+	await stop(h);
 });
 
 test("a running registered peer receives without any wait tool", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-06", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	assert.equal(h.pi.followUps.length, 0);
 	// the bridge holds a parked read; the record's landing wakes it
@@ -436,10 +460,11 @@ test("a running registered peer receives without any wait tool", async () => {
 	await h.pi.runQueue();
 	await tick();
 	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 60 }]);
+	await stop(h);
 });
 
 test("background arrival and the wait tool queue a message once", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-07", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	h.tracker.land(0, mail({ seq: 61, num: 6, to: { seq: 0, num: 0 } }));
 	await tick();
@@ -454,10 +479,11 @@ test("background arrival and the wait tool queue a message once", async () => {
 	);
 	assert.ok(String(result.content[0].text).includes("received m-6"));
 	assert.equal(h.pi.followUps.length, 1);
+	await stop(h);
 });
 
 test("a failed bridge read reconnects and keeps delivering", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-08", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	// the read after the parked one fails, then transport recovers
 	h.tracker.failNext = 1;
@@ -473,10 +499,11 @@ test("a failed bridge read reconnects and keeps delivering", async () => {
 		await new Promise((resolve) => setTimeout(resolve, 150));
 	}
 	assert.ok(h.pi.followUps.length > before, "the reconnected bridge delivered");
+	await stop(h);
 });
 
 test("session shutdown stops the bridge: nothing delivers after it", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-09", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	await h.pi.emit("session_shutdown");
 	assert.equal(h.pi.followUps.length, 0);
@@ -487,7 +514,7 @@ test("session shutdown stops the bridge: nothing delivers after it", async () =>
 });
 
 test("reassociation strands the old bridge: no stale delivery, no stale submit", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-10", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	// a new native session reassociates; the old bridge's parked read dies
 	h.pi.session = new FakeSession("bbbb2222", "/sessions/bbbb2222.jsonl");
@@ -502,10 +529,11 @@ test("reassociation strands the old bridge: no stale delivery, no stale submit",
 	h.tracker.land(1, mail({ seq: 66, num: 2, to: { seq: 1, num: 1 } }));
 	await tick();
 	assert.equal(h.pi.followUps.length, 1);
+	await stop(h);
 });
 
 test("an extension-source input releases the wait as the message, not as human input", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-11", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	const wait = h.tools("saccade_wait");
 	const running = wait.execute("t1", {}, new AbortController().signal, {
@@ -521,10 +549,11 @@ test("an extension-source input releases the wait as the message, not as human i
 	const text = String(result.content[0].text);
 	assert.ok(text.includes("received m-4"), text);
 	assert.ok(!text.includes("human"), `mislabelled as human: ${text}`);
+	await stop(h);
 });
 
 test("interactive input keeps the human wording and no correlation", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-12", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	const wait = h.tools("saccade_wait");
 	const running = wait.execute("t1", {}, new AbortController().signal, {
@@ -536,10 +565,11 @@ test("interactive input keeps the human wording and no correlation", async () =>
 	const text = String(result.content[0].text);
 	assert.ok(text.includes("native human input arrived"), text);
 	assert.equal(h.pi.followUps.length, 0);
+	await stop(h);
 });
 
 test("a refused native send recovers at the human-input boundary", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-13", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	h.pi.failNextSend = 1;
 	h.tracker.land(0, mail({ seq: 71, num: 5, to: { seq: 0, num: 0 } }));
@@ -568,10 +598,11 @@ test("a refused native send recovers at the human-input boundary", async () => {
 	}
 	assert.equal(h.pi.followUps.length, 1, "the reconciled guard re-delivered");
 	assert.equal(h.tracker.submissions.length, 0);
+	await stop(h);
 });
 
 test("a discarded queued delivery reconciles at an idle settle and redelivers", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-14", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	h.tracker.land(0, mail({ seq: 72, num: 6, to: { seq: 0, num: 0 } }));
 	await tick();
@@ -600,10 +631,11 @@ test("a discarded queued delivery reconciles at an idle settle and redelivers", 
 	await h.pi.emit("agent_settled");
 	await tick();
 	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 72 }]);
+	await stop(h);
 });
 
 test("missing-auth failure with no settle recovers at an explicit wait", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-15", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	h.pi.failNextSend = 1;
 	h.tracker.land(0, mail({ seq: 73, num: 7, to: { seq: 0, num: 0 } }));
@@ -629,10 +661,11 @@ test("missing-auth failure with no settle recovers at an explicit wait", async (
 	assert.equal(h.pi.followUps.length, 1, "the explicit wait re-delivered");
 	const result = await boundary(running, 8000, "saccade_wait");
 	assert.ok(String(result.content[0].text).includes("received m-7"));
+	await stop(h);
 });
 
 test("another extension's input yields our wait with generic native wording", async () => {
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-16", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	const wait = h.tools("saccade_wait");
 	const running = wait.execute("t1", {}, new AbortController().signal, {
@@ -650,24 +683,26 @@ test("another extension's input yields our wait with generic native wording", as
 	assert.ok(!text.includes("human"), `fabricated human origin: ${text}`);
 	assert.ok(!text.includes("received m-"), `fabricated correlation: ${text}`);
 	assert.equal(h.pi.followUps.length, 0);
+	await stop(h);
 });
 
 test("the attach carries the launch token it was launched with", async () => {
 	process.env.SACCADE_LAUNCH_TOKEN = "launch-abc123";
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-17", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	assert.equal(h.tracker.attachBodies.length, 1);
 	assert.equal(h.tracker.attachBodies[0].launch_token, "launch-abc123");
 	delete process.env.SACCADE_LAUNCH_TOKEN;
+	await stop(h);
 });
 
 test("the declared task anchors scope; an explicit task argument is message context", async () => {
 	process.env.SACCADE_ACTOR = "pi";
 	process.env.SACCADE_TASK = "t-9";
 	delete process.env.SACCADE_WORKSPACE;
-	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	const h = harness("sac-test-18", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("aaaa1111", me);
+	h.tracker.attachments.set("sac-test-18", me);
 	await h.pi.emit("session_start");
 
 	const send = h.tools("saccade_send");
@@ -695,4 +730,65 @@ test("the declared task anchors scope; an explicit task argument is message cont
 	assert.equal(second.context.scope.task, null);
 	assert.equal(second.task, 2);
 	delete process.env.SACCADE_TASK;
+	await stop(h);
+});
+
+test("the guard take is kernel-real: held while the fd lives, free after death", async () => {
+	// the EXACT production helper, against the kernel: retain the fd ->
+	// an independent probe must fail; close it -> the probe must succeed
+	const guard = "/tmp/saccade-guard-kernel-" + process.pid + ".guard";
+	const fd = openSync(guard, "a+");
+	let closed = false;
+	try {
+		assert.equal(takeGuardLock(fd), true, "the production take succeeds on a free guard");
+		// an independent process probes with its own descriptor: its
+		// flock must fail while the holder lives
+		const probeFd = openSync(guard, "a+");
+		const heldProbe = spawnSync("flock", ["-n", "3"], {
+			stdio: ["ignore", "ignore", "ignore", probeFd],
+		});
+		closeSync(probeFd);
+		assert.notEqual(heldProbe.status, 0, "an independent probe sees the lock held");
+		closeSync(fd);
+		closed = true;
+		const freeFd = openSync(guard, "a+");
+		const freeProbe = spawnSync("flock", ["-n", "3"], {
+			stdio: ["ignore", "ignore", "ignore", freeFd],
+		});
+		closeSync(freeFd);
+		assert.equal(freeProbe.status, 0, "death releases the lock");
+		// and the fd-form lock never materializes a file named 3
+		assert.ok(!existsSync("3"), "no file named 3 may appear");
+	} finally {
+		if (!closed) closeSync(fd);
+		rmSync(guard, { force: true });
+		rmSync("3", { force: true });
+	}
+});
+
+test("a held guard shuts the duplicate down before any model work", async () => {
+	const shared = new FakeTracker();
+	// the original attaches and holds its session's guard
+	const original = harness("dup-original0", "/sessions/dup-original.jsonl", "pi", shared);
+	await original.pi.emit("session_start");
+	assert.equal(original.pi.shutdowns, 0);
+	// a real duplicate start over the same native session: the held
+	// guard is detected, the duplicate names its refusal, and pi is
+	// shut down before any model work - never a silent null association
+	const duplicate = harness("dup-original0", "/sessions/dup-original.jsonl", "pi", shared);
+	await duplicate.pi.emit("session_start");
+	assert.equal(duplicate.pi.shutdowns, 1, "the duplicate shuts down");
+	// the duplicate never participated: its identity names the held
+	// guard, and nothing registered
+	const identity = duplicate.tools("saccade_identity");
+	const result = await identity.execute("t1", {}, undefined, {
+		sessionManager: duplicate.pi.session,
+	});
+	const text = String(result.content[0].text);
+	assert.ok(text.includes("not registered"), text);
+	assert.ok(text.includes("duplicate"), `the refusal names the held guard: ${text}`);
+	// the original is untouched and still holds its guard
+	assert.equal(original.pi.followUps.length, 0);
+	await stop(original);
+	await stop(duplicate);
 });

@@ -3437,6 +3437,9 @@ fn spawn_serving_subprocess(
             "PATH",
             format!("{}:{}", host_dir.display(), std::env::var("PATH").unwrap()),
         )
+        // a genuinely cold state root: the guard dirs must come into
+        // being from nothing, not from warmed probe residue
+        .env("XDG_STATE_HOME", db.parent().unwrap().join("xdg-state"))
         .env("SACCADE_ACTIVATION_LAUNCHER", launcher)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -3540,6 +3543,48 @@ async fn a_wire_send_activates_a_stopped_peer_through_the_launcher() {
         assert!(
             std::time::Instant::now() < deadline,
             "activation never reached the launcher; log: {logged:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // cold-state readiness: the attach reply names the guard file, and
+    // the probe that activation ran has created it from nothing
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "guardcheck", "session_file": "/sessions/guardcheck.jsonl"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let named = json_of(&body)["guard"]
+        .as_str()
+        .expect("the attach names the guard")
+        .to_string();
+    assert!(!named.is_empty(), "a server with a repo names every guard");
+    // attach readiness: the guard's parent exists on a cold state root
+    let guard = std::path::Path::new(&named);
+    assert!(
+        guard.parent().is_some_and(|p| p.is_dir()),
+        "the guard's parent materializes on a cold state root: {named}"
+    );
+    // and a landed write's probe creates the file itself: activation
+    // reached the decision on this cold root
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
+            "to": 2,
+            "body": "probe the cold guard",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    // the activation is fire-and-forget: poll briefly for its probe
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !guard.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "activation never probed the cold guard: {named}"
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }

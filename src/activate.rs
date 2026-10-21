@@ -162,18 +162,14 @@ pub fn activate(
 /// and forget from the reply's perspective - the send never waits on
 /// host mechanics.
 pub fn after_send(app: &AppState, to_id: IncarnationId, to_num: usize) {
-    eprintln!("ACTIVATE: entered for i-{to_num}");
     // activation routes through the host: a server serving no repo has
     // no state directory to key guards by and no repo to hand the door
     let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
-        eprintln!("ACTIVATE: no repo root");
         return;
     };
-    eprintln!("ACTIVATE: repo {}", repo_root.display());
     let address = crate::paths::address_at(app.db_path());
     let url = std::fs::read_to_string(&address).unwrap_or_default();
     let url = url.trim().to_string();
-    eprintln!("ACTIVATE: url {url}");
     if url.is_empty() {
         return;
     }
@@ -269,8 +265,7 @@ pub fn after_send(app: &AppState, to_id: IncarnationId, to_num: usize) {
             Err("the resume launch door exited unsuccessfully".into())
         }
     };
-    let decision = activate(repo_root.as_path(), &recipient, connected, &mut launch);
-    eprintln!("ACTIVATE: decision {decision:?}");
+    activate(repo_root.as_path(), &recipient, connected, &mut launch);
 }
 
 #[cfg(test)]

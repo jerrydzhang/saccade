@@ -100,6 +100,9 @@
         };
         saccadePi = pkgs.writeShellApplication {
           name = "saccade-pi";
+          # util-linux rides the closure: the integration's guard helper
+          # is flock, never an assumed ambient binary
+          runtimeInputs = [pkgs.util-linux];
           text = ''
             exec ${pi}/bin/wrapped-pi "$@"
           '';

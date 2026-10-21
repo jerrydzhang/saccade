@@ -1032,6 +1032,15 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
         &request.native_id,
         &request.session_file,
     );
+    // the guard's parent must exist before the integration opens it: a
+    // cold state root is readiness, not an error
+    if let (Ok(reply), Some(_repo)) = (&outcome, app.repo_root()) {
+        if let Some(guard) = &reply.guard {
+            if let Some(parent) = Path::new(guard).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+    }
     integration_outcome(&app, &guard, None, &received, started, &outcome);
     // only a fresh birth claims the launch mapping: an existing or
     // forked session reattaching under a stale token must never

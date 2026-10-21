@@ -77,9 +77,9 @@ interface QueuedDelivery {
 // held because this process's descriptor remains open, and any death
 // releases it. true = taken; false = held by a live holder; undefined
 // = the host offers no flock, which is unknown, not quiet.
-function takeGuardLock(fd: number): boolean | undefined {
+export function takeGuardLock(fd: number): boolean | undefined {
 	try {
-		const run = spawnSync("flock", ["-n", "3", "-c", ":"], {
+		const run = spawnSync("flock", ["-n", "3"], {
 			stdio: ["ignore", "ignore", "ignore", fd],
 		});
 		if (run.error) return undefined;
@@ -191,29 +191,32 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				}),
 			});
 			// the session's own runtime guard: kernel-held from here to
-			// association change or death. A held guard means a live
-			// process already owns this native session - this process
-			// is a duplicate, and it stays unregistered. An unavailable
-			// flock is unknown, not quiet: the session attaches
-			// unguarded and activation holds on the unknown.
+			// association change or death. Held = a live process already
+			// owns this native session: this process is a duplicate - it
+			// shuts down before any model work. Unknown = the host
+			// offers no flock: fail safe, no association, no
+			// participation - an unverified session must never look
+			// free to the backend's probe.
 			guardFd = null;
 			if (reply.guard) {
 				guardFd = openSync(reply.guard, "a+");
 				const taken = takeGuardLock(guardFd);
 				if (taken === false) {
 					closeSync(guardFd);
+					guardFd = null;
 					attachError =
 						"duplicate: this native session's guard is held by a live process";
 					pi.appendEntry("saccade_attach", { error: attachError });
+					pi.shutdown();
 					return null;
 				}
 				if (taken === undefined) {
 					closeSync(guardFd);
 					guardFd = null;
-					pi.appendEntry("saccade_attach", {
-						incarnation: reply.incarnation,
-						error: "the guard cannot be probed here; the session attaches unguarded",
-					});
+					attachError =
+						"the guard cannot be probed here; refusing an unverified association";
+					pi.appendEntry("saccade_attach", { error: attachError });
+					return null;
 				}
 			}
 			association = { ...reply, nativeId: sessionId, sessionFile, guardFd };
