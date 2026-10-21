@@ -42,6 +42,15 @@ struct Inner {
 /// public number, held until the token expires.
 type LaunchEntry = (usize, usize, std::time::Instant);
 
+/// One runtime association observation: live delivery connections now,
+/// and when the association was last seen - the bridge's parked read
+/// cycles are the heartbeat. Operational only.
+#[derive(Clone, Copy)]
+pub struct Association {
+    pub connections: usize,
+    pub last_seen: Instant,
+}
+
 /// The native bridge's operational cache: which incarnations hold a
 /// live delivery connection right now, and the launch tokens a compose
 /// door is waiting on. Runtime facts only - transport state and
@@ -51,8 +60,8 @@ type LaunchEntry = (usize, usize, std::time::Instant);
 pub struct BridgeCache {
     /// wakes parked delivery polls when a record lands
     notify: Arc<tokio::sync::Notify>,
-    /// incarnation birth seq -> live delivery connections
-    live: Arc<std::sync::Mutex<HashMap<usize, usize>>>,
+    /// incarnation birth seq -> runtime association
+    live: Arc<std::sync::Mutex<HashMap<usize, Association>>>,
     /// launch token -> (incarnation seq, public number), expiring
     launches: Arc<Mutex<HashMap<String, LaunchEntry>>>,
 }
@@ -65,11 +74,22 @@ impl BridgeCache {
     }
 
     /// Remember which incarnation claimed a compose launch token; the
-    /// launching door polls this to learn the birth it caused.
+    /// launching door polls this to learn the birth it caused. The
+    /// mapping binds once: the same association may refresh, a
+    /// different association never retargets - a forked or existing
+    /// session reattaching under a stale token changes nothing.
     pub fn remember_launch(&self, token: String, incarnation: usize, num: usize) {
         let mut launches = self.launches.lock().expect("the launch cache holds");
         launches.retain(|_, (_, _, at)| at.elapsed() < std::time::Duration::from_secs(900));
-        launches.insert(token, (incarnation, num, Instant::now()));
+        match launches.get(&token) {
+            Some((existing, _, _)) if *existing == incarnation => {
+                launches.insert(token, (incarnation, num, Instant::now()));
+            }
+            Some(_) => {}
+            None => {
+                launches.insert(token, (incarnation, num, Instant::now()));
+            }
+        }
     }
 
     /// The incarnation that registered under a launch token, if the
@@ -86,29 +106,42 @@ impl BridgeCache {
         let live = self.live.lock().expect("the live cache holds");
         let mut entries: Vec<(usize, usize)> = live
             .iter()
-            .filter(|(_, c)| **c > 0)
-            .map(|(i, c)| (*i, *c))
+            .filter(|(_, a)| a.connections > 0)
+            .map(|(i, a)| (*i, a.connections))
             .collect();
         entries.sort();
         entries
+    }
+
+    /// Whether this incarnation's runtime association was observed
+    /// within the given window: the bridge's parked read cycles are
+    /// the heartbeat, and a transient socket loss stays associated
+    /// until the window passes. Not proof of liveness past the window -
+    /// past it, activation falls to host evidence.
+    pub fn recently_associated(&self, incarnation: usize, window: std::time::Duration) -> bool {
+        let live = self.live.lock().expect("the live cache holds");
+        live.get(&incarnation)
+            .map(|a| a.last_seen.elapsed() <= window)
+            .unwrap_or(false)
     }
 }
 
 /// Counts one delivery connection for its scope: parked poll or
 /// immediate read, the bridge announces itself for the call's duration.
 struct BridgeLive {
-    live: Arc<std::sync::Mutex<HashMap<usize, usize>>>,
+    live: Arc<std::sync::Mutex<HashMap<usize, Association>>>,
     incarnation: usize,
 }
 
 impl BridgeLive {
     fn new(cache: &BridgeCache, incarnation: usize) -> Self {
-        *cache
-            .live
-            .lock()
-            .expect("the live cache holds")
-            .entry(incarnation)
-            .or_insert(0) += 1;
+        let mut live = cache.live.lock().expect("the live cache holds");
+        let entry = live.entry(incarnation).or_insert(Association {
+            connections: 0,
+            last_seen: Instant::now(),
+        });
+        entry.connections += 1;
+        entry.last_seen = Instant::now();
         Self {
             live: Arc::clone(&cache.live),
             incarnation,
@@ -119,10 +152,17 @@ impl BridgeLive {
 impl Drop for BridgeLive {
     fn drop(&mut self) {
         let mut live = self.live.lock().expect("the live cache holds");
-        if let Some(count) = live.get_mut(&self.incarnation) {
-            *count -= 1;
-            if *count == 0 {
-                live.remove(&self.incarnation);
+        if let Some(entry) = live.get_mut(&self.incarnation) {
+            entry.connections -= 1;
+            // the association outlives the connection: the window a
+            // transient socket loss spends inside is held, not silent
+            entry.last_seen = Instant::now();
+            if entry.connections == 0 {
+                // keep last_seen; prune only when the window passed
+                let now = Instant::now();
+                live.retain(|_, a| {
+                    a.connections > 0 || now.duration_since(a.last_seen).as_secs() < 300
+                });
             }
         }
     }
@@ -498,7 +538,7 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                     .expect("the birth record folds into its task");
                 reply["id"] = json!(format!("t-{}", born.0));
             }
-            if matches!(command, Command::SendMessage { .. }) {
+            if let Command::SendMessage { to: to_id, .. } = &command {
                 let numbers = app
                     .snapshot()
                     .expect("a landed write leaves a foldable world")
@@ -516,6 +556,9 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                     "seq": mctx.message.from.0 .0,
                     "num": numbers.incarnation_num(mctx.message.from),
                 });
+                // the command ingress activates exactly like the wire's
+                // own send face: one mechanism, no entrance left out
+                spawn_activation(&app, *to_id, numbers.incarnation_num(*to_id).unwrap_or(0));
             }
             (StatusCode::OK, Json(reply)).into_response()
         }
@@ -864,6 +907,11 @@ pub struct AttachReply {
     pub incarnation: usize,
     /// The incarnation's dense public number, the human-facing i-N
     pub num: usize,
+    /// This session's launch-guard file: the integration holds an
+    /// exclusive kernel flock on it from association until death - the
+    /// per-native-session runtime evidence activation reads. Server
+    /// authoritative; the extension never derives paths.
+    pub guard: Option<String>,
     pub records: Vec<StoredRecord>,
 }
 
@@ -882,6 +930,7 @@ struct AttachRequest {
 
 fn attach_operation(
     guard: &mut ServerState,
+    repo_root: Option<&Path>,
     native_id: &crate::NativeSessionId,
     saved_session: &crate::SessionLocator,
 ) -> Result<AttachReply, ApiFail> {
@@ -928,6 +977,11 @@ fn attach_operation(
             num: world
                 .incarnation_num(*id)
                 .expect("a resident incarnation holds a number"),
+            guard: repo_root.map(|repo| {
+                crate::activate::guard_path(repo, native_id.as_str())
+                    .display()
+                    .to_string()
+            }),
             records: Vec::new(),
         });
     }
@@ -951,6 +1005,11 @@ fn attach_operation(
         num: world
             .incarnation_num(crate::IncarnationId(birth))
             .expect("the landed registration folds in"),
+        guard: repo_root.map(|repo| {
+            crate::activate::guard_path(repo, native_id.as_str())
+                .display()
+                .to_string()
+        }),
         records: stored,
     })
 }
@@ -967,7 +1026,12 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
     };
     let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = attach_operation(&mut guard, &request.native_id, &request.session_file);
+    let outcome = attach_operation(
+        &mut guard,
+        app.repo_root(),
+        &request.native_id,
+        &request.session_file,
+    );
     integration_outcome(&app, &guard, None, &received, started, &outcome);
     // only a fresh birth claims the launch mapping: an existing or
     // forked session reattaching under a stale token must never
@@ -1001,6 +1065,16 @@ struct MessageSendRequest {
     body: crate::Prose,
     #[serde(default)]
     client: Option<String>,
+}
+
+/// One activation spawn, shared by every SendMessage ingress: the
+/// landed write itself wakes the host, never the face that used it.
+/// Fire and forget - the reply never waits on host mechanics.
+fn spawn_activation(app: &AppState, to_id: crate::IncarnationId, to_num: usize) {
+    let app = app.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        crate::activate::after_send(&app, to_id, to_num);
+    });
 }
 
 async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
@@ -1087,20 +1161,8 @@ async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
                     "num": numbers.incarnation_num(mctx.message.from),
                 },
             });
-            // one activation mechanism for every entrance: the landed
-            // write itself wakes the host - CLI, native tool, and API
-            // client alike - never the face that used it. Fire and
-            // forget: the reply never waits on host mechanics.
-            let app_for_activation = app.clone();
-            let to_id_for_activation = to_id;
-            let to_num_for_activation = request.to;
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::activate::after_send(
-                    &app_for_activation,
-                    to_id_for_activation,
-                    to_num_for_activation,
-                );
-            });
+            // one activation mechanism for every entrance
+            spawn_activation(&app, to_id, request.to);
             (StatusCode::OK, Json(reply)).into_response()
         }
         Err(e) => {

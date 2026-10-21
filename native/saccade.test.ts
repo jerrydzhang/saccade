@@ -145,13 +145,16 @@ class FakePi {
 			if (at >= 0) list.splice(at, 1);
 		};
 	}
+	// the pinned contract: void, and internal failures vanish into the
+	// runtime's own error sink - the extension cannot observe them
+	errors: string[] = [];
 	sendUserMessage(content: string, _opts?: unknown) {
 		if (this.failNextSend > 0) {
 			this.failNextSend -= 1;
-			return Promise.reject(new Error("no auth: the provider refused"));
+			this.errors.push("send_user_message: no auth: the provider refused");
+			return;
 		}
 		this.followUps.push(content);
-		return Promise.resolve();
 	}
 	appendEntry(_type: string, _data?: unknown) {}
 
@@ -535,23 +538,35 @@ test("interactive input keeps the human wording and no correlation", async () =>
 	assert.equal(h.pi.followUps.length, 0);
 });
 
-test("a refused native send releases the guard and delivers again", async () => {
+test("a refused native send recovers at the human-input boundary", async () => {
 	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	h.pi.failNextSend = 1;
 	h.tracker.land(0, mail({ seq: 71, num: 5, to: { seq: 0, num: 0 } }));
 	await tick();
 	await tick();
+	// the refusal is invisible to the extension (void + error sink):
+	// nothing queued, and no promise ever resolved or rejected here
 	assert.equal(h.pi.followUps.length, 0, "the refused send queued nothing");
-	// the guard releases a moment after the refusal; once the settle
-	// cadence passes, the next read re-delivers the same message
+	assert.ok(h.pi.errors.length > 0, "the runtime saw the failure");
+	// wakes alone cannot deliver: the guard honestly holds, because
+	// no supported observation says the delivery was lost
 	h.tracker.wake();
+	await tick();
+	await tick();
+	assert.equal(h.pi.followUps.length, 0);
+	// the human correction is the recovery boundary: the session is
+	// idle with nothing natively pending, the input event reconciles,
+	// and the boundary's own read delivers again
+	h.pi.idle = true;
+	h.pi.pendingNative = false;
+	await h.pi.emit("input", { source: "interactive", text: "fixed the auth" });
 	const deadline = Date.now() + 8000;
 	while (h.pi.followUps.length === 0 && Date.now() < deadline) {
 		h.tracker.wake();
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
-	assert.equal(h.pi.followUps.length, 1, "the released guard re-delivered");
+	assert.equal(h.pi.followUps.length, 1, "the reconciled guard re-delivered");
 	assert.equal(h.tracker.submissions.length, 0);
 });
 
@@ -585,6 +600,56 @@ test("a discarded queued delivery reconciles at an idle settle and redelivers", 
 	await h.pi.emit("agent_settled");
 	await tick();
 	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 72 }]);
+});
+
+test("missing-auth failure with no settle recovers at an explicit wait", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	h.pi.failNextSend = 1;
+	h.tracker.land(0, mail({ seq: 73, num: 7, to: { seq: 0, num: 0 } }));
+	await tick();
+	await tick();
+	// no agent_settled ever fires - the send failed before any run.
+	// The explicit wait is the recovery boundary: it reconciles, then
+	// its own first read delivers
+	const wait = h.tools("saccade_wait");
+	h.pi.idle = true;
+	h.pi.pendingNative = false;
+	const running = wait.execute("t1", {}, new AbortController().signal, {
+		sessionManager: h.pi.session,
+		isIdle: () => h.pi.idle,
+		hasPendingMessages: () => h.pi.pendingNative,
+	});
+	h.tracker.wake();
+	const deadline = Date.now() + 8000;
+	while (h.pi.followUps.length === 0 && Date.now() < deadline) {
+		h.tracker.wake();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	assert.equal(h.pi.followUps.length, 1, "the explicit wait re-delivered");
+	const result = await boundary(running, 8000, "saccade_wait");
+	assert.ok(String(result.content[0].text).includes("received m-7"));
+});
+
+test("another extension's input yields our wait with generic native wording", async () => {
+	const h = harness("aaaa1111", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	const wait = h.tools("saccade_wait");
+	const running = wait.execute("t1", {}, new AbortController().signal, {
+		sessionManager: h.pi.session,
+	});
+	await tick();
+	// not our envelope: another native extension's message
+	await h.pi.emit("input", {
+		source: "extension",
+		text: "[some other extension] probe",
+	});
+	const result = await boundary(running, 8000, "saccade_wait");
+	const text = String(result.content[0].text);
+	assert.ok(text.includes("native input arrived through the integration"), text);
+	assert.ok(!text.includes("human"), `fabricated human origin: ${text}`);
+	assert.ok(!text.includes("received m-"), `fabricated correlation: ${text}`);
+	assert.equal(h.pi.followUps.length, 0);
 });
 
 test("the attach carries the launch token it was launched with", async () => {

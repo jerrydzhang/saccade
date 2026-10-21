@@ -3,6 +3,8 @@
 // messages, and waits that incoming messages or native human input
 // release - releasing only this integration's own wait, never
 // interrupting other work.
+import { closeSync, openSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const POLL_MS = 1500;
@@ -14,6 +16,10 @@ interface AttachReply {
 	registered: boolean;
 	incarnation: number;
 	num: number;
+	/** This session's launch guard: the server-authoritative path this
+	 * integration flock-locks from association until death - the
+	 * per-native-session runtime evidence activation reads. */
+	guard?: string;
 }
 
 interface SendReply {
@@ -36,12 +42,16 @@ interface MailboxMessage {
 interface Association extends AttachReply {
 	nativeId: string;
 	sessionFile: string;
+	/** The open descriptor whose shared open-file-description holds the
+	 * guard's kernel lock: closed on association change and death, so
+	 * any release is observed by the activator's probe. */
+	guardFd: number | null;
 }
 
 // One wait tool call owns one of these; nothing about a wait lives in
 // shared state, so a stale poll can never observe or strand a newer
 // wait's release.
-type Outcome = "message" | "input" | "cancelled" | "detached";
+type Outcome = "message" | "input" | "extension" | "cancelled" | "detached";
 
 interface WaitState {
 	timer: ReturnType<typeof setInterval> | null;
@@ -62,6 +72,23 @@ interface QueuedDelivery {
 	sessionFile: string;
 }
 
+// Take the guard's kernel lock on the open file description this fd
+// shares with a short-lived helper: the helper exits, the lock stays
+// held because this process's descriptor remains open, and any death
+// releases it. true = taken; false = held by a live holder; undefined
+// = the host offers no flock, which is unknown, not quiet.
+function takeGuardLock(fd: number): boolean | undefined {
+	try {
+		const run = spawnSync("flock", ["-n", "3", "-c", ":"], {
+			stdio: ["ignore", "ignore", "ignore", fd],
+		});
+		if (run.error) return undefined;
+		return run.status === 0;
+	} catch {
+		return undefined;
+	}
+}
+
 export default function saccadeIntegration(pi: ExtensionAPI) {
 	// the session's association: resolved or registered fresh at every
 	// session start by the session's actual native id and locator
@@ -71,6 +98,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	const waits = new Set<WaitState>();
 	// envelopes queued natively, submissions not yet confirmed
 	const deliveries = new Set<QueuedDelivery>();
+	// this session's guard descriptor: the kernel lock on the shared
+	// open-file-description lives while it stays open
+	let guardFd: number | null = null;
 	// message seqs already queued under this association, with the
 	// message itself for correlation: startup, the wait tool, and the
 	// background bridge all drain the same mailbox, and a message
@@ -120,7 +150,17 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		attachError = null;
 		deliveries.clear();
 		queued.clear();
+		// the guard's kernel lock rides this descriptor: closing it on
+		// association change is the observed release activation reads
 		delete process.env.SACCADE_INCARNATION_SEQ;
+		if (guardFd !== null) {
+			try {
+				closeSync(guardFd);
+			} catch {
+				// already closed: the release is the same either way
+			}
+			guardFd = null;
+		}
 	}
 
 	// Resolve-or-register this session's incarnation from the session's
@@ -150,8 +190,38 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					launch_token: process.env.SACCADE_LAUNCH_TOKEN || undefined,
 				}),
 			});
-			association = { ...reply, nativeId: sessionId, sessionFile };
+			// the session's own runtime guard: kernel-held from here to
+			// association change or death. A held guard means a live
+			// process already owns this native session - this process
+			// is a duplicate, and it stays unregistered. An unavailable
+			// flock is unknown, not quiet: the session attaches
+			// unguarded and activation holds on the unknown.
+			guardFd = null;
+			if (reply.guard) {
+				guardFd = openSync(reply.guard, "a+");
+				const taken = takeGuardLock(guardFd);
+				if (taken === false) {
+					closeSync(guardFd);
+					attachError =
+						"duplicate: this native session's guard is held by a live process";
+					pi.appendEntry("saccade_attach", { error: attachError });
+					return null;
+				}
+				if (taken === undefined) {
+					closeSync(guardFd);
+					guardFd = null;
+					pi.appendEntry("saccade_attach", {
+						incarnation: reply.incarnation,
+						error: "the guard cannot be probed here; the session attaches unguarded",
+					});
+				}
+			}
+			association = { ...reply, nativeId: sessionId, sessionFile, guardFd };
 			process.env.SACCADE_INCARNATION_SEQ = String(reply.incarnation);
+			// the launch token's bootstrap is done: a later fork or
+			// reload in this process reattaches tokenless, so no other
+			// association can ever be retargeted by this one
+			delete process.env.SACCADE_LAUNCH_TOKEN;
 			startBridge(association);
 			return association;
 		} catch (error) {
@@ -232,8 +302,11 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 
 	// Queue one message natively and return: never block on what the
 	// native queue does after the current run. The submission is
-	// confirmed separately, by the delivery observers. A refused send
-	// releases its guard, so the next drain delivers again.
+	// confirmed separately, by the delivery observers. Pinned 1.2.0:
+	// sendUserMessage returns void and its internal failures are
+	// invisible here (the runtime routes them to its own error sink) -
+	// a refused or discarded delivery is recovered at the next
+	// supported boundary, never by watching a promise.
 	function queueDelivery(message: MailboxMessage): void {
 		if (association === null) return;
 		if (queued.has(message.seq)) return;
@@ -245,18 +318,31 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			sessionFile: association.sessionFile,
 		};
 		deliveries.add(delivery);
-		try {
-			const accepted = pi.sendUserMessage(delivery.envelope, { deliverAs: "followUp" });
-			Promise.resolve(accepted).catch(() => {
-				// the native side refused before queue or history: the
-				// mail is still pending and must stay deliverable
-				deliveries.delete(delivery);
-				queued.delete(message.seq);
-			});
-		} catch {
-			deliveries.delete(delivery);
-			queued.delete(message.seq);
+		pi.sendUserMessage(delivery.envelope, { deliverAs: "followUp" });
+	}
+
+	// Release the guards of deliveries that reality no longer holds:
+	// neither persisted in saved history nor natively pending while the
+	// session is truly idle means the queued input was refused before
+	// insertion or discarded after queueing. The next drain delivers
+	// again - recoverability over the once-flag, no timers.
+	function reconcileDiscarded(ctx: {
+		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
+		isIdle?: () => boolean;
+		hasPendingMessages?: () => boolean;
+	}): boolean {
+		if (ctx.isIdle?.() !== true || ctx.hasPendingMessages?.() !== false) {
+			return false;
 		}
+		let released = false;
+		for (const delivery of [...deliveries]) {
+			if (!savedEntryHas(ctx, delivery.envelope)) {
+				deliveries.delete(delivery);
+				queued.delete(delivery.messageSeq);
+				released = true;
+			}
+		}
+		return released;
 	}
 
 	// Extension message events are not proof of insertion - the
@@ -282,17 +368,12 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// re-post on later boundaries until the next resume clears it:
 	// limited retry-on-later-boundary bookkeeping, not convergence and
 	// not an exactly-once promise.
-	// At a true idle settle, a delivery that is neither persisted nor
-	// natively pending was discarded (interrupted input, cleared
-	// queue): its guard releases so the next drain delivers again -
-	// recoverability over the once-flag.
 	function confirmDeliveries(ctx: {
 		sessionManager: { getEntries(): Array<{ type: string; message?: { role: string; content: unknown } }> };
 		isIdle?: () => boolean;
 		hasPendingMessages?: () => boolean;
 	}): void {
-		const idleAndEmpty =
-			ctx.isIdle?.() === true && ctx.hasPendingMessages?.() === false;
+		reconcileDiscarded(ctx);
 		for (const delivery of [...deliveries]) {
 			if (
 				association === null ||
@@ -302,13 +383,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				deliveries.delete(delivery);
 				continue;
 			}
-			if (!savedEntryHas(ctx, delivery.envelope)) {
-				if (idleAndEmpty) {
-					deliveries.delete(delivery);
-					queued.delete(delivery.messageSeq);
-				}
-				continue;
-			}
+			if (!savedEntryHas(ctx, delivery.envelope)) continue;
 			deliveries.delete(delivery);
 			tracker("/api/v1/messages/submit", {
 				method: "POST",
@@ -466,6 +541,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		execute: async (_id, params, signal, ctx) => {
 			const who = await ensureAttached(ctx);
 			if (!who) return failed(`cannot wait: ${attachError}`);
+			// an explicit wait is a supported recovery boundary: refused
+			// or discarded deliveries release before this wait reads
+			reconcileDiscarded(ctx);
 			const wantReply = params.reply_to ? numToken(params.reply_to, "m-") : null;
 			const incarnation = who.incarnation;
 			const state: WaitState = {
@@ -508,6 +586,11 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				state.timer = setInterval(poll, POLL_MS);
 			});
 			// whatever the path, the wait's machinery is already down
+			if (released === "extension") {
+				return text(
+					"the wait ended because native input arrived through the integration; any pending messages stay in the mailbox - saccade_wait again to receive them",
+				);
+			}
 			if (released === "input") {
 				return text(
 					"the wait ended because native human input arrived; any pending messages stay in the mailbox - saccade_wait again to receive them",
@@ -576,7 +659,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// input - so the wait releases with the message's correlation; a
 	// human typing keeps the human wording. Neither reading claims a
 	// reply was satisfied.
-	pi.on("input", async (event, _ctx) => {
+	pi.on("input", async (event, ctx) => {
 		const source = (event as { source?: string }).source;
 		if (source === "extension") {
 			const text = typeof (event as { text?: unknown }).text === "string"
@@ -586,12 +669,25 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				(message) => envelopeText(message) === text,
 			);
 			if (correlated) {
+				// our own envelope: the wait releases with the real
+				// message correlation
 				for (const state of [...waits]) {
 					finish(state, "message", [correlated]);
+				}
+			} else {
+				// another extension's input is native input too: it
+				// yields our wait under a generic wording - never
+				// fabricated human origin, never a guessed correlation
+				for (const state of [...waits]) {
+					finish(state, "extension", []);
 				}
 			}
 			return { action: "continue" };
 		}
+		// a human correction is a supported recovery boundary: guards
+		// for refused or discarded deliveries release here, so an
+		// explicit wait or the bridge's next read delivers again
+		reconcileDiscarded(ctx);
 		for (const state of [...waits]) {
 			finish(state, "input", []);
 		}

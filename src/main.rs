@@ -2256,103 +2256,22 @@ fn send_door(
     // delivery activation: a running peer's bridge delivers; a stopped
     // one resumes from its exact saved session; every doubt stays
     // pending and says so - the send itself never un-lands
-    // server-routed sends are activated by the wire handler after the
-    // same landed write - one mechanism for every entrance; the local
-    // door activates only when no server holds the write
-    let activation = match &destination {
-        Destination::Server { .. } => None,
-        Destination::Local { .. } => Some(activate_locally(cli, destination, to_num)),
-    };
+    // activation is the wire's own act after this landed write - one
+    // mechanism for every entrance - so the door's face is the plain
+    // pending line and nothing else
     if cli.json {
-        let mut reply = serde_json::to_value(&sent).expect("the send reply is plain data");
-        reply["activation"] = match &activation {
-            Some(note) => serde_json::json!({
-                "state": note.state,
-                "detail": note.detail,
-                "terminal": note.terminal,
-            }),
-            None => serde_json::json!({"state": "on the server"}),
-        };
-        return Ok(serde_json::to_string_pretty(&reply).expect("plain data"));
+        return Ok(serde_json::to_string_pretty(
+            &serde_json::to_value(&sent).expect("the send reply is plain data"),
+        )
+        .expect("plain data"));
     }
-    let mut out = format!(
+    Ok(format!(
         "sent m-{} to i-{to_num} - pending until the recipient's integration submits it",
         sent.message
             .num
             .map(|n| n.to_string())
             .unwrap_or_else(|| format!("(seq {})", sent.message.seq)),
-    );
-    if let Some(note) = &activation {
-        if let Some(line) = note.line(to_num) {
-            out.push('\n');
-            out.push_str(&line);
-        }
-    }
-    Ok(out)
-}
-
-/// The local mode's activation: no server holds the bridge cache or
-/// the write, so the door decides and launches itself, synchronously,
-/// under the shared per-session lock.
-fn activate_locally(cli: &Cli, destination: &Destination, to_num: usize) -> ActivationNote {
-    let world = match loadout_of(destination) {
-        Ok(loadout) => match loadout.state {
-            saccade::db::LoadState::Full(world) => world,
-            saccade::db::LoadState::Degraded(_) => {
-                return ActivationNote {
-                    state: "hold",
-                    detail: Some(
-                        "the log will not fold; the recipient's session is unknown".into(),
-                    ),
-                    terminal: None,
-                };
-            }
-        },
-        Err(e) => {
-            return ActivationNote {
-                state: "hold",
-                detail: Some(e.to_string()),
-                terminal: None,
-            };
-        }
-    };
-    let Some(id) = world.incarnation_at_num(to_num) else {
-        return ActivationNote {
-            state: "hold",
-            detail: Some(format!("i-{to_num} is not a registered incarnation")),
-            terminal: None,
-        };
-    };
-    let ctx = &world.incarnations[&id];
-    let saccade::Incarnation::Native {
-        native_id,
-        saved_session,
-    } = &ctx.incarnation
-    else {
-        // historical attribution identities have no session to activate
-        return ActivationNote::silent();
-    };
-    let recipient = saccade::activate::Recipient {
-        num: to_num,
-        native_id: native_id.as_str().to_string(),
-        saved_session: saved_session.as_path().to_path_buf(),
-    };
-    let captured = std::cell::RefCell::new(None::<String>);
-    let mut launch = || -> Result<(), String> {
-        let (_, terminal) = integrate_launch(
-            cli,
-            destination,
-            None,
-            Some(&format!("i-{to_num}")),
-            &[],
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-        *captured.borrow_mut() = Some(terminal);
-        Ok(())
-    };
-    let decision = saccade::activate::activate(&recipient, false, &mut launch);
-    ActivationNote::of(decision, captured.into_inner())
+    ))
 }
 
 /// The mailbox door: the messages an incarnation participates in, in
@@ -2541,6 +2460,33 @@ fn integrate_launch(
             if !prompt_text.is_empty() {
                 argv.push(prompt_text);
             }
+            // the rigorous handoff: this door's success is the launched
+            // session's guard being held - observed, bounded, never
+            // assumed. A late boot holds the door until it lands or the
+            // bound passes; a bound pass reports failure and the mail
+            // stays relaunchable, with a late attacher refused at its
+            // own attach by the live holder's guard.
+            let guard = saccade::paths::state_dir(&repo)
+                .join("saccade-activation")
+                .join(format!(
+                    "{}.guard",
+                    saccade::paths::session_key(native_id.as_str())
+                ));
+            let handoff = std::time::Instant::now()
+                + std::time::Duration::from_secs(saccade::activate::GUARD_HANDOFF_SECS);
+            loop {
+                match saccade::activate::guard_held(&guard) {
+                    Some(true) => break,
+                    Some(false) if std::time::Instant::now() < handoff => {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                    }
+                    _ => {
+                        return Err(Fail::Usage(
+                            "the resumed session's guard was not taken within its bound; the launch stays unobserved and the mail pending".into(),
+                        ));
+                    }
+                }
+            }
             (dir, argv, format!("sac resume i-{token}"))
         }
         _ => {
@@ -2619,79 +2565,6 @@ fn launch_token() -> String {
         token.push_str(&format!("{b:02x}"));
     }
     token
-}
-
-/// Whether a native Pi process lives in this exact workspace right
-/// now, read from the host's process table: cwd symlink and argv[0]
-/// per /proc entry. A heuristic in the safe direction - any doubt
-/// reads as alive, and the caller leaves mail pending rather than
-/// spawning a duplicate into a running session.
-/// One activation outcome as the send door reports it: descriptive
-/// facts only, never a judgment about the recipient's work. A submitted
-/// launch is exactly that - submitted; reattachment is observed later,
-/// never assumed here.
-struct ActivationNote {
-    state: &'static str,
-    detail: Option<String>,
-    terminal: Option<String>,
-}
-
-impl ActivationNote {
-    fn silent() -> Self {
-        Self {
-            state: "connected",
-            detail: None,
-            terminal: None,
-        }
-    }
-
-    fn of(decision: saccade::activate::Decision, terminal: Option<String>) -> Self {
-        match decision {
-            saccade::activate::Decision::Connected => Self::silent(),
-            saccade::activate::Decision::ResumeSubmitted => Self {
-                state: "resume_submitted",
-                detail: None,
-                terminal,
-            },
-            saccade::activate::Decision::LiveUnbridged => Self {
-                state: "live_unbridged",
-                detail: None,
-                terminal: None,
-            },
-            saccade::activate::Decision::InFlight => Self {
-                state: "in_flight",
-                detail: None,
-                terminal: None,
-            },
-            saccade::activate::Decision::Hold(reason) => Self {
-                state: "hold",
-                detail: Some(reason),
-                terminal: None,
-            },
-        }
-    }
-
-    fn line(&self, to_num: usize) -> Option<String> {
-        match self.state {
-            "connected" => None,
-            "resume_submitted" => Some(format!(
-                "  their session was not live: resume launch submitted for i-{to_num} (terminal {}) - pending mail delivers once their session registers and drains",
-                self.terminal.as_deref().unwrap_or("?")
-            )),
-            "live_unbridged" => Some(
-                "  their session looks live but its delivery bridge is not connected; the message stays pending"
-                    .into(),
-            ),
-            "in_flight" => Some(
-                "  another activation is already handling their session; the message stays pending"
-                    .into(),
-            ),
-            _ => Some(format!(
-                "  activation not attempted: {} - the message stays pending",
-                self.detail.as_deref().unwrap_or("the host state is unknown")
-            )),
-        }
-    }
 }
 
 /// The ask door: cheap peer creation with an initial question. The
@@ -2782,7 +2655,10 @@ fn ask_door(
         "i-{num} registered at {dir_str} (terminal {terminal}); your question went as {answer} from {creator_num}; they receive it natively"
     ))
 }
-
+/// The ask door: cheap peer creation with an initial question. The
+/// creator is a registered incarnation; the question is durable
+/// addressed communication from its own scope - machine-supplied
+/// origin on the record - never argv shaped into native human input.
 fn parse_task_id(token: &str) -> Result<TaskId, Fail> {
     let n = token.strip_prefix("t-").ok_or_else(|| {
         Fail::Usage(format!(

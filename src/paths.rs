@@ -20,7 +20,7 @@ fn state_parent() -> PathBuf {
 
 /// A stable 32-bit FNV-1a of the path; hashers in std are not stable
 /// across versions, and this slug must outlive them.
-fn fnv1a(bytes: &[u8]) -> u32 {
+pub fn fnv1a(bytes: &[u8]) -> u32 {
     let mut hash: u32 = 0x811c9dc5;
     for byte in bytes {
         hash ^= u32::from(*byte);
@@ -46,6 +46,14 @@ pub fn repo_hue(repo_root: &Path) -> u32 {
 
 /// The per-repo state directory: repo basename plus a short hash of the
 /// resolved root, so same-named repos on one machine never collide.
+/// A filesystem-safe key for an opaque native session id: the id is
+/// arbitrary nonempty text, so it is never interpolated as a path -
+/// its stable hash scopes the runtime guard and marker files without
+/// changing the id's meaning anywhere else.
+pub fn session_key(native_id: &str) -> String {
+    format!("s{:08x}", fnv1a(native_id.as_bytes()))
+}
+
 pub fn state_dir(repo_root: &Path) -> PathBuf {
     let slug = format!(
         "{}-{:06x}",

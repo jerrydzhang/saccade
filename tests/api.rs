@@ -2,7 +2,7 @@
 //! back or a typed error, the tier law holding through HTTP exactly as it
 //! holds in process.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -3383,59 +3383,198 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(json_of(&body)["incarnation"], 3);
 
+    // a fresh fork under a STALE token births its own incarnation but
+    // never retargets the door's mapping: the correlation keeps
+    // pointing at the birth that claimed it
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "fork000001",
+            "session_file": "/sessions/fork000001.jsonl",
+            "launch_token": "launch-hex",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["registered"], true);
+    let forked = json_of(&body)["incarnation"].as_u64().unwrap();
+    assert_ne!(forked, 3, "the fork is a fresh birth");
+    let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-hex");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        json_of(&body)["incarnation"],
+        3,
+        "the mapping never retargeted"
+    );
+
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
+/// A serving subprocess: publishes its address file, so activation's
+/// routing is the real one, and carries the launcher seam plus the
+/// fake host on PATH for its own activation child.
+fn spawn_serving_subprocess(
+    db: &Path,
+    repo: &Path,
+    bin: &str,
+    host_dir: &Path,
+    launcher: &Path,
+) -> (String, u32) {
+    let port = 8940 + (std::process::id() % 500) as u16;
+    let child = std::process::Command::new(bin)
+        .args([
+            "--db",
+            db.to_str().unwrap(),
+            "--repo",
+            repo.to_str().unwrap(),
+            "serve",
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+        ])
+        .env(
+            "PATH",
+            format!("{}:{}", host_dir.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("SACCADE_ACTIVATION_LAUNCHER", launcher)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the serving subprocess spawns");
+    let pid = child.id();
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if ureq::get(&format!("{url}/api/v1/version"))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
+            .is_ok()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the serving subprocess never came up"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    (url, pid)
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn a_wire_send_to_a_stopped_peer_holds_when_the_host_cannot_vouch() {
-    let db = scratch_db("wire-activation");
-    let base_url = spawn_server(&db).await;
+async fn a_wire_send_activates_a_stopped_peer_through_the_launcher() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("wire-activate");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
 
-    // the recipient's saved session points where nothing exists: the
-    // shared activation decides Hold and submits no launch
+    // the launcher seam: records the launch argv and exits successfully,
+    // so the decision is observable without a real host, and the test
+    // fails if activation is disabled
+    let bin_dir = db.parent().unwrap().join("probe-bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let seam = bin_dir.join("activation-launcher");
+    let launch_log = db.parent().unwrap().join("launch.log");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"{}\"\nexit 0\n",
+        launch_log.display()
+    );
+    std::fs::write(&seam, script).unwrap();
+    std::fs::set_permissions(&seam, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+
+    // the recipient's saved session: a valid header whose workspace
+    // exists and holds no live process - the resumable shape
+    let workspace = db.parent().unwrap().join("stopped-peer-ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let saved = db.parent().unwrap().join("peer-session.jsonl");
+    std::fs::write(
+        &saved,
+        format!(
+            "{{\"type\":\"session\",\"id\":\"stopped001\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+
+    let (url, pid) = spawn_serving_subprocess(&db, &root, bin, &bin_dir, &seam);
+
+    // a live sender and the stopped recipient
     let (status, body) = post_json(
-        &base_url,
+        &url,
         "/api/v1/native/attach",
-        &json!({"native_id": "away00001", "session_file": "/sessions/gone/away00001.jsonl"}),
+        &json!({
+            "native_id": "sender0001",
+            "session_file": "/sessions/sender0001.jsonl",
+        }),
     );
     assert_eq!(status, 200, "{body}");
     let (status, body) = post_json(
-        &base_url,
+        &url,
         "/api/v1/native/attach",
-        &json!({"native_id": "home00001", "session_file": "/sessions/home00001.jsonl"}),
+        &json!({"native_id": "stopped001", "session_file": saved.to_str().unwrap()}),
     );
     assert_eq!(status, 200, "{body}");
 
+    // the wire's own send face: the stopped peer must be activated by
+    // the landed write, through the launcher seam
     let (status, body) = post_json(
-        &base_url,
+        &url,
         "/api/v1/messages/send",
         &json!({
             "context": {"actor": "pi", "tier": "agent",
-                        "scope": {"task": null, "incarnation": 1, "workspace": null}},
-            "to": 0,
-            "body": "the wire itself should try to wake this peer",
+                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
+            "to": 1,
+            "body": "wake through the wire",
         }),
     );
     assert_eq!(status, 200, "{body}");
 
-    // the activation ran under the session's lock and held: no grace
-    // marker was ever written, and the mail stays pending
-    std::thread::sleep(std::time::Duration::from_millis(400));
-    let marker = std::env::temp_dir()
-        .join("saccade-activation")
-        .join("away00001.launched");
-    assert!(
-        !marker.exists(),
-        "an unverifiable recipient launched nothing"
-    );
-    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=0");
-    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
-    assert!(
-        mail.iter()
-            .any(|m| m["to"]["seq"] == 0 && m["state"] == "pending"),
-        "{body}"
-    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let logged = std::fs::read_to_string(&launch_log).unwrap_or_default();
+        if logged.contains("--resume") && logged.contains("i-1") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "activation never reached the launcher; log: {logged:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 
+    // the command ingress activates through the same seam: a SendMessage
+    // over /api/v1/command must append a second observed launch
+    let before = std::fs::read_to_string(&launch_log)
+        .unwrap_or_default()
+        .len();
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/command",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
+            "command": {"send_message": {"from": 0, "to": 1, "body": "wake through the command face"}},
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let logged = std::fs::read_to_string(&launch_log).unwrap_or_default();
+        if logged.len() > before {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the command ingress never activated; log: {logged:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status();
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
