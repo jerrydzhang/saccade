@@ -2514,8 +2514,9 @@ fn integrate_launch(
     Ok((dir_str, terminal))
 }
 
-/// A fresh random launch token: self-generated correlation only, never
-/// printed into the session and never a record.
+/// A fresh random launch token: correlation only - it names the
+/// launcher's interest, rides the launch environment where the session
+/// can see it, and confers nothing on its holder. Never a record.
 fn launch_token() -> String {
     let mut bytes = [0u8; 16];
     // exactly sixteen bytes: /dev/urandom never ends, so anything
