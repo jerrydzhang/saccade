@@ -11,8 +11,10 @@ const LOCK_WAIT_MILLIS: u64 = 10_000;
 /// How long the resume door waits for the launched session's guard to
 /// be taken: bounded handoff, after which the door reports failure and
 /// the mail stays relaunchable. The bound never proves quiescence - a
-/// late boot is contained by the attach-side duplicate refusal.
-pub const GUARD_HANDOFF_SECS: u64 = 60;
+/// late boot is contained by the attach-side duplicate refusal, and a
+/// late attacher still associates, drains, and submits. Cold first
+/// boots of the composed harness have been observed past two minutes.
+pub const GUARD_HANDOFF_SECS: u64 = 300;
 
 /// The canonical per-native-session guard file: the session's
 /// integration holds an exclusive kernel flock on it from association
@@ -160,14 +162,18 @@ pub fn activate(
 /// and forget from the reply's perspective - the send never waits on
 /// host mechanics.
 pub fn after_send(app: &AppState, to_id: IncarnationId, to_num: usize) {
+    eprintln!("ACTIVATE: entered for i-{to_num}");
     // activation routes through the host: a server serving no repo has
     // no state directory to key guards by and no repo to hand the door
     let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
+        eprintln!("ACTIVATE: no repo root");
         return;
     };
+    eprintln!("ACTIVATE: repo {}", repo_root.display());
     let address = crate::paths::address_at(app.db_path());
     let url = std::fs::read_to_string(&address).unwrap_or_default();
     let url = url.trim().to_string();
+    eprintln!("ACTIVATE: url {url}");
     if url.is_empty() {
         return;
     }
@@ -238,7 +244,7 @@ pub fn after_send(app: &AppState, to_id: IncarnationId, to_num: usize) {
             }
             sink
         });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(420);
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
@@ -263,7 +269,8 @@ pub fn after_send(app: &AppState, to_id: IncarnationId, to_num: usize) {
             Err("the resume launch door exited unsuccessfully".into())
         }
     };
-    let _ = activate(repo_root.as_path(), &recipient, connected, &mut launch);
+    let decision = activate(repo_root.as_path(), &recipient, connected, &mut launch);
+    eprintln!("ACTIVATE: decision {decision:?}");
 }
 
 #[cfg(test)]
