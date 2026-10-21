@@ -151,19 +151,15 @@ fn use_comment_at(world: &World, n: u8) -> CommentId {
     }
 }
 
-/// Every birth the fold holds — comments, tasks, artifacts — with a
-/// one-past-the-end sentinel that exercises the citation guard.
-fn birth_ref_at(world: &World, n: u8) -> RecordId {
-    let mut births: Vec<RecordId> = world.comments.keys().map(|id| id.0).collect();
-    births.extend(world.tasks.iter().map(|ctx| ctx.birth));
-    for ctx in &world.tasks {
-        births.extend(ctx.artifacts.iter().map(|(rid, _)| *rid));
-    }
-    let slot = n as usize % (births.len() + 1);
-    if slot == births.len() {
+/// Any record position the log already holds — births and record
+/// facts alike — with a one-past-the-end sentinel that exercises the
+/// citation guard. `records` is the log's own length.
+fn record_ref_at(records: usize, n: u8) -> RecordId {
+    let slot = n as usize % (records + 1);
+    if slot == records {
         RecordId(usize::MAX)
     } else {
-        births[slot]
+        RecordId(slot)
     }
 }
 
@@ -201,7 +197,7 @@ fn incarnation_at(world: &World, task: TaskId, n: u8) -> Option<saccade::Incarna
     }
 }
 
-fn command_of(action: &Action, world: &World) -> Command {
+fn command_of(action: &Action, world: &World, records: usize) -> Command {
     let task = task_at(world, action.number("task"));
     match action {
         Action::Create { .. } => Command::CreateTask {
@@ -233,9 +229,10 @@ fn command_of(action: &Action, world: &World) -> Command {
             } else {
                 standing_offer_at(world, *reply).unwrap_or(CommentId(RecordId(usize::MAX)))
             };
-            // notes and requests cite births through their mappings
+            // notes and requests cite earlier records through their
+            // mappings: births and record facts alike
             let references: Vec<RecordId> = match variant % 6 {
-                0 | 1 => cites.iter().map(|n| birth_ref_at(world, *n)).collect(),
+                0 | 1 => cites.iter().map(|n| record_ref_at(records, *n)).collect(),
                 _ => Vec::new(),
             };
             // a decision homes on the task of the offer it names; the
@@ -418,13 +415,15 @@ proptest! {
     fn random_sequences_never_panic_and_replay_equals_live(actions in sequence_strategy()) {
         let mut conn = db::open(std::path::Path::new(":memory:")).expect(":memory: opens");
         let mut live = World::new();
+        let mut records = 0usize;
 
         for action in &actions {
             let ctx = context(action, &live);
-            let cmd = command_of(action, &live);
+            let cmd = command_of(action, &live, records);
             // rejections are gatekept by the pipeline and simply ignored; the property
             // is that no valid-grammar command sequence panics the fold
-            if let Ok((_, world)) = db::record(&mut conn, &ctx, cmd, 1) {
+            if let Ok((stored, world)) = db::record(&mut conn, &ctx, cmd, 1) {
+                records += stored.len();
                 live = world;
             }
         }
@@ -484,12 +483,14 @@ fn generator_reaches_deep_states() {
             .current();
         let mut conn = db::open(std::path::Path::new(":memory:")).unwrap();
         let mut live = World::new();
+        let mut records = 0usize;
 
         for action in &actions {
             let ctx = context(action, &live);
-            let cmd = command_of(action, &live);
+            let cmd = command_of(action, &live, records);
             match db::record(&mut conn, &ctx, cmd, 1) {
                 Ok((stored, world)) => {
+                    records += stored.len();
                     live = world;
                     let last = stored.last().unwrap();
                     match action {

@@ -126,6 +126,10 @@ pub struct World {
     /// Record-derived worker identities, born one-to-one with the
     /// workspace establishments
     pub incarnations: BTreeMap<IncarnationId, IncarnationContext>,
+    /// Every record's home thread, where the fold gives it one: the
+    /// provenance index citations resolve against. No residency —
+    /// the named record stays the event it is.
+    pub provenance: BTreeMap<RecordId, TaskId>,
 }
 
 impl World {
@@ -134,6 +138,7 @@ impl World {
             tasks: Vec::new(),
             comments: BTreeMap::new(),
             incarnations: BTreeMap::new(),
+            provenance: BTreeMap::new(),
         }
     }
 
@@ -159,7 +164,10 @@ impl World {
     /// order, the number the human-facing c-N carries. Births do not
     /// carry their own ids; the fold derives them.
     pub fn comment_num(&self, id: CommentId) -> Option<usize> {
-        self.comments.range(..=id).count().checked_sub(1)
+        if !self.comments.contains_key(&id) {
+            return None;
+        }
+        Some(self.comments.range(..id).count())
     }
 
     /// The comment holding this public number, resolved from the fold.
@@ -170,25 +178,15 @@ impl World {
     /// The incarnation's public number: its position in incarnation
     /// birth order, the number the human-facing i-N carries.
     pub fn incarnation_num(&self, id: IncarnationId) -> Option<usize> {
-        self.incarnations.range(..=id).count().checked_sub(1)
+        if !self.incarnations.contains_key(&id) {
+            return None;
+        }
+        Some(self.incarnations.range(..id).count())
     }
 
     /// The incarnation holding this public number, resolved from the fold.
     pub fn incarnation_at_num(&self, n: usize) -> Option<IncarnationId> {
         self.incarnations.keys().nth(n).copied()
-    }
-
-    /// Whether the record position is the birth of something the fold
-    /// holds: a task, a comment, an artifact, or an incarnation.
-    /// Stable internal references identify birth records.
-    pub fn is_birth(&self, rid: RecordId) -> bool {
-        self.comments.contains_key(&CommentId(rid))
-            || self.incarnations.contains_key(&IncarnationId(rid))
-            || self.tasks.iter().any(|ctx| ctx.birth == rid)
-            || self
-                .tasks
-                .iter()
-                .any(|ctx| ctx.artifacts.iter().any(|(r, _)| *r == rid))
     }
 
     /// Only valid path for world mutation
@@ -242,6 +240,8 @@ impl World {
         match record.event {
             // Task events
             Event::TaskCreated { name: task_name } => {
+                let birth = record.id;
+                self.provenance.insert(birth, TaskId(self.tasks.len()));
                 self.tasks.push(TaskContext {
                     task: Task {
                         state: TaskState::Open,
@@ -260,6 +260,7 @@ impl World {
                 });
             }
             Event::TaskClaimed { id, incarnation } => {
+                self.provenance.insert(record.id, id);
                 let owner = Self::owner_of(&record.context, incarnation)?;
                 if let Some(inc) = incarnation {
                     let born = self
@@ -280,6 +281,7 @@ impl World {
                 task_ctx.last_record_at = record.timestamp;
             }
             Event::TaskCancelled { id, .. } | Event::TaskReopened { id, .. } => {
+                self.provenance.insert(record.id, id);
                 let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.task.state = task_ctx
                     .task
@@ -302,10 +304,10 @@ impl World {
                 if self.tasks.get(home.0).is_none() {
                     return Err(Reason::InvalidTaskId);
                 }
-                // citations name earlier births only: marker k names
-                // references[k-1], and no comment cites itself forward
+                // citations name earlier records of this log: marker k
+                // names references[k-1], and no comment cites forward
                 for rid in references {
-                    if rid.0 >= record.id.0 || !self.is_birth(*rid) {
+                    if rid.0 >= record.id.0 {
                         return Err(Reason::InvalidReference);
                     }
                 }
@@ -369,6 +371,7 @@ impl World {
                     _ => None,
                 };
 
+                self.provenance.insert(record.id, home);
                 let task_ctx = self.tasks.get_mut(home.0).ok_or(Reason::InvalidTaskId)?;
                 if let Some(next) = task_ctx.task.state.transition(&record.event) {
                     task_ctx.task.state = next;
@@ -417,6 +420,13 @@ impl World {
                 );
             }
             Event::CommentRevised { id, ref body } => {
+                let home = self
+                    .comments
+                    .get(&id)
+                    .ok_or(Reason::InvalidCommentId)?
+                    .comment
+                    .home;
+                self.provenance.insert(record.id, home);
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
                 // the gate is the state: a withdrawn deposit admits no repair
                 if matches!(comment_ctx.comment.state, CommentState::Withdrawn(_)) {
@@ -440,6 +450,13 @@ impl World {
                 task_ctx.last_record_at = record.timestamp;
             }
             ref event @ Event::CommentWithdrawn { id, .. } => {
+                let home = self
+                    .comments
+                    .get(&id)
+                    .ok_or(Reason::InvalidCommentId)?
+                    .comment
+                    .home;
+                self.provenance.insert(record.id, home);
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
                 comment_ctx.comment.state = comment_ctx
                     .comment
@@ -467,6 +484,7 @@ impl World {
                 let source = *source;
                 let home = comment_ctx.comment.home;
                 self.check_binding(source, offer)?;
+                self.provenance.insert(record.id, home);
                 let comment_ctx = self.comments.get_mut(&id).expect("resident above");
                 comment_ctx.comment.state = comment_ctx
                     .comment
@@ -483,6 +501,7 @@ impl World {
                 task_ctx.last_record_at = record.timestamp;
             }
             Event::ArtifactAdded { root, ref artifact } => {
+                self.provenance.insert(record.id, root);
                 let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.artifacts.push((record.id, artifact.clone()));
                 task_ctx.last_record_at = record.timestamp;
@@ -494,6 +513,7 @@ impl World {
                 ref branch,
                 ref worktree,
             } => {
+                self.provenance.insert(record.id, task_id);
                 let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
                 if task_ctx.workspace.is_some() {
                     return Err(Reason::WorkspaceAlreadyExists);
@@ -527,6 +547,7 @@ impl World {
                 task_id,
                 ref checkpoint,
             } => {
+                self.provenance.insert(record.id, task_id);
                 let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
                 let workspace = task_ctx
                     .workspace
@@ -597,8 +618,39 @@ pub fn execute(
     command: Command,
     now: u64,
 ) -> Result<(World, Vec<Record>), Reject> {
-    let events = decide(command);
+    let events = decide(command.clone());
     enforce_tier(context, &events)?;
+    // The authoring ingress, after authority: a live use is born
+    // prospective — the born-bound shape belongs to migrated history
+    // alone — and every marker resolves through its mapping: a new
+    // comment against the mapping it carries, a revision against the
+    // one it cannot change. The fold replays old text unlinked.
+    match &command {
+        Command::Comment {
+            kind: CommentKind::Use { bound: Some(_), .. },
+            ..
+        } => return Err(Reject::InvalidStateTransition),
+        Command::Comment {
+            kind, references, ..
+        } => {
+            if let Some(prose) = kind.prose()
+                && crate::markers::first_unresolved(prose.as_str(), references.len()).is_some()
+            {
+                return Err(Reject::InvalidReference);
+            }
+        }
+        Command::ReviseComment { id, body } => {
+            let mapped = world
+                .comments
+                .get(id)
+                .map(|ctx| ctx.references.len())
+                .unwrap_or(0);
+            if crate::markers::first_unresolved(body.as_str(), mapped).is_some() {
+                return Err(Reject::InvalidReference);
+            }
+        }
+        _ => {}
+    }
     world.stage(base, context, now, &events)
 }
 
@@ -1537,10 +1589,11 @@ mod test {
         assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
     }
 
-    /// A historical log's born-bound use folds under the eligibility
-    /// the world held at its birth.
+    /// The born-bound use is migrated history: the fold replays it
+    /// under the eligibility the world held at its birth, and the
+    /// authoring ingress refuses it — a live use is born prospective.
     #[test]
-    fn a_use_may_be_born_already_bound() {
+    fn a_use_may_be_born_already_bound_in_history_alone() {
         let mut log = Log::new();
         log.execute(
             human(),
@@ -1560,7 +1613,41 @@ mod test {
         .unwrap();
         log.execute(agent(), offer(TaskId(1), "suite green"), 3)
             .unwrap();
-        log.execute(
+        let record = Record {
+            id: RecordId(3),
+            timestamp: 4,
+            context: agent(),
+            event: Event::Commented {
+                home: TaskId(0),
+                kind: CommentKind::Use {
+                    source: TaskId(1),
+                    reason: prose("builds on foo's account"),
+                    bound: Some(crate::objects::comment::UseBinding {
+                        offer: CommentId(RecordId(2)),
+                        grounds: prose("the account that landed"),
+                    }),
+                },
+                references: Vec::new(),
+            },
+        };
+        log.world = log
+            .world
+            .clone()
+            .apply(record)
+            .expect("history replays the born-bound shape");
+        let use_ctx = &log.world().comments[&CommentId(RecordId(3))];
+        assert_eq!(
+            use_ctx.comment.state,
+            CommentState::UseBound(CommentId(RecordId(2)))
+        );
+        assert_eq!(
+            use_ctx.binding.as_ref().map(|b| (b.offer, b.record)),
+            Some((CommentId(RecordId(2)), RecordId(3)))
+        );
+
+        // the same shape refuses at the authoring ingress, whatever
+        // eligibility the world holds
+        let refused = log.execute(
             agent(),
             Command::Comment {
                 home: TaskId(0),
@@ -1574,22 +1661,12 @@ mod test {
                 },
                 references: Vec::new(),
             },
-            4,
-        )
-        .unwrap();
-
-        let use_ctx = &log.world().comments[&CommentId(RecordId(3))];
-        assert_eq!(
-            use_ctx.comment.state,
-            CommentState::UseBound(CommentId(RecordId(2)))
+            5,
         );
-        assert_eq!(
-            use_ctx.binding.as_ref().map(|b| (b.offer, b.record)),
-            Some((CommentId(RecordId(2)), RecordId(3)))
-        );
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
 
-        // the same guards read at birth: a born binding to a rejected
-        // account refuses the whole fold
+        // and a born binding to a rejected account refuses the replay
+        // too: history keeps the law it kept
         let mut log = Log::new();
         log.execute(
             human(),
@@ -1611,9 +1688,11 @@ mod test {
             .unwrap();
         log.execute(human(), reject_on(TaskId(1), 2, "not good enough"), 4)
             .unwrap();
-        let refused = log.execute(
-            agent(),
-            Command::Comment {
+        let record = Record {
+            id: RecordId(5),
+            timestamp: 5,
+            context: agent(),
+            event: Event::Commented {
                 home: TaskId(0),
                 kind: CommentKind::Use {
                     source: TaskId(1),
@@ -1625,19 +1704,112 @@ mod test {
                 },
                 references: Vec::new(),
             },
-            5,
-        );
-        assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
+        };
+        let refused = log.world.clone().apply(record);
+        assert!(matches!(
+            refused.map_err(|e| e.reason),
+            Err(Reason::NotCurrentOffer)
+        ));
     }
 
-    /// Citations name earlier births only: marker targets must be
-    /// records the log already holds as births of something.
+    /// The authoring ingress validates markers after authority: new
+    /// comments against the mapping they carry, revisions against the
+    /// immutable one. Code spans and math are literal, never
+    /// citations; the fold replays old text unlinked.
     #[test]
-    fn citations_name_earlier_births_only() {
+    fn authoring_validates_markers_after_authority() {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        // a comment birth, a task birth, and an artifact birth all cite
+        // a marker beyond the mapping refuses at the ingress
+        let refused = log.execute(
+            agent(),
+            citing_note(TaskId(3), "an unresolvable [^2]", vec![RecordId(3)]),
+            40,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidReference)));
+        // zero is no marker position either
+        let refused = log.execute(
+            agent(),
+            citing_note(TaskId(3), "no zeroth [^0]", vec![RecordId(3)]),
+            40,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidReference)));
+        // a number too large for an index refuses, never panics
+        let oversized = "9".repeat(40);
+        let refused = log.execute(
+            agent(),
+            citing_note(
+                TaskId(3),
+                &format!("oversized [^{oversized}]"),
+                vec![RecordId(3)],
+            ),
+            40,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidReference)));
+
+        // code spans and math are literal: the body lands with no
+        // mapping at all
+        log.execute(
+            agent(),
+            note(TaskId(3), "the marker syntax is `[^1]` and $[^1]$ is math"),
+            40,
+        )
+        .unwrap();
+
+        // a revision keeps the mapping it was born with: the story's
+        // citing note (one reference) takes [^1], never [^2]
+        log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(19)),
+                body: prose("reworded, still [^1]"),
+            },
+            41,
+        )
+        .unwrap();
+        let refused = log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(19)),
+                body: prose("retargeted [^2]"),
+            },
+            42,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidReference)));
+
+        // the fold replays what authoring refused: the oversized
+        // marker lands in history and renders unresolved
+        let len = log.records().len();
+        let record = Record {
+            id: RecordId(len),
+            timestamp: 43,
+            context: agent(),
+            event: Event::Commented {
+                home: TaskId(3),
+                kind: CommentKind::Note {
+                    body: prose(&format!("historical [^{oversized}]")),
+                },
+                references: vec![RecordId(3)],
+            },
+        };
+        log.world = log
+            .world
+            .clone()
+            .apply(record)
+            .expect("history replays unlinked");
+    }
+
+    /// Citations name earlier records of this log: births and record
+    /// facts alike — claims, bindings, revisions — and nothing ahead
+    /// of the citing comment's own position.
+    #[test]
+    fn citations_name_earlier_records_only() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+
+        // a comment birth, a task birth, an artifact birth, and the
+        // record facts — a claim and a binding — all cite
         let artifact = Artifact {
             name: prose("sweep figure"),
             hash: ContentHash::of(b"figure bytes"),
@@ -1656,14 +1828,14 @@ mod test {
             agent(),
             citing_note(
                 TaskId(3),
-                "foo's account [^1], the task itself [^2], the figure [^3]",
-                vec![RecordId(3), RecordId(0), RecordId(artifact_seq)],
+                "foo's account [^1], the task [^2], the figure [^3], the claim [^4], the binding [^5]",
+                vec![RecordId(3), RecordId(0), RecordId(artifact_seq), RecordId(1), RecordId(18)],
             ),
             28,
         )
         .unwrap();
 
-        // a revision record is not a birth
+        // a revision record is a record fact too
         log.execute(
             agent(),
             Command::ReviseComment {
@@ -1674,23 +1846,20 @@ mod test {
         )
         .unwrap();
         let revision_seq = log.records().len() - 1;
+        log.execute(
+            agent(),
+            citing_note(TaskId(3), "the repair [^1]", vec![RecordId(revision_seq)]),
+            30,
+        )
+        .unwrap();
+
+        // a future position refuses
         let refused = log.execute(
             agent(),
-            citing_note(TaskId(3), "the revision [^1]", vec![RecordId(revision_seq)]),
-            30,
+            citing_note(TaskId(3), "out of reach [^1]", vec![RecordId(999)]),
+            31,
         );
         assert!(matches!(refused, Err(Reject::InvalidReference)));
-
-        // a claim record and a binding record are not births
-        for target in [RecordId(1), RecordId(18), RecordId(999)] {
-            let refused = log.execute(
-                agent(),
-                citing_note(TaskId(3), "out of reach [^1]", vec![target]),
-                31,
-            );
-            assert!(matches!(refused, Err(Reject::InvalidReference)));
-        }
-        assert_eq!(log.records().len(), RECORD_COUNT + 3);
     }
 
     #[test]

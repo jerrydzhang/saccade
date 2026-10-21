@@ -259,15 +259,6 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     if Prose::new(addr.body.clone()).is_err() {
         return compose_reject(req, app, n, fields, "a comment needs words");
     }
-    if let Some(k) = web::unresolved_marker(&addr.body, addr.references.len()) {
-        return compose_reject(
-            req,
-            app,
-            n,
-            fields,
-            &format!("marker [^{k}] has no reference to resolve; cite with @c-<n>"),
-        );
-    }
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
         Err(msg) => return compose_reject(req, app, n, fields, &msg),

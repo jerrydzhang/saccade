@@ -10,6 +10,9 @@ use saccade::api::AppState;
 
 fn scratch_db(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("sac-api-{tag}-{}", std::process::id()));
+    // a killed run may have left this pid's dir behind; every test
+    // here builds its tracker from nothing
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir.join("saccade.db")
 }
@@ -114,6 +117,19 @@ async fn commands_round_trip_over_the_wire() {
         ),
     );
     assert_eq!(status, 200);
+
+    // the authoring ingress rides the wire: a marker the mapping
+    // cannot resolve refuses with its taught reason
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"comment": {"home": 0, "kind": {"note": {"body": "dangling [^1]"}}, "references": []}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_reference");
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -2053,12 +2069,13 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
         .collect();
     assert!(seqs.contains(&0), "the birth rides its thread: {seqs:?}");
     assert!(seqs.contains(&2), "the reply rides its thread: {seqs:?}");
-    // the revision folds into its comment and claims no thread
+    // the revision rides the provenance index: its home is the
+    // comment it repairs
     let revised = rows
         .iter()
         .find(|r| r["kind"] == json!("comment_revised"))
         .expect("the revision row");
-    assert_eq!(revised["thread"], Value::Null);
+    assert_eq!(revised["thread"], json!("t-0"));
 
     // text reads end with the cursor line too: show, log, list, search, anchor
     for args in [

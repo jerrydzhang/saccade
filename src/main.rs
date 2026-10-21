@@ -268,10 +268,11 @@ enum Cmd {
         name: Option<String>,
     },
     /// Block until a matching record lands on the target: activity
-    /// mode matches records folding into a task or a comment's
-    /// reply chain (revisions and decisions included); offer mode
-    /// matches an Offer born on the task. Matches are strictly after
-    /// the given global position; nothing is recorded
+    /// mode matches records folding into a task, or the records
+    /// structurally tied to a comment — its citations, repairs, and
+    /// decisions; offer mode matches an Offer born on the task.
+    /// Matches are strictly after the given global position; nothing
+    /// is recorded
     Wait {
         /// The task (t-<n>) or comment (c-<seq>) to wait on
         target: String,
@@ -473,7 +474,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 references.push(resolve_ref(&world, token)?);
             }
             let body = Prose::new(body.clone())?;
-            marker_guard(body.as_str(), references.len())?;
             Command::Comment {
                 home,
                 kind: CommentKind::Note { body },
@@ -484,7 +484,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             let world = world_of(&destination)?;
             let (home, references) = comment_address(&world, target)?;
             let body = Prose::new(body.clone())?;
-            marker_guard(body.as_str(), references.len())?;
             Command::Comment {
                 home,
                 kind: CommentKind::Request { body },
@@ -965,20 +964,13 @@ fn comment_address(world: &World, token: &str) -> Result<(TaskId, Vec<RecordId>)
     Ok((parse_task_id(token)?, Vec::new()))
 }
 
-/// A citation token to its birth record: c-N a comment, t-N a task,
-/// a bare N any record position the fold holds as a birth.
+/// A citation token to the record it names: c-N a comment by its
+/// public number, t-N a task's birth, a bare N any record position —
+/// the fold refuses positions this log does not hold.
 fn resolve_ref(world: &World, token: &str) -> Result<RecordId, Fail> {
     let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    let birth = |rid: RecordId| {
-        world.is_birth(rid).then_some(rid).ok_or_else(|| {
-        Fail::Usage(format!(
-            "'{token}' names no birth record: citations name a task, comment, artifact, or incarnation"
-        ))
-    })
-    };
-    if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
+    if token.starts_with("c-") {
         let id = resolve_comment(world, token)?;
-        let _ = n;
         return Ok(id.0);
     }
     if token.starts_with("t-") {
@@ -990,25 +982,19 @@ fn resolve_ref(world: &World, token: &str) -> Result<RecordId, Fail> {
                 world.tasks.len()
             ))
         })?;
-        return birth(ctx.birth);
+        return Ok(ctx.birth);
     }
     if numeric(token) {
-        let rid = RecordId(token.parse().expect("digits checked"));
-        return birth(rid);
+        let Ok(seq) = token.parse::<usize>() else {
+            return Err(Fail::Usage(format!(
+                "'{token}' names no record position this log holds"
+            )));
+        };
+        return Ok(RecordId(seq));
     }
     Err(Fail::Usage(format!(
         "'{token}' is not a citation (expected c-<n>, t-<n>, or a bare <seq>)"
     )))
-}
-
-/// Every marker in the prose must resolve through the mapping.
-fn marker_guard(body: &str, references: usize) -> Result<(), Fail> {
-    match saccade::web::unresolved_marker(body, references) {
-        Some(k) => Err(Fail::Usage(format!(
-            "marker [^{k}] has no reference to resolve; add --ref or cite with the reply target"
-        ))),
-        None => Ok(()),
-    }
 }
 
 /// Possession fixes the tier: an agent harness sets SACCADE_ACTOR, and
@@ -2468,6 +2454,7 @@ fn ref_str(target: &saccade::views::RefTarget) -> String {
         saccade::views::RefTarget::Task { task } => format!("t-{task}"),
         saccade::views::RefTarget::Incarnation { num, .. } => format!("i-{num}"),
         saccade::views::RefTarget::Artifact { seq, .. } => format!("seq {seq}"),
+        saccade::views::RefTarget::Record { seq, .. } => format!("seq {seq}"),
     }
 }
 

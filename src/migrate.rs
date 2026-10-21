@@ -514,9 +514,11 @@ struct Renumber<'a> {
 }
 
 /// Rewrite one prose field's c-N and i-N tokens onto the public
-/// numbering. Identified tokens renumber; non-comment records become
-/// `seq N`; mixed raw-record ranges become `seq N–M`; anything
-/// unresolved stays visibly legacy and joins the report.
+/// numbering. Identified tokens renumber; ranges of local records
+/// ride the raw spelling end to end (`seq N–M`) unless both ends are
+/// comment births; tokens this log cannot identify — and tokens
+/// already carrying the legacy mark — stay visibly legacy and join
+/// the report, never re-qualified.
 fn rewrite_prose(
     text: &str,
     seq: usize,
@@ -526,6 +528,8 @@ fn rewrite_prose(
 ) -> String {
     let chars: Vec<char> = text.chars().collect();
     let word = |c: char| c.is_alphanumeric() || matches!(c, '-' | '#' | '_');
+    // the local membership a digit string can prove, fallibly
+    let local = |digits: &str| digits.parse::<usize>().ok().filter(|n| (ctx.is_record)(*n));
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < chars.len() {
@@ -541,67 +545,88 @@ fn rewrite_prose(
             let bounded =
                 digits.is_empty() || chars.get(i + 2 + digits.len()).is_none_or(|c| !word(*c));
             if !digits.is_empty() && bounded {
-                let n: usize = digits.parse().expect("digits checked");
                 let end = i + 2 + digits.len();
+                let letter = chars[i];
+                // a token our own mark already qualified stays as it
+                // stands: reported, never rewritten again
+                let already_marked = out.ends_with("legacy ")
+                    || (out.ends_with("legacy") && chars.get(i - 1) == Some(&' '));
                 // a range: c-A–c-B or c-A..c-B
-                if let Some((last, other_end)) = range_after(&chars, end, chars[i]) {
-                    let m: usize = last.parse().expect("digits checked");
-                    let both = (ctx.is_comment)(n) && (ctx.is_comment)(m);
-                    let neither = (ctx.is_record)(n)
-                        && !(ctx.is_comment)(n)
-                        && (ctx.is_record)(m)
-                        && !(ctx.is_comment)(m);
-                    if both {
-                        out.push_str(&format!(
-                            "c-{}–c-{}",
-                            ctx.comment_number[&n], ctx.comment_number[&m]
-                        ));
-                        report.comment_refs_renumbered += 2;
-                    } else if neither {
-                        out.push_str(&format!("seq {n}–{m}"));
-                        report.ranges_rewritten += 1;
-                    } else {
-                        let letter = let_token(chars[i]);
-                        out.push_str(&format!("legacy {letter}-{n}–{letter}-{m}"));
+                let range = range_after(&chars, end, letter);
+                if let Some((far_digits, stop)) = range {
+                    let near = local(&digits);
+                    let far = local(&far_digits);
+                    let both_comments = near
+                        .filter(|n| (ctx.is_comment)(*n))
+                        .zip(far.filter(|n| (ctx.is_comment)(*n)));
+                    if already_marked {
+                        out.push_str(&format!("{letter}-{digits}–{letter}-{far_digits}"));
                         report.legacy.push(LegacyRef {
                             seq,
                             field: field.to_string(),
-                            token: format!("{letter}-{n}–{letter}-{m}"),
+                            token: format!("{letter}-{digits}–{letter}-{far_digits}"),
+                        });
+                    } else if let Some((a, b)) = both_comments {
+                        out.push_str(&format!(
+                            "c-{}–c-{}",
+                            ctx.comment_number[&a], ctx.comment_number[&b]
+                        ));
+                        report.comment_refs_renumbered += 2;
+                    } else if let (Some(a), Some(b)) = (near, far) {
+                        // local and mixed, or raw end to end: the range
+                        // rides the raw spelling
+                        out.push_str(&format!("seq {}–{}", a.min(b), a.max(b)));
+                        report.ranges_rewritten += 1;
+                    } else {
+                        out.push_str(&format!("legacy {letter}-{digits}–{letter}-{far_digits}"));
+                        report.legacy.push(LegacyRef {
+                            seq,
+                            field: field.to_string(),
+                            token: format!("{letter}-{digits}–{letter}-{far_digits}"),
                         });
                     }
-                    i = other_end;
+                    i = stop;
                     continue;
                 }
-                match chars[i] {
-                    'c' => {
-                        if let Some(num) = ctx.comment_number.get(&n) {
-                            out.push_str(&format!("c-{num}"));
+                let near = local(&digits);
+                if already_marked {
+                    out.push_str(&format!("{letter}-{digits}"));
+                    report.legacy.push(LegacyRef {
+                        seq,
+                        field: field.to_string(),
+                        token: format!("{letter}-{digits}"),
+                    });
+                // the dense numbering of the kind the token names:
+                // membership in that kind's own map, not mere locality
+                } else if let Some(n) = near.filter(|n| match letter {
+                    'c' => (ctx.is_comment)(*n),
+                    _ => ctx.incarnation_number.contains_key(n),
+                }) {
+                    match letter {
+                        'c' => {
+                            out.push_str(&format!("c-{}", ctx.comment_number[&n]));
                             report.comment_refs_renumbered += 1;
-                        } else if (ctx.is_record)(n) {
-                            out.push_str(&format!("seq {n}"));
-                            report.record_refs_rewritten += 1;
-                        } else {
-                            out.push_str(&format!("legacy c-{n}"));
-                            report.legacy.push(LegacyRef {
-                                seq,
-                                field: field.to_string(),
-                                token: format!("c-{n}"),
-                            });
                         }
-                    }
-                    _ => {
-                        if let Some(num) = ctx.incarnation_number.get(&n) {
-                            out.push_str(&format!("i-{num}"));
+                        _ => {
+                            out.push_str(&format!("i-{}", ctx.incarnation_number[&n]));
                             report.incarnation_refs_renumbered += 1;
-                        } else {
-                            out.push_str(&format!("legacy i-{n}"));
-                            report.legacy.push(LegacyRef {
-                                seq,
-                                field: field.to_string(),
-                                token: format!("i-{n}"),
-                            });
                         }
                     }
+                // c-N was the all-purpose record prefix: a local
+                // non-comment rides the raw spelling. i-N names
+                // incarnations — local membership at a non-establishment
+                // record proves nothing about its provenance, so it
+                // stays legacy and reported, never remapped.
+                } else if let Some(n) = near.filter(|_| letter == 'c') {
+                    out.push_str(&format!("seq {n}"));
+                    report.record_refs_rewritten += 1;
+                } else {
+                    out.push_str(&format!("legacy {letter}-{digits}"));
+                    report.legacy.push(LegacyRef {
+                        seq,
+                        field: field.to_string(),
+                        token: format!("{letter}-{digits}"),
+                    });
                 }
                 i = end;
                 continue;
@@ -614,22 +639,17 @@ fn rewrite_prose(
     out
 }
 
-fn let_token(c: char) -> char {
-    c
-}
-
 /// Whether `end` begins a same-letter range (`–` or `..` then the
 /// same c-/i- token), returning the far number and the end position.
 fn range_after(chars: &[char], end: usize, letter: char) -> Option<(String, usize)> {
     let word = |c: char| c.is_alphanumeric() || matches!(c, '-' | '#' | '_');
-    let (sep, after) = if chars.get(end) == Some(&'–') {
-        (1, end + 1)
+    let after = if chars.get(end) == Some(&'–') {
+        end + 1
     } else if chars.get(end) == Some(&'.') && chars.get(end + 1) == Some(&'.') {
-        (2, end + 2)
+        end + 2
     } else {
         return None;
     };
-    let _ = sep;
     if chars.get(after) != Some(&letter)
         || chars.get(after + 1) != Some(&'-')
         || chars.get(after.saturating_sub(1)).is_some_and(|c| word(*c))
@@ -647,8 +667,8 @@ fn range_after(chars: &[char], end: usize, letter: char) -> Option<(String, usiz
     {
         return None;
     }
-    let end = after + 2 + digits.len();
-    Some((digits, end))
+    let stop = after + 2 + digits.len();
+    Some((digits, stop))
 }
 
 #[cfg(test)]
@@ -784,8 +804,9 @@ mod test {
         // c-1 (a claim record) and c-0 (a raw task birth) are
         // non-comment records: rewritten as seq
         assert!(report.record_refs_rewritten >= 2);
-        // c-2–c-3 renumbered as a comment range
-        assert_eq!(report.ranges_rewritten, 0);
+        // c-2–c-3 renumbered as a comment range; the mixed-local
+        // c-0..c-2 rides the raw spelling end to end
+        assert_eq!(report.ranges_rewritten, 1);
         // c-99 out of range stays legacy and reported
         assert!(
             report.legacy.iter().any(|l| l.token == "c-99"),
@@ -911,13 +932,15 @@ mod test {
         );
         // word boundaries hold: c-20 is not c-2
         assert_eq!(rewrite("c-20 stays", &mut report), "legacy c-20 stays");
-        // ranges: both comments renumber; both raw records become seq
+        // ranges: both comments renumber; local raw or mixed ranges
+        // ride the raw spelling end to end
         assert_eq!(rewrite("c-2–c-3", &mut report), "c-0–c-1");
         assert_eq!(rewrite("c-0..c-4", &mut report), "seq 0–4");
-        // a mixed range is genuinely ambiguous: legacy, reported
-        assert_eq!(rewrite("c-2–c-4", &mut report), "legacy c-2–c-4");
+        assert_eq!(rewrite("c-2–c-4", &mut report), "seq 2–4");
+        // a range with a foreign end stays legacy, reported
+        assert_eq!(rewrite("c-2–c-99", &mut report), "legacy c-2–c-99");
         assert!(
-            report.legacy.iter().any(|l| l.token == "c-2–c-4"),
+            report.legacy.iter().any(|l| l.token == "c-2–c-99"),
             "{report:?}"
         );
         // incarnations renumber; foreign ones stay legacy

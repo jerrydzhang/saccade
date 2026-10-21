@@ -502,11 +502,18 @@ pub enum RefTarget {
         name: String,
         hash: String,
     },
+    /// Any other record fact a citation names — a claim, a revision,
+    /// a binding, a checkpoint: its position and its home thread,
+    /// None when the fold gives it none
+    Record {
+        seq: usize,
+        task: Option<usize>,
+    },
 }
 
-/// One birth record's render target, resolved against the fold. The
-/// four birth kinds each carry their own shape; nothing else is a
-/// legal citation target.
+/// One citation's render target, resolved against the fold: the birth
+/// kinds carry their own shapes, every other record fact rides the
+/// provenance index to its home thread.
 pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
     if let Some(cctx) = world.comments.get(&CommentId(rid)) {
         return Some(RefTarget::Comment {
@@ -533,7 +540,10 @@ pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
             });
         }
     }
-    None
+    Some(RefTarget::Record {
+        seq: rid.0,
+        task: world.provenance.get(&rid).map(|t| t.0),
+    })
 }
 
 /// Each record's home thread, where the fold gives it one: a task by
@@ -541,17 +551,11 @@ pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
 /// rides. Records about a member — a revision, a withdrawal, a
 /// binding — carry none: they fold into the member, not the thread.
 pub fn thread_index(world: &World) -> BTreeMap<usize, TaskId> {
-    let mut index = BTreeMap::new();
-    for (i, ctx) in world.tasks.iter().enumerate() {
-        index.insert(ctx.birth.0, TaskId(i));
-        for cid in &ctx.thread {
-            index.insert(cid.0.0, TaskId(i));
-        }
-        for (rid, _) in &ctx.artifacts {
-            index.insert(rid.0, TaskId(i));
-        }
-    }
-    index
+    world
+        .provenance
+        .iter()
+        .map(|(rid, task)| (rid.0, *task))
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1175,10 +1179,9 @@ mod test {
         assert_eq!(index[&1], TaskId(0));
         assert_eq!(index[&2], TaskId(0));
         assert_eq!(index[&3], TaskId(0));
-        assert!(
-            !index.contains_key(&4),
-            "a revision carries no home of its own"
-        );
+        // record facts ride the provenance index: the revision's home
+        // is the comment it repairs
+        assert_eq!(index[&4], TaskId(0));
     }
 
     mod panels {
@@ -1394,15 +1397,26 @@ mod test {
                         },
                     },
                 ),
+                record(
+                    3,
+                    1,
+                    Tier::Human,
+                    Event::TaskClaimed {
+                        id: TaskId(0),
+                        incarnation: None,
+                    },
+                ),
                 comment_at(
-                    3,
-                    3,
+                    4,
+                    4,
                     Tier::Human,
                     TaskId(0),
                     CommentKind::Note {
-                        body: offer_body("the task [^1], the worker [^2], the figure [^3]"),
+                        body: offer_body(
+                            "the task [^1], the worker [^2], the figure [^3], the claim [^4]",
+                        ),
                     },
-                    vec![RecordId(0), RecordId(1), RecordId(2)],
+                    vec![RecordId(0), RecordId(1), RecordId(2), RecordId(3)],
                 ),
             ])
             .unwrap();
@@ -1418,6 +1432,10 @@ mod test {
                             task: 0,
                             name: "sweep figure".into(),
                             hash: ContentHash::of(b"figure bytes").as_str().to_string(),
+                        },
+                        RefTarget::Record {
+                            seq: 3,
+                            task: Some(0),
                         },
                     ]
                 ),

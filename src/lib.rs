@@ -6,6 +6,7 @@ pub mod client;
 pub mod db;
 pub mod decide;
 pub mod events;
+pub mod markers;
 pub mod migrate;
 pub mod objects;
 pub mod paths;
@@ -55,7 +56,9 @@ pub enum Reject {
     SelfAcceptance,
     #[error("no such incarnation")]
     InvalidIncarnationId,
-    #[error("a citation names a record this log does not hold as a birth")]
+    #[error(
+        "a citation does not resolve: its target is no earlier record, or its marker has no reference"
+    )]
     InvalidReference,
     // Permissions
     #[error("human-only act")]

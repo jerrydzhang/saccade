@@ -261,32 +261,6 @@ fn token_at(chars: &[char], p: usize) -> Option<(Tok, usize)> {
     None
 }
 
-/// A marker the mapping cannot resolve: every `[^k]` in the prose
-/// needs a reference at that position. The boundary check the author
-/// meets, never the record's.
-pub fn unresolved_marker(body: &str, references: usize) -> Option<u32> {
-    let chars: Vec<char> = body.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '[' && chars.get(i + 1) == Some(&'^') {
-            let digits: String = chars[i + 2..]
-                .iter()
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
-            if !digits.is_empty() && chars.get(i + 2 + digits.len()) == Some(&']') {
-                let k: u32 = digits.parse().expect("digits checked");
-                if k == 0 || k as usize > references {
-                    return Some(k);
-                }
-                i += 3 + digits.len();
-                continue;
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
 // ---- local time labels: ids, timestamps, and labels are mono facts ----
 
 fn local(ts: u64) -> OffsetDateTime {
@@ -640,6 +614,12 @@ fn ref_chip(target: &RefTarget) -> String {
         RefTarget::Artifact { seq, task, .. } => {
             format!("<a class=\"nseq mono\" href=\"/t/{task}#a-{seq}\">→seq {seq}</a>")
         }
+        RefTarget::Record { seq, task } => match task {
+            Some(task) => {
+                format!("<a class=\"nseq mono\" href=\"/t/{task}\">→seq {seq}</a>")
+            }
+            None => format!("<span class=\"nseq mono\">→seq {seq}</span>"),
+        },
     }
 }
 
@@ -694,27 +674,24 @@ fn mention_card(seq: usize, task: usize, name: &str, hash: &str, store: &Artifac
 /// Bare c-N tokens are prose: navigation follows the mapping, never
 /// the mention. The parse lives here, never in the record.
 fn markerize(escaped: &str, refs: &[RefTarget], store: &ArtifactStore) -> String {
-    let chars: Vec<char> = escaped.chars().collect();
     let mut out = String::with_capacity(escaped.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '[' && chars.get(i + 1) == Some(&'^') {
-            let digits: String = chars[i + 2..]
-                .iter()
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
-            if !digits.is_empty() && chars.get(i + 2 + digits.len()) == Some(&']') {
-                let k: usize = digits.parse().expect("digits checked");
-                if let Some(target) = refs.get(k - 1) {
-                    out.push_str(&marker_link(k, target, store));
-                    i += 3 + digits.len();
-                    continue;
-                }
+    let mut at = 0usize;
+    for token in crate::markers::tokens_in_run(escaped) {
+        // a number the mapping cannot take stays the words it was
+        let resolved = token
+            .number
+            .and_then(|k| refs.get(k - 1))
+            .filter(|_| token.number.is_some_and(|k| k >= 1));
+        match resolved {
+            Some(target) => {
+                out.push_str(&escaped[at..token.start]);
+                out.push_str(&marker_link(token.number.unwrap_or(0), target, store));
+                at = token.end;
             }
+            None => continue,
         }
-        out.push(chars[i]);
-        i += 1;
     }
+    out.push_str(&escaped[at..]);
     out
 }
 
@@ -740,6 +717,10 @@ fn marker_link(k: usize, target: &RefTarget, store: &ArtifactStore) -> String {
             "<span class=\"mrefa\">{}<sup><a class=\"mref\" href=\"/t/{task}#a-{seq}\">[^{k}]</a></sup></span>",
             mention_card(*seq, *task, name, hash, store)
         ),
+        RefTarget::Record { seq, task } => match task {
+            Some(task) => format!("<a class=\"mref\" href=\"/t/{task}\">[^{k}]</a>"),
+            None => format!("<span class=\"mref dead\">[^{k}] · seq {seq}</span>"),
+        },
     }
 }
 
@@ -1294,6 +1275,7 @@ pre:hover .copybtn, .copybtn:focus-visible { opacity: 1; }
 .mref { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; vertical-align: super; line-height: 1; }
 .mrefa { display: inline-flex; align-items: flex-end; gap: 1px; vertical-align: top; }
 .mrefa .mref { vertical-align: bottom; }
+.mref.dead { color: #6d6562; }
 
 /* artifacts: figure at position, card for mentions */
 .arow { padding-top: 2px; }
@@ -1575,20 +1557,6 @@ mod tests {
             "spaced"
         );
         assert_eq!(compile("@t-2\ndo it", TaskId(7), &world).body, "do it");
-    }
-
-    /// Every marker must resolve through the mapping: the boundary's
-    /// author-facing check.
-    #[test]
-    fn unresolved_markers_are_named_at_the_boundary() {
-        assert_eq!(unresolved_marker("plain words", 0), None);
-        assert_eq!(unresolved_marker("see [^1]", 1), None);
-        assert_eq!(unresolved_marker("see [^1] and [^1]", 1), None);
-        assert_eq!(unresolved_marker("see [^2]", 1), Some(2));
-        assert_eq!(unresolved_marker("see [^0]", 1), Some(0));
-        assert_eq!(unresolved_marker("see [^3]", 3), None);
-        // not a marker: no closing bracket, no digits
-        assert_eq!(unresolved_marker("see [^a] and [^1", 0), None);
     }
 
     // ---- the frame ----

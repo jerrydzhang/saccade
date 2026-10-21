@@ -90,9 +90,48 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             Some("no incarnation the record birthed carries that reference; a claim names one by its birth record (i-N), never by task scope alone".into())
         }
         Reject::InvalidReference => {
-            Some("a citation names an earlier birth record of this log: a task, a comment, an artifact, or an incarnation".into())
+            // the marker the mapping cannot resolve names itself; the
+            // target the log cannot hold names the law
+            let unresolvable = match command {
+                Command::Comment {
+                    kind, references, ..
+                } => kind.prose().and_then(|prose| {
+                    crate::markers::first_unresolved(prose.as_str(), references.len())
+                }),
+                Command::ReviseComment { id, body } => {
+                    let mapped = world
+                        .comments
+                        .get(id)
+                        .map(|ctx| ctx.references.len())
+                        .unwrap_or(0);
+                    crate::markers::first_unresolved(body.as_str(), mapped)
+                }
+                _ => None,
+            };
+            let revising = matches!(command, Command::ReviseComment { .. });
+            match unresolvable {
+                Some(marker) if revising => Some(format!(
+                    "marker [^{marker}] has no reference to resolve; a revision keeps the mapping it was born with — a retargeted citation is a new comment"
+                )),
+                Some(marker) => Some(format!(
+                    "marker [^{marker}] has no reference to resolve; cite with @c-<n> or --ref so the mapping carries it"
+                )),
+                None => Some(
+                    "a citation names an earlier record of this log; code spans and math are literal, never citations".into(),
+                ),
+            }
         }
         Reject::InvalidStateTransition => match command {
+            // the born-bound shape is migration's alone
+            Command::Comment {
+                kind:
+                    CommentKind::Use {
+                        bound: Some(_), ..
+                    },
+                ..
+            } => Some(
+                "a live use is born prospective; the born-bound shape belongs to migrated history — bind after the birth".into(),
+            ),
             Command::Comment { kind, home, .. } => match kind {
                 crate::CommentKind::Offer { .. } => {
                     need(world, *home, "an offer needs an open task and homes on it")
