@@ -919,20 +919,29 @@ mod test {
                 loadout.rows[seq].payload
             );
         }
-        // the world folds the bindings: foo's account, then the replacement
+        // the world folds the bindings: the state carries the
+        // selection, the context its attribution — foo's account,
+        // then the replacement
         assert_eq!(
             world.comments[&CommentId(RecordId(15))]
-                .binding
-                .as_ref()
-                .map(|b| b.offer),
+                .comment
+                .state
+                .payload_offer(),
             Some(CommentId(RecordId(3)))
         );
         assert_eq!(
             world.comments[&CommentId(RecordId(29))]
                 .binding
                 .as_ref()
-                .map(|b| (b.offer, b.record)),
-            Some((CommentId(RecordId(32)), RecordId(33)))
+                .map(|b| b.record),
+            Some(RecordId(33))
+        );
+        assert_eq!(
+            world.comments[&CommentId(RecordId(29))]
+                .comment
+                .state
+                .payload_offer(),
+            Some(CommentId(RecordId(32)))
         );
         // the citation mapping rides the birth payload whole
         assert!(loadout.rows[34].payload.contains("\"references\":[3]"));

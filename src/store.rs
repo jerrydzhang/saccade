@@ -126,10 +126,11 @@ pub struct World {
     /// Record-derived worker identities, born one-to-one with the
     /// workspace establishments
     pub incarnations: BTreeMap<IncarnationId, IncarnationContext>,
-    /// Every record's home thread, where the fold gives it one: the
-    /// provenance index citations resolve against. No residency —
-    /// the named record stays the event it is.
-    pub provenance: BTreeMap<RecordId, TaskId>,
+    /// Every applied record: existence for the citation guard, its
+    /// home thread where the fold gives one. A record without a home
+    /// still exists. No residency — the named record stays the event
+    /// it is.
+    pub provenance: BTreeMap<RecordId, Option<TaskId>>,
 }
 
 impl World {
@@ -241,7 +242,8 @@ impl World {
             // Task events
             Event::TaskCreated { name: task_name } => {
                 let birth = record.id;
-                self.provenance.insert(birth, TaskId(self.tasks.len()));
+                self.provenance
+                    .insert(birth, Some(TaskId(self.tasks.len())));
                 self.tasks.push(TaskContext {
                     task: Task {
                         state: TaskState::Open,
@@ -260,7 +262,7 @@ impl World {
                 });
             }
             Event::TaskClaimed { id, incarnation } => {
-                self.provenance.insert(record.id, id);
+                self.provenance.insert(record.id, Some(id));
                 let owner = Self::owner_of(&record.context, incarnation)?;
                 if let Some(inc) = incarnation {
                     let born = self
@@ -281,7 +283,7 @@ impl World {
                 task_ctx.last_record_at = record.timestamp;
             }
             Event::TaskCancelled { id, .. } | Event::TaskReopened { id, .. } => {
-                self.provenance.insert(record.id, id);
+                self.provenance.insert(record.id, Some(id));
                 let task_ctx = self.tasks.get_mut(id.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.task.state = task_ctx
                     .task
@@ -304,10 +306,8 @@ impl World {
                 if self.tasks.get(home.0).is_none() {
                     return Err(Reason::InvalidTaskId);
                 }
-                // citations name earlier records of this log: marker k
-                // names references[k-1], and no comment cites forward
                 for rid in references {
-                    if rid.0 >= record.id.0 {
+                    if rid.0 >= record.id.0 || !self.provenance.contains_key(rid) {
                         return Err(Reason::InvalidReference);
                     }
                 }
@@ -359,19 +359,14 @@ impl World {
                 }
 
                 let binding = match kind {
-                    CommentKind::Use {
-                        bound: Some(initial),
-                        ..
-                    } => Some(Binding {
+                    CommentKind::Use { bound: Some(_), .. } => Some(Binding {
                         record: record.id,
-                        offer: initial.offer,
-                        grounds: initial.grounds.clone(),
                         actor: record.context.actor.clone(),
                     }),
                     _ => None,
                 };
 
-                self.provenance.insert(record.id, home);
+                self.provenance.insert(record.id, Some(home));
                 let task_ctx = self.tasks.get_mut(home.0).ok_or(Reason::InvalidTaskId)?;
                 if let Some(next) = task_ctx.task.state.transition(&record.event) {
                     task_ctx.task.state = next;
@@ -426,7 +421,7 @@ impl World {
                     .ok_or(Reason::InvalidCommentId)?
                     .comment
                     .home;
-                self.provenance.insert(record.id, home);
+                self.provenance.insert(record.id, Some(home));
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
                 // the gate is the state: a withdrawn deposit admits no repair
                 if matches!(comment_ctx.comment.state, CommentState::Withdrawn(_)) {
@@ -456,7 +451,7 @@ impl World {
                     .ok_or(Reason::InvalidCommentId)?
                     .comment
                     .home;
-                self.provenance.insert(record.id, home);
+                self.provenance.insert(record.id, Some(home));
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
                 comment_ctx.comment.state = comment_ctx
                     .comment
@@ -471,11 +466,7 @@ impl World {
                 let task_ctx = self.tasks.get_mut(home.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_record_at = record.timestamp;
             }
-            Event::UseBound {
-                id,
-                offer,
-                ref grounds,
-            } => {
+            Event::UseBound { id, offer, .. } => {
                 let comment_ctx = self.comments.get(&id).ok_or(Reason::InvalidCommentId)?;
                 // binding is the use's door: every other variant holds
                 let CommentKind::Use { source, .. } = &comment_ctx.comment.kind else {
@@ -484,7 +475,7 @@ impl World {
                 let source = *source;
                 let home = comment_ctx.comment.home;
                 self.check_binding(source, offer)?;
-                self.provenance.insert(record.id, home);
+                self.provenance.insert(record.id, Some(home));
                 let comment_ctx = self.comments.get_mut(&id).expect("resident above");
                 comment_ctx.comment.state = comment_ctx
                     .comment
@@ -493,15 +484,13 @@ impl World {
                     .ok_or(Reason::InvalidStateTransition)?;
                 comment_ctx.binding = Some(Binding {
                     record: record.id,
-                    offer,
-                    grounds: grounds.clone(),
                     actor: record.context.actor.clone(),
                 });
                 let task_ctx = self.tasks.get_mut(home.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_record_at = record.timestamp;
             }
             Event::ArtifactAdded { root, ref artifact } => {
-                self.provenance.insert(record.id, root);
+                self.provenance.insert(record.id, Some(root));
                 let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.artifacts.push((record.id, artifact.clone()));
                 task_ctx.last_record_at = record.timestamp;
@@ -513,7 +502,7 @@ impl World {
                 ref branch,
                 ref worktree,
             } => {
-                self.provenance.insert(record.id, task_id);
+                self.provenance.insert(record.id, Some(task_id));
                 let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
                 if task_ctx.workspace.is_some() {
                     return Err(Reason::WorkspaceAlreadyExists);
@@ -547,7 +536,7 @@ impl World {
                 task_id,
                 ref checkpoint,
             } => {
-                self.provenance.insert(record.id, task_id);
+                self.provenance.insert(record.id, Some(task_id));
                 let task_ctx = self.tasks.get_mut(task_id.0).ok_or(Reason::InvalidTaskId)?;
                 let workspace = task_ctx
                     .workspace
@@ -640,12 +629,9 @@ pub fn execute(
             }
         }
         Command::ReviseComment { id, body } => {
-            let mapped = world
-                .comments
-                .get(id)
-                .map(|ctx| ctx.references.len())
-                .unwrap_or(0);
-            if crate::markers::first_unresolved(body.as_str(), mapped).is_some() {
+            if let Some(ctx) = world.comments.get(id)
+                && crate::markers::first_unresolved(body.as_str(), ctx.references.len()).is_some()
+            {
                 return Err(Reject::InvalidReference);
             }
         }
@@ -1212,18 +1198,25 @@ mod test {
         assert_eq!(use_ctx.comment.home, TaskId(3));
         assert_eq!(use_ctx.comment.kind.source(), Some(TaskId(0)));
         assert_eq!(
-            use_ctx.binding.as_ref().map(|b| (b.offer, b.record)),
-            Some((CommentId(RecordId(3)), RecordId(18)))
+            use_ctx.comment.state.payload_offer(),
+            Some(CommentId(RecordId(3)))
+        );
+        assert_eq!(
+            use_ctx.binding.as_ref().map(|b| b.record),
+            Some(RecordId(18))
         );
         assert_eq!(
             world.comments[&CommentId(RecordId(17))].comment.state,
-            CommentState::UseBound(CommentId(RecordId(3)))
+            CommentState::UseBound(crate::objects::comment::UseBinding {
+                offer: CommentId(RecordId(3)),
+                grounds: prose("foo's accepted account is the one that landed"),
+            })
         );
 
         // the second use followed bar's rework: replaced, then rebound
         let rework = &world.comments[&CommentId(RecordId(22))];
         assert_eq!(
-            rework.binding.as_ref().map(|b| b.offer),
+            rework.comment.state.payload_offer(),
             Some(CommentId(RecordId(25)))
         );
         assert_eq!(
@@ -1502,7 +1495,7 @@ mod test {
         assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
         let rework = &log.world().comments[&CommentId(RecordId(22))];
         assert_eq!(
-            rework.binding.as_ref().map(|b| b.offer),
+            rework.comment.state.payload_offer(),
             Some(CommentId(RecordId(25)))
         );
         assert_eq!(log.records().len(), RECORD_COUNT);
@@ -1555,9 +1548,9 @@ mod test {
         .unwrap();
         assert_eq!(
             log.world().comments[&CommentId(RecordId(3))]
-                .binding
-                .as_ref()
-                .map(|b| b.offer),
+                .comment
+                .state
+                .payload_offer(),
             Some(CommentId(RecordId(2)))
         );
         // rebinding to the replaced account refuses: not current
@@ -1570,9 +1563,9 @@ mod test {
             .unwrap();
         assert_eq!(
             log.world().comments[&CommentId(RecordId(3))]
-                .binding
-                .as_ref()
-                .map(|b| b.offer),
+                .comment
+                .state
+                .payload_offer(),
             Some(CommentId(RecordId(6)))
         );
 
@@ -1581,17 +1574,15 @@ mod test {
         log.execute(human(), accept_on(TaskId(1), 6), 10).unwrap();
         assert_eq!(
             log.world().comments[&CommentId(RecordId(3))]
-                .binding
-                .as_ref()
-                .map(|b| b.offer),
+                .comment
+                .state
+                .payload_offer(),
             Some(CommentId(RecordId(6)))
         );
         assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
     }
 
-    /// The born-bound use is migrated history: the fold replays it
-    /// under the eligibility the world held at its birth, and the
-    /// authoring ingress refuses it — a live use is born prospective.
+    /// The born-bound use replays as history and refuses at authoring.
     #[test]
     fn a_use_may_be_born_already_bound_in_history_alone() {
         let mut log = Log::new();
@@ -1638,11 +1629,14 @@ mod test {
         let use_ctx = &log.world().comments[&CommentId(RecordId(3))];
         assert_eq!(
             use_ctx.comment.state,
-            CommentState::UseBound(CommentId(RecordId(2)))
+            CommentState::UseBound(crate::objects::comment::UseBinding {
+                offer: CommentId(RecordId(2)),
+                grounds: prose("the account that landed"),
+            })
         );
         assert_eq!(
-            use_ctx.binding.as_ref().map(|b| (b.offer, b.record)),
-            Some((CommentId(RecordId(2)), RecordId(3)))
+            use_ctx.binding.as_ref().map(|b| b.record),
+            Some(RecordId(3))
         );
 
         // the same shape refuses at the authoring ingress, whatever
@@ -1712,10 +1706,7 @@ mod test {
         ));
     }
 
-    /// The authoring ingress validates markers after authority: new
-    /// comments against the mapping they carry, revisions against the
-    /// immutable one. Code spans and math are literal, never
-    /// citations; the fold replays old text unlinked.
+    /// Markers resolve at authoring; code and math are literal; history replays unlinked.
     #[test]
     fn authoring_validates_markers_after_authority() {
         let mut log = Log::new();
@@ -1800,9 +1791,7 @@ mod test {
             .expect("history replays unlinked");
     }
 
-    /// Citations name earlier records of this log: births and record
-    /// facts alike — claims, bindings, revisions — and nothing ahead
-    /// of the citing comment's own position.
+    /// Citations name earlier applied records: births and record facts alike.
     #[test]
     fn citations_name_earlier_records_only() {
         let mut log = Log::new();
@@ -1853,13 +1842,31 @@ mod test {
         )
         .unwrap();
 
-        // a future position refuses
+        // a future position refuses, and so does a gap the log never
+        // filled: earlier numeric position alone is not existence
         let refused = log.execute(
             agent(),
             citing_note(TaskId(3), "out of reach [^1]", vec![RecordId(999)]),
             31,
         );
         assert!(matches!(refused, Err(Reject::InvalidReference)));
+        let record = Record {
+            id: RecordId(500),
+            timestamp: 32,
+            context: agent(),
+            event: Event::Commented {
+                home: TaskId(3),
+                kind: CommentKind::Note {
+                    body: prose("a hole in the log [^1]"),
+                },
+                references: vec![RecordId(499)],
+            },
+        };
+        let refused = log.world.clone().apply(record);
+        assert!(matches!(
+            refused.map_err(|e| e.reason),
+            Err(Reason::InvalidReference)
+        ));
     }
 
     #[test]

@@ -98,8 +98,7 @@ pub fn first_unresolved(raw: &str, references: usize) -> Option<String> {
 mod test {
     use super::*;
 
-    /// The prose's structure decides what a marker is: text carries
-    /// citations, code spans, code blocks, and math stay literal.
+    /// Text carries citations; code spans, blocks, and math stay literal.
     #[test]
     fn code_and_math_are_literal_never_citations() {
         assert_eq!(first_unresolved("plain words", 0), None);
@@ -122,8 +121,7 @@ mod test {
         assert_eq!(first_unresolved("[^0] is no position", 1), Some("0".into()));
     }
 
-    /// Numbers parse fallibly: a digit string too large for an index
-    /// is an unresolved marker, never a panic.
+    /// An oversized digit string is an unresolved marker, never a panic.
     #[test]
     fn oversized_numbers_are_unresolved_not_panics() {
         let oversized = "9".repeat(40);

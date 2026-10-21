@@ -854,7 +854,7 @@ mod test {
             .get(&crate::CommentId(crate::RecordId(9)))
             .unwrap();
         assert_eq!(
-            use_ctx.binding.as_ref().map(|b| b.offer),
+            use_ctx.comment.state.payload_offer(),
             Some(crate::CommentId(crate::RecordId(3)))
         );
         assert!(

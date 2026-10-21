@@ -114,9 +114,10 @@ pub enum CommentState {
     Accept,
     Reject,
     Use,
-    /// A use's current selection: the offer the last binding named.
-    /// Earlier selections stay in the log; rebinding replaces this one.
-    UseBound(CommentId),
+    /// A use's current selection, the payload of the last binding:
+    /// the offer named and the grounds for selecting it. Earlier
+    /// selections stay in the log; rebinding replaces this one.
+    UseBound(UseBinding),
     /// The standing-error repair, terminal: the deposit's body left
     /// the fold's presentation, the tombstone holds its place.
     Withdrawn(Prose),
@@ -131,9 +132,21 @@ impl CommentState {
             (CommentState::Note, Event::CommentWithdrawn { note, .. }) => {
                 Some(CommentState::Withdrawn(note.clone()))
             }
-            (CommentState::Use | CommentState::UseBound(_), Event::UseBound { offer, .. }) => {
-                Some(CommentState::UseBound(*offer))
-            }
+            (
+                CommentState::Use | CommentState::UseBound(_),
+                Event::UseBound { offer, grounds, .. },
+            ) => Some(CommentState::UseBound(UseBinding {
+                offer: *offer,
+                grounds: grounds.clone(),
+            })),
+            _ => None,
+        }
+    }
+
+    /// The offer a bound use's current selection names.
+    pub fn payload_offer(&self) -> Option<CommentId> {
+        match self {
+            CommentState::UseBound(payload) => Some(payload.offer),
             _ => None,
         }
     }
@@ -147,7 +160,7 @@ impl CommentState {
             CommentKind::Reject { .. } => CommentState::Reject,
             CommentKind::Use { bound, .. } => match bound {
                 None => CommentState::Use,
-                Some(binding) => CommentState::UseBound(binding.offer),
+                Some(binding) => CommentState::UseBound(binding.clone()),
             },
         }
     }
@@ -171,13 +184,12 @@ pub struct Withdrawal {
     pub withdrawer: ActorName,
 }
 
-/// A use's current binding: the record that selected, the offer it
-/// selected, the grounds for that selection, and who bound it.
+/// A use's last binding's attribution: the record that selected and
+/// the actor who did. The selection itself — offer and grounds — is
+/// the state's payload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binding {
     pub record: RecordId,
-    pub offer: CommentId,
-    pub grounds: Prose,
     pub actor: ActorName,
 }
 
@@ -226,6 +238,13 @@ mod tables {
     fn bind_event() -> Event {
         Event::UseBound {
             id: CommentId(RecordId(1)),
+            offer: CommentId(RecordId(5)),
+            grounds: Prose::new("the selected account holds".into()).unwrap(),
+        }
+    }
+
+    fn bound_payload() -> UseBinding {
+        UseBinding {
             offer: CommentId(RecordId(5)),
             grounds: Prose::new("the selected account holds".into()).unwrap(),
         }
@@ -299,7 +318,7 @@ mod tables {
             CommentState::Accept,
             CommentState::Reject,
             CommentState::Use,
-            CommentState::UseBound(CommentId(RecordId(5))),
+            CommentState::UseBound(bound_payload()),
             withdrawn(),
         ];
         for state in &others {
@@ -311,13 +330,17 @@ mod tables {
     /// a binding selects again; every other variant holds.
     #[test]
     fn binding_is_the_use_door_alone() {
-        let selected = || CommentState::UseBound(CommentId(RecordId(5)));
+        let selected = || CommentState::UseBound(bound_payload());
         assert_eq!(
             CommentState::Use.transition(&bind_event()),
             Some(selected())
         );
         assert_eq!(
-            CommentState::UseBound(CommentId(RecordId(3))).transition(&bind_event()),
+            CommentState::UseBound(UseBinding {
+                offer: CommentId(RecordId(3)),
+                grounds: Prose::new("an earlier selection".into()).unwrap(),
+            })
+            .transition(&bind_event()),
             Some(selected())
         );
         let others = [
@@ -345,7 +368,7 @@ mod tables {
             CommentState::Accept,
             CommentState::Reject,
             CommentState::Use,
-            CommentState::UseBound(CommentId(RecordId(5))),
+            CommentState::UseBound(bound_payload()),
             withdrawn(),
         ];
         let events = [
@@ -388,7 +411,10 @@ mod tables {
             (use_of(), CommentState::Use),
             (
                 born_bound_use(),
-                CommentState::UseBound(CommentId(RecordId(5))),
+                CommentState::UseBound(UseBinding {
+                    offer: CommentId(RecordId(5)),
+                    grounds: Prose::new("filler".into()).unwrap(),
+                }),
             ),
         ] {
             assert_eq!(&CommentState::of(&kind), &state);

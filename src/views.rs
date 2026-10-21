@@ -291,16 +291,24 @@ fn line_of(world: &World, cid: CommentId) -> CommentLine {
             .unwrap_or_default(),
         offer: cctx.comment.kind.offer().and_then(|o| world.comment_num(o)),
         source: cctx.comment.kind.source(),
-        binding: cctx.binding.as_ref().map(|b| LineBinding {
-            offer: world
-                .comment_num(b.offer)
-                .expect("a bound offer is a resident comment"),
-            grounds: b.grounds.as_str().to_string(),
-        }),
+        binding: match &cctx.comment.state {
+            CommentState::UseBound(payload) => Some(LineBinding {
+                offer: world
+                    .comment_num(payload.offer)
+                    .expect("a bound offer is a resident comment"),
+                grounds: payload.grounds.as_str().to_string(),
+            }),
+            _ => None,
+        },
         references: cctx
             .references
             .iter()
-            .map(|rid| ref_target(world, *rid).expect("the fold admits only births as references"))
+            .map(|rid| {
+                ref_target(world, *rid).unwrap_or(RefTarget::Record {
+                    seq: rid.0,
+                    task: world.provenance.get(rid).copied().flatten().map(|t| t.0),
+                })
+            })
             .collect(),
         revised: cctx.revised.is_some(),
         reviser: cctx
@@ -542,7 +550,7 @@ pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
     }
     Some(RefTarget::Record {
         seq: rid.0,
-        task: world.provenance.get(&rid).map(|t| t.0),
+        task: world.provenance.get(&rid).copied().flatten().map(|t| t.0),
     })
 }
 
@@ -554,7 +562,7 @@ pub fn thread_index(world: &World) -> BTreeMap<usize, TaskId> {
     world
         .provenance
         .iter()
-        .map(|(rid, task)| (rid.0, *task))
+        .filter_map(|(rid, task)| task.map(|t| (rid.0, t)))
         .collect()
 }
 
@@ -876,8 +884,8 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
         if let Some(offer) = cctx.comment.kind.offer() {
             refs.push(Ref::Comment(offer));
         }
-        if let Some(binding) = &cctx.binding {
-            refs.push(Ref::Comment(binding.offer));
+        if let CommentState::UseBound(payload) = &cctx.comment.state {
+            refs.push(Ref::Comment(payload.offer));
         }
         for rid in &cctx.references {
             if world.comments.contains_key(&CommentId(*rid)) {
