@@ -116,43 +116,47 @@ pub struct OwnerEntry {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::{CommentKind, Target};
+    use crate::objects::comment::CommentKind;
     use crate::types::prose::Prose;
 
     fn note() -> Event {
         Event::Commented {
-            target: Target::Task(TaskId(0)),
+            home: TaskId(0),
             kind: CommentKind::Note {
                 body: Prose::new("filler".into()).unwrap(),
             },
+            references: Vec::new(),
         }
     }
 
     fn offer() -> Event {
         Event::Commented {
-            target: Target::Task(TaskId(0)),
+            home: TaskId(0),
             kind: CommentKind::Offer {
                 body: Prose::new("filler".into()).unwrap(),
             },
+            references: Vec::new(),
         }
     }
 
     fn accept() -> Event {
         Event::Commented {
-            target: Target::Comment(CommentId(RecordId(1))),
+            home: TaskId(0),
             kind: CommentKind::Accept {
                 offer: CommentId(RecordId(1)),
             },
+            references: Vec::new(),
         }
     }
 
     fn reject() -> Event {
         Event::Commented {
-            target: Target::Comment(CommentId(RecordId(1))),
+            home: TaskId(0),
             kind: CommentKind::Reject {
                 offer: CommentId(RecordId(1)),
                 grounds: Prose::new("filler".into()).unwrap(),
             },
+            references: Vec::new(),
         }
     }
 

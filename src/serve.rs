@@ -13,7 +13,7 @@ use tracing::info;
 
 use crate::api::AppState;
 use crate::db::ExecuteFail;
-use crate::objects::comment::{CommentKind, Target};
+use crate::objects::comment::CommentKind;
 use crate::objects::task::TaskId;
 use crate::views::{board, closed_tasks, comment_line, show_view, thread_view};
 use crate::web;
@@ -219,7 +219,6 @@ fn focus(world: &crate::store::World, n: usize) -> Option<web::Focus> {
     Some(web::Focus {
         show,
         thread: thread_view(world, TaskId(n))?,
-        refs: crate::views::ref_index(world),
     })
 }
 
@@ -240,37 +239,60 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
     }
 }
 
-/// The compose door: the @-compiler turns the body into a command; a
-/// fetch gets the thread-section fragment back, anything else a 303 to
-/// the comment's home thread.
+/// The compose door: the @-compiler turns the body into a home, an
+/// inline-marker body, and a reference mapping, resolved against the
+/// fold the page was rendered from; a fetch gets the thread-section
+/// fragment back, anything else a 303 to the comment's home thread.
 fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
     let raw = form_field(fields, "body");
-    let addr = web::compile(raw, Target::Task(TaskId(n)));
+    let snapshot = match app.snapshot() {
+        Ok(s) => s,
+        Err(fail) => {
+            return page(
+                app,
+                503,
+                &format!("world projection unavailable: {}", fail.reason()),
+            );
+        }
+    };
+    let addr = web::compile(raw, TaskId(n), &snapshot.world);
     if Prose::new(addr.body.clone()).is_err() {
         return compose_reject(req, app, n, fields, "a comment needs words");
+    }
+    if let Some(k) = web::unresolved_marker(&addr.body, addr.references.len()) {
+        return compose_reject(
+            req,
+            app,
+            n,
+            fields,
+            &format!("marker [^{k}] has no reference to resolve; cite with @c-<n>"),
+        );
     }
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
         Err(msg) => return compose_reject(req, app, n, fields, &msg),
     };
     let command = Command::Comment {
-        target: addr.target,
+        home: addr.home,
         kind: CommentKind::Note {
             body: Prose::new(addr.body.clone()).unwrap(),
         },
+        references: addr.references,
     };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(stored) => {
-            let seq = stored.last().map(|s| s.seq).unwrap_or(0);
-            let root = match addr.target {
-                Target::Task(t) => t.0,
-                Target::Comment(c) => app
-                    .snapshot()
-                    .ok()
-                    .and_then(|s| s.world.comments.get(&c).map(|cc| cc.comment.root))
-                    .map(|root| root.0)
-                    .unwrap_or(n),
-            };
+            let birth = stored.last().map(|s| s.seq).unwrap_or(0);
+            let (root, num) = app
+                .snapshot()
+                .ok()
+                .and_then(|s| {
+                    let id = crate::CommentId(RecordId(birth));
+                    s.world
+                        .comments
+                        .get(&id)
+                        .map(|c| (c.comment.home.0, s.world.comment_num(id).unwrap_or(birth)))
+                })
+                .unwrap_or((n, birth));
             // a rehome (or a reply landing on another task's thread) must
             // not swap the new home's section into the old page: the fetch
             // follows the same 303 a plain form post would take
@@ -288,7 +310,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
                     None => page(app, 404, &format!("no task t-{root}")),
                 }
             } else {
-                redirect(&format!("/t/{root}#c-{seq}"), first_claim.as_deref())
+                redirect(&format!("/t/{root}#c-{num}"), first_claim.as_deref())
             }
         }
         Err(ExecuteFail::Reject(r)) => compose_reject(req, app, n, fields, &reject_text(&r)),
@@ -315,12 +337,14 @@ fn reject(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
         Ok(ok) => ok,
         Err(msg) => return judge_reject(req, app, n, fields, &msg),
     };
+    let home = decision_home(app, offer);
     let command = Command::Comment {
-        target: Target::Comment(offer),
+        home,
         kind: CommentKind::Reject {
             offer,
             grounds: Prose::new(grounds.to_string()).unwrap(),
         },
+        references: Vec::new(),
     };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(_) => redirect(&format!("/t/{n}"), first_claim.as_deref()),
@@ -330,6 +354,16 @@ fn reject(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
         }
         Err(ExecuteFail::Db(e)) => page(app, 500, &format!("database: {e}")),
     }
+}
+
+/// The home a decision carries: the task of the offer it names. A
+/// stale form's offer names no comment and falls back to the page's
+/// task — the fold's guards do the refusing either way.
+fn decision_home(app: &AppState, offer: crate::CommentId) -> TaskId {
+    app.snapshot()
+        .ok()
+        .and_then(|s| s.world.comments.get(&offer).map(|c| c.comment.home))
+        .unwrap_or(TaskId(0))
 }
 
 /// The offer a decision form names — the one its page rendered, never
@@ -350,9 +384,11 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
         Ok(ok) => ok,
         Err(msg) => return judge_reject(req, app, n, fields, &msg),
     };
+    let home = decision_home(app, offer);
     let command = Command::Comment {
-        target: Target::Comment(offer),
+        home,
         kind: CommentKind::Accept { offer },
+        references: Vec::new(),
     };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(_) => redirect(&format!("/t/{n}"), first_claim.as_deref()),
@@ -364,31 +400,32 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
     }
 }
 
-/// The revise door: one comment, one body, one name. Identity is
+/// The revise door: one comment, one body, one name. The URL carries
+/// the comment's public number, resolved against the fold. Identity is
 /// claimed at the act, the tier pinned human — the console revises
 /// any comment — and the 303 returns to the comment's home thread.
 /// A refusal re-renders with the reason and the kept draft at the
 /// comment's own reveal, so the wording stays editable in place.
-fn revise(req: &Req, app: &AppState, seq: usize, fields: &[(String, String)]) -> Response {
-    let Some(root) = comment_root(app, seq) else {
-        return page(app, 404, &format!("no comment c-{}", seq));
+fn revise(req: &Req, app: &AppState, num: usize, fields: &[(String, String)]) -> Response {
+    let Some((root, id)) = comment_of(app, num) else {
+        return page(app, 404, &format!("no comment c-{num}"));
     };
     let body = form_field(fields, "body");
     if Prose::new(body.to_string()).is_err() {
-        return revise_reject(req, app, root, seq, body, fields, "a comment needs words");
+        return revise_reject(req, app, root, num, body, fields, "a comment needs words");
     }
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
-        Err(msg) => return revise_reject(req, app, root, seq, body, fields, &msg),
+        Err(msg) => return revise_reject(req, app, root, num, body, fields, &msg),
     };
     let command = Command::ReviseComment {
-        id: crate::CommentId(RecordId(seq)),
+        id,
         body: Prose::new(body.to_string()).unwrap(),
     };
     match app.execute(&context, command, None, console_request(req)) {
-        Ok(_) => redirect(&format!("/t/{root}#c-{seq}"), first_claim.as_deref()),
+        Ok(_) => redirect(&format!("/t/{root}#c-{num}"), first_claim.as_deref()),
         Err(ExecuteFail::Reject(r)) => {
-            revise_reject(req, app, root, seq, body, fields, &reject_text(&r))
+            revise_reject(req, app, root, num, body, fields, &reject_text(&r))
         }
         Err(ExecuteFail::Degraded(reason)) => {
             page(app, 503, &format!("world projection unavailable: {reason}"))
@@ -397,25 +434,22 @@ fn revise(req: &Req, app: &AppState, seq: usize, fields: &[(String, String)]) ->
     }
 }
 
-/// Whether the comment carries prose — a refused revise can only ride
-/// a row that has a reveal to carry it.
-fn comment_has_prose(app: &AppState, seq: usize) -> bool {
-    app.snapshot()
-        .ok()
-        .and_then(|s| comment_line(&s.world, crate::CommentId(RecordId(seq))))
-        .is_some_and(|l| !l.body.is_empty())
+/// The comment a public number names: its home thread and its birth.
+fn comment_of(app: &AppState, num: usize) -> Option<(usize, crate::CommentId)> {
+    let snapshot = app.snapshot().ok()?;
+    let id = snapshot.world.comment_at_num(num)?;
+    let root = snapshot.world.comments.get(&id)?.comment.home.0;
+    Some((root, id))
 }
 
-/// The thread a comment lives on, for routing the revise door's
-/// redirect back to the comment's home.
-fn comment_root(app: &AppState, seq: usize) -> Option<usize> {
-    let snapshot = app.snapshot().ok()?;
-    snapshot
-        .world
-        .comments
-        .get(&crate::CommentId(RecordId(seq)))
-        .map(|c| c.comment.root)
-        .map(|root| root.0)
+/// Whether the comment carries prose — a refused revise can only ride
+/// a row that has a reveal to carry it.
+fn comment_has_prose(app: &AppState, num: usize) -> bool {
+    app.snapshot()
+        .ok()
+        .and_then(|s| s.world.comment_at_num(num).map(|id| (s.world, id)))
+        .and_then(|(world, id)| comment_line(&world, id))
+        .is_some_and(|l| !l.body.is_empty())
 }
 
 fn thread_fragment(app: &AppState, n: usize) -> Option<String> {
@@ -664,6 +698,11 @@ fn reject_text(r: &Reject) -> String {
         SelfAcceptance => {
             "the declared task scope covers this task: a task-bound producer cannot accept its \
              own conclusion"
+                .into()
+        }
+        InvalidReference => {
+            "a citation names an earlier birth record: a task, a comment, an artifact, or an \
+             incarnation"
                 .into()
         }
         other => format!("{other:?}"),

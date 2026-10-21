@@ -6,6 +6,7 @@ pub mod client;
 pub mod db;
 pub mod decide;
 pub mod events;
+pub mod migrate;
 pub mod objects;
 pub mod paths;
 pub mod pi_session;
@@ -22,8 +23,10 @@ pub mod workspace;
 use serde::{Deserialize, Serialize};
 
 pub use decide::decide;
-pub use events::{Command, Event};
-pub use objects::comment::{Comment, CommentId, CommentKind, CommentState, Target};
+pub use events::{Command, Event, RecordRef};
+pub use objects::comment::{
+    Binding, Comment, CommentContext, CommentId, CommentKind, CommentState, Target, UseBinding,
+};
 pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
 pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 pub use store::{Context, Record, RecordId, Scope, Tier, World};
@@ -52,6 +55,8 @@ pub enum Reject {
     SelfAcceptance,
     #[error("no such incarnation")]
     InvalidIncarnationId,
+    #[error("a citation names a record this log does not hold as a birth")]
+    InvalidReference,
     // Permissions
     #[error("human-only act")]
     HumanOnly,
@@ -83,6 +88,7 @@ impl Reject {
             Reject::SelfReliance => "self_reliance",
             Reject::SelfAcceptance => "self_acceptance",
             Reject::InvalidIncarnationId => "invalid_incarnation_id",
+            Reject::InvalidReference => "invalid_reference",
             Reject::HumanOnly => "human_only",
             Reject::WorkspaceAlreadyExists => "workspace_already_exists",
             Reject::WorkspaceMissing => "workspace_missing",
@@ -110,6 +116,7 @@ mod test {
             Reject::SelfReliance,
             Reject::SelfAcceptance,
             Reject::InvalidIncarnationId,
+            Reject::InvalidReference,
             Reject::HumanOnly,
             Reject::WorkspaceAlreadyExists,
             Reject::WorkspaceMissing,

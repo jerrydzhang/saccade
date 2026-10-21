@@ -13,8 +13,9 @@ use crate::wire;
 /// file-header stamp identifying a Saccade database.
 const APPLICATION_ID: i32 = i32::from_be_bytes(*b"sacd");
 /// The schema this binary reads and writes.
-pub const SCHEMA_VERSION: i32 = 3;
-/// The schema the migration reads: Saccade 0.12.0's stamp.
+pub const SCHEMA_VERSION: i32 = 4;
+/// The schema the offline migration reads: Saccade 0.13.0's stamp.
+pub const MIGRATE_FROM_VERSION: i32 = 3;
 
 #[derive(Debug)]
 pub enum DbError {
@@ -514,7 +515,7 @@ mod test {
     use crate::store::Tier;
     use crate::types::artifact::Artifact;
     use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
-    use crate::{CommentId, ContentHash, Prose, RecordId, Scope, Target};
+    use crate::{CommentId, ContentHash, Prose, RecordId, Scope};
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().expect("open memory db");
@@ -561,29 +562,32 @@ mod test {
 
     fn offer(task: usize, body: &str) -> Command {
         Command::Comment {
-            target: Target::Task(TaskId(task)),
+            home: TaskId(task),
             kind: CommentKind::Offer {
                 body: Prose::new(body.into()).unwrap(),
             },
+            references: Vec::new(),
         }
     }
 
-    fn accept(seq: usize) -> Command {
+    fn accept_on(home: usize, seq: usize) -> Command {
         Command::Comment {
-            target: Target::Comment(CommentId(RecordId(seq))),
+            home: TaskId(home),
             kind: CommentKind::Accept {
                 offer: CommentId(RecordId(seq)),
             },
+            references: Vec::new(),
         }
     }
 
-    fn reject(seq: usize, grounds: &str) -> Command {
+    fn reject_on(home: usize, seq: usize, grounds: &str) -> Command {
         Command::Comment {
-            target: Target::Comment(CommentId(RecordId(seq))),
+            home: TaskId(home),
             kind: CommentKind::Reject {
                 offer: CommentId(RecordId(seq)),
                 grounds: Prose::new(grounds.into()).unwrap(),
             },
+            references: Vec::new(),
         }
     }
 
@@ -593,10 +597,11 @@ mod test {
 
     fn note(body: &str) -> Command {
         Command::Comment {
-            target: Target::Task(TaskId(0)),
+            home: TaskId(0),
             kind: CommentKind::Note {
                 body: Prose::new(body.into()).unwrap(),
             },
+            references: Vec::new(),
         }
     }
 
@@ -616,18 +621,18 @@ mod test {
         .unwrap();
         record(&mut conn, &scoped_agent(), note("mid-flight finding"), 11).unwrap();
         record(&mut conn, &agent(), offer(0, "suite green, 55 tests"), 12).unwrap();
-        record(&mut conn, &human(), accept(3), 12).unwrap();
+        record(&mut conn, &human(), accept_on(0, 3), 12).unwrap();
         record(&mut conn, &human(), create("fix bar"), 13).unwrap();
         record(&mut conn, &agent(), offer(1, "bar fixed the quick way"), 14).unwrap();
         record(
             &mut conn,
             &human(),
-            reject(6, "the edge case still fails"),
+            reject_on(1, 6, "the edge case still fails"),
             15,
         )
         .unwrap();
         record(&mut conn, &agent(), offer(1, "edge case held"), 16).unwrap();
-        record(&mut conn, &human(), accept(8), 16).unwrap();
+        record(&mut conn, &human(), accept_on(1, 8), 16).unwrap();
         record(&mut conn, &human(), create("migrate floop"), 17).unwrap();
         record(
             &mut conn,
@@ -653,26 +658,41 @@ mod test {
             &mut conn,
             &agent(),
             Command::Comment {
-                target: Target::Task(TaskId(2)),
+                home: TaskId(2),
                 kind: CommentKind::Request {
                     body: prose("please resume the migration"),
                 },
+                references: Vec::new(),
             },
             20,
         )
         .unwrap();
         record(&mut conn, &human(), create("adopt foo's account"), 21).unwrap();
+        // the prospective use names its source; the binding is its own record
         record(
             &mut conn,
             &agent(),
             Command::Comment {
-                target: Target::Task(TaskId(3)),
+                home: TaskId(3),
                 kind: CommentKind::Use {
-                    offer: CommentId(RecordId(3)),
+                    source: TaskId(0),
                     reason: prose("builds on the landed account"),
+                    bound: None,
                 },
+                references: Vec::new(),
             },
             21,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::BindUse {
+                id: CommentId(RecordId(15)),
+                offer: CommentId(RecordId(3)),
+                grounds: prose("foo's accepted account is the one that landed"),
+            },
+            22,
         )
         .unwrap();
         record(
@@ -716,7 +736,7 @@ mod test {
             &agent(),
             Command::ClaimTask {
                 id: TaskId(0),
-                incarnation: Some(IncarnationId(RecordId(17))),
+                incarnation: Some(IncarnationId(RecordId(18))),
             },
             22,
         )
@@ -745,21 +765,83 @@ mod test {
             &mut conn,
             &agent(),
             Command::ReviseComment {
-                id: CommentId(RecordId(22)),
+                id: CommentId(RecordId(23)),
                 body: prose("post-fold receipt, corrected"),
             },
             26,
         )
         .unwrap();
         record(&mut conn, &agent(), note("parked mid-flight"), 27).unwrap();
-        let (_, returned) = record(
+        record(
             &mut conn,
             &human(),
             Command::WithdrawComment {
-                id: CommentId(RecordId(24)),
+                id: CommentId(RecordId(25)),
                 note: prose("the parking was premature"),
             },
             27,
+        )
+        .unwrap();
+        // a second source, replaced and rebound: the rebind family rides
+        record(&mut conn, &human(), create("rewrite bar properly"), 28).unwrap();
+        record(&mut conn, &agent(), offer(5, "the deeper fix"), 28).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                home: TaskId(3),
+                kind: CommentKind::Use {
+                    source: TaskId(5),
+                    reason: prose("bar's rework is the real foundation"),
+                    bound: None,
+                },
+                references: Vec::new(),
+            },
+            29,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::BindUse {
+                id: CommentId(RecordId(29)),
+                offer: CommentId(RecordId(28)),
+                grounds: prose("the standing account"),
+            },
+            29,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &human(),
+            reject_on(5, 28, "the fix misses the index"),
+            30,
+        )
+        .unwrap();
+        record(&mut conn, &agent(), offer(5, "the fix that holds"), 30).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::BindUse {
+                id: CommentId(RecordId(29)),
+                offer: CommentId(RecordId(32)),
+                grounds: prose("the replacement held under review"),
+            },
+            31,
+        )
+        .unwrap();
+        // a citation rides its mapping through the wire
+        let (_, returned) = record(
+            &mut conn,
+            &agent(),
+            Command::Comment {
+                home: TaskId(3),
+                kind: CommentKind::Note {
+                    body: prose("rests on the conclusion above [^1], again [^1]"),
+                },
+                references: vec![RecordId(3)],
+            },
+            32,
         )
         .unwrap();
 
@@ -768,28 +850,28 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 26);
+        assert_eq!(loadout.rows.len(), 35);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
         assert_eq!(loadout.rows[11].kind, "task_cancelled");
         assert_eq!(loadout.rows[12].kind, "task_reopened");
-        assert_eq!(loadout.rows[20].kind, "task_created");
-        assert_eq!(loadout.rows[21].kind, "task_claimed");
+        assert_eq!(loadout.rows[21].kind, "task_created");
+        assert_eq!(loadout.rows[22].kind, "task_claimed");
         // the workspace establishment is machinery-authored and births
         // the shared identity the claim names
-        assert_eq!(loadout.rows[17].kind, "workspace_established");
-        assert_eq!(loadout.rows[18].kind, "task_workspace_checkpointed");
-        assert_eq!(loadout.rows[17].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[18].kind, "workspace_established");
+        assert_eq!(loadout.rows[19].kind, "task_workspace_checkpointed");
+        assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
         assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(17))]
+            world.incarnations[&IncarnationId(RecordId(18))]
                 .incarnation
                 .workspace,
             WorktreePath::new("/repo/wt/t-0".into()).unwrap()
         );
         assert_eq!(
             world.tasks[0].workspace.as_ref().unwrap().birth,
-            RecordId(17)
+            RecordId(18)
         );
         // the scoped record carries its declared scope; unscoped rows none
         assert!(
@@ -826,15 +908,43 @@ mod test {
                 .payload
                 .contains("the edge case still fails")
         );
+        // a prospective use names its source task, never an offer
+        assert!(loadout.rows[15].payload.contains("\"source\":0"));
+        // the binding family: the use, the selected offer, the grounds
+        for seq in [16, 33] {
+            assert_eq!(loadout.rows[seq].kind, "use_bound", "seq {seq}");
+            assert!(
+                loadout.rows[seq].payload.contains("grounds"),
+                "seq {seq}: {}",
+                loadout.rows[seq].payload
+            );
+        }
+        // the world folds the bindings: foo's account, then the replacement
+        assert_eq!(
+            world.comments[&CommentId(RecordId(15))]
+                .binding
+                .as_ref()
+                .map(|b| b.offer),
+            Some(CommentId(RecordId(3)))
+        );
+        assert_eq!(
+            world.comments[&CommentId(RecordId(29))]
+                .binding
+                .as_ref()
+                .map(|b| (b.offer, b.record)),
+            Some((CommentId(RecordId(32)), RecordId(33)))
+        );
+        // the citation mapping rides the birth payload whole
+        assert!(loadout.rows[34].payload.contains("\"references\":[3]"));
         // the revision family: pointer only, the fold presents the swap
-        assert_eq!(loadout.rows[23].kind, "comment_revised");
+        assert_eq!(loadout.rows[24].kind, "comment_revised");
         assert!(
-            loadout.rows[23]
+            loadout.rows[24]
                 .payload
                 .contains("post-fold receipt, corrected")
         );
         assert_eq!(
-            world.comments[&CommentId(RecordId(22))]
+            world.comments[&CommentId(RecordId(23))]
                 .comment
                 .kind
                 .prose()
@@ -843,44 +953,44 @@ mod test {
             "post-fold receipt, corrected"
         );
         assert_eq!(
-            world.comments[&CommentId(RecordId(22))].revised,
+            world.comments[&CommentId(RecordId(23))].revised,
             Some(Revision {
-                record: RecordId(23),
+                record: RecordId(24),
                 reviser: agent().actor,
             })
         );
-        assert!(loadout.rows[22].payload.contains("post-fold receipt"));
+        assert!(loadout.rows[23].payload.contains("post-fold receipt"));
         // the withdrawal family: the note and the tombstone's pointer
-        assert_eq!(loadout.rows[25].kind, "comment_withdrawn");
+        assert_eq!(loadout.rows[26].kind, "comment_withdrawn");
         assert!(
-            loadout.rows[25]
+            loadout.rows[26]
                 .payload
                 .contains("the parking was premature")
         );
         assert_eq!(
-            world.comments[&CommentId(RecordId(24))].withdrawn,
+            world.comments[&CommentId(RecordId(25))].withdrawn,
             Some(Withdrawal {
-                record: RecordId(25),
+                record: RecordId(26),
                 withdrawer: human().actor,
             })
         );
         assert!(matches!(
-            world.comments[&CommentId(RecordId(24))].comment.state,
+            world.comments[&CommentId(RecordId(25))].comment.state,
             CommentState::Withdrawn(_)
         ));
-        assert!(loadout.rows[24].payload.contains("parked mid-flight"));
+        assert!(loadout.rows[25].payload.contains("parked mid-flight"));
         // the artifact family: pointer only
-        assert_eq!(loadout.rows[16].kind, "artifact_added");
-        assert!(loadout.rows[16].payload.contains("sweep figure"));
+        assert_eq!(loadout.rows[17].kind, "artifact_added");
+        assert!(loadout.rows[17].payload.contains("sweep figure"));
         assert!(
-            loadout.rows[16]
+            loadout.rows[17]
                 .payload
                 .contains(ContentHash::of(b"figure bytes").as_str())
         );
         assert_eq!(
             world.tasks[0].artifacts,
             vec![(
-                RecordId(16),
+                RecordId(17),
                 Artifact {
                     name: Prose::new("sweep figure".into()).unwrap(),
                     hash: ContentHash::of(b"figure bytes"),
@@ -888,12 +998,12 @@ mod test {
             )]
         );
         // the world folded the full story
-        assert_eq!(world.tasks.len(), 5);
+        assert_eq!(world.tasks.len(), 6);
         assert!(matches!(world.tasks[0].task.state, TaskState::Concluded));
         assert!(matches!(world.tasks[1].task.state, TaskState::Concluded));
         assert!(matches!(world.tasks[2].task.state, TaskState::Open));
         assert!(matches!(world.tasks[3].task.state, TaskState::Open));
-        assert!(matches!(world.tasks[4].task.state, TaskState::Open));
+        assert!(matches!(world.tasks[5].task.state, TaskState::Offered));
         assert_eq!(world.tasks[0].current_offer, Some(CommentId(RecordId(3))));
         assert_eq!(world.tasks[1].current_offer, Some(CommentId(RecordId(8))));
         assert_eq!(world.tasks[2].current_offer, None);
@@ -920,7 +1030,7 @@ mod test {
             let mut conn = open(&path).expect("create the file-backed log");
             record(&mut conn, &human(), create("implement foo"), 10).unwrap();
             record(&mut conn, &agent(), offer(0, "suite green"), 11).unwrap();
-            record(&mut conn, &human(), accept(1), 12).unwrap();
+            record(&mut conn, &human(), accept_on(0, 1), 12).unwrap();
         } // connection dropped: WAL checkpoints back into the main file
 
         // reopen runs the full open path: pragmas, header-stamp verify

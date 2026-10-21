@@ -6,13 +6,13 @@
 //! record. So does the prose renderer: bodies and explanations parse
 //! as markdown with math on the way out, never in.
 
+use crate::store::World;
 use crate::views::{
     ArtifactLine, CommentLine, RefTarget, ShowView, TaskView, ThreadItem, ThreadView,
 };
-use crate::{CommentId, RecordId, Target, TaskId};
+use crate::{RecordId, TaskId};
 use math_core::{LatexToMathML, MathDisplay};
 use pulldown_cmark::{Alignment, Event as MdEvent, Options, Parser, Tag, TagEnd};
-use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;
 use time::OffsetDateTime;
@@ -127,8 +127,6 @@ pub fn favicon_link(hue: u32) -> String {
 pub struct Focus {
     pub show: ShowView,
     pub thread: ThreadView,
-    /// The reading-side resolver's index over the whole fold.
-    pub refs: BTreeMap<usize, RefTarget>,
 }
 
 /// A refused revise, rendered at its own comment's reveal: the draft
@@ -155,25 +153,31 @@ pub struct FormState {
 
 pub struct Address {
     pub body: String,
-    pub target: Target,
+    pub home: TaskId,
+    /// The citation mapping in marker order: marker k names
+    /// references[k-1]
+    pub references: Vec<RecordId>,
 }
 
 enum Tok {
-    Target(Target),
+    Cite(usize),
+    Home(TaskId),
 }
 
-/// The composer's grammar: `@c-N` parents the comment to that comment,
-/// `@t-N` rehomes it to that task; bare ids stay prose. A token must
-/// stand alone (the char before `@` is not alphanumeric, the char
-/// after is neither alphanumeric nor `-`). The first target token
-/// wins; later target tokens stay prose. Consumed tokens leave the
-/// body. The grammar never constructs a variant: it names the address,
-/// and the compose door decides the kind.
-pub(crate) fn compile(body: &str, fallback: Target) -> Address {
+/// The composer's grammar over the fold's public numbers: `@c-N`
+/// becomes an inline marker citing that comment, `@t-N` rehomes the
+/// comment to that task; bare ids stay prose. A token must stand
+/// alone (the char before `@` is not alphanumeric, the char after is
+/// neither alphanumeric nor `-`). The first home token wins; later
+/// home tokens stay prose. Cite tokens leave a `[^k]` marker at their
+/// position and a reference in the mapping. The parse lives here,
+/// never in the record.
+pub(crate) fn compile(body: &str, home: TaskId, world: &World) -> Address {
     let chars: Vec<char> = body.chars().collect();
     let mut out = String::with_capacity(body.len());
-    let mut target = fallback;
-    let mut target_taken = false;
+    let mut home = home;
+    let mut home_taken = false;
+    let mut references: Vec<RecordId> = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         let boundary = chars[i] == '@' && (i == 0 || !chars[i - 1].is_alphanumeric());
@@ -183,13 +187,27 @@ pub(crate) fn compile(body: &str, fallback: Target) -> Address {
             None
         };
         match token {
-            Some((Tok::Target(t), end)) if !target_taken => {
-                target = t;
-                target_taken = true;
+            Some((Tok::Cite(n), end)) => {
+                // a cite the fold cannot resolve stays the words it was
+                match world.comment_at_num(n) {
+                    Some(id) => {
+                        references.push(id.0);
+                        out.push_str(&format!("[^{}]", references.len()));
+                        i = end;
+                    }
+                    None => {
+                        out.extend(&chars[i..end]);
+                        i = end;
+                    }
+                }
+            }
+            Some((Tok::Home(t), end)) if !home_taken => {
+                home = t;
+                home_taken = true;
                 i = skip_space(&chars, end, &out);
             }
-            // a second target token is prose, @ and all
-            Some((Tok::Target(_), end)) => {
+            // a second home token is prose, @ and all
+            Some((Tok::Home(_), end)) => {
                 out.extend(&chars[i..end]);
                 i = end;
             }
@@ -201,11 +219,12 @@ pub(crate) fn compile(body: &str, fallback: Target) -> Address {
     }
     Address {
         body: out.trim().to_string(),
-        target,
+        home,
+        references,
     }
 }
 
-/// One following space goes with a consumed token when it would double up.
+/// One following space goes with a consumed home token when it would double up.
 fn skip_space(chars: &[char], end: usize, out: &str) -> usize {
     end + usize::from(
         end < chars.len()
@@ -223,15 +242,9 @@ fn token_at(chars: &[char], p: usize) -> Option<(Tok, usize)> {
         .iter()
         .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || **c == '-')
         .collect();
-    for (prefix, target) in [
-        (
-            "c-",
-            (|n: usize| Target::Comment(CommentId(RecordId(n)))) as fn(usize) -> Target,
-        ),
-        (
-            "t-",
-            (|n: usize| Target::Task(TaskId(n))) as fn(usize) -> Target,
-        ),
+    for (prefix, token) in [
+        ("c-", Tok::Cite as fn(usize) -> Tok),
+        ("t-", |n: usize| Tok::Home(TaskId(n))),
     ] {
         let Some(digits) = word.strip_prefix(prefix) else {
             continue;
@@ -242,8 +255,34 @@ fn token_at(chars: &[char], p: usize) -> Option<(Tok, usize)> {
         if let Ok(n) = digits.parse()
             && ends(word.len())
         {
-            return Some((Tok::Target(target(n)), p + word.len()));
+            return Some((token(n), p + word.len()));
         }
+    }
+    None
+}
+
+/// A marker the mapping cannot resolve: every `[^k]` in the prose
+/// needs a reference at that position. The boundary check the author
+/// meets, never the record's.
+pub fn unresolved_marker(body: &str, references: usize) -> Option<u32> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' && chars.get(i + 1) == Some(&'^') {
+            let digits: String = chars[i + 2..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() && chars.get(i + 2 + digits.len()) == Some(&']') {
+                let k: u32 = digits.parse().expect("digits checked");
+                if k == 0 || k as usize > references {
+                    return Some(k);
+                }
+                i += 3 + digits.len();
+                continue;
+            }
+        }
+        i += 1;
     }
     None
 }
@@ -377,7 +416,7 @@ pub fn thread_section(f: &Focus, form: &FormState, store: &ArtifactStore) -> Str
     if let Some(why) = &f.show.explanation {
         s.push_str(&format!(
             "<div class=\"receipt\"><span class=\"xk\" style=\"color:#dac09a\">EXPLANATION</span>\n<div class=\"nbody\">{}</div>\n</div>\n",
-            prose_html(why, &f.refs, store),
+            prose_html(why, &[], store),
         ));
     }
     // the form names the offer it was rendered against, so a stale
@@ -397,7 +436,7 @@ pub fn thread_section(f: &Focus, form: &FormState, store: &ArtifactStore) -> Str
         // artifacts carry no time in the fold; they ride beside the
         // utterances, never opening a gap
         if matches!(item, ThreadItem::Artifacts(_)) {
-            s.push_str(&item_html(item, form, judge.as_ref(), &f.refs, store));
+            s.push_str(&item_html(item, form, judge.as_ref(), store));
             continue;
         }
         let (first_at, last_at) = item_span(item);
@@ -410,7 +449,7 @@ pub fn thread_section(f: &Focus, form: &FormState, store: &ArtifactStore) -> Str
             ));
         }
         last_time = Some(last_at);
-        s.push_str(&item_html(item, form, judge.as_ref(), &f.refs, store));
+        s.push_str(&item_html(item, form, judge.as_ref(), store));
     }
     if f.thread.items.is_empty() && f.show.explanation.is_none() {
         s.push_str("<div class=\"nempty\">no comments yet</div>\n");
@@ -424,10 +463,6 @@ fn item_span(item: &ThreadItem) -> (u64, u64) {
         // artifacts carry no time in the fold; the gap logic skips them
         ThreadItem::Artifacts(_) => (0, 0),
         ThreadItem::Note(line) => (line.born_at, line.born_at),
-        ThreadItem::Group { root, replies } => {
-            let last = replies.last().map(|r| r.born_at).unwrap_or(root.born_at);
-            (root.born_at, last)
-        }
     }
 }
 
@@ -435,7 +470,6 @@ fn item_html(
     item: &ThreadItem,
     form: &FormState,
     judge: Option<&Judge>,
-    refs: &BTreeMap<usize, RefTarget>,
     store: &ArtifactStore,
 ) -> String {
     match item {
@@ -449,43 +483,7 @@ fn item_html(
             s.push_str("</div>\n");
             s
         }
-        ThreadItem::Group { root, replies } => {
-            let mut s = String::from("<div class=\"ntg\">\n");
-            s.push_str(&node_html(
-                root,
-                0,
-                kind_chip(root.kind),
-                None,
-                form,
-                judge,
-                refs,
-                store,
-            ));
-            for r in replies {
-                s.push_str(&node_html(
-                    r,
-                    r.depth.saturating_sub(2),
-                    kind_chip(r.kind),
-                    None,
-                    form,
-                    judge,
-                    refs,
-                    store,
-                ));
-            }
-            s.push_str("</div>\n");
-            s
-        }
-        ThreadItem::Note(line) => node_html(
-            line,
-            0,
-            kind_chip(line.kind),
-            None,
-            form,
-            judge,
-            refs,
-            store,
-        ),
+        ThreadItem::Note(line) => node_html(line, kind_chip(line.kind), None, form, judge, store),
     }
 }
 
@@ -502,38 +500,48 @@ fn kind_chip(kind: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// One comment row: kind chip, whisper mono meta (actor, seq, time),
-/// full body. Body renders through the reading-side resolver; every
-/// live row carries the revise reveal — the human surface's inline
-/// door — and a withdrawn note renders its tombstone instead, with
-/// no door: repair of a withdrawn deposit is a new deposit.
+/// One comment row: kind chip, whisper mono meta (actor, number,
+/// time), full body. The body renders its `[^k]` markers through the
+/// comment's own reference mapping; bare ids stay the words they
+/// were. Every live row carries the revise reveal — the human
+/// surface's inline door — and a withdrawn note renders its tombstone
+/// instead, with no door: repair of a withdrawn deposit is a new
+/// deposit.
 fn node_html(
     line: &CommentLine,
-    indent: usize,
     kind: Option<(&str, &str)>,
     tag: Option<&str>,
     form: &FormState,
     judge: Option<&Judge>,
-    refs: &BTreeMap<usize, RefTarget>,
     store: &ArtifactStore,
 ) -> String {
     let chip = kind
         .map(|(k, color)| format!("<span class=\"xk\" style=\"color:{color}\">{k}</span>"))
         .unwrap_or_default();
-    // the target edge, carried explicitly: a reply names the comment
-    // it addresses
-    let target = match line.target {
-        crate::Target::Comment(parent) => {
-            format!("<span class=\"nseq mono\">→c-{}</span>", parent.0.0)
-        }
-        crate::Target::Task(_) => String::new(),
-    };
-    // the reliance's source, named beside the address: a use points at
-    // its offer wherever that offer lives
+    // the citation edges, carried explicitly: a reply names the
+    // comment or record it cites through its mapping
+    let target = line
+        .references
+        .iter()
+        .map(ref_chip)
+        .collect::<Vec<_>>()
+        .join("");
+    // the reliance's declared source, named beside the home: a use
+    // points at another task, its binding at that task's conclusion
     let uses = line
-        .offer
-        .filter(|_| line.kind == "use")
-        .map(|o| format!("<span class=\"nseq mono\">uses c-{o}</span>"))
+        .source
+        .map(|t| format!("<span class=\"nseq mono\">uses t-{}</span>", t.0))
+        .unwrap_or_default();
+    let bound = line
+        .binding
+        .as_ref()
+        .map(|b| {
+            format!(
+                "<span class=\"nseq mono\" title=\"{}\">bound c-{}</span>",
+                esc(&b.grounds),
+                b.offer
+            )
+        })
         .unwrap_or_default();
     if line.withdrawn {
         // the tombstone: one line, the note — and a withdrawer who
@@ -544,9 +552,8 @@ fn node_html(
         };
         let note = esc(line.withdrawal_note.as_deref().unwrap_or_default());
         return format!(
-            "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{target}{withdrawn}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody tomb\">withdrawn: {note}</div>\n</div>\n",
-            seq = line.seq,
-            pad = 26 + indent * 22,
+            "<div class=\"nrow2\" id=\"c-{num}\" style=\"padding-left:26px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{num}</span>{target}{withdrawn}<span class=\"nseq mono\">{time}</span></div>\n<div class=\"nbody tomb\">withdrawn: {note}</div>\n</div>\n",
+            num = line.num,
             tier = esc(&line.tier),
             actor = esc(&line.actor),
             time = esc(&fmt_t(line.born_at)),
@@ -588,35 +595,52 @@ fn node_html(
         let refused = form
             .revise
             .as_ref()
-            .filter(|r| r.seq == line.seq)
+            .filter(|r| r.seq == line.num)
             .map(|r| format!("<div class=\"formerr\">{}</div>\n", esc(&r.error)))
             .unwrap_or_default();
         let draft = form
             .revise
             .as_ref()
-            .filter(|r| r.seq == line.seq)
+            .filter(|r| r.seq == line.num)
             .map(|r| esc(&r.draft))
             .unwrap_or_else(|| esc(&line.body));
-        let open = if form.revise.as_ref().is_some_and(|r| r.seq == line.seq) {
+        let open = if form.revise.as_ref().is_some_and(|r| r.seq == line.num) {
             " open"
         } else {
             ""
         };
         format!(
             "<div class=\"nbody\">{}</div>\n<details class=\"revise\"{open}><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{draft}</textarea>\n{refused}<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n",
-            prose_html(&line.body, refs, store),
-            seq = line.seq,
+            prose_html(&line.body, &line.references, store),
+            seq = line.num,
             who_input = who_input(&form.who),
         )
     };
     format!(
-        "<div class=\"nrow2\" id=\"c-{seq}\" style=\"padding-left:{pad}px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{seq}</span>{target}{uses}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n{body}{doors}</div>\n",
-        seq = line.seq,
-        pad = 26 + indent * 22,
+        "<div class=\"nrow2\" id=\"c-{num}\" style=\"padding-left:26px\">\n<div class=\"nmeta\">{chip}<span class=\"nwho {tier}\">{actor}</span><span class=\"nseq mono\">c-{num}</span>{target}{uses}{bound}{extra}{revised}<span class=\"nseq mono\">{time}</span></div>\n{body}{doors}</div>\n",
+        num = line.num,
         tier = esc(&line.tier),
         actor = esc(&line.actor),
         time = esc(&fmt_t(line.born_at)),
     )
+}
+
+/// One citation's chip: the target's public name, linking its home.
+fn ref_chip(target: &RefTarget) -> String {
+    match target {
+        RefTarget::Comment { num, task } => {
+            format!("<a class=\"nseq mono\" href=\"/t/{task}#c-{num}\">→c-{num}</a>")
+        }
+        RefTarget::Task { task } => {
+            format!("<a class=\"nseq mono\" href=\"/t/{task}\">→t-{task}</a>")
+        }
+        RefTarget::Incarnation { num, task } => {
+            format!("<a class=\"nseq mono\" href=\"/t/{task}\">→i-{num}</a>")
+        }
+        RefTarget::Artifact { seq, task, .. } => {
+            format!("<a class=\"nseq mono\" href=\"/t/{task}#a-{seq}\">→seq {seq}</a>")
+        }
+    }
 }
 
 /// One artifact at its home position: caption plus inline image by
@@ -663,39 +687,28 @@ fn mention_card(seq: usize, task: usize, name: &str, hash: &str, store: &Artifac
     }
 }
 
-/// The reading-side resolver over escaped text: a 'c-N' token the fold
-/// holds as a comment becomes a pure link to its home anchor, as an
-/// artifact becomes the card linking home; every other token stays
-/// the words it was. The parse lives here, never in the record.
-fn linkify(escaped: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStore) -> String {
+/// The reading-side resolver over escaped text: a `[^k]` marker whose
+/// comment carries a reference at that position resolves — a comment
+/// to its home anchor, an artifact to its card, a task or incarnation
+/// birth to its thread; every other token stays the words it was.
+/// Bare c-N tokens are prose: navigation follows the mapping, never
+/// the mention. The parse lives here, never in the record.
+fn markerize(escaped: &str, refs: &[RefTarget], store: &ArtifactStore) -> String {
     let chars: Vec<char> = escaped.chars().collect();
-    let word = |c: char| c.is_alphanumeric() || matches!(c, '-' | '#' | '_');
     let mut out = String::with_capacity(escaped.len());
     let mut i = 0;
     while i < chars.len() {
-        if chars[i] == 'c' && chars.get(i + 1) == Some(&'-') && (i == 0 || !word(chars[i - 1])) {
+        if chars[i] == '[' && chars.get(i + 1) == Some(&'^') {
             let digits: String = chars[i + 2..]
                 .iter()
                 .take_while(|c| c.is_ascii_digit())
                 .collect();
-            let n = digits.len();
-            let bounded = i + 2 + n >= chars.len() || !word(chars[i + 2 + n]);
-            if n > 0
-                && bounded
-                && let Ok(seq) = digits.parse::<usize>()
-            {
-                match refs.get(&seq) {
-                    Some(RefTarget::Comment { task }) => {
-                        out.push_str(&format!("<a href=\"/t/{task}#c-{seq}\">c-{seq}</a>"));
-                        i += 2 + n;
-                        continue;
-                    }
-                    Some(RefTarget::Artifact { task, name, hash }) => {
-                        out.push_str(&mention_card(seq, *task, name, hash, store));
-                        i += 2 + n;
-                        continue;
-                    }
-                    None => {}
+            if !digits.is_empty() && chars.get(i + 2 + digits.len()) == Some(&']') {
+                let k: usize = digits.parse().expect("digits checked");
+                if let Some(target) = refs.get(k - 1) {
+                    out.push_str(&marker_link(k, target, store));
+                    i += 3 + digits.len();
+                    continue;
                 }
             }
         }
@@ -703,6 +716,31 @@ fn linkify(escaped: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactSto
         i += 1;
     }
     out
+}
+
+/// One resolved marker's render: a superscript link for records, the
+/// card for an artifact.
+fn marker_link(k: usize, target: &RefTarget, store: &ArtifactStore) -> String {
+    match target {
+        RefTarget::Comment { num, task } => {
+            format!("<a class=\"mref\" href=\"/t/{task}#c-{num}\">[^{k}]</a>")
+        }
+        RefTarget::Task { task } => {
+            format!("<a class=\"mref\" href=\"/t/{task}\">[^{k}]</a>")
+        }
+        RefTarget::Incarnation { num, task } => {
+            format!("<a class=\"mref\" href=\"/t/{task}\" title=\"i-{num}\">[^{k}]</a>")
+        }
+        RefTarget::Artifact {
+            seq,
+            task,
+            name,
+            hash,
+        } => format!(
+            "<span class=\"mrefa\">{}<sup><a class=\"mref\" href=\"/t/{task}#a-{seq}\">[^{k}]</a></sup></span>",
+            mention_card(*seq, *task, name, hash, store)
+        ),
+    }
 }
 
 /// The one scheme door for a markdown link: http or https renders as a
@@ -796,13 +834,14 @@ fn crate_authored(mathml: &str) -> bool {
 }
 
 /// The prose renderer over raw bytes: CommonMark with tables and
-/// math, the same law as the @-compiler and linkify — the parse lives
-/// here, never in the record. Text events escape and resolve 'c-N'
-/// mentions; code spans and code blocks are verbatim; raw HTML never
-/// passes, rendering as the words it was; a link renders only on the
-/// http(s) schemes with rel=noopener; soft breaks are whitespace and
-/// hard breaks the CommonMark kinds.
-fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStore) -> String {
+/// math, the same law as the @-compiler and the marker resolver — the
+/// parse lives here, never in the record. Text events escape and
+/// resolve `[^k]` markers through the given mapping; code spans and
+/// code blocks are verbatim; raw HTML never passes, rendering as the
+/// words it was; a link renders only on the http(s) schemes with
+/// rel=noopener; soft breaks are whitespace and hard breaks the
+/// CommonMark kinds.
+fn prose_html(raw: &str, refs: &[RefTarget], store: &ArtifactStore) -> String {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES | Options::ENABLE_MATH);
     let mut out = String::with_capacity(raw.len());
@@ -812,7 +851,19 @@ fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStor
     let mut link_open = false;
     let mut aligns: Vec<Alignment> = Vec::new();
     let mut col = 0;
+    // text accumulates until the next event: a marker's brackets can
+    // span the parser's own text splits, so the resolver reads whole runs
+    let mut text_buf = String::new();
+    let flush_text = |buf: &mut String, out: &mut String| {
+        if !buf.is_empty() {
+            out.push_str(&markerize(buf, refs, store));
+            buf.clear();
+        }
+    };
     for ev in Parser::new_ext(raw, opts) {
+        if !matches!(ev, MdEvent::Text(_)) {
+            flush_text(&mut text_buf, &mut out);
+        }
         match ev {
             MdEvent::Start(tag) => match tag {
                 Tag::Paragraph => out.push_str("<p>"),
@@ -911,7 +962,7 @@ fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStor
                 if in_code {
                     code_buf.push_str(&t);
                 } else {
-                    out.push_str(&linkify(&esc(&t), refs, store));
+                    text_buf.push_str(&esc(&t));
                 }
             }
             MdEvent::Code(c) => out.push_str(&format!("<code>{}</code>", esc(&c))),
@@ -928,6 +979,7 @@ fn prose_html(raw: &str, refs: &BTreeMap<usize, RefTarget>, store: &ArtifactStor
             _ => {}
         }
     }
+    flush_text(&mut text_buf, &mut out);
     out
 }
 
@@ -962,13 +1014,16 @@ const JS: &str = r#"
 const re = /(^|[^A-Za-z0-9])@(c-[0-9]+|t-[0-9]+)(?![A-Za-z0-9-])/g;
 function resolve(text, home) {
   if (!text.trim()) return '';
-  let target = null;
+  let cite = [];
+  let rehomed = null;
   for (const m of text.matchAll(re)) {
-    if (target === null) target = m[2];
+    if (m[2][0] === 'c') cite.push(m[2]);
+    else if (rehomed === null) rehomed = m[2];
   }
   const parts = [];
-  if (target) parts.push((target[0] === 'c' ? 'reply \u2192 ' : 'rehome \u2192 ') + target);
+  if (rehomed) parts.push('home \u2192 ' + rehomed);
   else parts.push('home \u2192 t-' + home);
+  if (cite.length) parts.push('cites ' + cite.join(' '));
   return parts.join(' \u00b7 ');
 }
 document.addEventListener('input', (e) => {
@@ -1236,6 +1291,9 @@ pre:hover .copybtn, .copybtn:focus-visible { opacity: 1; }
 .nbody th { color: #b3aca6; background: #1e1c1a; }
 .nbody hr { border: none; border-top: 1px solid #2e2a28; margin: .9em 0; }
 .nbody math { font-size: 106%; }
+.mref { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; vertical-align: super; line-height: 1; }
+.mrefa { display: inline-flex; align-items: flex-end; gap: 1px; vertical-align: top; }
+.mrefa .mref { vertical-align: bottom; }
 
 /* artifacts: figure at position, card for mentions */
 .arow { padding-top: 2px; }
@@ -1350,10 +1408,10 @@ input.who:focus { outline: none; border-color: #2e2a28; caret-color: #c4a6a8; }
 mod tests {
 
     use super::*;
+    use crate::CommentId;
     use crate::CommentKind;
     use crate::Prose;
     use crate::events::Event;
-    use crate::objects::comment::Target;
     use crate::store::{Context, Record, Tier, World};
     use crate::types::actor::ActorName;
     use crate::views::{board, closed_tasks, show_view, thread_view};
@@ -1386,18 +1444,30 @@ mod tests {
         }
     }
 
-    fn task(n: usize) -> Target {
-        Target::Task(TaskId(n))
-    }
-
-    fn reply(seq: usize) -> Target {
-        Target::Comment(CommentId(RecordId(seq)))
-    }
-
     fn note(body: &str) -> CommentKind {
         CommentKind::Note {
             body: Prose::new(body.into()).unwrap(),
         }
+    }
+
+    fn note_on(
+        seq: usize,
+        at: u64,
+        ctx: &Context,
+        home: TaskId,
+        body: &str,
+        refs: Vec<RecordId>,
+    ) -> Record {
+        record(
+            seq,
+            at,
+            ctx,
+            Event::Commented {
+                home,
+                kind: note(body),
+                references: refs,
+            },
+        )
     }
 
     fn offer_kind(body: &str) -> CommentKind {
@@ -1408,62 +1478,123 @@ mod tests {
 
     // ---- the @-compiler's equivalence classes ----
 
-    #[test]
-    fn bare_body_passes_through() {
-        let a = compile("look at t-1 and c-2", task(7));
-        assert_eq!(a.body, "look at t-1 and c-2");
-        assert_eq!(a.target, task(7));
+    /// Three comments born at seq 2, 4, 6: dense c-0, c-1, c-2.
+    fn cite_world() -> World {
+        World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                },
+            ),
+            note_on(2, 2, human(), TaskId(0), "the finding", Vec::new()),
+            note_on(4, 4, agent(), TaskId(0), "the answer", Vec::new()),
+            note_on(6, 6, human(), TaskId(0), "the verdict", Vec::new()),
+        ])
+        .unwrap()
     }
 
     #[test]
-    fn comment_token_parents() {
-        let a = compile("saw it @c-19", task(7));
-        assert_eq!(a.body, "saw it");
-        assert_eq!(a.target, Target::Comment(CommentId(RecordId(19))));
+    fn bare_body_passes_through() {
+        let world = cite_world();
+        let a = compile("look at t-1 and c-2", TaskId(7), &world);
+        assert_eq!(a.body, "look at t-1 and c-2");
+        assert_eq!(a.home, TaskId(7));
+        assert!(a.references.is_empty());
+    }
+
+    #[test]
+    fn comment_token_cites_inline() {
+        let world = cite_world();
+        let a = compile("saw @c-2, which settles it", TaskId(7), &world);
+        assert_eq!(a.body, "saw [^1], which settles it");
+        assert_eq!(a.home, TaskId(7));
+        assert_eq!(a.references, vec![RecordId(6)]);
+        // repeated tokens are separate markers, repeated markers allowed
+        let a = compile("@c-0 then @c-1 then @c-0", TaskId(7), &world);
+        assert_eq!(a.body, "[^1] then [^2] then [^3]");
+        assert_eq!(a.references, vec![RecordId(2), RecordId(4), RecordId(2)]);
     }
 
     #[test]
     fn task_token_rehomes() {
-        let a = compile("@t-3 belongs there", task(7));
+        let world = cite_world();
+        let a = compile("@t-3 belongs there", TaskId(7), &world);
         assert_eq!(a.body, "belongs there");
-        assert_eq!(a.target, task(3));
+        assert_eq!(a.home, TaskId(3));
+        assert!(a.references.is_empty());
     }
 
     #[test]
-    fn first_target_token_wins_and_the_rest_is_prose() {
-        let a = compile("@t-1 then @t-2", task(7));
+    fn first_home_token_wins_and_the_rest_is_prose() {
+        let world = cite_world();
+        let a = compile("@t-1 then @t-2", TaskId(7), &world);
         assert_eq!(a.body, "then @t-2");
-        assert_eq!(a.target, task(1));
+        assert_eq!(a.home, TaskId(1));
     }
 
     #[test]
     fn tokens_must_stand_alone() {
-        let a = compile("mail me@agent now", task(7));
+        let world = cite_world();
+        let a = compile("mail me@agent now", TaskId(7), &world);
         assert_eq!(a.body, "mail me@agent now");
-        assert_eq!(a.target, task(7));
-        let a = compile("see x@t-1", task(7));
+        assert_eq!(a.home, TaskId(7));
+        let a = compile("see x@t-1", TaskId(7), &world);
         assert_eq!(a.body, "see x@t-1");
-        assert_eq!(a.target, task(7));
+        assert_eq!(a.home, TaskId(7));
     }
 
     #[test]
     fn partial_tokens_stay_prose() {
+        let world = cite_world();
         for body in ["@agentx", "@c-1x", "@t-", "@c- 5", "@agent-3", "@c-x"] {
-            let a = compile(body, task(7));
+            let a = compile(body, TaskId(7), &world);
             assert_eq!(a.body, body, "{body}");
-            assert_eq!(a.target, task(7), "{body}");
+            assert_eq!(a.home, TaskId(7), "{body}");
+            assert!(a.references.is_empty(), "{body}");
         }
     }
 
+    /// A cite the fold cannot resolve stays the words it was: no
+    /// invented edges, no dangling markers.
     #[test]
-    fn whitespace_is_tidy_after_a_consumed_token() {
-        assert_eq!(compile("  @t-3   spaced  ", task(7)).body, "spaced");
-        assert_eq!(compile("@c-2\ndo it", task(7)).body, "do it");
+    fn an_unresolvable_cite_stays_prose() {
+        let world = cite_world();
+        let a = compile("as they said @c-9", TaskId(7), &world);
+        assert_eq!(a.body, "as they said @c-9");
+        assert!(a.references.is_empty());
+    }
+
+    #[test]
+    fn whitespace_is_tidy_after_a_consumed_home_token() {
+        let world = cite_world();
+        assert_eq!(
+            compile("  @t-3   spaced  ", TaskId(7), &world).body,
+            "spaced"
+        );
+        assert_eq!(compile("@t-2\ndo it", TaskId(7), &world).body, "do it");
+    }
+
+    /// Every marker must resolve through the mapping: the boundary's
+    /// author-facing check.
+    #[test]
+    fn unresolved_markers_are_named_at_the_boundary() {
+        assert_eq!(unresolved_marker("plain words", 0), None);
+        assert_eq!(unresolved_marker("see [^1]", 1), None);
+        assert_eq!(unresolved_marker("see [^1] and [^1]", 1), None);
+        assert_eq!(unresolved_marker("see [^2]", 1), Some(2));
+        assert_eq!(unresolved_marker("see [^0]", 1), Some(0));
+        assert_eq!(unresolved_marker("see [^3]", 3), None);
+        // not a marker: no closing bracket, no digits
+        assert_eq!(unresolved_marker("see [^a] and [^1", 0), None);
     }
 
     // ---- the frame ----
 
-    /// t-0 concluded; t-1 conversing; t-2 offered.
+    /// t-0 concluded; t-1 conversing; t-2 offered. Comments born at
+    /// seq 2,3,5,6,7,10 carry the public numbers c-0..c-5.
     fn fixture() -> World {
         World::replay(vec![
             record(
@@ -1488,8 +1619,9 @@ mod tests {
                 20,
                 agent(),
                 Event::Commented {
-                    target: task(0),
+                    home: TaskId(0),
                     kind: offer_kind("suite green <34>"),
+                    references: Vec::new(),
                 },
             ),
             record(
@@ -1497,10 +1629,11 @@ mod tests {
                 30,
                 human(),
                 Event::Commented {
-                    target: reply(2),
+                    home: TaskId(0),
                     kind: CommentKind::Accept {
                         offer: CommentId(RecordId(2)),
                     },
+                    references: Vec::new(),
                 },
             ),
             record(
@@ -1511,34 +1644,29 @@ mod tests {
                     name: Prose::new("build <foo>".into()).unwrap(),
                 },
             ),
-            record(
+            note_on(
                 5,
                 3_140 * 3600,
                 human(),
-                Event::Commented {
-                    target: task(1),
-                    kind: CommentKind::Request {
-                        body: Prose::new("please build it".into()).unwrap(),
-                    },
-                },
+                TaskId(1),
+                "please build it, per c-0",
+                Vec::new(),
             ),
-            record(
+            note_on(
                 6,
                 3_160 * 3600,
                 agent(),
-                Event::Commented {
-                    target: reply(5),
-                    kind: note("reply body"),
-                },
+                TaskId(1),
+                "reply body",
+                Vec::new(),
             ),
-            record(
+            note_on(
                 7,
                 3_200 * 3600,
                 human(),
-                Event::Commented {
-                    target: task(1),
-                    kind: note("lonely note"),
-                },
+                TaskId(1),
+                "lonely note",
+                Vec::new(),
             ),
             record(
                 8,
@@ -1562,8 +1690,9 @@ mod tests {
                 110 * 3600,
                 agent(),
                 Event::Commented {
-                    target: task(2),
+                    home: TaskId(2),
                     kind: offer_kind("awaiting its consumer"),
+                    references: Vec::new(),
                 },
             ),
         ])
@@ -1574,7 +1703,6 @@ mod tests {
         Focus {
             show: show_view(world, TaskId(n)).unwrap(),
             thread: thread_view(world, TaskId(n)).unwrap(),
-            refs: crate::views::ref_index(world),
         }
     }
 
@@ -1607,7 +1735,7 @@ mod tests {
         assert!(html.contains("placeholder=\"grounds"), "{html}");
         // the doors ride the offer's own row
         let offer_row = html
-            .split("id=\"c-10\"")
+            .split("id=\"c-5\"")
             .nth(1)
             .expect("the offer row renders");
         assert!(offer_row.contains("/t/2/reject"), "{offer_row}");
@@ -1766,14 +1894,18 @@ mod tests {
             &Default::default(),
             &ArtifactStore::default(),
         );
-        assert!(html.contains("<details class=\"revise\">"), "{html}");
+        assert_eq!(
+            html.matches("<details class=\"revise\">").count(),
+            3,
+            "{html}"
+        );
         // the bodyless accept carries no reveal: t-0's accept has none
         let html = thread_section(
             &focus_of(&world, 0),
             &Default::default(),
             &ArtifactStore::default(),
         );
-        // the offer and its replies reveal; the accept row is bodyless
+        // the offer reveals; the accept row is bodyless
         assert_eq!(
             html.matches("<details class=\"revise\">").count(),
             1,
@@ -1792,15 +1924,7 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            record(
-                1,
-                10,
-                agent(),
-                Event::Commented {
-                    target: task(0),
-                    kind: note("first take"),
-                },
-            ),
+            note_on(1, 10, agent(), TaskId(0), "first take", Vec::new()),
             record(
                 2,
                 20,
@@ -1833,15 +1957,7 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            record(
-                1,
-                10,
-                agent(),
-                Event::Commented {
-                    target: task(0),
-                    kind: note("hasty words"),
-                },
-            ),
+            note_on(1, 10, agent(), TaskId(0), "hasty words", Vec::new()),
             record(
                 2,
                 20,
@@ -1873,7 +1989,7 @@ mod tests {
         assert!(page.contains("no task focused"), "{page}");
     }
 
-    // ---- artifacts and the reading-side resolver ----
+    // ---- citations, markers, and the retired auto-link ----
 
     const PNG_HEAD: &[u8] = b"\x89PNG\r\n\x1a\nrest-of-the-bytes";
 
@@ -1890,7 +2006,8 @@ mod tests {
         (ArtifactStore::at(dir.clone()), dir)
     }
 
-    /// t-0 concluded citing its artifact; t-1 mentions both.
+    /// t-0 holds the figure, then an offer citing it through a marker,
+    /// then its accept; t-1's note mentions ids in prose only.
     fn resolver_world() -> World {
         World::replay(vec![
             record(
@@ -1901,21 +2018,9 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            record(2, 2, human(), Event::Commented { target: task(0), kind: offer_kind("suite green, per c-4") }),
             record(
-                3,
-                3,
-                human(),
-                Event::Commented {
-                    target: reply(2),
-                    kind: CommentKind::Accept {
-                        offer: CommentId(RecordId(2)),
-                    },
-                },
-            ),
-            record(
-                4,
-                4,
+                1,
+                1,
                 human(),
                 Event::ArtifactAdded {
                     root: TaskId(0),
@@ -1926,6 +2031,28 @@ mod tests {
                 },
             ),
             record(
+                2,
+                2,
+                human(),
+                Event::Commented {
+                    home: TaskId(0),
+                    kind: offer_kind("suite green, per the figure [^1]"),
+                    references: vec![RecordId(1)],
+                },
+            ),
+            record(
+                3,
+                3,
+                human(),
+                Event::Commented {
+                    home: TaskId(0),
+                    kind: CommentKind::Accept {
+                        offer: CommentId(RecordId(2)),
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            record(
                 5,
                 5,
                 human(),
@@ -1933,52 +2060,83 @@ mod tests {
                     name: Prose::new("other work".into()).unwrap(),
                 },
             ),
-            record(
+            note_on(
                 6,
                 6,
                 human(),
-                Event::Commented {
-                    target: task(1),
-                    kind: note(
-                        "see c-2 and c-4 — birth c-0 stays words, pic-3 stays words, c-99 unresolved",
-                    ),
-                },
+                TaskId(1),
+                "see c-0 and the figure — no links, just words; c-99 unresolved",
+                Vec::new(),
             ),
         ])
         .unwrap()
     }
 
     #[test]
-    fn mentions_resolve_to_links_and_cards_or_stay_text() {
+    fn markers_resolve_to_links_and_cards_or_stay_text() {
         let world = resolver_world();
         let (store, dir) = store_of(&[PNG_HEAD], "png");
         let hash = crate::ContentHash::of(PNG_HEAD).as_str().to_string();
 
-        // the foreign body: a comment mention is a pure link
-        let html = thread_section(&focus_of(&world, 1), &Default::default(), &store);
-        assert!(html.contains("<a href=\"/t/0#c-2\">c-2</a>"), "{html}");
-        // an artifact mention is the card linking home
+        // the citing offer: a marker names the artifact, the card rides
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), &store);
+        assert!(
+            html.contains("<a class=\"mref\" href=\"/t/0#a-1\">[^1]</a>"),
+            "{html}"
+        );
         assert!(
             html.contains(&format!(
-                "<a class=\"acard\" href=\"/t/0#a-4\"><img src=\"/a/{hash}\" alt=\"sweep figure\"><span class=\"acap\">sweep figure</span></a>"
+                "<a class=\"acard\" href=\"/t/0#a-1\"><img src=\"/a/{hash}\" alt=\"sweep figure\"><span class=\"acap\">sweep figure</span></a>"
             )),
             "{html}"
         );
-        // unresolved tokens stay the words they were
-        assert!(html.contains("birth c-0 stays words"), "{html}");
-        assert!(html.contains("pic-3 stays words"), "{html}");
-        assert!(html.contains("c-99 unresolved"), "{html}");
+
+        // the foreign body: bare ids are prose, no edges, no links
+        let html = thread_section(&focus_of(&world, 1), &Default::default(), &store);
+        assert!(html.contains("see c-0 and the figure"), "{html}");
         assert!(!html.contains("c-0</a>"), "{html}");
         assert!(!html.contains("c-99</a>"), "{html}");
-        assert!(!html.contains("pi<a"), "{html}");
 
-        // the offer's prose resolves through the same rule
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A marker naming a comment links its home anchor; one naming a
+    /// task birth links the thread; a marker with no mapping stays the
+    /// words it was.
+    #[test]
+    fn markers_name_comments_tasks_and_stay_words_without_a_mapping() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("real work".into()).unwrap(),
+                },
+            ),
+            note_on(1, 1, human(), TaskId(0), "the finding", Vec::new()),
+            note_on(
+                2,
+                2,
+                human(),
+                TaskId(0),
+                "the comment [^1], the task [^2], the void [^3]",
+                vec![RecordId(1), RecordId(0)],
+            ),
+        ])
+        .unwrap();
+        let (store, dir) = store_of(&[], "markers");
         let html = thread_section(&focus_of(&world, 0), &Default::default(), &store);
         assert!(
-            html.contains("suite green, per <a class=\"acard\" href=\"/t/0#a-4\""),
+            html.contains("<a class=\"mref\" href=\"/t/0#c-0\">[^1]</a>"),
             "{html}"
         );
-
+        assert!(
+            html.contains("<a class=\"mref\" href=\"/t/0\">[^2]</a>"),
+            "{html}"
+        );
+        // a marker the mapping cannot resolve stays literal words
+        assert!(html.contains("the void [^3]"), "{html}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1993,26 +2151,94 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            record(
+            note_on(
                 1,
                 1,
                 human(),
-                Event::Commented {
-                    target: task(0),
-                    kind: note("the <b>bold</b> verdict & c-1"),
-                },
+                TaskId(0),
+                "the <b>bold</b> verdict & [^1]",
+                vec![RecordId(0)],
             ),
         ])
         .unwrap();
         let (store, dir) = store_of(&[], "escape");
         let html = thread_section(&focus_of(&world, 0), &Default::default(), &store);
-        // the words escaped, and the bounded token still resolved
+        // the words escaped, and the marker still resolved
         assert!(
-            html.contains("the &lt;b&gt;bold&lt;/b&gt; verdict &amp; <a href=\"/t/0#c-1\">c-1</a>"),
+            html.contains(
+                "the &lt;b&gt;bold&lt;/b&gt; verdict &amp; <a class=\"mref\" href=\"/t/0\">[^1]</a>"
+            ),
             "{html}"
         );
         assert!(!html.contains("<b>"), "{html}");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The use row names its source task and its binding's selection.
+    #[test]
+    fn a_use_row_names_its_source_and_bound_selection() {
+        let world = World::replay(vec![
+            record(
+                0,
+                0,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("consume it".into()).unwrap(),
+                },
+            ),
+            record(
+                1,
+                1,
+                human(),
+                Event::TaskCreated {
+                    name: Prose::new("produce it".into()).unwrap(),
+                },
+            ),
+            record(
+                2,
+                2,
+                agent(),
+                Event::Commented {
+                    home: TaskId(1),
+                    kind: offer_kind("suite green"),
+                    references: Vec::new(),
+                },
+            ),
+            record(
+                3,
+                3,
+                agent(),
+                Event::Commented {
+                    home: TaskId(0),
+                    kind: CommentKind::Use {
+                        source: TaskId(1),
+                        reason: Prose::new("builds on the account".into()).unwrap(),
+                        bound: None,
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            record(
+                4,
+                4,
+                human(),
+                Event::UseBound {
+                    id: CommentId(RecordId(3)),
+                    offer: CommentId(RecordId(2)),
+                    grounds: Prose::new("the account that landed".into()).unwrap(),
+                },
+            ),
+        ])
+        .unwrap();
+        let html = thread_section(
+            &focus_of(&world, 0),
+            &Default::default(),
+            &ArtifactStore::default(),
+        );
+        assert!(html.contains("uses t-1"), "{html}");
+        assert!(html.contains("bound c-0"), "{html}");
+        // the grounds ride the binding's title, the record's words
+        assert!(html.contains("the account that landed"), "{html}");
     }
 
     // ---- the prose renderer: markdown with math ----
@@ -2028,15 +2254,7 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            record(
-                1,
-                1,
-                human(),
-                Event::Commented {
-                    target: task(0),
-                    kind: note(body),
-                },
-            ),
+            note_on(1, 1, human(), TaskId(0), body, Vec::new()),
         ])
         .unwrap()
     }
@@ -2065,7 +2283,9 @@ mod tests {
         let html = prose_html_of(&prose_world("sets it out: $$a^2+b^2=c^2$$ done"));
         // display math is its own block, distinct from inline
         assert!(
-            html.contains("<span class=\"dmath\"><math data-raw=\"a^2+b^2=c^2\" title=\"a^2+b^2=c^2\" display=\"block\">"),
+            html.contains(
+                "<span class=\"dmath\"><math data-raw=\"a^2+b^2=c^2\" title=\"a^2+b^2=c^2\" display=\"block\">"
+            ),
             "{html}"
         );
         // a display miss keeps both fences and renders no block
@@ -2108,9 +2328,10 @@ mod tests {
     #[test]
     fn a_refused_revise_renders_open_at_its_row_with_the_draft_kept() {
         let world = fixture();
+        // the refused row carries its public number, c-3
         let form = FormState {
             revise: Some(ReviseForm {
-                seq: 5,
+                seq: 3,
                 draft: "the refused wording".into(),
                 error: "a comment needs words".into(),
             }),
@@ -2132,18 +2353,9 @@ mod tests {
     }
 
     #[test]
-    fn mentions_resolve_inside_emphasis() {
-        let html = prose_html_of(&prose_world("the *verdict of c-1* stands"));
-        assert!(
-            html.contains("<em>verdict of <a href=\"/t/0#c-1\">c-1</a></em>"),
-            "{html}"
-        );
-    }
-
-    #[test]
     fn code_spans_stay_verbatim() {
-        let html = prose_html_of(&prose_world("run `sac show c-1` now"));
-        assert!(html.contains("<code>sac show c-1</code>"), "{html}");
+        let html = prose_html_of(&prose_world("run `sac show c-1 [^1]` now"));
+        assert!(html.contains("<code>sac show c-1 [^1]</code>"), "{html}");
         assert!(!html.contains("<code>sac show <a"), "{html}");
     }
 

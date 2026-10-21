@@ -9,6 +9,9 @@ use crate::types::prose::Prose;
 #[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub struct CommentId(pub RecordId);
 
+/// The wait door's read-side addressing: a task's records, or one
+/// comment's. Comments themselves carry a home task and a reference
+/// mapping, never a positional address.
 #[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Target {
@@ -16,11 +19,19 @@ pub enum Target {
     Comment(CommentId),
 }
 
-/// The payload a comment carries. Notes and Requests keep the
-/// task-or-comment targets; an Offer addresses its whole task;
-/// Accept and Reject address the offer they name; a Use lives on the
-/// consuming task and names the source offer. No variant carries an
-/// address beyond its target: routing is structural.
+/// A use's selection of a conclusion: the offer named and the grounds
+/// for selecting it. A birth may carry one already bound — the shape a
+/// historical log migrates into — every later selection is its own
+/// binding record.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UseBinding {
+    pub offer: CommentId,
+    pub grounds: Prose,
+}
+
+/// The payload a comment carries. Every variant lives on one explicit
+/// home task; an Offer addresses its whole task; Accept and Reject
+/// name the offer they decide; a Use declares its fixed source task.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommentKind {
@@ -42,10 +53,15 @@ pub enum CommentKind {
         offer: CommentId,
         grounds: Prose,
     },
-    /// The consuming task's declared reliance on a source offer
+    /// The consuming task's declared reliance on a fixed source task;
+    /// the conclusion it rests on is a separate explicit binding
     Use {
-        offer: CommentId,
+        source: TaskId,
         reason: Prose,
+        /// The initial binding a historical log carries at birth; a
+        /// live birth is prospective and leaves it absent
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bound: Option<UseBinding>,
     },
 }
 
@@ -62,11 +78,19 @@ impl CommentKind {
         }
     }
 
+    /// The offer a decision names; a use names its source task, not an
+    /// offer — its selection rides the binding records.
     pub fn offer(&self) -> Option<CommentId> {
         match self {
-            CommentKind::Accept { offer }
-            | CommentKind::Reject { offer, .. }
-            | CommentKind::Use { offer, .. } => Some(*offer),
+            CommentKind::Accept { offer } | CommentKind::Reject { offer, .. } => Some(*offer),
+            _ => None,
+        }
+    }
+
+    /// The source task a use declares.
+    pub fn source(&self) -> Option<TaskId> {
+        match self {
+            CommentKind::Use { source, .. } => Some(*source),
             _ => None,
         }
     }
@@ -74,15 +98,14 @@ impl CommentKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
-    pub target: Target,
+    /// The one task this comment lives on, explicit at birth
+    pub home: TaskId,
     pub kind: CommentKind,
-    /// The task this comment lives on, derived from its target chain
-    pub root: TaskId,
     pub state: CommentState,
 }
 
-/// A comment's own lifecycle, born mirroring its variant; only the
-/// note carries a door.
+/// A comment's own lifecycle, born mirroring its variant; the note
+/// carries the withdrawal door, the use carries the binding door.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommentState {
     Note,
@@ -91,6 +114,9 @@ pub enum CommentState {
     Accept,
     Reject,
     Use,
+    /// A use's current selection: the offer the last binding named.
+    /// Earlier selections stay in the log; rebinding replaces this one.
+    UseBound(CommentId),
     /// The standing-error repair, terminal: the deposit's body left
     /// the fold's presentation, the tombstone holds its place.
     Withdrawn(Prose),
@@ -99,11 +125,14 @@ pub enum CommentState {
 impl CommentState {
     /// The comment state machine table, all event-named transitions
     /// must go through this: withdrawal is the note deposits' door
-    /// alone, every other variant holds.
+    /// alone, binding is the use's; every other variant holds.
     pub fn transition(&self, event: &Event) -> Option<CommentState> {
         match (self, event) {
             (CommentState::Note, Event::CommentWithdrawn { note, .. }) => {
                 Some(CommentState::Withdrawn(note.clone()))
+            }
+            (CommentState::Use | CommentState::UseBound(_), Event::UseBound { offer, .. }) => {
+                Some(CommentState::UseBound(*offer))
             }
             _ => None,
         }
@@ -116,7 +145,10 @@ impl CommentState {
             CommentKind::Offer { .. } => CommentState::Offer,
             CommentKind::Accept { .. } => CommentState::Accept,
             CommentKind::Reject { .. } => CommentState::Reject,
-            CommentKind::Use { .. } => CommentState::Use,
+            CommentKind::Use { bound, .. } => match bound {
+                None => CommentState::Use,
+                Some(binding) => CommentState::UseBound(binding.offer),
+            },
         }
     }
 }
@@ -139,6 +171,16 @@ pub struct Withdrawal {
     pub withdrawer: ActorName,
 }
 
+/// A use's current binding: the record that selected, the offer it
+/// selected, the grounds for that selection, and who bound it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Binding {
+    pub record: RecordId,
+    pub offer: CommentId,
+    pub grounds: Prose,
+    pub actor: ActorName,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommentContext {
     pub comment: Comment,
@@ -153,6 +195,12 @@ pub struct CommentContext {
     /// The standing-error repair's pointer, when the deposit was
     /// withdrawn — beside the revised pointer it mirrors
     pub withdrawn: Option<Withdrawal>,
+    /// The use's current selection, when a binding has landed; a
+    /// rebinding replaces it, the log keeps every earlier one
+    pub binding: Option<Binding>,
+    /// The citation mapping as born: marker k names references[k-1];
+    /// a revision never retargets it
+    pub references: Vec<RecordId>,
 }
 
 #[cfg(test)]
@@ -162,8 +210,9 @@ mod tables {
 
     fn comment_event(kind: CommentKind) -> Event {
         Event::Commented {
-            target: Target::Task(crate::TaskId(0)),
+            home: crate::TaskId(0),
             kind,
+            references: Vec::new(),
         }
     }
 
@@ -171,6 +220,14 @@ mod tables {
         Event::CommentWithdrawn {
             id: CommentId(RecordId(1)),
             note: Prose::new("parked in the wrong place".into()).unwrap(),
+        }
+    }
+
+    fn bind_event() -> Event {
+        Event::UseBound {
+            id: CommentId(RecordId(1)),
+            offer: CommentId(RecordId(5)),
+            grounds: Prose::new("the selected account holds".into()).unwrap(),
         }
     }
 
@@ -201,8 +258,20 @@ mod tables {
 
     fn use_of() -> CommentKind {
         CommentKind::Use {
-            offer: CommentId(RecordId(1)),
+            source: crate::TaskId(1),
             reason: Prose::new("filler".into()).unwrap(),
+            bound: None,
+        }
+    }
+
+    fn born_bound_use() -> CommentKind {
+        CommentKind::Use {
+            source: crate::TaskId(1),
+            reason: Prose::new("filler".into()).unwrap(),
+            bound: Some(UseBinding {
+                offer: CommentId(RecordId(5)),
+                grounds: Prose::new("filler".into()).unwrap(),
+            }),
         }
     }
 
@@ -230,10 +299,37 @@ mod tables {
             CommentState::Accept,
             CommentState::Reject,
             CommentState::Use,
+            CommentState::UseBound(CommentId(RecordId(5))),
             withdrawn(),
         ];
         for state in &others {
             assert_eq!(state.transition(&withdrawn_event()), None, "{state:?}");
+        }
+    }
+
+    /// Binding is the use's door alone — prospective or already bound,
+    /// a binding selects again; every other variant holds.
+    #[test]
+    fn binding_is_the_use_door_alone() {
+        let selected = || CommentState::UseBound(CommentId(RecordId(5)));
+        assert_eq!(
+            CommentState::Use.transition(&bind_event()),
+            Some(selected())
+        );
+        assert_eq!(
+            CommentState::UseBound(CommentId(RecordId(3))).transition(&bind_event()),
+            Some(selected())
+        );
+        let others = [
+            CommentState::Note,
+            CommentState::Request,
+            CommentState::Offer,
+            CommentState::Accept,
+            CommentState::Reject,
+            withdrawn(),
+        ];
+        for state in &others {
+            assert_eq!(state.transition(&bind_event()), None, "{state:?}");
         }
     }
 
@@ -249,6 +345,7 @@ mod tables {
             CommentState::Accept,
             CommentState::Reject,
             CommentState::Use,
+            CommentState::UseBound(CommentId(RecordId(5))),
             withdrawn(),
         ];
         let events = [
@@ -278,7 +375,8 @@ mod tables {
         }
     }
 
-    /// The birth state mirrors the variant, one for one.
+    /// The birth state mirrors the variant, one for one — including
+    /// the born-bound use a historical log carries.
     #[test]
     fn the_birth_state_mirrors_the_variant() {
         for (kind, state) in [
@@ -288,14 +386,18 @@ mod tables {
             (accept(), CommentState::Accept),
             (reject(), CommentState::Reject),
             (use_of(), CommentState::Use),
+            (
+                born_bound_use(),
+                CommentState::UseBound(CommentId(RecordId(5))),
+            ),
         ] {
             assert_eq!(&CommentState::of(&kind), &state);
         }
     }
 
     /// Accept carries no prose; every other variant's prose is the
-    /// revision door's swap surface, and the naming variants name
-    /// exactly the offer they reference.
+    /// revision door's swap surface, the decisions name exactly the
+    /// offer they reference, and a use names its source task.
     #[test]
     fn prose_and_offer_surface_of_each_variant() {
         assert!(accept().prose().is_none());
@@ -304,9 +406,11 @@ mod tables {
         }
         assert_eq!(accept().offer(), Some(CommentId(RecordId(1))));
         assert_eq!(reject().offer(), Some(CommentId(RecordId(1))));
-        assert_eq!(use_of().offer(), Some(CommentId(RecordId(1))));
+        assert_eq!(use_of().offer(), None);
         assert_eq!(note().offer(), None);
         assert_eq!(request().offer(), None);
         assert_eq!(offer().offer(), None);
+        assert_eq!(use_of().source(), Some(crate::TaskId(1)));
+        assert_eq!(note().source(), None);
     }
 }

@@ -1,4 +1,4 @@
-use crate::objects::comment::{CommentId, CommentKind, Target};
+use crate::objects::comment::{CommentId, CommentKind};
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::TaskId;
 use crate::types::artifact::Artifact;
@@ -36,9 +36,12 @@ pub enum Event {
     },
     // Comment events
     /// The payload is its variant, body included; Accept carries none.
+    /// Every comment names its one home task and carries its citation
+    /// mapping: marker k names references[k-1].
     Commented {
-        target: Target,
+        home: TaskId,
         kind: CommentKind,
+        references: Vec<RecordRef>,
     },
     /// A presentation repair, not a transition: the fold swaps the
     /// variant's prose and points at the latest revision record — the
@@ -54,6 +57,15 @@ pub enum Event {
     CommentWithdrawn {
         id: CommentId,
         note: Prose,
+    },
+    /// A use's explicit selection of a conclusion: the offer named
+    /// with required grounds. Binding a prospective use and rebinding
+    /// a bound one are the same record; the log keeps every earlier
+    /// selection.
+    UseBound {
+        id: CommentId,
+        offer: CommentId,
+        grounds: Prose,
     },
     /// A thread holding an artifact: name and content identity, the
     /// bytes stay in the store. Authored like a comment, any tier.
@@ -79,6 +91,9 @@ pub enum Event {
     },
 }
 
+/// A stable internal reference: the birth record of the thing cited.
+pub type RecordRef = crate::store::RecordId;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Command {
@@ -100,8 +115,9 @@ pub enum Command {
     },
     // Comment commands
     Comment {
-        target: Target,
+        home: TaskId,
         kind: CommentKind,
+        references: Vec<RecordRef>,
     },
     ReviseComment {
         id: CommentId,
@@ -110,6 +126,13 @@ pub enum Command {
     WithdrawComment {
         id: CommentId,
         note: Prose,
+    },
+    /// Select a conclusion for a use: binding a prospective use,
+    /// rebinding a bound one.
+    BindUse {
+        id: CommentId,
+        offer: CommentId,
+        grounds: Prose,
     },
     Artifact {
         root: TaskId,

@@ -97,7 +97,7 @@ async fn commands_round_trip_over_the_wire() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"task": 0}, "kind": {"offer": {"body": "suite green"}}}}),
+            json!({"comment": {"home": 0, "kind": {"offer": {"body": "suite green"}}, "references": []}}),
         ),
     );
     assert_eq!(status, 200);
@@ -110,7 +110,7 @@ async fn commands_round_trip_over_the_wire() {
         &envelope(
             "human person",
             "human",
-            json!({"comment": {"target": {"comment": 2}, "kind": {"accept": {"offer": 2}}}}),
+            json!({"comment": {"home": 0, "kind": {"accept": {"offer": 2}}, "references": []}}),
         ),
     );
     assert_eq!(status, 200);
@@ -138,7 +138,7 @@ async fn the_tier_law_holds_through_http() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"task": 0}, "kind": {"offer": {"body": "first account"}}}}),
+            json!({"comment": {"home": 0, "kind": {"offer": {"body": "first account"}}, "references": []}}),
         ),
     );
     let (status, body) = post_command(
@@ -146,7 +146,7 @@ async fn the_tier_law_holds_through_http() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"task": 0}, "kind": {"offer": {"body": "replacement"}}}}),
+            json!({"comment": {"home": 0, "kind": {"offer": {"body": "replacement"}}, "references": []}}),
         ),
     );
     assert_eq!(status, 400);
@@ -169,7 +169,7 @@ async fn the_tier_law_holds_through_http() {
             "tier": "agent",
             "scope": {"task": 0, "incarnation": null, "workspace": null}
         },
-        "command": {"comment": {"target": {"comment": 1}, "kind": {"accept": {"offer": 1}}}}
+        "command": {"comment": {"home": 0, "kind": {"accept": {"offer": 1}}, "references": []}}
     });
     let (status, body) = post_command(&base_url, &scoped);
     assert_eq!(status, 400);
@@ -222,7 +222,7 @@ async fn a_request_reply_names_its_position_and_the_recorded_workspace() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"task": 0}, "kind": {"request": {"body": "status?"}}}}),
+            json!({"comment": {"home": 0, "kind": {"request": {"body": "status?"}}, "references": []}}),
         ),
     );
     assert_eq!(status, 200, "{body}");
@@ -248,7 +248,7 @@ async fn a_request_reply_names_its_position_and_the_recorded_workspace() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"task": 0}, "kind": {"request": {"body": "where do you stand?"}}}}),
+            json!({"comment": {"home": 0, "kind": {"request": {"body": "where do you stand?"}}, "references": []}}),
         ),
     );
     assert_eq!(status, 200, "{body}");
@@ -262,7 +262,7 @@ async fn a_request_reply_names_its_position_and_the_recorded_workspace() {
         &envelope(
             "jerry",
             "human",
-            json!({"comment": {"target": {"task": 0}, "kind": {"note": {"body": "context note"}}}}),
+            json!({"comment": {"home": 0, "kind": {"note": {"body": "context note"}}, "references": []}}),
         ),
     );
     let note = json_of(&body)["records"][0]["seq"].as_u64().unwrap();
@@ -271,7 +271,7 @@ async fn a_request_reply_names_its_position_and_the_recorded_workspace() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"target": {"comment": note}, "kind": {"request": {"body": "on the note"}}}}),
+            json!({"comment": {"home": 0, "kind": {"request": {"body": "on the note"}}, "references": [note]}}),
         ),
     );
     assert_eq!(status, 200, "{body}");
@@ -356,14 +356,15 @@ async fn client_send_lands_and_refuses_through_the_wire() {
 
     // a refusal the world can teach carries the teaching as its detail:
     // the birth record used as a comment target names its task
+    // a binding naming a task's birth record: the world teaches the
+    // birth's own thread
     let fail = client::send(
         &base,
         &agent,
-        Command::Comment {
-            target: saccade::Target::Comment(saccade::CommentId(saccade::RecordId(0))),
-            kind: saccade::CommentKind::Note {
-                body: saccade::Prose::new("replying to a birth".into()).unwrap(),
-            },
+        Command::BindUse {
+            id: saccade::CommentId(saccade::RecordId(0)),
+            offer: saccade::CommentId(saccade::RecordId(0)),
+            grounds: saccade::Prose::new("naming a birth".into()).unwrap(),
         },
         None,
     )
@@ -371,10 +372,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
     match &fail {
         ClientFail::Refused { code, detail } => {
             assert_eq!(code, "invalid_comment_id");
-            assert!(
-                detail.contains("c-0 is the birth record of task t-0"),
-                "{detail}"
-            );
+            assert!(detail.contains("the birth of task t-0"), "{detail}");
             assert!(detail.contains("address its thread as t-0"), "{detail}");
         }
         other => panic!("expected a refusal, got {other:?}"),
@@ -386,10 +384,11 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         &base,
         &agent,
         Command::Comment {
-            target: saccade::Target::Task(saccade::TaskId(9)),
+            home: saccade::TaskId(9),
             kind: saccade::CommentKind::Note {
                 body: saccade::Prose::new("talking to nothing".into()).unwrap(),
             },
+            references: Vec::new(),
         },
         None,
     )
@@ -883,7 +882,7 @@ async fn clean_tears_the_workspace_down_and_keeps_the_lineage() {
 
 use saccade::CommentKind;
 use saccade::api::AppState as ConsoleState;
-use saccade::objects::comment::{CommentId, Target};
+use saccade::objects::comment::CommentId;
 use saccade::store::{Context, RecordId, Tier};
 use saccade::types::actor::ActorName;
 use saccade::views::task_view;
@@ -993,11 +992,6 @@ fn lines_of(world: &saccade::World, n: usize) -> Vec<saccade::views::CommentLine
         .items
         .into_iter()
         .flat_map(|item| match item {
-            saccade::views::ThreadItem::Group { root, replies } => {
-                let mut all = vec![root];
-                all.extend(replies);
-                all
-            }
             saccade::views::ThreadItem::Note(line) => vec![line],
             saccade::views::ThreadItem::Artifacts(_) => Vec::new(),
         })
@@ -1066,7 +1060,7 @@ async fn compose_lands_a_note_and_routes_addresses() {
         "task=0&body=kick+off&who=jerry",
     );
     assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0#c-2"));
+    assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
 
     let world = world_of(&state);
     let c = &world.comments[&CommentId(RecordId(2))];
@@ -1074,23 +1068,27 @@ async fn compose_lands_a_note_and_routes_addresses() {
     let lines = lines_of(&world, 0);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].seq, 2);
-    assert_eq!(lines[0].depth, 1);
+    assert_eq!(lines[0].num, 0);
     assert_eq!(lines[0].kind, "note");
     assert_eq!(lines[0].body, "kick off");
 
-    // @c-2 parents: the redirect stays on the reply's home thread
+    // @c-0 cites: the marker rides the body, the mapping carries the
+    // edge, the redirect stays on the citing comment's home thread
     let (status, _, loc) = post_form(
         &format!("{base}/compose"),
         &[],
-        "task=0&body=saw+it+%40c-2&who=jerry",
+        "task=0&body=saw+it+%40c-0&who=jerry",
     );
     assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0#c-3"));
-    // parenting is the thread's shape: depth 2 under the note
+    assert_eq!(loc.as_deref(), Some("/t/0#c-1"));
     let world = world_of(&state);
     let lines = lines_of(&world, 0);
     assert_eq!(lines[1].seq, 3);
-    assert_eq!(lines[1].depth, 2);
+    assert_eq!(lines[1].body, "saw it [^1]");
+    assert_eq!(
+        lines[1].references,
+        vec![saccade::views::RefTarget::Comment { num: 0, task: 0 }]
+    );
 
     // @t-1 rehomes: the redirect follows the comment to its new task
     let (status, _, loc) = post_form(
@@ -1099,25 +1097,25 @@ async fn compose_lands_a_note_and_routes_addresses() {
         "task=0&body=%40t-1+belongs+there&who=jerry",
     );
     assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/1#c-4"));
+    assert_eq!(loc.as_deref(), Some("/t/1#c-2"));
     let world = world_of(&state);
     assert_eq!(lines_of(&world, 1)[0].seq, 4);
     assert_eq!(lines_of(&world, 0).len(), 2, "it left t-0");
 
-    // bare ids are prose: unaddressed, on the composer's own task
+    // bare ids are prose: unaddressed, uncited, on the composer's task
     let (status, _, loc) = post_form(
         &format!("{base}/compose"),
         &[],
-        "task=0&body=see+t-1+and+c-2&who=jerry",
+        "task=0&body=see+t-1+and+c-0&who=jerry",
     );
     assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0#c-5"));
+    assert_eq!(loc.as_deref(), Some("/t/0#c-3"));
     let world = world_of(&state);
     let lines = lines_of(&world, 0);
     let last = lines.last().unwrap();
     assert_eq!(last.seq, 5);
-    assert_eq!(last.body, "see t-1 and c-2");
-    assert_eq!(last.depth, 1, "bare ids stay on the composer's task");
+    assert_eq!(last.body, "see t-1 and c-0");
+    assert!(last.references.is_empty(), "bare ids stay prose");
 
     // the console renders the focused thread with the comment in it
     let (status, html) = get_html(&format!("{base}/t/0"));
@@ -1239,10 +1237,11 @@ async fn a_local_write_shows_on_every_server_face() {
         &mut conn,
         &local,
         Command::Comment {
-            target: Target::Task(TaskId(0)),
+            home: TaskId(0),
             kind: CommentKind::Note {
                 body: Prose::new("LOCAL_MARKER".into()).unwrap(),
             },
+            references: Vec::new(),
         },
         saccade::db::now_epoch(),
     )
@@ -1360,7 +1359,7 @@ async fn compose_fetch_rehome_redirects_instead_of_swapping() {
         "task=0&body=%40t-1+belongs+there&who=jerry",
     );
     assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/1#c-2"));
+    assert_eq!(loc.as_deref(), Some("/t/1#c-0"));
     assert!(!body.contains("<section"), "no fragment rides the redirect");
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -1390,24 +1389,27 @@ async fn every_task_href_the_console_emits_resolves() {
         .execute(
             &human_ctx(),
             Command::Comment {
-                target: Target::Task(TaskId(1)),
+                home: TaskId(1),
                 kind: CommentKind::Offer {
                     body: Prose::new("the standing account".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             None,
             bare_request(),
         )
         .unwrap();
-    // a comment citing the offer so the anchor link form lights up
+    // a comment citing the offer through its marker so the anchor
+    // link form lights up
     state
         .execute(
             &human_ctx(),
             Command::Comment {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Note {
-                    body: Prose::new("a note worth keeping, per c-3".into()).unwrap(),
+                    body: Prose::new("a note worth keeping, citing [^1]".into()).unwrap(),
                 },
+                references: vec![RecordId(3)],
             },
             None,
             bare_request(),
@@ -1476,10 +1478,11 @@ async fn decision_forms_carry_the_actor_name() {
         .execute(
             &pi,
             Command::Comment {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Offer {
                     body: Prose::new("suite green".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             None,
             bare_request(),
@@ -1535,10 +1538,11 @@ async fn decision_forms_carry_the_actor_name() {
         .execute(
             &pi,
             Command::Comment {
-                target: Target::Task(TaskId(1)),
+                home: TaskId(1),
                 kind: CommentKind::Offer {
                     body: Prose::new("the second account".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             None,
             bare_request(),
@@ -1583,10 +1587,11 @@ async fn decision_forms_carry_the_actor_name() {
         .execute(
             &pi,
             Command::Comment {
-                target: Target::Task(TaskId(1)),
+                home: TaskId(1),
                 kind: CommentKind::Offer {
                     body: Prose::new("the third account".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             None,
             bare_request(),
@@ -1647,10 +1652,11 @@ async fn a_refused_console_decision_leaves_its_line() {
         .execute(
             &human_ctx(),
             Command::Comment {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Offer {
                     body: Prose::new("the first account".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             None,
             bare_request(),
@@ -1674,10 +1680,11 @@ async fn a_refused_console_decision_leaves_its_line() {
         .execute(
             &human_ctx(),
             Command::Comment {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Offer {
                     body: Prose::new("the replacement account".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             None,
             bare_request(),
@@ -1775,9 +1782,9 @@ fn search_reads_the_record_through_the_cli_face() {
         .iter()
         .position(|l| *l == "t-0  migrate floop")
         .expect("the owning thread groups first");
-    assert_eq!(lines[t0 + 1], "  c-0  pi  migrate floop");
-    assert_eq!(lines[t0 + 2], "  c-1  pi  the floop migration proceeds");
-    assert_eq!(lines[t0 + 3], "  c-4  pi  floop landed; suite green");
+    assert_eq!(lines[t0 + 1], "  t-0  pi  migrate floop");
+    assert_eq!(lines[t0 + 2], "  c-0  pi  the floop migration proceeds");
+    assert_eq!(lines[t0 + 3], "  c-1  pi  floop landed; suite green");
     assert!(lines.contains(&"t-1  floop guard"), "{out}");
 
     // narrowing prints visible counts; the filtered thread stays visible
@@ -1818,12 +1825,13 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(ok, "{out}");
     assert_eq!(out.trim_end(), "no matches (by:nobody)\ncursor 5");
 
-    // the anchor window reads the log's own rows
+    // the anchor window reads the log's own rows: c-1 is the dense
+    // number of the offer at seq 4
     let (ok, out, _) = sac(&["search", "c-1", "-C", "1"]);
     assert!(ok, "{out}");
-    assert!(out.contains("c-0  task_created  pi/agent"), "{out}");
+    assert!(out.contains("c-3  task_claimed  pi/agent"), "{out}");
     assert!(
-        out.contains("c-1  commented  pi/agent  the floop migration"),
+        out.contains("c-4  commented  pi/agent  floop landed"),
         "{out}"
     );
 
@@ -1834,14 +1842,13 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(err.contains("the moves"), "{err}");
     assert!(err.contains("c-907 -C 3"), "{err}");
 
-    // show opens records in the thread view's body format, either face;
-    // the whole body renders, reflowed at the thread's width — while
-    // the bare position shows the raw event, header and payload
-    let (ok, out, _) = sac(&["show", "c-5"]);
+    // show opens comments by their public number in the thread view's
+    // body format — the multi-line note is the tracker's third comment
+    let (ok, out, _) = sac(&["show", "c-2"]);
     assert!(ok, "{out}");
     assert_eq!(
         out.trim_end(),
-        "c-5  pi [note]\n  floop guards the door the second line holds the detail\ncursor 5"
+        "  c-2  pi [note]\n  floop guards the door the second line holds the detail\ncursor 5"
     );
     let (ok, out, _) = sac(&["show", "5"]);
     assert!(ok, "{out}");
@@ -1850,23 +1857,26 @@ fn search_reads_the_record_through_the_cli_face() {
         "the raw event rides whole: {out}"
     );
     assert!(out.contains("floop guards the door"), "{out}");
-    // the retired '#' id refuses, naming the c- form
+    // the retired '#' id refuses, teaching the bare doors
     let (ok, _, err) = sac(&["show", "#5"]);
     assert!(!ok, "{err}");
+    assert!(err.contains("drop the '#'"), "{err}");
+
+    // a birth record is not a comment: the typed door names the fold's
+    // comment extent, the bare door shows the raw event
+    assert!(sac(&["create", "task", "guard the birth door"]).0);
+    let (ok, _, err) = sac(&["show", "c-6"]);
+    assert!(!ok, "{err}");
     assert!(
-        err.contains("drop the '#': the record is addressed as c-5"),
+        err.contains("c-6 names no comment; this fold holds 3 comments, c-0 through c-2"),
         "{err}"
     );
-
-    // a birth renders as itself: header and relation, never the thread
-    // behind it — the relation names t-N, t-N opens the thread
-    assert!(sac(&["create", "task", "guard the birth door"]).0);
-    let (ok, out, _) = sac(&["show", "c-6"]);
+    let (ok, out, _) = sac(&["show", "6"]);
     assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "c-6  task  pi\nbirth of t-2\ncursor 6");
-    let (ok, out, _) = sac(&["show", "c-0"]);
-    assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "c-0  task  pi\nbirth of t-0\ncursor 6");
+    assert!(
+        out.starts_with("c-6  task_created  pi\n"),
+        "the raw birth rides whole: {out}"
+    );
 
     // several ids render each, threads and records in one call
     let (ok, out, _) = sac(&["show", "t-1", "c-1"]);
@@ -1874,12 +1884,12 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(out.contains("t-1  open  floop guard"), "{out}");
     assert!(out.contains("c-1  pi"), "{out}");
 
-    // a positional id that parses but names nothing the log holds
-    // refuses with the log's own extent, typed or bare
+    // a number that parses but names nothing the log holds refuses
+    // with the log's own extent, typed or bare
     let (ok, _, err) = sac(&["show", "c-99999"]);
     assert!(!ok);
     assert!(
-        err.contains("no record c-99999; the log holds 7 records, 0 through 6"),
+        err.contains("c-99999 names no comment; this fold holds 3 comments"),
         "{err}"
     );
     let (ok, _, err) = sac(&["show", "99999"]);
@@ -1888,25 +1898,25 @@ fn search_reads_the_record_through_the_cli_face() {
         err.contains("no record 99999; the log holds 7 records, 0 through 6"),
         "{err}"
     );
-    // the typed door opens any record: an ownership event renders as
+    // the bare door opens any record: an ownership event renders as
     // the log renders it, header and payload
-    let (ok, out, _) = sac(&["show", "c-3"]);
+    let (ok, out, _) = sac(&["show", "3"]);
     assert!(ok, "{out}");
-    assert_eq!(
-        out.trim_end(),
-        "c-3  task_claimed  pi\n{\"id\":0,\"incarnation\":null}\ncursor 6"
+    assert!(
+        out.starts_with("c-3  task_claimed  pi\n"),
+        "the raw event rides whole: {out}"
     );
     // the typed door opens the offer as its comment block, prose wrapped
-    let (ok, out, _) = sac(&["show", "c-4"]);
+    let (ok, out, _) = sac(&["show", "c-1"]);
     assert!(ok, "{out}");
     assert_eq!(
         out.trim_end(),
-        "c-4  pi [offer]\n  floop landed; suite green\ncursor 6"
+        "  c-1  pi [offer]\n  floop landed; suite green\ncursor 6"
     );
     let (ok, _, err) = sac(&["show", "bogus"]);
     assert!(!ok);
     assert!(
-        err.contains("'bogus' is not an id (expected c-<seq>, t-<n>, or a bare <seq>)"),
+        err.contains("'bogus' is not an id (expected c-<n>, t-<n>, or a bare <seq>)"),
         "{err}"
     );
 
@@ -1973,9 +1983,9 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     let answer = "the reply rides the thread its root holds";
     assert!(sac(&["create", "task", "byte door"]).0);
     assert!(sac(&["comment", "t-0", &body]).0);
-    assert!(sac(&["comment", "c-1", answer]).0);
+    assert!(sac(&["comment", "c-0", answer]).0);
     assert!(sac(&["comment", "t-0", "a short third note"]).0);
-    assert!(sac(&["revise", "c-3", "revised bytes"]).0);
+    assert!(sac(&["revise", "c-2", "revised bytes"]).0);
 
     // the thread's json face: bodies byte-exact, replies folded in,
     // the cursor the read inspected through
@@ -1988,15 +1998,18 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     assert_eq!(thread["name"], json!("byte door"));
     let entries = thread["entries"].as_array().expect("entries");
     assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0]["num"], json!(0));
     assert_eq!(entries[0]["seq"], json!(1));
     assert_eq!(entries[0]["kind"], json!("note"));
     assert_eq!(entries[0]["body"], json!(body));
-    // the entries carry the target edge: roots name the task, replies
-    // the comment they address
-    assert_eq!(entries[0]["target"], json!({"task": 0}));
+    assert_eq!(entries[0]["home"], json!("t-0"));
+    // the entries carry the citation mapping: the reply cites the note
+    // it answers, its home the same thread
+    assert_eq!(entries[0]["references"], json!([]));
+    assert_eq!(entries[1]["num"], json!(1));
     assert_eq!(entries[1]["seq"], json!(2));
-    assert_eq!(entries[1]["depth"], json!(2));
-    assert_eq!(entries[1]["target"], json!({"comment": 1}));
+    assert_eq!(entries[1]["home"], json!("t-0"));
+    assert_eq!(entries[1]["references"], json!(["c-0"]));
     assert_eq!(entries[1]["body"], json!(answer));
     // the fold presents the latest revision, byte-exact too
     assert_eq!(entries[2]["seq"], json!(3));
@@ -2005,22 +2018,19 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     assert_eq!(entries[2]["reviser"], json!(null));
 
     // the record door answers with the same block, alone
-    let (ok, out, _) = sac(&["show", "--json", "c-2"]);
+    let (ok, out, _) = sac(&["show", "--json", "c-1"]);
     assert!(ok, "{out}");
     let json: Value = serde_json::from_str(&out).expect("the json face parses");
     assert_eq!(json["blocks"][0]["body"], json!(answer));
-    assert_eq!(json["blocks"][0]["depth"], json!(2));
-    assert_eq!(json["blocks"][0]["target"], json!({"comment": 1}));
+    assert_eq!(json["blocks"][0]["references"], json!(["c-0"]));
 
     // the bare position on the json face: the raw log row, no fold
     let (ok, out, _) = sac(&["show", "--json", "2"]);
     assert!(ok, "{out}");
     let json: Value = serde_json::from_str(&out).expect("the json face parses");
     assert_eq!(json["blocks"][0]["seq"], json!(2));
-    assert_eq!(
-        json["blocks"][0]["payload"]["target"],
-        json!({"comment": 1})
-    );
+    assert_eq!(json["blocks"][0]["payload"]["home"], json!(0));
+    assert_eq!(json["blocks"][0]["payload"]["references"], json!([1]));
 
     // the log's json face carries folded thread membership: a reply's
     // target is its comment, its thread is still t-0 — and the cursor
@@ -2053,7 +2063,7 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     // text reads end with the cursor line too: show, log, list, search, anchor
     for args in [
         vec!["show", "t-0"],
-        vec!["show", "c-2"],
+        vec!["show", "c-1"],
         vec!["log"],
         vec!["list"],
         vec!["search", "byte"],
@@ -2095,7 +2105,7 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
             String::from_utf8_lossy(&out.stderr).into_owned(),
         )
     };
-    let (ok, out, _) = pipe("bogus\nc-1\n", &["show", "--stdin", "--json"]);
+    let (ok, out, _) = pipe("bogus\nc-0\n", &["show", "--stdin", "--json"]);
     assert!(ok, "{out}");
     let json: Value = serde_json::from_str(&out).expect("the json face parses");
     let rows = json["blocks"].as_array().expect("the blocks array");
@@ -2288,7 +2298,7 @@ async fn local_replies_match_the_wire() {
     let (_, body) = post_command(
         &served,
         &json!({"context": {"actor": "pi", "tier": "agent"},
-                 "command": {"comment": {"target": {"task": 0}, "kind": {"request": {"body": "status?"}}}}}),
+                 "command": {"comment": {"home": 0, "kind": {"request": {"body": "status?"}}, "references": []}}}),
     );
     let served_asked = json_of(&body);
     assert_eq!(served_asked["seq"], served_asked["records"][0]["seq"]);
@@ -2396,13 +2406,13 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     assert_eq!(cursor, 3);
 
     // the blocked wait wakes on another process's committed write
-    let mut child = spawn_waiter(&["c-1", "--after", "3", "--until", "activity"]);
+    let mut child = spawn_waiter(&["c-0", "--after", "3", "--until", "activity"]);
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert!(
         child.try_wait().unwrap().is_none(),
         "the wait woke with nothing matching"
     );
-    sac_quiet(&["comment", "c-1", "the reply on the note"]); // seq 4
+    sac_quiet(&["comment", "c-0", "the reply on the note"]); // seq 4
     let (seqs, cursor) = observed(child);
     assert_eq!(seqs, vec![4]);
     assert_eq!(cursor, 4);
@@ -2416,14 +2426,14 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     assert_eq!(row_count(), before, "the wait landed nothing");
 
     // the sibling neither wakes the comment wait nor rides in its records
-    let mut child = spawn_waiter(&["c-1", "--after", "4", "--until", "activity"]);
+    let mut child = spawn_waiter(&["c-0", "--after", "4", "--until", "activity"]);
     sac_quiet(&["comment", "t-0", "an unrelated sibling"]); // seq 5
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert!(
         child.try_wait().unwrap().is_none(),
         "unrelated activity woke the comment wait"
     );
-    sac_quiet(&["comment", "c-1", "the real reply"]); // seq 6
+    sac_quiet(&["comment", "c-0", "the real reply"]); // seq 6
     let (seqs, cursor) = observed(child);
     assert_eq!(seqs, vec![6]);
     assert_eq!(cursor, 6);
@@ -2454,7 +2464,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
 
     // an offer revision is not a new birth; the interrupted wait lands nothing
     let mut child = spawn_waiter(&["t-0", "--after", "8", "--until", "offer"]);
-    sac_quiet(&["revise", "c-8", "the account, restated"]); // seq 9
+    sac_quiet(&["revise", "c-7", "the account, restated"]); // seq 9
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert!(
         child.try_wait().unwrap().is_none(),
@@ -2465,7 +2475,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     assert_eq!(row_count(), 10, "the interrupted wait landed nothing");
 
     // offer mode addresses a task only
-    let (ok, _, stderr) = sac(&["wait", "c-1", "--after", "0", "--until", "offer"]);
+    let (ok, _, stderr) = sac(&["wait", "c-0", "--after", "0", "--until", "offer"]);
     assert!(!ok);
     assert!(stderr.contains("--until offer"), "{stderr}");
     assert!(stderr.contains("activity"), "{stderr}");
@@ -3722,5 +3732,265 @@ async fn the_declared_repo_carries_the_serving_effects() {
 
     let _ = serve.kill();
     let _ = serve.wait();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The use door through the CLI face: a prospective birth, an explicit
+/// binding, a source replacement that never touches the binding, an
+/// explicit rebind, and the guards that hold throughout.
+#[test]
+fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = scratch_db("use-door");
+    let sac = |args: &[&str]| {
+        let out = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .env("SACCADE_ACTOR", "pi")
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    assert!(sac(&["create", "task", "produce the account"]).0); // seq 0
+    assert!(sac(&["offer", "t-0", "the first account"]).0); // seq 1 -> c-0
+    assert!(sac(&["create", "task", "consume the account"]).0); // seq 2
+    assert!(
+        sac(&[
+            "use",
+            "t-1",
+            "--source",
+            "t-0",
+            "--reason",
+            "builds on the producer"
+        ])
+        .0
+    ); // seq 3 -> c-1
+
+    // born prospective: the source named, no selection yet
+    let (ok, out, _) = sac(&["show", "t-1"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("uses t-0"), "{out}");
+    assert!(!out.contains("bound c-"), "{out}");
+
+    // the explicit binding selects the standing account
+    assert!(sac(&["bind", "c-1", "c-0", "--grounds", "the standing account"]).0);
+    let (ok, out, _) = sac(&["show", "t-1"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("bound c-0"), "{out}");
+    assert!(out.contains("the standing account"), "{out}");
+
+    // the source replaces its conclusion: the binding keeps it, and a
+    // rebind to the replaced account refuses
+    assert!(sac(&["reject", "c-0", "--grounds", "the fix misses the index"]).0);
+    let (ok, _, err) = sac(&["bind", "c-1", "c-0", "--grounds", "gone"]);
+    assert!(!ok, "{err}");
+    assert!(err.contains("not_current_offer"), "{err}");
+    let (ok, out, _) = sac(&["show", "t-1"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("bound c-0"),
+        "the binding kept the replaced account"
+    );
+
+    // the explicit rebind selects the replacement (the reject at seq 5
+    // is dense c-2, the replacement offer c-3); acceptance of the
+    // selected conclusion changes nothing
+    assert!(sac(&["offer", "t-0", "the replacement"]).0); // seq 6 -> c-3
+    assert!(sac(&["bind", "c-1", "c-3", "--grounds", "the replacement held"]).0);
+    assert!(sac(&["accept", "c-3"]).0);
+    let (ok, out, _) = sac(&["show", "t-1"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("bound c-3"), "{out}");
+    assert!(!out.contains("bound c-0"), "{out}");
+
+    // the guards: a task cannot rely on itself; a binding selects from
+    // the declared source alone
+    let (ok, _, err) = sac(&["use", "t-0", "--source", "t-0", "--reason", "myself"]);
+    assert!(!ok, "{err}");
+    assert!(err.contains("self_reliance"), "{err}");
+    assert!(sac(&["create", "task", "an unrelated producer"]).0); // seq 8
+    assert!(sac(&["offer", "t-2", "an outside account"]).0); // seq 9 -> c-5
+    let (ok, _, err) = sac(&["bind", "c-1", "c-5", "--grounds", "not my source"]);
+    assert!(!ok, "{err}");
+    assert!(err.contains("invalid_state_transition"), "{err}");
+
+    // citations: --ref earns the next marker, the reply target cites
+    // its parent, and a marker with no reference refuses at the door
+    assert!(
+        sac(&[
+            "comment",
+            "t-1",
+            "rests on the conclusion [^1]",
+            "--ref",
+            "c-3"
+        ])
+        .0
+    );
+    let (ok, out, _) = sac(&["show", "t-1"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("\u{2192}c-3"), "{out}");
+    assert!(sac(&["comment", "c-0", "replying to the account"]).0);
+    let (ok, out, _) = sac(&["show", "t-0"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("\u{2192}c-0"),
+        "the reply cites its parent: {out}"
+    );
+    let (ok, _, err) = sac(&["comment", "t-1", "dangling [^2]", "--ref", "c-3"]);
+    assert!(!ok, "{err}");
+    assert!(err.contains("marker [^2]"), "{err}");
+
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+/// The migration door through the CLI face: a schema-3 source migrates
+/// into a fresh schema-4 tracker, the source stays untouched and
+/// unreadable to this binary, and the report names every renumbering.
+#[test]
+fn the_migrate_door_rewrites_a_schema3_tracker() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let dir = std::env::temp_dir().join(format!("sac-migrate-cli-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let v3 = dir.join("v3.db");
+    {
+        let conn = rusqlite::Connection::open(&v3).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                 seq INTEGER PRIMARY KEY,
+                 event_time INTEGER NOT NULL,
+                 logged_time INTEGER NOT NULL,
+                 actor TEXT NOT NULL,
+                 tier TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 payload TEXT NOT NULL,
+                 scope TEXT NULL
+             );
+             PRAGMA application_id = 1935762276;
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+        let insert = |seq: i64, kind: &str, payload: &str| {
+            conn.execute(
+                "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+                 VALUES (?1, 1000+?1, 2000, 'jerry', 'human', ?2, ?3, NULL)",
+                rusqlite::params![seq, kind, payload],
+            )
+            .unwrap();
+        };
+        // the story: a note citing comments, a raw birth, and an
+        // out-of-range token; an offer with its accept; another task's
+        // use relying on that offer
+        insert(0, "task_created", r#"{"name":"implement foo"}"#);
+        insert(
+            1,
+            "commented",
+            r#"{"target":{"task":0},"kind":{"note":{"body":"per c-1, c-2, and c-0, also c-9"}}}"#,
+        );
+        insert(
+            2,
+            "commented",
+            r#"{"target":{"task":0},"kind":{"offer":{"body":"suite green, see c-1"}}}"#,
+        );
+        insert(
+            3,
+            "commented",
+            r#"{"target":{"comment":2},"kind":{"accept":{"offer":2}}}"#,
+        );
+        insert(4, "task_created", r#"{"name":"adopt foo's account"}"#);
+        insert(
+            5,
+            "commented",
+            r#"{"target":{"task":1},"kind":{"use":{"offer":2,"reason":"builds on foo, per c-1"}}}"#,
+        );
+    }
+    let out_db = dir.join("v4.db");
+    let migrated = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&v3)
+        .args(["migrate", "--out"])
+        .arg(&out_db)
+        .env("SACCADE_ACTOR", "pi")
+        .output()
+        .expect("spawn sac migrate");
+    assert!(
+        migrated.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&migrated.stderr)
+    );
+    let report = String::from_utf8_lossy(&migrated.stdout).into_owned();
+    assert!(report.contains("migrated 6 records"), "{report}");
+    assert!(report.contains("1 uses born bound"), "{report}");
+    assert!(
+        report.contains("1 unresolved references stay legacy"),
+        "{report}"
+    );
+    assert!(report.contains("c-9"), "{report}");
+
+    // the output reads: prose renumbered onto the dense numbering, the
+    // use born bound, the reply rehomed with an empty mapping
+    let show = |args: &[&str]| {
+        let out = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&out_db)
+            .env("SACCADE_ACTOR", "pi")
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (ok, out, _) = show(&["show", "t-0"]);
+    assert!(ok, "{out}");
+    // dense numbers: the note (seq 1) is c-0, the offer (seq 2) c-1,
+    // the task birth rides as seq 0, and c-9 stays legacy
+    assert!(
+        out.contains("per c-0, c-1, and seq 0, also legacy c-9"),
+        "{out}"
+    );
+    // the consumer's thread: the use born bound to the historical offer
+    let (ok, out, _) = show(&["show", "t-1"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("uses t-0"), "{out}");
+    assert!(out.contains("bound c-1"), "{out}");
+    // the mapping stayed empty: no graph edges were invented
+    assert!(
+        !out.contains("\u{2192}"),
+        "old comments cite nothing: {out}"
+    );
+
+    // seqs and timestamps preserved: the log rides whole
+    let (ok, out, _) = show(&["log", "--json"]);
+    assert!(ok, "{out}");
+    let log: Value = serde_json::from_str(&out).unwrap();
+    let rows = log["records"].as_array().unwrap();
+    assert_eq!(rows.len(), 6);
+    assert_eq!(rows[0]["seq"], json!(0));
+    assert_eq!(rows[0]["event_time"], json!(1000));
+
+    // the source stays schema 3 and refuses to open under this binary
+    let read = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&v3)
+        .args(["list"])
+        .env("SACCADE_ACTOR", "pi")
+        .output()
+        .expect("spawn sac");
+    assert!(!read.status.success());
+    assert!(
+        String::from_utf8_lossy(&read.stderr).contains("predates this binary"),
+        "{}",
+        String::from_utf8_lossy(&read.stderr)
+    );
+
     std::fs::remove_dir_all(&dir).unwrap();
 }

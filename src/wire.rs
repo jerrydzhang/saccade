@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 10] = [
+const KINDS: [&str; 11] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -34,6 +34,7 @@ const KINDS: [&str; 10] = [
     "commented",
     "comment_revised",
     "comment_withdrawn",
+    "use_bound",
     "artifact_added",
     "workspace_established",
     "task_workspace_checkpointed",
@@ -72,7 +73,7 @@ fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::{CommentId, CommentKind, Target};
+    use crate::objects::comment::{CommentId, CommentKind};
     use crate::objects::task::TaskId;
     use crate::types::prose::Prose;
 
@@ -105,42 +106,66 @@ mod test {
                 explanation: prose(),
             },
             Event::Commented {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Note {
                     body: Prose::new("leaning sections, owner: jerry".into()).unwrap(),
                 },
+                references: vec![RecordId(3)],
             },
             Event::Commented {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Request {
                     body: Prose::new("please land the sweep".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             Event::Commented {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Offer {
                     body: Prose::new("suite green, 55 tests".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             Event::Commented {
-                target: Target::Comment(CommentId(RecordId(6))),
+                home: TaskId(1),
                 kind: CommentKind::Accept {
                     offer: CommentId(RecordId(6)),
                 },
+                references: Vec::new(),
             },
             Event::Commented {
-                target: Target::Comment(CommentId(RecordId(6))),
+                home: TaskId(1),
                 kind: CommentKind::Reject {
                     offer: CommentId(RecordId(6)),
                     grounds: Prose::new("the edge case still fails".into()).unwrap(),
                 },
+                references: Vec::new(),
             },
             Event::Commented {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Use {
-                    offer: CommentId(RecordId(6)),
+                    source: TaskId(1),
                     reason: Prose::new("builds on the landed account".into()).unwrap(),
+                    bound: None,
                 },
+                references: Vec::new(),
+            },
+            Event::Commented {
+                home: TaskId(0),
+                kind: CommentKind::Use {
+                    source: TaskId(1),
+                    reason: Prose::new("builds on the landed account".into()).unwrap(),
+                    bound: Some(crate::objects::comment::UseBinding {
+                        offer: CommentId(RecordId(6)),
+                        grounds: Prose::new("the account that landed".into()).unwrap(),
+                    }),
+                },
+                references: Vec::new(),
+            },
+            Event::UseBound {
+                id: CommentId(RecordId(7)),
+                offer: CommentId(RecordId(6)),
+                grounds: Prose::new("the selected account holds".into()).unwrap(),
             },
             Event::CommentRevised {
                 id: CommentId(RecordId(6)),

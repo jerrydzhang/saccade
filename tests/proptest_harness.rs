@@ -11,9 +11,7 @@ use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::store::{Record, Scope};
 use saccade::types::actor::ActorName;
 use saccade::wire;
-use saccade::{
-    Command, CommentId, CommentKind, Context, Prose, RecordId, Target, TaskId, Tier, World,
-};
+use saccade::{Command, CommentId, CommentKind, Context, Prose, RecordId, TaskId, Tier, World};
 
 #[derive(Clone, Debug)]
 enum Action {
@@ -40,6 +38,13 @@ enum Action {
         variant: u8,
         human: bool,
         scoped: bool,
+        /// Draws that name citation targets, marker order
+        cites: Vec<u8>,
+    },
+    BindUse {
+        use_draw: u8,
+        offer: u8,
+        human: bool,
     },
     Revise {
         comment: u8,
@@ -66,6 +71,7 @@ impl Action {
             | Action::Cancel { human, .. }
             | Action::Reopen { human, .. } => *human,
             Action::Comment { human, .. }
+            | Action::BindUse { human, .. }
             | Action::Revise { human, .. }
             | Action::WithdrawComment { human, .. }
             | Action::Artifact { human, .. } => *human,
@@ -86,6 +92,8 @@ impl Action {
             }
             Action::Comment { task, .. } if role == "task" => *task,
             Action::Comment { reply, .. } if role == "offer" => *reply,
+            Action::BindUse { use_draw, .. } if role == "comment" => *use_draw,
+            Action::BindUse { offer, .. } if role == "offer" => *offer,
             Action::Revise { comment, .. } if role == "comment" => *comment,
             Action::WithdrawComment { comment, .. } if role == "comment" => *comment,
             _ => 0,
@@ -124,6 +132,39 @@ fn standing_offer_at(world: &World, n: u8) -> Option<CommentId> {
         .collect();
     let slot = n as usize % (ids.len() + 1);
     ids.get(slot).copied()
+}
+
+/// The uses the fold holds, with a one-past-the-end sentinel: a
+/// binding names a use, and the guard fires on every other variant.
+fn use_comment_at(world: &World, n: u8) -> CommentId {
+    let ids: Vec<CommentId> = world
+        .comments
+        .iter()
+        .filter(|(_, ctx)| matches!(ctx.comment.kind, CommentKind::Use { .. }))
+        .map(|(id, _)| *id)
+        .collect();
+    let slot = n as usize % (ids.len() + 1);
+    if slot == ids.len() {
+        CommentId(RecordId(usize::MAX))
+    } else {
+        ids[slot]
+    }
+}
+
+/// Every birth the fold holds — comments, tasks, artifacts — with a
+/// one-past-the-end sentinel that exercises the citation guard.
+fn birth_ref_at(world: &World, n: u8) -> RecordId {
+    let mut births: Vec<RecordId> = world.comments.keys().map(|id| id.0).collect();
+    births.extend(world.tasks.iter().map(|ctx| ctx.birth));
+    for ctx in &world.tasks {
+        births.extend(ctx.artifacts.iter().map(|(rid, _)| *rid));
+    }
+    let slot = n as usize % (births.len() + 1);
+    if slot == births.len() {
+        RecordId(usize::MAX)
+    } else {
+        births[slot]
+    }
 }
 
 /// The standing Offered or Concluded accounts, with a one-past-the-end sentinel.
@@ -180,29 +221,36 @@ fn command_of(action: &Action, world: &World) -> Command {
             id: task,
             explanation: Prose::new("generated explanation".into()).unwrap(),
         },
-        Action::Comment { reply, variant, .. } => {
+        Action::Comment {
+            reply,
+            variant,
+            cites,
+            ..
+        } => {
             // a third of decisions name a plain comment (NotAnOffer stays exercised)
             let decision_ref = if reply % 3 == 0 {
                 comment_at(world, *reply)
             } else {
                 standing_offer_at(world, *reply).unwrap_or(CommentId(RecordId(usize::MAX)))
             };
+            // notes and requests cite births through their mappings
+            let references: Vec<RecordId> = match variant % 6 {
+                0 | 1 => cites.iter().map(|n| birth_ref_at(world, *n)).collect(),
+                _ => Vec::new(),
+            };
+            // a decision homes on the task of the offer it names; the
+            // near-miss draw keeps the guard's refusal exercised
+            let decision_home = world
+                .comments
+                .get(&decision_ref)
+                .map(|c| c.comment.home)
+                .unwrap_or(task);
+            let home = match variant % 6 {
+                3 | 4 => decision_home,
+                _ => task,
+            };
             Command::Comment {
-                target: match variant % 6 {
-                    // the broadcast addresses its whole task
-                    2 => Target::Task(task),
-                    // the decisions address the offer they name
-                    3 | 4 => Target::Comment(decision_ref),
-                    // the reliance lives on its consuming task
-                    5 => Target::Task(task),
-                    _ => {
-                        if reply % 2 == 0 {
-                            Target::Task(task)
-                        } else {
-                            Target::Comment(comment_at(world, *reply))
-                        }
-                    }
-                },
+                home,
                 kind: match variant % 6 {
                     0 => CommentKind::Note {
                         body: Prose::new("generated note".into()).unwrap(),
@@ -220,14 +268,23 @@ fn command_of(action: &Action, world: &World) -> Command {
                         offer: decision_ref,
                         grounds: Prose::new("generated grounds".into()).unwrap(),
                     },
+                    // the reliance declares its source task, prospective
                     _ => CommentKind::Use {
-                        offer: reliable_offer_at(world, *reply)
-                            .unwrap_or(CommentId(RecordId(usize::MAX))),
+                        source: task_at(world, *reply),
                         reason: Prose::new("generated reliance".into()).unwrap(),
+                        bound: None,
                     },
                 },
+                references,
             }
         }
+        Action::BindUse {
+            use_draw, offer, ..
+        } => Command::BindUse {
+            id: use_comment_at(world, *use_draw),
+            offer: reliable_offer_at(world, *offer).unwrap_or(CommentId(RecordId(usize::MAX))),
+            grounds: Prose::new("generated grounds".into()).unwrap(),
+        },
         Action::Revise { .. } => Command::ReviseComment {
             id: comment_at(world, action.number("comment")),
             body: Prose::new("generated revision".into()).unwrap(),
@@ -307,10 +364,31 @@ fn action_strategy() -> BoxedStrategy<Action> {
         }),
         2 => id(|task, human| Action::Cancel { task, human }),
         2 => id(|task, human| Action::Reopen { task, human }),
-        8 => (any::<u8>(), any::<u8>(), any::<u8>(), human_coin(), any::<bool>())
-            .prop_map(|(task, reply, variant, human, scoped)| {
-                Action::Comment { task, reply, variant, human, scoped }
+        8 => (
+            any::<u8>(),
+            any::<u8>(),
+            any::<u8>(),
+            human_coin(),
+            any::<bool>(),
+            proptest::collection::vec(any::<u8>(), 0..2),
+        )
+            .prop_map(|(task, reply, variant, human, scoped, cites)| {
+                Action::Comment {
+                    task,
+                    reply,
+                    variant,
+                    human,
+                    scoped,
+                    cites,
+                }
             }),
+        3 => (any::<u8>(), any::<u8>(), human_coin()).prop_map(|(use_draw, offer, human)| {
+            Action::BindUse {
+                use_draw,
+                offer,
+                human,
+            }
+        }),
         2 => id(|comment, human| Action::Revise { comment, human }),
         2 => id(|comment, human| Action::WithdrawComment { comment, human }),
         2 => id(|task, human| Action::Artifact { task, human }),
@@ -406,8 +484,6 @@ fn generator_reaches_deep_states() {
             .current();
         let mut conn = db::open(std::path::Path::new(":memory:")).unwrap();
         let mut live = World::new();
-        let mut depth: BTreeMap<saccade::CommentId, usize> = BTreeMap::new();
-        let mut max_depth = 0;
 
         for action in &actions {
             let ctx = context(action, &live);
@@ -446,6 +522,14 @@ fn generator_reaches_deep_states() {
                                 _ => "use comment",
                             };
                             *milestones.entry(name).or_default() += 1;
+                            if last.payload.contains("\"references\":[") {
+                                *milestones.entry("citing comment").or_default() += 1;
+                            }
+                        }
+                        Action::BindUse { .. } => {
+                            if last.kind == "use_bound" {
+                                *milestones.entry("use bind").or_default() += 1;
+                            }
                         }
                         Action::Artifact { .. } => {
                             *milestones.entry("artifact").or_default() += 1;
@@ -457,20 +541,6 @@ fn generator_reaches_deep_states() {
                             *milestones.entry("comment withdraw").or_default() += 1;
                         }
                         _ => {}
-                    }
-                    if last.kind == "commented" {
-                        let record = stored_to_records(std::slice::from_ref(last)).remove(0);
-                        let d = match record.event {
-                            saccade::Event::Commented { target, .. } => match target {
-                                saccade::Target::Task(_) => 1,
-                                saccade::Target::Comment(parent) => {
-                                    depth.get(&parent).copied().unwrap_or(1) + 1
-                                }
-                            },
-                            _ => unreachable!("kind checked before decoding"),
-                        };
-                        depth.insert(saccade::CommentId(record.id), d);
-                        max_depth = max_depth.max(d);
                     }
                 }
                 Err(ref fail) => {
@@ -490,6 +560,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::WorkspaceAlreadyExists => "WorkspaceAlreadyExists",
                         saccade::Reject::WorkspaceMissing => "WorkspaceMissing",
                         saccade::Reject::CheckpointRewind => "CheckpointRewind",
+                        saccade::Reject::InvalidReference => "InvalidReference",
                     };
                     *reject_kinds.entry(kind).or_default() += 1;
                 }
@@ -509,9 +580,6 @@ fn generator_reaches_deep_states() {
         if states.contains(&"cancelled") {
             *milestones.entry("cancelled task").or_default() += 1;
         }
-        if max_depth >= 2 {
-            *milestones.entry("depth 2 thread").or_default() += 1;
-        }
     }
 
     // floors sit at half the measured rates so normal RNG wobble cannot trip them
@@ -522,7 +590,7 @@ fn generator_reaches_deep_states() {
         ("concluded task", 0.05),
         ("cancelled task", 0.15),
         ("offered task", 0.10),
-        ("depth 2 thread", 0.02),
+        ("citing comment", 0.02),
         ("offer comment", 0.10),
         ("accept comment", 0.03),
         ("reject comment", 0.03),
@@ -532,6 +600,7 @@ fn generator_reaches_deep_states() {
         ("revise", 0.05),
         ("comment withdraw", 0.015),
         ("workspace established", 0.10),
+        ("use bind", 0.01),
     ] {
         let hit = milestones.get(name).copied().unwrap_or(0);
         assert!(
@@ -550,6 +619,7 @@ fn generator_reaches_deep_states() {
         "InvalidStateTransition",
         "InvalidIncarnationId",
         "WorkspaceAlreadyExists",
+        "InvalidReference",
     ] {
         assert!(
             reject_kinds.get(kind).copied().unwrap_or(0) > 0,

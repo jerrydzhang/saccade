@@ -18,7 +18,7 @@ use crate::ActorName;
 use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::events::Event;
-use crate::objects::comment::{CommentKind, Target};
+use crate::objects::comment::CommentKind;
 use crate::objects::task::TaskId;
 use crate::store::{Context, RecordId, Scope, Tier, World};
 use crate::views::{self, WorkspaceFacts};
@@ -671,10 +671,11 @@ async fn workspace_start(State(app): State<AppState>, body: Bytes) -> Response {
                 db::RecordDraft {
                     context: caller.clone(),
                     event: Event::Commented {
-                        target: Target::Task(TaskId(task)),
+                        home: TaskId(task),
                         kind: CommentKind::Request {
                             body: prose.clone(),
                         },
+                        references: Vec::new(),
                     },
                 },
                 db::RecordDraft {

@@ -10,8 +10,7 @@ use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::objects::task::TaskId;
 use saccade::views::{
     ArtifactLine, CommentLine, RequestFacts, SearchGroup, SearchQuery, TaskView, Term, ThreadItem,
-    artifact_line, comment_line, matched_line, search, show_view, task_view, thread_index,
-    thread_view,
+    comment_line, matched_line, search, show_view, task_view, thread_index, thread_view,
 };
 use saccade::{
     ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, GitCommit,
@@ -74,14 +73,22 @@ enum Cmd {
         #[arg(long)]
         explanation: String,
     },
-    /// Attach a note to a task (t-<n>) or reply to a comment (c-<seq>)
-    Comment { target: String, body: String },
+    /// Attach a note to a task (t-<n>), or reply to a comment
+    /// (c-<n>: the note homes on that comment's task and cites it)
+    Comment {
+        target: String,
+        body: String,
+        /// A citation the mapping carries: c-<n>, t-<n>, or a bare
+        /// <seq>; repeatable, each earning the next [^k] marker
+        #[arg(long = "ref", value_name = "REF")]
+        refs: Vec<String>,
+    },
     /// Attach a request — prose seeking response, recording why work
-    /// happened — to a task (t-<n>) or a comment (c-<seq>)
+    /// happened — to a task (t-<n>) or beside a comment (c-<n>)
     Request { target: String, body: String },
     /// Offer the whole-task closing account (t-<n> only: a broadcast)
     Offer { id: String, body: String },
-    /// Accept an offered conclusion: the offer it accepts (c-<seq>)
+    /// Accept an offered conclusion: the offer it accepts (c-<n>)
     Accept { offer: String },
     /// Reject an offered conclusion with grounds, asking reconsideration
     Reject {
@@ -89,14 +96,27 @@ enum Cmd {
         #[arg(long)]
         grounds: String,
     },
-    /// Record a consuming task's reliance on a source offer
+    /// Declare a consuming task's prospective reliance on a source
+    /// task; bind the conclusion it rests on with `sac bind`
     Use {
         /// The consuming task (t-<n>)
         task: String,
-        /// The source offer (c-<seq>)
-        offer: String,
+        /// The source task (t-<n>): fixed at birth, another task
+        #[arg(long)]
+        source: String,
         #[arg(long)]
         reason: String,
+    },
+    /// Bind a use's selection: the conclusion chosen from its source
+    /// task, with the grounds for that choice. Rebinding is the same
+    /// verb; earlier selections stay in the log
+    Bind {
+        /// The use (c-<n>)
+        id: String,
+        /// The selected offer (c-<n>)
+        offer: String,
+        #[arg(long)]
+        grounds: String,
     },
     /// Revise a comment's prose: the fold presents the latest and names
     /// a reviser who differs from the birth author, the log keeps the
@@ -212,6 +232,15 @@ enum Cmd {
     /// Report this session's environment-declared identity and routing:
     /// disclosure, never a liveness claim or proof of ownership
     Identity,
+    /// Migrate a schema-3 tracker into a fresh schema-4 one: the
+    /// source stays untouched, seq and timestamps carry over, prose
+    /// renumbers onto the fold's public numbering, and anything that
+    /// cannot be identified stays visibly legacy and reported
+    Migrate {
+        /// The fresh tracker to write; must not exist
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Clone the log's prefix through a storage seq into a fresh
     /// tracker: the reproduction recipe's cursor half
     Clone {
@@ -437,65 +466,105 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             id: parse_task_id(id)?,
             explanation: Prose::new(explanation.clone())?,
         },
-        Cmd::Comment { target, body } => Command::Comment {
-            target: parse_target(target)?,
-            kind: CommentKind::Note {
-                body: Prose::new(body.clone())?,
-            },
-        },
-        Cmd::Request { target, body } => Command::Comment {
-            target: parse_target(target)?,
-            kind: CommentKind::Request {
-                body: Prose::new(body.clone())?,
-            },
-        },
-        Cmd::Offer { id, body } => Command::Comment {
-            target: Target::Task(parse_task_id(id)?),
-            kind: CommentKind::Offer {
-                body: Prose::new(body.clone())?,
-            },
-        },
-        Cmd::Accept { offer } => {
-            let offer = parse_comment_id(offer)?;
+        Cmd::Comment { target, body, refs } => {
+            let world = world_of(&destination)?;
+            let (home, mut references) = comment_address(&world, target)?;
+            for token in refs {
+                references.push(resolve_ref(&world, token)?);
+            }
+            let body = Prose::new(body.clone())?;
+            marker_guard(body.as_str(), references.len())?;
             Command::Comment {
-                target: Target::Comment(offer),
+                home,
+                kind: CommentKind::Note { body },
+                references,
+            }
+        }
+        Cmd::Request { target, body } => {
+            let world = world_of(&destination)?;
+            let (home, references) = comment_address(&world, target)?;
+            let body = Prose::new(body.clone())?;
+            marker_guard(body.as_str(), references.len())?;
+            Command::Comment {
+                home,
+                kind: CommentKind::Request { body },
+                references,
+            }
+        }
+        Cmd::Offer { id, body } => {
+            let body = Prose::new(body.clone())?;
+            Command::Comment {
+                home: parse_task_id(id)?,
+                kind: CommentKind::Offer { body },
+                references: Vec::new(),
+            }
+        }
+        Cmd::Accept { offer } => {
+            let world = world_of(&destination)?;
+            let offer = resolve_comment(&world, offer)?;
+            let home = world.comments[&offer].comment.home;
+            Command::Comment {
+                home,
                 kind: CommentKind::Accept { offer },
+                references: Vec::new(),
             }
         }
         Cmd::Reject { offer, grounds } => {
-            let offer = parse_comment_id(offer)?;
+            let world = world_of(&destination)?;
+            let offer = resolve_comment(&world, offer)?;
+            let home = world.comments[&offer].comment.home;
             Command::Comment {
-                target: Target::Comment(offer),
+                home,
                 kind: CommentKind::Reject {
                     offer,
                     grounds: Prose::new(grounds.clone())?,
                 },
+                references: Vec::new(),
             }
         }
         Cmd::Use {
             task,
-            offer,
+            source,
             reason,
-        } => Command::Comment {
-            target: Target::Task(parse_task_id(task)?),
-            kind: CommentKind::Use {
-                offer: parse_comment_id(offer)?,
-                reason: Prose::new(reason.clone())?,
-            },
-        },
+        } => {
+            let reason = Prose::new(reason.clone())?;
+            Command::Comment {
+                home: parse_task_id(task)?,
+                kind: CommentKind::Use {
+                    source: parse_task_id(source)?,
+                    reason,
+                    bound: None,
+                },
+                references: Vec::new(),
+            }
+        }
+        Cmd::Bind { id, offer, grounds } => {
+            let world = world_of(&destination)?;
+            Command::BindUse {
+                id: resolve_comment(&world, id)?,
+                offer: resolve_comment(&world, offer)?,
+                grounds: Prose::new(grounds.clone())?,
+            }
+        }
         Cmd::Revise {
             id,
             body,
             stdin,
             body_file,
-        } => Command::ReviseComment {
-            id: parse_revision_id(id)?,
-            body: Prose::new(revise_body(body.clone(), *stdin, body_file.clone())?)?,
-        },
-        Cmd::Withdraw { id, note } => Command::WithdrawComment {
-            id: parse_comment_id(id)?,
-            note: Prose::new(note.clone())?,
-        },
+        } => {
+            let world = world_of(&destination)?;
+            Command::ReviseComment {
+                id: resolve_comment(&world, id)?,
+                body: Prose::new(revise_body(body.clone(), *stdin, body_file.clone())?)?,
+            }
+        }
+        Cmd::Withdraw { id, note } => {
+            let world = world_of(&destination)?;
+            Command::WithdrawComment {
+                id: resolve_comment(&world, id)?,
+                note: Prose::new(note.clone())?,
+            }
+        }
         Cmd::Artifact { task, path, name } => {
             let id = parse_task_id(task)?;
             let repo_root = match &cli.repo {
@@ -551,6 +620,17 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::Identity => unreachable!("identity dispatches before the destination resolves"),
         Cmd::Serve { .. } => unreachable!("serve dispatches before the destination resolves"),
         Cmd::Clean { id } => return clean_door(cli, &destination, id),
+        Cmd::Migrate { out } => {
+            let source = match &destination {
+                Destination::Local { db } => db.clone(),
+                Destination::Server { .. } => {
+                    return Err(Fail::Usage(
+                        "migrate reads the source file directly; pass --db".into(),
+                    ));
+                }
+            };
+            return migrate_door(cli, &source, out);
+        }
         Cmd::Clone { at, out } => {
             // the reproduction recipe's cursor half: the clone names the
             // world a refused request died against
@@ -840,7 +920,18 @@ fn loadout_of(destination: &Destination) -> Result<saccade::db::Loadout, Fail> {
     }
 }
 
-fn parse_comment_id(token: &str) -> Result<CommentId, Fail> {
+/// The folded world a public-id-bearing command resolves against:
+/// one read before the write; the fold re-validates under its lock.
+fn world_of(destination: &Destination) -> Result<World, Fail> {
+    let loadout = loadout_of(destination)?;
+    match loadout.state {
+        LoadState::Full(world) => Ok(world),
+        LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+    }
+}
+
+/// The comment a public c-N names: dense birth order against the fold.
+fn resolve_comment(world: &World, token: &str) -> Result<CommentId, Fail> {
     let n = token.strip_prefix("c-").ok_or_else(|| {
         let note = token
             .strip_prefix('#')
@@ -854,7 +945,70 @@ fn parse_comment_id(token: &str) -> Result<CommentId, Fail> {
     let n: usize = n
         .parse()
         .map_err(|_| Fail::Usage(format!("'{token}' is not a comment id")))?;
-    Ok(CommentId(RecordId(n)))
+    world.comment_at_num(n).ok_or_else(|| {
+        Fail::Usage(format!(
+            "c-{n} names no comment; this fold holds {} comments, c-0 through c-{}",
+            world.comments.len(),
+            world.comments.len().saturating_sub(1)
+        ))
+    })
+}
+
+/// A comment door's address: t-N homes there bare, c-N homes on that
+/// comment's task and cites it — the reply as an explicit reference.
+fn comment_address(world: &World, token: &str) -> Result<(TaskId, Vec<RecordId>), Fail> {
+    if token.starts_with("c-") {
+        let id = resolve_comment(world, token)?;
+        let home = world.comments[&id].comment.home;
+        return Ok((home, vec![id.0]));
+    }
+    Ok((parse_task_id(token)?, Vec::new()))
+}
+
+/// A citation token to its birth record: c-N a comment, t-N a task,
+/// a bare N any record position the fold holds as a birth.
+fn resolve_ref(world: &World, token: &str) -> Result<RecordId, Fail> {
+    let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    let birth = |rid: RecordId| {
+        world.is_birth(rid).then_some(rid).ok_or_else(|| {
+        Fail::Usage(format!(
+            "'{token}' names no birth record: citations name a task, comment, artifact, or incarnation"
+        ))
+    })
+    };
+    if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
+        let id = resolve_comment(world, token)?;
+        let _ = n;
+        return Ok(id.0);
+    }
+    if token.starts_with("t-") {
+        let id = parse_task_id(token)?;
+        let ctx = world.tasks.get(id.0).ok_or_else(|| {
+            Fail::Usage(format!(
+                "no task t-{}; the fold holds {}",
+                id.0,
+                world.tasks.len()
+            ))
+        })?;
+        return birth(ctx.birth);
+    }
+    if numeric(token) {
+        let rid = RecordId(token.parse().expect("digits checked"));
+        return birth(rid);
+    }
+    Err(Fail::Usage(format!(
+        "'{token}' is not a citation (expected c-<n>, t-<n>, or a bare <seq>)"
+    )))
+}
+
+/// Every marker in the prose must resolve through the mapping.
+fn marker_guard(body: &str, references: usize) -> Result<(), Fail> {
+    match saccade::web::unresolved_marker(body, references) {
+        Some(k) => Err(Fail::Usage(format!(
+            "marker [^{k}] has no reference to resolve; add --ref or cite with the reply target"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Possession fixes the tier: an agent harness sets SACCADE_ACTOR, and
@@ -1751,6 +1905,65 @@ fn render_workspace_reply(
     Ok(out.join("\n"))
 }
 
+/// The migration door: one schema-3 source into a fresh schema-4
+/// tracker, the report naming every renumbering class and every
+/// legacy token left for human review.
+fn migrate_door(
+    cli: &Cli,
+    source: &std::path::Path,
+    out: &std::path::Path,
+) -> Result<String, Fail> {
+    let report = saccade::migrate::migrate(source, out).map_err(|e| Fail::Usage(e.to_string()))?;
+    if cli.json {
+        let legacy: Vec<serde_json::Value> = report
+            .legacy
+            .iter()
+            .map(|l| serde_json::json!({"seq": l.seq, "field": l.field, "token": l.token}))
+            .collect();
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "records": report.records,
+            "requests_became_notes": report.requests_became_notes,
+            "replies_rehomed": report.replies_rehomed,
+            "uses_born_bound": report.uses_born_bound,
+            "comment_refs_renumbered": report.comment_refs_renumbered,
+            "record_refs_rewritten": report.record_refs_rewritten,
+            "ranges_rewritten": report.ranges_rewritten,
+            "incarnation_refs_renumbered": report.incarnation_refs_renumbered,
+            "legacy": legacy,
+            "out": out.display().to_string(),
+        }))
+        .expect("the report is plain data"));
+    }
+    let mut lines = vec![format!(
+        "migrated {} records into {}",
+        report.records,
+        out.display()
+    )];
+    lines.push(format!(
+        "  {} requests became notes · {} replies rehomed · {} uses born bound",
+        report.requests_became_notes, report.replies_rehomed, report.uses_born_bound
+    ));
+    lines.push(format!(
+        "  {} comment refs renumbered · {} record refs as seq · {} ranges · {} incarnation refs",
+        report.comment_refs_renumbered,
+        report.record_refs_rewritten,
+        report.ranges_rewritten,
+        report.incarnation_refs_renumbered
+    ));
+    if report.legacy.is_empty() {
+        lines.push("  no unresolved references".into());
+    } else {
+        lines.push(format!(
+            "  {} unresolved references stay legacy — review each:",
+            report.legacy.len()
+        ));
+        for l in &report.legacy {
+            lines.push(format!("    c-{} {}: {}", l.seq, l.field, l.token));
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
 fn read_only(cli: &Cli, loadout: &db::Loadout) -> Result<String, Fail> {
     let cursor = loadout.rows.last().map(|r| r.seq);
     match &cli.command {
@@ -1828,11 +2041,8 @@ fn wait_door(
     after: u64,
     until: saccade::views::WaitUntil,
 ) -> Result<String, Fail> {
-    let target = parse_target(target)?;
-    if matches!(
-        (target, until),
-        (Target::Comment(_), saccade::views::WaitUntil::Offer)
-    ) {
+    let raw = wait_target(target)?;
+    if matches!(raw, WaitToken::Comment(_)) && until == saccade::views::WaitUntil::Offer {
         return Err(Fail::Usage(
             "--until offer waits on a task (t-<n>); a comment wait is --until activity only".into(),
         ));
@@ -1842,6 +2052,18 @@ fn wait_door(
         let world = match loadout.state {
             LoadState::Full(world) => world,
             LoadState::Degraded(reason) => return Err(Fail::Degraded(reason)),
+        };
+        // the public number resolves against the fold being polled
+        let target = match &raw {
+            WaitToken::Task(id) => Target::Task(*id),
+            WaitToken::Comment(n) => {
+                Target::Comment(world.comment_at_num(*n).ok_or_else(|| {
+                    Fail::Usage(format!(
+                        "c-{n} names no comment; this fold holds {} comments",
+                        world.comments.len()
+                    ))
+                })?)
+            }
         };
         wait_target_exists(&world, &target, loadout.rows.len())?;
         let matched: Vec<StoredRecord> = loadout
@@ -1864,6 +2086,30 @@ fn wait_door(
         }
         std::thread::sleep(WAIT_POLL);
     }
+}
+
+#[derive(Debug)]
+enum WaitToken {
+    Task(TaskId),
+    Comment(usize),
+}
+
+/// The wait door's raw token: t-N as itself, c-N as the public number
+/// the fold resolves per poll.
+fn wait_target(token: &str) -> Result<WaitToken, Fail> {
+    let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
+        let _ = n;
+        return Ok(WaitToken::Comment(
+            token[2..].parse().expect("digits checked"),
+        ));
+    }
+    if token.starts_with('#') {
+        return Err(Fail::Usage(format!(
+            "'{token}' is not a wait target; drop the '#': tasks are t-<n>, comments c-<n>"
+        )));
+    }
+    Ok(WaitToken::Task(parse_task_id(token)?))
 }
 
 fn wait_target_exists(world: &saccade::World, target: &Target, records: usize) -> Result<(), Fail> {
@@ -1950,39 +2196,6 @@ fn hashed_task_note(token: &str) -> String {
     }
 }
 
-fn parse_target(token: &str) -> Result<Target, Fail> {
-    let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
-        return Ok(Target::Comment(CommentId(RecordId(
-            n.parse().expect("digits checked"),
-        ))));
-    }
-    if let Some(rest) = token.strip_prefix('#') {
-        let note = if numeric(rest) {
-            format!("; drop the '#': the comment is addressed as c-{rest}")
-        } else {
-            hashed_record_note(rest)
-        };
-        return Err(Fail::Usage(format!(
-            "'{token}' is not a comment id (expected c-<seq>){note}"
-        )));
-    }
-    Ok(Target::Task(parse_task_id(token)?))
-}
-
-/// The hashed-token faces taught at the comment door: a hashed task id
-/// wants the bare thread, a hashed c-N wants the bare record.
-fn hashed_record_note(rest: &str) -> String {
-    let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    if let Some(n) = rest.strip_prefix("t-").filter(|n| numeric(n)) {
-        return format!("; drop the '#': the thread is addressed as t-{n}");
-    }
-    if let Some(n) = rest.strip_prefix("c-").filter(|n| numeric(n)) {
-        return format!("; drop the '#': the comment is addressed as c-{n}");
-    }
-    String::new()
-}
-
 /// The revise door's body sources: the argument, the pipe, or the file
 /// — one of the three, the bytes landing verbatim.
 fn revise_body(body: Option<String>, stdin: bool, file: Option<PathBuf>) -> Result<String, Fail> {
@@ -1998,25 +2211,6 @@ fn revise_body(body: Option<String>, stdin: bool, file: Option<PathBuf>) -> Resu
             .map_err(|e| Fail::Usage(format!("cannot read {}: {e}", path.display())));
     }
     body.ok_or_else(|| Fail::Usage("the body comes by argument, --stdin, or --body-file".into()))
-}
-
-/// The 'c-<seq>' face the revise door takes; the retired '#' prefix
-/// learns its replacement.
-fn parse_revision_id(token: &str) -> Result<CommentId, Fail> {
-    let rest = token.strip_prefix("c-").ok_or_else(|| {
-        let note = token
-            .strip_prefix('#')
-            .filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
-            .map(|d| format!("; drop the '#': the comment is addressed as c-{d}"))
-            .unwrap_or_default();
-        Fail::Usage(format!(
-            "'{token}' is not a comment id (expected c-<seq>){note}"
-        ))
-    })?;
-    let n: usize = rest
-        .parse()
-        .map_err(|_| Fail::Usage(format!("'{token}' is not a comment id")))?;
-    Ok(CommentId(RecordId(n)))
 }
 
 /// The reference a create reply names: the task whose birth record just
@@ -2151,8 +2345,6 @@ fn render_tasks(cli: &Cli, world: &World, cursor: Option<usize>) -> String {
 
 const WIDTH: usize = 80;
 /// The thread header's indent ceiling: deep chains stop marching right.
-const HEADER_INDENT_CAP: usize = 4;
-
 /// The inspector dock as text: everything about the one thing. The
 /// thread renders the addressed forest — items in first-record order,
 /// replies carrying their target chip, prose at one constant margin.
@@ -2184,12 +2376,6 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
         out.push(String::new());
         match item {
             ThreadItem::Note(line) => out.extend(comment_block(line, false)),
-            ThreadItem::Group { root, replies } => {
-                out.extend(comment_block(root, false));
-                for line in replies {
-                    out.extend(comment_block(line, false));
-                }
-            }
             ThreadItem::Artifacts(lines) => {
                 for line in lines {
                     out.extend(artifact_block(line));
@@ -2203,26 +2389,30 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
 /// An artifact's body format: the pointer line — name and short hash.
 fn artifact_block(line: &ArtifactLine) -> Vec<String> {
     vec![
-        format!("c-{}  artifact", line.seq),
+        format!("seq {}  artifact", line.seq),
         format!("  {} · {}", line.name, line.short_hash()),
     ]
 }
 
 /// A thread view's body format for one comment: its header line —
-/// indent capped by depth, a reply's target chip naming the comment
-/// it addresses, a use's chip naming the offer it relies on — the
-/// wrapped prose at a constant margin. A withdrawn note renders its
-/// tombstone, the body only when revealed.
+/// the public number, the citation chips naming what its mapping
+/// cites, a use's chips naming its source task and bound selection —
+/// the wrapped prose at a constant margin. A withdrawn note renders
+/// its tombstone, the body only when revealed.
 fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
-    let indent = "  ".repeat(line.depth.saturating_sub(1).min(HEADER_INDENT_CAP));
-    let chip = match line.target {
-        Target::Comment(parent) => format!("→c-{}  ", parent.0.0),
-        Target::Task(_) => String::new(),
-    };
+    let chips: String = line
+        .references
+        .iter()
+        .map(|target| format!("→{}  ", ref_str(target)))
+        .collect();
     let uses = line
-        .offer
-        .filter(|_| line.kind == "use")
-        .map(|o| format!("  uses c-{o}"))
+        .source
+        .map(|t| format!("  uses t-{}", t.0))
+        .unwrap_or_default();
+    let bound = line
+        .binding
+        .as_ref()
+        .map(|b| format!("  bound c-{}", b.offer))
         .unwrap_or_default();
     // the withdrawal is terminal, so its mark replaces the revised one:
     // the body is gone, its provenance mark would narrate absence —
@@ -2245,9 +2435,17 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
         format!("  ({mark})")
     };
     let mut out = vec![format!(
-        "{indent}c-{}  {chip}{} [{}]{}{state}",
-        line.seq, line.actor, line.kind, uses
+        "  c-{}  {chips}{} [{}]{}{bound}{state}",
+        line.num, line.actor, line.kind, uses
     )];
+    if let Some(binding) = &line.binding {
+        out.push(wrap(
+            &format!("bound c-{} · {}", binding.offer, binding.grounds),
+            WIDTH,
+            "    ",
+            "    ",
+        ));
+    }
     if line.withdrawn {
         // the tombstone: one line, the note
         let note = line.withdrawal_note.as_deref().unwrap_or_default();
@@ -2263,13 +2461,23 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
     out
 }
 
+/// A citation target's public name.
+fn ref_str(target: &saccade::views::RefTarget) -> String {
+    match target {
+        saccade::views::RefTarget::Comment { num, .. } => format!("c-{num}"),
+        saccade::views::RefTarget::Task { task } => format!("t-{task}"),
+        saccade::views::RefTarget::Incarnation { num, .. } => format!("i-{num}"),
+        saccade::views::RefTarget::Artifact { seq, .. } => format!("seq {seq}"),
+    }
+}
+
 /// One id as show sees it: a whole thread, a record's folded form,
 /// or the raw event at a bare position.
 #[derive(Clone, Copy, Debug)]
 enum ShowId {
     Thread(TaskId),
-    /// c-<seq>: the presentation the record's kind earns
-    Record(CommentId),
+    /// c-<n>: the presentation the comment earns, by public number
+    Record(usize),
     /// bare <seq>: the raw event at that position
     Position(RecordId),
 }
@@ -2278,14 +2486,12 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
     let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
     if let Some(rest) = token.strip_prefix('#').filter(|n| numeric(n)) {
         return Err(Fail::Usage(format!(
-            "'{token}' is not an id (expected c-<seq>, t-<n>, or a bare <seq>); \
+            "'{token}' is not an id (expected c-<n>, t-<n>, or a bare <seq>); \
              drop the '#': the record is addressed as c-{rest}"
         )));
     }
     if let Some(rest) = token.strip_prefix("c-").filter(|n| numeric(n)) {
-        return Ok(ShowId::Record(CommentId(RecordId(
-            rest.parse().expect("digits checked"),
-        ))));
+        return Ok(ShowId::Record(rest.parse().expect("digits checked")));
     }
     if token.starts_with("t-") {
         return Ok(ShowId::Thread(parse_task_id(token)?));
@@ -2296,7 +2502,7 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
         )));
     }
     Err(Fail::Usage(format!(
-        "'{token}' is not an id (expected c-<seq>, t-<n>, or a bare <seq>)"
+        "'{token}' is not an id (expected c-<n>, t-<n>, or a bare <seq>)"
     )))
 }
 
@@ -2320,28 +2526,17 @@ fn render_id(
     };
     match parse_show_id(token)? {
         ShowId::Thread(id) => render_show(world, id),
-        ShowId::Record(id) => {
-            if let Some(line) = comment_line(world, id) {
-                return Ok(comment_block(&line, withdrawn_bodies).join("\n"));
-            }
-            if let Some(line) = artifact_line(world, id.0) {
-                return Ok(artifact_block(&line).join("\n"));
-            }
-            if let Some(task) = world.task_born_at(id.0) {
-                let ctx = &world.tasks[task.0];
-                return Ok(format!(
-                    "c-{}  task  {}\nbirth of t-{}",
-                    ctx.birth.0,
-                    ctx.birth_actor.as_str(),
-                    task.0
-                ));
-            }
-            // the typed door still opens any record the log holds:
-            // the event itself, header and payload
-            if let Some(row) = rows.get(id.0.0) {
-                return Ok(raw_event(row));
-            }
-            Err(no_record(token))
+        ShowId::Record(num) => {
+            let id = world.comment_at_num(num).ok_or_else(|| {
+                Fail::Usage(format!(
+                    "c-{num} names no comment; this fold holds {} comments, c-0 through c-{}",
+                    world.comments.len(),
+                    world.comments.len().saturating_sub(1)
+                ))
+            })?;
+            let line = comment_line(world, id)
+                .ok_or_else(|| Fail::Usage(format!("c-{num} folds into no comment")))?;
+            Ok(comment_block(&line, withdrawn_bodies).join("\n"))
         }
         ShowId::Position(id) => match rows.get(id.0) {
             Some(row) => Ok(raw_event(row)),
@@ -2369,10 +2564,6 @@ fn show_value(
                 .iter()
                 .flat_map(|item| match item {
                     ThreadItem::Note(line) => vec![comment_value(line, false)],
-                    ThreadItem::Group { root, replies } => std::iter::once(root)
-                        .chain(replies.iter())
-                        .map(|line| comment_value(line, false))
-                        .collect::<Vec<_>>(),
                     ThreadItem::Artifacts(lines) => {
                         lines.iter().map(artifact_value).collect::<Vec<_>>()
                     }
@@ -2388,32 +2579,17 @@ fn show_value(
                 "entries": entries,
             }))
         }
-        ShowId::Record(id) => {
-            if let Some(line) = comment_line(world, id) {
-                return Ok(comment_value(&line, withdrawn_bodies));
-            }
-            if let Some(line) = artifact_line(world, id.0) {
-                return Ok(artifact_value(&line));
-            }
-            if let Some(task) = world.task_born_at(id.0) {
-                let ctx = &world.tasks[task.0];
-                return Ok(serde_json::json!({
-                    "kind": "task",
-                    "seq": id.0.0,
-                    "actor": ctx.birth_actor.as_str(),
-                    "task": format!("t-{}", task.0),
-                }));
-            }
-            // the raw-id door's machine face: the log row's own grammar
-            if let Some(row) = rows.get(id.0.0) {
-                return Ok(serde_json::to_value(row).expect("records are plain data"));
-            }
-            Err(Fail::Usage(format!(
-                "no record c-{}; the log holds {} records, c-0 through c-{}",
-                id.0.0,
-                rows.len(),
-                rows.len().saturating_sub(1)
-            )))
+        ShowId::Record(num) => {
+            let id = world.comment_at_num(num).ok_or_else(|| {
+                Fail::Usage(format!(
+                    "c-{num} names no comment; this fold holds {} comments, c-0 through c-{}",
+                    world.comments.len(),
+                    world.comments.len().saturating_sub(1)
+                ))
+            })?;
+            let line = comment_line(world, id)
+                .ok_or_else(|| Fail::Usage(format!("c-{num} folds into no comment")))?;
+            Ok(comment_value(&line, withdrawn_bodies))
         }
         ShowId::Position(id) => match rows.get(id.0) {
             Some(row) => Ok(serde_json::to_value(row).expect("records are plain data")),
@@ -2439,10 +2615,16 @@ fn comment_value(line: &CommentLine, reveal: bool) -> serde_json::Value {
     };
     serde_json::json!({
         "kind": line.kind,
+        "num": line.num,
         "seq": line.seq,
-        "target": serde_json::to_value(line.target).expect("targets are plain data"),
+        "home": format!("t-{}", line.home.0),
         "offer": line.offer,
-        "depth": line.depth,
+        "source": line.source.map(|t| format!("t-{}", t.0)),
+        "binding": line.binding.as_ref().map(|b| serde_json::json!({
+            "offer": b.offer,
+            "grounds": b.grounds,
+        })),
+        "references": line.references.iter().map(ref_str).collect::<Vec<_>>(),
         "actor": line.actor,
         "tier": line.tier,
         "body": body,
@@ -2627,17 +2809,17 @@ fn render_search(
 /// The anchor query names one record: c-N itself, or t-N's birth.
 fn anchor_seq(loadout: &db::Loadout, query: &SearchQuery) -> Result<usize, Fail> {
     match query.terms.as_slice() {
-        [Term::Comment(id)] => {
-            if id.0 >= loadout.rows.len() {
-                return Err(Fail::Usage(format!(
-                    "no record c-{}; the log holds {} records, 0 through {}",
-                    id.0,
-                    loadout.rows.len(),
-                    loadout.rows.len().saturating_sub(1)
-                )));
+        [Term::Comment(num)] => match &loadout.state {
+            LoadState::Full(world) => {
+                world.comment_at_num(*num).map(|id| id.0.0).ok_or_else(|| {
+                    Fail::Usage(format!(
+                        "c-{num} names no comment; this fold holds {} comments",
+                        world.comments.len()
+                    ))
+                })
             }
-            Ok(id.0)
-        }
+            LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
+        },
         [Term::Task(id)] => match &loadout.state {
             LoadState::Full(world) => {
                 world.tasks.get(id.0).map(|ctx| ctx.birth.0).ok_or_else(|| {
@@ -2891,9 +3073,8 @@ mod test {
         assert_eq!(line, "'fix the '\\''flake'\\'' and $PATH' --flag ''");
     }
 
-    /// Hashed tokens learn their bare doors at the parse door: a hashed
-    /// task id wants the bare thread, a hashed record id wants the
-    /// bare c-N.
+    /// Hashed tokens learn their bare doors at the parse doors: the
+    /// wait target and the comment resolution both teach the bare form.
     #[test]
     fn hashed_tokens_learn_their_bare_doors() {
         let refused = parse_task_id("#t-3")
@@ -2905,59 +3086,33 @@ mod test {
              drop the '#': the task is addressed as t-3"
         );
 
-        let refused = parse_target("#t-3").map_err(|f| f.to_string()).unwrap_err();
+        let refused = wait_target("#t-3").map_err(|f| f.to_string()).unwrap_err();
         assert_eq!(
             refused,
-            "'#t-3' is not a comment id (expected c-<seq>); \
-             drop the '#': the thread is addressed as t-3"
+            "'#t-3' is not a wait target; drop the '#': tasks are t-<n>, comments c-<n>"
         );
 
-        let refused = parse_target("#c-7").map_err(|f| f.to_string()).unwrap_err();
-        assert_eq!(
-            refused,
-            "'#c-7' is not a comment id (expected c-<seq>); \
-             drop the '#': the comment is addressed as c-7"
-        );
+        let refused = wait_target("t-3").unwrap_or_else(|f| panic!("{f}"));
+        assert!(matches!(refused, WaitToken::Task(TaskId(3))));
+        assert!(matches!(wait_target("c-7").unwrap(), WaitToken::Comment(7)));
 
-        let refused = parse_target("#7").map_err(|f| f.to_string()).unwrap_err();
-        assert_eq!(
-            refused,
-            "'#7' is not a comment id (expected c-<seq>); \
-             drop the '#': the comment is addressed as c-7"
-        );
-
-        assert_eq!(
-            parse_task_id("t-3").unwrap_or_else(|f| panic!("{f}")),
-            TaskId(3)
-        );
-        assert_eq!(
-            parse_target("c-7").unwrap_or_else(|f| panic!("{f}")),
-            Target::Comment(CommentId(RecordId(7)))
-        );
-        assert_eq!(
-            parse_comment_id("c-7").unwrap_or_else(|f| panic!("{f}")),
-            CommentId(RecordId(7))
-        );
-
-        // the revise door takes the c- face; the retired '#' learns it
-        let refused = parse_revision_id("#7")
+        // the comment door teaches against a fold: c-7 with three
+        // comments names none of them
+        let world = World::new();
+        let refused = resolve_comment(&world, "c-7")
             .map_err(|f| f.to_string())
             .unwrap_err();
         assert_eq!(
             refused,
-            "'#7' is not a comment id (expected c-<seq>); \
-             drop the '#': the comment is addressed as c-7"
+            "c-7 names no comment; this fold holds 0 comments, c-0 through c-0"
         );
-        assert_eq!(
-            parse_revision_id("c-7").unwrap_or_else(|f| panic!("{f}")),
-            CommentId(RecordId(7))
-        );
+        assert!(resolve_comment(&world, "c-x").is_err());
 
         // the show door: typed ids, the bare position, and the retired
         // '#' learns the c- form
         assert!(matches!(
             parse_show_id("c-7").unwrap_or_else(|f| panic!("{f}")),
-            ShowId::Record(CommentId(RecordId(7)))
+            ShowId::Record(7)
         ));
         assert!(matches!(
             parse_show_id("7").unwrap_or_else(|f| panic!("{f}")),
@@ -2970,7 +3125,7 @@ mod test {
         let refused = parse_show_id("#7").map_err(|f| f.to_string()).unwrap_err();
         assert_eq!(
             refused,
-            "'#7' is not an id (expected c-<seq>, t-<n>, or a bare <seq>); \
+            "'#7' is not an id (expected c-<n>, t-<n>, or a bare <seq>); \
              drop the '#': the record is addressed as c-7"
         );
     }

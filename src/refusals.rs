@@ -4,10 +4,9 @@
 //! stay the wire's vocabulary, the teaching rides as prose.
 
 use crate::objects::comment::CommentKind;
-use crate::objects::comment::Target;
 use crate::objects::task::TaskContext;
 use crate::store::World;
-use crate::{Command, Reject, TaskId};
+use crate::{Command, CommentId, Reject, TaskId};
 
 /// What the refusal should have said: the id space's grammar and
 /// the target the asker probably meant. None when the world has
@@ -30,85 +29,114 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             let seq = command_comment(command)?;
             if let Some(i) = world.tasks.iter().position(|ctx| ctx.birth == seq.0) {
                 return Some(format!(
-                    "c-{seq} is the birth record of task t-{i}; address its thread as t-{i}",
-                    seq = seq.0.0
+                    "that record is the birth of task t-{i}; address its thread as t-{i}"
                 ));
             }
             Some(format!(
-                "c-{seq} names no comment; a reply addresses a comment record as c-<seq>, a task's thread as t-<n>",
-                seq = seq.0.0
+                "that record names no comment; this fold holds {} comments, c-0 through c-{}",
+                world.comments.len(),
+                world.comments.len().saturating_sub(1)
             ))
         }
         Reject::NotAnOffer => {
             let offer = command_offer(command)?;
             let ctx = world.comments.get(&offer)?;
             Some(format!(
-                "c-{} is a {}, not an offer; accept, reject, and use address an offer",
-                offer.0 .0,
+                "c-{} is a {}, not an offer; accept, reject, and a binding address an offer",
+                num_of(world, offer),
                 crate::views::kind_of(&ctx.comment.kind)
             ))
         }
         Reject::NotCurrentOffer => {
             let offer = command_offer(command)?;
             let ctx = world.comments.get(&offer)?;
-            let task = &world.tasks[ctx.comment.root.0];
-            let what = if matches!(command, Command::Comment { kind: CommentKind::Use { .. }, .. }) {
-                "a use names the source task's standing Offered or Concluded account"
-            } else {
-                "stale decisions cannot move the task"
+            let task = &world.tasks[ctx.comment.home.0];
+            let what = match command {
+                Command::BindUse { .. } => {
+                    "a binding names the source task's standing Offered or Concluded account"
+                }
+                Command::Comment {
+                    kind: CommentKind::Use { .. },
+                    ..
+                } => "a use names its source task; its binding names that task's account",
+                _ => "stale decisions cannot move the task",
             };
             match task.current_offer {
                 Some(current) => Some(format!(
                     "c-{} is no longer current on t-{}; the standing offer is c-{} — {what}",
-                    offer.0 .0,
-                    ctx.comment.root.0,
-                    current.0 .0
+                    num_of(world, offer),
+                    ctx.comment.home.0,
+                    num_of(world, current)
                 )),
                 None => Some(format!(
                     "c-{} was superseded: t-{} holds no standing offer — to replace an account, reject it while it stands, then offer anew",
-                    offer.0 .0,
-                    ctx.comment.root.0
+                    num_of(world, offer),
+                    ctx.comment.home.0
                 )),
             }
         }
         Reject::SelfReliance => Some(
-            "a task cannot rely on its own conclusion: use names another internal task's account".into(),
+            "a task cannot rely on its own conclusion: use names another internal task".into(),
         ),
         Reject::SelfAcceptance => {
             let offer = command_offer(command)?;
             let ctx = world.comments.get(&offer)?;
             Some(format!(
                 "the declared task scope covers t-{}: a task-bound producer cannot accept its own conclusion — acceptance is an outside consumer's act",
-                ctx.comment.root.0
+                ctx.comment.home.0
             ))
         }
         Reject::InvalidIncarnationId => {
             Some("no incarnation the record birthed carries that reference; a claim names one by its birth record (i-N), never by task scope alone".into())
         }
+        Reject::InvalidReference => {
+            Some("a citation names an earlier birth record of this log: a task, a comment, an artifact, or an incarnation".into())
+        }
         Reject::InvalidStateTransition => match command {
-            Command::Comment { kind, target } => match kind {
+            Command::Comment { kind, home, .. } => match kind {
                 crate::CommentKind::Offer { .. } => {
-                    let Target::Task(id) = target else {
-                        return None;
-                    };
-                    need(world, *id, "an offer needs an open task and addresses the whole task")
+                    need(world, *home, "an offer needs an open task and homes on it")
                 }
                 crate::CommentKind::Accept { .. } | crate::CommentKind::Reject { .. } => {
                     let offer = command_offer(command)?;
                     let ctx = world.comments.get(&offer)?;
-                    need(
-                        world,
-                        ctx.comment.root,
-                        match kind {
-                            crate::CommentKind::Accept { .. } => {
-                                "an accept needs a task standing offered on that offer"
-                            }
-                            _ => "a reject needs a task standing offered on that offer",
-                        },
-                    )
+                    match ctx.comment.home == *home {
+                        false => Some(format!(
+                            "the decision homes on t-{}, but its offer stands on t-{}; a decision lives on the task of the offer it names",
+                            home.0,
+                            ctx.comment.home.0
+                        )),
+                        true => need(
+                            world,
+                            ctx.comment.home,
+                            match kind {
+                                crate::CommentKind::Accept { .. } => {
+                                    "an accept needs a task standing offered on that offer"
+                                }
+                                _ => "a reject needs a task standing offered on that offer",
+                            },
+                        ),
+                    }
                 }
+                crate::CommentKind::Use { source, .. } => match source == home {
+                    true => None,
+                    false => need(world, *home, "a use homes on its consuming task"),
+                },
                 _ => None,
             },
+            Command::BindUse { id, offer, .. } => {
+                let use_ctx = world.comments.get(id)?;
+                let offer_ctx = world.comments.get(offer)?;
+                match use_ctx.comment.kind.source() {
+                    Some(source) if offer_ctx.comment.home != source => Some(format!(
+                        "c-{} stands on t-{}, but the use declared t-{} as its source; a binding selects from the source task alone",
+                        num_of(world, *offer),
+                        offer_ctx.comment.home.0,
+                        source.0
+                    )),
+                    _ => None,
+                }
+            }
             Command::CancelTask { id, .. } => {
                 need(world, *id, "a cancellation stops an open or offered task")
             }
@@ -120,12 +148,12 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 if ctx.withdrawn.is_some() {
                     Some(format!(
                         "c-{} is withdrawn; the door is terminal — a reached conclusion is a new deposit",
-                        id.0 .0
+                        num_of(world, *id)
                     ))
                 } else {
                     Some(format!(
                         "c-{} is a {}; withdrawal repairs a note deposit — the other variants keep their verdicts",
-                        id.0 .0,
+                        num_of(world, *id),
                         crate::views::kind_of(&ctx.comment.kind)
                     ))
                 }
@@ -135,13 +163,13 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 if ctx.withdrawn.is_some() {
                     return Some(format!(
                         "c-{} is withdrawn; the door is terminal — a reached conclusion is a new deposit",
-                        id.0 .0
+                        num_of(world, *id)
                     ));
                 }
                 (ctx.comment.kind.prose().is_none()).then(|| {
                     format!(
                         "c-{} is an accept: bodyless by law, no prose to repair",
-                        id.0 .0
+                        num_of(world, *id)
                     )
                 })
             }
@@ -149,6 +177,15 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
         },
         _ => None,
     }
+}
+
+/// The comment's public number for teaching text; a birth the fold
+/// does not hold renders the raw position it named.
+fn num_of(world: &World, id: CommentId) -> String {
+    world
+        .comment_num(id)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| format!("? (record {})", id.0.0))
 }
 
 /// The task a refusal names, when the command carries one — every
@@ -161,15 +198,9 @@ fn command_task(world: &World, command: &Command) -> Option<TaskId> {
         | Command::ReopenTask { id, .. }
         | Command::EstablishWorkspace { task_id: id, .. }
         | Command::CheckpointWorkspace { task_id: id, .. } => Some(*id),
-        Command::Comment {
-            target: Target::Task(id),
-            ..
-        } => Some(*id),
-        // a decision's task lives where its offer does
-        Command::Comment { kind, .. } => {
-            let offer = kind.offer()?;
-            world.comments.get(&offer).map(|c| c.comment.root)
-        }
+        Command::Comment { home, .. } => Some(*home),
+        // a binding's task lives where the use homes
+        Command::BindUse { id, .. } => world.comments.get(id).map(|c| c.comment.home),
         _ => None,
     }
 }
@@ -178,6 +209,7 @@ fn command_task(world: &World, command: &Command) -> Option<TaskId> {
 fn command_offer(command: &Command) -> Option<crate::CommentId> {
     match command {
         Command::Comment { kind, .. } => kind.offer(),
+        Command::BindUse { offer, .. } => Some(*offer),
         _ => None,
     }
 }
@@ -185,11 +217,10 @@ fn command_offer(command: &Command) -> Option<crate::CommentId> {
 /// The comment a command addresses, when the refusal is about one.
 fn command_comment(command: &Command) -> Option<crate::CommentId> {
     match command {
-        Command::Comment {
-            target: Target::Comment(cid),
-            ..
-        } => Some(*cid),
-        Command::ReviseComment { id, .. } | Command::WithdrawComment { id, .. } => Some(*id),
+        Command::Comment { kind, .. } => kind.offer(),
+        Command::ReviseComment { id, .. }
+        | Command::WithdrawComment { id, .. }
+        | Command::BindUse { id, .. } => Some(*id),
         _ => None,
     }
 }

@@ -6,7 +6,7 @@ use crate::Reject;
 use crate::decide::{decide, enforce_tier};
 use crate::events::{Command, Event};
 use crate::objects::comment::{
-    Comment, CommentContext, CommentId, CommentKind, CommentState, Revision, Target, Withdrawal,
+    Binding, Comment, CommentContext, CommentId, CommentKind, CommentState, Revision, Withdrawal,
 };
 use crate::objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
 use crate::objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
@@ -38,6 +38,9 @@ pub enum Reason {
     /// A claim names an incarnation the record never birthed, or one
     /// bound to another task.
     InvalidIncarnationId,
+    /// A citation names a record that is not an earlier birth: stable
+    /// internal references identify birth records.
+    InvalidReference,
     InvalidStateTransition,
     /// The task already holds a workspace: one lineage per task.
     WorkspaceAlreadyExists,
@@ -60,6 +63,7 @@ impl From<Reason> for Reject {
             Reason::SelfReliance => Reject::SelfReliance,
             Reason::SelfAcceptance => Reject::SelfAcceptance,
             Reason::InvalidIncarnationId => Reject::InvalidIncarnationId,
+            Reason::InvalidReference => Reject::InvalidReference,
             Reason::InvalidStateTransition => Reject::InvalidStateTransition,
             Reason::WorkspaceAlreadyExists => Reject::WorkspaceAlreadyExists,
             Reason::WorkspaceMissing => Reject::WorkspaceMissing,
@@ -151,6 +155,42 @@ impl World {
         self.tasks.iter().position(|t| t.birth == birth).map(TaskId)
     }
 
+    /// The comment's public number: its position in comment birth
+    /// order, the number the human-facing c-N carries. Births do not
+    /// carry their own ids; the fold derives them.
+    pub fn comment_num(&self, id: CommentId) -> Option<usize> {
+        self.comments.range(..=id).count().checked_sub(1)
+    }
+
+    /// The comment holding this public number, resolved from the fold.
+    pub fn comment_at_num(&self, n: usize) -> Option<CommentId> {
+        self.comments.keys().nth(n).copied()
+    }
+
+    /// The incarnation's public number: its position in incarnation
+    /// birth order, the number the human-facing i-N carries.
+    pub fn incarnation_num(&self, id: IncarnationId) -> Option<usize> {
+        self.incarnations.range(..=id).count().checked_sub(1)
+    }
+
+    /// The incarnation holding this public number, resolved from the fold.
+    pub fn incarnation_at_num(&self, n: usize) -> Option<IncarnationId> {
+        self.incarnations.keys().nth(n).copied()
+    }
+
+    /// Whether the record position is the birth of something the fold
+    /// holds: a task, a comment, an artifact, or an incarnation.
+    /// Stable internal references identify birth records.
+    pub fn is_birth(&self, rid: RecordId) -> bool {
+        self.comments.contains_key(&CommentId(rid))
+            || self.incarnations.contains_key(&IncarnationId(rid))
+            || self.tasks.iter().any(|ctx| ctx.birth == rid)
+            || self
+                .tasks
+                .iter()
+                .any(|ctx| ctx.artifacts.iter().any(|(r, _)| *r == rid))
+    }
+
     /// Only valid path for world mutation
     pub fn apply(mut self, record: Record) -> Result<Self, FoldError> {
         let at = record.id;
@@ -174,6 +214,28 @@ impl World {
             // machinery holds no whole-task responsibility
             Tier::System => Err(Reason::InvalidStateTransition),
         }
+    }
+
+    /// The eligibility a binding preserves at the moment it lands: the
+    /// offer named is an Offer of the use's declared source task and
+    /// that task's standing Offered or Concluded account. A bound use
+    /// keeps its selection when that offer is later rejected or
+    /// replaced — nothing here follows the source forward.
+    fn check_binding(&self, source: TaskId, offer: CommentId) -> Result<(), Reason> {
+        let offer_ctx = self.comments.get(&offer).ok_or(Reason::InvalidCommentId)?;
+        if !matches!(offer_ctx.comment.kind, CommentKind::Offer { .. }) {
+            return Err(Reason::NotAnOffer);
+        }
+        if offer_ctx.comment.home != source {
+            return Err(Reason::InvalidStateTransition);
+        }
+        let src = self.tasks.get(source.0).ok_or(Reason::InvalidTaskId)?;
+        if src.current_offer != Some(offer)
+            || !matches!(src.task.state, TaskState::Offered | TaskState::Concluded)
+        {
+            return Err(Reason::NotCurrentOffer);
+        }
+        Ok(())
     }
 
     fn apply_record(&mut self, record: Record) -> Result<(), Reason> {
@@ -233,40 +295,32 @@ impl World {
             }
             // Comment events
             Event::Commented {
-                ref target,
+                home,
                 ref kind,
+                ref references,
             } => {
-                let mut up = *target;
-                let root_task_id = loop {
-                    match up {
-                        Target::Task(t) => break t,
-                        Target::Comment(parent) => {
-                            up = self
-                                .comments
-                                .get(&parent)
-                                .ok_or(Reason::InvalidCommentId)?
-                                .comment
-                                .target;
-                        }
+                if self.tasks.get(home.0).is_none() {
+                    return Err(Reason::InvalidTaskId);
+                }
+                // citations name earlier births only: marker k names
+                // references[k-1], and no comment cites itself forward
+                for rid in references {
+                    if rid.0 >= record.id.0 || !self.is_birth(*rid) {
+                        return Err(Reason::InvalidReference);
                     }
-                };
-
+                }
                 match kind {
-                    CommentKind::Note { .. } | CommentKind::Request { .. } => {}
-                    // the broadcast addresses its whole task
-                    CommentKind::Offer { .. } => {
-                        if !matches!(target, Target::Task(_)) {
-                            return Err(Reason::InvalidStateTransition);
-                        }
-                    }
+                    CommentKind::Note { .. }
+                    | CommentKind::Request { .. }
+                    | CommentKind::Offer { .. } => {}
                     CommentKind::Accept { offer } | CommentKind::Reject { offer, .. } => {
-                        // a decision addresses the offer it names
-                        if *target != Target::Comment(*offer) {
-                            return Err(Reason::InvalidStateTransition);
-                        }
+                        // a decision lives on the task of the offer it names
                         let offer_ctx = self.comments.get(offer).ok_or(Reason::InvalidCommentId)?;
                         if !matches!(offer_ctx.comment.kind, CommentKind::Offer { .. }) {
                             return Err(Reason::NotAnOffer);
+                        }
+                        if offer_ctx.comment.home != home {
+                            return Err(Reason::InvalidStateTransition);
                         }
                         if matches!(kind, CommentKind::Accept { .. })
                             && record.context.tier == Tier::Agent
@@ -274,61 +328,48 @@ impl World {
                                 .context
                                 .scope
                                 .as_ref()
-                                .is_some_and(|scope| scope.task == offer_ctx.comment.root)
+                                .is_some_and(|scope| scope.task == offer_ctx.comment.home)
                         {
                             return Err(Reason::SelfAcceptance);
                         }
                         let offered = self
                             .tasks
-                            .get(offer_ctx.comment.root.0)
+                            .get(offer_ctx.comment.home.0)
                             .ok_or(Reason::InvalidTaskId)?;
                         if offered.current_offer != Some(*offer) {
                             return Err(Reason::NotCurrentOffer);
                         }
                     }
-                    CommentKind::Use { offer, .. } => {
-                        let offer_ctx = self.comments.get(offer).ok_or(Reason::InvalidCommentId)?;
-                        if !matches!(offer_ctx.comment.kind, CommentKind::Offer { .. }) {
-                            return Err(Reason::NotAnOffer);
-                        }
-                        let source = offer_ctx.comment.root;
-                        if source == root_task_id {
+                    CommentKind::Use { source, bound, .. } => {
+                        if *source == home {
                             return Err(Reason::SelfReliance);
                         }
-                        let src_ctx = self.tasks.get(source.0).ok_or(Reason::InvalidTaskId)?;
-                        if src_ctx.current_offer != Some(*offer)
-                            || !matches!(
-                                src_ctx.task.state,
-                                TaskState::Offered | TaskState::Concluded
-                            )
-                        {
-                            return Err(Reason::NotCurrentOffer);
+                        if self.tasks.get(source.0).is_none() {
+                            return Err(Reason::InvalidTaskId);
+                        }
+                        // a birth may carry its initial binding — the
+                        // shape a historical log migrates into — under
+                        // the same eligibility a later binding preserves
+                        if let Some(binding) = bound {
+                            self.check_binding(*source, binding.offer)?;
                         }
                     }
                 }
 
-                self.comments.insert(
-                    CommentId(record.id),
-                    CommentContext {
-                        comment: Comment {
-                            target: *target,
-                            kind: kind.clone(),
-                            root: root_task_id,
-                            state: CommentState::of(kind),
-                        },
+                let binding = match kind {
+                    CommentKind::Use {
+                        bound: Some(initial),
+                        ..
+                    } => Some(Binding {
+                        record: record.id,
+                        offer: initial.offer,
+                        grounds: initial.grounds.clone(),
                         actor: record.context.actor.clone(),
-                        tier: record.context.tier,
-                        scope: record.context.scope.clone(),
-                        born_at: record.timestamp,
-                        revised: None,
-                        withdrawn: None,
-                    },
-                );
+                    }),
+                    _ => None,
+                };
 
-                let task_ctx = self
-                    .tasks
-                    .get_mut(root_task_id.0)
-                    .ok_or(Reason::InvalidTaskId)?;
+                let task_ctx = self.tasks.get_mut(home.0).ok_or(Reason::InvalidTaskId)?;
                 if let Some(next) = task_ctx.task.state.transition(&record.event) {
                     task_ctx.task.state = next;
                     task_ctx.last_updated = record.id;
@@ -355,6 +396,25 @@ impl World {
                 }
                 task_ctx.thread.push(CommentId(record.id));
                 task_ctx.last_record_at = record.timestamp;
+
+                self.comments.insert(
+                    CommentId(record.id),
+                    CommentContext {
+                        comment: Comment {
+                            home,
+                            kind: kind.clone(),
+                            state: CommentState::of(kind),
+                        },
+                        actor: record.context.actor.clone(),
+                        tier: record.context.tier,
+                        scope: record.context.scope.clone(),
+                        born_at: record.timestamp,
+                        revised: None,
+                        withdrawn: None,
+                        binding,
+                        references: references.clone(),
+                    },
+                );
             }
             Event::CommentRevised { id, ref body } => {
                 let comment_ctx = self.comments.get_mut(&id).ok_or(Reason::InvalidCommentId)?;
@@ -375,8 +435,8 @@ impl World {
                     record: record.id,
                     reviser: record.context.actor.clone(),
                 });
-                let root = comment_ctx.comment.root;
-                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                let home = comment_ctx.comment.home;
+                let task_ctx = self.tasks.get_mut(home.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_record_at = record.timestamp;
             }
             ref event @ Event::CommentWithdrawn { id, .. } => {
@@ -390,8 +450,36 @@ impl World {
                     record: record.id,
                     withdrawer: record.context.actor.clone(),
                 });
-                let root = comment_ctx.comment.root;
-                let task_ctx = self.tasks.get_mut(root.0).ok_or(Reason::InvalidTaskId)?;
+                let home = comment_ctx.comment.home;
+                let task_ctx = self.tasks.get_mut(home.0).ok_or(Reason::InvalidTaskId)?;
+                task_ctx.last_record_at = record.timestamp;
+            }
+            Event::UseBound {
+                id,
+                offer,
+                ref grounds,
+            } => {
+                let comment_ctx = self.comments.get(&id).ok_or(Reason::InvalidCommentId)?;
+                // binding is the use's door: every other variant holds
+                let CommentKind::Use { source, .. } = &comment_ctx.comment.kind else {
+                    return Err(Reason::InvalidStateTransition);
+                };
+                let source = *source;
+                let home = comment_ctx.comment.home;
+                self.check_binding(source, offer)?;
+                let comment_ctx = self.comments.get_mut(&id).expect("resident above");
+                comment_ctx.comment.state = comment_ctx
+                    .comment
+                    .state
+                    .transition(&record.event)
+                    .ok_or(Reason::InvalidStateTransition)?;
+                comment_ctx.binding = Some(Binding {
+                    record: record.id,
+                    offer,
+                    grounds: grounds.clone(),
+                    actor: record.context.actor.clone(),
+                });
+                let task_ctx = self.tasks.get_mut(home.0).ok_or(Reason::InvalidTaskId)?;
                 task_ctx.last_record_at = record.timestamp;
             }
             Event::ArtifactAdded { root, ref artifact } => {
@@ -518,7 +606,7 @@ pub fn execute(
 mod test {
     use super::*;
     use crate::Event;
-    use crate::objects::comment::{CommentId, CommentKind, CommentState, Target};
+    use crate::objects::comment::{CommentId, CommentKind, CommentState};
     use crate::objects::incarnation::IncarnationId;
     use crate::objects::task::{Owner, TaskId, TaskState};
     use crate::types::actor::ActorName;
@@ -612,42 +700,77 @@ mod test {
         Prose::new(text.into()).unwrap()
     }
 
-    fn offer(id: TaskId, body: &str) -> Command {
+    fn note(home: TaskId, body: &str) -> Command {
         Command::Comment {
-            target: Target::Task(id),
-            kind: CommentKind::Offer { body: prose(body) },
+            home,
+            kind: CommentKind::Note { body: prose(body) },
+            references: Vec::new(),
         }
     }
 
-    fn accept(offer: usize) -> Command {
+    /// A note citing the given births through its markers.
+    fn citing_note(home: TaskId, body: &str, references: Vec<RecordId>) -> Command {
         Command::Comment {
-            target: Target::Comment(CommentId(RecordId(offer))),
+            home,
+            kind: CommentKind::Note { body: prose(body) },
+            references,
+        }
+    }
+
+    fn offer(id: TaskId, body: &str) -> Command {
+        Command::Comment {
+            home: id,
+            kind: CommentKind::Offer { body: prose(body) },
+            references: Vec::new(),
+        }
+    }
+
+    fn accept_on(home: TaskId, offer: usize) -> Command {
+        Command::Comment {
+            home,
             kind: CommentKind::Accept {
                 offer: CommentId(RecordId(offer)),
             },
+            references: Vec::new(),
         }
     }
 
-    fn reject(offer: usize, grounds: &str) -> Command {
+    fn reject_on(home: TaskId, offer: usize, grounds: &str) -> Command {
         Command::Comment {
-            target: Target::Comment(CommentId(RecordId(offer))),
+            home,
             kind: CommentKind::Reject {
                 offer: CommentId(RecordId(offer)),
                 grounds: prose(grounds),
             },
+            references: Vec::new(),
         }
     }
 
-    fn note(target: Target, body: &str) -> Command {
+    fn use_of(home: TaskId, source: TaskId, reason: &str) -> Command {
         Command::Comment {
-            target,
-            kind: CommentKind::Note { body: prose(body) },
+            home,
+            kind: CommentKind::Use {
+                source,
+                reason: prose(reason),
+                bound: None,
+            },
+            references: Vec::new(),
         }
     }
 
-    const RECORD_COUNT: usize = 18;
+    fn bind(id: usize, offer: usize, grounds: &str) -> Command {
+        Command::BindUse {
+            id: CommentId(RecordId(id)),
+            offer: CommentId(RecordId(offer)),
+            grounds: prose(grounds),
+        }
+    }
 
-    /// foo accepted; bar re-offered; floop reopened; a consumer uses foo.
+    const RECORD_COUNT: usize = 27;
+
+    /// foo accepted; bar re-offered and accepted; floop reopened; a
+    /// consumer cites foo, uses foo, and follows bar's rework through a
+    /// replacement conclusion.
     fn populate_log(log: &mut Log) {
         let human_ctx = human();
         let agent_ctx = agent();
@@ -671,7 +794,7 @@ mod test {
         .unwrap();
         log.execute(
             agent_ctx.clone(),
-            note(Target::Task(TaskId(0)), "mid-flight finding parked"),
+            note(TaskId(0), "mid-flight finding parked"),
             2,
         )
         .unwrap();
@@ -681,7 +804,8 @@ mod test {
             3,
         )
         .unwrap();
-        log.execute(human_ctx.clone(), accept(3), 4).unwrap();
+        log.execute(human_ctx.clone(), accept_on(TaskId(0), 3), 4)
+            .unwrap();
 
         log.execute(
             human_ctx.clone(),
@@ -706,15 +830,20 @@ mod test {
             7,
         )
         .unwrap();
-        log.execute(human_ctx.clone(), reject(7, "the edge case still fails"), 8)
-            .unwrap();
+        log.execute(
+            human_ctx.clone(),
+            reject_on(TaskId(1), 7, "the edge case still fails"),
+            8,
+        )
+        .unwrap();
         log.execute(
             agent_ctx.clone(),
             offer(TaskId(1), "edge case held, suite green"),
             9,
         )
         .unwrap();
-        log.execute(human_ctx.clone(), accept(9), 10).unwrap();
+        log.execute(human_ctx.clone(), accept_on(TaskId(1), 9), 10)
+            .unwrap();
 
         log.execute(
             human_ctx.clone(),
@@ -736,10 +865,11 @@ mod test {
         log.execute(
             agent_ctx.clone(),
             Command::Comment {
-                target: Target::Task(TaskId(2)),
+                home: TaskId(2),
                 kind: CommentKind::Request {
                     body: prose("please resume the migration"),
                 },
+                references: Vec::new(),
             },
             13,
         )
@@ -757,7 +887,7 @@ mod test {
         log.execute(
             human_ctx.clone(),
             Command::CreateTask {
-                name: prose("adopt foo's account"),
+                name: prose("adopt the accounts"),
             },
             15,
         )
@@ -771,16 +901,68 @@ mod test {
             16,
         )
         .unwrap();
+        // the prospective use names its source task; the conclusion it
+        // rests on is a separate explicit binding
         log.execute(
             agent_ctx.clone(),
-            Command::Comment {
-                target: Target::Task(TaskId(3)),
-                kind: CommentKind::Use {
-                    offer: CommentId(RecordId(3)),
-                    reason: prose("builds on foo's landed account"),
-                },
-            },
+            use_of(TaskId(3), TaskId(0), "builds on foo's landed account"),
             17,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            bind(17, 3, "foo's accepted account is the one that landed"),
+            18,
+        )
+        .unwrap();
+        // a citation: marker [^1] names foo's account, same target twice
+        log.execute(
+            agent_ctx.clone(),
+            citing_note(
+                TaskId(3),
+                "rests on the conclusion above [^1], again [^1]",
+                vec![RecordId(3)],
+            ),
+            19,
+        )
+        .unwrap();
+
+        log.execute(
+            human_ctx.clone(),
+            Command::CreateTask {
+                name: prose("rewrite bar properly"),
+            },
+            20,
+        )
+        .unwrap();
+        log.execute(agent_ctx.clone(), offer(TaskId(4), "the deeper fix"), 21)
+            .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            use_of(TaskId(3), TaskId(4), "bar's rework is the real foundation"),
+            22,
+        )
+        .unwrap();
+        log.execute(agent_ctx.clone(), bind(22, 21, "the standing account"), 23)
+            .unwrap();
+        // the source replaces its conclusion: the binding keeps it
+        log.execute(
+            human_ctx.clone(),
+            reject_on(TaskId(4), 21, "the fix misses the index"),
+            24,
+        )
+        .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            offer(TaskId(4), "the fix that holds"),
+            25,
+        )
+        .unwrap();
+        // the explicit rebind selects the replacement
+        log.execute(
+            agent_ctx.clone(),
+            bind(22, 25, "the replacement held under review"),
+            26,
         )
         .unwrap();
     }
@@ -850,6 +1032,10 @@ mod test {
         assert!(matches!(
             Reject::from(Reason::InvalidIncarnationId),
             Reject::InvalidIncarnationId
+        ));
+        assert!(matches!(
+            Reject::from(Reason::InvalidReference),
+            Reject::InvalidReference
         ));
         assert!(matches!(
             Reject::from(Reason::InvalidStateTransition),
@@ -939,7 +1125,8 @@ mod test {
         }
     }
 
-    /// The story folds the ratified lifecycle.
+    /// The story folds the ratified lifecycle, including the use's
+    /// prospective birth, explicit binding, and explicit rebinding.
     #[test]
     fn the_story_folds_the_ratified_lifecycle() {
         let mut log = Log::new();
@@ -952,12 +1139,52 @@ mod test {
         assert_eq!(world.tasks[1].current_offer, Some(CommentId(RecordId(9))));
         assert_eq!(world.tasks[2].task.state, TaskState::Open);
         assert_eq!(world.tasks[3].task.state, TaskState::Open);
+        assert_eq!(world.tasks[4].task.state, TaskState::Offered);
         // the reopen cleared the standing pointer
         assert_eq!(world.tasks[2].current_offer, None);
+        assert_eq!(world.tasks[4].current_offer, Some(CommentId(RecordId(25))));
 
         // the create-reply query: births resolve, non-births don't
         assert_eq!(world.task_born_at(RecordId(0)), Some(TaskId(0)));
         assert_eq!(world.task_born_at(RecordId(2)), None);
+
+        // public numbers derive from birth order: the comments in the
+        // story are seq 2,3,4,7,8,9,10,13,17,19,21,22,24,25 — the use
+        // born at 17 is the ninth comment, c-8 to a human
+        assert_eq!(world.comment_at_num(8), Some(CommentId(RecordId(17))));
+        assert_eq!(world.comment_num(CommentId(RecordId(17))), Some(8));
+        assert_eq!(world.comment_at_num(world.comments.len()), None);
+
+        // the use was born prospective, bound to foo's account explicitly
+        let use_ctx = &world.comments[&CommentId(RecordId(17))];
+        assert_eq!(use_ctx.comment.home, TaskId(3));
+        assert_eq!(use_ctx.comment.kind.source(), Some(TaskId(0)));
+        assert_eq!(
+            use_ctx.binding.as_ref().map(|b| (b.offer, b.record)),
+            Some((CommentId(RecordId(3)), RecordId(18)))
+        );
+        assert_eq!(
+            world.comments[&CommentId(RecordId(17))].comment.state,
+            CommentState::UseBound(CommentId(RecordId(3)))
+        );
+
+        // the second use followed bar's rework: replaced, then rebound
+        let rework = &world.comments[&CommentId(RecordId(22))];
+        assert_eq!(
+            rework.binding.as_ref().map(|b| b.offer),
+            Some(CommentId(RecordId(25)))
+        );
+        assert_eq!(
+            rework.binding.as_ref().map(|b| b.record),
+            Some(RecordId(26))
+        );
+
+        // the citation note carries its mapping: one marker, one target
+        let citing = &world.comments[&CommentId(RecordId(19))];
+        assert!(matches!(
+            &citing.comment.kind,
+            CommentKind::Note { body } if body.as_str().contains("[^1]")
+        ));
     }
 
     #[test]
@@ -966,18 +1193,23 @@ mod test {
         populate_log(&mut log);
 
         // t-1's first offer was rejected: neither decision reaches it
-        for command in [accept(7), reject(7, "changed my mind again")] {
+        for command in [
+            accept_on(TaskId(1), 7),
+            reject_on(TaskId(1), 7, "changed my mind again"),
+        ] {
             let refused = log.execute(human(), command, 99);
             assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
         }
-        // a note is not an offer; an offer on another thread is not
-        // this thread's current one
-        let refused = log.execute(human(), accept(2), 99);
+        // a note is not an offer
+        let refused = log.execute(human(), accept_on(TaskId(0), 2), 99);
         assert!(matches!(refused, Err(Reject::NotAnOffer)));
         assert_eq!(log.records().len(), RECORD_COUNT);
 
         // t-0 concluded on c-3: its own current offer no longer moves
-        for command in [accept(3), reject(3, "a fault found later")] {
+        for command in [
+            accept_on(TaskId(0), 3),
+            reject_on(TaskId(0), 3, "a fault found later"),
+        ] {
             let refused = log.execute(human(), command, 99);
             assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
         }
@@ -989,32 +1221,33 @@ mod test {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        // the scoped agent accepts its own task's offer: refused
-        let refused = log.execute(scoped_agent(0), accept(3), 99);
+        // t-4 stands offered on c-25: the scoped producer cannot accept
+        let scoped = scoped_agent(4);
+        let refused = log.execute(scoped.clone(), accept_on(TaskId(4), 25), 99);
         assert!(matches!(refused, Err(Reject::SelfAcceptance)));
 
         // the same agent rejects on grounds: any participant may
-        log.execute(agent(), offer(TaskId(3), "the consumer's account"), 18)
-            .unwrap();
         log.execute(
-            scoped_agent(0),
-            reject(18, "the reason no longer holds"),
-            19,
+            scoped,
+            reject_on(TaskId(4), 25, "the reason no longer holds"),
+            27,
         )
         .unwrap();
-        assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
+        assert_eq!(log.world().tasks[4].task.state, TaskState::Open);
 
         // a scope on another task accepts freely; humans ignore scope
-        log.execute(agent(), offer(TaskId(3), "the second account"), 20)
+        log.execute(agent(), offer(TaskId(4), "the second account"), 28)
             .unwrap();
-        log.execute(scoped_agent(2), accept(20), 21).unwrap();
+        log.execute(scoped_agent(2), accept_on(TaskId(4), 28), 29)
+            .unwrap();
         let mut scoped_human = scoped_agent(3);
         scoped_human.tier = Tier::Human;
-        log.execute(agent(), offer(TaskId(2), "the floop account"), 22)
+        log.execute(agent(), offer(TaskId(2), "the floop account"), 30)
             .unwrap();
-        log.execute(scoped_human, accept(22), 23).unwrap();
+        log.execute(scoped_human, accept_on(TaskId(2), 30), 32)
+            .unwrap();
         assert_eq!(log.world().tasks[2].task.state, TaskState::Concluded);
-        assert_eq!(log.world().tasks[3].task.state, TaskState::Concluded);
+        assert_eq!(log.world().tasks[4].task.state, TaskState::Concluded);
     }
 
     #[test]
@@ -1116,10 +1349,11 @@ mod test {
         log.execute(
             agent(),
             Command::Comment {
-                target: Target::Task(TaskId(3)),
+                home: TaskId(3),
                 kind: CommentKind::Request {
                     body: prose("please resume the adoption"),
                 },
+                references: Vec::new(),
             },
             100,
         )
@@ -1166,75 +1400,297 @@ mod test {
         assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
     }
 
+    /// The use's guards: self-reliance and source existence at birth;
+    /// the binding's eligibility at every selection. A bound use keeps
+    /// its selection when the source replaces its conclusion.
     #[test]
-    fn use_guards_its_source_reference() {
+    fn use_guards_its_source_and_binding() {
         let mut log = Log::new();
         populate_log(&mut log);
 
-        // the story's use names foo's accepted account from t-3's thread
-        let used = &log.world().comments[&CommentId(RecordId(17))];
-        assert_eq!(used.comment.root, TaskId(3));
-        assert!(matches!(used.comment.kind, CommentKind::Use { .. }));
-        assert_eq!(log.world().tasks[3].task.state, TaskState::Open);
-
-        // a non-offer refuses
+        // a use names its own task: refused
         let refused = log.execute(
             agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(3)),
-                kind: CommentKind::Use {
-                    offer: CommentId(RecordId(2)),
-                    reason: prose("that is a note"),
-                },
-            },
+            use_of(TaskId(3), TaskId(3), "relying on myself"),
             99,
         );
-        assert!(matches!(refused, Err(Reject::NotAnOffer)));
+        assert!(matches!(refused, Err(Reject::SelfReliance)));
 
-        // a rejected account is not a standing one
+        // a use names an unborn task: refused
         let refused = log.execute(
             agent(),
-            Command::Comment {
-                target: Target::Task(TaskId(3)),
-                kind: CommentKind::Use {
-                    offer: CommentId(RecordId(7)),
-                    reason: prose("bar's rejected account"),
-                },
-            },
+            use_of(TaskId(3), TaskId(9), "relying on nothing"),
             100,
         );
+        assert!(matches!(refused, Err(Reject::InvalidTaskId)));
+
+        // a binding names a note: not an offer
+        let refused = log.execute(agent(), bind(17, 2, "that is a note"), 101);
+        assert!(matches!(refused, Err(Reject::NotAnOffer)));
+
+        // a binding names another task's offer than the declared source
+        let refused = log.execute(agent(), bind(17, 9, "bar's account is not foo's"), 102);
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+
+        // bar's rejected account stands on a task the use never named
+        let refused = log.execute(agent(), bind(22, 7, "bar's rejected account"), 103);
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+
+        // binding a note is not the use's door
+        let refused = log.execute(agent(), bind(2, 3, "a note binds nothing"), 104);
+        assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+
+        // a binding names an unknown comment
+        let refused = log.execute(agent(), bind(99, 3, "no such use"), 105);
+        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
+
+        // the replaced conclusion: rebinding to it refuses, and the
+        // bound use kept it through the replacement
+        let refused = log.execute(agent(), bind(22, 21, "the account bar replaced"), 106);
+        assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
+        let rework = &log.world().comments[&CommentId(RecordId(22))];
+        assert_eq!(
+            rework.binding.as_ref().map(|b| b.offer),
+            Some(CommentId(RecordId(25)))
+        );
+        assert_eq!(log.records().len(), RECORD_COUNT);
+    }
+
+    /// Source replacement alone leaves the binding; the explicit rebind
+    /// selects the replacement; acceptance never invalidates it.
+    #[test]
+    fn a_bound_use_keeps_its_selection_through_source_replacement() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("consume the rework"),
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("produce the rework"),
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(agent(), offer(TaskId(1), "the first account"), 3)
+            .unwrap();
+        log.execute(
+            agent(),
+            use_of(TaskId(0), TaskId(1), "builds on the rework"),
+            4,
+        )
+        .unwrap();
+
+        // pending: no selection yet
+        assert_eq!(
+            log.world().comments[&CommentId(RecordId(3))].comment.state,
+            CommentState::Use
+        );
+        log.execute(agent(), bind(3, 2, "the standing account"), 5)
+            .unwrap();
+
+        // the source replaces its conclusion: the binding keeps it
+        log.execute(
+            human(),
+            reject_on(TaskId(1), 2, "the fix misses the index"),
+            6,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().comments[&CommentId(RecordId(3))]
+                .binding
+                .as_ref()
+                .map(|b| b.offer),
+            Some(CommentId(RecordId(2)))
+        );
+        // rebinding to the replaced account refuses: not current
+        let refused = log.execute(agent(), bind(3, 2, "gone"), 7);
         assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
 
-        // t-3 stands offered on c-18: a use from its own thread refuses
-        log.execute(agent(), offer(TaskId(3), "the consumer's account"), 18)
+        log.execute(agent(), offer(TaskId(1), "the replacement"), 8)
+            .unwrap();
+        log.execute(agent(), bind(3, 6, "the replacement held under review"), 9)
+            .unwrap();
+        assert_eq!(
+            log.world().comments[&CommentId(RecordId(3))]
+                .binding
+                .as_ref()
+                .map(|b| b.offer),
+            Some(CommentId(RecordId(6)))
+        );
+
+        // acceptance of the selected conclusion changes nothing: no
+        // follow, no cascade
+        log.execute(human(), accept_on(TaskId(1), 6), 10).unwrap();
+        assert_eq!(
+            log.world().comments[&CommentId(RecordId(3))]
+                .binding
+                .as_ref()
+                .map(|b| b.offer),
+            Some(CommentId(RecordId(6)))
+        );
+        assert_eq!(log.world().tasks[0].task.state, TaskState::Open);
+    }
+
+    /// A historical log's born-bound use folds under the eligibility
+    /// the world held at its birth.
+    #[test]
+    fn a_use_may_be_born_already_bound() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("consume foo"),
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("produce foo"),
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(agent(), offer(TaskId(1), "suite green"), 3)
+            .unwrap();
+        log.execute(
+            agent(),
+            Command::Comment {
+                home: TaskId(0),
+                kind: CommentKind::Use {
+                    source: TaskId(1),
+                    reason: prose("builds on foo's account"),
+                    bound: Some(crate::objects::comment::UseBinding {
+                        offer: CommentId(RecordId(2)),
+                        grounds: prose("the account that landed"),
+                    }),
+                },
+                references: Vec::new(),
+            },
+            4,
+        )
+        .unwrap();
+
+        let use_ctx = &log.world().comments[&CommentId(RecordId(3))];
+        assert_eq!(
+            use_ctx.comment.state,
+            CommentState::UseBound(CommentId(RecordId(2)))
+        );
+        assert_eq!(
+            use_ctx.binding.as_ref().map(|b| (b.offer, b.record)),
+            Some((CommentId(RecordId(2)), RecordId(3)))
+        );
+
+        // the same guards read at birth: a born binding to a rejected
+        // account refuses the whole fold
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("consume bar"),
+            },
+            1,
+        )
+        .unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("produce bar"),
+            },
+            2,
+        )
+        .unwrap();
+        log.execute(agent(), offer(TaskId(1), "the account"), 3)
+            .unwrap();
+        log.execute(human(), reject_on(TaskId(1), 2, "not good enough"), 4)
             .unwrap();
         let refused = log.execute(
             agent(),
             Command::Comment {
-                target: Target::Task(TaskId(3)),
+                home: TaskId(0),
                 kind: CommentKind::Use {
-                    offer: CommentId(RecordId(18)),
-                    reason: prose("relying on myself"),
+                    source: TaskId(1),
+                    reason: prose("builds on bar's account"),
+                    bound: Some(crate::objects::comment::UseBinding {
+                        offer: CommentId(RecordId(2)),
+                        grounds: prose("the account that landed"),
+                    }),
                 },
+                references: Vec::new(),
             },
-            101,
+            5,
         );
-        assert!(matches!(refused, Err(Reject::SelfReliance)));
+        assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
+    }
 
-        // a standing Offered account on another task lands
+    /// Citations name earlier births only: marker targets must be
+    /// records the log already holds as births of something.
+    #[test]
+    fn citations_name_earlier_births_only() {
+        let mut log = Log::new();
+        populate_log(&mut log);
+
+        // a comment birth, a task birth, and an artifact birth all cite
+        let artifact = Artifact {
+            name: prose("sweep figure"),
+            hash: ContentHash::of(b"figure bytes"),
+        };
         log.execute(
-            human(),
-            Command::Comment {
-                target: Target::Task(TaskId(2)),
-                kind: CommentKind::Use {
-                    offer: CommentId(RecordId(18)),
-                    reason: prose("floop builds on the consumer's account"),
-                },
+            agent(),
+            Command::Artifact {
+                root: TaskId(3),
+                artifact: artifact.clone(),
             },
-            102,
+            27,
         )
         .unwrap();
-        assert_eq!(log.records().len(), RECORD_COUNT + 2);
+        let artifact_seq = log.records().len() - 1;
+        log.execute(
+            agent(),
+            citing_note(
+                TaskId(3),
+                "foo's account [^1], the task itself [^2], the figure [^3]",
+                vec![RecordId(3), RecordId(0), RecordId(artifact_seq)],
+            ),
+            28,
+        )
+        .unwrap();
+
+        // a revision record is not a birth
+        log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(2)),
+                body: prose("mid-flight finding parked, corrected"),
+            },
+            29,
+        )
+        .unwrap();
+        let revision_seq = log.records().len() - 1;
+        let refused = log.execute(
+            agent(),
+            citing_note(TaskId(3), "the revision [^1]", vec![RecordId(revision_seq)]),
+            30,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidReference)));
+
+        // a claim record and a binding record are not births
+        for target in [RecordId(1), RecordId(18), RecordId(999)] {
+            let refused = log.execute(
+                agent(),
+                citing_note(TaskId(3), "out of reach [^1]", vec![target]),
+                31,
+            );
+            assert!(matches!(refused, Err(Reject::InvalidReference)));
+        }
+        assert_eq!(log.records().len(), RECORD_COUNT + 3);
     }
 
     #[test]
@@ -1260,7 +1716,7 @@ mod test {
         assert_eq!(
             ctx.revised,
             Some(Revision {
-                record: RecordId(18),
+                record: RecordId(RECORD_COUNT),
                 reviser: agent().actor,
             })
         );
@@ -1286,7 +1742,28 @@ mod test {
             101,
         );
         assert!(matches!(refused, Err(Reject::InvalidCommentId)));
-        assert_eq!(log.records().len(), RECORD_COUNT + 1);
+
+        // a revision never retargets references: the citing note's
+        // mapping survives its own repair untouched
+        log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(19)),
+                body: prose("rests on the conclusion above, reworded [^1]"),
+            },
+            102,
+        )
+        .unwrap();
+        let birth = log
+            .records()
+            .iter()
+            .find(|r| matches!(r.event, Event::Commented { .. } if r.id == RecordId(19)))
+            .expect("the birth stands in the log");
+        match &birth.event {
+            Event::Commented { references, .. } => assert_eq!(*references, vec![RecordId(3)]),
+            other => panic!("the birth keeps its shape: {other:?}"),
+        }
+        assert_eq!(log.records().len(), RECORD_COUNT + 2);
     }
 
     #[test]
@@ -1309,7 +1786,7 @@ mod test {
         assert_eq!(
             ctx.withdrawn,
             Some(Withdrawal {
-                record: RecordId(18),
+                record: RecordId(RECORD_COUNT),
                 withdrawer: human().actor,
             })
         );
@@ -1334,8 +1811,8 @@ mod test {
         }
 
         // the variants keep their verdicts: the offer, the accept, the
-        // reject, and the use all refuse the door
-        for id in [3usize, 10, 8, 17] {
+        // reject, and the uses all refuse the door
+        for id in [3usize, 10, 8, 17, 22] {
             let refused = log.execute(
                 human(),
                 Command::WithdrawComment {
@@ -1370,26 +1847,16 @@ mod test {
         for (id, state) in [(0, "concluded"), (2, "cancelled")] {
             log.execute(
                 agent(),
-                note(
-                    Target::Task(TaskId(id)),
-                    &format!("for the record, on the {state} task"),
-                ),
+                note(TaskId(id), &format!("for the record, on the {state} task")),
                 99,
             )
             .unwrap_or_else(|e| panic!("note on {state} task refused: {e:?}"));
         }
         assert_eq!(log.records().len(), before + 2);
 
-        // only an unknown comment id refuses, writing nothing
-        let refused = log.execute(
-            human(),
-            note(
-                Target::Comment(CommentId(RecordId(99))),
-                "addresses nothing",
-            ),
-            100,
-        );
-        assert!(matches!(refused, Err(Reject::InvalidCommentId)));
+        // only an unknown home task refuses, writing nothing
+        let refused = log.execute(agent(), note(TaskId(9), "no such home"), 100);
+        assert!(matches!(refused, Err(Reject::InvalidTaskId)));
         assert_eq!(log.records().len(), before + 2);
     }
 

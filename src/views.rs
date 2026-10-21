@@ -27,7 +27,7 @@ pub struct RequestFacts {
 
 pub fn request_facts(world: &World, position: RecordId) -> Option<RequestFacts> {
     let comment = world.comments.get(&CommentId(position))?;
-    let task = comment.comment.root.0;
+    let task = comment.comment.home.0;
     let workspace = world.tasks[task]
         .workspace
         .as_ref()
@@ -50,8 +50,19 @@ pub enum WaitUntil {
     Offer,
 }
 
-/// A use never matches a comment wait: matching follows targets, and
-/// a use targets its consuming task, never the offer it names.
+/// A comment's structural edges: its citation mapping and the offer a
+/// decision names. Prose-only mentions of an id are never edges.
+fn cites(cctx: &CommentContext, watched: CommentId) -> bool {
+    cctx.references.contains(&watched.0)
+        || cctx
+            .comment
+            .kind
+            .offer()
+            .is_some_and(|offer| offer == watched)
+}
+
+/// Binding is activity about the use it binds, never about the offer
+/// it names: a comment wait on the offer does not wake on a binding.
 pub fn wait_matches(
     world: &World,
     at: RecordId,
@@ -64,8 +75,9 @@ pub fn wait_matches(
             event,
             Event::Commented {
                 kind: CommentKind::Offer { .. },
-                target: born,
-            } if *born == *target
+                home,
+                ..
+            } if Target::Task(*home) == *target
         );
     }
     match event {
@@ -76,50 +88,36 @@ pub fn wait_matches(
         Event::TaskClaimed { id, .. }
         | Event::TaskCancelled { id, .. }
         | Event::TaskReopened { id, .. } => *target == Target::Task(*id),
-        Event::Commented { target: born, .. } => match target {
-            Target::Task(task) => born_task(world, at) == Some(*task),
-            Target::Comment(watched) => chain_contains(world, *born, *watched),
+        Event::Commented { home, .. } => match target {
+            Target::Task(task) => home == task,
+            Target::Comment(watched) => world
+                .comments
+                .get(&CommentId(at))
+                .is_some_and(|cctx| cites(cctx, *watched)),
         },
         Event::CommentRevised { id, .. } | Event::CommentWithdrawn { id, .. } => match target {
             Target::Task(task) => world
                 .comments
                 .get(id)
-                .is_some_and(|c| c.comment.root == *task),
+                .is_some_and(|c| c.comment.home == *task),
             Target::Comment(watched) => {
-                *id == *watched || chain_contains(world, target_of(world, *id), *watched)
+                *id == *watched
+                    || world
+                        .comments
+                        .get(id)
+                        .is_some_and(|cctx| cites(cctx, *watched))
             }
+        },
+        Event::UseBound { id, .. } => match target {
+            Target::Task(task) => world
+                .comments
+                .get(id)
+                .is_some_and(|c| c.comment.home == *task),
+            Target::Comment(watched) => *id == *watched,
         },
         Event::ArtifactAdded { root, .. } => *target == Target::Task(*root),
         Event::WorkspaceEstablished { task_id, .. }
         | Event::TaskWorkspaceCheckpointed { task_id, .. } => *target == Target::Task(*task_id),
-    }
-}
-
-fn born_task(world: &World, at: RecordId) -> Option<TaskId> {
-    world.comments.get(&CommentId(at)).map(|c| c.comment.root)
-}
-
-fn target_of(world: &World, id: CommentId) -> Target {
-    world
-        .comments
-        .get(&id)
-        .expect("a chain member is resident")
-        .comment
-        .target
-}
-
-fn chain_contains(world: &World, born: Target, watched: CommentId) -> bool {
-    let mut up = born;
-    loop {
-        match up {
-            Target::Task(_) => return false,
-            Target::Comment(id) => {
-                if id == watched {
-                    return true;
-                }
-                up = target_of(world, id);
-            }
-        }
     }
 }
 
@@ -144,13 +142,13 @@ fn state_str(state: &TaskState) -> &'static str {
 }
 
 impl TaskView {
-    pub fn of(id: TaskId, ctx: &TaskContext) -> TaskView {
+    pub fn of(world: &World, id: TaskId, ctx: &TaskContext) -> TaskView {
         TaskView {
             id: format!("t-{}", id.0),
             state: state_str(&ctx.task.state),
             name: ctx.task.name.as_str().to_string(),
             offer: ctx.current_offer.map(|c| c.0.0),
-            owner: current_owner(ctx).map(|o| owner_str(&o.owner)),
+            owner: current_owner(ctx).map(|o| owner_str(world, &o.owner)),
             n_comments: ctx.thread.len(),
         }
     }
@@ -161,27 +159,41 @@ pub fn current_owner(ctx: &TaskContext) -> Option<&OwnerEntry> {
     ctx.ownership.last()
 }
 
-fn owner_str(owner: &Owner) -> String {
+fn owner_str(world: &World, owner: &Owner) -> String {
     match owner {
         Owner::Human(actor) | Owner::External(actor) => actor.as_str().to_string(),
-        Owner::Incarnation(id) => format!("i-{}", id.0.0),
+        // the public number: incarnation birth order, derived by the fold
+        Owner::Incarnation(id) => format!(
+            "i-{}",
+            world
+                .incarnation_num(*id)
+                .expect("an owner is a resident incarnation")
+        ),
     }
 }
 
-/// A row of the task's thread view. Depth is position in the rendered
-/// thread — the task is the root, so a comment addressing it sits at
-/// 1 — and target is the edge the comment carries: the task it
-/// addresses or the comment it replies to.
+/// A row of the task's thread view. The home task is explicit at
+/// birth; there is no reply parenting — a reply is a comment citing
+/// its parent through the reference mapping.
 #[derive(Debug)]
 pub struct CommentLine {
+    /// The public number, the c-N a human addresses: comment birth order
+    pub num: usize,
+    /// The birth record's position in the log
     pub seq: usize,
-    pub target: Target,
-    pub depth: usize,
+    pub home: TaskId,
     pub actor: String,
     pub tier: String,
     pub kind: &'static str,
     pub body: String,
+    /// The offer a decision names, as its public number
     pub offer: Option<usize>,
+    /// The source task a use declares
+    pub source: Option<TaskId>,
+    /// The use's current binding, when one has landed
+    pub binding: Option<LineBinding>,
+    /// The citation mapping in marker order: marker k is references[k-1]
+    pub references: Vec<RefTarget>,
     /// The descriptive mark: the fold presents a revised body
     pub revised: bool,
     /// The reviser's name, when the body was revised by an actor who
@@ -196,6 +208,14 @@ pub struct CommentLine {
     /// The tombstone's note
     pub withdrawal_note: Option<String>,
     pub born_at: u64,
+}
+
+/// A use's current selection as a line renders it.
+#[derive(Debug, PartialEq)]
+pub struct LineBinding {
+    /// The selected offer's public number
+    pub offer: usize,
+    pub grounds: String,
 }
 
 /// An artifact's thread line: its position and its pointer. The fold
@@ -215,30 +235,19 @@ impl ArtifactLine {
     }
 }
 
-/// One conversation: a comment plus every reply hanging off it, in
-/// record order. Bounded by the reply links, never by the renderer.
-pub struct Conversation {
-    pub root: CommentLine,
-    pub replies: Vec<CommentLine>,
-}
-
-/// The focused task's thread in record order by first comment: a
-/// conversation, or one unlinked annotation.
+/// The focused task's thread in record order: every comment flat at
+/// its home, artifacts clustered within themselves.
 #[derive(Debug)]
 pub enum ThreadItem {
-    Group {
-        root: CommentLine,
-        replies: Vec<CommentLine>,
-    },
     Note(CommentLine),
     /// Artifacts clustered within themselves: consecutive artifact
-    /// records as one item, never attached to a comment's group —
+    /// records as one item, never attached to a comment's row —
     /// association with a comment is what citing is for.
     Artifacts(Vec<ArtifactLine>),
 }
 
 /// The focused task's thread as a view: the context's pointer index,
-/// followed, grouped by reply links, ordered by first comment.
+/// comments in birth order, artifact clusters between them.
 pub struct ThreadView {
     pub items: Vec<ThreadItem>,
 }
@@ -261,21 +270,12 @@ fn line_of(world: &World, cid: CommentId) -> CommentLine {
         .comments
         .get(&cid)
         .expect("apply guarantees thread members are resident");
-    let mut depth = 1;
-    let mut up = cctx.comment.target;
-    while let Target::Comment(parent) = up {
-        depth += 1;
-        up = world
-            .comments
-            .get(&parent)
-            .expect("apply received a dangling comment target")
-            .comment
-            .target;
-    }
     CommentLine {
+        num: world
+            .comment_num(cid)
+            .expect("a resident comment holds a number"),
         seq: cid.0.0,
-        target: cctx.comment.target,
-        depth,
+        home: cctx.comment.home,
         actor: cctx.actor.as_str().to_string(),
         tier: format!("{:?}", cctx.tier).to_lowercase(),
         kind: if matches!(cctx.comment.state, CommentState::Withdrawn(_)) {
@@ -289,7 +289,19 @@ fn line_of(world: &World, cid: CommentId) -> CommentLine {
             .prose()
             .map(|p| p.as_str().to_string())
             .unwrap_or_default(),
-        offer: cctx.comment.kind.offer().map(|o| o.0.0),
+        offer: cctx.comment.kind.offer().and_then(|o| world.comment_num(o)),
+        source: cctx.comment.kind.source(),
+        binding: cctx.binding.as_ref().map(|b| LineBinding {
+            offer: world
+                .comment_num(b.offer)
+                .expect("a bound offer is a resident comment"),
+            grounds: b.grounds.as_str().to_string(),
+        }),
+        references: cctx
+            .references
+            .iter()
+            .map(|rid| ref_target(world, *rid).expect("the fold admits only births as references"))
+            .collect(),
         revised: cctx.revised.is_some(),
         reviser: cctx
             .revised
@@ -348,7 +360,7 @@ pub struct ShowView {
 }
 
 impl ShowView {
-    pub fn of(id: TaskId, ctx: &TaskContext) -> ShowView {
+    pub fn of(world: &World, id: TaskId, ctx: &TaskContext) -> ShowView {
         ShowView {
             id: format!("t-{}", id.0),
             state: state_str(&ctx.task.state),
@@ -357,7 +369,7 @@ impl ShowView {
                 TaskState::Cancelled(why) => Some(why.as_str().to_string()),
                 _ => None,
             },
-            owner: current_owner(ctx).map(|o| owner_str(&o.owner)),
+            owner: current_owner(ctx).map(|o| owner_str(world, &o.owner)),
             offer: ctx.current_offer.map(|c| c.0.0),
             workspace: ctx.workspace.as_ref().map(|w| {
                 format!(
@@ -372,31 +384,29 @@ impl ShowView {
 
 /// Read helpers: follow the world's pointers so emitters need not.
 pub fn task_view(world: &World, id: TaskId) -> Option<TaskView> {
-    world.tasks.get(id.0).map(|ctx| TaskView::of(id, ctx))
+    world
+        .tasks
+        .get(id.0)
+        .map(|ctx| TaskView::of(world, id, ctx))
 }
 
 pub fn show_view(world: &World, id: TaskId) -> Option<ShowView> {
-    world.tasks.get(id.0).map(|ctx| ShowView::of(id, ctx))
+    world
+        .tasks
+        .get(id.0)
+        .map(|ctx| ShowView::of(world, id, ctx))
 }
 
-/// Follow the world's pointers to one task's thread: the conversation
-/// each root opened, and the annotations no one replied to.
+/// Follow the world's pointers to one task's thread: every comment at
+/// its home in birth order, artifacts clustered within themselves.
 pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
     let ctx = world.tasks.get(id.0)?;
-    // building groups in record order; replies always come after their
-    // root, so one pass suffices.
-    enum Building {
-        Group {
-            root: CommentLine,
-            replies: Vec<CommentLine>,
-        },
-    }
     enum Member {
         Comment(CommentId),
         Artifact(RecordId, Artifact),
     }
     // the thread's utterances merged by position; artifacts never join
-    // a comment's group. Consecutive artifacts accumulate into one
+    // a comment's row. Consecutive artifacts accumulate into one
     // cluster and any comment closes it — the thread-top cluster and
     // the mid-stream one are the same path.
     let mut stream: Vec<(usize, Member)> = ctx
@@ -411,92 +421,29 @@ pub fn thread_view(world: &World, id: TaskId) -> Option<ThreadView> {
     );
     stream.sort_by_key(|(seq, _)| *seq);
 
-    let mut groups: Vec<Building> = Vec::new();
-    let mut root_index: BTreeMap<CommentId, usize> = BTreeMap::new();
-    let mut clusters: Vec<(usize, Vec<ArtifactLine>)> = Vec::new();
-    let mut open_cluster: Option<(usize, Vec<ArtifactLine>)> = None;
+    let mut items: Vec<ThreadItem> = Vec::new();
+    let mut open_cluster: Option<Vec<ArtifactLine>> = None;
     for (_, member) in stream {
         match member {
             Member::Comment(cid) => {
                 if let Some(cluster) = open_cluster.take() {
-                    clusters.push(cluster);
+                    items.push(ThreadItem::Artifacts(cluster));
                 }
-                let root = root_of(&world.comments, cid);
-                if root == cid {
-                    let line = line_of(world, cid);
-                    root_index.insert(cid, groups.len());
-                    groups.push(Building::Group {
-                        root: line,
-                        replies: Vec::new(),
-                    });
-                } else {
-                    let g = root_index
-                        .get(&root)
-                        .copied()
-                        .expect("a reply's root is resident and earlier");
-                    let line = line_of(world, cid);
-                    match &mut groups[g] {
-                        Building::Group { replies, .. } => replies.push(line),
-                    }
-                }
+                items.push(ThreadItem::Note(line_of(world, cid)));
             }
             Member::Artifact(rid, artifact) => {
                 let line = artifact_line_of(rid.0, &artifact);
                 match &mut open_cluster {
-                    Some((_, lines)) => lines.push(line),
-                    None => open_cluster = Some((rid.0, vec![line])),
+                    Some(lines) => lines.push(line),
+                    None => open_cluster = Some(vec![line]),
                 }
             }
         }
     }
     if let Some(cluster) = open_cluster.take() {
-        clusters.push(cluster);
-    }
-
-    let group_items: Vec<(usize, ThreadItem)> = groups
-        .into_iter()
-        .map(|g| match g {
-            Building::Group { root, replies } => {
-                if replies.is_empty() {
-                    (root.seq, ThreadItem::Note(root))
-                } else {
-                    (root.seq, ThreadItem::Group { root, replies })
-                }
-            }
-        })
-        .collect();
-    let cluster_items: Vec<(usize, ThreadItem)> = clusters
-        .into_iter()
-        .map(|(seq, lines)| (seq, ThreadItem::Artifacts(lines)))
-        .collect();
-    // both lists are sorted by their first seq; one merge orders the items
-    let mut items: Vec<ThreadItem> = Vec::with_capacity(group_items.len() + cluster_items.len());
-    let mut groups_iter = group_items.into_iter().peekable();
-    let mut clusters_iter = cluster_items.into_iter().peekable();
-    loop {
-        let take_group = match (groups_iter.peek(), clusters_iter.peek()) {
-            (None, None) => break,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (Some((gseq, _)), Some((cseq, _))) => gseq < cseq,
-        };
-        items.push(if take_group {
-            groups_iter.next().expect("peeked").1
-        } else {
-            clusters_iter.next().expect("peeked").1
-        });
+        items.push(ThreadItem::Artifacts(cluster));
     }
     Some(ThreadView { items })
-}
-
-/// The chain member whose target is the task — cid itself when it is a
-/// root. Chains end at the task; the fold guarantees residency.
-fn root_of(comments: &BTreeMap<CommentId, CommentContext>, cid: CommentId) -> CommentId {
-    let mut current = cid;
-    while let Target::Comment(parent) = comments[&current].comment.target {
-        current = parent;
-    }
-    current
 }
 
 /// The board: live tasks in identity order, flat. An offered task
@@ -507,7 +454,7 @@ pub fn board(world: &World) -> Vec<TaskView> {
         .iter()
         .enumerate()
         .filter(|(_, ctx)| matches!(ctx.task.state, TaskState::Open | TaskState::Offered))
-        .map(|(i, ctx)| TaskView::of(TaskId(i), ctx))
+        .map(|(i, ctx)| TaskView::of(world, TaskId(i), ctx))
         .collect()
 }
 
@@ -525,62 +472,74 @@ pub fn closed_tasks(world: &World) -> Vec<TaskView> {
                 TaskState::Concluded | TaskState::Cancelled(_)
             )
         })
-        .map(|(i, ctx)| (ctx.last_record_at, i, TaskView::of(TaskId(i), ctx)))
+        .map(|(i, ctx)| (ctx.last_record_at, i, TaskView::of(world, TaskId(i), ctx)))
         .collect();
     rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
     rows.into_iter().map(|(_, _, row)| row).collect()
 }
 
-// -- the reading-side reference resolver's index --------------------
+// -- the citation resolver's target vocabulary ----------------------
 
-/// What a 'c-N' mention resolves to on the reading side: a comment's
-/// home anchor, or an artifact's home card. The mention parse itself
-/// lives in the view, never in the record.
+/// What a citation's target resolves to on the reading side: the home
+/// a birth renders at. The birth's identity carries its public number
+/// where the reader addresses it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RefTarget {
     Comment {
+        num: usize,
+        task: usize,
+    },
+    Task {
+        task: usize,
+    },
+    Incarnation {
+        num: usize,
         task: usize,
     },
     Artifact {
+        seq: usize,
         task: usize,
         name: String,
         hash: String,
     },
 }
 
-/// Every seq the fold holds as a comment or an artifact, mapped to its
-/// mention's render — the index the webui's body renders resolve
-/// against. Births and machinery records stay unresolvable on purpose:
-/// an unresolved token renders as plain text.
-pub fn ref_index(world: &World) -> BTreeMap<usize, RefTarget> {
-    let mut index = BTreeMap::new();
-    for (id, cctx) in &world.comments {
-        index.insert(
-            id.0.0,
-            RefTarget::Comment {
-                task: cctx.comment.root.0,
-            },
-        );
+/// One birth record's render target, resolved against the fold. The
+/// four birth kinds each carry their own shape; nothing else is a
+/// legal citation target.
+pub fn ref_target(world: &World, rid: RecordId) -> Option<RefTarget> {
+    if let Some(cctx) = world.comments.get(&CommentId(rid)) {
+        return Some(RefTarget::Comment {
+            num: world.comment_num(CommentId(rid))?,
+            task: cctx.comment.home.0,
+        });
+    }
+    if let Some(task) = world.task_born_at(rid) {
+        return Some(RefTarget::Task { task: task.0 });
+    }
+    if let Some(ictx) = world.incarnations.get(&crate::IncarnationId(rid)) {
+        return Some(RefTarget::Incarnation {
+            num: world.incarnation_num(crate::IncarnationId(rid))?,
+            task: ictx.incarnation.task.0,
+        });
     }
     for (i, ctx) in world.tasks.iter().enumerate() {
-        for (rid, artifact) in &ctx.artifacts {
-            index.insert(
-                rid.0,
-                RefTarget::Artifact {
-                    task: i,
-                    name: artifact.name.as_str().to_string(),
-                    hash: artifact.hash.as_str().to_string(),
-                },
-            );
+        if let Some((_, artifact)) = ctx.artifacts.iter().find(|(r, _)| *r == rid) {
+            return Some(RefTarget::Artifact {
+                seq: rid.0,
+                task: i,
+                name: artifact.name.as_str().to_string(),
+                hash: artifact.hash.as_str().to_string(),
+            });
         }
     }
-    index
+    None
 }
 
 /// Each record's home thread, where the fold gives it one: a task by
-/// its birth, a comment by its root — replies included — an artifact
-/// by the thread it rides. Records about a member, a revision or a
-/// withdrawal, carry none: they fold into the member, not the thread.
+/// its birth, a comment by its home, an artifact by the thread it
+/// rides. Records about a member — a revision, a withdrawal, a
+/// binding — carry none: they fold into the member, not the thread.
 pub fn thread_index(world: &World) -> BTreeMap<usize, TaskId> {
     let mut index = BTreeMap::new();
     for (i, ctx) in world.tasks.iter().enumerate() {
@@ -623,10 +582,10 @@ pub const SEARCH_KINDS: [&str; 9] = [
 pub enum Term {
     /// Matches as a whole, word-bounded token, case-folded
     Plain(String),
-    /// c-N: prose citations of the comment, and replies addressing it
-    Comment(RecordId),
-    /// t-N: prose namings of the task, comments
-    /// addressing it
+    /// c-N over the fold's public comment numbering: prose mentions
+    /// and structural citations of that comment
+    Comment(usize),
+    /// t-N: prose namings of the task, comments homed on it
     Task(TaskId),
 }
 
@@ -635,7 +594,7 @@ impl Term {
     fn canonical(&self) -> String {
         match self {
             Term::Plain(s) => s.clone(),
-            Term::Comment(id) => format!("c-{}", id.0),
+            Term::Comment(n) => format!("c-{n}"),
             Term::Task(id) => format!("t-{}", id.0),
         }
     }
@@ -725,7 +684,7 @@ impl SearchQuery {
             } else if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
                 query
                     .terms
-                    .push(Term::Comment(RecordId(n.parse().expect("digits checked"))));
+                    .push(Term::Comment(n.parse().expect("digits checked")));
             } else if let Some(n) = token.strip_prefix("t-").filter(|n| numeric(n)) {
                 query
                     .terms
@@ -775,22 +734,8 @@ fn token_in_field(term: &str, field: &str) -> bool {
 /// A structural reference a record carries beside its text.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Ref {
-    Comment(RecordId),
+    Comment(CommentId),
     Task(TaskId),
-}
-
-/// Every term must be satisfied, each by the text or by a reference.
-fn terms_match(query: &SearchQuery, text: &str, refs: &[Ref]) -> bool {
-    query.terms.iter().all(|term| match term {
-        Term::Plain(s) => token_in_field(s, text),
-        Term::Comment(id) => {
-            token_in_field(&Term::Comment(*id).canonical(), text)
-                || refs.contains(&Ref::Comment(*id))
-        }
-        Term::Task(id) => {
-            token_in_field(&Term::Task(*id).canonical(), text) || refs.contains(&Ref::Task(*id))
-        }
-    })
 }
 
 /// The line a result renders: the first line a term lands on, else
@@ -829,6 +774,7 @@ pub struct SearchGroup {
 }
 
 /// Search the fold: no index, no ranking, no memory between calls.
+/// A term with no terms matches everything the facets then narrow.
 pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, SearchFail> {
     for facet in &query.facets {
         let asked = match facet {
@@ -845,14 +791,27 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
         }
     }
 
+    // a comment term's public number resolves against this fold before
+    // any structural matching; prose matching reads the number as text
+    let text_match = |term: &Term, text: &str| token_in_field(&term.canonical(), text);
+    let comment_match = |term: &Term, body: &str, refs: &[Ref]| match term {
+        Term::Comment(n) => {
+            text_match(term, body)
+                || world
+                    .comment_at_num(*n)
+                    .is_some_and(|wanted| refs.contains(&Ref::Comment(wanted)))
+        }
+        _ => false,
+    };
+
     let mut matches: Vec<(usize, SearchRecord)> = Vec::new();
     for (i, ctx) in world.tasks.iter().enumerate() {
         let title = ctx.task.name.as_str();
-        if terms_match(query, title, &[]) {
+        if query.terms.iter().all(|t| text_match(t, title)) {
             matches.push((
                 i,
                 SearchRecord {
-                    pointer: format!("c-{}", ctx.birth.0),
+                    pointer: format!("t-{i}"),
                     kind: "task",
                     actor: Some(ctx.birth_actor.as_str().to_string()),
                     body: title.to_string(),
@@ -862,7 +821,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
         }
         if let TaskState::Cancelled(why) = &ctx.task.state {
             let text = why.as_str();
-            if terms_match(query, text, &[]) {
+            if query.terms.iter().all(|t| text_match(t, text)) {
                 matches.push((
                     i,
                     SearchRecord {
@@ -878,11 +837,11 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
         // artifacts are name-indexed: the pointer's text is the name
         for (rid, artifact) in &ctx.artifacts {
             let name = artifact.name.as_str();
-            if terms_match(query, name, &[]) {
+            if query.terms.iter().all(|t| text_match(t, name)) {
                 matches.push((
                     i,
                     SearchRecord {
-                        pointer: format!("c-{}", rid.0),
+                        pointer: format!("seq {rid}", rid = rid.0),
                         kind: "artifact",
                         actor: None,
                         body: name.to_string(),
@@ -904,15 +863,40 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
             .prose()
             .map(|p| p.as_str().to_string())
             .unwrap_or_default();
-        let refs = [match cctx.comment.target {
-            Target::Task(t) => Ref::Task(t),
-            Target::Comment(c) => Ref::Comment(c.0),
-        }];
-        if terms_match(query, &body, &refs) {
+        // the structural edges: the home, the use's source, the offer
+        // a decision names, the current binding, the citations
+        let mut refs = vec![Ref::Task(cctx.comment.home)];
+        if let Some(source) = cctx.comment.kind.source() {
+            refs.push(Ref::Task(source));
+        }
+        if let Some(offer) = cctx.comment.kind.offer() {
+            refs.push(Ref::Comment(offer));
+        }
+        if let Some(binding) = &cctx.binding {
+            refs.push(Ref::Comment(binding.offer));
+        }
+        for rid in &cctx.references {
+            if world.comments.contains_key(&CommentId(*rid)) {
+                refs.push(Ref::Comment(CommentId(*rid)));
+            } else if let Some(task) = world.task_born_at(*rid) {
+                refs.push(Ref::Task(task));
+            }
+        }
+        let matched = query.terms.iter().all(|t| match t {
+            Term::Comment(_) => comment_match(t, &body, &refs),
+            Term::Task(id) => text_match(t, &body) || refs.contains(&Ref::Task(*id)),
+            Term::Plain(_) => text_match(t, &body),
+        });
+        if matched {
             matches.push((
-                cctx.comment.root.0,
+                cctx.comment.home.0,
                 SearchRecord {
-                    pointer: format!("c-{}", id.0.0),
+                    pointer: format!(
+                        "c-{num}",
+                        num = world
+                            .comment_num(*id)
+                            .expect("a resident comment holds a number")
+                    ),
                     kind: kind_of(&cctx.comment.kind),
                     actor: Some(cctx.actor.as_str().to_string()),
                     body,
@@ -973,7 +957,7 @@ mod test {
     use super::*;
     use crate::CommentKind;
     use crate::events::Event;
-    use crate::objects::comment::{CommentId, Target};
+    use crate::objects::comment::CommentId;
     use crate::objects::task::Task;
     use crate::store::{Context, Record, RecordId, Tier, World};
     use crate::types::actor::ActorName;
@@ -1001,20 +985,22 @@ mod test {
 
     #[test]
     fn state_strings_are_the_identifier_vocabulary() {
+        let world = World::new();
         assert_eq!(
-            TaskView::of(TaskId(0), &ctx_of(TaskState::Open)).state,
+            TaskView::of(&world, TaskId(0), &ctx_of(TaskState::Open)).state,
             "open"
         );
         assert_eq!(
-            TaskView::of(TaskId(0), &ctx_of(TaskState::Offered)).state,
+            TaskView::of(&world, TaskId(0), &ctx_of(TaskState::Offered)).state,
             "offered"
         );
         assert_eq!(
-            TaskView::of(TaskId(0), &ctx_of(TaskState::Concluded)).state,
+            TaskView::of(&world, TaskId(0), &ctx_of(TaskState::Concluded)).state,
             "concluded"
         );
         assert_eq!(
             TaskView::of(
+                &world,
                 TaskId(0),
                 &ctx_of(TaskState::Cancelled(
                     Prose::new("no longer wanted".into()).unwrap()
@@ -1041,21 +1027,22 @@ mod test {
         }
     }
 
-    /// The board is flat: rows in identity order, and each task owns
-    /// exactly its own thread.
+    /// The thread is flat: comments in birth order at their homes, an
+    /// artifact cluster standing wherever consecutive artifacts land.
     #[test]
-    fn the_board_is_flat_in_identity_order() {
+    fn the_thread_is_flat_in_birth_order() {
         let human = human();
         let agent = agent();
-        let record = |id: usize, ctx: &Context, target: Target, body: &str| Record {
-            id: RecordId(id),
-            timestamp: id as u64,
+        let note = |seq: usize, ctx: &Context, home: TaskId, body: &str| Record {
+            id: RecordId(seq),
+            timestamp: seq as u64,
             context: ctx.clone(),
             event: Event::Commented {
-                target,
+                home,
                 kind: CommentKind::Note {
                     body: Prose::new(body.into()).unwrap(),
                 },
+                references: Vec::new(),
             },
         };
         let birth = |id: usize, ctx: &Context, name: &str| Record {
@@ -1069,59 +1056,52 @@ mod test {
         let world = World::replay(vec![
             birth(0, &human, "real work"),
             birth(1, &human, "other work"),
-            record(
-                2,
-                &agent,
-                Target::Task(TaskId(0)),
-                "triage: how is sections, undecided",
-            ),
-            record(
+            note(2, &agent, TaskId(0), "triage: how is sections, undecided"),
+            note(
                 3,
                 &human,
-                Target::Comment(CommentId(RecordId(2))),
+                TaskId(0),
                 "no - pure tree, canvas verdict pending",
             ),
-            record(
-                4,
-                &agent,
-                Target::Comment(CommentId(RecordId(3))),
-                "noted, parked with owner",
-            ),
-            record(
-                5,
-                &human,
-                Target::Task(TaskId(1)),
-                "belongs to the other thread",
-            ),
+            note(4, &agent, TaskId(0), "noted, parked with owner"),
+            note(5, &human, TaskId(1), "belongs to the other thread"),
         ])
         .unwrap();
 
         assert_eq!(world.comments.len(), 4);
         assert_eq!(
-            world.comments[&CommentId(RecordId(2))].comment.target,
-            Target::Task(TaskId(0))
+            world.comments[&CommentId(RecordId(2))].comment.home,
+            TaskId(0)
         );
         assert_eq!(
-            world.comments[&CommentId(RecordId(3))].comment.target,
-            Target::Comment(CommentId(RecordId(2)))
+            world.comments[&CommentId(RecordId(5))].comment.home,
+            TaskId(1)
         );
 
         let thread = thread_view(&world, TaskId(0)).unwrap();
-        match &thread.items[0] {
-            ThreadItem::Group { root, replies } => {
-                assert_eq!(root.seq, 2);
-                assert_eq!(root.depth, 1);
-                assert_eq!(root.target, Target::Task(TaskId(0)));
-                assert_eq!(replies[0].seq, 3);
-                assert_eq!(replies[0].depth, 2);
-                assert_eq!(replies[0].target, Target::Comment(CommentId(RecordId(2))));
-                assert_eq!(replies[1].seq, 4);
-                assert_eq!(replies[1].depth, 3);
-                assert_eq!(replies[1].target, Target::Comment(CommentId(RecordId(3))));
-            }
-            other => panic!("expected a group, got {other:?}"),
-        }
-        assert_eq!(thread_view(&world, TaskId(1)).unwrap().items.len(), 1);
+        let nums: Vec<(usize, usize)> = thread
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ThreadItem::Note(line) => Some((line.num, line.seq)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(nums, vec![(0, 2), (1, 3), (2, 4)]);
+
+        // public numbers are comment birth order, shared across threads
+        assert_eq!(
+            thread_view(&world, TaskId(1))
+                .unwrap()
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    ThreadItem::Note(line) => Some(line.num),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
 
         // the board lists live tasks flat, in identity order
         let rows = board(&world);
@@ -1147,10 +1127,11 @@ mod test {
                 timestamp: 1,
                 context: human.clone(),
                 event: Event::Commented {
-                    target: Target::Task(TaskId(0)),
+                    home: TaskId(0),
                     kind: CommentKind::Note {
                         body: Prose::new("first deposit".into()).unwrap(),
                     },
+                    references: Vec::new(),
                 },
             },
             Record {
@@ -1158,10 +1139,11 @@ mod test {
                 timestamp: 2,
                 context: human.clone(),
                 event: Event::Commented {
-                    target: Target::Comment(CommentId(RecordId(1))),
+                    home: TaskId(0),
                     kind: CommentKind::Note {
-                        body: Prose::new("a reply".into()).unwrap(),
+                        body: Prose::new("a later note".into()).unwrap(),
                     },
+                    references: vec![RecordId(1)],
                 },
             },
             Record {
@@ -1202,7 +1184,7 @@ mod test {
     mod panels {
         use super::super::*;
         use crate::events::Event;
-        use crate::objects::comment::{CommentId, Target};
+        use crate::objects::comment::CommentId;
         use crate::store::{Context, Record, RecordId, Tier, World};
         use crate::types::actor::ActorName;
         use crate::types::artifact::Artifact;
@@ -1249,14 +1231,19 @@ mod test {
             seq: usize,
             at: u64,
             tier: Tier,
-            target: Target,
+            home: TaskId,
             kind: CommentKind,
+            references: Vec<RecordId>,
         ) -> Record {
             Record {
                 id: RecordId(seq),
                 timestamp: at,
                 context: ctx(tier),
-                event: Event::Commented { target, kind },
+                event: Event::Commented {
+                    home,
+                    kind,
+                    references,
+                },
             }
         }
 
@@ -1271,19 +1258,21 @@ mod test {
                     1,
                     10,
                     Tier::Human,
-                    Target::Task(TaskId(0)),
+                    TaskId(0),
                     CommentKind::Note {
                         body: offer_body("parked finding"),
                     },
+                    Vec::new(),
                 ),
                 comment_at(
                     2,
                     20,
                     Tier::Agent,
-                    Target::Comment(CommentId(RecordId(1))),
+                    TaskId(0),
                     CommentKind::Note {
-                        body: offer_body("the reply"),
+                        body: offer_body("the reply, citing [^1]"),
                     },
+                    vec![RecordId(1)],
                 ),
                 record(
                     3,
@@ -1303,8 +1292,7 @@ mod test {
 
         fn entry_shape(entry: &ThreadItem) -> (&'static str, usize) {
             match entry {
-                ThreadItem::Note(line) => ("note", line.seq),
-                ThreadItem::Group { root, .. } => ("group", root.seq),
+                ThreadItem::Note(line) => ("note", line.num),
                 ThreadItem::Artifacts(lines) => ("artifacts", lines[0].seq),
             }
         }
@@ -1316,22 +1304,124 @@ mod test {
             let shapes: Vec<_> = thread.items.iter().map(entry_shape).collect();
             assert_eq!(
                 shapes,
-                vec![("group", 1), ("artifacts", 3)],
-                "a group then a trailing artifact cluster"
+                vec![("note", 0), ("note", 1), ("artifacts", 3)],
+                "two flat notes then a trailing artifact cluster"
             );
         }
 
+        /// A reply is a comment citing its parent: the mapping carries
+        /// the edge, repeated markers resolve the same target.
         #[test]
-        fn the_thread_clusters_by_reply_links() {
+        fn a_reply_is_a_citation_not_a_parent() {
             let world = clustered();
             let thread = thread_view(&world, TaskId(0)).unwrap();
-            match &thread.items[0] {
-                ThreadItem::Group { root, replies } => {
-                    assert_eq!(root.seq, 1);
-                    assert_eq!(replies.len(), 1);
-                    assert_eq!(replies[0].seq, 2);
+            match &thread.items[1] {
+                ThreadItem::Note(line) => {
+                    assert_eq!(line.seq, 2);
+                    assert_eq!(line.home, TaskId(0));
+                    assert_eq!(
+                        line.references,
+                        vec![RefTarget::Comment { num: 0, task: 0 }]
+                    );
                 }
-                other => panic!("expected a group, got {other:?}"),
+                other => panic!("expected a note, got {other:?}"),
+            }
+            // the same marker twice resolves the same target
+            let world = World::replay(vec![
+                task_at(0, 0, "implement foo"),
+                comment_at(
+                    1,
+                    10,
+                    Tier::Agent,
+                    TaskId(0),
+                    CommentKind::Note {
+                        body: offer_body("parked finding"),
+                    },
+                    Vec::new(),
+                ),
+                comment_at(
+                    2,
+                    20,
+                    Tier::Human,
+                    TaskId(0),
+                    CommentKind::Note {
+                        body: offer_body("again [^1] and again [^1]"),
+                    },
+                    vec![RecordId(1), RecordId(1)],
+                ),
+            ])
+            .unwrap();
+            let thread = thread_view(&world, TaskId(0)).unwrap();
+            match &thread.items[1] {
+                ThreadItem::Note(line) => assert_eq!(
+                    line.references,
+                    vec![
+                        RefTarget::Comment { num: 0, task: 0 },
+                        RefTarget::Comment { num: 0, task: 0 }
+                    ]
+                ),
+                other => panic!("expected a note, got {other:?}"),
+            }
+        }
+
+        /// Citations may name task births, artifact births, and
+        /// incarnation births — not only comments.
+        #[test]
+        fn citations_name_any_birth() {
+            use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
+            let world = World::replay(vec![
+                task_at(0, 0, "implement foo"),
+                record(
+                    1,
+                    1,
+                    Tier::System,
+                    Event::WorkspaceEstablished {
+                        task_id: TaskId(0),
+                        base: GitCommit::new("abc123".into()).unwrap(),
+                        branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                        worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+                    },
+                ),
+                record(
+                    2,
+                    2,
+                    Tier::Human,
+                    Event::ArtifactAdded {
+                        root: TaskId(0),
+                        artifact: Artifact {
+                            name: Prose::new("sweep figure".into()).unwrap(),
+                            hash: ContentHash::of(b"figure bytes"),
+                        },
+                    },
+                ),
+                comment_at(
+                    3,
+                    3,
+                    Tier::Human,
+                    TaskId(0),
+                    CommentKind::Note {
+                        body: offer_body("the task [^1], the worker [^2], the figure [^3]"),
+                    },
+                    vec![RecordId(0), RecordId(1), RecordId(2)],
+                ),
+            ])
+            .unwrap();
+            let thread = thread_view(&world, TaskId(0)).unwrap();
+            match &thread.items[1] {
+                ThreadItem::Note(line) => assert_eq!(
+                    line.references,
+                    vec![
+                        RefTarget::Task { task: 0 },
+                        RefTarget::Incarnation { num: 0, task: 0 },
+                        RefTarget::Artifact {
+                            seq: 2,
+                            task: 0,
+                            name: "sweep figure".into(),
+                            hash: ContentHash::of(b"figure bytes").as_str().to_string(),
+                        },
+                    ]
+                ),
+                other => panic!("expected a note, got {other:?}"),
             }
         }
 
@@ -1346,19 +1436,21 @@ mod test {
                     4,
                     4,
                     Tier::Agent,
-                    Target::Task(TaskId(0)),
+                    TaskId(0),
                     CommentKind::Offer {
                         body: offer_body("suite green"),
                     },
+                    Vec::new(),
                 ),
                 comment_at(
                     5,
                     5,
                     Tier::Human,
-                    Target::Comment(CommentId(RecordId(4))),
+                    TaskId(0),
                     CommentKind::Accept {
                         offer: CommentId(RecordId(4)),
                     },
+                    Vec::new(),
                 ),
                 record(
                     6,
@@ -1373,10 +1465,11 @@ mod test {
                     7,
                     7,
                     Tier::Agent,
-                    Target::Task(TaskId(3)),
+                    TaskId(3),
                     CommentKind::Offer {
                         body: offer_body("awaiting its consumer"),
                     },
+                    Vec::new(),
                 ),
             ])
             .unwrap();
@@ -1400,10 +1493,11 @@ mod test {
                     1,
                     10,
                     Tier::Agent,
-                    Target::Task(TaskId(0)),
+                    TaskId(0),
                     CommentKind::Offer {
                         body: offer_body("suite green, 55 tests"),
                     },
+                    Vec::new(),
                 ),
                 Record {
                     id: RecordId(2),
@@ -1432,10 +1526,11 @@ mod test {
                     1,
                     10,
                     Tier::Agent,
-                    Target::Task(TaskId(0)),
+                    TaskId(0),
                     CommentKind::Note {
                         body: offer_body("parked mid-flight"),
                     },
+                    Vec::new(),
                 ),
                 Record {
                     id: RecordId(2),
@@ -1477,10 +1572,11 @@ mod test {
                     timestamp: 10,
                     context: scoped,
                     event: Event::Commented {
-                        target: Target::Task(TaskId(0)),
+                        home: TaskId(0),
                         kind: CommentKind::Note {
                             body: offer_body("scoped helper's note"),
                         },
+                        references: Vec::new(),
                     },
                 },
             ])
@@ -1491,13 +1587,96 @@ mod test {
             let line = comment_line(&world, CommentId(RecordId(1))).unwrap();
             assert_eq!(line.actor, "pi");
         }
+
+        /// The use line names its source task and, once bound, the
+        /// selected conclusion with its grounds.
+        #[test]
+        fn a_use_renders_its_source_and_binding() {
+            let world = World::replay(vec![
+                task_at(0, 0, "consume the account"),
+                task_at(1, 1, "produce the account"),
+                comment_at(
+                    2,
+                    2,
+                    Tier::Agent,
+                    TaskId(1),
+                    CommentKind::Offer {
+                        body: offer_body("suite green"),
+                    },
+                    Vec::new(),
+                ),
+                comment_at(
+                    3,
+                    3,
+                    Tier::Agent,
+                    TaskId(0),
+                    CommentKind::Use {
+                        source: TaskId(1),
+                        reason: offer_body("builds on the account"),
+                        bound: None,
+                    },
+                    Vec::new(),
+                ),
+                Record {
+                    id: RecordId(4),
+                    timestamp: 4,
+                    context: ctx(Tier::Human),
+                    event: Event::UseBound {
+                        id: CommentId(RecordId(3)),
+                        offer: CommentId(RecordId(2)),
+                        grounds: offer_body("the account that landed"),
+                    },
+                },
+            ])
+            .unwrap();
+
+            let pending_world = World::replay(vec![
+                task_at(0, 0, "consume the account"),
+                task_at(1, 1, "produce the account"),
+                comment_at(
+                    2,
+                    2,
+                    Tier::Agent,
+                    TaskId(1),
+                    CommentKind::Offer {
+                        body: offer_body("suite green"),
+                    },
+                    Vec::new(),
+                ),
+                comment_at(
+                    3,
+                    3,
+                    Tier::Agent,
+                    TaskId(0),
+                    CommentKind::Use {
+                        source: TaskId(1),
+                        reason: offer_body("builds on the account"),
+                        bound: None,
+                    },
+                    Vec::new(),
+                ),
+            ])
+            .unwrap();
+            let pending = comment_line(&pending_world, CommentId(RecordId(3))).unwrap();
+            assert_eq!(pending.kind, "use");
+            assert_eq!(pending.source, Some(TaskId(1)));
+            assert_eq!(pending.binding, None);
+            assert_eq!(pending.body, "builds on the account");
+
+            let bound = comment_line(&world, CommentId(RecordId(3))).unwrap();
+            assert_eq!(bound.kind, "use");
+            assert_eq!(
+                bound.binding.map(|b| (b.offer, b.grounds)),
+                Some((0, "the account that landed".to_string()))
+            );
+        }
     }
 
     mod search {
         use super::super::*;
         use crate::ContentHash;
         use crate::events::Event;
-        use crate::objects::comment::{CommentId, Target};
+        use crate::objects::comment::CommentId;
         use crate::store::{Context, Record, RecordId, Tier, World};
         use crate::types::actor::ActorName;
         use crate::types::artifact::Artifact;
@@ -1535,24 +1714,38 @@ mod test {
             seq: usize,
             at: u64,
             ctx: &Context,
-            target: Target,
+            home: TaskId,
             kind: CommentKind,
+            references: Vec<RecordId>,
         ) -> Record {
-            record(seq, at, ctx, Event::Commented { target, kind })
-        }
-
-        fn note(seq: usize, at: u64, ctx: &Context, target: Target, body: &str) -> Record {
-            comment(
+            record(
                 seq,
                 at,
                 ctx,
-                target,
-                CommentKind::Note {
-                    body: Prose::new(body.into()).unwrap(),
+                Event::Commented {
+                    home,
+                    kind,
+                    references,
                 },
             )
         }
 
+        fn note(seq: usize, at: u64, ctx: &Context, home: TaskId, body: &str) -> Record {
+            comment(
+                seq,
+                at,
+                ctx,
+                home,
+                CommentKind::Note {
+                    body: Prose::new(body.into()).unwrap(),
+                },
+                Vec::new(),
+            )
+        }
+
+        /// The story: comments at seq 2,3,5,6,8,9 carry public numbers
+        /// 0,1,2,3,4,5. c-3 and c-9 cite the finding at seq 2 (c-0);
+        /// c-8 names it in prose.
         fn story() -> World {
             let jerry = ctx(Tier::Human, "jerry");
             let bot = ctx(Tier::Agent, "saccade bot");
@@ -1564,29 +1757,26 @@ mod test {
                     2,
                     20,
                     &jerry,
-                    Target::Task(TaskId(0)),
+                    TaskId(0),
                     "parked: the fluke blocks foo\ntelemetries abound here",
                 ),
-                note(
+                comment(
                     3,
                     30,
                     &pi,
-                    Target::Comment(CommentId(RecordId(2))),
-                    "the fluke is real; floop proceeds",
+                    TaskId(0),
+                    CommentKind::Note {
+                        body: Prose::new("the fluke is real; floop proceeds".into()).unwrap(),
+                    },
+                    vec![RecordId(2)],
                 ),
                 task(4, 40, &jerry, "t-490 the id boundary guard"),
-                note(
-                    5,
-                    50,
-                    &pi,
-                    Target::Task(TaskId(1)),
-                    "t-0 waits on this thread",
-                ),
+                note(5, 50, &pi, TaskId(1), "t-0 waits on this thread"),
                 note(
                     6,
                     60,
                     &pi,
-                    Target::Task(TaskId(1)),
+                    TaskId(1),
                     "the run answered\nsee c-123 for the trail",
                 ),
                 record(
@@ -1602,20 +1792,24 @@ mod test {
                     8,
                     80,
                     &bot,
-                    Target::Task(TaskId(1)),
+                    TaskId(1),
                     CommentKind::Offer {
                         body: Prose::new(
-                            "suite 9 green; the floop migration landed per c-2".into(),
+                            "suite 9 green; the floop migration landed per c-0".into(),
                         )
                         .unwrap(),
                     },
+                    Vec::new(),
                 ),
-                note(
+                comment(
                     9,
                     90,
                     &bot,
-                    Target::Comment(CommentId(RecordId(2))),
-                    "done, per the plan above",
+                    TaskId(0),
+                    CommentKind::Note {
+                        body: Prose::new("done, per the plan above".into()).unwrap(),
+                    },
+                    vec![RecordId(2)],
                 ),
             ])
             .unwrap()
@@ -1658,45 +1852,58 @@ mod test {
                         },
                     },
                 ),
-                note(
+                comment(
                     2,
                     2,
                     &jerry,
-                    Target::Task(TaskId(0)),
-                    "the verdict cites c-1 above",
+                    TaskId(0),
+                    CommentKind::Note {
+                        body: Prose::new("the verdict cites the figure above".into()).unwrap(),
+                    },
+                    vec![RecordId(1)],
                 ),
             ])
             .unwrap();
             // the name matches as a whole token; the title's "sweep" does not
             let groups = search(&world, &q(&["sweep-overview"])).unwrap();
-            assert_eq!(pointers(&groups), vec![(0, vec!["c-1".into()])]);
+            assert_eq!(pointers(&groups), vec![(0, vec!["seq 1".into()])]);
             let groups = &groups[0];
             assert_eq!(groups.records[0].kind, "artifact");
             assert_eq!(groups.records[0].actor, None);
             assert_eq!(groups.records[0].body, "sweep-overview");
             // the kind facet narrows to artifacts alone
             let groups = search(&world, &q(&["sweep-overview", "kind:artifact"])).unwrap();
-            assert_eq!(pointers(&groups), vec![(0, vec!["c-1".into()])]);
-            // and the mention is a reference search finding its namer
-            let groups = search(&world, &q(&["c-1"])).unwrap();
-            assert_eq!(pointers(&groups), vec![(0, vec!["c-2".into()])]);
+            assert_eq!(pointers(&groups), vec![(0, vec!["seq 1".into()])]);
+            // the citing note's prose names no term of the query: a
+            // citation's target is a pointer, not a text match
         }
 
+        /// An id term is a reference search: structural citations match,
+        /// prose mentions match, and the pointers carry public numbers.
         #[test]
         fn an_id_term_is_a_reference_search() {
             let world = story();
-            // 'c-2': the offer cites it in prose, c-3 and c-9 address it by reply
+            // c-0 (seq 2): cited by c-3 and c-9 through their mappings,
+            // named in prose by c-8
             assert_eq!(
-                pointers(&search(&world, &q(&["c-2"])).unwrap()),
+                pointers(&search(&world, &q(&["c-0"])).unwrap()),
                 vec![
-                    (0, vec!["c-3".into(), "c-9".into()]),
-                    (1, vec!["c-8".into()])
+                    (0, vec!["c-1".into(), "c-5".into()]),
+                    (1, vec!["c-4".into()])
                 ]
             );
-            // 't-0': c-5 names it in prose, c-2 by address
+            // t-0: the notes home on it, c-2 names it in prose
             assert_eq!(
                 pointers(&search(&world, &q(&["t-0"])).unwrap()),
-                vec![(0, vec!["c-2".into()]), (1, vec!["c-5".into()])]
+                vec![
+                    (0, vec!["c-0".into(), "c-1".into(), "c-5".into()]),
+                    (1, vec!["c-2".into()])
+                ]
+            );
+            // a term naming no comment of this fold matches only prose
+            assert_eq!(
+                pointers(&search(&world, &q(&["c-9"])).unwrap()),
+                Vec::<(usize, Vec<String>)>::new()
             );
         }
 
@@ -1705,13 +1912,7 @@ mod test {
             let jerry = ctx(Tier::Human, "jerry");
             let world = World::replay(vec![
                 task(0, 0, &jerry, "hold the verdict"),
-                note(
-                    2,
-                    2,
-                    &jerry,
-                    Target::Task(TaskId(0)),
-                    "the floop verdict lands",
-                ),
+                note(2, 2, &jerry, TaskId(0), "the floop verdict lands"),
                 record(
                     3,
                     3,
@@ -1726,7 +1927,7 @@ mod test {
             // the fold's latest body matches, the orphaned original does not
             assert_eq!(
                 pointers(&search(&world, &q(&["blorp"])).unwrap()),
-                vec![(0, vec!["c-2".into()])]
+                vec![(0, vec!["c-0".into()])]
             );
             assert!(search(&world, &q(&["floop"])).unwrap().is_empty());
         }
@@ -1737,13 +1938,7 @@ mod test {
             let pi = ctx(Tier::Agent, "pi");
             let world = World::replay(vec![
                 task(0, 0, &jerry, "hold the verdict"),
-                note(
-                    2,
-                    2,
-                    &pi,
-                    Target::Task(TaskId(0)),
-                    "the floop verdict lands",
-                ),
+                note(2, 2, &pi, TaskId(0), "the floop verdict lands"),
                 record(
                     3,
                     3,
@@ -1755,12 +1950,15 @@ mod test {
                 ),
                 // a later record still cites the withdrawn comment: the
                 // reference must never dangle
-                note(
+                comment(
                     4,
                     4,
                     &jerry,
-                    Target::Comment(CommentId(RecordId(2))),
-                    "the verdict lives on per c-2",
+                    TaskId(0),
+                    CommentKind::Note {
+                        body: Prose::new("the verdict lives on".into()).unwrap(),
+                    },
+                    vec![RecordId(2)],
                 ),
             ])
             .unwrap();
@@ -1773,13 +1971,13 @@ mod test {
             flagged.withdrawn = true;
             assert_eq!(
                 pointers(&search(&world, &flagged).unwrap()),
-                vec![(0, vec!["c-2".into()])]
+                vec![(0, vec!["c-0".into()])]
             );
-            // the citation still resolves: c-2's reference search finds the
-            // record that cites it, withdrawn or not
+            // the citation still resolves: c-0's reference search finds
+            // the record that cites it, withdrawn or not
             assert_eq!(
-                pointers(&search(&world, &q(&["c-2"])).unwrap()),
-                vec![(0, vec!["c-4".into()])]
+                pointers(&search(&world, &q(&["c-0"])).unwrap()),
+                vec![(0, vec!["c-1".into()])]
             );
         }
 
@@ -1795,8 +1993,7 @@ mod test {
                     .collect::<Vec<_>>(),
                 vec![(1, 0, 2), (0, 1, 1)]
             );
-            // by: only pi's reply matches; the title and offer are
-            // other authors', visible as counts
+            // by: only pi's notes match; the other authors stay as counts
             let groups = search(&world, &q(&["floop", "by:pi"])).unwrap();
             assert_eq!(
                 groups
@@ -1813,7 +2010,7 @@ mod test {
             let groups = search(&world, &q(&["floop", "kind:offer"])).unwrap();
             assert_eq!(
                 pointers(&groups),
-                vec![(1, vec!["c-8".into()]), (0, vec![])],
+                vec![(1, vec!["c-4".into()]), (0, vec![])],
                 "only the offer shows; the other thread holds its count"
             );
             let groups = search(&world, &q(&["kind:accept"])).unwrap();
@@ -1876,42 +2073,71 @@ mod test {
             )
         }
 
-        fn comment(seq: usize, target: Target, kind: CommentKind) -> (usize, Event) {
-            record(seq, Event::Commented { target, kind })
-        }
-
-        fn note(seq: usize, target: Target, body: &str) -> (usize, Event) {
-            comment(
+        fn comment(
+            seq: usize,
+            home: TaskId,
+            kind: CommentKind,
+            references: Vec<RecordId>,
+        ) -> (usize, Event) {
+            record(
                 seq,
-                target,
-                CommentKind::Note {
-                    body: Prose::new(body.into()).unwrap(),
+                Event::Commented {
+                    home,
+                    kind,
+                    references,
                 },
             )
         }
 
-        // t-0 holds the waited offer, its sibling note, a two-link chain, revisions, a withdrawal, the accept, a claim, an artifact; t-1 a rejected offer and its concluded successor
+        fn note(seq: usize, home: TaskId, body: &str) -> (usize, Event) {
+            comment(
+                seq,
+                home,
+                CommentKind::Note {
+                    body: Prose::new(body.into()).unwrap(),
+                },
+                Vec::new(),
+            )
+        }
+
+        fn note_on(seq: usize, home: TaskId, body: &str, refs: Vec<RecordId>) -> (usize, Event) {
+            comment(
+                seq,
+                home,
+                CommentKind::Note {
+                    body: Prose::new(body.into()).unwrap(),
+                },
+                refs,
+            )
+        }
+
+        // t-0 holds the waited offer, its sibling note, a citing note,
+        // revisions, a withdrawal, the accept, a claim, an artifact; t-1
+        // a rejected offer and its concluded successor, a bound use
         fn story() -> (World, Vec<(usize, Event)>) {
             let events = vec![
                 task(0, "implement foo"),
                 comment(
                     1,
-                    Target::Task(TaskId(0)),
+                    TaskId(0),
                     CommentKind::Offer {
                         body: Prose::new("suite green, ready for review".into()).unwrap(),
                     },
+                    Vec::new(),
                 ),
-                note(2, Target::Task(TaskId(0)), "sibling chatter"),
-                note(
+                note_on(2, TaskId(0), "sibling chatter", Vec::new()),
+                note_on(
                     3,
-                    Target::Comment(CommentId(RecordId(1))),
-                    "one question first",
+                    TaskId(0),
+                    "one question first, citing the offer [^1]",
+                    vec![RecordId(1)],
                 ),
                 task(4, "migrate floop"),
-                note(
+                note_on(
                     5,
-                    Target::Comment(CommentId(RecordId(3))),
-                    "answered in the body; see c-1 for the offer",
+                    TaskId(0),
+                    "answered in the body; see c-0 for the offer",
+                    Vec::new(),
                 ),
                 (
                     6,
@@ -1922,19 +2148,22 @@ mod test {
                 ),
                 comment(
                     7,
-                    Target::Comment(CommentId(RecordId(1))),
+                    TaskId(0),
                     CommentKind::Accept {
                         offer: CommentId(RecordId(1)),
                     },
+                    Vec::new(),
                 ),
-                note(8, Target::Task(TaskId(1)), "the other thread"),
+                note(8, TaskId(1), "the other thread"),
                 comment(
                     9,
-                    Target::Task(TaskId(1)),
+                    TaskId(1),
                     CommentKind::Use {
-                        offer: CommentId(RecordId(1)),
+                        source: TaskId(0),
                         reason: Prose::new("floop rests on foo".into()).unwrap(),
+                        bound: None,
                     },
+                    Vec::new(),
                 ),
                 (
                     10,
@@ -1969,31 +2198,43 @@ mod test {
                 ),
                 comment(
                     14,
-                    Target::Task(TaskId(1)),
+                    TaskId(1),
                     CommentKind::Offer {
                         body: Prose::new("floop migrated, review welcome".into()).unwrap(),
                     },
+                    Vec::new(),
                 ),
                 comment(
                     15,
-                    Target::Comment(CommentId(RecordId(14))),
+                    TaskId(1),
                     CommentKind::Reject {
                         offer: CommentId(RecordId(14)),
                         grounds: Prose::new("the floop index is missing".into()).unwrap(),
                     },
+                    Vec::new(),
                 ),
                 comment(
                     16,
-                    Target::Task(TaskId(1)),
+                    TaskId(1),
                     CommentKind::Offer {
                         body: Prose::new("the index rides along now".into()).unwrap(),
                     },
+                    Vec::new(),
                 ),
                 comment(
                     17,
-                    Target::Comment(CommentId(RecordId(16))),
+                    TaskId(1),
                     CommentKind::Accept {
                         offer: CommentId(RecordId(16)),
+                    },
+                    Vec::new(),
+                ),
+                (
+                    18,
+                    Event::UseBound {
+                        id: CommentId(RecordId(9)),
+                        offer: CommentId(RecordId(1)),
+                        grounds: Prose::new("the account that landed".into()).unwrap(),
                     },
                 ),
             ];
@@ -2042,18 +2283,34 @@ mod test {
                     &Target::Task(TaskId(1)),
                     WaitUntil::Activity
                 ),
-                vec![4, 8, 9, 14, 15, 16, 17]
+                vec![4, 8, 9, 14, 15, 16, 17, 18]
             );
         }
 
-        // the comment wait wakes only on its chain: replies, revisions of members, the accept — not the birth, sibling, use, or in-prose citation
+        // the comment wait wakes on the comment's own repairs, the
+        // records citing it, and the decisions naming it — not the
+        // birth, sibling, prose-only mention, or a binding elsewhere
         #[test]
-        fn the_comment_wait_matches_only_its_chain() {
+        fn the_comment_wait_matches_only_its_structural_edges() {
             let (world, events) = story();
             let offer = Target::Comment(CommentId(RecordId(1)));
             assert_eq!(
                 matching(&world, &events, &offer, WaitUntil::Activity),
-                vec![3, 5, 6, 7, 12, 13]
+                vec![3, 7, 12, 13]
+            );
+            // a binding names its use's selection, never the offer:
+            // waiting on the use wakes, waiting on the offer does not
+            let use_target = Target::Comment(CommentId(RecordId(9)));
+            assert_eq!(
+                matching(&world, &events, &use_target, WaitUntil::Activity),
+                vec![18]
+            );
+            // a prose-only mention (seq 5 says "see c-0") is not an edge
+            // of the comment it names: only structural citations match
+            let sibling = Target::Comment(CommentId(RecordId(2)));
+            assert_eq!(
+                matching(&world, &events, &sibling, WaitUntil::Activity),
+                Vec::<usize>::new()
             );
         }
 
@@ -2104,13 +2361,28 @@ mod test {
             }
         }
 
-        fn comment(seq: usize, ctx: &Context, target: Target, kind: CommentKind) -> Record {
-            record(seq, ctx, Event::Commented { target, kind })
+        fn comment(
+            seq: usize,
+            ctx: &Context,
+            home: TaskId,
+            kind: CommentKind,
+            references: Vec<RecordId>,
+        ) -> Record {
+            record(
+                seq,
+                ctx,
+                Event::Commented {
+                    home,
+                    kind,
+                    references,
+                },
+            )
         }
 
-        // the request resolves a comment target through its root; a task with no workspace returns none
+        // the request resolves through its home task; a task with no
+        // workspace returns none
         #[test]
-        fn the_request_facts_resolve_the_root_and_the_recorded_workspace() {
+        fn the_request_facts_resolve_the_home_and_the_recorded_workspace() {
             let jerry = ctx("jerry");
             let world = World::replay(vec![
                 record(
@@ -2140,26 +2412,29 @@ mod test {
                 comment(
                     3,
                     &jerry,
-                    Target::Task(TaskId(1)),
+                    TaskId(1),
                     CommentKind::Note {
                         body: Prose::new("context for the migration".into()).unwrap(),
                     },
+                    Vec::new(),
                 ),
                 comment(
                     4,
                     &jerry,
-                    Target::Task(TaskId(0)),
+                    TaskId(0),
                     CommentKind::Request {
                         body: Prose::new("where do you stand?".into()).unwrap(),
                     },
+                    Vec::new(),
                 ),
                 comment(
                     5,
                     &jerry,
-                    Target::Comment(CommentId(RecordId(3))),
+                    TaskId(1),
                     CommentKind::Request {
-                        body: Prose::new("and on this note?".into()).unwrap(),
+                        body: Prose::new("and beside the note?".into()).unwrap(),
                     },
+                    vec![RecordId(3)],
                 ),
             ])
             .unwrap();
@@ -2178,8 +2453,7 @@ mod test {
                 )
             );
 
-            // a comment target resolves through its root task, and a
-            // task with no recorded workspace returns none
+            // a request homed on a task without a workspace returns none
             let facts = request_facts(&world, RecordId(5)).expect("the request folds in");
             assert_eq!(facts.seq, 5);
             assert_eq!(facts.task, 1);

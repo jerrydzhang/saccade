@@ -14,6 +14,7 @@ fn required_tier(event: &Event) -> Authority {
         Event::TaskCreated { .. }
         | Event::TaskClaimed { .. }
         | Event::Commented { .. }
+        | Event::UseBound { .. }
         | Event::ArtifactAdded { .. }
         | Event::TaskWorkspaceCheckpointed { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
@@ -44,9 +45,18 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::ClaimTask { id, incarnation } => vec![Event::TaskClaimed { id, incarnation }],
         Command::CancelTask { id, explanation } => vec![Event::TaskCancelled { id, explanation }],
         Command::ReopenTask { id, explanation } => vec![Event::TaskReopened { id, explanation }],
-        Command::Comment { target, kind } => vec![Event::Commented { target, kind }],
+        Command::Comment {
+            home,
+            kind,
+            references,
+        } => vec![Event::Commented {
+            home,
+            kind,
+            references,
+        }],
         Command::ReviseComment { id, body } => vec![Event::CommentRevised { id, body }],
         Command::WithdrawComment { id, note } => vec![Event::CommentWithdrawn { id, note }],
+        Command::BindUse { id, offer, grounds } => vec![Event::UseBound { id, offer, grounds }],
         Command::Artifact { root, artifact } => vec![Event::ArtifactAdded { root, artifact }],
         Command::EstablishWorkspace {
             task_id,
@@ -72,7 +82,7 @@ pub fn decide(command: Command) -> Vec<Event> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::{CommentId, CommentKind, Target};
+    use crate::objects::comment::{CommentId, CommentKind};
     use crate::objects::incarnation::IncarnationId;
     use crate::types::actor::ActorName;
     use crate::types::artifact::Artifact;
@@ -103,7 +113,7 @@ mod test {
     fn authority_table_gates_exactly_the_gated_events() {
         // Expected cells stated independently of required_tier.
         use Authority::*;
-        let events: [(Event, Authority); 15] = [
+        let events: [(Event, Authority); 16] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -128,51 +138,66 @@ mod test {
             ),
             (
                 Event::Commented {
-                    target: Target::Task(TaskId(0)),
+                    home: TaskId(0),
                     kind: CommentKind::Note { body: prose() },
+                    references: Vec::new(),
                 },
                 AnyTier,
             ),
             (
                 Event::Commented {
-                    target: Target::Task(TaskId(0)),
+                    home: TaskId(0),
                     kind: CommentKind::Request { body: prose() },
+                    references: Vec::new(),
                 },
                 AnyTier,
             ),
             (
                 Event::Commented {
-                    target: Target::Task(TaskId(0)),
+                    home: TaskId(0),
                     kind: CommentKind::Offer { body: prose() },
+                    references: Vec::new(),
                 },
                 AnyTier,
             ),
             (
                 Event::Commented {
-                    target: Target::Comment(CommentId(RecordId(0))),
+                    home: TaskId(0),
                     kind: CommentKind::Accept {
                         offer: CommentId(RecordId(0)),
                     },
+                    references: Vec::new(),
                 },
                 AnyTier,
             ),
             (
                 Event::Commented {
-                    target: Target::Comment(CommentId(RecordId(0))),
+                    home: TaskId(0),
                     kind: CommentKind::Reject {
                         offer: CommentId(RecordId(0)),
                         grounds: prose(),
                     },
+                    references: Vec::new(),
                 },
                 AnyTier,
             ),
             (
                 Event::Commented {
-                    target: Target::Task(TaskId(0)),
+                    home: TaskId(0),
                     kind: CommentKind::Use {
-                        offer: CommentId(RecordId(0)),
+                        source: TaskId(1),
                         reason: prose(),
+                        bound: None,
                     },
+                    references: Vec::new(),
+                },
+                AnyTier,
+            ),
+            (
+                Event::UseBound {
+                    id: CommentId(RecordId(0)),
+                    offer: CommentId(RecordId(1)),
+                    grounds: prose(),
                 },
                 AnyTier,
             ),
@@ -256,8 +281,9 @@ mod test {
                 explanation: prose(),
             },
             Command::Comment {
-                target: Target::Task(TaskId(0)),
+                home: TaskId(0),
                 kind: CommentKind::Offer { body: prose() },
+                references: vec![RecordId(0)],
             },
             Command::ReviseComment {
                 id: CommentId(RecordId(0)),
@@ -266,6 +292,11 @@ mod test {
             Command::WithdrawComment {
                 id: CommentId(RecordId(0)),
                 note: prose(),
+            },
+            Command::BindUse {
+                id: CommentId(RecordId(0)),
+                offer: CommentId(RecordId(1)),
+                grounds: prose(),
             },
             Command::Artifact {
                 root: TaskId(0),
