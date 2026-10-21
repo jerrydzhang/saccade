@@ -1,11 +1,7 @@
-//! Native Pi session-file mechanics for workspace handoff: one saved
-//! session (JSONL in Pi's documented session format) keeps its native
-//! identity while the cwd in its first-line header moves to a selected
-//! workspace. This is an adapter over the documented format, not a
-//! native API: the caller owns process quiescence and the ordinary
-//! native startup (`--session <full-id> --session-dir <dir>` launched
-//! from the selected workspace). One file is touched; the record, the
-//! tracker, and any running Pi are not.
+//! Native Pi session-file mechanics for workspace handoff: an adapter
+//! over Pi's documented session format, not a native API. The caller
+//! owns process quiescence and the native startup itself; this module
+//! touches one file, never the record or the tracker.
 
 use std::fs;
 use std::io::Write;
@@ -54,15 +50,12 @@ pub enum HandoffFail {
     Write { path: PathBuf, detail: String },
 }
 
-/// The saved session's header facts.
 pub fn read_header(path: &Path) -> Result<SessionHeader, HandoffFail> {
     Ok(load(path)?.facts)
 }
 
-/// Move one stopped session's header cwd to the selected workspace
-/// address, replacing the file atomically and preserving its
-/// permissions; the id, every other header field, and all non-header
-/// bytes are unchanged. Returns the cwd the session carried before.
+/// Move a stopped session's header cwd to the selected workspace,
+/// replacing the file atomically; returns the cwd it carried before.
 ///
 /// The caller confirms the previous native process has exited before
 /// calling; a readable file establishes no quiescence.
@@ -200,11 +193,14 @@ fn atomic_replace(path: &Path, bytes: Vec<u8>) -> Result<(), HandoffFail> {
         std::process::id(),
         nanos
     ));
+    // cleanup below may remove only a temp this call created, so
+    // exclusive creation comes first; a refused create removes nothing
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|e| fail(e.to_string()))?;
     let written = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)?;
         file.set_permissions(permissions)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
@@ -258,8 +254,7 @@ mod tests {
         serde_json::from_slice(line).unwrap()
     }
 
-    // A native-shaped session: header with an extra field, then a
-    // story of tree-linked entries through a final newline.
+    // a native-shaped session: header with an extra field, then a story of tree-linked entries
     fn story_session() -> Vec<u8> {
         let header = r#"{"type":"session","version":3,"id":"handoff-smoke-1a2b3c4d","timestamp":"2026-10-21T03:40:04.770Z","cwd":"/story/worktrees/implement-handoff","parentSession":"/story/sessions/earlier.jsonl"}"#;
         let entries = [
