@@ -2980,6 +2980,10 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         "{out}"
     );
     let worktree = db.parent().unwrap().join("worktrees").join("t-0");
+    let this_sac = std::fs::canonicalize(env!("CARGO_BIN_EXE_sac"))
+        .unwrap()
+        .display()
+        .to_string();
     let typed = command_of(&host_log, &format!("path:{}", worktree.display()));
     assert!(
         typed.starts_with(&format!(
@@ -2990,10 +2994,12 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     );
     assert!(
         typed.contains(&format!(
-            "exec t-0 -- {}",
+            "exec t-0 -- env {} {} {}",
+            shell_quoted(&format!("SACCADE_SERVER={base_url}")),
+            shell_quoted(&format!("SACCADE_CLI={this_sac}")),
             shell_quoted(&pi.display().to_string())
         )),
-        "{typed}"
+        "the native routing re-arms inside exec argv, after its scrub: {typed}"
     );
     assert!(
         typed.contains(&format!("--server {}", shell_quoted(&base_url))),
@@ -3027,12 +3033,15 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         .env("PATH", std::env::var("PATH").unwrap())
         .env("PI_DUMP", dump.display().to_string())
         .env_remove("SACCADE_ACTOR")
-        .env_remove("SACCADE_TASK")
-        .env_remove("SACCADE_INCARNATION_SEQ")
-        .env_remove("SACCADE_WORKSPACE")
-        .env_remove("SACCADE_REPO")
-        .env_remove("SACCADE_DB")
-        .env_remove("SACCADE_SERVER")
+        // the stale routing and scope a host terminal could inherit;
+        // none of it may substitute for the line's own values
+        .env("SACCADE_SERVER", "http://stale:1")
+        .env("SACCADE_DB", "/stale/routing.db")
+        .env("SACCADE_CLI", "/stale/sac")
+        .env("SACCADE_TASK", "t-99")
+        .env("SACCADE_INCARNATION_SEQ", "999")
+        .env("SACCADE_WORKSPACE", "/nowhere")
+        .env("SACCADE_REPO", "/stale/repo")
         .current_dir(&root)
         .output()
         .expect("the typed command runs");
@@ -3069,13 +3078,20 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
         line("SACCADE_WORKSPACE"),
         format!("SACCADE_WORKSPACE={}", worktree.display())
     );
+    assert_eq!(
+        line("SACCADE_REPO"),
+        format!("SACCADE_REPO={}", root.display())
+    );
+    // the launch routing, not the stale inheritance, reached the session
+    assert_eq!(line("SACCADE_SERVER"), format!("SACCADE_SERVER={base_url}"));
+    assert_eq!(line("SACCADE_CLI"), format!("SACCADE_CLI={this_sac}"));
     assert!(
         !injected.lines().any(|l| l.starts_with("SACCADE_DB=")),
-        "routing never rides the injection: {injected}"
+        "start is server-only; no db routing: {injected}"
     );
     assert!(
-        !injected.lines().any(|l| l.starts_with("SACCADE_SERVER=")),
-        "routing never rides the injection: {injected}"
+        !injected.lines().any(|l| l.contains("/stale/")) && !injected.contains("stale:1"),
+        "stale ambient routing never substitutes: {injected}"
     );
 
     // repeat start: the live terminal is revealed, nothing new created
@@ -3287,6 +3303,125 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     assert_eq!(identity["incarnation_seq"], 1);
     assert!(identity.get("incarnation").is_none());
     assert_eq!(identity["workspace"], worktree.display().to_string());
+
+    // discovered routing: no --server is named; the start door resolves
+    // the repo's published server and arms the native session with it.
+    // The tracker lives at the repo's state root, so serve and clients
+    // share one XDG_STATE_HOME
+    let db2 = scratch_db("ws-cli-discovered");
+    let (root2, _first2, _head2) = scratch_repo(db2.parent().unwrap());
+    let state_home2 = db2.parent().unwrap().join("state-home");
+    let root2c = std::fs::canonicalize(&root2).unwrap();
+    let tracker2 = state_home2
+        .join("saccade")
+        .join(format!(
+            "{}-{:06x}",
+            saccade::paths::repo_basename(&root2c),
+            saccade::paths::fnv1a(root2c.as_os_str().as_encoded_bytes())
+        ))
+        .join("saccade.db");
+    let (mut serve2, discovered_url) = spawn_serve(
+        bin,
+        &tracker2,
+        &["--repo", root2.to_str().unwrap()],
+        &[("XDG_STATE_HOME", state_home2.to_str().unwrap())],
+    );
+    let discovered_envs = [
+        ("SACCADE_ACTOR", "pi"),
+        ("XDG_STATE_HOME", state_home2.to_str().unwrap()),
+    ];
+    let discovered_args = |sub: &[&str]| {
+        let mut full = vec!["--repo".to_string(), root2.display().to_string()];
+        full.extend(sub.iter().map(|s| s.to_string()));
+        full
+    };
+    assert!(
+        run(
+            &discovered_args(&["create", "task", "discovered routing"]),
+            &discovered_envs
+        )
+        .0
+    );
+    std::fs::write(&host_log, b"").unwrap();
+    let (ok, out, err) = run(
+        &discovered_args(&["start", "t-0", "discovered prompt"]),
+        &discovered_envs,
+    );
+    assert!(ok, "stdout: {out}\nstderr: {err}");
+    let worktree2 = tracker2.parent().unwrap().join("worktrees").join("t-0");
+    let typed2 = command_of(&host_log, &format!("path:{}", worktree2.display()));
+    assert!(
+        !typed2.contains("--server"),
+        "no explicit flag: the discovery named the destination: {typed2}"
+    );
+    assert!(
+        typed2.contains(&shell_quoted(&format!("SACCADE_SERVER={discovered_url}"))),
+        "the discovered server arms the session: {typed2}"
+    );
+    let allowed = std::process::Command::new("direnv")
+        .arg("allow")
+        .arg(&worktree2)
+        .output()
+        .expect("direnv runs");
+    assert!(
+        allowed.status.success(),
+        "direnv allow: {}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    let dump2 = db2.parent().unwrap().join("pi-dump-run");
+    let fresh2 = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(&typed2)
+        .env("PATH", std::env::var("PATH").unwrap())
+        .env("PI_DUMP", dump2.display().to_string())
+        .env("XDG_STATE_HOME", state_home2.to_str().unwrap())
+        .env_remove("SACCADE_ACTOR")
+        .env("SACCADE_SERVER", "http://stale:1")
+        .env("SACCADE_DB", "/stale/routing.db")
+        .env("SACCADE_CLI", "/stale/sac")
+        .current_dir(&root)
+        .output()
+        .expect("the discovered typed command runs");
+    assert!(
+        fresh2.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&fresh2.stderr)
+    );
+    let injected2 = std::fs::read_to_string(&dump2).unwrap();
+    assert!(
+        injected2
+            .lines()
+            .any(|l| l == format!("SACCADE_SERVER={discovered_url}")),
+        "{injected2}"
+    );
+    assert!(
+        injected2
+            .lines()
+            .any(|l| l == format!("SACCADE_CLI={this_sac}")),
+        "{injected2}"
+    );
+    assert!(
+        injected2
+            .lines()
+            .any(|l| l == format!("SACCADE_REPO={}", root2.display())),
+        "{injected2}"
+    );
+    assert!(
+        injected2.lines().any(|l| l == "SACCADE_TASK=t-0"),
+        "{injected2}"
+    );
+    assert!(
+        injected2.lines().any(|l| l == "argv: discovered prompt"),
+        "{injected2}"
+    );
+    assert!(
+        !injected2.lines().any(|l| l.starts_with("SACCADE_DB=")),
+        "{injected2}"
+    );
+
+    let _ = serve2.kill();
+    let _ = serve2.wait();
+    std::fs::remove_dir_all(db2.parent().unwrap()).unwrap();
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -4014,6 +4149,10 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
     let submitted = command_of(&fx.host_log, "");
     assert!(submitted.contains("--session resumee01"), "{submitted}");
     assert!(submitted.contains("--session-dir"), "{submitted}");
+    // the terminal title carries the canonical public token, once
+    let logged = std::fs::read_to_string(&fx.host_log).unwrap();
+    assert!(logged.contains("--title\nsac resume i-0\n"), "{logged}");
+    assert!(!logged.contains("i-i-"), "{logged}");
 
     // one append-ordered witness: the host started the command, then the harness took the real guard
     let witness = std::fs::read_to_string(&fx.child_log).unwrap();
@@ -4737,11 +4876,17 @@ fn piped_human_prose_passes_and_unattended_refuses() {
 // ---- the destination contract through the CLI face ----
 
 /// A real `sac serve` subprocess; the reply is the URL it published.
-fn spawn_serve(bin: &str, db: &std::path::Path, extra: &[&str]) -> (std::process::Child, String) {
+fn spawn_serve(
+    bin: &str,
+    db: &std::path::Path,
+    extra: &[&str],
+    envs: &[(&str, &str)],
+) -> (std::process::Child, String) {
     let mut child = std::process::Command::new(bin)
         .args(["serve", "--port", "0", "--db"])
         .arg(db)
         .args(extra)
+        .envs(envs.iter().copied())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -4798,9 +4943,9 @@ fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
     let dir = std::env::temp_dir().join(format!("sac-api-dest-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (db_a, db_b, db_c) = (dir.join("a.db"), dir.join("b.db"), dir.join("c.db"));
-    let (mut serve_a, url_a) = spawn_serve(bin, &db_a, &[]);
-    let (mut serve_b, url_b) = spawn_serve(bin, &db_b, &[]);
-    let (mut serve_c, url_c) = spawn_serve(bin, &db_c, &[]);
+    let (mut serve_a, url_a) = spawn_serve(bin, &db_a, &[], &[]);
+    let (mut serve_b, url_b) = spawn_serve(bin, &db_b, &[], &[]);
+    let (mut serve_c, url_c) = spawn_serve(bin, &db_c, &[], &[]);
 
     let sac = |args: &[&str], envs: &[(&str, &str)]| {
         let mut cmd = scrubbed(std::process::Command::new(bin));
@@ -5054,7 +5199,8 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
 
     // a scratch serve never overwrites the repo's hint; wildcard publishes loopback
     let scratch_db = dir.join("scratch").join("saccade.db");
-    let (mut scratch_serve, scratch_url) = spawn_serve(bin, &scratch_db, &["--bind", "0.0.0.0"]);
+    let (mut scratch_serve, scratch_url) =
+        spawn_serve(bin, &scratch_db, &["--bind", "0.0.0.0"], &[]);
     assert!(
         scratch_url.starts_with("http://127.0.0.1:"),
         "{scratch_url}"
@@ -5070,7 +5216,7 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
     let _ = scratch_serve.kill();
     let _ = scratch_serve.wait();
     std::fs::remove_file(saccade::paths::address_at(&scratch_db)).unwrap();
-    let (mut scratch_serve, republished) = spawn_serve(bin, &scratch_db, &[]);
+    let (mut scratch_serve, republished) = spawn_serve(bin, &scratch_db, &[], &[]);
     let (ok, _, err) = sac_in(&root, &["--server", &republished, "--json", "log"], &state);
     assert!(ok, "the republished hint answers: {err}");
     assert_eq!(

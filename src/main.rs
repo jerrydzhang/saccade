@@ -1900,14 +1900,28 @@ fn launch_harness(
     let pi = pinned_pi()?;
     let label = command_label(&pi.display().to_string());
     let repo = resolve_repo(cli)?;
-    let sac = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("sac"));
+    // this same path arms the session's SACCADE_CLI: a guessed PATH
+    // spelling could hand the handoff helper another tracker's CLI
+    let sac = std::env::current_exe().map_err(|e| {
+        Fail::Usage(format!(
+            "this executable cannot be resolved for the launch: {e}"
+        ))
+    })?;
     // an assignment is not a word: its value is quoted here, and it
     // never passes through the word quoting below
     let assignment = format!("SACCADE_ACTOR={}", shell_quote(&label));
     let mut argv = vec![sac.display().to_string()];
     // the child's explicit destination rides only when the caller named
     // one; a discovered server is re-found from the repo it serves
-    if let (Destination::Server { url }, true) = (destination, cli.server.is_some()) {
+    let url = match destination {
+        Destination::Server { url } => url.clone(),
+        Destination::Local { .. } => {
+            return Err(Fail::Usage(
+                "start runs through the server; no local launch exists".into(),
+            ));
+        }
+    };
+    if cli.server.is_some() {
         argv.extend(["--server".to_string(), url.clone()]);
     }
     argv.extend([
@@ -1916,6 +1930,13 @@ fn launch_harness(
         "exec".to_string(),
         format!("t-{}", task.0),
         "--".to_string(),
+        // exec scrubs the caller's destination env, so the session's
+        // own routing re-arms here, after that scrub: the already
+        // resolved server and this binary, or the session attaches
+        // nowhere and dies unregistered
+        "env".to_string(),
+        format!("SACCADE_SERVER={url}"),
+        format!("SACCADE_CLI={}", sac.display()),
         pi.display().to_string(),
         request.as_str().to_string(),
     ]);
@@ -2496,6 +2517,13 @@ fn integrate_launch(
                 ));
             };
             let id = resolve_incarnation(&world, token)?;
+            // the title and error faces render the fold's canonical
+            // public number, never the typed spelling (i-i-N came from
+            // concatenating both)
+            let num = world
+                .incarnation_num(id)
+                .expect("the fold just resolved this incarnation");
+            let token = &format!("i-{num}");
             let ctx = &world.incarnations[&id];
             let saccade::Incarnation::Native {
                 native_id,
@@ -2503,8 +2531,7 @@ fn integrate_launch(
             } = &ctx.incarnation
             else {
                 return Err(Fail::Usage(format!(
-                    "i-{} carries no saved native session to resume; historical attribution identities have none",
-                    token
+                    "{token} carries no saved native session to resume; historical attribution identities have none",
                 )));
             };
             // strict resume: the saved file must exist and carry the
@@ -2565,7 +2592,7 @@ fn integrate_launch(
                     ));
                 }
             }
-            (dir, argv, format!("sac resume i-{token}"), Some(guard))
+            (dir, argv, format!("sac resume {token}"), Some(guard))
         }
         _ => {
             return Err(Fail::Usage(
