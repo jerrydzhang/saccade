@@ -22,6 +22,7 @@ use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::events::Event;
 use crate::objects::task::TaskId;
 use crate::store::{Context, RecordId, Scope, Tier, World};
+use crate::types::pointers::WorktreePath;
 use crate::views::WorkspaceFacts;
 use crate::web;
 use crate::workspace::{self, Established, WorkspaceFail};
@@ -422,6 +423,9 @@ enum ApiFail {
     Workspace(WorkspaceFail),
     /// The serving edge has no repo to run effects against
     NoRepo,
+    /// A controller refusal with its own status and code: quiescence,
+    /// association, or a partial outcome the caller must see
+    Refused(StatusCode, &'static str, String),
 }
 
 impl From<ExecuteFail> for ApiFail {
@@ -461,8 +465,13 @@ impl ApiFail {
                 Value::String(detail),
             ),
             ApiFail::Workspace(fail) => {
+                // infrastructure failures are the server's, never the
+                // caller's bad input: unavailable entropy and a
+                // directory the OS refused are the effect layer's break
                 let status = match fail {
-                    WorkspaceFail::Git(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                    WorkspaceFail::Git(_)
+                    | WorkspaceFail::Entropy(_)
+                    | WorkspaceFail::DirCreate { .. } => StatusCode::INTERNAL_SERVER_ERROR,
                     _ => StatusCode::BAD_REQUEST,
                 };
                 (status, fail.code().into(), Value::String(fail.detail()))
@@ -475,6 +484,9 @@ impl ApiFail {
                         .into(),
                 ),
             ),
+            ApiFail::Refused(status, code, detail) => {
+                (status, code.to_string(), Value::String(detail))
+            }
         }
     }
 }
@@ -590,6 +602,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/records", get(records))
         .route("/api/v1/workspace/start", post(workspace_start))
         .route("/api/v1/workspace/open", post(workspace_open))
+        .route("/api/v1/workspace/create", post(workspace_create))
+        .route("/api/v1/workspace/change", post(workspace_change))
         .route("/api/v1/native/attach", post(native_attach))
         .route("/api/v1/native/bridge", get(native_bridge))
         .route("/api/v1/native/launch", get(native_launch))
@@ -679,6 +693,7 @@ fn workspace_operation(
                 ApiFail::Malformed(_) => "malformed_request",
                 ApiFail::Workspace(effect) => effect.code(),
                 ApiFail::NoRepo => "workspace_no_repo",
+                ApiFail::Refused(_, code, _) => code,
             };
             let cursor = match guard {
                 ServerState::Ready(inner) => db::last_seq(&inner.conn)
@@ -842,6 +857,340 @@ async fn workspace_open(State(app): State<AppState>, body: Bytes) -> Response {
     respond_operation(guard, outcome)
 }
 
+// -- the task-free workspace controller ----------------------------------
+
+/// What a creation provisioned: actual Git facts and the birth record
+/// that carries them - the workspace's identity, never a numbering.
+#[derive(Serialize)]
+pub struct WorkspaceBirth {
+    /// The birth record's position: the workspace's stable identity
+    pub seq: usize,
+    pub base: String,
+    pub branch: String,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct CreateReply {
+    pub created: bool,
+    pub workspace: WorkspaceBirth,
+    pub records: Vec<StoredRecord>,
+}
+
+#[derive(Deserialize)]
+struct CreateRequest {
+    /// The descriptive label of the c-366 name: optional, falling
+    /// back to workspace-<token>
+    #[serde(default)]
+    label: Option<String>,
+    /// The canonical base: a ref, defaulting to the primary HEAD
+    #[serde(default)]
+    base: Option<String>,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+/// Provision through the real Git provisioner under the writer lock,
+/// then land the birth with the facts the effect actually produced.
+fn create_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    label: Option<&str>,
+    base: Option<&str>,
+) -> Result<CreateReply, ApiFail> {
+    let ServerState::Ready(inner) = guard else {
+        let ServerState::Degraded(reason, _) = guard else {
+            unreachable!("the state is one of the two")
+        };
+        return Err(ApiFail::Degraded(reason.clone()));
+    };
+    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
+        return Err(ApiFail::NoRepo);
+    };
+    let home = workspace::worktree_home(&inner.db_path);
+    let provisioned =
+        workspace::provision(&repo_root, &home, label, base).map_err(ApiFail::Workspace)?;
+    let drafts = vec![db::RecordDraft {
+        context: Context::system(),
+        event: Event::WorkspaceCreated {
+            base: provisioned.base.clone(),
+            branch: provisioned.branch.clone(),
+            worktree: provisioned.worktree.clone(),
+        },
+    }];
+    match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
+        Ok(records) => {
+            let birth = records[0].seq;
+            Ok(CreateReply {
+                created: true,
+                workspace: WorkspaceBirth {
+                    seq: birth,
+                    base: provisioned.base.as_str().to_string(),
+                    branch: provisioned.branch.as_str().to_string(),
+                    path: provisioned.worktree.as_path().display().to_string(),
+                },
+                records,
+            })
+        }
+        // the effect stands: a failed birth is disclosed, never rolled back
+        Err(e) => Err(ApiFail::Refused(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage",
+            format!(
+                "provisioned branch {} at {} but the birth record could not land: {e}; \
+                 the branch and directory stand - inspect them before creating another",
+                provisioned.branch.as_str(),
+                provisioned.worktree.as_path().display()
+            ),
+        )),
+    }
+}
+
+async fn workspace_create(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: CreateRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
+    let started = Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = create_operation(
+        &app,
+        &mut guard,
+        request.label.as_deref(),
+        request.base.as_deref(),
+    );
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+/// What a stopped-session change did: the incarnation, the directory
+/// it carried before, and the directory it carries now.
+#[derive(Serialize)]
+pub struct ChangeReply {
+    pub changed: bool,
+    /// The birth record position: the machine identity channel
+    pub incarnation: usize,
+    /// The incarnation's dense public number, the human-facing i-N
+    pub num: usize,
+    pub from: String,
+    pub to: String,
+    pub records: Vec<StoredRecord>,
+}
+
+#[derive(Deserialize)]
+struct ChangeRequest {
+    /// The incarnation's public number, the human-facing i-N
+    incarnation: usize,
+    /// The selected directory: an explicit existing one, never created here
+    to: String,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+/// One stopped-session change: resolve the recorded incarnation,
+/// prove quiescence through its kernel guard, retarget the saved
+/// header atomically, then land the System change fact. Busy and
+/// unknown refuse before any mutation; the session's activation lock
+/// serializes the whole window against automatic mail activation.
+fn change_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    num: usize,
+    to: &str,
+) -> Result<ChangeReply, ApiFail> {
+    let ServerState::Ready(inner) = guard else {
+        let ServerState::Degraded(reason, _) = guard else {
+            unreachable!("the state is one of the two")
+        };
+        return Err(ApiFail::Degraded(reason.clone()));
+    };
+    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
+        return Err(ApiFail::NoRepo);
+    };
+    // the fold resolves the incarnation before anything moves: a
+    // missing or historical identity is no change target
+    let world = match db::load(&inner.conn)
+        .map_err(|e| ApiFail::Db(e.to_string()))?
+        .state
+    {
+        db::LoadState::Full(world) => world,
+        db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
+    };
+    let id = world
+        .incarnation_at_num(num)
+        .ok_or(ApiFail::Reject(Reject::InvalidIncarnationId, None))?;
+    let (native_id, saved_session) = match &world.incarnations[&id].incarnation {
+        crate::Incarnation::Native {
+            native_id,
+            saved_session,
+        } => (native_id.clone(), saved_session.clone()),
+        crate::Incarnation::Established { .. } => {
+            return Err(ApiFail::Refused(
+                StatusCode::BAD_REQUEST,
+                "invalid_incarnation_id",
+                format!(
+                    "i-{num} is a historical attribution identity: it carries no saved native session to move"
+                ),
+            ));
+        }
+    };
+    // the target is validated before any lock is taken: an explicit
+    // existing directory, never one this route creates
+    let target = std::path::PathBuf::from(to);
+    let target = WorktreePath::new(target.clone()).map_err(|_| {
+        ApiFail::Refused(
+            StatusCode::BAD_REQUEST,
+            "workspace_path_invalid",
+            format!("{} is not an absolute path", target.display()),
+        )
+    })?;
+    if !target.as_path().is_dir() {
+        return Err(ApiFail::Refused(
+            StatusCode::BAD_REQUEST,
+            "workspace_path_missing",
+            format!(
+                "{} does not exist; a change selects an existing directory and creates nothing",
+                target.as_path().display()
+            ),
+        ));
+    }
+
+    // the session's activation lock: automatic mail activation and
+    // this change serialize on the very same file, so neither can
+    // interleave with the other's decision
+    let _session = match crate::activate::lock_session(&repo_root, native_id.as_str()) {
+        Ok(lock) => lock,
+        Err(crate::activate::LockFail::InFlight) => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "session_activation_in_flight",
+                "another activation holds this session's lock; try again when it settles".into(),
+            ));
+        }
+        Err(crate::activate::LockFail::Unavailable(e)) => {
+            return Err(ApiFail::Refused(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "session_lock_unavailable",
+                format!("the session's activation lock could not be opened: {e}"),
+            ));
+        }
+    };
+    // quiescence is kernel evidence, never a guess: a held guard is a
+    // live process, an unprobeable one is unknown - both refuse first
+    let guard_path = crate::activate::guard_path(&repo_root, native_id.as_str());
+    match crate::activate::guard_held(&guard_path) {
+        Some(false) => {}
+        Some(true) => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "session_live",
+                format!(
+                    "i-{num}'s launch guard is held by a live process; exit that session first - this route moves stopped sessions only"
+                ),
+            ));
+        }
+        None => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "session_quiescence_unknown",
+                format!(
+                    "i-{num}'s launch guard at {} cannot be probed; liveness is unknown and nothing was moved",
+                    guard_path.display()
+                ),
+            ));
+        }
+    }
+    // the physical retarget: the adapter validates the immutable saved
+    // association (id match) before any byte moves, then replaces the
+    // header atomically
+    let from =
+        crate::pi_session::retarget_cwd(saved_session.as_path(), native_id.as_str(), &target)
+            .map_err(|e| {
+                let (status, code) = match &e {
+                    crate::pi_session::HandoffFail::Missing(_) => {
+                        (StatusCode::BAD_REQUEST, "saved_session_missing")
+                    }
+                    crate::pi_session::HandoffFail::IdMismatch { .. } => {
+                        (StatusCode::BAD_REQUEST, "saved_session_mismatch")
+                    }
+                    _ => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "saved_session_unreadable",
+                    ),
+                };
+                ApiFail::Refused(status, code, e.to_string())
+            })?;
+    // the record lands only after the effect: a failed publication is
+    // disclosed with its pointers, never rolled back into a pending state
+    let command = Command::ChangeWorkspace {
+        incarnation: id,
+        worktree: target.clone(),
+    };
+    match db::record(
+        &mut inner.conn,
+        &Context::system(),
+        command,
+        db::now_epoch(),
+    ) {
+        Ok((records, _)) => Ok(ChangeReply {
+            changed: true,
+            incarnation: id.0.0,
+            num,
+            from,
+            to: target.as_path().display().to_string(),
+            records,
+        }),
+        Err(e) => Err(ApiFail::Refused(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage",
+            format!(
+                "the saved session at {} was retargeted to {} but the change record could not land: {e}; \
+                 the header change stands and the record is missing - resume still works from the new directory",
+                saved_session.as_path().display(),
+                target.as_path().display()
+            ),
+        )),
+    }
+}
+
+async fn workspace_change(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: ChangeRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
+    let started = Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = change_operation(&app, &mut guard, request.incarnation, &request.to);
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
 // -- the native integration's doors -------------------------------------
 
 /// One native integration attempt's outcome, logged like every
@@ -878,6 +1227,7 @@ fn integration_outcome<T>(
                 ApiFail::Malformed(_) => "malformed_request",
                 ApiFail::Workspace(effect) => effect.code(),
                 ApiFail::NoRepo => "workspace_no_repo",
+                ApiFail::Refused(_, code, _) => code,
             };
             let cursor = match guard {
                 ServerState::Ready(inner) => db::last_seq(&inner.conn).ok().flatten(),

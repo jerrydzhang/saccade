@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -258,7 +258,8 @@ enum Cmd {
     /// Launch the composed native Pi in an explicit existing
     /// workspace, task-free: a fresh session registers itself as a new
     /// incarnation; --resume continues a saved one from its recorded
-    /// locator. No task, claim, or request is provisioned
+    /// locator; --new provisions a fresh workspace first. No task,
+    /// claim, or request is provisioned
     Integrate {
         /// The workspace directory to work in; it must already exist
         #[arg(long, conflicts_with = "resume")]
@@ -267,6 +268,21 @@ enum Cmd {
         /// native session, validated against the saved header
         #[arg(long, conflicts_with = "workspace")]
         resume: Option<String>,
+        /// Provision a NEW workspace through the server's Git effects
+        /// and launch there: an optional descriptive label (the name
+        /// falls back to workspace-<token>); conflicts with
+        /// --workspace and --resume
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "",
+            conflicts_with_all = ["workspace", "resume"]
+        )]
+        new: Option<String>,
+        /// The Git base for --new: a ref, defaulting to the primary
+        /// checkout's current HEAD
+        #[arg(long, requires = "new")]
+        base: Option<String>,
         /// The initial question: the launching incarnation sends it as
         /// a durable addressed message to the newborn peer. The creator
         /// must be registered (SACCADE_INCARNATION_SEQ); conflicts with
@@ -276,6 +292,15 @@ enum Cmd {
         /// The initial prompt, quoted; native human input when omitted
         #[arg(last = true)]
         prompt: Vec<String>,
+    },
+    /// The task-free workspace controller: provision a new workspace,
+    /// or move a stopped native session's saved directory. Creation
+    /// births its own record - no task, claim, or incarnation; a
+    /// change refuses a live session and lands only after the saved
+    /// header actually moved
+    Workspace {
+        #[command(subcommand)]
+        verb: WorkspaceVerb,
     },
     /// Report this session's environment-declared identity and routing:
     /// disclosure, never a liveness claim or proof of ownership
@@ -332,6 +357,40 @@ enum Cmd {
         /// offer addresses a task only
         #[arg(long)]
         until: UntilMode,
+    },
+}
+
+/// The task-free controller's verbs.
+#[derive(Clone, Subcommand)]
+enum WorkspaceVerb {
+    /// Provision a NEW workspace: a fresh branch named from the
+    /// optional descriptive label plus a generated uniqueness suffix
+    /// (workspace-<token> without a label), cut at the named base or
+    /// the primary HEAD, checked out under the tracker's home
+    New {
+        /// The descriptive label; omit for workspace-<token>
+        label: Option<String>,
+        /// The Git base: a ref, defaulting to the primary checkout's
+        /// current HEAD
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// Move a stopped native session's saved working directory to an
+    /// explicit existing one: a live session refuses (exit it first),
+    /// and the change record lands only after the header moved
+    Switch {
+        /// The incarnation (i-<n>)
+        incarnation: String,
+        /// The selected directory: it must already exist
+        #[arg(long)]
+        to: PathBuf,
+        /// Resume the session in the new directory after the change
+        #[arg(long)]
+        resume: bool,
+        /// The prompt for the resumed session; native human input when
+        /// omitted (with --resume)
+        #[arg(last = true)]
+        prompt: Vec<String>,
     },
 }
 
@@ -667,13 +726,26 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::Integrate {
             workspace,
             resume,
+            new,
+            base,
             ask,
             prompt,
         } => {
+            if let Some(labeled) = new.as_deref().map(str::to_owned) {
+                let label = (!labeled.is_empty()).then_some(labeled.as_str());
+                return integrate_new_door(
+                    cli,
+                    &destination,
+                    label,
+                    base.as_deref(),
+                    ask.as_deref(),
+                    prompt,
+                );
+            }
             if let Some(question) = ask.as_deref() {
                 let Some(workspace) = workspace.as_deref() else {
                     return Err(Fail::Usage(
-                        "integrate --ask launches a fresh peer: pass --workspace <dir>".into(),
+                        "integrate --ask launches a fresh peer: pass --workspace <dir> or --new [label]".into(),
                     ));
                 };
                 return ask_door(cli, &destination, workspace, question);
@@ -686,6 +758,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                 prompt,
             );
         }
+        Cmd::Workspace { verb } => return workspace_door(cli, &destination, verb),
         Cmd::Start {
             id,
             body,
@@ -2567,18 +2640,29 @@ fn launch_token() -> String {
     token
 }
 
+/// What an ask launch did: the newborn's address and the question's.
+struct AskOutcome {
+    workspace: String,
+    terminal: String,
+    birth: usize,
+    num: usize,
+    message_seq: usize,
+    message_num: Option<usize>,
+    creator: String,
+}
+
 /// The ask door: cheap peer creation with an initial question. The
 /// creator is a registered incarnation; the question is durable
 /// addressed communication from its own scope - machine-supplied
 /// origin on the record - never argv shaped into native human input.
 /// The newborn's address arrives by launch-token correlation; knowing
 /// it confers nothing beyond the reply surface.
-fn ask_door(
+fn ask_run(
     cli: &Cli,
     destination: &Destination,
     workspace: &std::path::Path,
     question: &str,
-) -> Result<String, Fail> {
+) -> Result<AskOutcome, Fail> {
     let url = server_url(destination, "integrate")?;
     let context = context_of(cli)?;
     let scope = context.scope.clone().ok_or_else(|| {
@@ -2636,25 +2720,230 @@ fn ask_door(
     };
     let sent = client::send_message(&url, &context, num, None, scope.task.map(|t| t.0), &body)
         .map_err(Fail::Client)?;
-    let answer = sent
-        .message
-        .num
-        .map(|n| format!("m-{n}"))
-        .unwrap_or_else(|| format!("seq {}", sent.message.seq));
+    Ok(AskOutcome {
+        workspace: dir_str,
+        terminal,
+        birth,
+        num,
+        message_seq: sent.message.seq,
+        message_num: sent.message.num,
+        creator: creator_num,
+    })
+}
 
+fn ask_door(
+    cli: &Cli,
+    destination: &Destination,
+    workspace: &std::path::Path,
+    question: &str,
+) -> Result<String, Fail> {
+    let outcome = ask_run(cli, destination, workspace, question)?;
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "workspace": dir_str,
-            "terminal": terminal,
-            "incarnation": {"seq": birth, "num": num},
-            "question": {"num": sent.message.num, "seq": sent.message.seq},
+            "workspace": outcome.workspace,
+            "terminal": outcome.terminal,
+            "incarnation": {"seq": outcome.birth, "num": outcome.num},
+            "question": {"num": outcome.message_num, "seq": outcome.message_seq},
+        }))
+        .expect("plain data"));
+    }
+    let answer = outcome
+        .message_num
+        .map(|n| format!("m-{n}"))
+        .unwrap_or_else(|| format!("seq {}", outcome.message_seq));
+    Ok(format!(
+        "i-{num} registered at {workspace} (terminal {terminal}); your question went as {answer} from {creator}; they receive it natively",
+        num = outcome.num,
+        workspace = outcome.workspace,
+        terminal = outcome.terminal,
+        creator = outcome.creator,
+    ))
+}
+
+// -- the task-free workspace controller's CLI face -----------------------
+
+/// Provision a NEW task-free workspace through the server's Git
+/// effects; the birth record is the workspace's identity.
+fn provision_new(
+    destination: &Destination,
+    label: Option<&str>,
+    base: Option<&str>,
+) -> Result<client::WorkspaceBirth, Fail> {
+    let url = server_url(destination, "workspace new")?;
+    client::handshake(&url);
+    let reply = client::create_workspace(&url, label, base).map_err(Fail::Client)?;
+    Ok(reply.workspace)
+}
+
+/// The creation's text face: actual Git facts and the birth record.
+fn render_birth(birth: &client::WorkspaceBirth) -> String {
+    format!(
+        "workspace provisioned - record {} (its identity, no numbering)\n  branch {} | base {}\n  path {}",
+        birth.seq, birth.branch, birth.base, birth.path
+    )
+}
+
+/// `sac workspace new`: provision and report; no task, claim, or
+/// incarnation rides it.
+fn workspace_new_door(
+    cli: &Cli,
+    destination: &Destination,
+    label: Option<&str>,
+    base: Option<&str>,
+) -> Result<String, Fail> {
+    let birth = provision_new(destination, label, base)?;
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "created": true,
+            "workspace": birth,
+        }))
+        .expect("plain data"));
+    }
+    Ok(render_birth(&birth))
+}
+
+/// `sac workspace switch`: the stopped-session change through the
+/// server, then an optional resume through the ordinary door. The
+/// change record's truth is the header move; the resume is a separate
+/// launch whose failure leaves that fact standing.
+fn workspace_switch_door(
+    cli: &Cli,
+    destination: &Destination,
+    token: &str,
+    to: &Path,
+    resume: bool,
+    prompt: &[String],
+) -> Result<String, Fail> {
+    let url = server_url(destination, "workspace switch")?;
+    client::handshake(&url);
+    // resolve the incarnation token against the fold first, so the
+    // refusal names the fold's extent; the wire's law is unchanged
+    let loadout = loadout_of(destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "switch needs the world; the log will not fold".into(),
+        ));
+    };
+    let id = resolve_incarnation(&world, token)?;
+    let num = world
+        .incarnation_num(id)
+        .ok_or(Fail::Reject(Reject::InvalidIncarnationId))?;
+    let reply = client::change_workspace(&url, num, to).map_err(Fail::Client)?;
+    let record = reply.records.first().map(|r| r.seq);
+    let changed = format!(
+        "i-{num} workspace changed - saved cwd {from} -> {to}{record}",
+        num = reply.num,
+        from = reply.from,
+        to = reply.to,
+        record = record.map(|r| format!(" (record {r})")).unwrap_or_default(),
+    );
+    if resume {
+        let (dir_str, terminal) =
+            integrate_launch(cli, destination, None, Some(token), prompt, None)?;
+        if cli.json {
+            return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "changed": true,
+                "incarnation": reply.incarnation,
+                "num": reply.num,
+                "from": reply.from,
+                "to": reply.to,
+                "records": reply.records,
+                "resumed": {"workspace": dir_str, "terminal": terminal},
+            }))
+            .expect("plain data"));
+        }
+        return Ok(format!(
+            "{changed}\nintegrated pi launching at {dir_str} - terminal {terminal}\n  the resumed session carries the same native id and history"
+        ));
+    }
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "changed": true,
+            "incarnation": reply.incarnation,
+            "num": reply.num,
+            "from": reply.from,
+            "to": reply.to,
+            "records": reply.records,
         }))
         .expect("plain data"));
     }
     Ok(format!(
-        "i-{num} registered at {dir_str} (terminal {terminal}); your question went as {answer} from {creator_num}; they receive it natively"
+        "{changed}\n  the session was stopped; resume it there with `sac integrate --resume i-{}`",
+        reply.num
     ))
 }
+
+fn workspace_door(
+    cli: &Cli,
+    destination: &Destination,
+    verb: &WorkspaceVerb,
+) -> Result<String, Fail> {
+    match verb {
+        WorkspaceVerb::New { label, base } => {
+            workspace_new_door(cli, destination, label.as_deref(), base.as_deref())
+        }
+        WorkspaceVerb::Switch {
+            incarnation,
+            to,
+            resume,
+            prompt,
+        } => workspace_switch_door(cli, destination, incarnation, to, *resume, prompt),
+    }
+}
+
+/// The explicit-new launch: provision through the server's effects,
+/// then hand the fresh directory to the ordinary doors - fresh launch
+/// or ask, exactly the existing composition. A launch failure leaves
+/// the creation fact true.
+fn integrate_new_door(
+    cli: &Cli,
+    destination: &Destination,
+    label: Option<&str>,
+    base: Option<&str>,
+    ask: Option<&str>,
+    prompt: &[String],
+) -> Result<String, Fail> {
+    let birth = provision_new(destination, label, base)?;
+    let path = birth.path.clone();
+    if cli.json {
+        let launch = match ask {
+            Some(question) => {
+                let outcome = ask_run(cli, destination, Path::new(&path), question)?;
+                serde_json::json!({
+                    "workspace": outcome.workspace,
+                    "terminal": outcome.terminal,
+                    "incarnation": {"seq": outcome.birth, "num": outcome.num},
+                    "question": {"num": outcome.message_num, "seq": outcome.message_seq},
+                })
+            }
+            None => {
+                let (dir_str, terminal) =
+                    integrate_launch(cli, destination, Some(Path::new(&path)), None, prompt, None)?;
+                serde_json::json!({"workspace": dir_str, "terminal": terminal})
+            }
+        };
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "provisioned": birth,
+            "launch": launch,
+        }))
+        .expect("plain data"));
+    }
+    let door = match ask {
+        Some(question) => ask_door(cli, destination, Path::new(&path), question)?,
+        None => {
+            let (dir_str, terminal) =
+                integrate_launch(cli, destination, Some(Path::new(&path)), None, prompt, None)?;
+            format!(
+                "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+            )
+        }
+    };
+    Ok(format!("{}\n{door}", render_birth(&birth)))
+}
+/// The ask door: cheap peer creation with an initial question. The
+/// creator is a registered incarnation; the question is durable
+/// addressed communication from its own scope - machine-supplied
+/// origin on the record.
 /// The ask door: cheap peer creation with an initial question. The
 /// creator is a registered incarnation; the question is durable
 /// addressed communication from its own scope - machine-supplied

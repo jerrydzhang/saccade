@@ -51,6 +51,37 @@ finding - name it on the thread before proceeding.
   unstaged, or untracked work; clean refuses before anything
   destructive runs. Commit or remove the work first; ignored files
   don't count.
+- `workspace_label_invalid` - the descriptive label of a
+  `sac workspace new` name is not a safe single path and ref
+  component; name it again.
+- `workspace_entropy_unavailable` - the OS entropy source failed, so
+  no unique workspace name exists. This is infrastructure, not bad
+  input; retry, and report it if it persists.
+- `workspace_dir_create_failed` - the OS refused to create the
+  workspace directory. Infrastructure, not bad input.
+- `workspace_path_invalid` - the target of a workspace change is not
+  an absolute path.
+- `workspace_path_missing` - the target of a workspace change does
+  not exist; a change selects an existing directory and creates
+  nothing.
+- `saved_session_missing` - the saved session file a change or resume
+  names does not exist; only the exact recorded association resolves.
+- `saved_session_mismatch` - the saved session file carries another
+  session's id; a reused native id never rebinds to other history.
+- `saved_session_unreadable` - the saved session exists but its
+  header cannot be read or validated; nothing was moved.
+- `session_live` - the session's launch guard is held by a live
+  process; exit that session first. Workspace switching moves stopped
+  sessions only.
+- `session_quiescence_unknown` - the launch guard could not be
+  probed, so liveness is unknown; nothing was moved.
+- `session_activation_in_flight` - another activation holds the
+  session's lock; try again when it settles.
+- `session_lock_unavailable` - the session's activation lock file
+  could not be opened. Infrastructure; nothing was moved.
+- `storage` - the database refused a write. Where an effect (a
+  provisioned workspace, a moved session header) already happened, the
+  detail discloses what stands - the effect is not rolled back.
 - `workspace_effect` - a git effect failed; the detail carries git's
   own stderr.
 - `workspace_no_repo` - the serving edge resolved no repo root at boot,

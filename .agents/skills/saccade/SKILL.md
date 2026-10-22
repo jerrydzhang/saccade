@@ -163,7 +163,9 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; nothing is recorded |
 | `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace - none is created by checkpoint |
 | `sac start t-N "initial prompt"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects and submit the pinned native Pi into one host terminal with the prompt as its native first input - no comment publication, no ownership transfer; a repeat start reveals the standing workspace's live terminal or reports its address |
-| `sac integrate --workspace <dir> [-- prompt]` | any tier | launch the composed native Pi in an explicit existing directory, task-free: a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. Never creates a workspace, task, claim, or request |
+| `sac integrate --workspace <dir> [-- prompt]` / `--new [label] [--base <ref>]` | any tier | launch the composed native Pi task-free: `--workspace` selects an explicit existing directory; `--new` provisions a fresh workspace through the server's Git effects and launches there; a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. No task, claim, or request is provisioned |
+| `sac workspace new [label] [--base <ref>]` | any tier | provision a NEW task-free workspace through the server's Git effects: the label plus a generated uniqueness suffix (workspace-<token> without a label), cut at the named base or the primary HEAD. The birth record's position is the workspace's identity - no task, claim, or incarnation, and no new numbering |
+| `sac workspace switch i-<n> --to <dir> [--resume -- prompt]` | any tier | move a STOPPED native session's saved working directory to an explicit existing one: a held guard refuses (exit the session first) and an unprobeable one refuses as unknown, both before anything moves; the target must already exist; the saved header is retargeted atomically (same native id, body, and history), and the change record lands only after the header actually moved - it asserts the confirmed change, never a running process. `--resume` then continues the same native id there through the ordinary resume door |
 | `sac integrate --workspace <dir> --ask "question"` | a registered incarnation | cheap peer creation with an initial question: launches the peer, and once it registers the question goes to it as a durable addressed message from your own scope - the newborn's address is your reply surface. Requires SACCADE_INCARNATION_SEQ; never argv-shaped human input, never a task or ownership |
 | `sac open t-N` | any tier | ensure the recorded environment exists (a missing checkout is recreated from its branch tip); a fresh association births the establishment alone, a standing one reveals its live terminal or reports its address - never a harness launch or ownership change |
 | `sac clean t-N` | any tier | stop the workspace's host terminals and running work, remove the checkout; the branch (unmerged commits included), records, checkpoints, and artifacts stand; a checkout with staged, unstaged, or untracked work refuses first; nothing is recorded |
@@ -176,8 +178,9 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
 
 Not in this build (later slices, do not assume them): managed
-completion obligations, workspace creation or switching from a live
-session, proposal machinery of any kind. Launching is the host's:
+completion obligations, workspace switching from a live session (a live
+session's guard refuses and tells the operator to exit first), proposal
+machinery of any kind. Launching is the host's:
 `sac start` and `sac integrate` ask the host (Orca) for one terminal
 and never supervise it - restarting Saccade leaves native sessions
 alone.
@@ -322,6 +325,24 @@ another task, and execs the argv with its argument boundaries intact.
 A standing workspace never grows a terminal per visit: open and repeat
 start reveal the live terminal the host holds in the worktree, or
 report the address. The record governs; the workspace is a cache.
+
+A workspace can also be born task-free: `sac workspace new` provisions
+through the server's own Git effects - the optional label plus a
+generated uniqueness suffix, `workspace-<token>` without one - and
+lands a creation birth whose record position is the identity: no task,
+no claim, no incarnation, and no new human-facing number. Several
+sessions may select one workspace; selecting an existing directory
+(`sac integrate --workspace`) provisions nothing.
+
+A native session's saved working directory moves by explicit change:
+`sac workspace switch i-<n> --to <dir>` resolves the recorded
+incarnation, requires the session's launch guard to be free (kernel
+evidence it is not owned by a live process; unknown refuses),
+validates the exact saved association and the existing target, then
+retargets the saved header atomically and lands the change record only
+after the header actually moved. The fact stays true if a later launch
+fails; nothing is inferred, nothing is stopped, and no process list is
+consulted.
 
 ## Errors and degraded mode
 

@@ -97,6 +97,66 @@ fn activation_paths_in(repo_root: &Path, native_id: &str) -> (PathBuf, PathBuf) 
     )
 }
 
+/// Why a session's activation lock is not ours. Unavailable means the
+/// lock file could not even be opened - the state root is broken;
+/// InFlight means another holder kept it past the bound.
+#[derive(Debug)]
+pub enum LockFail {
+    Unavailable(String),
+    InFlight,
+}
+
+/// The per-native-session activation lock, held for as long as the
+/// returned value lives: a stopped-session controller serializes its
+/// guard proof, header retarget, and record against automatic mail
+/// activation on the very same file, so neither can interleave. Bounded
+/// wait, never indefinite.
+pub struct SessionLock {
+    /// The open descriptor: dropping it releases the flock
+    _file: std::fs::File,
+}
+
+impl std::fmt::Debug for SessionLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SessionLock")
+    }
+}
+
+pub fn lock_session(repo_root: &Path, native_id: &str) -> Result<SessionLock, LockFail> {
+    lock_session_within(
+        repo_root,
+        native_id,
+        std::time::Duration::from_millis(LOCK_WAIT_MILLIS),
+    )
+}
+
+/// The same lock under an explicit wait bound; the test seam keeps the
+/// in-flight refusal out of the standard bound's shadow.
+pub fn lock_session_within(
+    repo_root: &Path,
+    native_id: &str,
+    wait: std::time::Duration,
+) -> Result<SessionLock, LockFail> {
+    let (lock_path, _launched) = activation_paths_in(repo_root, native_id);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| LockFail::Unavailable(e.to_string()))?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if taken == 0 {
+            return Ok(SessionLock { _file: file });
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(LockFail::InFlight);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
 /// The activation decision for one recipient, under the session's
 /// lock: the runtime association (live bridge connections) first, then
 /// the session's own guard, then the saved header, then the launch.
@@ -429,5 +489,36 @@ mod tests {
             crate::paths::session_key("one"),
             crate::paths::session_key("two"),
         );
+    }
+
+    #[test]
+    fn the_session_lock_serializes_and_reports_a_refused_open() {
+        let base = std::env::temp_dir().join(format!("sac-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // a free lock is taken and held for the value's lifetime
+        let held = lock_session(&base, "aaaa1111").expect("the free lock is taken");
+        // a second taker finds it in flight, inside a test-sized bound
+        let second = lock_session_within(&base, "aaaa1111", std::time::Duration::from_millis(300))
+            .unwrap_err();
+        assert!(matches!(second, LockFail::InFlight), "{second:?}");
+        drop(held);
+        let again = lock_session(&base, "aaaa1111");
+        assert!(again.is_ok(), "release lets the next holder in");
+        drop(again);
+
+        // an unopenable lock file is unavailability, never a timeout:
+        // the lock sits beside the guard under the same session key
+        let guard = guard_path(&base, "bbbb2222");
+        std::fs::create_dir_all(guard.parent().unwrap()).unwrap();
+        let lock = guard.with_file_name(format!(
+            "{}.lock",
+            guard.file_stem().unwrap().to_string_lossy()
+        ));
+        std::fs::create_dir(&lock).unwrap();
+        let refused = lock_session(&base, "bbbb2222").unwrap_err();
+        assert!(matches!(refused, LockFail::Unavailable(_)), "{refused:?}");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

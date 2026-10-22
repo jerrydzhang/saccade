@@ -4798,3 +4798,523 @@ fn the_migrate_door_rewrites_a_schema3_tracker() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// The task-free controller over real git, wire, and CLI: creation
+/// births a workspace identity alone, the stopped-session change
+/// proves quiescence before it moves a byte, and the explicit-new
+/// choice rides the ordinary launch doors.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("ws-controller");
+    let home = db.parent().unwrap();
+    let (root, _first, head) = scratch_repo(home);
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    // two explicit existing directories, neither created by saccade
+    let selected_a = home.join("selected-a");
+    let selected_b = home.join("selected-b");
+    std::fs::create_dir_all(&selected_a).unwrap();
+    std::fs::create_dir_all(&selected_b).unwrap();
+
+    // creation through the wire: actual Git facts, the birth record
+    // carrying them, the record's position the only identity
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/create",
+        &json!({"label": "expedition"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["created"], true);
+    assert!(
+        reply["workspace"]["branch"]
+            .as_str()
+            .unwrap()
+            .starts_with("expedition-"),
+        "{reply}"
+    );
+    assert_eq!(reply["workspace"]["base"], head.as_str());
+    assert!(
+        reply["workspace"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!(
+                "expedition-{}",
+                reply["workspace"]["branch"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix("expedition-")
+                    .unwrap()
+            ))
+    );
+    let birth = reply["workspace"]["seq"].as_u64().unwrap();
+    let created = reply["records"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0]["kind"], "workspace_created");
+    assert_eq!(created[0]["actor"], "saccade");
+    assert_eq!(created[0]["tier"], "system");
+    // the branch is real: the checkout exists and is a worktree
+    assert!(
+        std::path::Path::new(reply["workspace"]["path"].as_str().unwrap())
+            .join(".git")
+            .exists()
+    );
+
+    // a second creation with no label: the ratified fallback name, a
+    // distinct branch and birth
+    let (status, body) = post_workspace(&base_url, "/api/v1/workspace/create", &json!({}));
+    assert_eq!(status, 200, "{body}");
+    let second = json_of(&body);
+    assert!(
+        second["workspace"]["branch"]
+            .as_str()
+            .unwrap()
+            .starts_with("workspace-"),
+        "{second}"
+    );
+    assert_ne!(second["workspace"]["branch"], reply["workspace"]["branch"]);
+    assert!(second["workspace"]["seq"].as_u64().unwrap() > birth);
+
+    // creation birthed no task, claim, message, or incarnation: the
+    // log holds exactly the two creations
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let rows = json_of(&body)["records"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 2);
+    for row in &rows {
+        assert_eq!(row["kind"], "workspace_created", "{row}");
+        let payload = &row["payload"];
+        assert!(payload.get("task_id").is_none(), "{row}");
+        assert!(payload.get("incarnation").is_none(), "{row}");
+    }
+
+    // creation advanced no i-N: the first native session is i-0
+    let saved = home.join("rover-session.jsonl");
+    let header = format!(
+        "{{\"type\":\"session\",\"version\":3,\"id\":\"rover0001\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
+        selected_b.display()
+    );
+    let tail = "{\"type\":\"message\",\"id\":\"aa\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"user\",\"content\":\"parked at the old workspace\"}}\n";
+    std::fs::write(&saved, format!("{header}{tail}")).unwrap();
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "rover0001", "session_file": saved.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let rover = json_of(&body);
+    assert_eq!(rover["num"], 0);
+    let rover_birth = rover["incarnation"].as_u64().unwrap();
+    let guard =
+        std::path::PathBuf::from(rover["guard"].as_str().expect("the server names the guard"));
+    assert!(guard.parent().unwrap().is_dir());
+
+    // the stopped change: guard free, association exact, the record
+    // lands only after the header actually moved
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": 0, "to": selected_a.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let changed = json_of(&body);
+    assert_eq!(changed["changed"], true);
+    assert_eq!(
+        changed["from"],
+        json!(selected_b.display().to_string()),
+        "{changed}"
+    );
+    assert_eq!(changed["to"], json!(selected_a.display().to_string()));
+    assert_eq!(changed["num"], 0);
+    let change_records = changed["records"].as_array().unwrap();
+    assert_eq!(change_records.len(), 1);
+    assert_eq!(change_records[0]["kind"], "workspace_changed");
+    assert_eq!(change_records[0]["actor"], "saccade");
+    assert_eq!(change_records[0]["tier"], "system");
+    // the saved session moved: header cwd is the selected directory,
+    // the body is byte-identical, the id and history unchanged
+    let moved = std::fs::read(&saved).unwrap();
+    let moved_header: Value =
+        serde_json::from_slice(moved.split(|&b| b == b'\n').next().unwrap()).unwrap();
+    assert_eq!(moved_header["cwd"], selected_a.display().to_string());
+    assert_eq!(moved_header["id"], "rover0001");
+    assert!(moved.ends_with(tail.as_bytes()), "the body rode whole");
+    // the change record landed after the header success: two creations,
+    // the registration, the change
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let rows = json_of(&body)["records"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[3]["kind"], "workspace_changed");
+
+    // a held guard is a live process: busy refuses before any mutation
+    use std::os::fd::AsRawFd;
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&guard)
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": 0, "to": selected_b.to_str().unwrap()}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "session_live");
+    let untouched = std::fs::read(&saved).unwrap();
+    let untouched_header: Value =
+        serde_json::from_slice(untouched.split(|&b| b == b'\n').next().unwrap()).unwrap();
+    assert_eq!(untouched_header["cwd"], selected_a.display().to_string());
+    drop(held);
+
+    // an unprobeable guard is unknown: refuse, move nothing
+    std::fs::remove_file(&guard).unwrap();
+    std::fs::create_dir(&guard).unwrap();
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": 0, "to": selected_b.to_str().unwrap()}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "session_quiescence_unknown"
+    );
+    std::fs::remove_dir(&guard).unwrap();
+
+    // with the guard released the same change lands
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": 0, "to": selected_b.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        json_of(&body)["from"],
+        json!(selected_a.display().to_string())
+    );
+
+    // a missing target refuses before anything moves; the recorded
+    // association stands
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let before = json_of(&body)["records"].as_array().unwrap().len();
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": 0, "to": home.join("nowhere").to_str().unwrap()}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "workspace_path_missing");
+    // an unknown incarnation refuses
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": 99, "to": selected_a.to_str().unwrap()}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_incarnation_id");
+    // a session whose saved locator names no file refuses
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "ghost0001", "session_file": "/sessions/ghost0001.jsonl"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["num"], 1);
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": 1, "to": selected_a.to_str().unwrap()}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "saved_session_missing");
+    // a historical attribution identity is no change target: start a
+    // task, and its establishment births i-2 with no saved session
+    post_command(
+        &base_url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "carry a merge through the worktree"}}),
+        ),
+    );
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/start",
+        &json!({
+            "context": {"actor": "human person", "tier": "human"},
+            "task": 0,
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    // the reply names the birth record; the change route addresses the
+    // i-N: rover is i-0, ghost i-1, the establishment i-2
+    let (status, body) = post_workspace(
+        &base_url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": 2, "to": selected_a.to_str().unwrap()}),
+    );
+    assert_eq!(status, 400, "{body}");
+    let detail = json_of(&body)["error"]["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_incarnation_id");
+    assert!(detail.contains("historical attribution"), "{detail}");
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    assert_eq!(
+        json_of(&body)["records"].as_array().unwrap().len(),
+        before + 3,
+        "only the registration, the task, and the establishment wrote past the changes"
+    );
+
+    // the CLI face: creation and switch through a real subprocess
+    let sac = |args: &[&str], envs: &[(&str, &str)]| {
+        let out = std::process::Command::new(bin)
+            .args(["--server", &base_url, "--repo", root.to_str().unwrap()])
+            .args(args)
+            .env("SACCADE_DB", "")
+            .env("SACCADE_SERVER", "")
+            .env("SACCADE_TASK", "")
+            .env("SACCADE_WORKSPACE", "")
+            .env("SACCADE_LAUNCH_TOKEN", "")
+            .env("SACCADE_ACTIVATION_LAUNCHER", "")
+            .envs(envs.iter().copied())
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (ok, out, err) = sac(&["workspace", "new", "cli-built", "--json"], &[]);
+    assert!(ok, "{out}{err}");
+    let built = json_of(&out);
+    assert_eq!(built["created"], true);
+    assert!(
+        built["workspace"]["branch"]
+            .as_str()
+            .unwrap()
+            .starts_with("cli-built-"),
+        "{out}"
+    );
+
+    let (ok, out, err) = sac(
+        &[
+            "workspace",
+            "switch",
+            "i-0",
+            "--to",
+            selected_a.to_str().unwrap(),
+            "--json",
+        ],
+        &[],
+    );
+    assert!(ok, "{out}{err}");
+    let switched = json_of(&out);
+    assert_eq!(switched["changed"], true);
+    assert_eq!(switched["from"], json!(selected_b.display().to_string()));
+    assert_eq!(switched["to"], json!(selected_a.display().to_string()));
+    assert_eq!(switched["records"][0]["kind"], "workspace_changed");
+    // the text face names the move and the ordinary resume door
+    let (ok, out, err) = sac(
+        &[
+            "workspace",
+            "switch",
+            "i-0",
+            "--to",
+            selected_b.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("workspace changed - saved cwd"), "{out}");
+    assert!(out.contains("sac integrate --resume i-0"), "{out}");
+
+    // the explicit-new choice rides the ordinary fresh-launch door:
+    // provision, then launch, one composition
+    let host = fake_host(home);
+    let host_log = home.join("host.log");
+    let host_state = home.join("host-state");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    let host_path = format!(
+        "{}:{}",
+        host.parent().unwrap().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let pi = stub_pi(home);
+
+    let (ok, out, err) = sac(
+        &["integrate", "--new", "trailblaze", "--json"],
+        &[
+            ("PATH", host_path.as_str()),
+            ("FAKE_ORCA_LOG", host_log.to_str().unwrap()),
+            ("FAKE_ORCA_STATE", host_state.to_str().unwrap()),
+            ("SACCADE_PI", pi.to_str().unwrap()),
+        ],
+    );
+    assert!(ok, "{out}{err}");
+    let launched = json_of(&out);
+    assert!(
+        launched["provisioned"]["branch"]
+            .as_str()
+            .unwrap()
+            .starts_with("trailblaze-"),
+        "{out}"
+    );
+    assert_eq!(
+        launched["launch"]["workspace"], launched["provisioned"]["path"],
+        "{out}"
+    );
+    assert!(!launched["launch"]["terminal"].as_str().unwrap().is_empty());
+
+    // the ask composition rides the same birth: a registered creator
+    // questions the newborn peer. The newborn claims its launch token
+    // by attaching, as the integration itself would
+    let ask_out = home.join("ask.out");
+    let ask_err = home.join("ask.err");
+    let ask_cli = std::thread::spawn({
+        let base_url = base_url.clone();
+        let root = root.clone();
+        let host_path = host_path.clone();
+        let host_log = host_log.clone();
+        let host_state = host_state.clone();
+        let pi = pi.clone();
+        let ask_out = ask_out.clone();
+        let ask_err = ask_err.clone();
+        move || {
+            std::process::Command::new(bin)
+                .args([
+                    "--server",
+                    &base_url,
+                    "--repo",
+                    root.to_str().unwrap(),
+                    "integrate",
+                    "--new",
+                    "inquiry",
+                    "--ask",
+                    "what holds at the edge?",
+                    "--json",
+                ])
+                .env("PATH", &host_path)
+                .env("FAKE_ORCA_LOG", &host_log)
+                .env("FAKE_ORCA_STATE", &host_state)
+                .env("SACCADE_PI", &pi)
+                .env("SACCADE_ACTOR", "rover")
+                .env("SACCADE_INCARNATION_SEQ", rover_birth.to_string())
+                .env("SACCADE_TASK", "")
+                .env("SACCADE_WORKSPACE", "")
+                .env("SACCADE_LAUNCH_TOKEN", "")
+                .env("SACCADE_ACTIVATION_LAUNCHER", "")
+                .stdout(std::fs::File::create(&ask_out).unwrap())
+                .stderr(std::fs::File::create(&ask_err).unwrap())
+                .status()
+                .expect("spawn sac")
+        }
+    });
+    let mut token = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while token.is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the launch line never carried a token; log: {:?}",
+            std::fs::read_to_string(&host_log).unwrap_or_default()
+        );
+        if let Ok(text) = std::fs::read_to_string(&host_log) {
+            for line in text.lines() {
+                if let Some(at) = line.find("SACCADE_LAUNCH_TOKEN=") {
+                    let raw = &line[at + "SACCADE_LAUNCH_TOKEN=".len()..];
+                    let trimmed = raw.trim_matches('\'');
+                    let end = trimmed.find(' ').unwrap_or(trimmed.len());
+                    token = trimmed[..end].to_string();
+                }
+            }
+        }
+        if token.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "inquiry0001",
+            "session_file": "/sessions/inquiry0001.jsonl",
+            "launch_token": token,
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(ask_cli.join().unwrap().success());
+    let asked = json_of(&std::fs::read_to_string(&ask_out).unwrap());
+    assert!(
+        asked["provisioned"]["branch"]
+            .as_str()
+            .unwrap()
+            .starts_with("inquiry-"),
+        "{asked}"
+    );
+    let newborn = asked["launch"]["incarnation"]["num"].as_u64().unwrap();
+    // the i-N counted births only: rover i-0, ghost i-1, the
+    // establishment i-2, the newborn i-3 - creation never counted
+    assert_eq!(newborn, 3, "{asked}");
+    assert!(asked["launch"]["question"]["seq"].is_u64(), "{asked}");
+    // the question is durable addressed mail from the creator's scope
+    let (_, body) = get_json(
+        &base_url,
+        &format!("/api/v1/messages/pending?incarnation={rover_birth}"),
+    );
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    let sent: Vec<&Value> = mail.iter().filter(|m| m["from"]["num"] == 0).collect();
+    assert_eq!(sent.len(), 1, "{body}");
+    assert_eq!(sent[0]["to"]["num"], newborn);
+
+    // a resume request cannot outrun the guard: the session is stopped
+    // (the change landed), so --resume composes onto a live refusal -
+    // busy is decided before any launch, and the resume door's own
+    // handoff contract rides the activation suite unchanged
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&guard)
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let (ok, out, err) = sac(
+        &[
+            "workspace",
+            "switch",
+            "i-0",
+            "--to",
+            selected_a.to_str().unwrap(),
+            "--resume",
+            "--",
+            "continue at the new workspace",
+        ],
+        &[],
+    );
+    assert!(!ok, "{out}{err}");
+    assert!(err.contains("session_live"), "{err}");
+    // the refused change moved nothing: the recorded target stands
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let rows = json_of(&body)["records"].as_array().unwrap().clone();
+    let changed: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r["kind"] == "workspace_changed")
+        .collect();
+    let last = changed.last().unwrap()["payload"]["worktree"]
+        .as_str()
+        .unwrap();
+    assert_eq!(last, selected_b.display().to_string());
+
+    std::fs::remove_dir_all(home).unwrap();
+}

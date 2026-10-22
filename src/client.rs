@@ -539,6 +539,72 @@ pub fn open_workspace(url: &str, task: usize) -> Result<WorkspaceReply, ClientFa
     )
 }
 
+// -- the task-free workspace controller's client half --------------------
+
+/// What a creation provisioned: actual Git facts and the birth record
+/// carrying them - the workspace's identity, never a numbering.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WorkspaceBirth {
+    pub seq: usize,
+    pub base: String,
+    pub branch: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreateReply {
+    pub created: bool,
+    pub workspace: WorkspaceBirth,
+    pub records: Vec<StoredRecord>,
+}
+
+/// Provision a NEW task-free workspace through the server's Git
+/// effects; the birth lands with the facts the effect produced.
+pub fn create_workspace(
+    url: &str,
+    label: Option<&str>,
+    base: Option<&str>,
+) -> Result<CreateReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/workspace/create",
+        serde_json::json!({
+            "label": label,
+            "base": base,
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChangeReply {
+    pub changed: bool,
+    pub incarnation: usize,
+    pub num: usize,
+    pub from: String,
+    pub to: String,
+    pub records: Vec<StoredRecord>,
+}
+
+/// Move a stopped native session's saved working directory to an
+/// explicit existing one; the server refuses a live or unprovable
+/// session before any mutation.
+pub fn change_workspace(
+    url: &str,
+    incarnation: usize,
+    to: &std::path::Path,
+) -> Result<ChangeReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/workspace/change",
+        serde_json::json!({
+            "incarnation": incarnation,
+            "to": to.display().to_string(),
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
+}
+
 /// Which incarnations hold a live delivery connection right now: the
 /// activation decision's operational input, never a liveness proof -
 /// absence is not proof a native process exited.
