@@ -1722,7 +1722,7 @@ test("the workspace tool refuses a busy snapshot, stopping nothing", async () =>
 	wrapper.jobs = [{ id: "bg-1", kind: "bash", state: "running" }];
 	await withHandoffEnv(async () => {
 		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, wrapper.ctxOf(h));
-		assert.match((out as any).content[0].text, /1 background job\(s\) active: bg-1 \(bash, running\)/);
+		assert.match((out as any).content[0].text, /1 reported background job\(s\) \(running, stopping, or unresolved\): bg-1 \(bash, running\)/);
 		assert.match((out as any).content[0].text, /nothing was stopped and nothing changed/);
 	});
 	assert.equal(wrapper.queries, 1);
@@ -2172,6 +2172,8 @@ test("a provision awaited while the human cancels never arms and keeps the birth
 		const out = await running;
 		assert.equal((out as any).isError, true);
 		assert.match((out as any).content[0].text, /cancelled or the session changed while preparing/);
+		// a provision already landed: the face must not claim nothing changed
+		assert.doesNotMatch((out as any).content[0].text, /nothing changed/);
 		// the birth already landed: the pointer survives the cancel
 		assert.match((out as any).content[0].text, new RegExp(`birth record 301 at ${provisioned}; no move happened`));
 	});

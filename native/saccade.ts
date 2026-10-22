@@ -1281,7 +1281,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				if (jobs.length > 0) {
 					const listed = jobs.map((j) => `${j.id} (${j.kind}, ${j.state})`).join(", ");
 					return giveUp(
-						`not moved: ${jobs.length} background job(s) active: ${listed}; nothing was stopped and nothing changed`,
+						`not moved: ${jobs.length} reported background job(s) (running, stopping, or unresolved): ${listed}; nothing was stopped and nothing changed`,
 					);
 				}
 				if (admissions.size > 0) {
@@ -1311,7 +1311,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				}
 				if (!still()) {
 					return giveUp(
-						"not moved: the handoff was cancelled or the session changed while preparing; nothing changed",
+						"not moved: the handoff was cancelled or the session changed while preparing; no workspace move happened",
 					);
 				}
 				if (signal?.aborted) {
