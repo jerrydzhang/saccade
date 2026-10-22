@@ -90,6 +90,23 @@ pub enum Event {
         task_id: TaskId,
         checkpoint: GitCommit,
     },
+    /// The created workspace's birth: the canonical base commit,
+    /// branch, and absolute path provisioning established. The
+    /// record's position is the workspace's own identity; no task, no
+    /// incarnation, no number rides the payload.
+    WorkspaceCreated {
+        base: GitCommit,
+        branch: GitBranch,
+        worktree: WorktreePath,
+    },
+    /// The confirmed saved-directory change of a native incarnation,
+    /// published only after the saved session's working directory was
+    /// actually retargeted. It asserts the confirmed change - never a
+    /// pending intent, never a running process.
+    WorkspaceChanged {
+        incarnation: IncarnationId,
+        worktree: WorktreePath,
+    },
     // Incarnation and message events: registration and submission are
     // machinery verbs, System-authored by role; a message is authored
     // by its sending session's registered identity
@@ -178,6 +195,17 @@ pub enum Command {
     CheckpointWorkspace {
         task_id: TaskId,
         checkpoint: GitCommit,
+    },
+    // Creation and change are machinery verbs: System authorship comes
+    // from the role, never input
+    CreateWorkspace {
+        base: GitCommit,
+        branch: GitBranch,
+        worktree: WorktreePath,
+    },
+    ChangeWorkspace {
+        incarnation: IncarnationId,
+        worktree: WorktreePath,
     },
     // Registration and submission are machinery verbs: System
     // authorship comes from the role, never input. A message is

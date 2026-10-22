@@ -61,6 +61,13 @@ enum Action {
     Establish {
         task: u8,
     },
+    CreateWorkspace {
+        draw: u8,
+    },
+    ChangeWorkspace {
+        incarnation: u8,
+        dir: u8,
+    },
     Register {
         draw: u8,
     },
@@ -87,6 +94,8 @@ impl Action {
             | Action::WithdrawComment { human, .. }
             | Action::Artifact { human, .. } => *human,
             Action::Establish { .. }
+            | Action::CreateWorkspace { .. }
+            | Action::ChangeWorkspace { .. }
             | Action::Register { .. }
             | Action::Send { .. }
             | Action::Submit { .. } => false,
@@ -355,6 +364,18 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             worktree: saccade::WorktreePath::new(format!("/generated/wt/t-{}", task.0).into())
                 .unwrap(),
         },
+        Action::CreateWorkspace { draw } => Command::CreateWorkspace {
+            base: saccade::GitCommit::new("abc000".into()).unwrap(),
+            branch: saccade::GitBranch::new(format!("feature-{draw:02}")).unwrap(),
+            worktree: saccade::WorktreePath::new(format!("/generated/wt/feature-{draw:02}").into())
+                .unwrap(),
+        },
+        Action::ChangeWorkspace { incarnation, dir } => Command::ChangeWorkspace {
+            incarnation: native_at(world, *incarnation)
+                .unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
+            worktree: saccade::WorktreePath::new(format!("/generated/wt/moved-{dir:02}").into())
+                .unwrap(),
+        },
         Action::Register { draw } => Command::RegisterIncarnation {
             native_id: saccade::NativeSessionId::new(format!("native-{draw:02}")).unwrap(),
             saved_session: saccade::SessionLocator::new(
@@ -384,7 +405,12 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
 
 fn context(action: &Action, world: &World) -> Context {
     // provisioning and delivery bookkeeping are the machinery's own acts
-    if let Action::Establish { .. } | Action::Register { .. } | Action::Submit { .. } = action {
+    if let Action::Establish { .. }
+    | Action::CreateWorkspace { .. }
+    | Action::ChangeWorkspace { .. }
+    | Action::Register { .. }
+    | Action::Submit { .. } = action
+    {
         return Context::system();
     }
     // a send rides its sender's registered native identity
@@ -481,6 +507,11 @@ fn action_strategy() -> BoxedStrategy<Action> {
         2 => id(|comment, human| Action::WithdrawComment { comment, human }),
         2 => id(|task, human| Action::Artifact { task, human }),
         2 => any::<u8>().prop_map(|task| Action::Establish { task }),
+        2 => any::<u8>().prop_map(|draw| Action::CreateWorkspace { draw }),
+        2 => (any::<u8>(), any::<u8>()).prop_map(|(incarnation, dir)| Action::ChangeWorkspace {
+            incarnation,
+            dir,
+        }),
         2 => any::<u8>().prop_map(|draw| Action::Register { draw }),
         3 => (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(from, to, reply)| Action::Send {
             from,
@@ -610,6 +641,16 @@ fn generator_reaches_deep_states() {
                                 *milestones.entry("workspace established").or_default() += 1;
                             }
                         }
+                        Action::CreateWorkspace { .. } => {
+                            if last.kind == "workspace_created" {
+                                *milestones.entry("workspace created").or_default() += 1;
+                            }
+                        }
+                        Action::ChangeWorkspace { .. } => {
+                            if last.kind == "workspace_changed" {
+                                *milestones.entry("workspace changed").or_default() += 1;
+                            }
+                        }
                         Action::Comment { variant, .. } => {
                             // the variant grammar must actually land
                             let name = match variant % 5 {
@@ -718,6 +759,8 @@ fn generator_reaches_deep_states() {
         ("revise", 0.05),
         ("comment withdraw", 0.015),
         ("workspace established", 0.10),
+        ("workspace created", 0.10),
+        ("workspace changed", 0.01),
         ("use bind", 0.01),
     ] {
         let hit = milestones.get(name).copied().unwrap_or(0);

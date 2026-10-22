@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 14] = [
+const KINDS: [&str; 16] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -38,6 +38,8 @@ const KINDS: [&str; 14] = [
     "artifact_added",
     "workspace_established",
     "task_workspace_checkpointed",
+    "workspace_created",
+    "workspace_changed",
     "incarnation_registered",
     "message_sent",
     "message_submitted",
@@ -190,6 +192,15 @@ mod test {
             Event::TaskWorkspaceCheckpointed {
                 task_id: TaskId(0),
                 checkpoint: GitCommit::new("def456".into()).unwrap(),
+            },
+            Event::WorkspaceCreated {
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+            },
+            Event::WorkspaceChanged {
+                incarnation: IncarnationId(RecordId(16)),
+                worktree: WorktreePath::new("/repo/wt/workspace-deadbeef".into()).unwrap(),
             },
             Event::IncarnationRegistered {
                 native_id: NativeSessionId::new("a1b2c3d4-evil".into()).unwrap(),

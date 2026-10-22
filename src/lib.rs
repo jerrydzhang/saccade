@@ -32,6 +32,9 @@ pub use objects::comment::{
 pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
 pub use objects::message::{Message, MessageContext, MessageId, MessageState};
 pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
+pub use objects::workspace::{
+    CreatedWorkspace, CreatedWorkspaceContext, WorkspaceChange, WorkspaceId,
+};
 pub use store::{Context, Record, RecordId, Scope, Tier, World};
 pub use types::actor::ActorName;
 pub use types::artifact::{Artifact, ContentHash};

@@ -11,7 +11,10 @@ use crate::objects::comment::{
 use crate::objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
 use crate::objects::message::{Message, MessageContext, MessageId, MessageState};
 use crate::objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
-use crate::objects::workspace::{Workspace, WorkspaceContext};
+use crate::objects::workspace::{
+    CreatedWorkspace, CreatedWorkspaceContext, Workspace, WorkspaceChange, WorkspaceContext,
+    WorkspaceId,
+};
 use crate::types::actor::ActorName;
 use crate::types::pointers::WorktreePath;
 
@@ -147,6 +150,13 @@ pub struct World {
     pub incarnations: BTreeMap<IncarnationId, IncarnationContext>,
     /// Durable addressed messages, in birth order
     pub messages: BTreeMap<MessageId, MessageContext>,
+    /// Workspaces born by their own creation records: independent of
+    /// any task or incarnation, identity at the birth record. No
+    /// human-facing number derives from these births.
+    pub workspaces: BTreeMap<WorkspaceId, CreatedWorkspaceContext>,
+    /// The latest confirmed saved-directory change per native
+    /// incarnation: a machinery fact cache, never a lifecycle stage.
+    pub workspace_changes: BTreeMap<IncarnationId, WorkspaceChange>,
     /// Every applied record: existence for the citation guard, its
     /// home thread where the fold gives one. A record without a home
     /// still exists. No residency - the named record stays the event
@@ -161,6 +171,8 @@ impl World {
             comments: BTreeMap::new(),
             incarnations: BTreeMap::new(),
             messages: BTreeMap::new(),
+            workspaces: BTreeMap::new(),
+            workspace_changes: BTreeMap::new(),
             provenance: BTreeMap::new(),
         }
     }
@@ -596,6 +608,51 @@ impl World {
                 }
                 task_ctx.last_updated = record.id;
                 task_ctx.last_record_at = record.timestamp;
+            }
+            Event::WorkspaceCreated {
+                ref base,
+                ref branch,
+                ref worktree,
+            } => {
+                // a birth with no task home still exists; no task, no
+                // incarnation, no numbering rides it
+                self.provenance.insert(record.id, None);
+                self.workspaces.insert(
+                    WorkspaceId(record.id),
+                    CreatedWorkspaceContext {
+                        workspace: CreatedWorkspace {
+                            base: base.clone(),
+                            branch: branch.clone(),
+                            worktree: worktree.clone(),
+                        },
+                        born_at: record.timestamp,
+                    },
+                );
+            }
+            Event::WorkspaceChanged {
+                incarnation,
+                ref worktree,
+            } => {
+                // the change names a recorded native incarnation: a
+                // historical attribution identity has no saved session
+                // to move
+                let born = self
+                    .incarnations
+                    .get(&incarnation)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                if born.incarnation.native_id().is_none() {
+                    return Err(Reason::InvalidIncarnationId);
+                }
+                // a fact with no task home: it rides the incarnation
+                self.provenance.insert(record.id, None);
+                self.workspace_changes.insert(
+                    incarnation,
+                    WorkspaceChange {
+                        worktree: worktree.clone(),
+                        record: record.id,
+                        at: record.timestamp,
+                    },
+                );
             }
             // Incarnation and message events
             Event::IncarnationRegistered {
@@ -2312,6 +2369,143 @@ mod test {
             4,
         );
         assert!(matches!(refused, Err(Reject::HumanOnly)));
+    }
+
+    // -- the task-free workspace contracts ---------------------------
+
+    fn created(label_branch: &str, path: &str) -> Command {
+        Command::CreateWorkspace {
+            base: GitCommit::new("abc123".into()).unwrap(),
+            branch: GitBranch::new(label_branch.into()).unwrap(),
+            worktree: WorktreePath::new(path.into()).unwrap(),
+        }
+    }
+
+    /// A created workspace births its own identity: no task, no
+    /// incarnation, no claim or message - and no i-N advance.
+    #[test]
+    fn creation_births_a_task_free_workspace_identity() {
+        let mut log = Log::new();
+        log.execute_system(created("feature-abc123ab", "/repo/wt/feature-abc123ab"), 1)
+            .unwrap();
+        log.execute_system(
+            created("workspace-deadbeef", "/repo/wt/workspace-deadbeef"),
+            2,
+        )
+        .unwrap();
+
+        let world = log.world();
+        assert_eq!(world.tasks.len(), 0);
+        // no incarnation rides a creation: the i-N numbering is untouched
+        assert_eq!(world.incarnations.len(), 0);
+        assert_eq!(world.workspaces.len(), 2);
+        let birth = RecordId(0);
+        assert_eq!(world.provenance[&birth], None);
+        assert_eq!(
+            world.workspaces[&crate::WorkspaceId(birth)].workspace,
+            crate::CreatedWorkspace {
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+            }
+        );
+        // several sessions may select one workspace: a second creation
+        // naming the same directory is another birth, never a refusal
+        log.execute_system(created("feature-abc123ab", "/repo/wt/feature-abc123ab"), 3)
+            .unwrap();
+        assert_eq!(log.world().workspaces.len(), 3);
+
+        // the creation verb rejects judgment tiers
+        for ctx in [human(), agent()] {
+            let refused = log.execute(ctx, created("rejected-label", "/repo/wt/x"), 4);
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
+        }
+        assert_eq!(log.records().len(), 3);
+    }
+
+    /// The confirmed change names a native incarnation and lands as a
+    /// fact: the cache holds the latest, the log keeps every one, and
+    /// a historical attribution identity is no change target.
+    #[test]
+    fn a_confirmed_change_rides_a_native_incarnation() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        let to = |path: &str| Command::ChangeWorkspace {
+            incarnation: IncarnationId(RecordId(0)),
+            worktree: WorktreePath::new(path.into()).unwrap(),
+        };
+        log.execute_system(to("/repo/wt/feature-abc123ab"), 2)
+            .unwrap();
+        let first = &log.world().workspace_changes[&IncarnationId(RecordId(0))];
+        assert_eq!(first.record, RecordId(1));
+        assert_eq!(
+            first.worktree,
+            WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap()
+        );
+
+        // a second change replaces the cache and keeps both records
+        log.execute_system(to("/repo/wt/workspace-deadbeef"), 3)
+            .unwrap();
+        assert_eq!(log.records().len(), 3);
+        let latest = &log.world().workspace_changes[&IncarnationId(RecordId(0))];
+        assert_eq!(latest.record, RecordId(2));
+        assert_eq!(
+            latest.worktree,
+            WorktreePath::new("/repo/wt/workspace-deadbeef".into()).unwrap()
+        );
+
+        // the change fact takes no task home
+        assert_eq!(log.world().provenance[&RecordId(1)], None);
+        assert_eq!(log.world().provenance[&RecordId(2)], None);
+
+        // an unknown incarnation refuses: the fact needs its session
+        let refused = log.execute_system(
+            Command::ChangeWorkspace {
+                incarnation: IncarnationId(RecordId(9)),
+                worktree: WorktreePath::new("/repo/wt/nowhere".into()).unwrap(),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+
+        // a historical attribution identity has no saved session to
+        // move: the establishment birth is no change target
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("carry a merge through the worktree"),
+            },
+            5,
+        )
+        .unwrap();
+        log.execute_system(
+            Command::EstablishWorkspace {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            6,
+        )
+        .unwrap();
+        let establishment = log.records().len() - 1;
+        let refused = log.execute_system(
+            Command::ChangeWorkspace {
+                incarnation: IncarnationId(RecordId(establishment)),
+                worktree: WorktreePath::new("/repo/wt/elsewhere".into()).unwrap(),
+            },
+            7,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+        assert_eq!(log.world().workspace_changes.len(), 1);
+
+        // the change verb rejects judgment tiers: it is machinery's
+        // post-effect record, never a caller's claim
+        for ctx in [human(), agent()] {
+            let refused = log.execute(ctx, to("/repo/wt/rejected"), 8);
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
+        }
+        assert_eq!(log.records().len(), 5);
     }
 
     /// An incarnation claim names the incarnation at every judgment tier.

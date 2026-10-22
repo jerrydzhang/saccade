@@ -887,7 +887,7 @@ mod test {
             34,
         )
         .unwrap();
-        let (_, returned) = record(
+        record(
             &mut conn,
             &system,
             Command::SubmitMessage {
@@ -897,13 +897,49 @@ mod test {
             35,
         )
         .unwrap();
+        // the task-free workspace families ride the same round-trip:
+        // a created workspace birth, then the native session's
+        // confirmed change into it
+        record(
+            &mut conn,
+            &system,
+            Command::CreateWorkspace {
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+            },
+            36,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::ChangeWorkspace {
+                incarnation: IncarnationId(RecordId(35)),
+                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+            },
+            36,
+        )
+        .unwrap();
+        // the write path's world is the one a full reload produces,
+        // asserted after the last write of the story
+        let (_, returned) = record(
+            &mut conn,
+            &system,
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: GitCommit::new("def456".into()).unwrap(),
+            },
+            36,
+        )
+        .unwrap();
 
         let loadout = load(&conn).unwrap();
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 39);
+        assert_eq!(loadout.rows.len(), 42);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
@@ -1069,6 +1105,31 @@ mod test {
                 .as_deref()
         );
         assert_eq!(loadout.rows[38].kind, "message_submitted");
+        // the created workspace births no task, no incarnation, no
+        // numbering: its identity is its own record position
+        assert_eq!(loadout.rows[39].kind, "workspace_created");
+        assert_eq!(loadout.rows[39].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[39].tier, "system");
+        assert_eq!(loadout.rows[40].kind, "workspace_changed");
+        assert_eq!(
+            world.workspaces[&crate::WorkspaceId(RecordId(39))].workspace,
+            crate::CreatedWorkspace {
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+            }
+        );
+        assert_eq!(world.provenance[&RecordId(39)], None);
+        assert_eq!(
+            world.workspace_changes[&IncarnationId(RecordId(35))],
+            crate::WorkspaceChange {
+                worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+                record: RecordId(40),
+                at: 36,
+            }
+        );
+        assert_eq!(world.provenance[&RecordId(40)], None);
+        assert_eq!(world.incarnations.len(), 3, "creation advanced no i-N");
         // the registration births a native identity; the message
         // answers by reference and the submission reads submitted
         assert_eq!(

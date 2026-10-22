@@ -22,9 +22,13 @@ fn required_tier(event: &Event) -> Authority {
         Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
         // a presentation repair may come from any judgment tier
         Event::CommentRevised { .. } | Event::CommentWithdrawn { .. } => Authority::AnyTier,
-        // provisioning by role: the machinery's establishment, the
-        // native registration, and the recipient's delivery record
+        // provisioning by role: the machinery's establishment and
+        // creation, the native registration, and the recipient's
+        // delivery record. The confirmed change is machinery's act too:
+        // it lands after the physical retarget, never from a caller.
         Event::WorkspaceEstablished { .. }
+        | Event::WorkspaceCreated { .. }
+        | Event::WorkspaceChanged { .. }
         | Event::IncarnationRegistered { .. }
         | Event::MessageSubmitted { .. } => Authority::Require(Tier::System),
     }
@@ -79,6 +83,22 @@ pub fn decide(command: Command) -> Vec<Event> {
         } => vec![Event::TaskWorkspaceCheckpointed {
             task_id,
             checkpoint,
+        }],
+        Command::CreateWorkspace {
+            base,
+            branch,
+            worktree,
+        } => vec![Event::WorkspaceCreated {
+            base,
+            branch,
+            worktree,
+        }],
+        Command::ChangeWorkspace {
+            incarnation,
+            worktree,
+        } => vec![Event::WorkspaceChanged {
+            incarnation,
+            worktree,
         }],
         Command::RegisterIncarnation {
             native_id,
@@ -143,7 +163,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 18] = [
+        let events: [(Event, Authority); 20] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -264,6 +284,23 @@ mod test {
                 },
                 AnyTier,
             ),
+            // Creation and the confirmed change are the machinery's own
+            // acts, like the establishment and the registration.
+            (
+                Event::WorkspaceCreated {
+                    base: GitCommit::new("abc123".into()).unwrap(),
+                    branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
+                    worktree: WorktreePath::new("/wt".into()).unwrap(),
+                },
+                Require(Tier::System),
+            ),
+            (
+                Event::WorkspaceChanged {
+                    incarnation: IncarnationId(RecordId(0)),
+                    worktree: WorktreePath::new("/wt".into()).unwrap(),
+                },
+                Require(Tier::System),
+            ),
             // The native registration and the delivery record are the
             // machinery's; a message is its sending session's act.
             (
@@ -362,6 +399,15 @@ mod test {
             Command::CheckpointWorkspace {
                 task_id: TaskId(0),
                 checkpoint: GitCommit::new("abc123".into()).unwrap(),
+            },
+            Command::CreateWorkspace {
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("workspace-deadbeef".into()).unwrap(),
+                worktree: WorktreePath::new("/wt".into()).unwrap(),
+            },
+            Command::ChangeWorkspace {
+                incarnation: IncarnationId(RecordId(0)),
+                worktree: WorktreePath::new("/wt".into()).unwrap(),
             },
             Command::RegisterIncarnation {
                 native_id: NativeSessionId::new("a1b2c3d4".into()).unwrap(),
