@@ -156,10 +156,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// session start by the session's actual native id and locator
 	let association: Association | null = null;
 	let attachError: string | null = null;
-	// this start carried no saved native session at all (a --no-session
-	// helper runtime): nothing to verify, so the startup exit rule is
-	// not a match
-	let noNativeSession = false;
+	// this start is the intentional in-memory mode: the pinned contract
+	// leaves getSessionFile undefined exactly when persist is false, so
+	// there is no saved session to verify and no startup exit
+	let unpersistedSession = false;
 	// the waits this integration currently owns
 	const waits = new Set<WaitState>();
 	// envelopes queued natively, submissions not yet confirmed
@@ -251,14 +251,23 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			// process no longer runs it, so the release is honest
 			releaseGuard();
 		}
+		if (sessionFile === undefined && sessionId) {
+			// the pinned in-memory mode: the contract leaves the session
+			// file undefined exactly when nothing persists, and the id is
+			// always generated - an intentional helper has no saved
+			// session to verify, so it stays alive unregistered, checked
+			// before routing so server presence cannot change its shape
+			unpersistedSession = true;
+			attachError = "the session is unsaved (in-memory); nothing to register";
+			return null;
+		}
 		if (!server()) {
 			attachError = "no SACCADE_SERVER routing; the session stays unregistered";
 			return null;
 		}
 		if (!sessionId || !sessionFile) {
-			// a --no-session runtime has no native session to verify: not
-			// a failed verification, so the startup exit rule does not fire
-			noNativeSession = true;
+			// a persisted session without its file is invalid identity:
+			// cannot verify, so the startup exit rule applies
 			attachError = "the session carries no saved native file; nothing to register";
 			return null;
 		}
@@ -713,14 +722,14 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		// association's waits and queued deliveries die with it, never
 		// submitting or delivering into a session this incarnation is not
 		cancelAllWaits();
-		noNativeSession = false;
+		unpersistedSession = false;
 		const who = await attach(ctx);
 		if (!who) {
 			if (attachError) pi.appendEntry("saccade_attach", { error: attachError });
 			// startup that cannot verify association exits, explaining
 			// itself above - unless an applicable exact-session guard is
 			// held: a guarded reload or reassociation retries lazily
-			if (!heldGuard() && !noNativeSession) {
+			if (!heldGuard() && !unpersistedSession) {
 				// headless runs paint nothing: the explanation goes to
 				// stderr so the failure is observable before the exit
 				if (!ctx.hasUI) {

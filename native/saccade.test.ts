@@ -121,8 +121,8 @@ type SessionEntryLike = { type: string; message?: { role: string; content: unkno
 class FakeSession {
 	entries: SessionEntryLike[] = [];
 	nativeId: string;
-	file: string;
-	constructor(nativeId: string, file: string) {
+	file: string | undefined;
+	constructor(nativeId: string, file: string | undefined) {
 		this.nativeId = nativeId;
 		this.file = file;
 	}
@@ -149,7 +149,7 @@ class FakePi implements ExtensionAPI {
 	pendingNative = false;
 
 	hasUI = true;
-	constructor(nativeId: string, file: string) {
+	constructor(nativeId: string, file: string | undefined) {
 		this.session = new FakeSession(nativeId, file);
 	}
 
@@ -499,7 +499,7 @@ function fakeContext(pi: FakePi, session: FakeSession): ExtensionContext {
 
 function harness(
 	nativeId: string,
-	file: string,
+	file: string | undefined,
 	actor?: string,
 	shared?: FakeTracker,
 ): Harness {
@@ -531,7 +531,7 @@ function harness(
 function reloadedHarness(
 	h: Harness,
 	nativeId: string,
-	file: string,
+	file: string | undefined,
 ): Harness {
 	const pi = new FakePi(nativeId, file);
 	saccadeIntegration(pi);
@@ -1291,11 +1291,19 @@ test("an unknown guard take refuses the association and shuts the session down",
 	rmSync(shim, { recursive: true, force: true });
 });
 
-test("a no-session helper start stays alive and unregistered", async () => {
-	// subagent helper (empty session file): nothing to verify, no exit, no registration
+test("an in-memory helper start stays alive, unregistered, parent env cleared", async () => {
+	// intentional in-memory helper: alive, unregistered, no inherited incarnation
 	const shared = new FakeTracker();
-	const h = harness("helper-run0", "", "pi", shared);
+	delete process.env.SACCADE_INCARNATION_SEQ;
+	const h = harness("helper-run0", undefined, "pi", shared);
+	process.env.SACCADE_INCARNATION_SEQ = "0";
 	await h.pi.emit("session_start");
+	// the inherited parent incarnation is gone before any helper work
+	assert.equal(
+		process.env.SACCADE_INCARNATION_SEQ,
+		undefined,
+		"the helper never inherits the parent incarnation",
+	);
 	assert.equal(h.pi.shutdowns, 0, "a healthy tracker does not kill the helper");
 	assert.equal(shared.attachments.size, 0, "nothing registered without a session");
 	const identity = h.tools("saccade_identity");
@@ -1309,6 +1317,7 @@ test("a no-session helper start stays alive and unregistered", async () => {
 		),
 	);
 	assert.ok(text.includes("not registered"), text);
+	assert.equal(process.env.SACCADE_INCARNATION_SEQ, undefined);
 	await stop(h);
 });
 
