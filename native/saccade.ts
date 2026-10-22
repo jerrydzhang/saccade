@@ -8,6 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import type {
+	AgentSettledEvent,
 	ExtensionContext,
 	ExtensionToolContext,
 	ExtensionAPI,
@@ -719,9 +720,16 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		confirmContinuations(ctx);
 		return undefined;
 	});
-	pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
+	pi.on("agent_settled", (event: AgentSettledEvent, ctx: ExtensionContext) => {
 		confirmDeliveries(ctx);
 		confirmContinuations(ctx);
+		if (event.aborted === true) {
+			// the run was aborted: only this handoff cancels, with its
+			// gate - no launch, no shutdown, no undo of a provision that
+			// already landed, no touching of any job
+			cancelPendingHandoff("the run was aborted; the session stays");
+			return undefined;
+		}
 		settlePendingHandoff(ctx);
 		return undefined;
 	});
@@ -1136,13 +1144,25 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			}
 			// every exit below releases the hold: a refused or failed
 			// preparation leaves the session exactly as it was
+			// a provision that already landed keeps its pointer through any
+			// later failure: the birth stands, the error face names it, and
+			// nothing is rolled back or claimed moved
+			let created: number | null = null;
+			let createdPath: string | null = null;
 			const giveUp = (why: string) => {
 				releaseActivityGate(token);
-				return failed(why);
+				// only this call's token-owned runtime arm is cleared: the
+				// append may have failed before the arm persisted, and the
+				// settle boundary must never launch an unpersisted handoff
+				if (pendingHandoff?.token === token) pendingHandoff = null;
+				const pointer =
+					created !== null && createdPath !== null
+						? ` The provisioned workspace stands: birth record ${created} at ${createdPath}; no move happened.`
+						: "";
+				return failed(`${why}${pointer}`);
 			};
 			try {
 				let target: string;
-				let created: number | null = null;
 				if (params.choice === "existing") {
 					if (params.path === undefined || params.label !== undefined || params.base !== undefined) {
 						return giveUp(
@@ -1169,6 +1189,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 						}),
 					});
 					created = reply.workspace.seq;
+					createdPath = reply.workspace.path;
 					target = realpathSync(reply.workspace.path);
 				}
 				if (signal?.aborted) {
@@ -1186,7 +1207,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				const log = /\.guard$/.test(held.path)
 					? held.path.replace(/\.guard$/, ".handoff.log")
 					: `${held.path}.handoff.log`;
-				pendingHandoff = { token, target, toolCall: id, log, created, script };
 				// the session's actual injected scope rides the arm: what the
 				// launch injected is what the resumed session must carry, never
 				// a value inferred from a task, message, or name
@@ -1194,6 +1214,8 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					actor: actorInjected ? (process.env.SACCADE_ACTOR ?? null) : null,
 					task: process.env.SACCADE_TASK?.trim() ? process.env.SACCADE_TASK.trim() : null,
 				};
+				// the arm goes live only after its entry is persisted: a failed
+				// append must leave nothing for the settle boundary to launch
 				pi.appendEntry("saccade_handoff", {
 					token,
 					nativeId: who.nativeId,
@@ -1205,6 +1227,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					log,
 					scope,
 				} satisfies HandoffEntryData);
+				pendingHandoff = { token, target, toolCall: id, log, created, script };
 				const provisioned = created !== null ? ` (provisioned now, birth record ${created})` : "";
 				return text(
 					[

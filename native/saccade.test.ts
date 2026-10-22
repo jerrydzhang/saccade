@@ -185,6 +185,9 @@ class FakePi implements ExtensionAPI {
 		this.followUps.push(content);
 	}
 	appendEntries: Array<{ type: string; data: unknown }> = [];
+	// when set, appendEntry throws for this custom type: the persistence
+	// failure seam
+	failAppend: string | null = null;
 	// components the registered renderer painted, in append order
 	rendered: unknown[] = [];
 	entryRenderers = new Map<string, EntryRenderer>();
@@ -195,6 +198,9 @@ class FakePi implements ExtensionAPI {
 		this.entryRenderers.set(customType, renderer as EntryRenderer);
 	}
 	appendEntry<T = unknown>(customType: string, data?: T): void {
+		if (this.failAppend === customType) {
+			throw new Error("session storage refused the append");
+		}
 		this.appendEntries.push({ type: customType, data });
 		// faithful to interactive mode: a registered renderer paints the
 		// entry into chat; without one the append stays invisible
@@ -1633,6 +1639,58 @@ test("an armed handoff persists its facts and shuts the session down at settle",
 	await stop(h);
 });
 
+test("a failed arm append leaves nothing for the settle boundary to launch", async () => {
+	const h = harness("appendfail19", "/sessions/appendfail19.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const calls = activityProvider(h.pi, "idle");
+	const target = scratchDir("appendfail19-target");
+	await withHandoffEnv(async () => {
+		h.pi.failAppend = "saccade_handoff";
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		assert.equal((out as any).isError, true);
+		assert.match((out as any).content[0].text, /hold is released and the session stays/);
+		h.pi.failAppend = null;
+		// the arm never went live: the settle boundary launches and shuts
+		// down nothing, and the admission hold went back with the token
+		await h.pi.emit("agent_settled");
+	});
+	assert.equal(h.pi.shutdowns, 0, "an unpersisted arm never shuts the session down");
+	const armed = h.pi.appendEntries.find((e) => e.type === "saccade_handoff");
+	assert.equal(armed, undefined, "the failed append persisted nothing");
+	// the helper's log would sit beside the fake guard; nothing created it
+	const guard = "/tmp/saccade-fake-guard-" + h.tracker.guardSalt + "-appendfail19.guard";
+	assert.equal(existsSync(guard.replace(/\.guard$/, ".handoff.log")), false, "no helper launched for the failed arm");
+	assert.deepEqual(calls.map((c) => c.op), ["hold", "release"]);
+	rmSync(target, { recursive: true, force: true });
+	await stop(h);
+});
+
+test("an aborted run cancels only its armed handoff: no launch, no shutdown, admission restored", async () => {
+	const h = harness("abort20", "/sessions/abort20.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const calls = activityProvider(h.pi, "idle");
+	const target = scratchDir("abort20-target");
+	await withHandoffEnv(async () => {
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		assert.match((out as any).content[0].text, /handoff armed/);
+		// the pinned AgentSettledEvent carries the run's own abort
+		await h.pi.emit("agent_settled", { aborted: true });
+	});
+	assert.equal(h.pi.shutdowns, 0, "an aborted run never shuts the session down");
+	const armed = h.pi.appendEntries.find((e) => e.type === "saccade_handoff")!;
+	const log = (armed.data as HandoffEntryData).log;
+	assert.equal(existsSync(log), false, "no helper launched on abort");
+	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
+	assert.equal((done!.data as HandoffDoneData).outcome, "cancelled");
+	assert.match((done!.data as HandoffDoneData).reason ?? "", /aborted/);
+	assert.ok(calls.some((c) => c.op === "release"), "the abort released the hold");
+	// admission restored: the wrapper holds again for a fresh token
+	const reopened: any = {};
+	h.pi.events.emit("bash-background.handoff-gate", { op: "hold", token: "post-abort", reply: reopened });
+	assert.equal(reopened.held, true, "the released gate admits again");
+	await stop(h);
+});
+
 test("a helper that cannot launch cancels the handoff and keeps the session alive", async () => {
 	const h = harness("launchfail7", "/sessions/launchfail7.jsonl", "pi");
 	await h.pi.emit("session_start");
@@ -1975,7 +2033,7 @@ test("the new choice provisions through the server and arms the birth record", a
 	await stop(h);
 });
 
-test("a provision that comes back with no usable path releases the hold", async () => {
+test("a provision that comes back with no usable path releases the hold and keeps the birth pointer", async () => {
 	const h = harness("fresh18", "/sessions/fresh18.jsonl", "pi");
 	await h.pi.emit("session_start");
 	const calls = activityProvider(h.pi, "idle");
@@ -1984,8 +2042,14 @@ test("a provision that comes back with no usable path releases the hold", async 
 		const out = await h.tools("saccade_workspace").execute("c1", { choice: "new" }, undefined, undefined, toolCtxOf(h));
 		assert.equal((out as any).isError, true);
 		assert.match((out as any).content[0].text, /hold is released and the session stays/);
+		// the birth already landed: the failure face carries the true
+		// provision pointer, never a rollback or a success claim
+		assert.match((out as any).content[0].text, /birth record 301 at \/nonexistent-saccade-provision; no move happened/);
 	});
 	assert.deepEqual(calls.map((c) => c.op), ["hold", "release"]);
 	assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false);
+	// nothing is live for the settle boundary after the failure
+	await h.pi.emit("agent_settled");
+	assert.equal(h.pi.shutdowns, 0);
 	await stop(h);
 });
