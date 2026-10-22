@@ -2452,13 +2452,21 @@ fn integrate_launch(
     let repo = resolve_repo(cli)?;
     let label = command_label(&pi.display().to_string());
     // routing rides the launch line: the integration reaches the
-    // tracker's server directly, the repo names the tracker besides
+    // tracker's server directly, the repo names the tracker besides,
+    // and the CLI path lets the session's own handoff helper call the
+    // controller door by name instead of guessing at a PATH
     let mut routing = format!(
         "SACCADE_ACTOR={} SACCADE_SERVER={} SACCADE_REPO={}",
         shell_quote(&label),
         shell_quote(&url),
         shell_quote(&repo.display().to_string()),
     );
+    if let Ok(exe) = std::env::current_exe() {
+        routing.push_str(&format!(
+            " SACCADE_CLI={}",
+            shell_quote(&exe.display().to_string())
+        ));
+    }
     if let Some(token) = launch_token {
         routing.push_str(&format!(" SACCADE_LAUNCH_TOKEN={}", shell_quote(token)));
     }
@@ -2574,7 +2582,7 @@ fn integrate_launch(
     // routing the child never selected; the routing it does select
     // rides the line explicitly.
     let command = format!(
-        "cd {} && env -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB -u SACCADE_LAUNCH_TOKEN {} {}",
+        "cd {} && env -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB -u SACCADE_LAUNCH_TOKEN -u SACCADE_CLI {} {}",
         shell_quote(&dir_str),
         routing,
         argv.iter()

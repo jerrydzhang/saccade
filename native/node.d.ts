@@ -4,7 +4,7 @@
 // purpose - a widening that production starts using must be added here
 // first, where the typecheck sees it.
 declare module "node:fs" {
-	export function openSync(path: string, flags: string | number): number;
+	export function openSync(path: string, flags: string | number, mode?: number): number;
 	export function closeSync(fd: number): void;
 	export function existsSync(path: string): boolean;
 	enum FileMode {
@@ -14,6 +14,9 @@ declare module "node:fs" {
 	export function mkdtempSync(prefix: string): string;
 	export function writeFileSync(path: string, data: string): void;
 	export function chmodSync(path: string, mode: number | FileMode): void;
+	export function readFileSync(path: string, encoding: string): string;
+	export function realpathSync(path: string): string;
+	export function statSync(path: string): { isDirectory(): boolean };
 }
 declare module "node:child_process" {
 	export interface SpawnSyncResult {
@@ -30,5 +33,10 @@ declare module "node:child_process" {
 		command: string,
 		args: readonly string[],
 		options: { stdio: readonly unknown[]; detached?: boolean },
-	): { kill: () => boolean; pid: number | undefined };
+	): {
+		kill: () => boolean;
+		pid: number | undefined;
+		on: (event: string, listener: () => void) => void;
+		unref: () => void;
+	};
 }

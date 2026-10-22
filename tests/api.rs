@@ -3339,6 +3339,7 @@ async fn the_integrate_launch_scrubs_stale_inheritance() {
         .env("SACCADE_TASK", "t-0")
         .env("SACCADE_WORKSPACE", "/nowhere")
         .env("SACCADE_DB", "/stale/routing.db")
+        .env("SACCADE_CLI", "/stale/sac")
         .output()
         .expect("spawn sac");
     let ok = out.status.success();
@@ -3369,6 +3370,29 @@ async fn the_integrate_launch_scrubs_stale_inheritance() {
     assert!(
         typed.contains(&format!("SACCADE_REPO={}", root.display())),
         "{typed}"
+    );
+    // the handoff helper's controller door is named, never guessed from
+    // a PATH, and a stale inherited CLI path is scrubbed before the
+    // routing assignment
+    assert!(
+        typed.contains("-u SACCADE_CLI"),
+        "the launch scrubs a stale inherited CLI path: {typed}"
+    );
+    assert!(
+        typed.contains(&format!(
+            "SACCADE_CLI={}",
+            shell_quoted(
+                &std::fs::canonicalize(env!("CARGO_BIN_EXE_sac"))
+                    .unwrap()
+                    .display()
+                    .to_string()
+            )
+        )),
+        "{typed}"
+    );
+    assert!(
+        !typed.contains("/stale/sac"),
+        "the stale CLI path never survives the scrub: {typed}"
     );
     assert!(
         typed.ends_with(&shell_quoted("register and wait")),

@@ -3,8 +3,8 @@
 // messages, and waits that incoming messages or native human input
 // release - releasing only this integration's own wait, never
 // interrupting other work.
-import { closeSync, openSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { closeSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import type {
@@ -144,6 +144,154 @@ const WaitParams = Type.Object({
 		}),
 	),
 });
+const WorkspaceParams = Type.Object({
+	choice: Type.Union([Type.Literal("existing"), Type.Literal("new")], {
+		description: "the explicit choice: move to an existing directory, or provision a new workspace",
+	}),
+	path: Type.Optional(
+		Type.String({
+			description: "existing: the directory to move this session's saved workspace to; it must already exist",
+		}),
+	),
+	label: Type.Optional(
+		Type.String({ description: "new: the descriptive label; omit for workspace-<token>" }),
+	),
+	base: Type.Optional(
+		Type.String({ description: "new: the Git base ref; defaults to the primary checkout's current HEAD" }),
+	),
+});
+
+interface WorkspaceBirthReply {
+	created: boolean;
+	workspace: { seq: number; base: string; branch: string; path: string };
+}
+
+// -- the explicit own-session workspace handoff --------------------------
+
+// The provider-owned activity hook on the wrapper's event bus: the
+// reply object travels in the request payload, and an untouched reply
+// means no supported provider runs in this wrapper - activity is
+// unknown, which is never idle.
+const ACTIVITY_CHANNEL = "bash-background.handoff-gate";
+
+interface ActivityProbe {
+	handled?: boolean;
+	held?: boolean;
+	busy?: number;
+	jobs?: string[];
+	released?: boolean;
+	reason?: string;
+}
+
+// The saved-session facts an armed handoff persists: the exact identity
+// the resume-side correlation validates, the helper's inputs, and the
+// human-followable failure location.
+export interface HandoffEntryData {
+	token: string;
+	nativeId: string;
+	sessionFile: string;
+	toolCall: string;
+	incarnation: number;
+	target: string;
+	created: number | null;
+	log: string;
+}
+
+// What became of an armed handoff: the token is the join - entries carry
+// machine-assigned ids only after persistence, so a done entry names the
+// armed entry's token, never an id it cannot know.
+export interface HandoffDoneData {
+	token: string;
+	outcome: "activated" | "stale" | "cancelled";
+	reason?: string;
+	record?: number;
+}
+
+// The handoff this process armed and has not yet shut down for. Module
+// state on purpose: any reload or session replacement kills it with the
+// tool call's run, and the gate goes with it.
+interface PendingHandoff {
+	token: string;
+	target: string;
+	toolCall: string;
+	log: string;
+	created: number | null;
+	script: string;
+}
+
+// The helper launch seam: exported so the contract test can pin the
+// script's words, and overridden nowhere in production.
+export function handoffHelperScript(spec: {
+	guard: string;
+	cli: string;
+	server: string;
+	repo: string;
+	num: number;
+	target: string;
+	cycles: number;
+}): string {
+	const quote = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`;
+	const cycles = String(spec.cycles);
+	return [
+		"i=0",
+		`while [ "$i" -lt ${cycles} ]; do`,
+		`\tif flock -n ${quote(spec.guard)} true 2>/dev/null; then break; fi`,
+		"	sleep 0.25",
+		"	i=$((i+1))",
+		"done",
+		`if ! flock -n ${quote(spec.guard)} true 2>/dev/null; then`,
+		`\techo ${quote("the session's guard stayed held past the quiescence bound; no switch or resume was attempted")}`,
+		"\texit 3",
+		"fi",
+		`exec ${quote(spec.cli)} --server ${quote(spec.server)} --repo ${quote(spec.repo)} workspace switch ${quote(`i-${spec.num}`)} --to ${quote(spec.target)} --resume`,
+	].join("\n");
+}
+
+// Launch the detached helper: a shell that waits for this process's own
+// death to release the guard, then calls the existing stopped-session
+// controller door. The helper inherits no descriptor of this process -
+// only the log file it writes - so its own wait cannot block the
+// release it waits for. Detached and unref'd: it outlives this process
+// by design and bounds itself.
+function launchHandoffHelper(script: string, log: string): void {
+	const fd = openSync(log, "a", 0o600);
+	try {
+		const child = spawn("sh", ["-c", script], {
+			detached: true,
+			stdio: ["ignore", fd, fd],
+		});
+		child.on("error", () => {});
+		child.unref();
+	} finally {
+		closeSync(fd);
+	}
+}
+
+// The machine envelope that reactivates the explicit own request after
+// the confirmed move: original tool reference and change record, never
+// human-shaped text. All words are authored ASCII; the target is data.
+export function handoffEnvelope(data: HandoffEntryData, record: number): string {
+	return [
+		`[saccade workspace handoff | tool ${data.toolCall} | change record c-${record}]`,
+		"",
+		`Your explicit own-session workspace handoff is confirmed: this native session kept its id, saved history, and declared scope; the saved working directory moved to ${data.target} (record c-${record}).`,
+		"Continue the goal you were pursuing when you called saccade_workspace - no new goal was created and nothing else changed.",
+	].join("\n");
+}
+
+// The saved header's cwd, read the one way the controller does: first
+// line, session header, its cwd field. Anything else is unreadable.
+export function headerCwd(sessionFile: string): string | null {
+	try {
+		const line = readFileSync(sessionFile, "utf8").split("\n", 1)[0] ?? "";
+		const header = JSON.parse(line) as { type?: string; cwd?: unknown };
+		if (header.type !== "session") return null;
+		if (typeof header.cwd !== "string" || header.cwd === "") return null;
+		return header.cwd;
+	} catch {
+		return null;
+	}
+}
 
 export default function saccadeIntegration(pi: ExtensionAPI) {
 	// the attach record's reader: interactive chat paints custom
@@ -151,6 +299,24 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	pi.registerEntryRenderer("saccade_attach", (entry) => {
 		const data = (entry.data ?? {}) as { error?: string };
 		return new Text(data.error ? `saccade: ${data.error}` : "saccade: attached");
+	});
+	// the armed handoff and its outcome, painted for the session's human
+	pi.registerEntryRenderer("saccade_handoff", (entry) => {
+		const data = (entry.data ?? {}) as HandoffEntryData;
+		const provisioned = data.created !== null ? ` (provisioned, birth record c-${data.created})` : "";
+		return new Text(
+			`saccade: handoff armed - saved workspace moves to ${data.target}${provisioned} when this run settles; helper log ${data.log}`,
+		);
+	});
+	pi.registerEntryRenderer("saccade_handoff_done", (entry) => {
+		const data = (entry.data ?? {}) as HandoffDoneData;
+		const line =
+			data.outcome === "activated"
+				? `handoff activated, resumed there (record c-${data.record})`
+				: data.outcome === "stale"
+					? `handoff not activated: ${data.reason ?? "stale"}`
+					: `handoff cancelled: ${data.reason ?? "cancelled"}`;
+		return new Text(`saccade: ${line}`);
 	});
 	// the session's association: resolved or registered fresh at every
 	// session start by the session's actual native id and locator
@@ -171,6 +337,27 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// (the send was refused, or the queued input was discarded), at
 	// which point the guard releases and the next drain delivers again
 	const queued = new Map<number, MailboxMessage>();
+	// the armed own-session handoff this process has not yet shut down
+	// for: null once the helper is launched (the shutdown is the armed
+	// run's own act), and cancelled with its gate on any other boundary
+	let pendingHandoff: PendingHandoff | null = null;
+
+	// One synchronous emit reads and holds: the bus dispatches handlers
+	// synchronously, so the answer is final when emit returns - the idle
+	// check and the admission hold are one atomic act.
+	function activityProbe(op: string, token: string): ActivityProbe {
+		const reply: ActivityProbe = {};
+		try {
+			pi.events.emit(ACTIVITY_CHANNEL, { op, token, reply });
+		} catch {
+			// a bus that refuses the emit is the same unknown as an absent provider
+		}
+		return reply;
+	}
+
+	function releaseActivityGate(token: string): void {
+		activityProbe("release", token);
+	}
 
 	// agent possession is set at load, before any attach: a tracker
 	// outage must still leave nested sac calls acting as the agent, and
@@ -520,8 +707,138 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	});
 	pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
 		confirmDeliveries(ctx);
+		settlePendingHandoff(ctx);
 		return undefined;
 	});
+
+	// Release the armed handoff without shutting down: the gate goes
+	// with the token, the outcome lands as a fact, and the session stays
+	// exactly as it was.
+	function cancelPendingHandoff(reason: string) {
+		const armed = pendingHandoff;
+		if (armed === null) return;
+		pendingHandoff = null;
+		releaseActivityGate(armed.token);
+		pi.appendEntry("saccade_handoff_done", {
+			token: armed.token,
+			outcome: "cancelled",
+			reason,
+		} satisfies HandoffDoneData);
+	}
+
+	// The settle boundary is the safe native act: the run's entries - the
+	// tool result among them - are saved before this fires, so the old
+	// process stops with its history complete. The helper is launched
+	// first (detached, unref'd, no descriptor of this process) and the
+	// supported shutdown follows; a launch failure releases the hold and
+	// keeps the session usable.
+	function settlePendingHandoff(ctx: ExtensionContext) {
+		const armed = pendingHandoff;
+		if (armed === null) return;
+		try {
+			launchHandoffHelper(armed.script, armed.log);
+		} catch (error) {
+			pendingHandoff = null;
+			releaseActivityGate(armed.token);
+			pi.appendEntry("saccade_handoff_done", {
+				token: armed.token,
+				outcome: "cancelled",
+				reason: `the helper could not launch: ${errorText(error)}`,
+			} satisfies HandoffDoneData);
+			return;
+		}
+		pendingHandoff = null;
+		ctx.shutdown();
+	}
+
+	// The armed handoff entries a saved history carries, minus the ones a
+	// done entry already resolved: the token is the join.
+	function unconsumedHandoffs(ctx: ExtensionContext): HandoffEntryData[] {
+		const done = new Set<string>();
+		const armed: HandoffEntryData[] = [];
+		for (const entry of ctx.sessionManager.getEntries()) {
+			if (entry.type !== "custom") continue;
+			const shaped = entry as { customType?: string; data?: unknown };
+			if (shaped.customType === "saccade_handoff_done") {
+				const token = (shaped.data ?? {}) as HandoffDoneData;
+				if (typeof token.token === "string") done.add(token.token);
+				continue;
+			}
+			if (shaped.customType !== "saccade_handoff") continue;
+			const data = shaped.data as HandoffEntryData | undefined;
+			if (data && typeof data.token === "string") armed.push(data);
+		}
+		return armed.filter((a) => !done.has(a.token));
+	}
+
+	// The confirmed change record for this incarnation and target: actual
+	// tracker facts scanned once, the latest match wins. The payload
+	// travels as the JSON itself - an object on the wire, a string only
+	// in older storage shapes - and an unreadable payload is skipped,
+	// never guessed.
+	async function confirmedChangeRecord(incarnation: number, target: string): Promise<number | null> {
+		const reply = await tracker<{ records: Array<{ seq: number; kind: string; payload: unknown }> }>(
+			"/api/v1/records",
+		);
+		let found: number | null = null;
+		for (const record of reply.records) {
+			if (record.kind !== "workspace_changed") continue;
+			try {
+				const payload = (
+					typeof record.payload === "string" ? JSON.parse(record.payload) : record.payload
+				) as { incarnation?: unknown; worktree?: unknown };
+				if (payload.incarnation === incarnation && payload.worktree === target) found = record.seq;
+			} catch {
+				continue;
+			}
+		}
+		return found;
+	}
+
+	// Correlate the saved armed entry against the exact current native
+	// association, the actual saved header, and the confirmed record
+	// before consuming it. Startup data is correlation, never authority:
+	// a fork, another session, an unmoved or re-moved header, or a
+	// missing record marks the entry stale instead of redirecting it, and
+	// a tracker outage leaves it unconsumed for the next start.
+	async function consumeHandoff(ctx: ExtensionContext, who: Association): Promise<void> {
+		const candidates = unconsumedHandoffs(ctx);
+		if (candidates.length === 0) return;
+		for (const older of candidates.slice(0, -1)) {
+			pi.appendEntry("saccade_handoff_done", {
+				token: older.token,
+				outcome: "stale",
+				reason: "superseded by a later arm",
+			} satisfies HandoffDoneData);
+		}
+		const data = candidates[candidates.length - 1]!;
+		const stale = (reason: string) => {
+			pi.appendEntry("saccade_handoff_done", {
+				token: data.token,
+				outcome: "stale",
+				reason,
+			} satisfies HandoffDoneData);
+		};
+		if (data.nativeId !== ctx.sessionManager.getSessionId()) {
+			return stale("the armed native id is not this session's");
+		}
+		if (data.sessionFile !== ctx.sessionManager.getSessionFile()) {
+			return stale("the armed session file is not this session's");
+		}
+		if (headerCwd(data.sessionFile) !== data.target) {
+			return stale("the saved session's working directory is not the armed target");
+		}
+		const record = await confirmedChangeRecord(who.incarnation, data.target);
+		if (record === null) {
+			return stale("no confirmed workspace change record matches this incarnation and target");
+		}
+		pi.appendEntry("saccade_handoff_done", {
+			token: data.token,
+			outcome: "activated",
+			record,
+		} satisfies HandoffDoneData);
+		pi.sendUserMessage(handoffEnvelope(data, record), { deliverAs: "followUp" });
+	}
 
 	function text(content: string) {
 		return {
@@ -716,6 +1033,131 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerTool({
+		name: "saccade_workspace",
+		label: "Saccade workspace",
+		description:
+			"Move THIS session to another workspace, by explicit choice only: an existing directory, or a newly provisioned one. The saved working directory changes at a safe native boundary - this run settles, the session shuts down, and a bounded helper moves the saved session and resumes it there with the same native id, history, and declared scope. Refuses while background jobs or subagents are active (nothing is stopped), and refuses rather than guess when the wrapper's activity cannot be verified.",
+		parameters: WorkspaceParams,
+		execute: async (
+			id,
+			params: Static<typeof WorkspaceParams>,
+			signal,
+			_onUpdate,
+			ctx: ExtensionToolContext,
+		) => {
+			const who = await ensureAttached(ctx);
+			if (!who) return failed(`not moved: ${attachError}`);
+			const held = heldGuard();
+			const cli = process.env.SACCADE_CLI?.trim() || undefined;
+			const repo = process.env.SACCADE_REPO?.trim() || undefined;
+			const url = server();
+			if (!held || !cli || !repo || !url) {
+				const missing = [
+					!held ? "this session's guard" : null,
+					!url ? "SACCADE_SERVER" : null,
+					!repo ? "SACCADE_REPO" : null,
+					!cli ? "SACCADE_CLI (the controller door's path)" : null,
+				]
+					.filter((part) => part !== null)
+					.join(", ");
+				return failed(`not moved: the handoff helper needs ${missing}; nothing changed`);
+			}
+			const token = `handoff-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+			// the atomic idle check and admission hold: busy refuses with
+			// nothing stopped, an unanswered probe refuses as unknown, and
+			// neither leaves a hold behind
+			const probe = activityProbe("hold", token);
+			if (probe.handled !== true) {
+				return failed(
+					"not moved: no supported wrapper activity guard answered; activity is unknown and is never idle - nothing changed",
+				);
+			}
+			if (probe.held !== true) {
+				const busy =
+					probe.busy !== undefined
+						? `${probe.busy} background job(s) active (${(probe.jobs ?? []).join(", ")})`
+						: (probe.reason ?? "the wrapper refused the hold");
+				return failed(`not moved: ${busy}; nothing was stopped and nothing changed`);
+			}
+			// every exit below releases the hold: a refused or failed
+			// preparation leaves the session exactly as it was
+			const giveUp = (why: string) => {
+				releaseActivityGate(token);
+				return failed(why);
+			};
+			try {
+				let target: string;
+				let created: number | null = null;
+				if (params.choice === "existing") {
+					if (params.path === undefined || params.label !== undefined || params.base !== undefined) {
+						return giveUp(
+							"not moved: the existing choice names exactly a path and nothing else; nothing changed",
+						);
+					}
+					const resolved = realpathSync(params.path);
+					if (!statSync(resolved).isDirectory()) {
+						return giveUp(`not moved: ${resolved} is not a directory; nothing changed`);
+					}
+					target = resolved;
+				} else {
+					if (params.path !== undefined) {
+						return giveUp(
+							"not moved: the new choice provisions a workspace and takes no path; nothing changed",
+						);
+					}
+					const reply = await tracker<WorkspaceBirthReply>("/api/v1/workspace/create", {
+						method: "POST",
+						body: JSON.stringify({
+							label: params.label ?? null,
+							base: params.base ?? null,
+							client: "saccade-native-tool",
+						}),
+					});
+					created = reply.workspace.seq;
+					target = realpathSync(reply.workspace.path);
+				}
+				if (signal?.aborted) {
+					return giveUp("not moved: the call was cancelled; the hold is released and the session stays");
+				}
+				const script = handoffHelperScript({
+					guard: held.path,
+					cli,
+					server: url,
+					repo,
+					num: who.num,
+					target,
+					cycles: 480,
+				});
+				const log = /\.guard$/.test(held.path)
+					? held.path.replace(/\.guard$/, ".handoff.log")
+					: `${held.path}.handoff.log`;
+				pendingHandoff = { token, target, toolCall: id, log, created, script };
+				pi.appendEntry("saccade_handoff", {
+					token,
+					nativeId: who.nativeId,
+					sessionFile: who.sessionFile,
+					toolCall: id,
+					incarnation: who.incarnation,
+					target,
+					created,
+					log,
+				} satisfies HandoffEntryData);
+				const provisioned = created !== null ? ` (provisioned now, birth record c-${created})` : "";
+				return text(
+					[
+						`workspace handoff armed: the activity gate is held, target ${target}${provisioned}.`,
+						"When this run settles, the session shuts down and a bounded helper moves the saved session's working directory and resumes it there - same native id, history, and declared scope.",
+						`The helper's outcome log is ${log}; if the session does not come back, that file names the failure.`,
+						"Do not start background work. Native human input or a reload cancels the handoff and releases the hold.",
+					].join("\n"),
+				);
+			} catch (error) {
+				return giveUp(`not moved: ${errorText(error)}; the hold is released and the session stays`);
+			}
+		},
+	});
+
 	pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
 		// every start reassociates by the session's actual native id and
 		// locator - new, fork, resume, and reload alike - and the old
@@ -748,13 +1190,27 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				error: errorText(error),
 			});
 		}
+		// a saved armed handoff correlates against this exact association;
+		// an unread correlation stays unconsumed, never stale by guess
+		try {
+			await consumeHandoff(ctx, who);
+		} catch (error) {
+			pi.appendEntry("saccade_attach", {
+				incarnation: who.incarnation,
+				error: `handoff correlation unread: ${errorText(error)}`,
+			});
+		}
 	});
 
 	pi.on("session_shutdown", async () => {
 		// idempotent teardown: waits finish, queued deliveries cancel,
 		// the association and its env channel go with the session - and
 		// the exact-session guard stays kernel-held: process death is
-		// its release, and a reload's next start reuses it
+		// its release, and a reload's next start reuses it. A handoff
+		// still armed here never launched its helper: reload and session
+		// replacement cancel it with its gate; on the quit path the
+		// settle boundary already emptied it.
+		cancelPendingHandoff("the session ended before the handoff's run settled");
 		cancelAllWaits();
 		suspendAssociation();
 		return undefined;
@@ -793,6 +1249,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		// for refused or discarded deliveries release here, so an
 		// explicit wait or the bridge's next read delivers again
 		reconcileDiscarded(ctx);
+		// the human took the session back: an armed handoff cancels with
+		// its gate, and the input proceeds in the staying session
+		cancelPendingHandoff("native human input arrived; the session stays");
 		for (const state of [...waits]) {
 			finish(state, "input", []);
 		}
