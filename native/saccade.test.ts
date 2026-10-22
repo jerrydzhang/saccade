@@ -1,7 +1,16 @@
 // The integration's mechanics and queue contract, pinned against a stateful fake of the native followUp queue.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { closeSync, existsSync, openSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import {
+	chmodSync,
+	closeSync,
+	existsSync,
+	mkdtempSync,
+	openSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import type {
 	ExtensionAPI,
@@ -959,6 +968,33 @@ test("the guard take is kernel-real: held while the fd lives, free after death",
 	}
 });
 
+test("the guard take classifies by the documented flock contract", () => {
+	const guard = "/tmp/saccade-guard-classify-" + process.pid + ".guard";
+	const fd = openSync(guard, "a+");
+	const shim = mkdtempSync("/tmp/saccade-flock-shim-");
+	const savedPath = process.env.PATH;
+	try {
+		// exit 1 is the documented held-lock conflict: busy
+		writeFileSync(join(shim, "flock"), "#!/bin/sh\nexit 1\n");
+		chmodSync(join(shim, "flock"), 0o755);
+		process.env.PATH = shim;
+		assert.equal(takeGuardLock(fd), false, "exit 1 is the busy conflict");
+		// every other exit, signal death, and spawn failure stay unknown
+		writeFileSync(join(shim, "flock"), "#!/bin/sh\nexit 16\n");
+		assert.equal(takeGuardLock(fd), undefined, "exit 16 is unknown");
+		writeFileSync(join(shim, "flock"), "#!/bin/sh\nkill -TERM $$\n");
+		assert.equal(takeGuardLock(fd), undefined, "signal death is unknown");
+		process.env.PATH = "";
+		assert.equal(takeGuardLock(fd), undefined, "a missing flock is unknown");
+	} finally {
+		if (savedPath === undefined) delete process.env.PATH;
+		else process.env.PATH = savedPath;
+		closeSync(fd);
+		rmSync(guard, { force: true });
+		rmSync(shim, { recursive: true, force: true });
+	}
+});
+
 test("a held guard shuts the duplicate down before any model work", async () => {
 	const shared = new FakeTracker();
 	// the original attaches and holds its session's guard
@@ -988,4 +1024,40 @@ test("a held guard shuts the duplicate down before any model work", async () => 
 	assert.equal(original.pi.followUps.length, 0);
 	await stop(original);
 	await stop(duplicate);
+});
+
+test("an unknown guard take refuses the association and shuts the session down", async () => {
+	const shared = new FakeTracker();
+	// a flock that fails outside the documented contract: the take is
+	// unknown, and an unverified session must not keep running unguarded
+	const shim = mkdtempSync("/tmp/saccade-flock-shim-");
+	writeFileSync(join(shim, "flock"), "#!/bin/sh\nexit 16\n");
+	chmodSync(join(shim, "flock"), 0o755);
+	const savedPath = process.env.PATH;
+	process.env.PATH = shim;
+	let h: ReturnType<typeof harness>;
+	try {
+		h = harness("unknown-guard0", "/sessions/unknown-guard.jsonl", "pi", shared);
+		await h.pi.emit("session_start");
+		assert.equal(h.pi.shutdowns, 1, "the unverified session shuts down");
+		// still inside the broken-flock window: a retried attach meets
+		// the same unknown and refuses again - never a live association
+		const identity = h.tools("saccade_identity");
+		const result = await identity.execute(
+			"t1",
+			{},
+			undefined,
+			undefined,
+			{ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
+		);
+		const text = resultText(result);
+		assert.ok(text.includes("not registered"), text);
+		assert.ok(text.includes("cannot be probed"), `the refusal names the unknown: ${text}`);
+		assert.equal(h.pi.shutdowns, 2, "every attempt refuses and shuts down");
+	} finally {
+		if (savedPath === undefined) delete process.env.PATH;
+		else process.env.PATH = savedPath;
+	}
+	await stop(h);
+	rmSync(shim, { recursive: true, force: true });
 });

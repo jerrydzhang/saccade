@@ -1,3 +1,4 @@
+tsconfig.local.json
+node_modules
 pi-sdk.d.ts
 typebox
-node_modules

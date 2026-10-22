@@ -89,8 +89,14 @@ export function takeGuardLock(fd: number): boolean | undefined {
 		const run = spawnSync("flock", ["-n", "3"], {
 			stdio: ["ignore", "ignore", "ignore", fd],
 		});
+		// the documented flock contract: 0 = taken, 1 = the held-lock
+		// conflict (busy), every other exit, signal death, or spawn
+		// failure is an unknown state - never folded into busy
 		if (run.error) return undefined;
-		return run.status === 0;
+		if (run.signal !== null) return undefined;
+		if (run.status === 0) return true;
+		if (run.status === 1) return false;
+		return undefined;
 	} catch {
 		return undefined;
 	}
@@ -100,13 +106,17 @@ const IdentityParams = Type.Object({});
 const SendParams = Type.Object({
 	to: Type.String({ description: "recipient incarnation, i-<n>" }),
 	body: Type.String({ description: "the message body" }),
-	reply_to: Type.String({ description: "the message answered, m-<n>" }),
-	task: Type.String({ description: "task context, t-<n>" }),
+	reply_to: Type.Optional(
+		Type.String({ description: "the message answered, m-<n>" }),
+	),
+	task: Type.Optional(Type.String({ description: "task context, t-<n>" })),
 });
 const WaitParams = Type.Object({
-	reply_to: Type.String({
-		description: "only messages answering m-<n> release the wait",
-	}),
+	reply_to: Type.Optional(
+		Type.String({
+			description: "only messages answering m-<n> release the wait",
+		}),
+	),
 });
 
 export default function saccadeIntegration(pi: ExtensionAPI) {
@@ -217,11 +227,19 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			// free to the backend's probe.
 			guardFd = null;
 			if (reply.guard) {
-				guardFd = openSync(reply.guard, "a+");
-				const taken = takeGuardLock(guardFd);
+				let fd: number;
+				try {
+					fd = openSync(reply.guard, "a+");
+				} catch (error) {
+					// an unopenable guard is as unsafe as an unknown take:
+					// the process exits rather than continue unguarded
+					attachError = `the guard path is unopenable: ${errorText(error)}`;
+					ctx.shutdown();
+					return null;
+				}
+				const taken = takeGuardLock(fd);
 				if (taken === false) {
-					closeSync(guardFd);
-					guardFd = null;
+					closeSync(fd);
 					attachError =
 						"duplicate: this native session's guard is held by a live process";
 					// the supported termination path: the duplicate exits
@@ -230,13 +248,15 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					return null;
 				}
 				if (taken === undefined) {
-					closeSync(guardFd);
-					guardFd = null;
+					// unknown refuses the association AND the session: no
+					// unguarded tracked process may keep running
+					closeSync(fd);
 					attachError =
 						"the guard cannot be probed here; refusing an unverified association";
-					pi.appendEntry("saccade_attach", { error: attachError });
+					ctx.shutdown();
 					return null;
 				}
+				guardFd = fd;
 			}
 			association = { ...reply, nativeId: sessionId, sessionFile, guardFd };
 			process.env.SACCADE_INCARNATION_SEQ = String(reply.incarnation);
@@ -488,16 +508,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		label: "Saccade send",
 		description:
 			"Send a durable message to another registered incarnation. Addressing uses public numbers: the recipient i-<n>, an optional reply_to m-<n> naming the message this one answers, and an optional task t-<n> riding as context without publishing to its thread. Nonblocking; pair with saccade_wait when the reply matters now.",
-		parameters: {
-			type: "object",
-			properties: {
-				to: { type: "string", description: "recipient incarnation, i-<n>" },
-				body: { type: "string", description: "the message body" },
-				reply_to: { type: "string", description: "the message answered, m-<n>" },
-				task: { type: "string", description: "task context, t-<n>" },
-			},
-			required: ["to", "body"],
-		},
+		parameters: SendParams,
 		execute: async (_id, params: Static<typeof SendParams>, _signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
 			if (!who) return failed(`not sent: ${attachError}`);
@@ -539,15 +550,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		label: "Saccade wait",
 		description:
 			"Wait for incoming saccade messages addressed to this incarnation. Released by a matching message (delivered natively into your session) or by native human input; the result names which happened, never whether a request was answered. No messages and no input: it keeps waiting.",
-		parameters: {
-			type: "object",
-			properties: {
-				reply_to: {
-					type: "string",
-					description: "only messages answering m-<n> release the wait",
-				},
-			},
-		},
+		parameters: WaitParams,
 		execute: async (_id, params: Static<typeof WaitParams>, signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
 			if (!who) return failed(`cannot wait: ${attachError}`);

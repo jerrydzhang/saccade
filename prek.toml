@@ -9,6 +9,10 @@ hooks = [
     entry = "sh", language = "system",
     args = ["-c", "status=0; LC_ALL=C git grep --cached -I -n -e '[^ -~\t]' -- . || status=$?; if [ \"$status\" -eq 0 ]; then echo 'non-ASCII byte(s) above: authored text is ASCII; runtime Unicode goes in source escapes, prose takes ASCII punctuation' >&2; exit 1; fi; if [ \"$status\" -gt 1 ]; then echo \"ascii check could not scan the index (git grep status $status)\" >&2; exit 1; fi"],
     pass_filenames = false, always_run = true },
+  { id = "saccade-native-typecheck", name = "native extension typechecks against the pinned SDK",
+    entry = "bash", language = "system",
+    args = ["native/typecheck.sh"],
+    pass_filenames = false, always_run = true },
 ]
 
 [[repos]]

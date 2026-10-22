@@ -64,6 +64,7 @@
                 prek
                 just
                 typescript
+                nodejs
                 saccade.packages.${system}.default
                 devPi
               ];

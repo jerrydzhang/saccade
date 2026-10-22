@@ -7,11 +7,18 @@ declare module "node:fs" {
 	export function openSync(path: string, flags: string | number): number;
 	export function closeSync(fd: number): void;
 	export function existsSync(path: string): boolean;
+	enum FileMode {
+		accessible = 0o755,
+	}
 	export function rmSync(path: string, options: { force?: boolean; recursive?: boolean }): void;
+	export function mkdtempSync(prefix: string): string;
+	export function writeFileSync(path: string, data: string): void;
+	export function chmodSync(path: string, mode: number | FileMode): void;
 }
 declare module "node:child_process" {
 	export interface SpawnSyncResult {
 		status: number | null;
+		signal: string | null;
 		error: Error | undefined;
 	}
 	export function spawnSync(

@@ -1,3 +1,8 @@
+// Compile contract for the native extension sources against the
+// PINNED SDK's own types. Run native/typecheck.sh - it resolves the
+// pinned SDK through the SACCADE_PI chain and generates
+// tsconfig.local.json (gitignored) with the real store paths; plain
+// tsc against this base fails by design until it has run.
 {
 	"compilerOptions": {
 		"strict": true,
@@ -6,12 +11,11 @@
 		"module": "esnext",
 		"moduleResolution": "bundler",
 		"allowImportingTsExtensions": true,
-		"skipLibCheck": false,
-		"types": [],
-		"paths": {
-			"@earendil-works/pi-coding-agent": ["./pi-sdk.d.ts"],
-			"typebox": ["./typebox"]
-		}
+		// declaration files of unrelated dependencies are not the
+		// contract; this source is still checked against the pinned
+		// SDK's own types through the generated paths
+		"skipLibCheck": true,
+		"types": []
 	},
 	"include": ["*.ts", "*.d.ts"]
 }
