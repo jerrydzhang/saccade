@@ -26,4 +26,9 @@ declare module "node:child_process" {
 		args: readonly string[],
 		options: { stdio: readonly unknown[] },
 	): SpawnSyncResult;
+	export function spawn(
+		command: string,
+		args: readonly string[],
+		options: { stdio: readonly unknown[]; detached?: boolean },
+	): { kill: () => boolean; pid: number | undefined };
 }

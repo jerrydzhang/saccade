@@ -11,7 +11,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -492,6 +492,28 @@ function harness(
 	return {
 		pi,
 		tracker,
+		tools: (name: string) => {
+			const def = pi.tools.get(name);
+			assert.ok(def, `the fake registered ${name}`);
+			return def;
+		},
+		ctx: () => fakeContext(pi, pi.session),
+	};
+}
+
+// A reloaded runtime runs a FRESH factory over the same tracker. The
+// guard registry is process-global, so the fresh instance adopts the
+// held exact-session guard instead of refusing as a duplicate.
+function reloadedHarness(
+	h: Harness,
+	nativeId: string,
+	file: string,
+): Harness {
+	const pi = new FakePi(nativeId, file);
+	saccadeIntegration(pi);
+	return {
+		pi,
+		tracker: h.tracker,
 		tools: (name: string) => {
 			const def = pi.tools.get(name);
 			assert.ok(def, `the fake registered ${name}`);
@@ -1068,35 +1090,126 @@ test("a reload to a different native session releases the old session's guard", 
 	await stop(h);
 });
 
-test("a held guard shuts the duplicate down before any model work", async () => {
+test("a fresh factory after shutdown adopts the held exact-session guard", async () => {
+	// proof level: a fresh FACTORY on the same module - the shape pi's
+	// cached-factory reload path runs. Kernel evidence throughout.
 	const shared = new FakeTracker();
-	// the original attaches and holds its session's guard
-	const original = harness("dup-original0", "/sessions/dup-original.jsonl", "pi", shared);
-	await original.pi.emit("session_start");
-	assert.equal(original.pi.shutdowns, 0);
-	// a real duplicate start over the same native session: the held
-	// guard is detected, the duplicate names its refusal, and pi is
-	// shut down before any model work - never a silent null association
-	const duplicate = harness("dup-original0", "/sessions/dup-original.jsonl", "pi", shared);
-	await duplicate.pi.emit("session_start");
-	assert.equal(duplicate.pi.shutdowns, 1, "the duplicate shuts down");
-	// the duplicate never participated: its identity names the held
-	// guard, and nothing registered
-	const identity = duplicate.tools("saccade_identity");
-	const result = await identity.execute(
-		"t1",
-		{},
-		undefined,
-		undefined,
-		{ ...duplicate.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
+	const first = harness("adopt-guard0", "/sessions/adopt-guard.jsonl", "pi", shared);
+	const guard =
+		"/tmp/saccade-fake-guard-" + shared.guardSalt + "-adopt-guard0.guard";
+	await first.pi.emit("session_start");
+	assert.equal(probeHeld(guard), true, "the first instance holds the guard");
+	await first.pi.emit("session_shutdown", { reason: "reload" });
+	// a reloaded runtime: a new factory invocation, fresh closures
+	const second = reloadedHarness(first, "adopt-guard0", "/sessions/adopt-guard.jsonl");
+	await second.pi.emit("session_start");
+	assert.equal(probeHeld(guard), true, "the reloaded runtime keeps the guard held");
+	assert.equal(second.pi.shutdowns, 0, "the reloaded runtime is not refused");
+	const identity = second.tools("saccade_identity");
+	const text = resultText(
+		await identity.execute(
+			"t1",
+			{},
+			undefined,
+			undefined,
+			{ ...second.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
+		),
 	);
-	const text = resultText(result);
-	assert.ok(text.includes("not registered"), text);
-	assert.ok(text.includes("duplicate"), `the refusal names the held guard: ${text}`);
-	// the original is untouched and still holds its guard
-	assert.equal(original.pi.followUps.length, 0);
-	await stop(original);
-	await stop(duplicate);
+	assert.ok(text.includes("i-0"), text);
+	assert.ok(text.includes("already registered"), text);
+	await stop(second);
+});
+
+test("the guard registry survives a full module re-evaluation", async () => {
+	// proof level: a fresh MODULE evaluation - what jiti's
+	// moduleCache:false does on a cache miss. Module state dies; the
+	// registered-symbol globalThis registry is what survives.
+	const shared = new FakeTracker();
+	const guard =
+		"/tmp/saccade-fake-guard-" + shared.guardSalt + "-reeval-guard0.guard";
+	process.env.SACCADE_ACTOR = "pi";
+	shared.install();
+	process.env.SACCADE_SERVER = shared.url();
+	const firstPi = new FakePi("reeval-guard0", "/sessions/reeval-guard.jsonl");
+	saccadeIntegration(firstPi);
+	await firstPi.emit("session_start");
+	assert.equal(probeHeld(guard), true);
+	await firstPi.emit("session_shutdown", { reason: "reload" });
+	// a different specifier means a different module record: fresh
+	// module scope, factory re-evaluated from the source text
+	const reevaluated = (await import(`./saccade.ts?reeval=${Date.now()}`)) as
+		typeof import("./saccade.ts");
+	const secondPi = new FakePi("reeval-guard0", "/sessions/reeval-guard.jsonl");
+	reevaluated.default(secondPi);
+	await secondPi.emit("session_start");
+	assert.equal(probeHeld(guard), true, "the lock survives module re-evaluation");
+	assert.equal(secondPi.shutdowns, 0, "the re-evaluated runtime is not refused");
+	await stop({ pi: secondPi, tracker: shared, tools: () => undefined as never, ctx: () => undefined as never } as Harness);
+});
+
+test("a real second process refuses the attach and its death releases the lock", async () => {
+	// proof level: kernel, cross-process. A real second process holds
+	// the guard: the integration refuses and shuts down, naming the
+	// held guard, and the registration resolves once. Only the whole
+	// process group's real death frees the open file description.
+	const shared = new FakeTracker();
+	const guard =
+		"/tmp/saccade-fake-guard-" + shared.guardSalt + "-crossproc0.guard";
+	const holder = spawn("flock", [guard, "sleep", "30"], {
+		stdio: ["ignore", "ignore", "ignore"],
+		detached: true,
+	});
+	try {
+		const deadline = Date.now() + 5000;
+		while (!probeHeld(guard) && Date.now() < deadline) await tick();
+		assert.equal(probeHeld(guard), true, "the second process holds the lock");
+		const dup = harness("crossproc0", "/sessions/crossproc.jsonl", "pi", shared);
+		await dup.pi.emit("session_start");
+		assert.equal(dup.pi.shutdowns, 1, "the duplicate refusal fires");
+		const identity = dup.tools("saccade_identity");
+		const text = resultText(
+			await identity.execute(
+				"t1",
+				{},
+				undefined,
+				undefined,
+				{ ...dup.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
+			),
+		);
+		assert.ok(text.includes("not registered"), text);
+		assert.ok(text.includes("duplicate"), `the refusal names the held guard: ${text}`);
+		// real process-group death: the kernel releases, and a fresh
+		// instance of the integration attaches onto the freed lock
+		process.kill(-holder.pid!, "SIGKILL");
+		const freeDeadline = Date.now() + 5000;
+		while (probeHeld(guard) && Date.now() < freeDeadline) await tick();
+		assert.equal(probeHeld(guard), false, "process death released the lock");
+		const fresh = reloadedHarness(dup, "crossproc0", "/sessions/crossproc.jsonl");
+		await fresh.pi.emit("session_start");
+		assert.equal(fresh.pi.shutdowns, 0, "the freed guard admits the session");
+		assert.equal(shared.attachments.size, 1, "one registration, resolved twice");
+		await stop(fresh);
+	} finally {
+		try {
+			process.kill(-holder.pid!, "SIGKILL");
+		} catch {
+			// the group is already gone
+		}
+	}
+});
+
+test("a human-started session that cannot verify runs unassociated - the unratified offline gap", async () => {
+	// Characterization only: no launch token, tracker down before the
+	// first attach, no retained guard. The hole stays open pending the
+	// outage-tradeoff decision; this pins today's baseline.
+	const shared = new FakeTracker();
+	delete process.env.SACCADE_LAUNCH_TOKEN;
+	const h = harness("offline-gap0", "/sessions/offline-gap.jsonl", "pi", shared);
+	shared.attachFails = true;
+	await h.pi.emit("session_start");
+	assert.equal(h.pi.shutdowns, 0, "the unratified gap: the process continues");
+	shared.attachFails = false;
+	await stop(h);
 });
 
 test("an unknown guard take refuses the association and shuts the session down", async () => {

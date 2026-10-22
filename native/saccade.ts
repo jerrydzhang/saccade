@@ -102,6 +102,35 @@ export function takeGuardLock(fd: number): boolean | undefined {
 	}
 }
 
+// The held guard's exact-session record: the kernel lock on the shared
+// open-file-description lives while the descriptor stays open, and the
+// path and native session identity ride beside it so a reload can
+// tell an applicable exact-session guard from another session's.
+// Operational state only - never incarnation lifecycle or authority.
+// It lives on globalThis under a registered symbol because pi reloads
+// extensions with moduleCache: false: the module re-evaluates and
+// module state dies, while the process - and the descriptor it holds
+// - lives on.
+interface GuardRecord {
+	fd: number;
+	path: string;
+	sessionId: string;
+	sessionFile: string;
+}
+const GUARD_REGISTRY_KEY = Symbol.for("saccade.guard");
+function heldGuard(): GuardRecord | undefined {
+	const holder = globalThis as typeof globalThis & {
+		[GUARD_REGISTRY_KEY]?: GuardRecord;
+	};
+	return holder[GUARD_REGISTRY_KEY];
+}
+function holdGuard(record: GuardRecord | undefined) {
+	const holder = globalThis as typeof globalThis & {
+		[GUARD_REGISTRY_KEY]?: GuardRecord | undefined;
+	};
+	holder[GUARD_REGISTRY_KEY] = record;
+}
+
 const IdentityParams = Type.Object({});
 const SendParams = Type.Object({
 	to: Type.String({ description: "recipient incarnation, i-<n>" }),
@@ -128,14 +157,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	const waits = new Set<WaitState>();
 	// envelopes queued natively, submissions not yet confirmed
 	const deliveries = new Set<QueuedDelivery>();
-	// this session's guard descriptor: the kernel lock on the shared
-	// open-file-description lives while it stays open, and the path and
-	// session identity ride beside it so a reload can tell an
-	// applicable exact-session guard from another session's
-	let guardFd: number | null = null;
-	let guardPath: string | null = null;
-	let guardSessionId: string | null = null;
-	let guardSessionFile: string | null = null;
 	// message seqs already queued under this association, with the
 	// message itself for correlation: startup, the wait tool, and the
 	// background bridge all drain the same mailbox, and a message
@@ -180,17 +201,15 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// Release the held guard, if any: closing the descriptor is the
 	// observed kernel release activation reads.
 	function releaseGuard() {
-		if (guardFd !== null) {
+		const held = heldGuard();
+		if (held) {
 			try {
-				closeSync(guardFd);
+				closeSync(held.fd);
 			} catch {
 				// already closed: the release is the same either way
 			}
+			holdGuard(undefined);
 		}
-		guardFd = null;
-		guardPath = null;
-		guardSessionId = null;
-		guardSessionFile = null;
 	}
 
 	// Suspend the association runtime without touching the guard: the
@@ -216,9 +235,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		const sessionId = ctx.sessionManager.getSessionId();
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		suspendAssociation();
+		const held = heldGuard();
 		if (
-			guardFd !== null &&
-			(guardSessionId !== sessionId || guardSessionFile !== sessionFile)
+			held &&
+			(held.sessionId !== sessionId || held.sessionFile !== sessionFile)
 		) {
 			// a different native session's guard cannot be reused: this
 			// process no longer runs it, so the release is honest
@@ -252,7 +272,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			// the lock is already ours.
 			if (!reply.guard) {
 				releaseGuard();
-			} else if (guardFd !== null && guardPath === reply.guard) {
+			} else if (heldGuard()?.path === reply.guard) {
 				// retained exact-session guard
 			} else {
 				releaseGuard();
@@ -285,12 +305,19 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					ctx.shutdown();
 					return null;
 				}
-				guardFd = fd;
-				guardPath = reply.guard;
-				guardSessionId = sessionId;
-				guardSessionFile = sessionFile;
+				holdGuard({
+					fd,
+					path: reply.guard,
+					sessionId,
+					sessionFile,
+				});
 			}
-			association = { ...reply, nativeId: sessionId, sessionFile, guardFd };
+			association = {
+				...reply,
+				nativeId: sessionId,
+				sessionFile,
+				guardFd: heldGuard()?.fd ?? null,
+			};
 			process.env.SACCADE_INCARNATION_SEQ = String(reply.incarnation);
 			// the launch token's bootstrap is done: a later fork or
 			// reload in this process reattaches tokenless, so no other
@@ -685,7 +712,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			// this session's guard duty - and without a retained guard -
 			// running on is the unsafe side. A reload holding its
 			// exact-session guard stays alive and retries lazily.
-			if (process.env.SACCADE_LAUNCH_TOKEN && guardFd === null) {
+			if (process.env.SACCADE_LAUNCH_TOKEN && !heldGuard()) {
 				ctx.shutdown();
 			}
 			return;
