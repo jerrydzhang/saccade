@@ -148,6 +148,7 @@ class FakePi implements ExtensionAPI {
 	idle = false;
 	pendingNative = false;
 
+	hasUI = true;
 	constructor(nativeId: string, file: string) {
 		this.session = new FakeSession(nativeId, file);
 	}
@@ -477,7 +478,7 @@ function fakeContext(pi: FakePi, session: FakeSession): ExtensionContext {
 			setToolsExpanded: () => unimplemented("ui.setToolsExpanded")(),
 		},
 		mode: "tui",
-		hasUI: true,
+		hasUI: pi.hasUI,
 		cwd: "/",
 		modelRegistry: {} as never,
 		model: undefined,
@@ -1114,8 +1115,7 @@ test("a reload to a different native session releases the old session's guard", 
 });
 
 test("a fresh factory after shutdown adopts the held exact-session guard", async () => {
-	// proof level: a fresh FACTORY on the same module - the shape pi's
-	// cached-factory reload path runs. Kernel evidence throughout.
+	// proof level: fresh factory, same module (cached-factory reload path); kernel evidence
 	const shared = new FakeTracker();
 	const first = harness("adopt-guard0", "/sessions/adopt-guard.jsonl", "pi", shared);
 	const guard =
@@ -1144,9 +1144,7 @@ test("a fresh factory after shutdown adopts the held exact-session guard", async
 });
 
 test("the guard registry survives a full module re-evaluation", async () => {
-	// proof level: a fresh MODULE evaluation - what jiti's
-	// moduleCache:false does on a cache miss. Module state dies; the
-	// registered-symbol globalThis registry is what survives.
+	// proof level: fresh module re-evaluation (jiti moduleCache:false shape); kernel evidence
 	const shared = new FakeTracker();
 	const guard =
 		"/tmp/saccade-fake-guard-" + shared.guardSalt + "-reeval-guard0.guard";
@@ -1171,10 +1169,7 @@ test("the guard registry survives a full module re-evaluation", async () => {
 });
 
 test("a real second process refuses the attach and its death releases the lock", async () => {
-	// proof level: kernel, cross-process. A real second process holds
-	// the guard: the integration refuses and shuts down, naming the
-	// held guard, and the registration resolves once. Only the whole
-	// process group's real death frees the open file description.
+	// proof level: kernel, cross-process - refusal, single registration, release on real group death
 	const shared = new FakeTracker();
 	const guard =
 		"/tmp/saccade-fake-guard-" + shared.guardSalt + "-crossproc0.guard";
@@ -1251,7 +1246,6 @@ test("a human-started session that cannot verify exits, explaining the failure",
 		"the visible card names the tracker failure",
 	);
 	shared.attachFails = false;
-	shared.attachFails = false;
 	await stop(h);
 });
 
@@ -1295,4 +1289,52 @@ test("an unknown guard take refuses the association and shuts the session down",
 	}
 	await stop(h);
 	rmSync(shim, { recursive: true, force: true });
+});
+
+test("a no-session helper start stays alive and unregistered", async () => {
+	// subagent helper (empty session file): nothing to verify, no exit, no registration
+	const shared = new FakeTracker();
+	const h = harness("helper-run0", "", "pi", shared);
+	await h.pi.emit("session_start");
+	assert.equal(h.pi.shutdowns, 0, "a healthy tracker does not kill the helper");
+	assert.equal(shared.attachments.size, 0, "nothing registered without a session");
+	const identity = h.tools("saccade_identity");
+	const text = resultText(
+		await identity.execute(
+			"t1",
+			{},
+			undefined,
+			undefined,
+			{ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
+		),
+	);
+	assert.ok(text.includes("not registered"), text);
+	await stop(h);
+});
+
+test("a headless unverifiable start explains on stderr before exiting", async () => {
+	// no UI to paint: the explanation must still be observable
+	const shared = new FakeTracker();
+	const h = harness("headless-off0", "/sessions/headless-off.jsonl", "pi", shared);
+	h.pi.hasUI = false;
+	shared.attachFails = true;
+	const written: string[] = [];
+	const original = process.stderr.write.bind(process.stderr);
+	process.stderr.write = ((chunk: string | Uint8Array) => {
+		written.push(String(chunk));
+		return true;
+	}) as typeof process.stderr.write;
+	try {
+		await h.pi.emit("session_start");
+	} finally {
+		process.stderr.write = original;
+	}
+	assert.equal(h.pi.shutdowns >= 1, true, "the unverified start exits");
+	assert.match(
+		written.join(""),
+		/degraded/,
+		"stderr names the tracker failure",
+	);
+	shared.attachFails = false;
+	await stop(h);
 });

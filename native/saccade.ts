@@ -156,6 +156,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// session start by the session's actual native id and locator
 	let association: Association | null = null;
 	let attachError: string | null = null;
+	// this start carried no saved native session at all (a --no-session
+	// helper runtime): nothing to verify, so the startup exit rule is
+	// not a match
+	let noNativeSession = false;
 	// the waits this integration currently owns
 	const waits = new Set<WaitState>();
 	// envelopes queued natively, submissions not yet confirmed
@@ -252,6 +256,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			return null;
 		}
 		if (!sessionId || !sessionFile) {
+			// a --no-session runtime has no native session to verify: not
+			// a failed verification, so the startup exit rule does not fire
+			noNativeSession = true;
 			attachError = "the session carries no saved native file; nothing to register";
 			return null;
 		}
@@ -706,13 +713,19 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		// association's waits and queued deliveries die with it, never
 		// submitting or delivering into a session this incarnation is not
 		cancelAllWaits();
+		noNativeSession = false;
 		const who = await attach(ctx);
 		if (!who) {
 			if (attachError) pi.appendEntry("saccade_attach", { error: attachError });
 			// startup that cannot verify association exits, explaining
 			// itself above - unless an applicable exact-session guard is
 			// held: a guarded reload or reassociation retries lazily
-			if (!heldGuard()) {
+			if (!heldGuard() && !noNativeSession) {
+				// headless runs paint nothing: the explanation goes to
+				// stderr so the failure is observable before the exit
+				if (!ctx.hasUI) {
+					process.stderr.write(`saccade: ${attachError}\n`);
+				}
 				ctx.shutdown();
 			}
 			return;
