@@ -20,6 +20,8 @@ pub enum WorkspaceFail {
     PathOccupied(PathBuf),
     /// The checkout carries staged, unstaged, or untracked work.
     Dirty { path: PathBuf, files: Vec<String> },
+    /// The descriptive label is not a safe single path and ref component.
+    InvalidLabel(String),
     /// A git command failed; the detail is its stderr.
     Git(String),
 }
@@ -31,6 +33,7 @@ impl WorkspaceFail {
             WorkspaceFail::BranchMissing(_) => "workspace_branch_missing",
             WorkspaceFail::PathOccupied(_) => "workspace_path_occupied",
             WorkspaceFail::Dirty { .. } => "workspace_dirty",
+            WorkspaceFail::InvalidLabel(_) => "workspace_label_invalid",
             WorkspaceFail::Git(_) => "workspace_effect",
         }
     }
@@ -68,8 +71,21 @@ impl WorkspaceFail {
                 )
             }
             WorkspaceFail::Git(detail) => detail.clone(),
+            WorkspaceFail::InvalidLabel(reason) => {
+                format!("invalid descriptive label: {reason}")
+            }
         }
     }
+}
+
+/// The facts a named provisioning established: actual Git pointers the
+/// record will carry later. Plumbing for the controller, not a resident
+/// object.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Provisioned {
+    pub base: GitCommit,
+    pub branch: GitBranch,
+    pub worktree: WorktreePath,
 }
 
 /// The facts an establishment established: exactly what the birth records.
@@ -120,6 +136,133 @@ fn branch_exists(root: &Path, branch: &GitBranch) -> bool {
         .unwrap_or(false)
 }
 
+/// One worktree cut shared by every establishment shape: a fresh
+/// branch at the canonical base, checked out at the path.
+fn cut_worktree(
+    root: &Path,
+    branch: &GitBranch,
+    path: &Path,
+    base: &GitCommit,
+) -> Result<(), WorkspaceFail> {
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            branch.as_str(),
+            &path.display().to_string(),
+            base.as_str(),
+        ],
+    )
+    .map(|_| ())
+}
+
+/// A fresh uniqueness token: real OS entropy, never counters, clocks,
+/// or process ids. Exactly four bytes: /dev/urandom never ends, so
+/// anything read-to-EOF here would allocate forever.
+fn fresh_token() -> String {
+    let mut bytes = [0u8; 4];
+    let filled = std::fs::File::open("/dev/urandom")
+        .is_ok_and(|mut file| std::io::Read::read_exact(&mut file, &mut bytes).is_ok());
+    if !filled {
+        // no urandom: the caller's collision refusal is the safety net
+        return "00000000".to_string();
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The label is one filename and ref component: the safety rules are
+/// Git's ref-component rules plus path-separator refusal. Unicode
+/// carries - this is data, never transliterated.
+fn validate_label(label: &str) -> Result<(), WorkspaceFail> {
+    let refused = |why: &str| {
+        Err(WorkspaceFail::InvalidLabel(format!(
+            "invalid label {label:?}: {why}"
+        )))
+    };
+    if label.is_empty() {
+        return refused("empty");
+    }
+    if label.trim() != label {
+        return refused("leading or trailing whitespace");
+    }
+    if label.starts_with('-') {
+        return refused("leading dash reads as a command-line flag");
+    }
+    if label.starts_with('.') || label.ends_with('.') {
+        return refused("dots at either end");
+    }
+    if label.ends_with(".lock") {
+        return refused("the .lock suffix is a ref lock file");
+    }
+    if label.contains("..") {
+        return refused("consecutive dots");
+    }
+    if label.contains("@{") {
+        return refused("the @{ sequence is reflog syntax");
+    }
+    if label.chars().any(|c| {
+        matches!(
+            c,
+            '/' | '\\' | ' ' | '~' | '^' | ':' | '?' | '*' | '[' | ']'
+        ) || c.is_control()
+    }) {
+        return refused("characters a path or ref component cannot carry");
+    }
+    Ok(())
+}
+
+/// Provision a NEW task-independent workspace: a fresh branch named
+/// from the optional descriptive label plus a generated uniqueness
+/// suffix (workspace-<token> without a label), cut at the named base
+/// or the primary HEAD, checked out under the home. Actual Git facts
+/// come back; nothing existing is ever touched or adopted.
+pub fn provision(
+    root: &Path,
+    worktree_home: &Path,
+    label: Option<&str>,
+    base: Option<&str>,
+) -> Result<Provisioned, WorkspaceFail> {
+    provision_with_token(root, worktree_home, label, base, &fresh_token())
+}
+
+/// The same provisioning with the token supplied: the test seam keeps
+/// entropy out of name assertions.
+fn provision_with_token(
+    root: &Path,
+    worktree_home: &Path,
+    label: Option<&str>,
+    base: Option<&str>,
+    token: &str,
+) -> Result<Provisioned, WorkspaceFail> {
+    if let Some(label) = label {
+        validate_label(label)?;
+    }
+    let name = match label {
+        Some(label) => format!("{label}-{token}"),
+        None => format!("workspace-{token}"),
+    };
+    let branch = GitBranch::new(name.clone())
+        .map_err(|e| WorkspaceFail::Git(format!("the composed name is no branch: {e:?}")))?;
+    let base = resolve_commit(root, base)?;
+    if branch_exists(root, &branch) {
+        return Err(WorkspaceFail::BranchExists(branch));
+    }
+    let path = worktree_home.join(&name);
+    if path.exists() {
+        return Err(WorkspaceFail::PathOccupied(path));
+    }
+    cut_worktree(root, &branch, &path, &base)?;
+    let worktree = WorktreePath::new(path).map_err(|e| WorkspaceFail::Git(format!("{e:?}")))?;
+    Ok(Provisioned {
+        base,
+        branch,
+        worktree,
+    })
+}
+
 /// The task's default branch name.
 pub fn branch_name(task: TaskId) -> GitBranch {
     GitBranch::new(format!("saccade/t-{}", task.0)).expect("the scheme names a valid branch")
@@ -143,18 +286,7 @@ pub fn establish(
     if path.exists() {
         return Err(WorkspaceFail::PathOccupied(path));
     }
-    git(
-        root,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            branch.as_str(),
-            &path.display().to_string(),
-            base.as_str(),
-        ],
-    )?;
+    cut_worktree(root, &branch, &path, &base)?;
     let worktree = WorktreePath::new(path).map_err(|e| WorkspaceFail::Git(format!("{e:?}")))?;
     Ok(Established {
         task,
@@ -312,6 +444,121 @@ mod test {
         std::fs::create_dir_all(home.join("t-2")).unwrap();
         let refused = establish(&root, &home, TaskId(2), None);
         assert!(matches!(refused, Err(WorkspaceFail::PathOccupied(_))));
+
+        // named provisioning: label plus injected token, cut at HEAD
+        let facts = provision_with_token(&root, &home, Some("feature"), None, "abc123ab").unwrap();
+        assert_eq!(facts.base, resolve_commit(&root, None).unwrap());
+        assert_eq!(facts.branch.as_str(), "feature-abc123ab");
+        assert_eq!(facts.worktree.as_path(), home.join("feature-abc123ab"));
+        assert!(home.join("feature-abc123ab").join("f.txt").is_file());
+        let feature_branch = facts.branch.clone();
+        let feature_tip = branch_tip(&root, &feature_branch).unwrap();
+
+        // an omitted label gets the ratified fallback name
+        let facts = provision_with_token(&root, &home, None, None, "deadbeef").unwrap();
+        assert_eq!(facts.branch.as_str(), "workspace-deadbeef");
+        assert_eq!(facts.worktree.as_path(), home.join("workspace-deadbeef"));
+
+        // an explicit base names the canonical commit, as in the task shape
+        std::fs::write(root.join("f.txt"), "newer\n").unwrap();
+        git(&root, &["commit", "-qam", "newer"]).unwrap();
+        let named_base = resolve_commit(&root, Some("HEAD~1")).unwrap();
+        let facts =
+            provision_with_token(&root, &home, Some("pinned"), Some("HEAD~1"), "cafe0000").unwrap();
+        assert_eq!(facts.base, named_base);
+
+        // unicode labels are data: preserved exactly, never transliterated
+        let facts = provision_with_token(
+            &root,
+            &home,
+            Some("\u{e9}tude-\u{4e2d}\u{6587}"),
+            None,
+            "f00dcafe",
+        )
+        .unwrap();
+        assert_eq!(
+            facts.branch.as_str(),
+            "\u{e9}tude-\u{4e2d}\u{6587}-f00dcafe"
+        );
+        assert!(
+            home.join("\u{e9}tude-\u{4e2d}\u{6587}-f00dcafe")
+                .join("f.txt")
+                .is_file()
+        );
+
+        // unsafe labels refuse before any side effect: no branch, no directory
+        let bad = [
+            "../escape",
+            "a/b",
+            "a\\b",
+            "-flag",
+            ".lead",
+            "tail.",
+            "end.lock",
+            "a..b",
+            "a@{b",
+            "a b",
+            "a~b",
+            "a^b",
+            "a:b",
+            "a?b",
+            "a*b",
+            "a[b]",
+            "",
+            "  ",
+            "pad ",
+        ];
+        for label in bad {
+            let refused = provision_with_token(&root, &home, Some(label), None, "abc123ab");
+            assert!(
+                matches!(refused, Err(WorkspaceFail::InvalidLabel(_))),
+                "label {label:?} must refuse"
+            );
+        }
+        assert_eq!(
+            branch_tip(&root, &feature_branch).unwrap(),
+            feature_tip,
+            "the earlier provisioned branch is untouched by the refusals"
+        );
+        let created: Vec<_> = std::fs::read_dir(&home)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            created.len(),
+            7,
+            "four provisions plus the three task worktrees: {created:?}"
+        );
+        for name in [
+            "feature-abc123ab",
+            "workspace-deadbeef",
+            "pinned-cafe0000",
+            "\u{e9}tude-\u{4e2d}\u{6587}-f00dcafe",
+        ] {
+            assert!(home.join(name).is_dir(), "provision {name} exists");
+        }
+
+        // a token collision refuses: an existing branch is never reused
+        let refused = provision_with_token(&root, &home, Some("feature"), None, "abc123ab");
+        assert!(matches!(refused, Err(WorkspaceFail::BranchExists(_))));
+        // a path collision refuses: the occupied directory is never adopted
+        std::fs::create_dir_all(home.join("workspace-c011dce1")).unwrap();
+        let refused = provision_with_token(&root, &home, None, None, "c011dce1");
+        assert!(matches!(refused, Err(WorkspaceFail::PathOccupied(_))));
+        assert!(
+            !root
+                .join(".git")
+                .join("refs")
+                .join("heads")
+                .join("workspace-c011dce1")
+                .exists()
+        );
+
+        // fresh tokens come from real entropy: two live calls differ
+        let a = provision(&root, &home, Some("live"), None).unwrap();
+        let b = provision(&root, &home, Some("live"), None).unwrap();
+        assert_ne!(a.branch.as_str(), b.branch.as_str());
 
         std::fs::remove_dir_all(&root).unwrap();
     }
