@@ -174,7 +174,10 @@ class FakePi implements ExtensionAPI {
 		}
 		this.followUps.push(content);
 	}
-	appendEntry<T = unknown>(_customType: string, _data?: T): void {}
+	appendEntries: Array<{ type: string; data: unknown }> = [];
+	appendEntry<T = unknown>(customType: string, data?: T): void {
+		this.appendEntries.push({ type: customType, data });
+	}
 	// every other ExtensionAPI member: present on the real surface,
 	// never part of this test's exercised surface
 	exec(): never {
@@ -1165,7 +1168,10 @@ test("a real second process refuses the attach and its death releases the lock",
 		assert.equal(probeHeld(guard), true, "the second process holds the lock");
 		const dup = harness("crossproc0", "/sessions/crossproc.jsonl", "pi", shared);
 		await dup.pi.emit("session_start");
-		assert.equal(dup.pi.shutdowns, 1, "the duplicate refusal fires");
+		assert.ok(
+			dup.pi.shutdowns >= 1,
+			"the duplicate refusal requests exit (refusal and start-rule agree)",
+		);
 		const identity = dup.tools("saccade_identity");
 		const text = resultText(
 			await identity.execute(
@@ -1198,16 +1204,24 @@ test("a real second process refuses the attach and its death releases the lock",
 	}
 });
 
-test("a human-started session that cannot verify runs unassociated - the unratified offline gap", async () => {
-	// Characterization only: no launch token, tracker down before the
-	// first attach, no retained guard. The hole stays open pending the
-	// outage-tradeoff decision; this pins today's baseline.
+test("a human-started session that cannot verify exits, explaining the failure", async () => {
+	// the ratified offline-startup rule: no token, tracker down before
+	// the first attach, no retained guard - the composed process
+	// explains itself and exits rather than run unguarded
 	const shared = new FakeTracker();
 	delete process.env.SACCADE_LAUNCH_TOKEN;
 	const h = harness("offline-gap0", "/sessions/offline-gap.jsonl", "pi", shared);
 	shared.attachFails = true;
 	await h.pi.emit("session_start");
-	assert.equal(h.pi.shutdowns, 0, "the unratified gap: the process continues");
+	assert.equal(h.pi.shutdowns, 1, "the unverified start exits");
+	const note = h.pi.appendEntries[h.pi.appendEntries.length - 1];
+	assert.ok(note, "the failure is explained, not silent");
+	assert.equal(note.type, "saccade_attach");
+	assert.match(
+		String((note.data as { error?: string }).error),
+		/degraded/,
+		"the explanation names the tracker failure",
+	);
 	shared.attachFails = false;
 	await stop(h);
 });
@@ -1225,7 +1239,10 @@ test("an unknown guard take refuses the association and shuts the session down",
 	try {
 		h = harness("unknown-guard0", "/sessions/unknown-guard.jsonl", "pi", shared);
 		await h.pi.emit("session_start");
-		assert.equal(h.pi.shutdowns, 1, "the unverified session shuts down");
+		assert.ok(
+			h.pi.shutdowns >= 1,
+			"the unverified session requests exit (refusal and start-rule agree)",
+		);
 		// still inside the broken-flock window: a retried attach meets
 		// the same unknown and refuses again - never a live association
 		const identity = h.tools("saccade_identity");
@@ -1239,7 +1256,10 @@ test("an unknown guard take refuses the association and shuts the session down",
 		const text = resultText(result);
 		assert.ok(text.includes("not registered"), text);
 		assert.ok(text.includes("cannot be probed"), `the refusal names the unknown: ${text}`);
-		assert.equal(h.pi.shutdowns, 2, "every attempt refuses and shuts down");
+		assert.ok(
+			h.pi.shutdowns > 1,
+			"every attempt refuses and requests exit",
+		);
 	} finally {
 		if (savedPath === undefined) delete process.env.PATH;
 		else process.env.PATH = savedPath;

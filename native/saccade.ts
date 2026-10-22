@@ -102,15 +102,11 @@ export function takeGuardLock(fd: number): boolean | undefined {
 	}
 }
 
-// The held guard's exact-session record: the kernel lock on the shared
-// open-file-description lives while the descriptor stays open, and the
-// path and native session identity ride beside it so a reload can
-// tell an applicable exact-session guard from another session's.
-// Operational state only - never incarnation lifecycle or authority.
-// It lives on globalThis under a registered symbol because pi reloads
-// extensions with moduleCache: false: the module re-evaluates and
-// module state dies, while the process - and the descriptor it holds
-// - lives on.
+// The held guard's descriptor plus its exact session identity. On
+// globalThis under a registered symbol because pi reloads extensions
+// with moduleCache: false: module state dies on reload while the
+// process-held descriptor lives. Operational state, never lifecycle
+// or authority.
 interface GuardRecord {
 	fd: number;
 	path: string;
@@ -706,13 +702,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		const who = await attach(ctx);
 		if (!who) {
 			if (attachError) pi.appendEntry("saccade_attach", { error: attachError });
-			// a protocol-launched boot that could not verify its session
-			// refuses before any model work: the launch token marks a boot
-			// the integration itself started, and without a reply naming
-			// this session's guard duty - and without a retained guard -
-			// running on is the unsafe side. A reload holding its
-			// exact-session guard stays alive and retries lazily.
-			if (process.env.SACCADE_LAUNCH_TOKEN && !heldGuard()) {
+			// startup that cannot verify association exits, explaining
+			// itself above - unless an applicable exact-session guard is
+			// held: a guarded reload or reassociation retries lazily
+			if (!heldGuard()) {
 				ctx.shutdown();
 			}
 			return;
