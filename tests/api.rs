@@ -2,6 +2,7 @@
 //! back or a typed error, the tier law holding through HTTP exactly as it
 //! holds in process.
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -2723,7 +2724,29 @@ if [ "$1" = terminal ] && [ "$2" = create ]; then
     prev="$a"
   done
   path="${selector#path:}"
+  if [ -n "${FAKE_ORCA_CREATE_FAILS:-}" ]; then
+    printf 'the host refused the create\n' >&2
+    exit 1
+  fi
   printf '{"handle":"%s","worktreePath":"%s","orphaned":false}\n' "$handle" "$path" >> "$FAKE_ORCA_STATE"
+  if [ -n "${FAKE_ORCA_SPAWN:-}" ]; then
+    submitted=""
+    prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--command" ]; then submitted="$a"; fi
+      prev="$a"
+    done
+    child_guard=""
+    if [ -f "${FAKE_ORCA_GUARD_FILE:-/dev/null-nothing}" ]; then
+      child_guard=$(cat "$FAKE_ORCA_GUARD_FILE")
+    fi
+    printf 'submitted-command-started\n' >> "$FAKE_ORCA_CHILD_LOG"
+    if [ -n "$child_guard" ]; then
+      SACCADE_TEST_GUARD="$child_guard" sh -c "$submitted" >> "$FAKE_ORCA_CHILD_LOG" 2>&1 &
+    else
+      sh -c "$submitted" >> "$FAKE_ORCA_CHILD_LOG" 2>&1 &
+    fi
+  fi
   printf '{"ok":true,"result":{"terminal":{"handle":"%s"}}}\n' "$handle"
   exit 0
 fi
@@ -2765,6 +2788,111 @@ fn stub_pi(dir: &std::path::Path) -> std::path::PathBuf {
     .unwrap();
     std::fs::set_permissions(&pi, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     pi
+}
+
+/// A guard-holding process fixture standing in for pinned Pi - not
+/// actual Pi: it associates the way the real integration would, by
+/// taking the session's real kernel guard on the guard file the test
+/// names, records what it saw in fixture order, and stays alive as a
+/// live holder until killed (its own sleep bound releases it anyway).
+fn guard_pi(dir: &std::path::Path) -> std::path::PathBuf {
+    let pi = dir.join("pi guard-holder");
+    std::fs::write(
+        &pi,
+        r#"#!/bin/sh
+{
+  printf 'argv: %s\n' "$*"
+  printf 'pwd: %s\n' "$PWD"
+  env | grep '^SACCADE_' | sort
+} > "$PI_DUMP"
+printf '%s\n' "$$" > "$PI_PIDFILE"
+exec 9>>"$SACCADE_TEST_GUARD"
+if ! flock -n 9; then
+  printf 'guard-busy\n' >> "$FIXTURE_LOG"
+  exit 3
+fi
+printf 'guard-taken\n' >> "$FIXTURE_LOG"
+# the sleep must not inherit the lock's descriptor: a shared open
+# file description outlives the killed parent and keeps the guard
+sleep 180 9>&-
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&pi, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    pi
+}
+
+/// One bounded sac subprocess in its own process group, with an
+/// explicitly scrubbed environment: a bound pass kills the whole
+/// group and reports the timeout, so a regression to the old
+/// wait-before-submit door fails fast instead of outwaiting the suite.
+fn bounded_sac<S: AsRef<str>>(
+    bin: &str,
+    args: &[S],
+    envs: &[(&str, String)],
+) -> (bool, String, String, bool) {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args.iter().map(AsRef::as_ref))
+        .process_group(0)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    // the scrub is a removal, never an empty set: these names carry
+    // clap env fallbacks an empty value would trip
+    for key in [
+        "SACCADE_REPO",
+        "SACCADE_DB",
+        "SACCADE_SERVER",
+        "SACCADE_ACTOR",
+        "SACCADE_TASK",
+        "SACCADE_INCARNATION_SEQ",
+        "SACCADE_WORKSPACE",
+        "SACCADE_LAUNCH_TOKEN",
+        "SACCADE_ACTIVATION_LAUNCHER",
+    ] {
+        cmd.env_remove(key);
+    }
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    let mut child = cmd.spawn().expect("the bounded sac spawns");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            _ => {
+                timed_out = true;
+                break None;
+            }
+        }
+    };
+    if timed_out {
+        // the whole group goes: the stuck door and everything it
+        // spawned - a plain parent kill would leak descendants holding
+        // shared file descriptions
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        let _ = std::io::Read::read_to_string(&mut pipe, &mut stdout);
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+    }
+    let _ = child.wait();
+    (
+        !timed_out && status.is_some_and(|s| s.success()),
+        stdout,
+        stderr,
+        timed_out,
+    )
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3418,35 +3546,56 @@ fn spawn_serving_subprocess(
     repo: &Path,
     bin: &str,
     host_dir: &Path,
-    launcher: &Path,
+    launcher: Option<&Path>,
+    state_home: Option<&Path>,
+    extra_envs: &[(&str, &str)],
 ) -> (String, u32) {
-    let port = 8940 + (std::process::id() % 500) as u16;
-    let child = std::process::Command::new(bin)
-        .args([
-            "--db",
-            db.to_str().unwrap(),
-            "--repo",
-            repo.to_str().unwrap(),
-            "serve",
-            "--bind",
-            "127.0.0.1",
-            "--port",
-            &port.to_string(),
-        ])
-        .env(
-            "PATH",
-            format!("{}:{}", host_dir.display(), std::env::var("PATH").unwrap()),
-        )
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args([
+        "--db",
+        db.to_str().unwrap(),
+        "--repo",
+        repo.to_str().unwrap(),
+        "serve",
+        "--bind",
+        "127.0.0.1",
+        "--port",
+        "0",
+    ])
+    .env(
+        "PATH",
+        format!("{}:{}", host_dir.display(), std::env::var("PATH").unwrap()),
+    );
+    if let Some(dir) = state_home {
         // a genuinely cold state root: the guard dirs must come into
         // being from nothing, not from warmed probe residue
-        .env("XDG_STATE_HOME", db.parent().unwrap().join("xdg-state"))
-        .env("SACCADE_ACTIVATION_LAUNCHER", launcher)
+        cmd.env("XDG_STATE_HOME", dir);
+    }
+    if let Some(path) = launcher {
+        cmd.env("SACCADE_ACTIVATION_LAUNCHER", path);
+    }
+    for (key, value) in extra_envs {
+        cmd.env(key, value);
+    }
+    let child = cmd
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("the serving subprocess spawns");
     let pid = child.id();
-    let url = format!("http://127.0.0.1:{port}");
+    // port 0: the server publishes its bound address beside the db,
+    // so parallel serving subprocesses never collide on a guess
+    let hint = saccade::paths::address_at(db);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let url = loop {
+        match std::fs::read_to_string(&hint) {
+            Ok(text) if !text.trim().is_empty() => break text.trim().to_string(),
+            _ if std::time::Instant::now() >= deadline => {
+                panic!("the serving subprocess never published its address")
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         if ureq::get(&format!("{url}/api/v1/version"))
@@ -3501,7 +3650,16 @@ async fn a_wire_send_activates_a_stopped_peer_through_the_launcher() {
     )
     .unwrap();
 
-    let (url, pid) = spawn_serving_subprocess(&db, &root, bin, &bin_dir, &seam);
+    let cold_state = db.parent().unwrap().join("xdg-state");
+    let (url, pid) = spawn_serving_subprocess(
+        &db,
+        &root,
+        bin,
+        &bin_dir,
+        Some(&seam),
+        Some(&cold_state),
+        &[],
+    );
 
     // a live sender and the stopped recipient
     let (status, body) = post_json(
@@ -3621,6 +3779,595 @@ async fn a_wire_send_activates_a_stopped_peer_through_the_launcher() {
         .arg(pid.to_string())
         .status();
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// One owned real-door fixture: the fake host, the guard-holding
+/// harness, their logs and state, and the cold state home every
+/// serving subprocess and door here runs under.
+struct DoorFixture {
+    host: PathBuf,
+    pi: PathBuf,
+    host_log: PathBuf,
+    host_state: PathBuf,
+    child_log: PathBuf,
+    dump: PathBuf,
+    pidfile: PathBuf,
+    guard_file: PathBuf,
+    cold_state: PathBuf,
+}
+
+fn door_fixture(home: &Path) -> DoorFixture {
+    let host = fake_host(home);
+    let pi = guard_pi(home);
+    let host_log = home.join("host.log");
+    let host_state = home.join("host-state");
+    let child_log = home.join("child.log");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    std::fs::write(&child_log, b"").unwrap();
+    DoorFixture {
+        host,
+        pi,
+        host_log,
+        host_state,
+        child_log,
+        dump: home.join("stub.dump"),
+        pidfile: home.join("stub.pid"),
+        guard_file: home.join("guard-path"),
+        cold_state: home.join("xdg-state"),
+    }
+}
+
+/// The environment one real-door subprocess runs under: the fake host
+/// first on PATH, the fixture harness as pinned Pi, every fixture
+/// channel named, the launcher seam disabled, and the same cold state
+/// home the fixture server named its guard under - the door's own
+/// guard derivation must land on that same file.
+fn door_envs(fx: &DoorFixture, guard: Option<&Path>) -> Vec<(&'static str, String)> {
+    let mut envs = vec![
+        (
+            "PATH",
+            format!(
+                "{}:{}",
+                fx.host.parent().unwrap().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        ),
+        ("FAKE_ORCA_LOG", fx.host_log.display().to_string()),
+        ("FAKE_ORCA_STATE", fx.host_state.display().to_string()),
+        ("FAKE_ORCA_SPAWN", "1".to_string()),
+        ("FAKE_ORCA_CHILD_LOG", fx.child_log.display().to_string()),
+        ("XDG_STATE_HOME", fx.cold_state.display().to_string()),
+        ("SACCADE_PI", fx.pi.display().to_string()),
+        ("PI_DUMP", fx.dump.display().to_string()),
+        ("PI_PIDFILE", fx.pidfile.display().to_string()),
+        ("FIXTURE_LOG", fx.child_log.display().to_string()),
+    ];
+    if let Some(guard) = guard {
+        envs.push(("SACCADE_TEST_GUARD", guard.display().to_string()));
+    }
+    envs
+}
+
+/// Kill the fixture holder by its pidfile and wait for its guard to
+/// actually free: death releases the kernel flock, and the release is
+/// the proof the hold was real.
+fn stop_holder(pidfile: &Path, guard: &Path) {
+    if let Ok(pid) = std::fs::read_to_string(pidfile) {
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(pid.trim())
+            .status();
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while saccade::activate::guard_held(guard) != Some(false) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the fixture holder's guard never freed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn the_real_resume_door_submits_then_observes_the_guard() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("resume-door");
+    let home = db.parent().unwrap();
+    let (root, _first, _head) = scratch_repo(home);
+    let fx = door_fixture(home);
+    let (url, server_pid) = spawn_serving_subprocess(
+        &db,
+        &root,
+        bin,
+        fx.host.parent().unwrap(),
+        None,
+        Some(&fx.cold_state),
+        &[],
+    );
+
+    // the resumable session: a valid saved header whose workspace
+    // exists and holds no live process; the server's reply names the
+    // authoritative guard path
+    let workspace = home.join("resumed-ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let saved = home.join("resumee-session.jsonl");
+    std::fs::write(
+        &saved,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"resumee01\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "resumee01", "session_file": saved.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["num"], 0);
+    let guard = PathBuf::from(
+        json_of(&body)["guard"]
+            .as_str()
+            .expect("the attach names the guard"),
+    );
+
+    // a tampered association: the association was recorded, then the
+    // file's identity rewritten under it - the door refuses before any
+    // submission
+    let tampered = home.join("tampered-session.jsonl");
+    std::fs::write(
+        &tampered,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"other002\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "other002", "session_file": tampered.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    std::fs::write(
+        &tampered,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"rewritten01\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    // a missing saved file refuses the same way
+    let absent = home.join("absent-session.jsonl");
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "missing003", "session_file": absent.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let envs = door_envs(&fx, Some(&guard));
+    let door_args = |resume: &str| {
+        vec![
+            "--server".to_string(),
+            url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "integrate".to_string(),
+            "--resume".to_string(),
+            resume.to_string(),
+            "--json".to_string(),
+        ]
+    };
+    let (ok, out, err, timed_out) = bounded_sac(bin, &door_args("i-1"), &envs);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "{out}");
+    assert!(err.contains("carries id rewritten01"), "{err}");
+    let (ok, _out, err, timed_out) = bounded_sac(bin, &door_args("i-2"), &envs);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "{err}");
+    assert!(err.contains("cannot resume"), "{err}");
+    assert!(
+        std::fs::read_to_string(&fx.host_log).unwrap().is_empty(),
+        "a refused resume must contact no host"
+    );
+
+    // a preexisting live holder refuses before a duplicate is
+    // submitted: busy is never permission to launch
+    use std::os::fd::AsRawFd;
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&guard)
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    assert_eq!(saccade::activate::guard_held(&guard), Some(true));
+    let (ok, _out, err, timed_out) = bounded_sac(bin, &door_args("i-0"), &envs);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "{err}");
+    assert!(err.contains("already held"), "{err}");
+    assert!(
+        std::fs::read_to_string(&fx.host_log).unwrap().is_empty(),
+        "a busy resume must contact no host"
+    );
+    drop(held);
+    assert_eq!(saccade::activate::guard_held(&guard), Some(false));
+
+    // the corrected door: submit through the host, THEN the launched
+    // session takes its guard and the door observes the handoff
+    let (ok, out, err, timed_out) = bounded_sac(bin, &door_args("i-0"), &envs);
+    assert!(!timed_out, "the door outwaited its guard bound: {err}");
+    assert!(ok, "{out}{err}");
+    let launched = json_of(&out);
+    assert_eq!(
+        launched["workspace"],
+        json!(workspace.display().to_string()),
+        "{out}"
+    );
+    assert!(!launched["terminal"].as_str().unwrap().is_empty(), "{out}");
+
+    // the submission rode the host before the harness ever ran
+    let submitted = command_of(&fx.host_log, "");
+    assert!(submitted.contains("--session resumee01"), "{submitted}");
+    assert!(submitted.contains("--session-dir"), "{submitted}");
+
+    // one append-ordered witness: the host started the submitted
+    // command, then the harness took the real kernel guard
+    let witness = std::fs::read_to_string(&fx.child_log).unwrap();
+    let started = witness
+        .find("submitted-command-started")
+        .unwrap_or_else(|| panic!("{witness}"));
+    let taken = witness
+        .find("guard-taken")
+        .unwrap_or_else(|| panic!("{witness}"));
+    assert!(started < taken, "{witness}");
+
+    // kernel evidence: held while the session lives, freed at its death
+    assert_eq!(saccade::activate::guard_held(&guard), Some(true));
+    let dump = std::fs::read_to_string(&fx.dump).unwrap();
+    assert!(dump.contains("--session resumee01"), "{dump}");
+    assert!(dump.contains("--session-dir"), "{dump}");
+    assert!(
+        dump.contains(&format!("pwd: {}", workspace.display())),
+        "{dump}"
+    );
+    assert!(dump.contains(&format!("SACCADE_SERVER={url}")), "{dump}");
+    assert!(
+        dump.contains(&format!("SACCADE_REPO={}", root.display())),
+        "{dump}"
+    );
+    assert!(dump.contains("SACCADE_ACTOR="), "{dump}");
+    assert!(
+        !dump.contains("SACCADE_TASK="),
+        "stale scope must not ride the launch: {dump}"
+    );
+    assert!(!dump.contains("SACCADE_INCARNATION_SEQ="), "{dump}");
+    stop_holder(&fx.pidfile, &guard);
+
+    let _ = std::process::Command::new("kill")
+        .arg(server_pid.to_string())
+        .status();
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn switch_resume_runs_through_the_real_door() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("switch-resume-door");
+    let home = db.parent().unwrap();
+    let (root, _first, _head) = scratch_repo(home);
+    let fx = door_fixture(home);
+    let (url, server_pid) = spawn_serving_subprocess(
+        &db,
+        &root,
+        bin,
+        fx.host.parent().unwrap(),
+        None,
+        Some(&fx.cold_state),
+        &[],
+    );
+
+    // two explicit existing directories; the stopped rover parked at B
+    let selected_a = home.join("selected-a");
+    let selected_b = home.join("selected-b");
+    std::fs::create_dir_all(&selected_a).unwrap();
+    std::fs::create_dir_all(&selected_b).unwrap();
+    let saved = home.join("rover-session.jsonl");
+    let tail = "{\"type\":\"message\",\"id\":\"aa\",\"parentId\":null,\"timestamp\":\"t\",\"message\":{\"role\":\"user\",\"content\":\"parked at the old workspace\"}}\n";
+    std::fs::write(
+        &saved,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"rover0001\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n{tail}",
+            selected_b.display()
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "rover0001", "session_file": saved.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["num"], 0);
+    let guard = PathBuf::from(
+        json_of(&body)["guard"]
+            .as_str()
+            .expect("the attach names the guard"),
+    );
+
+    // the composed door: the change lands, then the SAME native id
+    // resumes at the new directory through the real submission
+    let envs = door_envs(&fx, Some(&guard));
+    let (ok, out, err, timed_out) = bounded_sac(
+        bin,
+        &[
+            "--server",
+            &url,
+            "--repo",
+            root.to_str().unwrap(),
+            "workspace",
+            "switch",
+            "i-0",
+            "--to",
+            selected_a.to_str().unwrap(),
+            "--resume",
+            "--",
+            "carry the thread forward",
+        ],
+        &envs,
+    );
+    assert!(!timed_out, "{err}");
+    assert!(ok, "{out}{err}");
+    assert!(out.contains("workspace changed"), "{out}");
+    assert!(out.contains("integrated pi launching"), "{out}");
+    assert!(out.contains(selected_a.to_str().unwrap()), "{out}");
+
+    // the header moved whole: same native id, same history, new cwd
+    let moved = std::fs::read(&saved).unwrap();
+    let header: Value =
+        serde_json::from_slice(moved.split(|&b| b == b'\n').next().unwrap()).unwrap();
+    assert_eq!(header["cwd"], json!(selected_a.display().to_string()));
+    assert_eq!(header["id"], "rover0001");
+    assert!(moved.ends_with(tail.as_bytes()), "the body rode whole");
+
+    // the change record landed
+    let changes_of = |rows: &[Value]| -> Vec<Value> {
+        rows.iter()
+            .filter(|r| r["kind"] == "workspace_changed")
+            .cloned()
+            .collect()
+    };
+    let (_, body) = get_json(&url, "/api/v1/records");
+    let changes = changes_of(json_of(&body)["records"].as_array().unwrap());
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        changes[0]["payload"]["worktree"],
+        json!(selected_a.display().to_string())
+    );
+
+    // the resume is the same session, running in the new directory
+    let witness = std::fs::read_to_string(&fx.child_log).unwrap();
+    let started = witness
+        .find("submitted-command-started")
+        .unwrap_or_else(|| panic!("{witness}"));
+    let taken = witness
+        .find("guard-taken")
+        .unwrap_or_else(|| panic!("{witness}"));
+    assert!(started < taken, "{witness}");
+    assert_eq!(saccade::activate::guard_held(&guard), Some(true));
+    let dump = std::fs::read_to_string(&fx.dump).unwrap();
+    assert!(dump.contains("--session rover0001"), "{dump}");
+    assert!(dump.contains("carry the thread forward"), "{dump}");
+    assert!(
+        dump.contains(&format!("pwd: {}", selected_a.display())),
+        "{dump}"
+    );
+    stop_holder(&fx.pidfile, &guard);
+
+    // a failed launch: the host refuses the create, the command fails,
+    // and the standing change fact is disclosed in the failure face
+    let mut fail_envs = envs.clone();
+    fail_envs.push(("FAKE_ORCA_CREATE_FAILS", "1".to_string()));
+    let switch_args = |to: &Path, json: bool| {
+        let mut args = vec![
+            "--server".to_string(),
+            url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "workspace".to_string(),
+            "switch".to_string(),
+            "i-0".to_string(),
+            "--to".to_string(),
+            to.to_str().unwrap().to_string(),
+            "--resume".to_string(),
+        ];
+        if json {
+            args.push("--json".to_string());
+        }
+        args.push("--".to_string());
+        args.push("carry it back".to_string());
+        args
+    };
+    let (ok, _out, err, timed_out) = bounded_sac(bin, &switch_args(&selected_b, false), &fail_envs);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "a failed launch must not exit success");
+    assert!(err.contains("orca terminal create failed"), "{err}");
+    assert!(err.contains("workspace changed"), "{err}");
+    assert!(err.contains(selected_b.to_str().unwrap()), "{err}");
+    // the change is true: the header really moved and the record landed
+    let moved = std::fs::read(&saved).unwrap();
+    let header: Value =
+        serde_json::from_slice(moved.split(|&b| b == b'\n').next().unwrap()).unwrap();
+    assert_eq!(header["cwd"], json!(selected_b.display().to_string()));
+    assert_eq!(header["id"], "rover0001");
+    let (_, body) = get_json(&url, "/api/v1/records");
+    let changes = changes_of(json_of(&body)["records"].as_array().unwrap());
+    assert_eq!(changes.len(), 2);
+    assert_eq!(
+        changes[1]["payload"]["worktree"],
+        json!(selected_b.display().to_string())
+    );
+    // nothing ran: the guard never changed hands
+    assert_eq!(saccade::activate::guard_held(&guard), Some(false));
+    let witness = std::fs::read_to_string(&fx.child_log).unwrap();
+    assert_eq!(witness.matches("guard-taken").count(), 1, "{witness}");
+
+    // the same disclosure through the json face: a valid envelope that
+    // carries the standing fact, never a success claim
+    let (ok, _out, err, timed_out) = bounded_sac(bin, &switch_args(&selected_a, true), &fail_envs);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "{err}");
+    let envelope: Value = serde_json::from_str(err.trim()).expect("a valid json error envelope");
+    assert_eq!(envelope["error"], "usage");
+    assert!(
+        envelope["detail"]
+            .as_str()
+            .unwrap()
+            .contains("workspace changed"),
+        "{envelope}"
+    );
+    let moved = std::fs::read(&saved).unwrap();
+    let header: Value =
+        serde_json::from_slice(moved.split(|&b| b == b'\n').next().unwrap()).unwrap();
+    assert_eq!(header["cwd"], json!(selected_a.display().to_string()));
+
+    let _ = std::process::Command::new("kill")
+        .arg(server_pid.to_string())
+        .status();
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn a_send_activates_through_the_real_door() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("send-real-door");
+    let home = db.parent().unwrap();
+    let (root, _first, _head) = scratch_repo(home);
+    let fx = door_fixture(home);
+
+    // the launch rides the server's own environment: no launcher seam,
+    // the real binary is the launcher; the guard path reaches the
+    // submitted command through the fixture's pointer file, written
+    // once the attach reply has named it
+    std::fs::write(&fx.guard_file, b"").unwrap();
+    let server_envs = [
+        ("FAKE_ORCA_LOG", fx.host_log.to_str().unwrap()),
+        ("FAKE_ORCA_STATE", fx.host_state.to_str().unwrap()),
+        ("FAKE_ORCA_SPAWN", "1"),
+        ("FAKE_ORCA_CHILD_LOG", fx.child_log.to_str().unwrap()),
+        ("FAKE_ORCA_GUARD_FILE", fx.guard_file.to_str().unwrap()),
+        ("SACCADE_PI", fx.pi.to_str().unwrap()),
+        ("PI_DUMP", fx.dump.to_str().unwrap()),
+        ("PI_PIDFILE", fx.pidfile.to_str().unwrap()),
+        ("FIXTURE_LOG", fx.child_log.to_str().unwrap()),
+    ];
+    let (url, server_pid) = spawn_serving_subprocess(
+        &db,
+        &root,
+        bin,
+        fx.host.parent().unwrap(),
+        None,
+        Some(&fx.cold_state),
+        &server_envs,
+    );
+
+    // a live sender and the stopped peer
+    let workspace = home.join("peer-ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let saved = home.join("peer001-session.jsonl");
+    std::fs::write(
+        &saved,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"peer001\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "sender001", "session_file": "/sessions/sender001.jsonl"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sender_birth = json_of(&body)["incarnation"].as_u64().unwrap();
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "peer001", "session_file": saved.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["num"], 1);
+    let peer_birth = json_of(&body)["incarnation"].as_u64().unwrap();
+    let guard = PathBuf::from(
+        json_of(&body)["guard"]
+            .as_str()
+            .expect("the attach names the guard"),
+    );
+    std::fs::write(&fx.guard_file, guard.to_str().unwrap()).unwrap();
+
+    // the landed write drives the real door: submission first, then
+    // the launched session's guard
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": sender_birth, "workspace": null}},
+            "to": 1,
+            "body": "wake through the real door",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let witness = loop {
+        let witness = std::fs::read_to_string(&fx.child_log).unwrap_or_default();
+        if witness.contains("submitted-command-started") && witness.contains("guard-taken") {
+            break witness;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the send never drove the real door; witness: {witness:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    let started = witness.find("submitted-command-started").unwrap();
+    let taken = witness.find("guard-taken").unwrap();
+    assert!(started < taken, "{witness}");
+    let submitted = command_of(&fx.host_log, "");
+    assert!(submitted.contains("--session peer001"), "{submitted}");
+    assert_eq!(saccade::activate::guard_held(&guard), Some(true));
+    let dump = std::fs::read_to_string(&fx.dump).unwrap();
+    assert!(dump.contains("--session peer001"), "{dump}");
+    assert!(
+        dump.contains(&format!("pwd: {}", workspace.display())),
+        "{dump}"
+    );
+    assert!(dump.contains(&format!("SACCADE_SERVER={url}")), "{dump}");
+
+    // delivery facts stay honest: the launch is submitted, the mail
+    // stays pending until the session registers
+    let (_, body) = get_json(
+        &url,
+        &format!("/api/v1/messages/pending?incarnation={peer_birth}"),
+    );
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    assert!(
+        mail.iter()
+            .any(|m| m["from"]["num"] == 0 && m["state"] == "pending"),
+        "{body}"
+    );
+
+    stop_holder(&fx.pidfile, &guard);
+    let _ = std::process::Command::new("kill")
+        .arg(server_pid.to_string())
+        .status();
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -5174,6 +5921,44 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
         "{out}"
     );
     assert!(!launched["launch"]["terminal"].as_str().unwrap().is_empty());
+
+    // a failed launch over the standing provision: the birth pointer
+    // and path ride the failure face, never a success claim
+    let (ok, out, err) = sac(
+        &["integrate", "--new", "stumble", "--json"],
+        &[
+            ("PATH", host_path.as_str()),
+            ("FAKE_ORCA_LOG", host_log.to_str().unwrap()),
+            ("FAKE_ORCA_STATE", host_state.to_str().unwrap()),
+            ("FAKE_ORCA_CREATE_FAILS", "1"),
+            ("SACCADE_PI", pi.to_str().unwrap()),
+        ],
+    );
+    assert!(!ok, "{out}{err}");
+    let envelope: Value = serde_json::from_str(err.trim()).expect("a valid json error envelope");
+    assert_eq!(envelope["error"], "usage");
+    let detail = envelope["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("workspace provisioned - record"),
+        "{detail}"
+    );
+    assert!(detail.contains("stumble-"), "{detail}");
+    assert!(detail.contains("the launch failed"), "{detail}");
+    // the creation fact is true and the only record: provisioned, not
+    // launched, and nothing else written
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let rows = json_of(&body)["records"].as_array().unwrap().clone();
+    let stumbled: Vec<&Value> = rows
+        .iter()
+        .filter(|r| {
+            r["kind"] == "workspace_created"
+                && r["payload"]["branch"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("stumble-")
+        })
+        .collect();
+    assert_eq!(stumbled.len(), 1, "{body}");
 
     // the ask composition rides the same birth: a registered creator
     // questions the newborn peer. The newborn claims its launch token

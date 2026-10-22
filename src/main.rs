@@ -2463,7 +2463,7 @@ fn integrate_launch(
         routing.push_str(&format!(" SACCADE_LAUNCH_TOKEN={}", shell_quote(token)));
     }
     let prompt_text = prompt.join(" ");
-    let (dir, argv, title) = match (workspace, resume) {
+    let (dir, argv, title, handoff) = match (workspace, resume) {
         (Some(dir), None) => {
             let dir = dir
                 .canonicalize()
@@ -2478,7 +2478,7 @@ fn integrate_launch(
             if !prompt_text.is_empty() {
                 argv.push(prompt_text);
             }
-            (dir, argv, "sac integrate".to_string())
+            (dir, argv, "sac integrate".to_string(), None)
         }
         (None, Some(token)) => {
             let loadout = loadout_of(destination)?;
@@ -2533,34 +2533,31 @@ fn integrate_launch(
             if !prompt_text.is_empty() {
                 argv.push(prompt_text);
             }
-            // the rigorous handoff: this door's success is the launched
-            // session's guard being held - observed, bounded, never
-            // assumed. A late boot holds the door until it lands or the
-            // bound passes; a bound pass reports failure and the mail
-            // stays relaunchable, with a late attacher refused at its
-            // own attach by the live holder's guard.
-            let guard = saccade::paths::state_dir(&repo)
-                .join("saccade-activation")
-                .join(format!(
-                    "{}.guard",
-                    saccade::paths::session_key(native_id.as_str())
-                ));
-            let handoff = std::time::Instant::now()
-                + std::time::Duration::from_secs(saccade::activate::GUARD_HANDOFF_SECS);
-            loop {
-                match saccade::activate::guard_held(&guard) {
-                    Some(true) => break,
-                    Some(false) if std::time::Instant::now() < handoff => {
-                        std::thread::sleep(std::time::Duration::from_millis(400));
-                    }
-                    _ => {
-                        return Err(Fail::Usage(
-                            "the resumed session's guard was not taken within its bound; the launch stays unobserved and the mail pending".into(),
-                        ));
-                    }
+            // busy and unknown preflight, before anything is submitted:
+            // a preexisting live holder is a live session, never proof
+            // this unsubmitted child has resumed, and an unprobeable
+            // guard leaves liveness unknown - both refuse here rather
+            // than duplicate the session. The handoff observation below
+            // rides out as the door's own evidence, after the host has
+            // the submission.
+            let guard = saccade::activate::guard_path(&repo, native_id.as_str());
+            if let Some(base) = guard.parent() {
+                let _ = std::fs::create_dir_all(base);
+            }
+            match saccade::activate::guard_held(&guard) {
+                Some(false) => {}
+                Some(true) => {
+                    return Err(Fail::Usage(format!(
+                        "{token}'s session is live: its guard is already held, so no launch is submitted; exit that session first"
+                    )));
+                }
+                None => {
+                    return Err(Fail::Usage(
+                        "the session's guard cannot be probed, so liveness is unknown; no launch is submitted".into(),
+                    ));
                 }
             }
-            (dir, argv, format!("sac resume i-{token}"))
+            (dir, argv, format!("sac resume i-{token}"), Some(guard))
         }
         _ => {
             return Err(Fail::Usage(
@@ -2605,6 +2602,30 @@ fn integrate_launch(
         )));
     }
     let terminal = terminal_handle(&String::from_utf8_lossy(&out.stdout)).map_err(Fail::Usage)?;
+    // the rigorous handoff, after the submission: this door's success
+    // is the launched session's guard being held - observed, bounded,
+    // never assumed, and terminal-create success alone proves neither
+    // attach nor execution. A late boot holds the door until it lands
+    // or the bound passes; a bound pass reports failure and the mail
+    // stays relaunchable, with a late attacher refused at its own
+    // attach by the live holder's guard.
+    if let Some(guard) = handoff {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(saccade::activate::GUARD_HANDOFF_SECS);
+        loop {
+            match saccade::activate::guard_held(&guard) {
+                Some(true) => break,
+                Some(false) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                }
+                _ => {
+                    return Err(Fail::Usage(
+                        "the resumed session's guard was not taken within its bound; the launch stays unobserved and the mail pending".into(),
+                    ));
+                }
+            }
+        }
+    }
     Ok((dir_str, terminal))
 }
 
@@ -2838,8 +2859,12 @@ fn workspace_switch_door(
         record = record.map(|r| format!(" (record {r})")).unwrap_or_default(),
     );
     if resume {
+        // the change fact already stands; a failed launch says so
         let (dir_str, terminal) =
-            integrate_launch(cli, destination, None, Some(token), prompt, None)?;
+            match integrate_launch(cli, destination, None, Some(token), prompt, None) {
+                Ok(launch) => launch,
+                Err(e) => return Err(launch_failed(&changed, e)),
+            };
         if cli.json {
             return Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "changed": true,
@@ -2891,6 +2916,14 @@ fn workspace_door(
     }
 }
 
+/// A launch failure over a standing fact: the change or provision the
+/// combined door already made true stays in the failure's face - the
+/// pointer and path ride the error, never a success claim, never a
+/// second record.
+fn launch_failed(standing: &str, error: Fail) -> Fail {
+    Fail::Usage(format!("{standing}\nthe launch failed: {error}"))
+}
+
 /// The explicit-new launch: provision through the server's effects,
 /// then hand the fresh directory to the ordinary doors - fresh launch
 /// or ask, exactly the existing composition. A launch failure leaves
@@ -2905,21 +2938,26 @@ fn integrate_new_door(
 ) -> Result<String, Fail> {
     let birth = provision_new(destination, label, base)?;
     let path = birth.path.clone();
+    let provisioned = render_birth(&birth);
     if cli.json {
         let launch = match ask {
-            Some(question) => {
-                let outcome = ask_run(cli, destination, Path::new(&path), question)?;
-                serde_json::json!({
+            Some(question) => match ask_run(cli, destination, Path::new(&path), question) {
+                Ok(outcome) => serde_json::json!({
                     "workspace": outcome.workspace,
                     "terminal": outcome.terminal,
                     "incarnation": {"seq": outcome.birth, "num": outcome.num},
                     "question": {"num": outcome.message_num, "seq": outcome.message_seq},
-                })
-            }
+                }),
+                Err(e) => return Err(launch_failed(&provisioned, e)),
+            },
             None => {
-                let (dir_str, terminal) =
-                    integrate_launch(cli, destination, Some(Path::new(&path)), None, prompt, None)?;
-                serde_json::json!({"workspace": dir_str, "terminal": terminal})
+                match integrate_launch(cli, destination, Some(Path::new(&path)), None, prompt, None)
+                {
+                    Ok((dir_str, terminal)) => {
+                        serde_json::json!({"workspace": dir_str, "terminal": terminal})
+                    }
+                    Err(e) => return Err(launch_failed(&provisioned, e)),
+                }
             }
         };
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
@@ -2929,25 +2967,21 @@ fn integrate_new_door(
         .expect("plain data"));
     }
     let door = match ask {
-        Some(question) => ask_door(cli, destination, Path::new(&path), question)?,
+        Some(question) => match ask_door(cli, destination, Path::new(&path), question) {
+            Ok(door) => door,
+            Err(e) => return Err(launch_failed(&provisioned, e)),
+        },
         None => {
-            let (dir_str, terminal) =
-                integrate_launch(cli, destination, Some(Path::new(&path)), None, prompt, None)?;
-            format!(
-                "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
-            )
+            match integrate_launch(cli, destination, Some(Path::new(&path)), None, prompt, None) {
+                Ok((dir_str, terminal)) => format!(
+                    "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+                ),
+                Err(e) => return Err(launch_failed(&provisioned, e)),
+            }
         }
     };
     Ok(format!("{}\n{door}", render_birth(&birth)))
 }
-/// The ask door: cheap peer creation with an initial question. The
-/// creator is a registered incarnation; the question is durable
-/// addressed communication from its own scope - machine-supplied
-/// origin on the record.
-/// The ask door: cheap peer creation with an initial question. The
-/// creator is a registered incarnation; the question is durable
-/// addressed communication from its own scope - machine-supplied
-/// origin on the record - never argv shaped into native human input.
 fn parse_task_id(token: &str) -> Result<TaskId, Fail> {
     let n = token.strip_prefix("t-").ok_or_else(|| {
         Fail::Usage(format!(
