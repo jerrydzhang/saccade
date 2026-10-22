@@ -129,8 +129,13 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// envelopes queued natively, submissions not yet confirmed
 	const deliveries = new Set<QueuedDelivery>();
 	// this session's guard descriptor: the kernel lock on the shared
-	// open-file-description lives while it stays open
+	// open-file-description lives while it stays open, and the path and
+	// session identity ride beside it so a reload can tell an
+	// applicable exact-session guard from another session's
 	let guardFd: number | null = null;
+	let guardPath: string | null = null;
+	let guardSessionId: string | null = null;
+	let guardSessionFile: string | null = null;
 	// message seqs already queued under this association, with the
 	// message itself for correlation: startup, the wait tool, and the
 	// background bridge all drain the same mailbox, and a message
@@ -172,25 +177,35 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return body as T;
 	}
 
-	// Detach whatever this session carried: the identity channel goes
-	// with it, and queued deliveries die unsubmitted - a reassociated
-	// session never submits as the previous incarnation.
-	function detach() {
-		association = null;
-		attachError = null;
-		deliveries.clear();
-		queued.clear();
-		// the guard's kernel lock rides this descriptor: closing it on
-		// association change is the observed release activation reads
-		delete process.env.SACCADE_INCARNATION_SEQ;
+	// Release the held guard, if any: closing the descriptor is the
+	// observed kernel release activation reads.
+	function releaseGuard() {
 		if (guardFd !== null) {
 			try {
 				closeSync(guardFd);
 			} catch {
 				// already closed: the release is the same either way
 			}
-			guardFd = null;
 		}
+		guardFd = null;
+		guardPath = null;
+		guardSessionId = null;
+		guardSessionFile = null;
+	}
+
+	// Suspend the association runtime without touching the guard: the
+	// identity channel goes with the association, queued deliveries die
+	// unsubmitted, and the bridge loop strands - but an exact-session
+	// guard stays kernel-held. Process death releases it; a reload's
+	// next start reuses it. Releasing before a reattach reply would let
+	// a transient tracker outage leave this live process unguarded
+	// while activation sees a free session and resumes another copy.
+	function suspendAssociation() {
+		association = null;
+		attachError = null;
+		deliveries.clear();
+		queued.clear();
+		delete process.env.SACCADE_INCARNATION_SEQ;
 	}
 
 	// Resolve-or-register this session's incarnation from the session's
@@ -198,13 +213,21 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// attachment. The reply is the machine identity, and the env channel
 	// rides it for `sac`.
 	async function attach(ctx: ExtensionContext): Promise<Association | null> {
-		detach();
+		const sessionId = ctx.sessionManager.getSessionId();
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		suspendAssociation();
+		if (
+			guardFd !== null &&
+			(guardSessionId !== sessionId || guardSessionFile !== sessionFile)
+		) {
+			// a different native session's guard cannot be reused: this
+			// process no longer runs it, so the release is honest
+			releaseGuard();
+		}
 		if (!server()) {
 			attachError = "no SACCADE_SERVER routing; the session stays unregistered";
 			return null;
 		}
-		const sessionId = ctx.sessionManager.getSessionId();
-		const sessionFile = ctx.sessionManager.getSessionFile();
 		if (!sessionId || !sessionFile) {
 			attachError = "the session carries no saved native file; nothing to register";
 			return null;
@@ -224,9 +247,15 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			// shuts down before any model work. Unknown = the host
 			// offers no flock: fail safe, no association, no
 			// participation - an unverified session must never look
-			// free to the backend's probe.
-			guardFd = null;
-			if (reply.guard) {
+			// free to the backend's probe. A guard held for this exact
+			// session from a previous start is reused, never reopened:
+			// the lock is already ours.
+			if (!reply.guard) {
+				releaseGuard();
+			} else if (guardFd !== null && guardPath === reply.guard) {
+				// retained exact-session guard
+			} else {
+				releaseGuard();
 				let fd: number;
 				try {
 					fd = openSync(reply.guard, "a+");
@@ -257,6 +286,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					return null;
 				}
 				guardFd = fd;
+				guardPath = reply.guard;
+				guardSessionId = sessionId;
+				guardSessionFile = sessionFile;
 			}
 			association = { ...reply, nativeId: sessionId, sessionFile, guardFd };
 			process.env.SACCADE_INCARNATION_SEQ = String(reply.incarnation);
@@ -268,6 +300,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			return association;
 		} catch (error) {
 			attachError = errorText(error);
+			// a retained exact-session guard stays held across the failed
+			// attempt: this live process never continues unguarded, and
+			// the next attach attempt reuses the lock
 			return null;
 		}
 	}
@@ -644,6 +679,15 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		const who = await attach(ctx);
 		if (!who) {
 			if (attachError) pi.appendEntry("saccade_attach", { error: attachError });
+			// a protocol-launched boot that could not verify its session
+			// refuses before any model work: the launch token marks a boot
+			// the integration itself started, and without a reply naming
+			// this session's guard duty - and without a retained guard -
+			// running on is the unsafe side. A reload holding its
+			// exact-session guard stays alive and retries lazily.
+			if (process.env.SACCADE_LAUNCH_TOKEN && guardFd === null) {
+				ctx.shutdown();
+			}
 			return;
 		}
 		// activation at a supported boundary: the mailbox drains at start
@@ -659,9 +703,11 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async () => {
 		// idempotent teardown: waits finish, queued deliveries cancel,
-		// the association and its env channel go with the session
+		// the association and its env channel go with the session - and
+		// the exact-session guard stays kernel-held: process death is
+		// its release, and a reload's next start reuses it
 		cancelAllWaits();
-		detach();
+		suspendAssociation();
 		return undefined;
 	});
 

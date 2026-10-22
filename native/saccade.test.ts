@@ -306,6 +306,9 @@ class FakeTracker {
 	sent: any[] = [];
 	attachBodies: any[] = [];
 	attachFails = false;
+	// guard paths are pure in the native id within one tracker; the
+	// salt keeps different tests' retained guards from colliding
+	guardSalt = Math.random().toString(36).slice(2);
 	failNext = 0;
 	// parked bridge reads: held until a record lands or the test wakes them
 	parked: Array<() => void> = [];
@@ -343,7 +346,8 @@ class FakeTracker {
 			if (this.attachFails) {
 				return this.reply({ error: { code: "degraded", detail: "down" } }, 503);
 			}
-			const guard = "/tmp/saccade-fake-guard-" + body.native_id + ".guard";
+			const guard =
+				"/tmp/saccade-fake-guard-" + this.guardSalt + "-" + body.native_id + ".guard";
 			const known = this.attachments.get(body.native_id);
 			if (known) {
 				return this.reply({ registered: false, ...known, guard });
@@ -522,8 +526,21 @@ function resultText(result: unknown): string {
 		.join("");
 }
 
-// End a harness's session: loops stop, guards release, and no leaked
-// activity from one test reaches another through the global fetch.
+// An independent kernel probe of a guard file: true when the lock is
+// held by some live descriptor, as activation would see it.
+function probeHeld(guardPath: string): boolean {
+	const fd = openSync(guardPath, "a+");
+	const probe = spawnSync("flock", ["-n", "3"], {
+		stdio: ["ignore", "ignore", "ignore", fd],
+	});
+	closeSync(fd);
+	return probe.status !== 0;
+}
+
+// End a harness's session: loops stop, queued work dies, and no
+// leaked activity from one test reaches another through the global
+// fetch. The guard rides the process: the fake tracker's salted paths
+// keep one test's retained lock from reaching another.
 async function stop(h: Harness): Promise<void> {
 	await h.pi.emit("session_shutdown");
 }
@@ -993,6 +1010,62 @@ test("the guard take classifies by the documented flock contract", () => {
 		rmSync(guard, { force: true });
 		rmSync(shim, { recursive: true, force: true });
 	}
+});
+
+test("a transient tracker outage across reload keeps the exact-session guard held", async () => {
+	const h = harness("reload-guard0", "/sessions/reload-guard.jsonl", "pi", new FakeTracker());
+	const guard =
+		"/tmp/saccade-fake-guard-" + h.tracker.guardSalt + "-reload-guard0.guard";
+	await h.pi.emit("session_start");
+	assert.equal(probeHeld(guard), true, "the first attach holds the session's guard");
+	// the real reload sequence: shutdown, then a start whose attach
+	// hits a transient tracker outage
+	await h.pi.emit("session_shutdown");
+	h.tracker.attachFails = true;
+	await h.pi.emit("session_start");
+	assert.equal(probeHeld(guard), true, "the outage must not release the guard");
+	assert.equal(h.pi.shutdowns, 0, "the process is guarded: it stays alive");
+	const identity = h.tools("saccade_identity");
+	const toolCtx = () => ({ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
+	const refused = resultText(await identity.execute("t1", {}, undefined, undefined, toolCtx()));
+	assert.ok(refused.includes("not registered"), refused);
+	// the tracker returns: the retained lock is reused, never retaken
+	h.tracker.attachFails = false;
+	const ok = resultText(await identity.execute("t2", {}, undefined, undefined, toolCtx()));
+	assert.ok(ok.includes("i-0"), ok);
+	assert.equal(probeHeld(guard), true, "the retained guard is still the one held");
+	assert.equal(h.pi.shutdowns, 0, "no refusal ever fired");
+	await stop(h);
+});
+
+test("a protocol-launched boot that cannot verify refuses before model work", async () => {
+	process.env.SACCADE_LAUNCH_TOKEN = "boot-token";
+	const h = harness("launch-outage0", "/sessions/launch-outage.jsonl", "pi", new FakeTracker());
+	try {
+		h.tracker.attachFails = true;
+		await h.pi.emit("session_start");
+		assert.equal(h.pi.shutdowns, 1, "the unverified launched boot shuts down");
+	} finally {
+		delete process.env.SACCADE_LAUNCH_TOKEN;
+	}
+	await stop(h);
+});
+
+test("a reload to a different native session releases the old session's guard", async () => {
+	const h = harness("switch-old0", "/sessions/switch-old.jsonl", "pi", new FakeTracker());
+	const guardOf = (id: string) =>
+		"/tmp/saccade-fake-guard-" + h.tracker.guardSalt + "-" + id + ".guard";
+	await h.pi.emit("session_start");
+	assert.equal(probeHeld(guardOf("switch-old0")), true, "the old session's guard is held");
+	h.pi.session = new FakeSession("switch-new0", "/sessions/switch-new.jsonl");
+	await h.pi.emit("session_start");
+	assert.equal(
+		probeHeld(guardOf("switch-old0")),
+		false,
+		"the old session's guard released with the identity change",
+	);
+	assert.equal(probeHeld(guardOf("switch-new0")), true, "the new session's guard is held");
+	await stop(h);
 });
 
 test("a held guard shuts the duplicate down before any model work", async () => {
