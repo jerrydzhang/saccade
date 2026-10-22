@@ -13,6 +13,8 @@ import {
 } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import type {
+	CustomEntry,
+	EntryRenderer,
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionToolContext,
@@ -175,8 +177,29 @@ class FakePi implements ExtensionAPI {
 		this.followUps.push(content);
 	}
 	appendEntries: Array<{ type: string; data: unknown }> = [];
+	// components the registered renderer painted, in append order
+	rendered: unknown[] = [];
+	entryRenderers = new Map<string, EntryRenderer>();
+	registerEntryRenderer<T = unknown>(
+		customType: string,
+		renderer: EntryRenderer<T>,
+	): void {
+		this.entryRenderers.set(customType, renderer as EntryRenderer);
+	}
 	appendEntry<T = unknown>(customType: string, data?: T): void {
 		this.appendEntries.push({ type: customType, data });
+		// faithful to interactive mode: a registered renderer paints the
+		// entry into chat; without one the append stays invisible
+		const renderer = this.entryRenderers.get(customType);
+		if (renderer) {
+			this.rendered.push(
+				renderer(
+					{ type: "custom", customType, data } as CustomEntry<T>,
+					{ expanded: false },
+					undefined as unknown as Theme,
+				),
+			);
+		}
 	}
 	// every other ExtensionAPI member: present on the real surface,
 	// never part of this test's exercised surface
@@ -209,9 +232,6 @@ class FakePi implements ExtensionAPI {
 	}
 	registerCommand(): never {
 		throw new Error("fake pi: registerCommand");
-	}
-	registerEntryRenderer(): never {
-		throw new Error("fake pi: registerEntryRenderer");
 	}
 	registerFlag(): never {
 		throw new Error("fake pi: registerFlag");
@@ -1205,9 +1225,7 @@ test("a real second process refuses the attach and its death releases the lock",
 });
 
 test("a human-started session that cannot verify exits, explaining the failure", async () => {
-	// the ratified offline-startup rule: no token, tracker down before
-	// the first attach, no retained guard - the composed process
-	// explains itself and exits rather than run unguarded
+	// ratified offline rule: no token, tracker down, no held guard - explain and exit
 	const shared = new FakeTracker();
 	delete process.env.SACCADE_LAUNCH_TOKEN;
 	const h = harness("offline-gap0", "/sessions/offline-gap.jsonl", "pi", shared);
@@ -1220,8 +1238,19 @@ test("a human-started session that cannot verify exits, explaining the failure",
 	assert.match(
 		String((note.data as { error?: string }).error),
 		/degraded/,
-		"the explanation names the tracker failure",
 	);
+	// the explanation paints: the registered renderer rendered the
+	// visible card, not just the private record
+	const painted = h.pi.rendered[h.pi.rendered.length - 1] as {
+		render: (width: number) => string[];
+	};
+	assert.ok(painted, "the attach entry has a reader and painted");
+	assert.match(
+		painted.render(80).join("\n"),
+		/degraded/,
+		"the visible card names the tracker failure",
+	);
+	shared.attachFails = false;
 	shared.attachFails = false;
 	await stop(h);
 });

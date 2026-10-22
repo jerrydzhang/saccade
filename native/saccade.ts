@@ -5,6 +5,7 @@
 // interrupting other work.
 import { closeSync, openSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import type {
 	ExtensionContext,
@@ -145,6 +146,12 @@ const WaitParams = Type.Object({
 });
 
 export default function saccadeIntegration(pi: ExtensionAPI) {
+	// the attach record's reader: interactive chat paints custom
+	// entries only through a registered renderer
+	pi.registerEntryRenderer("saccade_attach", (entry) => {
+		const data = (entry.data ?? {}) as { error?: string };
+		return new Text(data.error ? `saccade: ${data.error}` : "saccade: attached");
+	});
 	// the session's association: resolved or registered fresh at every
 	// session start by the session's actual native id and locator
 	let association: Association | null = null;
