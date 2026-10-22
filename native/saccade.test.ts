@@ -1456,9 +1456,10 @@ test("the handoff envelope carries the machine provenance in ASCII with the targ
 		target: "/story/worktrees/\u{e9}tude",
 		created: null,
 		log: "/tmp/handoff.log",
+		scope: { actor: "pi", task: "t-9" },
 	};
 	const envelope = handoffEnvelope(data, 41);
-	assert.match(envelope, /^\[saccade workspace handoff \| tool call_9 \| change record c-41\]/);
+	assert.match(envelope, /^\[saccade workspace handoff \| tool call_9 \| change record 41\]/);
 	assert.match(envelope, /kept its id, saved history, and declared scope/);
 	// the moved-to directory rides byte for byte, never transliterated
 	assert.ok(envelope.includes("/story/worktrees/\u{e9}tude"));
@@ -1616,6 +1617,8 @@ test("an armed handoff persists its facts and shuts the session down at settle",
 	assert.equal(data.toolCall, "call_arm");
 	assert.equal(data.target, target);
 	assert.equal(data.created, null, "an existing choice provisions nothing");
+	// the harness injected this actor; the session carries no task scope
+	assert.deepEqual(data.scope, { actor: "pi", task: null });
 	assert.match(data.log, /\.handoff\.log$/);
 	// the settle boundary shuts the session down with the helper launched
 	await h.pi.emit("agent_settled");
@@ -1722,6 +1725,7 @@ function armedEntry(overrides: Record<string, unknown>) {
 			target: "/story/wt-2",
 			created: null,
 			log: "/tmp/handoff.log",
+			scope: { actor: null, task: null },
 			...overrides,
 		},
 	};
@@ -1740,16 +1744,31 @@ test("a resumed session consumes the armed handoff and reactivates the own reque
 	const file = savedSession("resume10", target);
 	const h = harness("resume10", file, "pi", new FakeTracker());
 	h.tracker.records.push(changedRecord(411, 0, target));
-	h.pi.session.entries.push(armedEntry({ sessionFile: file }) as any);
+	h.pi.session.entries.push(
+		armedEntry({ sessionFile: file, scope: { actor: "injected-scope-actor", task: "t-9" } }) as any,
+	);
 	await startWith(h);
+	// the validated arm restores the session's own injected scope before
+	// anything can write under the launch's default identity
+	assert.equal(process.env.SACCADE_ACTOR, "injected-scope-actor");
+	assert.equal(process.env.SACCADE_TASK, "t-9");
+	// queue first: the done entry is NOT terminal at send time
+	assert.equal(h.pi.followUps.length, 1, "the continuation entered the native queue");
+	assert.equal(
+		h.pi.appendEntries.some((e) => e.type === "saccade_handoff_done"),
+		false,
+		"activation is not terminal before the saved insert",
+	);
+	const envelope = h.pi.followUps[0] ?? "";
+	assert.match(envelope, /^\[saccade workspace handoff \| tool call_res \| change record 411\]/);
+	assert.match(envelope, /Continue the goal you were pursuing/);
+	// the run saves the envelope; the boundary completes the arm terminally
+	await h.pi.runQueue();
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
-	assert.ok(done, "the consumption is a saved fact");
+	assert.ok(done, "the saved insert is a recorded fact");
 	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
 	assert.equal((done!.data as HandoffDoneData).record, 411);
-	assert.equal(h.pi.followUps.length, 1, "the continuation entered the native queue");
-	const envelope = h.pi.followUps[0] ?? "";
-	assert.match(envelope, /^\[saccade workspace handoff \| tool call_res \| change record c-411\]/);
-	assert.match(envelope, /Continue the goal you were pursuing/);
+	delete process.env.SACCADE_TASK;
 	await stop(h);
 });
 
@@ -1811,11 +1830,88 @@ test("a tracker outage leaves the arm unconsumed for the next start", async () =
 		"an unread correlation is never a stale guess",
 	);
 	assert.equal(h.pi.followUps.length, 0);
-	// the next start reads the record and activates
+	// the next start reads the record and queues; the run saves the
+	// envelope and the boundary completes the arm
 	await startWith(h);
+	assert.equal(h.pi.followUps.length, 1);
+	await h.pi.runQueue();
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
 	await stop(h);
+});
+
+test("a refused continuation insertion stays unconsumed and re-queues at a later boundary", async () => {
+	const target = "/story/wt-2";
+	const file = savedSession("resume16", target);
+	const h = harness("resume16", file, "pi", new FakeTracker());
+	h.tracker.records.push(changedRecord(417, 0, target));
+	h.pi.session.entries.push(armedEntry({ sessionFile: file, nativeId: "resume16" }) as any);
+	// the queue refuses this insertion: nothing saved, nothing terminal
+	h.pi.failNextSend = 1;
+	await startWith(h);
+	assert.equal(h.pi.followUps.length, 0, "the refused insertion queued nothing");
+	assert.equal(
+		h.pi.appendEntries.some((e) => e.type === "saccade_handoff_done"),
+		false,
+		"an unsaved envelope never completes the arm",
+	);
+	// an idle boundary re-queues the same envelope - the delivery
+	// discipline's recover-over-once-flag, no timers
+	h.pi.idle = true;
+	h.pi.pendingNative = false;
+	await h.pi.emit("agent_settled");
+	assert.equal(h.pi.followUps.length, 1, "the boundary re-queued the envelope");
+	await h.pi.runQueue();
+	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
+	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
+	assert.equal((done!.data as HandoffDoneData).record, 417);
+	await stop(h);
+});
+
+test("an envelope already in the saved history completes the arm without re-queueing", async () => {
+	const target = "/story/wt-2";
+	const file = savedSession("resume17", target);
+	const h = harness("resume17", file, "pi", new FakeTracker());
+	h.tracker.records.push(changedRecord(418, 0, target));
+	const data = armedEntry({ sessionFile: file, nativeId: "resume17" }).data as HandoffEntryData;
+	const envelope = handoffEnvelope(data, 418);
+	// the crash-and-recover shape: the envelope was saved but the done
+	// entry never landed
+	h.pi.session.entries.push(armedEntry({ sessionFile: file, nativeId: "resume17" }) as any);
+	h.pi.session.entries.push({ type: "message", message: { role: "user", content: envelope } } as any);
+	await startWith(h);
+	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
+	assert.ok(done, "the saved envelope completes the arm at once");
+	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
+	assert.equal((done!.data as HandoffDoneData).record, 418);
+	assert.equal(h.pi.followUps.length, 0, "no duplicate queue for a saved envelope");
+	await stop(h);
+});
+
+test("a reload between queue and save re-queues at the next start, never a silent loss", async () => {
+	const target = "/story/wt-2";
+	const file = savedSession("resume18", target);
+	const tracker = new FakeTracker();
+	tracker.records.push(changedRecord(419, 0, target));
+	const h = harness("resume18", file, "pi", tracker);
+	h.pi.session.entries.push(armedEntry({ sessionFile: file, nativeId: "resume18" }) as any);
+	await startWith(h);
+	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(
+		h.pi.appendEntries.some((e) => e.type === "saccade_handoff_done"),
+		false,
+	);
+	// the reload: a fresh module over the same session file and tracker;
+	// the queued envelope was never saved, the arm is still unconsumed
+	const second = reloadedHarness(h, "resume18", file);
+	second.tracker.records = tracker.records;
+	second.pi.session.entries.push(...h.pi.session.entries);
+	await second.pi.emit("session_start");
+	assert.equal(second.pi.followUps.length, 1, "the next start re-queues the unsaved envelope");
+	await second.pi.runQueue();
+	const done = second.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
+	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
+	assert.equal((done!.data as HandoffDoneData).record, 419);
 });
 
 test("an already-consumed arm stays consumed and an older arm is superseded", async () => {
@@ -1832,6 +1928,8 @@ test("an already-consumed arm stays consumed and an older arm is superseded", as
 		data: { token: "handoff-old", outcome: "cancelled", reason: "earlier cancel" },
 	} as any);
 	await startWith(h);
+	assert.equal(h.pi.followUps.length, 1, "the latest arm queued its continuation");
+	await h.pi.runQueue();
 	const dones = h.pi.appendEntries.filter((e) => e.type === "saccade_handoff_done");
 	assert.deepEqual(
 		dones.map((e) => (e.data as HandoffDoneData).token),
@@ -1839,7 +1937,6 @@ test("an already-consumed arm stays consumed and an older arm is superseded", as
 		"the consumed arm stays consumed; the latest arm activates",
 	);
 	assert.equal((dones[0]!.data as HandoffDoneData).outcome, "activated");
-	assert.equal(h.pi.followUps.length, 1);
 	await stop(h);
 });
 
@@ -1867,7 +1964,7 @@ test("the new choice provisions through the server and arms the birth record", a
 	h.tracker.createPaths.push(provisioned);
 	await withHandoffEnv(async () => {
 		const out = await h.tools("saccade_workspace").execute("c1", { choice: "new", label: "\u{e9}tude" }, undefined, undefined, toolCtxOf(h));
-		assert.match((out as any).content[0].text, /provisioned now, birth record c-301/);
+		assert.match((out as any).content[0].text, /provisioned now, birth record 301/);
 	});
 	const created = h.tracker.creates[0];
 	assert.equal(created.label, "\u{e9}tude", "the label rides as data, never transliterated");

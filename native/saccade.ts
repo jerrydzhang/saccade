@@ -184,8 +184,9 @@ interface ActivityProbe {
 }
 
 // The saved-session facts an armed handoff persists: the exact identity
-// the resume-side correlation validates, the helper's inputs, and the
-// human-followable failure location.
+// the resume-side correlation validates, the injected self scope it must
+// carry across the launch, the helper's inputs, and the human-followable
+// failure location.
 export interface HandoffEntryData {
 	token: string;
 	nativeId: string;
@@ -195,6 +196,7 @@ export interface HandoffEntryData {
 	target: string;
 	created: number | null;
 	log: string;
+	scope: { actor: string | null; task: string | null };
 }
 
 // What became of an armed handoff: the token is the join - entries carry
@@ -268,13 +270,15 @@ function launchHandoffHelper(script: string, log: string): void {
 }
 
 // The machine envelope that reactivates the explicit own request after
-// the confirmed move: original tool reference and change record, never
-// human-shaped text. All words are authored ASCII; the target is data.
+// the confirmed move: original tool reference and the change record's
+// storage seq, never human-shaped text. All words are authored ASCII; the
+// target is data. Record seqs render as bare numbers: c-N is the comment
+// numbering, never record provenance.
 export function handoffEnvelope(data: HandoffEntryData, record: number): string {
 	return [
-		`[saccade workspace handoff | tool ${data.toolCall} | change record c-${record}]`,
+		`[saccade workspace handoff | tool ${data.toolCall} | change record ${record}]`,
 		"",
-		`Your explicit own-session workspace handoff is confirmed: this native session kept its id, saved history, and declared scope; the saved working directory moved to ${data.target} (record c-${record}).`,
+		`Your explicit own-session workspace handoff is confirmed: this native session kept its id, saved history, and declared scope; the saved working directory moved to ${data.target} (record ${record}).`,
 		"Continue the goal you were pursuing when you called saccade_workspace - no new goal was created and nothing else changed.",
 	].join("\n");
 }
@@ -303,7 +307,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// the armed handoff and its outcome, painted for the session's human
 	pi.registerEntryRenderer("saccade_handoff", (entry) => {
 		const data = (entry.data ?? {}) as HandoffEntryData;
-		const provisioned = data.created !== null ? ` (provisioned, birth record c-${data.created})` : "";
+		const provisioned = data.created !== null ? ` (provisioned, birth record ${data.created})` : "";
 		return new Text(
 			`saccade: handoff armed - saved workspace moves to ${data.target}${provisioned} when this run settles; helper log ${data.log}`,
 		);
@@ -312,7 +316,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		const data = (entry.data ?? {}) as HandoffDoneData;
 		const line =
 			data.outcome === "activated"
-				? `handoff activated, resumed there (record c-${data.record})`
+				? `handoff activated, resumed there (record ${data.record})`
 				: data.outcome === "stale"
 					? `handoff not activated: ${data.reason ?? "stale"}`
 					: `handoff cancelled: ${data.reason ?? "cancelled"}`;
@@ -341,6 +345,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// for: null once the helper is launched (the shutdown is the armed
 	// run's own act), and cancelled with its gate on any other boundary
 	let pendingHandoff: PendingHandoff | null = null;
+	// continuations queued natively whose terminal done awaits the saved
+	// envelope, bound to the arm they came from; association-bound like
+	// deliveries - a reassociated session never completes a stale one
+	const continuations = new Set<{ data: HandoffEntryData; record: number; envelope: string }>();
 
 	// One synchronous emit reads and holds: the bus dispatches handlers
 	// synchronously, so the answer is final when emit returns - the idle
@@ -363,6 +371,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// outage must still leave nested sac calls acting as the agent, and
 	// an injected name always wins
 	const injectedActor = process.env.SACCADE_ACTOR;
+	// whether this session's actor was injected (launch-time possession)
+	// or is only the automatic fallback: an injected actor rides the
+	// self-handoff's scope, the fallback does not pretend to be one
+	const actorInjected = injectedActor !== undefined && injectedActor.trim() !== "";
 	if (injectedActor === undefined || injectedActor.trim() === "") {
 		process.env.SACCADE_ACTOR = FALLBACK_ACTOR;
 	}
@@ -699,14 +711,17 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// settle - each checks the saved entries, never an event alone.
 	pi.on("message_end", (_event: unknown, ctx: ExtensionContext) => {
 		confirmDeliveries(ctx);
+		confirmContinuations(ctx);
 		return undefined;
 	});
 	pi.on("agent_end", (_event: unknown, ctx: ExtensionContext) => {
 		confirmDeliveries(ctx);
+		confirmContinuations(ctx);
 		return undefined;
 	});
 	pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
 		confirmDeliveries(ctx);
+		confirmContinuations(ctx);
 		settlePendingHandoff(ctx);
 		return undefined;
 	});
@@ -832,12 +847,51 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		if (record === null) {
 			return stale("no confirmed workspace change record matches this incarnation and target");
 		}
-		pi.appendEntry("saccade_handoff_done", {
-			token: data.token,
-			outcome: "activated",
-			record,
-		} satisfies HandoffDoneData);
-		pi.sendUserMessage(handoffEnvelope(data, record), { deliverAs: "followUp" });
+		// the validated arm restores this session's own injected scope: the
+		// values captured at arm time, applied in the resumed process before
+		// any write can ride the wrong identity channel
+		if (data.scope?.actor) process.env.SACCADE_ACTOR = data.scope.actor;
+		if (data.scope?.task) process.env.SACCADE_TASK = data.scope.task;
+		// Activation is not terminal until the continuation envelope is in
+		// the saved history: sendUserMessage returns void and its failures
+		// are invisible, so the done entry lands only at the saved-insertion
+		// confirmation, exactly like a message delivery. Until then the arm
+		// stays unconsumed - a crash, refusal, or reload re-queues at the
+		// next supported boundary instead of silencing the request forever.
+		const envelope = handoffEnvelope(data, record);
+		if (savedEntryHas(ctx, envelope)) {
+			pi.appendEntry("saccade_handoff_done", {
+				token: data.token,
+				outcome: "activated",
+				record,
+			} satisfies HandoffDoneData);
+			return;
+		}
+		if (![...continuations].some((c) => c.data.token === data.token)) {
+			continuations.add({ data, record, envelope });
+			pi.sendUserMessage(envelope, { deliverAs: "followUp" });
+		}
+	}
+
+	// The saved-insertion correlation for queued continuations, riding the
+	// same boundaries as delivery confirmation: a saved envelope completes
+	// the arm terminally; an envelope the queue dropped while the session
+	// is idle re-queues; a busy session just waits for its own boundary.
+	function confirmContinuations(ctx: ExtensionContext): void {
+		for (const continuation of [...continuations]) {
+			if (savedEntryHas(ctx, continuation.envelope)) {
+				continuations.delete(continuation);
+				pi.appendEntry("saccade_handoff_done", {
+					token: continuation.data.token,
+					outcome: "activated",
+					record: continuation.record,
+				} satisfies HandoffDoneData);
+				continue;
+			}
+			if (ctx.isIdle?.() === true && ctx.hasPendingMessages?.() === false) {
+				pi.sendUserMessage(continuation.envelope, { deliverAs: "followUp" });
+			}
+		}
 	}
 
 	function text(content: string) {
@@ -1133,6 +1187,13 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					? held.path.replace(/\.guard$/, ".handoff.log")
 					: `${held.path}.handoff.log`;
 				pendingHandoff = { token, target, toolCall: id, log, created, script };
+				// the session's actual injected scope rides the arm: what the
+				// launch injected is what the resumed session must carry, never
+				// a value inferred from a task, message, or name
+				const scope = {
+					actor: actorInjected ? (process.env.SACCADE_ACTOR ?? null) : null,
+					task: process.env.SACCADE_TASK?.trim() ? process.env.SACCADE_TASK.trim() : null,
+				};
 				pi.appendEntry("saccade_handoff", {
 					token,
 					nativeId: who.nativeId,
@@ -1142,8 +1203,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					target,
 					created,
 					log,
+					scope,
 				} satisfies HandoffEntryData);
-				const provisioned = created !== null ? ` (provisioned now, birth record c-${created})` : "";
+				const provisioned = created !== null ? ` (provisioned now, birth record ${created})` : "";
 				return text(
 					[
 						`workspace handoff armed: the activity gate is held, target ${target}${provisioned}.`,
