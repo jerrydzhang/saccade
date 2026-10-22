@@ -2916,10 +2916,6 @@ fn workspace_door(
     }
 }
 
-/// A launch failure over a standing fact: the change or provision the
-/// combined door already made true stays in the failure's face - the
-/// pointer and path ride the error, never a success claim, never a
-/// second record.
 fn launch_failed(standing: &str, error: Fail) -> Fail {
     Fail::Usage(format!("{standing}\nthe launch failed: {error}"))
 }

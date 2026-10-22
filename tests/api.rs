@@ -2790,11 +2790,7 @@ fn stub_pi(dir: &std::path::Path) -> std::path::PathBuf {
     pi
 }
 
-/// A guard-holding process fixture standing in for pinned Pi - not
-/// actual Pi: it associates the way the real integration would, by
-/// taking the session's real kernel guard on the guard file the test
-/// names, records what it saw in fixture order, and stays alive as a
-/// live holder until killed (its own sleep bound releases it anyway).
+/// A fixture harness, not actual Pi: it takes the named real kernel guard, records what it saw, and stays alive until killed.
 fn guard_pi(dir: &std::path::Path) -> std::path::PathBuf {
     let pi = dir.join("pi guard-holder");
     std::fs::write(
@@ -2812,9 +2808,8 @@ if ! flock -n 9; then
   exit 3
 fi
 printf 'guard-taken\n' >> "$FIXTURE_LOG"
-# the sleep must not inherit the lock's descriptor: a shared open
-# file description outlives the killed parent and keeps the guard
-sleep 180 9>&-
+# exec: this pid becomes the sleep and the sole lock holder, so one kill frees the guard
+exec sleep 180
 "#,
     )
     .unwrap();
@@ -2822,10 +2817,7 @@ sleep 180 9>&-
     pi
 }
 
-/// One bounded sac subprocess in its own process group, with an
-/// explicitly scrubbed environment: a bound pass kills the whole
-/// group and reports the timeout, so a regression to the old
-/// wait-before-submit door fails fast instead of outwaiting the suite.
+/// One bounded sac subprocess in its own process group; a bound pass kills the whole group and reports the timeout.
 fn bounded_sac<S: AsRef<str>>(
     bin: &str,
     args: &[S],
@@ -2836,8 +2828,7 @@ fn bounded_sac<S: AsRef<str>>(
         .process_group(0)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    // the scrub is a removal, never an empty set: these names carry
-    // clap env fallbacks an empty value would trip
+    // the scrub removes rather than empties: these names carry clap env fallbacks
     for key in [
         "SACCADE_REPO",
         "SACCADE_DB",
@@ -2870,9 +2861,7 @@ fn bounded_sac<S: AsRef<str>>(
         }
     };
     if timed_out {
-        // the whole group goes: the stuck door and everything it
-        // spawned - a plain parent kill would leak descendants holding
-        // shared file descriptions
+        // the whole group goes: a plain parent kill would leak descendants holding shared file descriptions
         unsafe {
             libc::kill(-(child.id() as i32), libc::SIGKILL);
         }
@@ -3583,8 +3572,7 @@ fn spawn_serving_subprocess(
         .spawn()
         .expect("the serving subprocess spawns");
     let pid = child.id();
-    // port 0: the server publishes its bound address beside the db,
-    // so parallel serving subprocesses never collide on a guess
+    // port 0: the bound address publishes beside the db, so parallel subprocesses never collide
     let hint = saccade::paths::address_at(db);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let url = loop {
@@ -3781,9 +3769,7 @@ async fn a_wire_send_activates_a_stopped_peer_through_the_launcher() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// One owned real-door fixture: the fake host, the guard-holding
-/// harness, their logs and state, and the cold state home every
-/// serving subprocess and door here runs under.
+/// One owned real-door fixture: the fake host, the guard-holding harness, their logs, and the cold state home.
 struct DoorFixture {
     host: PathBuf,
     pi: PathBuf,
@@ -3818,11 +3804,7 @@ fn door_fixture(home: &Path) -> DoorFixture {
     }
 }
 
-/// The environment one real-door subprocess runs under: the fake host
-/// first on PATH, the fixture harness as pinned Pi, every fixture
-/// channel named, the launcher seam disabled, and the same cold state
-/// home the fixture server named its guard under - the door's own
-/// guard derivation must land on that same file.
+/// The environment one real-door subprocess runs under: fake host first on PATH, the fixture harness as pinned Pi, the launcher seam disabled, and the cold state home the fixture server named its guard under.
 fn door_envs(fx: &DoorFixture, guard: Option<&Path>) -> Vec<(&'static str, String)> {
     let mut envs = vec![
         (
@@ -3849,9 +3831,7 @@ fn door_envs(fx: &DoorFixture, guard: Option<&Path>) -> Vec<(&'static str, Strin
     envs
 }
 
-/// Kill the fixture holder by its pidfile and wait for its guard to
-/// actually free: death releases the kernel flock, and the release is
-/// the proof the hold was real.
+/// Kill the fixture holder by its pidfile and wait for its guard to actually free.
 fn stop_holder(pidfile: &Path, guard: &Path) {
     if let Ok(pid) = std::fs::read_to_string(pidfile) {
         let _ = std::process::Command::new("kill")
@@ -3886,9 +3866,7 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
         &[],
     );
 
-    // the resumable session: a valid saved header whose workspace
-    // exists and holds no live process; the server's reply names the
-    // authoritative guard path
+    // the resumable session: a valid saved header, existing workspace, no live process; the reply names the guard
     let workspace = home.join("resumed-ws");
     std::fs::create_dir_all(&workspace).unwrap();
     let saved = home.join("resumee-session.jsonl");
@@ -3913,9 +3891,7 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
             .expect("the attach names the guard"),
     );
 
-    // a tampered association: the association was recorded, then the
-    // file's identity rewritten under it - the door refuses before any
-    // submission
+    // a tampered association: recorded, then the file's identity rewritten under it
     let tampered = home.join("tampered-session.jsonl");
     std::fs::write(
         &tampered,
@@ -3974,8 +3950,7 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
         "a refused resume must contact no host"
     );
 
-    // a preexisting live holder refuses before a duplicate is
-    // submitted: busy is never permission to launch
+    // a preexisting live holder refuses before a duplicate is submitted
     use std::os::fd::AsRawFd;
     let held = std::fs::OpenOptions::new()
         .create(true)
@@ -3999,8 +3974,7 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
     drop(held);
     assert_eq!(saccade::activate::guard_held(&guard), Some(false));
 
-    // the corrected door: submit through the host, THEN the launched
-    // session takes its guard and the door observes the handoff
+    // the corrected door: submit through the host, then observe the launched session's guard
     let (ok, out, err, timed_out) = bounded_sac(bin, &door_args("i-0"), &envs);
     assert!(!timed_out, "the door outwaited its guard bound: {err}");
     assert!(ok, "{out}{err}");
@@ -4017,8 +3991,7 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
     assert!(submitted.contains("--session resumee01"), "{submitted}");
     assert!(submitted.contains("--session-dir"), "{submitted}");
 
-    // one append-ordered witness: the host started the submitted
-    // command, then the harness took the real kernel guard
+    // one append-ordered witness: the host started the command, then the harness took the real guard
     let witness = std::fs::read_to_string(&fx.child_log).unwrap();
     let started = witness
         .find("submitted-command-started")
@@ -4101,8 +4074,7 @@ fn switch_resume_runs_through_the_real_door() {
             .expect("the attach names the guard"),
     );
 
-    // the composed door: the change lands, then the SAME native id
-    // resumes at the new directory through the real submission
+    // the composed door: the change lands, then the same native id resumes through the real submission
     let envs = door_envs(&fx, Some(&guard));
     let (ok, out, err, timed_out) = bounded_sac(
         bin,
@@ -4170,8 +4142,7 @@ fn switch_resume_runs_through_the_real_door() {
     );
     stop_holder(&fx.pidfile, &guard);
 
-    // a failed launch: the host refuses the create, the command fails,
-    // and the standing change fact is disclosed in the failure face
+    // a failed launch: the host refuses the create and the standing change fact is disclosed
     let mut fail_envs = envs.clone();
     fail_envs.push(("FAKE_ORCA_CREATE_FAILS", "1".to_string()));
     let switch_args = |to: &Path, json: bool| {
@@ -4218,8 +4189,7 @@ fn switch_resume_runs_through_the_real_door() {
     let witness = std::fs::read_to_string(&fx.child_log).unwrap();
     assert_eq!(witness.matches("guard-taken").count(), 1, "{witness}");
 
-    // the same disclosure through the json face: a valid envelope that
-    // carries the standing fact, never a success claim
+    // the json face: a valid envelope carrying the standing fact
     let (ok, _out, err, timed_out) = bounded_sac(bin, &switch_args(&selected_a, true), &fail_envs);
     assert!(!timed_out, "{err}");
     assert!(!ok, "{err}");
@@ -4251,10 +4221,7 @@ fn a_send_activates_through_the_real_door() {
     let (root, _first, _head) = scratch_repo(home);
     let fx = door_fixture(home);
 
-    // the launch rides the server's own environment: no launcher seam,
-    // the real binary is the launcher; the guard path reaches the
-    // submitted command through the fixture's pointer file, written
-    // once the attach reply has named it
+    // the server's own env carries the launch: no launcher seam, the guard path rides the fixture's pointer file
     std::fs::write(&fx.guard_file, b"").unwrap();
     let server_envs = [
         ("FAKE_ORCA_LOG", fx.host_log.to_str().unwrap()),
@@ -4311,8 +4278,7 @@ fn a_send_activates_through_the_real_door() {
     );
     std::fs::write(&fx.guard_file, guard.to_str().unwrap()).unwrap();
 
-    // the landed write drives the real door: submission first, then
-    // the launched session's guard
+    // the landed write drives the real door: submission first, then the guard
     let (status, body) = post_json(
         &url,
         "/api/v1/messages/send",
@@ -4350,8 +4316,7 @@ fn a_send_activates_through_the_real_door() {
     );
     assert!(dump.contains(&format!("SACCADE_SERVER={url}")), "{dump}");
 
-    // delivery facts stay honest: the launch is submitted, the mail
-    // stays pending until the session registers
+    // delivery facts stay honest: submitted, not read
     let (_, body) = get_json(
         &url,
         &format!("/api/v1/messages/pending?incarnation={peer_birth}"),
