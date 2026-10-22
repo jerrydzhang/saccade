@@ -1989,12 +1989,12 @@ fn search_reads_the_record_through_the_cli_face() {
     assert_eq!(out.trim_end(), "no matches (by:nobody)\ncursor 5");
 
     // the anchor window reads the log's own rows: c-1 is the dense
-    // number of the offer at seq 4
+    // number of the offer at seq 4; rows carry their seq as provenance
     let (ok, out, _) = sac(&["search", "c-1", "-C", "1"]);
     assert!(ok, "{out}");
-    assert!(out.contains("c-3  task_claimed  pi/agent"), "{out}");
+    assert!(out.contains("seq 3  task_claimed  pi/agent"), "{out}");
     assert!(
-        out.contains("c-4  commented  pi/agent  floop landed"),
+        out.contains("seq 4  commented  pi/agent  floop landed"),
         "{out}"
     );
 
@@ -2016,7 +2016,7 @@ fn search_reads_the_record_through_the_cli_face() {
     let (ok, out, _) = sac(&["show", "5"]);
     assert!(ok, "{out}");
     assert!(
-        out.starts_with("c-5  commented  pi\n"),
+        out.starts_with("seq 5  commented  pi\n"),
         "the raw event rides whole: {out}"
     );
     assert!(out.contains("floop guards the door"), "{out}");
@@ -2037,7 +2037,7 @@ fn search_reads_the_record_through_the_cli_face() {
     let (ok, out, _) = sac(&["show", "6"]);
     assert!(ok, "{out}");
     assert!(
-        out.starts_with("c-6  task_created  pi\n"),
+        out.starts_with("seq 6  task_created  pi\n"),
         "the raw birth rides whole: {out}"
     );
 
@@ -2066,7 +2066,7 @@ fn search_reads_the_record_through_the_cli_face() {
     let (ok, out, _) = sac(&["show", "3"]);
     assert!(ok, "{out}");
     assert!(
-        out.starts_with("c-3  task_claimed  pi\n"),
+        out.starts_with("seq 3  task_claimed  pi\n"),
         "the raw event rides whole: {out}"
     );
     // the typed door opens the offer as its comment block, prose wrapped
@@ -2601,10 +2601,11 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     assert_eq!(seqs, vec![6]);
     assert_eq!(cursor, 6);
 
-    // the text face: matched record lines, then the cursor for the next wait
+    // the text face: matched record lines with their seq provenance,
+    // then the cursor for the next wait
     let (ok, out, _) = sac(&["wait", "t-0", "--after", "5", "--until", "activity"]);
     assert!(ok, "{out}");
-    assert!(out.contains("c-6"), "{out}");
+    assert!(out.contains("seq 6"), "{out}");
     assert!(out.trim_end().ends_with("cursor 6"), "{out}");
 
     // the offer wait stays down through a note and wakes on the offer's birth
@@ -5429,7 +5430,8 @@ async fn the_declared_repo_carries_the_serving_effects() {
 
 /// The use door through the CLI face: a prospective birth, an explicit
 /// binding, a source replacement that never touches the binding, an
-/// explicit rebind, and the guards that hold throughout.
+/// explicit rebind, and the guards that hold throughout - every id
+/// read from a printed face resolving to the same account it names.
 #[test]
 fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     let bin = env!("CARGO_BIN_EXE_sac");
@@ -5449,54 +5451,114 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
         )
     };
 
-    assert!(sac(&["create", "task", "produce the account"]).0); // seq 0
-    assert!(sac(&["offer", "t-0", "the first account"]).0); // seq 1 -> c-0
-    assert!(sac(&["create", "task", "consume the account"]).0); // seq 2
+    // the board's earlier work: six noncomment births stand before the
+    // first comment, so every storage seq sits far from its public num
+    assert!(sac(&["create", "task", "produce the account"]).0); // seq 0, t-0
+    assert!(sac(&["create", "task", "file the floop index"]).0); // seq 1, t-1
+    assert!(sac(&["create", "task", "chart the floop index"]).0); // seq 2, t-2
+    assert!(sac(&["create", "task", "migrate floop"]).0); // seq 3, t-3
+    assert!(sac(&["claim", "t-1"]).0); // seq 4
+    assert!(sac(&["claim", "t-2"]).0); // seq 5
+    assert!(sac(&["offer", "t-0", "the first account"]).0); // seq 6 -> c-0
+    assert!(sac(&["create", "task", "consume the account"]).0); // seq 7, t-4
     assert!(
         sac(&[
             "use",
-            "t-1",
+            "t-4",
             "--source",
             "t-0",
             "--reason",
             "builds on the producer"
         ])
         .0
-    ); // seq 3 -> c-1
+    ); // seq 8 -> c-1
+
+    // the standing offer's printed c-N is its dense comment number,
+    // never the seq it was born at - and that same token resolves the
+    // comment through every door
+    let (ok, out, _) = sac(&["show", "t-0"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("offer  c-0"), "{out}");
+    assert!(!out.contains("offer  c-6"), "{out}");
+    let (ok, out, _) = sac(&["show", "c-0"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("the first account"), "{out}");
+    // the bare door still shows the raw event at its position
+    let (ok, out, _) = sac(&["show", "6"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.starts_with("seq 6  commented  pi\n"),
+        "the offer's birth record rides whole: {out}"
+    );
+
+    // the machine faces keep the birth reference; the dense alias
+    // rides beside it, explicitly named
+    let (ok, out, _) = sac(&["--json", "list"]);
+    assert!(ok, "{out}");
+    let list: Value = serde_json::from_str(&out).unwrap();
+    let row = list["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "t-0")
+        .expect("the offered task lists")
+        .clone();
+    assert_eq!(row["offer"], json!(6), "the list keeps the birth ref");
+    let (ok, out, _) = sac(&["--json", "show", "t-0"]);
+    assert!(ok, "{out}");
+    let shown: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(shown["blocks"][0]["state"], "offered");
+    assert_eq!(shown["blocks"][0]["offer"], json!(6));
+    assert_eq!(shown["blocks"][0]["offer_num"], json!(0));
 
     // born prospective: the source named, no selection yet
-    let (ok, out, _) = sac(&["show", "t-1"]);
+    let (ok, out, _) = sac(&["show", "t-4"]);
     assert!(ok, "{out}");
     assert!(out.contains("uses t-0"), "{out}");
     assert!(!out.contains("bound c-"), "{out}");
 
-    // the explicit binding selects the standing account
-    assert!(sac(&["bind", "c-1", "c-0", "--grounds", "the standing account"]).0);
-    let (ok, out, _) = sac(&["show", "t-1"]);
+    // the explicit binding selects the standing account; the record
+    // stores the original birth references, never the printed tokens
+    assert!(sac(&["bind", "c-1", "c-0", "--grounds", "the standing account"]).0); // seq 9
+    let (ok, out, _) = sac(&["log"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains(r#"{"grounds":"the standing account","id":8,"offer":6}"#),
+        "the binding stores birth refs: {out}"
+    );
+    // every generic row labels its position as provenance: a seq
+    // never borrows the c- face only a comment birth earns
+    for line in out.lines().filter(|l| !l.is_empty()) {
+        assert!(
+            line.starts_with("seq ") || line.starts_with("cursor "),
+            "a log row borrowed an alias face: {line}"
+        );
+    }
+    let (ok, out, _) = sac(&["show", "t-4"]);
     assert!(ok, "{out}");
     assert!(out.contains("bound c-0"), "{out}");
     assert!(out.contains("the standing account"), "{out}");
 
     // the source replaces its conclusion: the binding keeps it, and a
     // rebind to the replaced account refuses
-    assert!(sac(&["reject", "c-0", "--grounds", "the fix misses the index"]).0);
+    assert!(sac(&["reject", "c-0", "--grounds", "the fix misses the index"]).0); // seq 10 -> c-2
     let (ok, _, err) = sac(&["bind", "c-1", "c-0", "--grounds", "gone"]);
     assert!(!ok, "{err}");
     assert!(err.contains("not_current_offer"), "{err}");
-    let (ok, out, _) = sac(&["show", "t-1"]);
+    let (ok, out, _) = sac(&["show", "t-4"]);
     assert!(ok, "{out}");
     assert!(
         out.contains("bound c-0"),
         "the binding kept the replaced account"
     );
 
-    // the explicit rebind selects the replacement (the reject at seq 5
-    // is dense c-2, the replacement offer c-3); acceptance of the
-    // selected conclusion changes nothing
-    assert!(sac(&["offer", "t-0", "the replacement"]).0); // seq 6 -> c-3
-    assert!(sac(&["bind", "c-1", "c-3", "--grounds", "the replacement held"]).0);
-    assert!(sac(&["accept", "c-3"]).0);
-    let (ok, out, _) = sac(&["show", "t-1"]);
+    // the explicit rebind selects the replacement (the replacement
+    // offer c-3 lands at seq 11); acceptance of the selected
+    // conclusion changes nothing
+    assert!(sac(&["offer", "t-0", "the replacement"]).0); // seq 11 -> c-3
+    assert!(sac(&["bind", "c-1", "c-3", "--grounds", "the replacement held"]).0); // seq 12
+    assert!(sac(&["accept", "c-3"]).0); // seq 13 -> c-4
+    let (ok, out, _) = sac(&["show", "t-4"]);
     assert!(ok, "{out}");
     assert!(out.contains("bound c-3"), "{out}");
     assert!(!out.contains("bound c-0"), "{out}");
@@ -5506,8 +5568,8 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     let (ok, _, err) = sac(&["use", "t-0", "--source", "t-0", "--reason", "myself"]);
     assert!(!ok, "{err}");
     assert!(err.contains("self_reliance"), "{err}");
-    assert!(sac(&["create", "task", "an unrelated producer"]).0); // seq 8
-    assert!(sac(&["offer", "t-2", "an outside account"]).0); // seq 9 -> c-5
+    assert!(sac(&["create", "task", "an unrelated producer"]).0); // seq 14, t-5
+    assert!(sac(&["offer", "t-5", "an outside account"]).0); // seq 15 -> c-5
     let (ok, _, err) = sac(&["bind", "c-1", "c-5", "--grounds", "not my source"]);
     assert!(!ok, "{err}");
     assert!(err.contains("invalid_state_transition"), "{err}");
@@ -5517,21 +5579,21 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     assert!(
         sac(&[
             "comment",
-            "t-1",
+            "t-4",
             "rests on the conclusion [^1]",
             "--ref",
             "c-3"
         ])
         .0
     );
-    let (ok, out, _) = sac(&["show", "t-1"]);
+    let (ok, out, _) = sac(&["show", "t-4"]);
     assert!(ok, "{out}");
     assert!(out.contains("->c-3"), "{out}");
     assert!(sac(&["comment", "c-0", "replying to the account"]).0);
     let (ok, out, _) = sac(&["show", "t-0"]);
     assert!(ok, "{out}");
     assert!(out.contains("->c-0"), "the reply cites its parent: {out}");
-    let (ok, _, err) = sac(&["comment", "t-1", "dangling [^2]", "--ref", "c-3"]);
+    let (ok, _, err) = sac(&["comment", "t-4", "dangling [^2]", "--ref", "c-3"]);
     assert!(!ok, "{err}");
     assert!(err.contains("marker [^2]"), "{err}");
 
@@ -5621,6 +5683,9 @@ fn the_migrate_door_rewrites_a_schema3_tracker() {
         "{report}"
     );
     assert!(report.contains("c-9"), "{report}");
+    // the diagnostic row names the record's position as provenance,
+    // the stored token it reports stays verbatim
+    assert!(report.contains("seq 1 body: c-9"), "{report}");
 
     // the output reads: prose renumbered onto the dense numbering, the
     // use born bound, the reply rehomed with an empty mapping

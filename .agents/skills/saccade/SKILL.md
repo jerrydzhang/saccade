@@ -148,7 +148,7 @@ and reopening (`sac reopen t-N --explanation "..."`).
 |---|---|---|
 | `sac create task "name"` | any tier | the reply names what was born |
 | `sac claim t-N` | any tier | ownership transfer; never a state change |
-| `sac comment t-N "..."` / `sac comment c-<seq> "..."` | any tier | a note, parked or replied |
+| `sac comment t-N "..."` / `sac comment c-<n> "..."` | any tier | a note, parked or replied |
 | `sac send --to i-<n> [--reply m-<n>] [--task t-<n>] "body"` (`--stdin`) | a registered incarnation | durable addressed communication: the sender rides the environment, delivery is the recipient's integration's act; never a comment, never a thread entry |
 | `sac messages [i-<n>]` | anonymous | the messages an incarnation participates in, in record order, with their delivery state (pending/submitted - bookkeeping, never a reading or agreement claim); the mailbox defaults to the declared scope |
 | `sac offer t-N "..."` | any tier | the whole-task closing account |
@@ -157,8 +157,8 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac use t-<consumer> c-<offer> --reason "..."` | any tier | record reliance on a source offer |
 | `sac cancel t-N --explanation "..."` | **human only** | stop an unfinished undertaking |
 | `sac reopen t-N --explanation "..."` | **human only** | resume a cancelled undertaking |
-| `sac revise c-<seq> "..."` (prose also by `--stdin` or `--body-file`) | any tier | presentation repair on prose-carrying variants; the fold names a reviser, `sac log` keeps the original |
-| `sac withdraw c-<seq> --note "..."` | any tier | the note's standing-error repair: body out, tombstone stays |
+| `sac revise c-<n> "..."` (prose also by `--stdin` or `--body-file`) | any tier | presentation repair on prose-carrying variants; the fold names a reviser, `sac log` keeps the original |
+| `sac withdraw c-<n> --note "..."` | any tier | the note's standing-error repair: body out, tombstone stays |
 | `sac artifact t-N <path> [--name ...]` | any tier | park an artifact on the thread - the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
 | `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; nothing is recorded |
 | `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace - none is created by checkpoint |
@@ -215,7 +215,7 @@ one matched line each, in record order.
   grammar.
 - **Read the neighborhood**: `sac search c-907 -C 3`.
 - **Read whole records**: bare seqs show the raw event at that
-  position, `c-N` the record's folded form, `t-N` the task plus
+  position, `c-N` the comment as it folds, `t-N` the task plus
   thread. The pipe reads end to end.
 
 Pointers stay pointers. The power tail is unchanged: `sac log | grep`

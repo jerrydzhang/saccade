@@ -21,9 +21,10 @@ and server binary versions, duration.
 - **Version skew names itself**: both binaries are on every line; a
   malformed_request from a working client is a pair mismatch, not
   corruption.
-- **Storage seq is not the record id**: `events.seq` is the storage
-  cursor; `c-N` record ids are fold positions - two series, never
-  interchangeable.
+- **Storage seq is not a comment number**: `events.seq` is the storage
+  cursor; `c-N` is the fold's dense comment birth number - two series,
+  never interchangeable. A record's own position is always spelled
+  `seq N`.
 - **Door-level refusals write no line** (cross-site, nameless forms,
   unknown routes): no code vocabulary exists for them; none is invented.
 - **Bootstrap**: reads on a missing db refuse ("any mutating command

@@ -159,6 +159,8 @@ pub struct TaskView {
     pub id: String,
     pub state: &'static str,
     pub name: String,
+    /// The standing offer's birth-record reference: the machine value
+    /// commands carry, never the public c-N
     pub offer: Option<usize>,
     pub owner: Option<String>,
     /// Size of the attached comment thread; renders as a mere pointer (`#`).
@@ -395,7 +397,12 @@ pub struct ShowView {
     /// The cancellation's recorded explanation, on a cancelled task
     pub explanation: Option<String>,
     pub owner: Option<String>,
+    /// The standing offer's birth-record reference: the machine value
+    /// decision forms and wire commands carry, never the public c-N
     pub offer: Option<usize>,
+    /// The standing offer's public number, the c-N a human reads:
+    /// dense comment birth order, derived by the fold
+    pub offer_num: Option<usize>,
     /// The established workspace's branch and address, when one stands
     pub workspace: Option<String>,
 }
@@ -412,6 +419,7 @@ impl ShowView {
             },
             owner: current_owner(ctx).map(|o| owner_str(world, &o.owner)),
             offer: ctx.current_offer.map(|c| c.0.0),
+            offer_num: ctx.current_offer.and_then(|c| world.comment_num(c)),
             workspace: ctx.workspace.as_ref().map(|w| {
                 format!(
                     "{} | {}",
@@ -1557,6 +1565,104 @@ mod test {
             // the board holds the live pair
             let live: Vec<_> = board(&world).into_iter().map(|r| r.id).collect();
             assert_eq!(live, vec!["t-2".to_string(), "t-3".to_string()]);
+        }
+
+        /// Seven noncomment births precede the first comment, so every
+        /// storage seq sits far from the public num it must never
+        /// borrow. The show view keeps the offer's birth reference for
+        /// machines and derives the dense c-N for readers.
+        #[test]
+        fn the_show_view_derives_the_offer_num_beside_the_birth_ref() {
+            let world = World::replay(vec![
+                task_at(0, 0, "produce the account"),
+                record(
+                    1,
+                    1,
+                    Tier::Human,
+                    Event::TaskClaimed {
+                        id: TaskId(0),
+                        incarnation: None,
+                    },
+                ),
+                task_at(2, 2, "consume the account"),
+                record(
+                    3,
+                    3,
+                    Tier::Human,
+                    Event::ArtifactAdded {
+                        root: TaskId(0),
+                        artifact: Artifact {
+                            name: offer_body("sweep figure"),
+                            hash: ContentHash::of(b"figure bytes"),
+                        },
+                    },
+                ),
+                record(
+                    4,
+                    4,
+                    Tier::Human,
+                    Event::TaskClaimed {
+                        id: TaskId(1),
+                        incarnation: None,
+                    },
+                ),
+                task_at(5, 5, "chart the floop index"),
+                record(
+                    6,
+                    6,
+                    Tier::Human,
+                    Event::TaskClaimed {
+                        id: TaskId(2),
+                        incarnation: None,
+                    },
+                ),
+                comment_at(
+                    7,
+                    7,
+                    Tier::Agent,
+                    TaskId(0),
+                    CommentKind::Offer {
+                        body: offer_body("suite green"),
+                    },
+                    Vec::new(),
+                ),
+                comment_at(
+                    8,
+                    8,
+                    Tier::Agent,
+                    TaskId(1),
+                    CommentKind::Note {
+                        body: offer_body("a question first"),
+                    },
+                    Vec::new(),
+                ),
+                comment_at(
+                    9,
+                    9,
+                    Tier::Human,
+                    TaskId(0),
+                    CommentKind::Accept {
+                        offer: CommentId(RecordId(7)),
+                    },
+                    Vec::new(),
+                ),
+            ])
+            .unwrap();
+
+            let show = show_view(&world, TaskId(0)).unwrap();
+            assert_eq!(show.offer, Some(7), "the birth ref rides for machines");
+            assert_eq!(show.offer_num, Some(0), "the public num is dense");
+            let line = comment_line(&world, CommentId(RecordId(7))).unwrap();
+            assert_eq!(line.num, 0);
+            assert_eq!(line.seq, 7);
+            // the printed c-N resolves to that same account
+            assert_eq!(
+                world.comment_at_num(show.offer_num.unwrap()),
+                Some(CommentId(RecordId(show.offer.unwrap())))
+            );
+            // the list keeps the machine value; comments number by kind
+            assert_eq!(task_view(&world, TaskId(0)).unwrap().offer, Some(7));
+            assert_eq!(comment_line(&world, CommentId(RecordId(8))).unwrap().num, 1);
         }
 
         #[test]

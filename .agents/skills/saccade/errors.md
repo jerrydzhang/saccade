@@ -32,7 +32,7 @@ finding - name it on the thread before proceeding.
   comment, cancel or reopen from a state that does not admit it).
 - `invalid_incarnation_id` - a claim names an incarnation the record
   never birthed, or one bound to another task; the reference is `i-N`,
-  the establishment birth's record position.
+  the fold's dense incarnation number.
 - `workspace_already_exists` - the task already holds a workspace
   lineage; one per task.
 - `workspace_missing` - the task has no recorded workspace; `sac start`

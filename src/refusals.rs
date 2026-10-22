@@ -87,7 +87,7 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
             ))
         }
         Reject::InvalidIncarnationId => {
-            Some("no incarnation the record birthed carries that reference; a claim names one by its birth record (i-N), never by task scope alone".into())
+            Some("no incarnation the record birthed carries that reference; a claim names one by its public number i-N, never by task scope alone".into())
         }
         Reject::InvalidReference => {
             // the marker the mapping cannot resolve names itself; the

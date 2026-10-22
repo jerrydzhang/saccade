@@ -175,8 +175,7 @@ enum Cmd {
     /// Everything about tasks and records, many at once; bare seqs show
     /// the raw event, t-<n> shows the task plus its thread
     Show {
-        /// Ids in any mix: c-<seq> a record - comments and artifacts as
-        /// their blocks, every other event as itself - bare <seq> the
+        /// Ids in any mix: c-<n> a comment as its block - bare <seq> the
         /// raw event at that position - t-<n> a whole thread
         #[arg(required_unless_present = "stdin")]
         ids: Vec<String>,
@@ -347,7 +346,7 @@ enum Cmd {
     /// Matches are strictly after the given global position; nothing
     /// is recorded
     Wait {
-        /// The task (t-<n>) or comment (c-<seq>) to wait on
+        /// The task (t-<n>) or comment (c-<n>) to wait on
         target: String,
         /// The global record position matched strictly after - the
         /// cursor a read disclosed, never defaulted
@@ -2086,7 +2085,7 @@ fn migrate_door(
             report.legacy.len()
         ));
         for l in &report.legacy {
-            lines.push(format!("    c-{} {}: {}", l.seq, l.field, l.token));
+            lines.push(format!("    seq {} {}: {}", l.seq, l.field, l.token));
         }
     }
     Ok(lines.join("\n"))
@@ -2193,7 +2192,7 @@ fn wait_door(
                 })?)
             }
         };
-        wait_target_exists(&world, &target, loadout.rows.len())?;
+        wait_target_exists(&world, &target)?;
         let matched: Vec<StoredRecord> = loadout
             .rows
             .iter()
@@ -2240,7 +2239,7 @@ fn wait_target(token: &str) -> Result<WaitToken, Fail> {
     Ok(WaitToken::Task(parse_task_id(token)?))
 }
 
-fn wait_target_exists(world: &saccade::World, target: &Target, records: usize) -> Result<(), Fail> {
+fn wait_target_exists(world: &saccade::World, target: &Target) -> Result<(), Fail> {
     match target {
         Target::Task(task) => {
             if world.tasks.get(task.0).is_none() {
@@ -2254,10 +2253,9 @@ fn wait_target_exists(world: &saccade::World, target: &Target, records: usize) -
         Target::Comment(id) => {
             if !world.comments.contains_key(id) {
                 return Err(Fail::Usage(format!(
-                    "no record c-{}; the log holds {} records, 0 through {}",
+                    "the comment's birth record seq {} is not resident; the fold holds {} comments",
                     id.0.0,
-                    records,
-                    records.saturating_sub(1)
+                    world.comments.len()
                 )));
             }
         }
@@ -3113,9 +3111,11 @@ fn render_log(
     lines.join("\n")
 }
 
+/// One log row: the record's own position as its provenance - a seq
+/// is never dressed as the c-N only a comment birth earns.
 fn record_line(r: &StoredRecord) -> String {
     format!(
-        "c-{} {} {}/{} et={} lt={} {}",
+        "seq {} {} {}/{} et={} lt={} {}",
         r.seq, r.kind, r.actor, r.tier, r.event_time, r.logged_time, r.payload
     )
 }
@@ -3187,7 +3187,7 @@ fn render_show(world: &World, task_id: TaskId) -> Result<String, Fail> {
     if let Some(owner) = &view.owner {
         out.push(format!("owner  {owner}"));
     }
-    if let Some(offer) = view.offer {
+    if let Some(offer) = view.offer_num {
         out.push(format!("offer  c-{offer}"));
     }
     if let Some(workspace) = &view.workspace {
@@ -3319,13 +3319,13 @@ fn ref_str(target: &saccade::views::RefTarget) -> String {
     }
 }
 
-/// One id as show sees it: a whole thread, a record's folded form,
+/// One id as show sees it: a whole thread, a comment's folded form,
 /// or the raw event at a bare position.
 #[derive(Clone, Copy, Debug)]
 enum ShowId {
     Thread(TaskId),
     /// c-<n>: the presentation the comment earns, by public number
-    Record(usize),
+    Comment(usize),
     /// m-<n>: the message's presentation, by public number
     Message(usize),
     /// bare <seq>: the raw event at that position
@@ -3341,7 +3341,7 @@ fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
         )));
     }
     if let Some(rest) = token.strip_prefix("c-").filter(|n| numeric(n)) {
-        return Ok(ShowId::Record(rest.parse().expect("digits checked")));
+        return Ok(ShowId::Comment(rest.parse().expect("digits checked")));
     }
     if let Some(rest) = token.strip_prefix("m-").filter(|n| numeric(n)) {
         return Ok(ShowId::Message(rest.parse().expect("digits checked")));
@@ -3379,7 +3379,7 @@ fn render_id(
     };
     match parse_show_id(token)? {
         ShowId::Thread(id) => render_show(world, id),
-        ShowId::Record(num) => {
+        ShowId::Comment(num) => {
             let id = world.comment_at_num(num).ok_or_else(|| {
                 Fail::Usage(format!(
                     "c-{num} names no comment; this fold holds {} comments, c-0 through c-{}",
@@ -3439,11 +3439,12 @@ fn show_value(
                 "name": view.name,
                 "owner": view.owner,
                 "offer": view.offer,
+                "offer_num": view.offer_num,
                 "explanation": view.explanation,
                 "entries": entries,
             }))
         }
-        ShowId::Record(num) => {
+        ShowId::Comment(num) => {
             let id = world.comment_at_num(num).ok_or_else(|| {
                 Fail::Usage(format!(
                     "c-{num} names no comment; this fold holds {} comments, c-0 through c-{}",
@@ -3526,7 +3527,7 @@ fn artifact_value(line: &ArtifactLine) -> serde_json::Value {
 /// The raw event as itself: header and payload, no fold.
 fn raw_event(row: &db::StoredRecord) -> String {
     format!(
-        "c-{}  {}  {}\n{}",
+        "seq {}  {}  {}\n{}",
         row.seq, row.kind, row.actor, row.payload
     )
 }
@@ -3708,7 +3709,7 @@ fn anchor_seq(loadout: &db::Loadout, query: &SearchQuery) -> Result<usize, Fail>
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
         },
         _ => Err(Fail::Usage(
-            "-C anchors on one record: give a single id term (c-<seq> or t-N) and no facets".into(),
+            "-C anchors on one record: give a single id term (c-<n> or t-N) and no facets".into(),
         )),
     }
 }
@@ -3747,7 +3748,7 @@ fn render_anchor(
     let mut lines: Vec<String> = window
         .iter()
         .map(|row| {
-            let prefix = format!("c-{}  {}  {}/{}", row.seq, row.kind, row.actor, row.tier);
+            let prefix = format!("seq {}  {}  {}/{}", row.seq, row.kind, row.actor, row.tier);
             let budget = WIDTH.saturating_sub(prefix.chars().count() + 2);
             format!("{prefix}  {}", glimpse(&row_line(row), budget))
         })
@@ -3996,7 +3997,7 @@ mod test {
         // '#' learns the c- form
         assert!(matches!(
             parse_show_id("c-7").unwrap_or_else(|f| panic!("{f}")),
-            ShowId::Record(7)
+            ShowId::Comment(7)
         ));
         assert!(matches!(
             parse_show_id("7").unwrap_or_else(|f| panic!("{f}")),

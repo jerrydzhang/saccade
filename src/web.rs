@@ -643,7 +643,7 @@ fn artifact_html(line: &ArtifactLine, indent: usize, store: &ArtifactStore) -> S
         None => format!("<span class=\"acap\">{name} | unavailable</span>\n"),
     };
     format!(
-        "<div class=\"nrow2 arow\" id=\"a-{seq}\" style=\"padding-left:{pad}px\">\n{figure}<div class=\"nmeta\"><span class=\"xk\" style=\"color:#a2c3c4\">ARTIFACT</span><span class=\"nseq mono\">c-{seq}</span></div>\n</div>\n",
+        "<div class=\"nrow2 arow\" id=\"a-{seq}\" style=\"padding-left:{pad}px\">\n{figure}<div class=\"nmeta\"><span class=\"xk\" style=\"color:#a2c3c4\">ARTIFACT</span><span class=\"nseq mono\">seq {seq}</span></div>\n</div>\n",
         seq = line.seq,
     )
 }
@@ -2071,6 +2071,20 @@ mod tests {
         assert!(html.contains("see c-0 and the figure"), "{html}");
         assert!(!html.contains("c-0</a>"), "{html}");
         assert!(!html.contains("c-99</a>"), "{html}");
+
+        // the artifact row labels its position as provenance, the
+        // anchor stays the seq the hrefs cite
+        let html = thread_section(&focus_of(&world, 0), &Default::default(), &store);
+        let row = html
+            .split("id=\"a-1\"")
+            .nth(1)
+            .expect("the artifact row renders");
+        let row = row.split("</div>").next().unwrap();
+        assert!(
+            row.contains("<span class=\"nseq mono\">seq 1</span>"),
+            "{row}"
+        );
+        assert!(!row.contains("c-1"), "{row}");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
