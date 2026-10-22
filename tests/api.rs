@@ -1974,7 +1974,7 @@ fn search_reads_the_record_through_the_cli_face() {
     );
 
     // total zero says so in one line and exits clean, terms or facets;
-    // the retired '#' term learns the c- form instead of matching words
+    // the retired '#' term refuses, naming the c- form instead of matching words
     let (ok, out, _) = sac(&["search", "c-99999"]);
     assert!(ok, "{out}");
     assert_eq!(out.trim_end(), "no matches (c-99999)\ncursor 5");
@@ -1984,6 +1984,17 @@ fn search_reads_the_record_through_the_cli_face() {
         err.contains("drop the '#': the reference search is c-99999"),
         "{err}"
     );
+    // a reference number past the id space refuses at the term door
+    // with the ordinary exit, never a panic
+    let (ok, _, err) = sac(&["search", "c-184467440737095516160"]);
+    assert!(!ok);
+    assert!(
+        err.contains("'c-184467440737095516160' is not a reference (expected c-<n> or t-<n>)"),
+        "{err}"
+    );
+    let (ok, _, err) = sac(&["search", "t-184467440737095516160"]);
+    assert!(!ok);
+    assert!(err.contains("is not a reference"), "{err}");
     let (ok, out, _) = sac(&["search", "by:nobody"]);
     assert!(ok, "{out}");
     assert_eq!(out.trim_end(), "no matches (by:nobody)\ncursor 5");
@@ -2020,7 +2031,7 @@ fn search_reads_the_record_through_the_cli_face() {
         "the raw event rides whole: {out}"
     );
     assert!(out.contains("floop guards the door"), "{out}");
-    // the retired '#' id refuses, teaching the bare doors
+    // the retired '#' id refuses, naming the bare doors
     let (ok, _, err) = sac(&["show", "#5"]);
     assert!(!ok, "{err}");
     assert!(err.contains("drop the '#'"), "{err}");
@@ -2079,7 +2090,30 @@ fn search_reads_the_record_through_the_cli_face() {
     let (ok, _, err) = sac(&["show", "bogus"]);
     assert!(!ok);
     assert!(
-        err.contains("'bogus' is not an id (expected c-<n>, t-<n>, or a bare <seq>)"),
+        err.contains("'bogus' is not an id (expected c-<n>, t-<n>, m-<n>, or a bare <seq>)"),
+        "{err}"
+    );
+
+    // a number past the id space refuses at the grammar door with the
+    // ordinary exit, never a panic: digits are grammar, the id space is not
+    let (ok, _, err) = sac(&["show", "c-184467440737095516160"]);
+    assert!(!ok);
+    assert!(
+        err.contains(
+            "'c-184467440737095516160' is not an id (expected c-<n>, t-<n>, m-<n>, or a bare <seq>)"
+        ),
+        "{err}"
+    );
+    let (ok, _, err) = sac(&["show", "m-184467440737095516160"]);
+    assert!(!ok);
+    assert!(err.contains("is not an id"), "{err}");
+    let (ok, _, err) = sac(&["show", "184467440737095516160"]);
+    assert!(!ok);
+    assert!(err.contains("is not an id"), "{err}");
+    let (ok, _, err) = sac(&["show", "#184467440737095516160"]);
+    assert!(!ok);
+    assert!(
+        err.contains("a comment is c-<n>, the raw record at a position is the bare <seq>"),
         "{err}"
     );
 
@@ -2654,6 +2688,22 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     let (ok, _, stderr) = sac(&["wait", "t-9", "--after", "0", "--until", "activity"]);
     assert!(!ok);
     assert!(stderr.contains("no task t-9"), "{stderr}");
+
+    // a target number past the id space refuses at the token door with
+    // the ordinary exit, never a panic
+    let (ok, _, stderr) = sac(&[
+        "wait",
+        "c-184467440737095516160",
+        "--after",
+        "0",
+        "--until",
+        "activity",
+    ]);
+    assert!(!ok);
+    assert!(
+        stderr.contains("'c-184467440737095516160' is not a wait target (expected t-<n> or c-<n>)"),
+        "{stderr}"
+    );
 
     // the same wait over the wire, waking on a local write
     let mut serve = std::process::Command::new(bin)

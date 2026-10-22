@@ -175,8 +175,9 @@ enum Cmd {
     /// Everything about tasks and records, many at once; bare seqs show
     /// the raw event, t-<n> shows the task plus its thread
     Show {
-        /// Ids in any mix: c-<n> a comment as its block - bare <seq> the
-        /// raw event at that position - t-<n> a whole thread
+        /// Ids in any mix: c-<n> a comment as its block, m-<n> a
+        /// message - bare <seq> the raw event at that position - t-<n>
+        /// a whole thread
         #[arg(required_unless_present = "stdin")]
         ids: Vec<String>,
         /// Read one id per line from stdin instead of arguments; blank
@@ -2225,11 +2226,13 @@ enum WaitToken {
 /// the fold resolves per poll.
 fn wait_target(token: &str) -> Result<WaitToken, Fail> {
     let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
-        let _ = n;
-        return Ok(WaitToken::Comment(
-            token[2..].parse().expect("digits checked"),
-        ));
+    if let Some(rest) = token.strip_prefix("c-").filter(|n| numeric(n)) {
+        let n = rest.parse().map_err(|_| {
+            Fail::Usage(format!(
+                "'{token}' is not a wait target (expected t-<n> or c-<n>)"
+            ))
+        })?;
+        return Ok(WaitToken::Comment(n));
     }
     if token.starts_with('#') {
         return Err(Fail::Usage(format!(
@@ -3334,29 +3337,34 @@ enum ShowId {
 
 fn parse_show_id(token: &str) -> Result<ShowId, Fail> {
     let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
-    if let Some(rest) = token.strip_prefix('#').filter(|n| numeric(n)) {
+    let not_an_id = || {
+        Fail::Usage(format!(
+            "'{token}' is not an id (expected c-<n>, t-<n>, m-<n>, or a bare <seq>)"
+        ))
+    };
+    if numeric(token.strip_prefix('#').unwrap_or_default()) {
+        // the retired face teaches the two doors it may have meant: a
+        // comment is c-<n>, the raw record at a position the bare <seq>
         return Err(Fail::Usage(format!(
-            "'{token}' is not an id (expected c-<n>, t-<n>, or a bare <seq>); \
-             drop the '#': the record is addressed as c-{rest}"
+            "'{token}' is not an id (expected c-<n>, t-<n>, m-<n>, or a bare <seq>); \
+             drop the '#': a comment is c-<n>, the raw record at a position is the bare <seq>"
         )));
     }
     if let Some(rest) = token.strip_prefix("c-").filter(|n| numeric(n)) {
-        return Ok(ShowId::Comment(rest.parse().expect("digits checked")));
+        return Ok(ShowId::Comment(rest.parse().map_err(|_| not_an_id())?));
     }
     if let Some(rest) = token.strip_prefix("m-").filter(|n| numeric(n)) {
-        return Ok(ShowId::Message(rest.parse().expect("digits checked")));
+        return Ok(ShowId::Message(rest.parse().map_err(|_| not_an_id())?));
     }
     if token.starts_with("t-") {
         return Ok(ShowId::Thread(parse_task_id(token)?));
     }
     if numeric(token) {
         return Ok(ShowId::Position(RecordId(
-            token.parse().expect("digits checked"),
+            token.parse().map_err(|_| not_an_id())?,
         )));
     }
-    Err(Fail::Usage(format!(
-        "'{token}' is not an id (expected c-<n>, t-<n>, or a bare <seq>)"
-    )))
+    Err(not_an_id())
 }
 
 /// Render one id: a thread whole, or a record as itself - a comment
@@ -3958,10 +3966,10 @@ mod test {
         assert_eq!(line, "'fix the '\\''flake'\\'' and $PATH' --flag ''");
     }
 
-    /// Hashed tokens learn their bare doors at the parse doors: the
-    /// wait target and the comment resolution both teach the bare form.
+    /// Hashed tokens refuse at the parse doors, naming the bare forms:
+    /// the wait target, the comment resolution, and the show id.
     #[test]
-    fn hashed_tokens_learn_their_bare_doors() {
+    fn hashed_tokens_name_their_bare_doors() {
         let refused = parse_task_id("#t-3")
             .map_err(|f| f.to_string())
             .unwrap_err();
@@ -3994,7 +4002,7 @@ mod test {
         assert!(resolve_comment(&world, "c-x").is_err());
 
         // the show door: typed ids, the bare position, and the retired
-        // '#' learns the c- form
+        // '#' naming the c- form and the bare seq
         assert!(matches!(
             parse_show_id("c-7").unwrap_or_else(|f| panic!("{f}")),
             ShowId::Comment(7)
@@ -4010,9 +4018,23 @@ mod test {
         let refused = parse_show_id("#7").map_err(|f| f.to_string()).unwrap_err();
         assert_eq!(
             refused,
-            "'#7' is not an id (expected c-<n>, t-<n>, or a bare <seq>); \
-             drop the '#': the record is addressed as c-7"
+            "'#7' is not an id (expected c-<n>, t-<n>, m-<n>, or a bare <seq>); \
+             drop the '#': a comment is c-<n>, the raw record at a position is the bare <seq>"
         );
+
+        // a number past the id space refuses at the door, never panics:
+        // digits are grammar, the conversion is fallible like any id
+        let refused = parse_show_id("c-184467440737095516160")
+            .map_err(|f| f.to_string())
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            "'c-184467440737095516160' is not an id (expected c-<n>, t-<n>, m-<n>, or a bare <seq>)"
+        );
+        assert!(parse_show_id("m-184467440737095516160").is_err());
+        assert!(parse_show_id("184467440737095516160").is_err());
+        assert!(wait_target("c-184467440737095516160").is_err());
+        assert!(parse_show_id("#184467440737095516160").is_err());
     }
 
     /// The revise door's body lands verbatim: the argument as given, the

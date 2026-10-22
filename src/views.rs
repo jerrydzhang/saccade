@@ -720,6 +720,13 @@ fn task_ref(token: &str, facet: &str) -> Result<TaskId, SearchFail> {
         .ok_or_else(|| SearchFail::Usage(format!("{facet} takes a task id, e.g. {facet}t-4")))
 }
 
+// a digit run past the id space names no reference this binary can hold
+fn not_a_reference(token: &str) -> SearchFail {
+    SearchFail::Usage(format!(
+        "'{token}' is not a reference (expected c-<n> or t-<n>)"
+    ))
+}
+
 impl SearchQuery {
     pub fn parse(tokens: &[String]) -> Result<SearchQuery, SearchFail> {
         let numeric = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
@@ -747,13 +754,11 @@ impl SearchQuery {
                     "drop the '#': the reference search is c-{n}"
                 )));
             } else if let Some(n) = token.strip_prefix("c-").filter(|n| numeric(n)) {
-                query
-                    .terms
-                    .push(Term::Comment(n.parse().expect("digits checked")));
+                let n = n.parse().map_err(|_| not_a_reference(token))?;
+                query.terms.push(Term::Comment(n));
             } else if let Some(n) = token.strip_prefix("t-").filter(|n| numeric(n)) {
-                query
-                    .terms
-                    .push(Term::Task(TaskId(n.parse().expect("digits checked"))));
+                let n = n.parse().map_err(|_| not_a_reference(token))?;
+                query.terms.push(Term::Task(TaskId(n)));
             } else if token.is_empty() {
                 return Err(SearchFail::Usage("a term is required".into()));
             } else {
@@ -1567,10 +1572,8 @@ mod test {
             assert_eq!(live, vec!["t-2".to_string(), "t-3".to_string()]);
         }
 
-        /// Seven noncomment births precede the first comment, so every
-        /// storage seq sits far from the public num it must never
-        /// borrow. The show view keeps the offer's birth reference for
-        /// machines and derives the dense c-N for readers.
+        // seven noncomment births precede seq 7, the first comment:
+        // the birth ref stays machine, c-0 derives dense
         #[test]
         fn the_show_view_derives_the_offer_num_beside_the_birth_ref() {
             let world = World::replay(vec![
