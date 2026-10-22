@@ -4,6 +4,7 @@
 //! values; the fold never checks the filesystem, and these functions
 //! never touch the record.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::objects::task::TaskId;
@@ -22,6 +23,10 @@ pub enum WorkspaceFail {
     Dirty { path: PathBuf, files: Vec<String> },
     /// The descriptive label is not a safe single path and ref component.
     InvalidLabel(String),
+    /// The OS entropy source could not be read; no unique token exists.
+    Entropy(String),
+    /// A worktree directory could not be created: the home or the target.
+    DirCreate { path: PathBuf, detail: String },
     /// A git command failed; the detail is its stderr.
     Git(String),
 }
@@ -34,6 +39,8 @@ impl WorkspaceFail {
             WorkspaceFail::PathOccupied(_) => "workspace_path_occupied",
             WorkspaceFail::Dirty { .. } => "workspace_dirty",
             WorkspaceFail::InvalidLabel(_) => "workspace_label_invalid",
+            WorkspaceFail::Entropy(_) => "workspace_entropy_unavailable",
+            WorkspaceFail::DirCreate { .. } => "workspace_dir_create_failed",
             WorkspaceFail::Git(_) => "workspace_effect",
         }
     }
@@ -73,6 +80,13 @@ impl WorkspaceFail {
             WorkspaceFail::Git(detail) => detail.clone(),
             WorkspaceFail::InvalidLabel(reason) => {
                 format!("invalid descriptive label: {reason}")
+            }
+            WorkspaceFail::Entropy(detail) => detail.clone(),
+            WorkspaceFail::DirCreate { path, detail } => {
+                format!(
+                    "could not create worktree directory {}: {detail}",
+                    path.display()
+                )
             }
         }
     }
@@ -162,15 +176,21 @@ fn cut_worktree(
 /// A fresh uniqueness token: real OS entropy, never counters, clocks,
 /// or process ids. Exactly four bytes: /dev/urandom never ends, so
 /// anything read-to-EOF here would allocate forever.
-fn fresh_token() -> String {
+fn fresh_token() -> Result<String, WorkspaceFail> {
+    let mut urandom = std::fs::File::open("/dev/urandom").map_err(|e| {
+        WorkspaceFail::Entropy(format!("the OS entropy source is unavailable: {e}"))
+    })?;
+    token_from_reader(&mut urandom)
+}
+
+/// Four bytes from any reader, hex-encoded; the seam the contract test
+/// pins entropy refusal through.
+fn token_from_reader<R: Read>(reader: &mut R) -> Result<String, WorkspaceFail> {
     let mut bytes = [0u8; 4];
-    let filled = std::fs::File::open("/dev/urandom")
-        .is_ok_and(|mut file| std::io::Read::read_exact(&mut file, &mut bytes).is_ok());
-    if !filled {
-        // no urandom: the caller's collision refusal is the safety net
-        return "00000000".to_string();
-    }
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|e| WorkspaceFail::Entropy(format!("the OS entropy source failed: {e}")))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// The label is one filename and ref component: the safety rules are
@@ -225,7 +245,8 @@ pub fn provision(
     label: Option<&str>,
     base: Option<&str>,
 ) -> Result<Provisioned, WorkspaceFail> {
-    provision_with_token(root, worktree_home, label, base, &fresh_token())
+    let token = fresh_token()?;
+    provision_with_token(root, worktree_home, label, base, &token)
 }
 
 /// The same provisioning with the token supplied: the test seam keeps
@@ -251,10 +272,34 @@ fn provision_with_token(
         return Err(WorkspaceFail::BranchExists(branch));
     }
     let path = worktree_home.join(&name);
-    if path.exists() {
-        return Err(WorkspaceFail::PathOccupied(path));
+    // the home is built only after every check above passed
+    if let Err(e) = std::fs::create_dir_all(worktree_home) {
+        return Err(WorkspaceFail::DirCreate {
+            path: worktree_home.to_path_buf(),
+            detail: e.to_string(),
+        });
     }
-    cut_worktree(root, &branch, &path, &base)?;
+    // the exclusive claim: existing, even empty or a dangling symlink,
+    // refuses before git fills our freshly owned directory
+    if let Err(e) = std::fs::create_dir(&path) {
+        return Err(match e.kind() {
+            std::io::ErrorKind::AlreadyExists => WorkspaceFail::PathOccupied(path),
+            _ => WorkspaceFail::DirCreate {
+                path: path.clone(),
+                detail: e.to_string(),
+            },
+        });
+    }
+    cut_worktree(root, &branch, &path, &base).map_err(|e| match e {
+        // no rollback: name the attempt and that git may have left pieces
+        WorkspaceFail::Git(detail) => WorkspaceFail::Git(format!(
+            "provisioning branch {} at {} failed: {detail}; \
+             git may have left the branch or directory behind",
+            branch.as_str(),
+            path.display()
+        )),
+        other => other,
+    })?;
     let worktree = WorktreePath::new(path).map_err(|e| WorkspaceFail::Git(format!("{e:?}")))?;
     Ok(Provisioned {
         base,
@@ -555,10 +600,58 @@ mod test {
                 .exists()
         );
 
+        // an existing empty directory is occupied all the same
+        std::fs::create_dir_all(home.join("workspace-0cc1ded0")).unwrap();
+        let refused = provision_with_token(&root, &home, None, None, "0cc1ded0");
+        assert!(matches!(refused, Err(WorkspaceFail::PathOccupied(_))));
+        assert!(
+            home.join("workspace-0cc1ded0")
+                .read_dir()
+                .unwrap()
+                .next()
+                .is_none(),
+            "the empty directory was never populated"
+        );
+        assert!(!branch_exists(
+            &root,
+            &GitBranch::new("workspace-0cc1ded0".into()).unwrap()
+        ));
+
+        // a dangling symlink at the target is occupied all the same
+        std::os::unix::fs::symlink(home.join("no-such-place"), home.join("workspace-dab9ced0"))
+            .unwrap();
+        let refused = provision_with_token(&root, &home, None, None, "dab9ced0");
+        assert!(matches!(refused, Err(WorkspaceFail::PathOccupied(_))));
+        assert!(
+            home.join("workspace-dab9ced0")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the dangling symlink was never replaced"
+        );
+        assert!(!branch_exists(
+            &root,
+            &GitBranch::new("workspace-dab9ced0".into()).unwrap()
+        ));
+
         // fresh tokens come from real entropy: two live calls differ
         let a = provision(&root, &home, Some("live"), None).unwrap();
         let b = provision(&root, &home, Some("live"), None).unwrap();
         assert_ne!(a.branch.as_str(), b.branch.as_str());
+
+        // the entropy seam refuses when the source fails: four bytes or nothing
+        struct DeadEntropy;
+        impl std::io::Read for DeadEntropy {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("no entropy today"))
+            }
+        }
+        let refused = token_from_reader(&mut DeadEntropy);
+        assert!(matches!(refused, Err(WorkspaceFail::Entropy(_))));
+        // a good source reads exactly four bytes into eight hex digits
+        let mut four: &[u8] = &[0xde, 0xad, 0xbe, 0xef];
+        assert_eq!(token_from_reader(&mut four).unwrap(), "deadbeef");
 
         std::fs::remove_dir_all(&root).unwrap();
     }
