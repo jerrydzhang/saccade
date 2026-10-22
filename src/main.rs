@@ -3966,8 +3966,6 @@ mod test {
         assert_eq!(line, "'fix the '\\''flake'\\'' and $PATH' --flag ''");
     }
 
-    /// Hashed tokens refuse at the parse doors, naming the bare forms:
-    /// the wait target, the comment resolution, and the show id.
     #[test]
     fn hashed_tokens_name_their_bare_doors() {
         let refused = parse_task_id("#t-3")
@@ -4001,8 +3999,6 @@ mod test {
         );
         assert!(resolve_comment(&world, "c-x").is_err());
 
-        // the show door: typed ids, the bare position, and the retired
-        // '#' naming the c- form and the bare seq
         assert!(matches!(
             parse_show_id("c-7").unwrap_or_else(|f| panic!("{f}")),
             ShowId::Comment(7)
@@ -4022,8 +4018,6 @@ mod test {
              drop the '#': a comment is c-<n>, the raw record at a position is the bare <seq>"
         );
 
-        // a number past the id space refuses at the door, never panics:
-        // digits are grammar, the conversion is fallible like any id
         let refused = parse_show_id("c-184467440737095516160")
             .map_err(|f| f.to_string())
             .unwrap_err();

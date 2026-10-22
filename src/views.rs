@@ -1572,8 +1572,6 @@ mod test {
             assert_eq!(live, vec!["t-2".to_string(), "t-3".to_string()]);
         }
 
-        // seven noncomment births precede seq 7, the first comment:
-        // the birth ref stays machine, c-0 derives dense
         #[test]
         fn the_show_view_derives_the_offer_num_beside_the_birth_ref() {
             let world = World::replay(vec![
