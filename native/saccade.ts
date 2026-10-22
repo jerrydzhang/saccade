@@ -14,7 +14,14 @@ import type {
 	ExtensionAPI,
 	InputEvent,
 	SessionStartEvent,
+	ToolCallEvent,
+	ToolExecutionEndEvent,
+	ToolExecutionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+
+// The outcome of a supported nested call, taken from the pinned
+// executeTool signature itself.
+type NestedToolOutcome = Awaited<ReturnType<ExtensionToolContext["executeTool"]>>;
 
 const POLL_MS = 1500;
 // the automatic actor fallback: agent possession when the launch did
@@ -169,19 +176,47 @@ interface WorkspaceBirthReply {
 
 // -- the explicit own-session workspace handoff --------------------------
 
-// The provider-owned activity hook on the wrapper's event bus: the
-// reply object travels in the request payload, and an untouched reply
-// means no supported provider runs in this wrapper - activity is
-// unknown, which is never idle.
-const ACTIVITY_CHANNEL = "bash-background.handoff-gate";
+// One live row of the wrapper's public jobs snapshot: the shape the
+// pinned contract declares for the read-only `jobs` tool - registered
+// jobs whose state is running, stopping, or unknown; terminal jobs are
+// absent by contract. Compatible extra fields are ignored.
+export interface JobsSnapshotEntry {
+	id: string;
+	kind: "bash" | "subagent";
+	state: "running" | "stopping" | "unknown";
+}
 
-interface ActivityProbe {
-	handled?: boolean;
-	held?: boolean;
-	busy?: number;
-	jobs?: string[];
-	released?: boolean;
-	reason?: string;
+// The snapshot's validation: exactly {jobs: [...]}, each entry carrying
+// an id, a kind, and one of the live states. Any deviation - missing,
+// malformed, an unseen state - reads as unknown, never as empty: future
+// shapes are unverifiable, not silently skipped.
+export function validJobsSnapshot(structured: unknown): JobsSnapshotEntry[] | null {
+	if (typeof structured !== "object" || structured === null || Array.isArray(structured)) {
+		return null;
+	}
+	const jobs = (structured as { jobs?: unknown }).jobs;
+	if (!Array.isArray(jobs)) return null;
+	const live: JobsSnapshotEntry[] = [];
+	for (const entry of jobs) {
+		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+		const { id, kind, state } = entry as Record<string, unknown>;
+		if (typeof id !== "string" || id === "") return null;
+		if (kind !== "bash" && kind !== "subagent") return null;
+		if (state !== "running" && state !== "stopping" && state !== "unknown") return null;
+		live.push({ id, kind, state });
+	}
+	return live;
+}
+
+// The wrapper admissions a handoff must freeze: a background bash start
+// and any subagent start. Foreground work, stop, wait, and the jobs
+// query itself are not admissions.
+function isAdmission(toolName: string, args: unknown): boolean {
+	if (toolName === "subagent") return true;
+	if (toolName === "bash") {
+		return (args as { background?: unknown } | undefined)?.background === true;
+	}
+	return false;
 }
 
 // The saved-session facts an armed handoff persists: the exact identity
@@ -350,22 +385,58 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// envelope, bound to the arm they came from; association-bound like
 	// deliveries - a reassociated session never completes a stale one
 	const continuations = new Set<{ data: HandoffEntryData; record: number; envelope: string }>();
+	// The own admission gate, set while a handoff request prepares and
+	// then owned by its armed handoff: background bash and subagent
+	// starts refuse at the public tool_call hook. Module state on
+	// purpose, like the arm itself - a reload or session replacement
+	// kills it with the tool call's run.
+	let admissionHold: { token: string } | null = null;
+	// Admissions dispatched and not yet finished, keyed by tool call id:
+	// the gap between a start and its registry entry, which the jobs
+	// snapshot cannot see yet. Bounded native call state, never a model
+	// of ongoing jobs - the registered truth stays the jobs read.
+	const admissions = new Set<string>();
 
-	// One synchronous emit reads and holds: the bus dispatches handlers
-	// synchronously, so the answer is final when emit returns - the idle
-	// check and the admission hold are one atomic act.
-	function activityProbe(op: string, token: string): ActivityProbe {
-		const reply: ActivityProbe = {};
+	// The public admission guard: while this session's handoff prepares
+	// or is armed, background bash and subagent starts refuse before
+	// execution - stop, wait, jobs, and foreground work stay allowed,
+	// and nothing already running is touched.
+	pi.on("tool_call", (event: ToolCallEvent) => {
+		if (admissionHold === null && pendingHandoff === null) return undefined;
+		if (!isAdmission(event.toolName, event.input)) return undefined;
+		return {
+			block: true,
+			reason:
+				"a saccade workspace handoff is preparing: no new background bash or subagent may start; nothing already running is stopped - retry the move later",
+		};
+	});
+	pi.on("tool_execution_start", (event: ToolExecutionStartEvent) => {
+		if (isAdmission(event.toolName, event.args)) admissions.add(event.toolCallId);
+	});
+	// the end is unconditional on the pinned runtime, blocked attempts
+	// included: a finished dispatch never strands its token here
+	pi.on("tool_execution_end", (event: ToolExecutionEndEvent) => {
+		admissions.delete(event.toolCallId);
+	});
+
+	// The awaited status read: the wrapper's public jobs tool through the
+	// supported nested dispatch, so disabled tools and permissions apply
+	// unchanged. A missing tool, an error, and any malformed answer
+	// return unknown - never empty, never idle.
+	async function queryJobs(
+		ctx: ExtensionToolContext,
+		signal?: AbortSignal,
+	): Promise<JobsSnapshotEntry[] | null> {
+		if (typeof ctx.executeTool !== "function") return null;
 		try {
-			pi.events.emit(ACTIVITY_CHANNEL, { op, token, reply });
+			const outcome: NestedToolOutcome = await ctx.executeTool("jobs", {}, { signal });
+			if (outcome.isError) return null;
+			return validJobsSnapshot(outcome.result?.structuredContent);
 		} catch {
-			// a bus that refuses the emit is the same unknown as an absent provider
+			// a dispatch that refuses to answer is the same unknown as a
+			// missing tool
+			return null;
 		}
-		return reply;
-	}
-
-	function releaseActivityGate(token: string): void {
-		activityProbe("release", token);
 	}
 
 	// agent possession is set at load, before any attach: a tracker
@@ -734,19 +805,31 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return undefined;
 	});
 
-	// Release the armed handoff without shutting down: the gate goes
-	// with the token, the outcome lands as a fact, and the session stays
-	// exactly as it was.
+	// Release the armed handoff - or a still-preparing request, whose
+	// gate has not reached a persisted arm - without shutting down: the
+	// outcome lands as a fact and the session stays exactly as it was.
+	// A preparation cancelled here observes its hold gone at its next
+	// await and never arms.
 	function cancelPendingHandoff(reason: string) {
 		const armed = pendingHandoff;
-		if (armed === null) return;
-		pendingHandoff = null;
-		releaseActivityGate(armed.token);
-		pi.appendEntry("saccade_handoff_done", {
-			token: armed.token,
-			outcome: "cancelled",
-			reason,
-		} satisfies HandoffDoneData);
+		if (armed !== null) {
+			pendingHandoff = null;
+			pi.appendEntry("saccade_handoff_done", {
+				token: armed.token,
+				outcome: "cancelled",
+				reason,
+			} satisfies HandoffDoneData);
+			return;
+		}
+		const preparing = admissionHold;
+		if (preparing !== null) {
+			admissionHold = null;
+			pi.appendEntry("saccade_handoff_done", {
+				token: preparing.token,
+				outcome: "cancelled",
+				reason,
+			} satisfies HandoffDoneData);
+		}
 	}
 
 	// The settle boundary is the safe native act: the run's entries - the
@@ -762,7 +845,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			launchHandoffHelper(armed.script, armed.log);
 		} catch (error) {
 			pendingHandoff = null;
-			releaseActivityGate(armed.token);
 			pi.appendEntry("saccade_handoff_done", {
 				token: armed.token,
 				outcome: "cancelled",
@@ -1099,7 +1181,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		name: "saccade_workspace",
 		label: "Saccade workspace",
 		description:
-			"Move THIS session to another workspace, by explicit choice only: an existing directory, or a newly provisioned one. The saved working directory changes at a safe native boundary - this run settles, the session shuts down, and a bounded helper moves the saved session and resumes it there with the same native id, history, and declared scope. Refuses while background jobs or subagents are active (nothing is stopped), and refuses rather than guess when the wrapper's activity cannot be verified.",
+			"Move THIS session to another workspace, by explicit choice only: an existing directory, or a newly provisioned one. The saved working directory changes at a safe native boundary - this run settles, the session shuts down, and a bounded helper moves the saved session and resumes it there with the same native id, history, and declared scope. Refuses while background jobs or subagents are active or unverifiable (nothing is stopped), and blocks new background starts until the handoff resolves.",
 		parameters: WorkspaceParams,
 		execute: async (
 			id,
@@ -1126,31 +1208,38 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				return failed(`not moved: the handoff helper needs ${missing}; nothing changed`);
 			}
 			const token = `handoff-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-			// the atomic idle check and admission hold: busy refuses with
-			// nothing stopped, an unanswered probe refuses as unknown, and
-			// neither leaves a hold behind
-			const probe = activityProbe("hold", token);
-			if (probe.handled !== true) {
+			// param discipline before any hold: a request that can never arm
+			// holds nothing and reads nothing
+			if (
+				params.choice === "existing" &&
+				(params.path === undefined || params.label !== undefined || params.base !== undefined)
+			) {
 				return failed(
-					"not moved: no supported wrapper activity guard answered; activity is unknown and is never idle - nothing changed",
+					"not moved: the existing choice names exactly a path and nothing else; nothing changed",
 				);
 			}
-			if (probe.held !== true) {
-				const busy =
-					probe.busy !== undefined
-						? `${probe.busy} background job(s) active (${(probe.jobs ?? []).join(", ")})`
-						: (probe.reason ?? "the wrapper refused the hold");
-				return failed(`not moved: ${busy}; nothing was stopped and nothing changed`);
+			if (params.choice === "new" && params.path !== undefined) {
+				return failed("not moved: the new choice provisions a workspace and takes no path; nothing changed");
 			}
-			// every exit below releases the hold: a refused or failed
-			// preparation leaves the session exactly as it was
+			if (admissionHold !== null || pendingHandoff !== null) {
+				return failed(
+					"not moved: a workspace handoff is already preparing or armed for this session; nothing changed",
+				);
+			}
+			// the admission gate goes up before any awaited read, so a new
+			// background start cannot slip past the status check while it
+			// runs; every exit below releases this request's hold, and a
+			// refused or failed preparation leaves the session as it was
+			admissionHold = { token };
 			// a provision that already landed keeps its pointer through any
 			// later failure: the birth stands, the error face names it, and
 			// nothing is rolled back or claimed moved
 			let created: number | null = null;
 			let createdPath: string | null = null;
 			const giveUp = (why: string) => {
-				releaseActivityGate(token);
+				// only this request's hold: a newer request's, or an already
+				// cancelled, hold is never released here
+				if (admissionHold?.token === token) admissionHold = null;
 				// only this call's token-owned runtime arm is cleared: the
 				// append may have failed before the arm persisted, and the
 				// settle boundary must never launch an unpersisted handoff
@@ -1161,25 +1250,53 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 						: "";
 				return failed(`${why}${pointer}`);
 			};
+			// after every awaited step the request continues only while its
+			// own hold is still current under the same association: human
+			// input, abort, reload, or session replacement cancels the
+			// preparation, and a stale completion must not re-arm
+			const still = () => admissionHold?.token === token && association === who;
 			try {
+				// an admission already executing when the gate went up - a
+				// start whose spawn has not landed in the registry - is
+				// exactly what the jobs snapshot cannot see yet
+				if (admissions.size > 0) {
+					return giveUp(
+						`not moved: ${admissions.size} background start(s) still in flight; nothing was stopped and nothing changed`,
+					);
+				}
+				const jobs = await queryJobs(ctx, signal);
+				if (!still()) {
+					return giveUp(
+						"not moved: the handoff was cancelled or the session changed while its status was read; nothing changed",
+					);
+				}
+				if (signal?.aborted) {
+					return giveUp("not moved: the call was cancelled; the hold is released and the session stays");
+				}
+				if (jobs === null) {
+					return giveUp(
+						"not moved: no valid jobs snapshot answered - the tool is missing, errored, or malformed, and unverifiable activity is never idle; nothing changed",
+					);
+				}
+				if (jobs.length > 0) {
+					const listed = jobs.map((j) => `${j.id} (${j.kind}, ${j.state})`).join(", ");
+					return giveUp(
+						`not moved: ${jobs.length} background job(s) active: ${listed}; nothing was stopped and nothing changed`,
+					);
+				}
+				if (admissions.size > 0) {
+					return giveUp(
+						"not moved: a background start raced the status read; nothing was stopped and nothing changed",
+					);
+				}
 				let target: string;
 				if (params.choice === "existing") {
-					if (params.path === undefined || params.label !== undefined || params.base !== undefined) {
-						return giveUp(
-							"not moved: the existing choice names exactly a path and nothing else; nothing changed",
-						);
-					}
-					const resolved = realpathSync(params.path);
+					const resolved = realpathSync(params.path!);
 					if (!statSync(resolved).isDirectory()) {
 						return giveUp(`not moved: ${resolved} is not a directory; nothing changed`);
 					}
 					target = resolved;
 				} else {
-					if (params.path !== undefined) {
-						return giveUp(
-							"not moved: the new choice provisions a workspace and takes no path; nothing changed",
-						);
-					}
 					const reply = await tracker<WorkspaceBirthReply>("/api/v1/workspace/create", {
 						method: "POST",
 						body: JSON.stringify({
@@ -1191,6 +1308,11 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					created = reply.workspace.seq;
 					createdPath = reply.workspace.path;
 					target = realpathSync(reply.workspace.path);
+				}
+				if (!still()) {
+					return giveUp(
+						"not moved: the handoff was cancelled or the session changed while preparing; nothing changed",
+					);
 				}
 				if (signal?.aborted) {
 					return giveUp("not moved: the call was cancelled; the hold is released and the session stays");
@@ -1228,10 +1350,13 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 					scope,
 				} satisfies HandoffEntryData);
 				pendingHandoff = { token, target, toolCall: id, log, created, script };
+				// the armed handoff owns the admissions gate from here: the
+				// preparing hold transfers, so the guard never blinks
+				admissionHold = null;
 				const provisioned = created !== null ? ` (provisioned now, birth record ${created})` : "";
 				return text(
 					[
-						`workspace handoff armed: the activity gate is held, target ${target}${provisioned}.`,
+						`workspace handoff armed: background admissions are held, target ${target}${provisioned}.`,
 						"When this run settles, the session shuts down and a bounded helper moves the saved session's working directory and resumes it there - same native id, history, and declared scope.",
 						`The helper's outcome log is ${log}; if the session does not come back, that file names the failure.`,
 						"Do not start background work. Native human input or a reload cancels the handoff and releases the hold.",

@@ -33,6 +33,7 @@ import {
 	numToken,
 	takeGuardLock,
 	userText,
+	validJobsSnapshot,
 	type HandoffDoneData,
 	type HandoffEntryData,
 	default as saccadeIntegration,
@@ -368,6 +369,22 @@ class FakeTracker {
 	records: Array<{ seq: number; kind: string; payload: unknown }> = [];
 	creates: any[] = [];
 	createPaths: string[] = [];
+	// holds the next workspace create mid-flight, like the parked reads
+	private createGate: { open: () => void; promise: Promise<void> } | null = null;
+
+	holdNextCreate(): void {
+		let open!: () => void;
+		const promise = new Promise<void>((resolve) => {
+			open = resolve;
+		});
+		this.createGate = { open, promise };
+	}
+
+	releaseCreate(): void {
+		const gate = this.createGate;
+		this.createGate = null;
+		gate?.open();
+	}
 
 	url() {
 		return "http://tracker.test";
@@ -443,6 +460,10 @@ class FakeTracker {
 		if (path === "/api/v1/workspace/create") {
 			this.creates.push(body);
 			const seq = 300 + this.creates.length;
+			if (this.createGate !== null) {
+				const gate = this.createGate;
+				await gate.promise;
+			}
 			return this.reply({
 				created: true,
 				workspace: {
@@ -1398,32 +1419,158 @@ test("a headless unverifiable start explains on stderr before exiting", async ()
 
 // -- the explicit own-session workspace handoff ------------------------------
 
-// A fake wrapper activity provider over the bus: absent is no provider at
-// all, idle holds, busy refuses with a live job named.
-function activityProvider(
-	pi: FakePi,
-	mode: "absent" | "idle" | "busy",
-): Array<{ op: string; token: string }> {
-	const calls: Array<{ op: string; token: string }> = [];
-	if (mode === "absent") return calls;
-	pi.events.on("bash-background.handoff-gate", (data: any) => {
-		const reply = data?.reply;
-		if (typeof reply !== "object" || reply === null) return;
-		reply.handled = true;
-		calls.push({ op: data.op, token: data.token });
-		if (data.op === "hold") {
-			if (mode === "busy") {
-				reply.held = false;
-				reply.busy = 1;
-				reply.jobs = ["bg-1"];
-				reply.reason = "background jobs are active";
-			} else {
-				reply.held = true;
-			}
+// The fake wrapper side of the public contract: a jobs tool served
+// through the nested dispatch the pinned SDK actually runs, plus
+// admission dispatches of the same shape - tool_execution_start before
+// the tool_call hooks, the end always, blocked calls never execute.
+interface JobsExecute {
+	isError: boolean;
+	text: string;
+	structured?: unknown;
+}
+
+class FakeWrapper {
+	pi: FakePi;
+	// the registered live jobs, returned as the snapshot's payload
+	jobs: Array<{ id: string; kind: string; state: string }> = [];
+	// when set, the jobs outcome is an error result carrying this text
+	jobsError: string | null = null;
+	// when set, replaces the structuredContent the jobs tool returns
+	payload: { value: unknown } | null = null;
+	// when true, no jobs tool answers the nested call at all
+	noJobsTool = false;
+	queries = 0;
+	// the admission attempts the tool_call hook blocked, in order
+	blocked: string[] = [];
+	private seq = 0;
+	// holds the next jobs query mid-dispatch, before its result
+	private gate: { open: () => void; promise: Promise<void> } | null = null;
+
+	constructor(pi: FakePi) {
+		this.pi = pi;
+	}
+
+	holdNextQuery(): void {
+		let open!: () => void;
+		const promise = new Promise<void>((resolve) => {
+			open = resolve;
+		});
+		this.gate = { open, promise };
+	}
+
+	releaseQuery(): void {
+		const gate = this.gate;
+		this.gate = null;
+		gate?.open();
+	}
+
+	private jobsExecute(): Promise<JobsExecute> {
+		// the read counts once dispatched, even when nothing answers
+		this.queries += 1;
+		if (this.noJobsTool) return Promise.resolve({ isError: true, text: "Tool jobs not found" });
+		if (this.gate !== null) {
+			// the gate stays until released: a later holdNextQuery replaces it
+			const gate = this.gate;
+			return gate.promise.then(() => this.jobsAnswer());
 		}
-		if (data.op === "release") reply.released = true;
-	});
-	return calls;
+		return Promise.resolve(this.jobsAnswer());
+	}
+
+	private jobsAnswer(): JobsExecute {
+		if (this.jobsError !== null) return { isError: true, text: this.jobsError };
+		const structured = this.payload !== null ? this.payload.value : { jobs: this.jobs };
+		return { isError: false, text: "jobs snapshot", structured };
+	}
+
+	// the pinned hook order: the first block wins and stops the chain
+	private async hooksBlocked(toolName: string, args: unknown, id: string): Promise<boolean> {
+		for (const handler of this.pi.handlers.get("tool_call") ?? []) {
+			const result = (await handler(
+				{ type: "tool_call", toolCallId: id, toolName, input: args },
+				this.pi.context(),
+			)) as { block?: boolean } | undefined;
+			if (result?.block) return true;
+		}
+		return false;
+	}
+
+	private endEvent(toolName: string, id: string, outcome: JobsExecute) {
+		return {
+			toolCallId: id,
+			toolName,
+			result: {
+				content: [{ type: "text", text: outcome.text }],
+				details: undefined,
+				...(outcome.structured !== undefined ? { structuredContent: outcome.structured } : {}),
+			},
+			isError: outcome.isError,
+		};
+	}
+
+	// one full nested dispatch: start, hooks, execute, end
+	private async dispatch(toolName: string, args: unknown, execute: () => Promise<JobsExecute>): Promise<JobsExecute> {
+		const id = `fake-${toolName}-${this.seq++}`;
+		await this.pi.emit("tool_execution_start", { toolCallId: id, toolName, args });
+		let outcome: JobsExecute;
+		if (await this.hooksBlocked(toolName, args, id)) {
+			this.blocked.push(toolName);
+			outcome = { isError: true, text: `blocked: ${toolName}` };
+		} else {
+			outcome = await execute();
+		}
+		await this.pi.emit("tool_execution_end", this.endEvent(toolName, id, outcome));
+		return outcome;
+	}
+
+	// an admission attempt: a background bash start or a subagent start
+	async startAdmission(toolName: "bash" | "subagent", args: Record<string, unknown>): Promise<void> {
+		await this.dispatch(toolName, args, async () => ({ isError: false, text: `${toolName} started` }));
+	}
+
+	// an admission whose dispatch has started but whose end has not
+	// fired: the in-flight shape the registry cannot show yet. The
+	// returned settle fires the end; settle(true) ends it failed.
+	async holdAdmission(
+		toolName: "bash" | "subagent",
+		args: Record<string, unknown>,
+	): Promise<(failed?: boolean) => Promise<void>> {
+		const id = `fake-${toolName}-${this.seq++}`;
+		await this.pi.emit("tool_execution_start", { toolCallId: id, toolName, args });
+		if (await this.hooksBlocked(toolName, args, id)) {
+			this.blocked.push(toolName);
+			await this.pi.emit("tool_execution_end", {
+				...this.endEvent(toolName, id, { isError: true, text: "blocked" }),
+			});
+			return async () => {};
+		}
+		return (failed = false) =>
+			this.pi
+				.emit("tool_execution_end", {
+					...this.endEvent(toolName, id, { isError: failed, text: failed ? "failed" : "ended" }),
+				})
+				.then(() => {});
+	}
+
+	// the tool context the integration sees: executeTool rides the same
+	// dispatch and the jobs tool answers through it
+	ctxOf(h: Harness): ExtensionToolContext {
+		return {
+			...h.ctx(),
+			tools: [],
+			executeTool: async (name: string, args: unknown) => {
+				const outcome = await this.dispatch(name, args, () => this.jobsExecute());
+				return {
+					toolCall: { type: "toolCall", id: "fake-nested", name, arguments: {} },
+					result: {
+						content: [{ type: "text", text: outcome.text }],
+						details: undefined,
+						...(outcome.structured !== undefined ? { structuredContent: outcome.structured } : {}),
+					},
+					isError: outcome.isError,
+				};
+			},
+		} as unknown as ExtensionToolContext;
+	}
 }
 
 // The workspace arm's environment: routing and the controller door named.
@@ -1440,11 +1587,6 @@ async function withHandoffEnv<T>(fn: () => Promise<T>): Promise<T> {
 		if (savedRepo === undefined) delete process.env.SACCADE_REPO;
 		else process.env.SACCADE_REPO = savedRepo;
 	}
-}
-
-// The faithful tool context, like every tool contract in this suite.
-function toolCtxOf(h: Harness) {
-	return { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) } as any;
 }
 
 function scratchDir(tag: string): string {
@@ -1510,111 +1652,171 @@ test("the helper script waits on the exact guard then calls the controller door 
 	);
 });
 
-test("the workspace tool refuses an unsaved session before any activity probe", async () => {
+test("the workspace tool refuses an unsaved session before any status read", async () => {
 	const h = harness("mem0", undefined, "pi");
-	const calls = activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	await withHandoffEnv(async () => {
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, wrapper.ctxOf(h));
 		assert.equal((out as any).isError, true);
 		assert.match((out as any).content[0].text, /unsaved \(in-memory\)/);
 	});
-	assert.deepEqual(calls, [], "an unsaved session never probes the wrapper");
-	assert.equal(h.pi.busEmitted.length, 0);
+	assert.equal(wrapper.queries, 0, "an unsaved session never reads the wrapper");
+	// no admission gate leaked: a background start goes through untouched
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, []);
 	await stop(h);
 });
 
-test("the workspace tool refuses as unknown when no activity provider answers", async () => {
+test("the workspace tool refuses as unknown when no jobs tool answers", async () => {
 	const h = harness("noprov1", "/sessions/noprov1.jsonl", "pi");
 	await h.pi.emit("session_start");
-	activityProvider(h.pi, "absent");
+	const wrapper = new FakeWrapper(h.pi);
+	wrapper.noJobsTool = true;
 	await withHandoffEnv(async () => {
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, wrapper.ctxOf(h));
 		assert.equal((out as any).isError, true);
-		assert.match((out as any).content[0].text, /activity is unknown and is never idle/);
+		assert.match((out as any).content[0].text, /unverifiable activity is never idle/);
 	});
+	assert.equal(wrapper.queries, 1, "the read went out once and was refused");
 	assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false, "nothing armed on an unknown wrapper");
 	assert.equal(h.pi.shutdowns, 0, "an unknown wrapper never shuts the session down");
+	// the hold went back with the refusal: admissions run untouched
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, []);
 	await stop(h);
 });
 
-test("the workspace tool refuses a busy wrapper, stopping nothing", async () => {
+test("a jobs answer that errors or is malformed refuses as unknown, never as idle", async () => {
+	const h = harness("badjobs1", "/sessions/badjobs1.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const variants: Array<{ label: string; shape: (w: FakeWrapper) => void }> = [
+		{ label: "errored", shape: (w) => (w.jobsError = "the poller died") },
+		{ label: "no structuredContent", shape: (w) => (w.payload = { value: undefined }) },
+		{ label: "not an object", shape: (w) => (w.payload = { value: "jobs" }) },
+		{ label: "no jobs field", shape: (w) => (w.payload = { value: {} }) },
+		{ label: "jobs not an array", shape: (w) => (w.payload = { value: { jobs: "all clear" } }) },
+		{ label: "entry not an object", shape: (w) => (w.payload = { value: { jobs: [7] } }) },
+		{ label: "id missing", shape: (w) => (w.payload = { value: { jobs: [{ kind: "bash", state: "running" }] } }) },
+		{ label: "kind unknown", shape: (w) => (w.payload = { value: { jobs: [{ id: "bg-1", kind: "powershell", state: "running" }] } }) },
+		{ label: "state unseen", shape: (w) => (w.payload = { value: { jobs: [{ id: "bg-1", kind: "bash", state: "finishing" }] } }) },
+	];
+	await withHandoffEnv(async () => {
+		for (const variant of variants) {
+			const wrapper = new FakeWrapper(h.pi);
+			variant.shape(wrapper);
+			const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, wrapper.ctxOf(h));
+			assert.equal((out as any).isError, true, `${variant.label} must refuse`);
+			assert.match((out as any).content[0].text, /never idle/, `${variant.label} refuses as unknown`);
+			assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false, `${variant.label} armed nothing`);
+			await wrapper.startAdmission("subagent", { task: "later work" });
+			assert.deepEqual(wrapper.blocked, [], `${variant.label} released the hold`);
+		}
+	});
+	await stop(h);
+});
+
+test("the workspace tool refuses a busy snapshot, stopping nothing", async () => {
 	const h = harness("busy2", "/sessions/busy2.jsonl", "pi");
 	await h.pi.emit("session_start");
-	const calls = activityProvider(h.pi, "busy");
+	const wrapper = new FakeWrapper(h.pi);
+	wrapper.jobs = [{ id: "bg-1", kind: "bash", state: "running" }];
 	await withHandoffEnv(async () => {
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, toolCtxOf(h));
-		assert.match((out as any).content[0].text, /1 background job\(s\) active \(bg-1\)/);
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, wrapper.ctxOf(h));
+		assert.match((out as any).content[0].text, /1 background job\(s\) active: bg-1 \(bash, running\)/);
 		assert.match((out as any).content[0].text, /nothing was stopped and nothing changed/);
 	});
-	assert.deepEqual(calls.map((c) => c.op), ["hold"], "a busy refusal takes no hold and needs no release");
+	assert.equal(wrapper.queries, 1);
 	assert.equal(h.pi.shutdowns, 0);
+	// the hold released at once: the session stays usable
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, []);
 	await stop(h);
 });
 
-test("the workspace tool names the missing helper inputs and probes nothing", async () => {
+test("stopping and unknown jobs refuse exactly like running ones", async () => {
+	const h = harness("busy2b", "/sessions/busy2b.jsonl", "pi");
+	await h.pi.emit("session_start");
+	await withHandoffEnv(async () => {
+		for (const job of [
+			{ id: "bg-2", kind: "bash", state: "stopping" },
+			{ id: "sa-1", kind: "subagent", state: "unknown" },
+		]) {
+			const wrapper = new FakeWrapper(h.pi);
+			wrapper.jobs = [job];
+			const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, wrapper.ctxOf(h));
+			assert.equal((out as any).isError, true, `${job.state} must refuse`);
+			assert.match((out as any).content[0].text, new RegExp(`${job.id} \\(${job.kind}, ${job.state}\\)`));
+			assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false);
+		}
+	});
+	await stop(h);
+});
+
+test("the workspace tool names the missing helper inputs and reads nothing", async () => {
 	const h = harness("nocli3", "/sessions/nocli3.jsonl", "pi");
 	await h.pi.emit("session_start");
 	delete process.env.SACCADE_CLI;
-	const calls = activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	try {
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: "/tmp" }, undefined, undefined, wrapper.ctxOf(h));
 		assert.match((out as any).content[0].text, /SACCADE_CLI/);
 	} finally {
 		delete process.env.SACCADE_CLI;
 	}
-	assert.deepEqual(calls, [], "an unlaunchable helper never holds the gate");
+	assert.equal(wrapper.queries, 0, "an unlaunchable helper never reads the wrapper");
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, [], "no gate leaked from the refused request");
 	await stop(h);
 });
 
 test("the workspace tool's param discipline leaves no default and no mixed shape", async () => {
 	const h = harness("params4", "/sessions/params4.jsonl", "pi");
 	await h.pi.emit("session_start");
-	activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	await withHandoffEnv(async () => {
-		const missing = await h.tools("saccade_workspace").execute("c1", { choice: "existing" }, undefined, undefined, toolCtxOf(h));
+		const missing = await h.tools("saccade_workspace").execute("c1", { choice: "existing" }, undefined, undefined, wrapper.ctxOf(h));
 		assert.match((missing as any).content[0].text, /names exactly a path/);
-		const mixed = await h.tools("saccade_workspace").execute("c2", { choice: "existing", path: "/tmp", label: "nope" }, undefined, undefined, toolCtxOf(h));
+		const mixed = await h.tools("saccade_workspace").execute("c2", { choice: "existing", path: "/tmp", label: "nope" }, undefined, undefined, wrapper.ctxOf(h));
 		assert.match((mixed as any).content[0].text, /names exactly a path/);
-		const pathed = await h.tools("saccade_workspace").execute("c3", { choice: "new", path: "/tmp" }, undefined, undefined, toolCtxOf(h));
+		const pathed = await h.tools("saccade_workspace").execute("c3", { choice: "new", path: "/tmp" }, undefined, undefined, wrapper.ctxOf(h));
 		assert.match((pathed as any).content[0].text, /takes no path/);
 	});
+	assert.equal(wrapper.queries, 0, "param failures read nothing");
 	await stop(h);
 });
 
 test("a failed preparation releases the hold and keeps the session usable", async () => {
 	const h = harness("giveup5", "/sessions/giveup5.jsonl", "pi");
 	await h.pi.emit("session_start");
-	const calls = activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const missing = join(scratchDir("giveup5x"), "not-there");
 	await withHandoffEnv(async () => {
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: missing }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: missing }, undefined, undefined, wrapper.ctxOf(h));
 		assert.equal((out as any).isError, true);
 	});
-	assert.deepEqual(
-		calls.map((c) => c.op),
-		["hold", "release"],
-		"the failed preparation released its own hold",
-	);
-	assert.equal(calls[1]?.token, calls[0]?.token);
+	assert.equal(wrapper.queries, 1, "the status read happened before the path failed");
 	assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false);
 	assert.equal(h.pi.shutdowns, 0, "a failed preparation never shuts the session down");
+	await wrapper.startAdmission("subagent", { task: "carry on" });
+	assert.deepEqual(wrapper.blocked, [], "the failed preparation released its own hold");
 	await stop(h);
 });
 
-test("an armed handoff persists its facts and shuts the session down at settle", async () => {
+test("an armed handoff persists its facts, blocks admissions, and shuts the session down at settle", async () => {
 	const h = harness("arm6", "/sessions/arm6.jsonl", "pi");
 	await h.pi.emit("session_start");
-	activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const target = scratchDir("arm6-target");
-	const calls = activityProvider(h.pi, "idle");
 	await withHandoffEnv(async () => {
-		const out = await h.tools("saccade_workspace").execute("call_arm", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("call_arm", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
 		const body = (out as any).content[0].text;
 		assert.match(body, /workspace handoff armed/);
+		assert.match(body, /background admissions are held/);
 		assert.ok(body.includes(target), "the armed reply names the target");
 		assert.match(body, /helper's outcome log is (\S+\.handoff\.log)/);
 		assert.match(body, /if the session does not come back, that file names the failure/);
 	});
+	assert.equal(wrapper.queries, 1, "one valid empty snapshot armed the handoff");
 	const armed = h.pi.appendEntries.find((e) => e.type === "saccade_handoff");
 	assert.ok(armed, "the arm is a saved fact");
 	const data = armed!.data as HandoffEntryData;
@@ -1626,6 +1828,12 @@ test("an armed handoff persists its facts and shuts the session down at settle",
 	// the harness injected this actor; the session carries no task scope
 	assert.deepEqual(data.scope, { actor: "pi", task: null });
 	assert.match(data.log, /\.handoff\.log$/);
+	// while armed, background starts refuse and foreground work does not
+	await wrapper.startAdmission("bash", { command: "sleep 5", background: true });
+	await wrapper.startAdmission("subagent", { task: "more work" });
+	assert.deepEqual(wrapper.blocked, ["bash", "subagent"], "the armed handoff holds admissions");
+	await wrapper.startAdmission("bash", { command: "ls" });
+	assert.equal(wrapper.blocked.length, 2, "foreground bash is not an admission");
 	// the settle boundary shuts the session down with the helper launched
 	await h.pi.emit("agent_settled");
 	assert.equal(h.pi.shutdowns, 1, "the armed settle is the shutdown");
@@ -1634,7 +1842,6 @@ test("an armed handoff persists its facts and shuts the session down at settle",
 	await new Promise((resolve) => setTimeout(resolve, 400));
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal(done, undefined, "a launched handoff is not cancelled afterwards");
-	assert.deepEqual(calls.filter((c) => c.op === "hold").length, 1);
 	rmSync(target, { recursive: true, force: true });
 	await stop(h);
 });
@@ -1642,11 +1849,11 @@ test("an armed handoff persists its facts and shuts the session down at settle",
 test("a failed arm append leaves nothing for the settle boundary to launch", async () => {
 	const h = harness("appendfail19", "/sessions/appendfail19.jsonl", "pi");
 	await h.pi.emit("session_start");
-	const calls = activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const target = scratchDir("appendfail19-target");
 	await withHandoffEnv(async () => {
 		h.pi.failAppend = "saccade_handoff";
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
 		assert.equal((out as any).isError, true);
 		assert.match((out as any).content[0].text, /hold is released and the session stays/);
 		h.pi.failAppend = null;
@@ -1660,18 +1867,19 @@ test("a failed arm append leaves nothing for the settle boundary to launch", asy
 	// the helper's log would sit beside the fake guard; nothing created it
 	const guard = "/tmp/saccade-fake-guard-" + h.tracker.guardSalt + "-appendfail19.guard";
 	assert.equal(existsSync(guard.replace(/\.guard$/, ".handoff.log")), false, "no helper launched for the failed arm");
-	assert.deepEqual(calls.map((c) => c.op), ["hold", "release"]);
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, [], "the failed append released the hold");
 	rmSync(target, { recursive: true, force: true });
 	await stop(h);
 });
 
-test("an aborted run cancels only its armed handoff: no launch, no shutdown, admission restored", async () => {
+test("an aborted run cancels only its armed handoff: no launch, no shutdown, admissions restored", async () => {
 	const h = harness("abort20", "/sessions/abort20.jsonl", "pi");
 	await h.pi.emit("session_start");
-	const calls = activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const target = scratchDir("abort20-target");
 	await withHandoffEnv(async () => {
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
 		assert.match((out as any).content[0].text, /handoff armed/);
 		// the pinned AgentSettledEvent carries the run's own abort
 		await h.pi.emit("agent_settled", { aborted: true });
@@ -1683,21 +1891,19 @@ test("an aborted run cancels only its armed handoff: no launch, no shutdown, adm
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "cancelled");
 	assert.match((done!.data as HandoffDoneData).reason ?? "", /aborted/);
-	assert.ok(calls.some((c) => c.op === "release"), "the abort released the hold");
-	// admission restored: the wrapper holds again for a fresh token
-	const reopened: any = {};
-	h.pi.events.emit("bash-background.handoff-gate", { op: "hold", token: "post-abort", reply: reopened });
-	assert.equal(reopened.held, true, "the released gate admits again");
+	// admissions restored: the released gate admits a fresh background start
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, [], "the abort released the hold");
 	await stop(h);
 });
 
 test("a helper that cannot launch cancels the handoff and keeps the session alive", async () => {
 	const h = harness("launchfail7", "/sessions/launchfail7.jsonl", "pi");
 	await h.pi.emit("session_start");
-	activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const target = scratchDir("launchfail7-target");
 	await withHandoffEnv(async () => {
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
 		assert.match((out as any).content[0].text, /handoff armed/);
 		const armed = h.pi.appendEntries.find((e) => e.type === "saccade_handoff")!;
 		// the log path is occupied by a directory: the launch itself fails
@@ -1710,8 +1916,8 @@ test("a helper that cannot launch cancels the handoff and keeps the session aliv
 	assert.equal((done!.data as HandoffDoneData).outcome, "cancelled");
 	assert.match((done!.data as HandoffDoneData).reason ?? "", /helper could not launch/);
 	// the gate went with the cancelled arm
-	const release = h.pi.busEmitted.find((e) => (e.payload as any)?.op === "release");
-	assert.ok(release, "the cancellation released the hold");
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, [], "the cancellation released the hold");
 	rmSync(target, { recursive: true, force: true });
 	await stop(h);
 });
@@ -1719,23 +1925,27 @@ test("a helper that cannot launch cancels the handoff and keeps the session aliv
 test("native human input cancels an armed handoff; extension input does not", async () => {
 	const h = harness("input8", "/sessions/input8.jsonl", "pi");
 	await h.pi.emit("session_start");
-	activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const target = scratchDir("input8-target");
 	await withHandoffEnv(async () => {
-		await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
 		await h.pi.emit("input", { source: "extension", text: "[saccade message m-9 | from i-2]\n\nhello" });
 		assert.equal(
 			h.pi.appendEntries.some((e) => e.type === "saccade_handoff_done"),
 			false,
 			"an arriving delivery is not a takeover",
 		);
+		// still armed: admissions stay held through an arriving delivery
+		await wrapper.startAdmission("bash", { command: "sleep 5", background: true });
+		assert.deepEqual(wrapper.blocked, ["bash"]);
 		await h.pi.emit("input", { source: "user", text: "wait, stay here" });
 	});
 	assert.equal(h.pi.shutdowns, 0);
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "cancelled");
 	assert.match((done!.data as HandoffDoneData).reason ?? "", /human input/);
-	assert.ok(h.pi.busEmitted.some((e) => (e.payload as any)?.op === "release"));
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, ["bash"], "the takeover released the hold");
 	rmSync(target, { recursive: true, force: true });
 	await stop(h);
 });
@@ -1743,17 +1953,232 @@ test("native human input cancels an armed handoff; extension input does not", as
 test("a session end before the settle cancels the armed handoff", async () => {
 	const h = harness("end9", "/sessions/end9.jsonl", "pi");
 	await h.pi.emit("session_start");
-	activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const target = scratchDir("end9-target");
 	await withHandoffEnv(async () => {
-		await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
 		await h.pi.emit("session_shutdown");
 	});
 	assert.equal(h.pi.shutdowns, 0);
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "cancelled");
-	assert.ok(h.pi.busEmitted.some((e) => (e.payload as any)?.op === "release"));
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, [], "the session end released the hold");
 	rmSync(target, { recursive: true, force: true });
+	await stop(h);
+});
+
+test("the jobs snapshot validator reads the pinned shape and tolerates compatible extras", () => {
+	assert.deepEqual(validJobsSnapshot({ jobs: [] }), []);
+	assert.deepEqual(validJobsSnapshot({ jobs: [{ id: "bg-1", kind: "bash", state: "running" }] }), [
+		{ id: "bg-1", kind: "bash", state: "running" },
+	]);
+	assert.deepEqual(
+		validJobsSnapshot({
+			jobs: [
+				{ id: "bg-2", kind: "bash", state: "stopping", startedAt: 9 },
+				{ id: "sa-1", kind: "subagent", state: "unknown" },
+			],
+			checkedAt: "now",
+		}),
+		[
+			{ id: "bg-2", kind: "bash", state: "stopping" },
+			{ id: "sa-1", kind: "subagent", state: "unknown" },
+		],
+	);
+	for (const bad of [
+		null,
+		undefined,
+		"jobs",
+		[],
+		{},
+		{ jobs: null },
+		{ jobs: "none" },
+		{ jobs: [null] },
+		{ jobs: [{ id: 3, kind: "bash", state: "running" }] },
+		{ jobs: [{ id: "", kind: "bash", state: "running" }] },
+		{ jobs: [{ id: "bg-1", kind: "shell", state: "running" }] },
+		{ jobs: [{ id: "bg-1", kind: "bash", state: "exited" }] },
+		{ jobs: [{ id: "bg-1", kind: "bash", state: "finishing" }] },
+	]) {
+		assert.equal(validJobsSnapshot(bad), null, `a malformed snapshot (${JSON.stringify(bad)}) is unknown, never empty`);
+	}
+});
+
+test("background admissions block while the handoff prepares; foreground work and jobs do not", async () => {
+	const h = harness("prepare21", "/sessions/prepare21.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const wrapper = new FakeWrapper(h.pi);
+	const target = scratchDir("prepare21-target");
+	await withHandoffEnv(async () => {
+		wrapper.holdNextQuery();
+		const running = h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
+		await tick();
+		assert.equal(wrapper.queries, 1, "the status read is in flight");
+		// the gate is up: background bash and subagent starts refuse
+		await wrapper.startAdmission("bash", { command: "sleep 5", background: true });
+		await wrapper.startAdmission("subagent", { task: "sneaky work" });
+		assert.deepEqual(wrapper.blocked, ["bash", "subagent"], "the preparing hold blocks admissions");
+		// foreground bash, and the jobs query itself, are not admissions
+		await wrapper.startAdmission("bash", { command: "ls" });
+		assert.equal(wrapper.blocked.length, 2, "foreground bash passes the gate");
+		// the blocked attempts left nothing in flight: the empty snapshot arms
+		wrapper.releaseQuery();
+		const out = await running;
+		assert.match((out as any).content[0].text, /handoff armed/);
+		await h.pi.emit("input", { source: "user", text: "stay" });
+	});
+	const armed = h.pi.appendEntries.find((e) => e.type === "saccade_handoff");
+	assert.ok(armed, "the valid empty snapshot armed the handoff");
+	rmSync(target, { recursive: true, force: true });
+	await stop(h);
+});
+
+test("an admission still in flight refuses the move before any query, and its end frees it", async () => {
+	const h = harness("inflight22", "/sessions/inflight22.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const target = scratchDir("inflight22-target");
+	await withHandoffEnv(async () => {
+		// a start whose spawn has not been acknowledged: no end yet
+		const settle = await new FakeWrapper(h.pi).holdAdmission("bash", { command: "sleep 5", background: true });
+		const busy = new FakeWrapper(h.pi);
+		const refused = await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, busy.ctxOf(h));
+		assert.equal((refused as any).isError, true);
+		assert.match((refused as any).content[0].text, /1 background start\(s\) still in flight/);
+		assert.equal(busy.queries, 0, "the in-flight admission is visible before the read");
+		// a failed end (a refused spawn) frees the count the same way
+		await settle(true);
+		const ok = new FakeWrapper(h.pi);
+		const armed = await h.tools("saccade_workspace").execute("c2", { choice: "existing", path: target }, undefined, undefined, ok.ctxOf(h));
+		assert.match((armed as any).content[0].text, /handoff armed/);
+		await h.pi.emit("input", { source: "user", text: "stay" });
+	});
+	rmSync(target, { recursive: true, force: true });
+	await stop(h);
+});
+
+test("a second handoff request refuses while one is preparing or armed", async () => {
+	const h = harness("second23", "/sessions/second23.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const wrapper = new FakeWrapper(h.pi);
+	const target = scratchDir("second23-target");
+	await withHandoffEnv(async () => {
+		wrapper.holdNextQuery();
+		const first = h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
+		await tick();
+		const second = await h.tools("saccade_workspace").execute("c2", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
+		assert.equal((second as any).isError, true);
+		assert.match((second as any).content[0].text, /already preparing or armed/);
+		wrapper.releaseQuery();
+		await first;
+		const third = await h.tools("saccade_workspace").execute("c3", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
+		assert.equal((third as any).isError, true);
+		assert.match((third as any).content[0].text, /already preparing or armed/, "an armed handoff refuses another");
+		await h.pi.emit("input", { source: "user", text: "stay" });
+	});
+	rmSync(target, { recursive: true, force: true });
+	await stop(h);
+});
+
+test("human input during the status read cancels the preparation; the stale read never arms", async () => {
+	const h = harness("staleq24", "/sessions/staleq24.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const wrapper = new FakeWrapper(h.pi);
+	const target = scratchDir("staleq24-target");
+	await withHandoffEnv(async () => {
+		wrapper.holdNextQuery();
+		const running = h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
+		await tick();
+		// the human takes the session back while the read is pending
+		await h.pi.emit("input", { source: "user", text: "actually, stay" });
+		wrapper.releaseQuery();
+		const out = await running;
+		assert.equal((out as any).isError, true);
+		assert.match((out as any).content[0].text, /cancelled or the session changed while its status was read/);
+	});
+	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
+	assert.equal((done!.data as HandoffDoneData).outcome, "cancelled");
+	assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false, "the stale read armed nothing");
+	// the session is usable: a fresh request goes all the way
+	const again = new FakeWrapper(h.pi);
+	await withHandoffEnv(async () => {
+		const out = await h.tools("saccade_workspace").execute("c2", { choice: "existing", path: target }, undefined, undefined, again.ctxOf(h));
+		assert.match((out as any).content[0].text, /handoff armed/);
+		await h.pi.emit("input", { source: "user", text: "stay" });
+	});
+	rmSync(target, { recursive: true, force: true });
+	await stop(h);
+});
+
+test("an abort during the status read releases the hold and refuses the move", async () => {
+	const h = harness("staleq25", "/sessions/staleq25.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const wrapper = new FakeWrapper(h.pi);
+	const target = scratchDir("staleq25-target");
+	const controller = new AbortController();
+	await withHandoffEnv(async () => {
+		wrapper.holdNextQuery();
+		const running = h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, controller.signal, undefined, wrapper.ctxOf(h));
+		await tick();
+		controller.abort();
+		wrapper.releaseQuery();
+		const out = await running;
+		assert.equal((out as any).isError, true);
+		assert.match((out as any).content[0].text, /the call was cancelled; the hold is released and the session stays/);
+	});
+	assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false, "an aborted read never arms");
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, [], "the abort released the hold");
+	rmSync(target, { recursive: true, force: true });
+	await stop(h);
+});
+
+test("a session end during the status read cancels the preparation; the read never arms", async () => {
+	const h = harness("staleq26", "/sessions/staleq26.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const wrapper = new FakeWrapper(h.pi);
+	const target = scratchDir("staleq26-target");
+	await withHandoffEnv(async () => {
+		wrapper.holdNextQuery();
+		const running = h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
+		await tick();
+		await h.pi.emit("session_shutdown");
+		wrapper.releaseQuery();
+		const out = await running;
+		assert.equal((out as any).isError, true);
+		assert.match((out as any).content[0].text, /cancelled or the session changed while its status was read/);
+	});
+	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
+	assert.equal((done!.data as HandoffDoneData).outcome, "cancelled");
+	assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false, "a dead preparation never arms");
+	rmSync(target, { recursive: true, force: true });
+	await stop(h);
+});
+
+test("a provision awaited while the human cancels never arms and keeps the birth pointer", async () => {
+	const h = harness("staleq27", "/sessions/staleq27.jsonl", "pi");
+	await h.pi.emit("session_start");
+	const wrapper = new FakeWrapper(h.pi);
+	const provisioned = scratchDir("staleq27-ws");
+	h.tracker.createPaths.push(provisioned);
+	await withHandoffEnv(async () => {
+		h.tracker.holdNextCreate();
+		const running = h.tools("saccade_workspace").execute("c1", { choice: "new", label: "late" }, undefined, undefined, wrapper.ctxOf(h));
+		await tick();
+		assert.equal(h.tracker.creates.length, 1, "the provision call is in flight");
+		// the human cancels during the awaited provision call
+		await h.pi.emit("input", { source: "user", text: "no, stay" });
+		h.tracker.releaseCreate();
+		const out = await running;
+		assert.equal((out as any).isError, true);
+		assert.match((out as any).content[0].text, /cancelled or the session changed while preparing/);
+		// the birth already landed: the pointer survives the cancel
+		assert.match((out as any).content[0].text, new RegExp(`birth record 301 at ${provisioned}; no move happened`));
+	});
+	assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false, "the cancelled preparation armed nothing");
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, [], "the cancel released the hold");
+	rmSync(provisioned, { recursive: true, force: true });
 	await stop(h);
 });
 
@@ -2001,10 +2426,10 @@ test("an already-consumed arm stays consumed and an older arm is superseded", as
 test("the handoff entries paint through registered renderers", async () => {
 	const h = harness("paint16", "/sessions/paint16.jsonl", "pi");
 	await h.pi.emit("session_start");
-	activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const target = scratchDir("paint16-target");
 	await withHandoffEnv(async () => {
-		await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, toolCtxOf(h));
+		await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
 	});
 	assert.ok(h.pi.entryRenderers.get("saccade_handoff"), "the armed entry has a renderer");
 	assert.ok(h.pi.entryRenderers.get("saccade_handoff_done"), "the done entry has a renderer");
@@ -2017,11 +2442,11 @@ test("the handoff entries paint through registered renderers", async () => {
 test("the new choice provisions through the server and arms the birth record", async () => {
 	const h = harness("fresh17", "/sessions/fresh17.jsonl", "pi");
 	await h.pi.emit("session_start");
-	activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	const provisioned = scratchDir("fresh17-ws");
 	h.tracker.createPaths.push(provisioned);
 	await withHandoffEnv(async () => {
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "new", label: "\u{e9}tude" }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "new", label: "\u{e9}tude" }, undefined, undefined, wrapper.ctxOf(h));
 		assert.match((out as any).content[0].text, /provisioned now, birth record 301/);
 	});
 	const created = h.tracker.creates[0];
@@ -2036,17 +2461,18 @@ test("the new choice provisions through the server and arms the birth record", a
 test("a provision that comes back with no usable path releases the hold and keeps the birth pointer", async () => {
 	const h = harness("fresh18", "/sessions/fresh18.jsonl", "pi");
 	await h.pi.emit("session_start");
-	const calls = activityProvider(h.pi, "idle");
+	const wrapper = new FakeWrapper(h.pi);
 	await withHandoffEnv(async () => {
 		// no createPaths queued: the fake births /nonexistent-saccade-provision
-		const out = await h.tools("saccade_workspace").execute("c1", { choice: "new" }, undefined, undefined, toolCtxOf(h));
+		const out = await h.tools("saccade_workspace").execute("c1", { choice: "new" }, undefined, undefined, wrapper.ctxOf(h));
 		assert.equal((out as any).isError, true);
 		assert.match((out as any).content[0].text, /hold is released and the session stays/);
 		// the birth already landed: the failure face carries the true
 		// provision pointer, never a rollback or a success claim
 		assert.match((out as any).content[0].text, /birth record 301 at \/nonexistent-saccade-provision; no move happened/);
 	});
-	assert.deepEqual(calls.map((c) => c.op), ["hold", "release"]);
+	await wrapper.startAdmission("bash", { command: "ls", background: true });
+	assert.deepEqual(wrapper.blocked, [], "the failed provision released the hold");
 	assert.equal(h.pi.appendEntries.some((e) => e.type === "saccade_handoff"), false);
 	// nothing is live for the settle boundary after the failure
 	await h.pi.emit("agent_settled");
