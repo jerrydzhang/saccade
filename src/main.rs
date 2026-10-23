@@ -3113,7 +3113,6 @@ fn glimpse(line: &str, budget: usize) -> String {
 #[cfg(test)]
 mod test {
     use super::*;
-    use saccade::GitBranch;
 
     /// Possession, --actor, and the declared scope, one test owning every env mutation.
     #[test]

@@ -85,7 +85,7 @@ Work concludes through accounts and decisions, all of them comments:
   Any tier may offer; offering is not owner-gated.
 - **Accept** - names the offer (`c-N`), no prose. Moves `offered ->
   concluded`. Accept when the work is actually relied on, not when it
-  is merely finished. A producer whose declared scope covers the task
+  is merely finished. An agent whose declared scope covers the task
   cannot accept its offer.
 - **Reject** - names the offer with required grounds. Moves `offered ->
   open`, asking reconsideration; it does not establish wrongness. Any
@@ -101,8 +101,9 @@ Work concludes through accounts and decisions, all of them comments:
   never moves the selection, and a different source task is another
   use. Use creates no acceptance, and acceptance creates no use.
 - **Note** - everything else that parks on a thread or replies to a
-  record. Asking a person a question is a note or a message, never a
-  separate kind.
+  record. A note may record a question or a finding; a request
+  addressed to a peer is a message, not a note; native human
+  conversation stays native. No separate request kind exists.
 
 Older offers stay addressable; decisions naming a superseded offer
 refuse (`not_current_offer`). A concluded task never reopens - later

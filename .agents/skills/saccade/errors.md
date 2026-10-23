@@ -23,7 +23,7 @@ finding - name it on the thread before proceeding.
 - `self_reliance` - the use names its own task as source: reliance
   runs between different undertakings.
 - `self_acceptance` - your declared task scope covers the offered task:
-  a producer scoped to the task cannot accept its own conclusion.
+  an agent scoped to the task cannot accept its own conclusion.
   Acceptance is an outside consumer's act.
 - `invalid_state_transition` - read the log; the task's state says
   otherwise (a second offer while one stands, a decision on a concluded
