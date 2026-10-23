@@ -33,24 +33,15 @@ finding - name it on the thread before proceeding.
 - `invalid_incarnation_id` - a claim names an incarnation the record
   never birthed, or one bound to another task; the reference is `i-N`,
   the fold's dense incarnation number.
-- `workspace_already_exists` - the task already holds a workspace
-  lineage; one per task.
-- `workspace_missing` - the task has no recorded workspace; `sac start`
-  and `sac open` establish one, `sac exec` does not.
-- `checkpoint_rewind` - the branch tip sits behind the recorded
+- `workspace_missing` - the record names no workspace for that task;
+  a checkpoint has nothing to point at.
+- `checkpoint_rewind` - the named head sits behind the recorded
   checkpoint; a checkpoint advances, never rewinds.
-- `workspace_branch_exists` - start would take a branch name the repo
-  already holds; the branch scheme is `saccade/t-<n>`, one lineage per
-  task.
-- `workspace_branch_missing` - the recorded branch no longer exists in
-  the repo, so the checkout cannot be recreated; recovery of a missing
-  branch is not built.
+- `workspace_branch_exists` - provisioning would take a branch name
+  the repo already holds; generated names carry a uniqueness suffix,
+  so this names a real collision.
 - `workspace_path_occupied` - the workspace's worktree path is already
   occupied on disk.
-- `workspace_dirty` - the workspace's checkout carries staged,
-  unstaged, or untracked work; clean refuses before anything
-  destructive runs. Commit or remove the work first; ignored files
-  don't count.
 - `workspace_label_invalid` - the descriptive label of a
   `sac workspace new` name is not a safe single path and ref
   component; name it again.
@@ -108,8 +99,8 @@ finding - name it on the thread before proceeding.
 - `server_mismatch` - a server answered at the discovered address but
   serves a different database than the one the hint sits beside.
 - `usage` - the command line itself is wrong; both explicit
-  destinations (`--db` with `--server`) refuse here, as do server-only
-  verbs (`start`, `open`) aimed at a local `--db`.
+  destinations (`--db` with `--server`) refuse here, as does the
+  server-only `launch` aimed at a local `--db`.
 
 When the tracker misbehaves or a refusal needs reproducing, read
 `diagnosing.md` beside this file: the attempts log reconstructs the

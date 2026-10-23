@@ -14,8 +14,8 @@ use saccade::views::{
     thread_view,
 };
 use saccade::{
-    ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, GitCommit,
-    IncarnationId, Prose, RecordId, Reject, Scope, Target, Tier, WorktreePath, wire,
+    ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, IncarnationId,
+    Prose, RecordId, Reject, Scope, Target, Tier, WorktreePath, wire,
 };
 
 mod skill;
@@ -216,44 +216,6 @@ enum Cmd {
         bind: String,
         #[arg(long, default_value_t = 8811)]
         port: u16,
-    },
-    /// Record a task's current branch tip as its checkpoint
-    Checkpoint { id: String },
-    /// Establish a task's workspace and launch the pinned harness with
-    /// the prompt as its native first input; no comment publication, no
-    /// ownership transfer. A task already holding a workspace is
-    /// reported and opened, never duplicated
-    Start {
-        id: String,
-        /// The initial prompt, quoted
-        #[arg(required_unless_present = "stdin", conflicts_with = "stdin")]
-        body: Option<String>,
-        /// Read the initial prompt from stdin instead of an argument
-        #[arg(long)]
-        stdin: bool,
-        /// The Git base for the new branch: a ref, defaulting to the
-        /// primary checkout's current HEAD
-        #[arg(long)]
-        base: Option<String>,
-    },
-    /// Open a task's workspace through the host: ensure the recorded
-    /// environment exists (a missing checkout is recreated from its
-    /// branch tip), launch no harness, land no records
-    Open { id: String },
-    /// Tear a task's workspace down: its host terminals and running
-    /// work close, the checkout is removed, the branch (unmerged
-    /// commits included), records, checkpoints, and artifacts stand.
-    /// Staged, unstaged, or untracked work refuses first; nothing is
-    /// recorded
-    Clean { id: String },
-    /// Run a command inside a task's workspace: resolve the recorded
-    /// workspace/incarnation, enter the checkout, inject the identity
-    /// and routing environment, and exec the argv as given
-    Exec {
-        id: String,
-        /// The command and its arguments, after --
-        #[arg(last = true)]
-        argv: Vec<String>,
     },
     /// Launch the composed native Pi in an explicit existing
     /// workspace, task-free: a fresh session registers itself as a new
@@ -759,17 +721,8 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             );
         }
         Cmd::Workspace { verb } => return workspace_door(cli, &destination, verb),
-        Cmd::Start {
-            id,
-            body,
-            stdin,
-            base,
-        } => return start_door(cli, &destination, id, body.clone(), *stdin, base.clone()),
-        Cmd::Open { id } => return open_door(cli, &destination, id),
-        Cmd::Exec { id, argv } => return exec_door(cli, &destination, id, argv),
         Cmd::Identity => unreachable!("identity dispatches before the destination resolves"),
         Cmd::Serve { .. } => unreachable!("serve dispatches before the destination resolves"),
-        Cmd::Clean { id } => return clean_door(cli, &destination, id),
         Cmd::Migrate { out } => {
             let source = match &destination {
                 Destination::Local { db } => db.clone(),
@@ -806,47 +759,6 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             });
         }
         Cmd::Skill { .. } => unreachable!("the skill door dispatches before the db doors"),
-        Cmd::Checkpoint { id } => {
-            let task = parse_task_id(id)?;
-            let repo_root = match &cli.repo {
-                Some(repo) => repo
-                    .canonicalize()
-                    .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display())))?,
-                None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(|_| {
-                    Fail::Usage(
-                        "the working directory is not inside a git repository; pass --repo so checkpoint can resolve the branch".into(),
-                    )
-                })?,
-            };
-            let loadout = loadout_of(&destination)?;
-            let LoadState::Full(world) = loadout.state else {
-                return Err(Fail::Degraded(
-                    "checkpoint needs the world; the log will not fold".into(),
-                ));
-            };
-            let ctx = world.tasks.get(task.0).ok_or(Reject::InvalidTaskId)?;
-            let workspace = ctx.workspace.as_ref().ok_or(Reject::WorkspaceMissing)?;
-            let branch: String = workspace.workspace.branch.clone().into();
-            let tip = sh_git(
-                &repo_root,
-                &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
-            )
-            .map_err(Fail::Usage)?;
-            let recorded = workspace.workspace.checkpoint.as_str();
-            if tip == recorded {
-                return Ok(format!("t-{} checkpoint unchanged at {tip}", task.0));
-            }
-            // a tip strictly behind the recorded checkpoint rewinds it; a
-            // descended or diverged tip is an advance or a new lineage
-            if is_ancestor(&repo_root, &tip, recorded) {
-                return Err(Fail::Reject(Reject::CheckpointRewind));
-            }
-            Command::CheckpointWorkspace {
-                task_id: task,
-                checkpoint: GitCommit::new(tip)
-                    .map_err(|e| Fail::Usage(format!("git gave no commit: {e:?}")))?,
-            }
-        }
     };
 
     // Identity is required only where it is recorded: mutating commands.
@@ -964,32 +876,9 @@ fn skill_door(json: bool, verb: SkillVerb) -> ExitCode {
     }
 }
 
-fn sh_git(cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .output()
-        .map_err(|e| format!("git {}: {e}", args.first().unwrap_or(&"")))?;
-    if !out.status.success() {
-        return Err(format!(
-            "git {} failed: {}",
-            args.first().unwrap_or(&""),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// True when `ancestor` is an ancestor of `descendant`, equal included.
-fn is_ancestor(root: &std::path::Path, ancestor: &str, descendant: &str) -> bool {
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["merge-base", "--is-ancestor", ancestor, descendant])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+enum Destination {
+    Local { db: PathBuf },
+    Server { url: String },
 }
 
 /// The primary repo root: --repo names it, else the repo containing
@@ -1001,11 +890,6 @@ fn resolve_repo(cli: &Cli) -> Result<PathBuf, Fail> {
             .map_err(|e| Fail::Usage(format!("--repo {}: {e}", repo.display()))),
         None => saccade::paths::repo_root(std::path::Path::new(".")).map_err(Fail::Usage),
     }
-}
-
-enum Destination {
-    Local { db: PathBuf },
-    Server { url: String },
 }
 
 fn resolve_destination(cli: &Cli) -> Result<Destination, Fail> {
@@ -1227,40 +1111,6 @@ fn canonical_db(db_path: &std::path::Path) -> PathBuf {
     std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf())
 }
 
-/// The start door: the server establishes through its own Git effects;
-/// the host then carries one terminal running the pinned harness with
-/// the given prompt as its native initial input - no request comment,
-/// no ownership transfer. A task already holding a workspace is
-/// reported - nothing duplicated.
-fn start_door(
-    cli: &Cli,
-    destination: &Destination,
-    id: &str,
-    body: Option<String>,
-    stdin: bool,
-    base: Option<String>,
-) -> Result<String, Fail> {
-    let url = server_url(destination, "start")?;
-    let task = parse_task_id(id)?;
-    let prompt = start_body(body, stdin)?;
-    let context = context_of(cli)?;
-    identity_fallback_guard(cli, &context, attached_terminal())?;
-    client::handshake(&url);
-    let reply =
-        client::start_workspace(&url, &context, task.0, base.as_deref()).map_err(Fail::Client)?;
-    let host = if reply.established {
-        launch_harness(cli, destination, task, &reply, &Prose::new(prompt)?)?
-    } else {
-        open_through_host(&reply.workspace.path, false).map_err(|e| {
-            Fail::Usage(format!(
-                "workspace stands at {}; the host would not open it: {e}",
-                reply.workspace.path
-            ))
-        })?
-    };
-    render_workspace_reply(cli, &reply, &host)
-}
-
 fn server_url(destination: &Destination, verb: &str) -> Result<String, Fail> {
     match destination {
         Destination::Server { url } => Ok(url.clone()),
@@ -1306,177 +1156,6 @@ fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fail> {
         Err(e) => Err(Fail::Usage(e)),
         Ok(infallible) => match infallible {},
     }
-}
-
-/// The open door: ensure the recorded environment exists (a missing
-/// checkout is recreated from its branch tip, identity unchanged); an
-/// unestablished task births the association alone. No harness launch,
-/// no request, no ownership change.
-fn open_door(cli: &Cli, destination: &Destination, id: &str) -> Result<String, Fail> {
-    let url = server_url(destination, "open")?;
-    let task = parse_task_id(id)?;
-    client::handshake(&url);
-    let reply = client::open_workspace(&url, task.0).map_err(Fail::Client)?;
-    let host = open_through_host(&reply.workspace.path, reply.established).map_err(|e| {
-        Fail::Usage(format!(
-            "workspace stands at {}; the host would not open it: {e}",
-            reply.workspace.path
-        ))
-    })?;
-    render_workspace_reply(cli, &reply, &host)
-}
-
-fn clean_door(cli: &Cli, destination: &Destination, id: &str) -> Result<String, Fail> {
-    let task = parse_task_id(id)?;
-    let repo_root = resolve_repo(cli)?;
-    let LoadState::Full(world) = loadout_of(destination)?.state else {
-        return Err(Fail::Degraded(
-            "clean needs the world; the log will not fold".into(),
-        ));
-    };
-    let ctx = world.tasks.get(task.0).ok_or(Reject::InvalidTaskId)?;
-    let recorded = ctx.workspace.as_ref().ok_or(Reject::WorkspaceMissing)?;
-    let facts = saccade::workspace::recorded(task, recorded);
-    let path = facts.worktree.as_path().display().to_string();
-    saccade::workspace::refuse_dirty(&facts)?;
-    let host = close_workspace_terminals(&path).map_err(Fail::Usage)?;
-    let removed = saccade::workspace::remove_checkout(&repo_root, &facts).map_err(|e| match e {
-        saccade::workspace::WorkspaceFail::Git(detail) => {
-            Fail::Workspace(saccade::workspace::WorkspaceFail::Git(format!(
-                "{detail}; the checkout stands at {path}"
-            )))
-        }
-        other => Fail::Workspace(other),
-    })?;
-    let registration = deregister_workspace(&path).map_err(|e| {
-        Fail::Usage(format!(
-            "the host registration could not be removed: {e}; the checkout {path} is removed, \
-             branch {} retained",
-            facts.branch.as_str()
-        ))
-    })?;
-    let tip = saccade::workspace::branch_tip(&repo_root, &facts.branch)?;
-    render_clean_report(
-        cli,
-        task,
-        &facts,
-        tip.as_ref(),
-        &host,
-        removed,
-        registration,
-    )
-}
-
-fn render_clean_report(
-    cli: &Cli,
-    task: TaskId,
-    facts: &saccade::workspace::Established,
-    tip: Option<&saccade::GitCommit>,
-    host: &HostClosed,
-    removed: bool,
-    registration: HostDeregister,
-) -> Result<String, Fail> {
-    let path = facts.worktree.as_path().display().to_string();
-    let checkout = if removed { "removed" } else { "absent" };
-    let registration = match registration {
-        HostDeregister::Removed => "removed",
-        HostDeregister::Nothing => "absent",
-    };
-    if cli.json {
-        let host_json = match host {
-            HostClosed::Terminals { tabs, stopped } => serde_json::json!({
-                "terminals": {"closed": *tabs as u64, "stopped": *stopped as u64},
-                "registration": registration,
-            }),
-            HostClosed::Nothing => serde_json::json!({
-                "terminals": null,
-                "registration": registration,
-            }),
-        };
-        return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "task": format!("t-{}", task.0),
-            "path": path,
-            "branch": facts.branch.as_str(),
-            "tip": tip.map(|t| t.as_str()),
-            "checkout": checkout,
-            "host": host_json,
-        }))
-        .expect("the clean report is plain data"));
-    }
-    let mut out = vec![format!(
-        "t-{} workspace clean - checkout {checkout}",
-        task.0
-    )];
-    out.push(match tip {
-        Some(tip) => format!(
-            "  branch {} stands at {}",
-            facts.branch.as_str(),
-            tip.as_str()
-        ),
-        None => format!("  branch {} is gone", facts.branch.as_str()),
-    });
-    out.push(format!("  path {path}"));
-    out.push(match host {
-        HostClosed::Terminals { tabs, stopped } => {
-            fn word<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
-                if n == 1 { one } else { many }
-            }
-            format!(
-                "  host | {} {} closed, {} {} stopped",
-                tabs,
-                word(*tabs, "terminal tab", "terminal tabs"),
-                stopped,
-                word(*stopped, "process", "processes")
-            )
-        }
-        HostClosed::Nothing => "  host | nothing to close".to_string(),
-    });
-    out.push(format!("  host registration {registration}"));
-    Ok(out.join("\n"))
-}
-
-fn exec_door(
-    cli: &Cli,
-    destination: &Destination,
-    id: &str,
-    argv: &[String],
-) -> Result<String, Fail> {
-    let [program, rest @ ..] = argv else {
-        return Err(Fail::Usage("exec needs a command after --".into()));
-    };
-    let task = parse_task_id(id)?;
-    let LoadState::Full(world) = loadout_of(destination)?.state else {
-        return Err(Fail::Degraded(
-            "exec needs the world; the log will not fold".into(),
-        ));
-    };
-    let ctx = world.tasks.get(task.0).ok_or(Reject::InvalidTaskId)?;
-    let workspace = ctx.workspace.as_ref().ok_or(Reject::WorkspaceMissing)?;
-    let repo = resolve_repo(cli)?;
-    let actor = std::env::var("SACCADE_ACTOR")
-        .ok()
-        .filter(|a| !a.is_empty())
-        .unwrap_or_else(|| command_label(program));
-    let env = injected_environment(task, workspace, &actor, &repo);
-    let checkout = workspace.workspace.worktree.as_path();
-    std::env::set_current_dir(checkout).map_err(|e| {
-        Fail::Usage(format!(
-            "the checkout {} is missing: 'sac open t-{}' recreates it from the branch - {e}",
-            checkout.display(),
-            task.0
-        ))
-    })?;
-    let err = std::os::unix::process::CommandExt::exec(
-        std::process::Command::new(program)
-            .args(rest)
-            .envs(env)
-            .env_remove("SACCADE_DB")
-            .env_remove("SACCADE_SERVER")
-            // the retired spelling never reaches a child: the machine
-            // channel is SACCADE_INCARNATION_SEQ alone
-            .env_remove("SACCADE_INCARNATION"),
-    );
-    Err(Fail::Usage(format!("cannot exec {program}: {err}")))
 }
 
 /// A launched command's attribution label: its own file name.
@@ -1577,33 +1256,8 @@ fn identity_door(cli: &Cli) -> Result<String, Fail> {
     Ok(out.join("\n"))
 }
 
-/// Routing rides nothing: the session's sac commands discover from
-/// the repo.
-fn injected_environment(
-    task: TaskId,
-    workspace: &saccade::objects::workspace::WorkspaceContext,
-    actor: &str,
-    repo: &std::path::Path,
-) -> Vec<(String, String)> {
-    vec![
-        ("SACCADE_ACTOR".into(), actor.to_string()),
-        ("SACCADE_TASK".into(), format!("t-{}", task.0)),
-        // the machine identity channel: a bare birth-record position;
-        // the public i-N stays the fold's dense numbering
-        (
-            "SACCADE_INCARNATION_SEQ".into(),
-            workspace.birth.0.to_string(),
-        ),
-        (
-            "SACCADE_WORKSPACE".into(),
-            workspace.workspace.worktree.as_path().display().to_string(),
-        ),
-        ("SACCADE_REPO".into(), repo.display().to_string()),
-    ]
-}
-
-/// The start and send doors' body source: the quoted argument or the pipe.
-fn start_body(body: Option<String>, stdin: bool) -> Result<String, Fail> {
+/// The send door's body source: the quoted argument or the pipe.
+fn body_source(body: Option<String>, stdin: bool) -> Result<String, Fail> {
     if stdin {
         if std::io::stdin().is_terminal() {
             return Err(Fail::Usage("nothing piped: --stdin reads the body".into()));
@@ -1650,22 +1304,6 @@ fn shell_quote(word: &str) -> String {
     out
 }
 
-/// What the host did with the workspace.
-#[derive(serde::Serialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum HostOpen {
-    /// First start: the harness command was submitted into a new
-    /// terminal - acceptance is the evidence, execution is unobserved.
-    Launched { terminal: String, command: String },
-    /// A new shell terminal in the worktree (a birth's open).
-    Created { terminal: String },
-    /// A live terminal the host confirmed it brought to the front.
-    Revealed { terminal: String },
-    /// The workspace's address stands as the report; `live` names a
-    /// terminal the host holds but would not bring forward.
-    Reported { path: String, live: Option<String> },
-}
-
 fn orca(args: &[&str]) -> Result<std::process::Output, std::io::Error> {
     std::process::Command::new("orca").args(args).output()
 }
@@ -1683,58 +1321,11 @@ fn orca_await_worktree(path: &str) -> Result<(), String> {
         }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
-                "orca has not discovered {path} yet (bounded at 90s); 'sac open t-<n>' opens it once it has",
+                "orca has not discovered {path} yet (bounded at 90s)"
             ));
         }
         std::thread::sleep(std::time::Duration::from_millis(1500));
     }
-}
-
-/// The first live terminal the host holds in the worktree, if any.
-fn live_terminal(path: &str) -> Result<Option<String>, String> {
-    let out =
-        orca(&["terminal", "list", "--json"]).map_err(|e| format!("orca terminal list: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "orca terminal list failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let parsed: Option<String> =
-        serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&out.stdout))
-            .ok()
-            .and_then(|v| {
-                v.get("result")
-                    .and_then(|r| r.get("terminals"))
-                    .and_then(|ts| ts.as_array())
-                    .and_then(|ts| {
-                        ts.iter()
-                            .filter(|t| {
-                                t.get("worktreePath").and_then(|p| p.as_str()) == Some(path)
-                            })
-                            .filter(|t| {
-                                !t.get("orphaned").and_then(|o| o.as_bool()).unwrap_or(false)
-                            })
-                            .find_map(|t| {
-                                t.get("handle").and_then(|h| h.as_str()).map(str::to_string)
-                            })
-                    })
-            });
-    Ok(parsed)
-}
-
-/// Whether the host confirmed it brought the terminal to the front:
-/// its pinned answer is result.focus.navigated.
-fn switch_navigated(out: &std::process::Output) -> bool {
-    serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&out.stdout))
-        .ok()
-        .and_then(|v| {
-            v.get("result")
-                .and_then(|r| r.get("focus"))
-                .and_then(|f| f.get("navigated"))
-                .and_then(|n| n.as_bool())
-        })
-        .unwrap_or(false)
 }
 
 /// The created terminal's handle from the host's pinned response shape.
@@ -1749,288 +1340,6 @@ fn terminal_handle(stdout: &str) -> Result<String, String> {
                 .map(str::to_string)
         })
         .ok_or_else(|| "the terminal was created but the host named no handle".into())
-}
-
-enum OrcaCall {
-    Result(serde_json::Value),
-    Nothing,
-    Failed(String),
-}
-
-fn classify_orca(host: Result<std::process::Output, std::io::Error>, args: &[&str]) -> OrcaCall {
-    let out = match host {
-        // a binary that is not there is no host; a host that cannot
-        // run is a broken teardown path and refuses before destruction
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return OrcaCall::Nothing,
-        Err(e) => {
-            return OrcaCall::Failed(format!("orca {}: {e}", args.first().unwrap_or(&"")));
-        }
-        Ok(out) => out,
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let parsed: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            return OrcaCall::Failed(format!(
-                "orca {}: {e} ({})",
-                args.first().unwrap_or(&""),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-    };
-    if parsed.get("ok").and_then(|o| o.as_bool()) == Some(true) {
-        return OrcaCall::Result(parsed["result"].clone());
-    }
-    if parsed["error"]["code"].as_str() == Some("selector_not_found") {
-        return OrcaCall::Nothing;
-    }
-    OrcaCall::Failed(
-        parsed["error"]["message"]
-            .as_str()
-            .unwrap_or("orca failed")
-            .to_string(),
-    )
-}
-
-fn orca_workspace_call(args: &[&str]) -> OrcaCall {
-    classify_orca(orca(args), args)
-}
-
-enum HostClosed {
-    Terminals { tabs: usize, stopped: usize },
-    Nothing,
-}
-
-/// Stop every terminal and running work the host holds at the
-/// workspace: teardown's explicit authorization, never an inference.
-fn close_workspace_terminals(path: &str) -> Result<HostClosed, String> {
-    let selector = format!("path:{path}");
-    match orca_workspace_call(&[
-        "terminal",
-        "close",
-        "--worktree",
-        &selector,
-        "--all",
-        "--json",
-    ]) {
-        OrcaCall::Nothing => Ok(HostClosed::Nothing),
-        OrcaCall::Result(v) => Ok(HostClosed::Terminals {
-            tabs: v.get("closed").and_then(|c| c.as_u64()).unwrap_or(0) as usize,
-            stopped: v.get("stopped").and_then(|s| s.as_u64()).unwrap_or(0) as usize,
-        }),
-        OrcaCall::Failed(e) => Err(format!("orca terminal close failed: {e}")),
-    }
-}
-
-enum HostDeregister {
-    Removed,
-    Nothing,
-}
-
-/// Deregister the workspace from the host: a pure host-bookkeeping
-/// call - git removal is saccade's own effect, and the host's removal
-/// door would take the checked-out branch with it.
-fn deregister_workspace(path: &str) -> Result<HostDeregister, String> {
-    let selector = format!("path:{path}");
-    match orca_workspace_call(&["worktree", "rm", "--worktree", &selector, "--json"]) {
-        OrcaCall::Nothing => Ok(HostDeregister::Nothing),
-        OrcaCall::Result(v) => {
-            if v.get("removed").and_then(|r| r.as_bool()) == Some(true) {
-                Ok(HostDeregister::Removed)
-            } else {
-                Err("the host reported no removal".into())
-            }
-        }
-        OrcaCall::Failed(e) => Err(e),
-    }
-}
-
-/// Open a workspace through the host: a live terminal is brought
-/// forward only on the host's confirmed navigation, and only a birth's
-/// open creates one - a standing workspace is reported, never grown
-/// another tab.
-fn open_through_host(path: &str, create_when_none: bool) -> Result<HostOpen, String> {
-    if let Some(handle) = live_terminal(path)? {
-        let out = orca(&["terminal", "switch", "--terminal", &handle, "--json"])
-            .map_err(|e| format!("orca terminal switch: {e}"))?;
-        if out.status.success() && switch_navigated(&out) {
-            return Ok(HostOpen::Revealed { terminal: handle });
-        }
-        return Ok(HostOpen::Reported {
-            path: path.to_string(),
-            live: Some(handle),
-        });
-    }
-    if !create_when_none {
-        return Ok(HostOpen::Reported {
-            path: path.to_string(),
-            live: None,
-        });
-    }
-    orca_await_worktree(path)?;
-    let out = orca(&[
-        "terminal",
-        "create",
-        "--worktree",
-        &format!("path:{path}"),
-        "--json",
-    ])
-    .map_err(|e| format!("orca terminal create: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "orca terminal create failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let terminal = terminal_handle(&String::from_utf8_lossy(&out.stdout))?;
-    Ok(HostOpen::Created { terminal })
-}
-
-/// Submit the pinned harness into a new host terminal at the workspace,
-/// the prompt as its literal first input: a self-contained sac exec
-/// invocation, dev environment activated when the worktree carries an
-/// .envrc, the harness's label supplied as the session's actor.
-fn launch_harness(
-    cli: &Cli,
-    destination: &Destination,
-    task: TaskId,
-    reply: &client::WorkspaceReply,
-    request: &Prose,
-) -> Result<HostOpen, Fail> {
-    let pi = pinned_pi()?;
-    let label = command_label(&pi.display().to_string());
-    let repo = resolve_repo(cli)?;
-    // this same path arms the session's SACCADE_CLI: a guessed PATH
-    // spelling could hand the handoff helper another tracker's CLI
-    let sac = std::env::current_exe().map_err(|e| {
-        Fail::Usage(format!(
-            "this executable cannot be resolved for the launch: {e}"
-        ))
-    })?;
-    // an assignment is not a word: its value is quoted here, and it
-    // never passes through the word quoting below
-    let assignment = format!("SACCADE_ACTOR={}", shell_quote(&label));
-    let mut argv = vec![sac.display().to_string()];
-    // the child's explicit destination rides only when the caller named
-    // one; a discovered server is re-found from the repo it serves
-    let url = match destination {
-        Destination::Server { url } => url.clone(),
-        Destination::Local { .. } => {
-            return Err(Fail::Usage(
-                "start runs through the server; no local launch exists".into(),
-            ));
-        }
-    };
-    if cli.server.is_some() {
-        argv.extend(["--server".to_string(), url.clone()]);
-    }
-    argv.extend([
-        "--repo".to_string(),
-        repo.display().to_string(),
-        "exec".to_string(),
-        format!("t-{}", task.0),
-        "--".to_string(),
-        // exec scrubs the caller's destination env, so the session's
-        // own routing re-arms here, after that scrub: the already
-        // resolved server and this binary, or the session attaches
-        // nowhere and dies unregistered
-        "env".to_string(),
-        format!("SACCADE_SERVER={url}"),
-        format!("SACCADE_CLI={}", sac.display()),
-        pi.display().to_string(),
-        request.as_str().to_string(),
-    ]);
-    let worktree = &reply.workspace.path;
-    let direnv = std::path::Path::new(worktree).join(".envrc");
-    if direnv.is_file() {
-        // the assignment leads the typed line and the dev environment
-        // wraps the command: SACCADE_ACTOR=... direnv exec <wt> <sac> ...
-        argv.splice(
-            0..0,
-            ["direnv".to_string(), "exec".to_string(), worktree.clone()],
-        );
-    }
-    let command = std::iter::once(assignment)
-        .chain(argv.iter().map(|w| shell_quote(w)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    orca_await_worktree(worktree).map_err(Fail::Usage)?;
-    let out = orca(&[
-        "terminal",
-        "create",
-        "--worktree",
-        &format!("path:{worktree}"),
-        "--title",
-        &format!("sac t-{}", task.0),
-        "--command",
-        &command,
-        "--json",
-    ])
-    .map_err(|e| Fail::Usage(format!("orca terminal create: {e}")))?;
-    if !out.status.success() {
-        return Err(Fail::Usage(format!(
-            "the workspace stands at {worktree} and the records landed, but orca terminal create failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
-    }
-    let terminal = terminal_handle(&String::from_utf8_lossy(&out.stdout)).map_err(Fail::Usage)?;
-    Ok(HostOpen::Launched { terminal, command })
-}
-
-/// The workspace doors' report: every claim read off the records that
-/// actually landed, and what the host did.
-fn render_workspace_reply(
-    cli: &Cli,
-    reply: &client::WorkspaceReply,
-    host: &HostOpen,
-) -> Result<String, Fail> {
-    if cli.json {
-        let mut value = serde_json::to_value(reply).expect("the reply is plain data");
-        value["host"] = serde_json::to_value(host).expect("the host report is plain data");
-        return Ok(serde_json::to_string_pretty(&value).expect("plain data"));
-    }
-    let mut out = Vec::new();
-    if reply.established {
-        out.push(format!(
-            "t-{} workspace established - no request or ownership recorded",
-            reply.workspace.task
-        ));
-    } else if reply.recreated {
-        out.push(format!(
-            "t-{} workspace stands - checkout recreated from the branch tip, no duplicate records",
-            reply.workspace.task
-        ));
-    } else {
-        out.push(format!(
-            "t-{} workspace stands - no duplicate launch, request, or ownership change",
-            reply.workspace.task
-        ));
-    }
-    out.push(format!(
-        "  branch {} | base {}",
-        reply.workspace.branch, reply.workspace.base
-    ));
-    out.push(format!("  path {}", reply.workspace.path));
-    match host {
-        HostOpen::Launched { terminal, .. } => out.push(format!(
-            "  host terminal {terminal} | harness command submitted (execution unobserved)"
-        )),
-        HostOpen::Created { terminal } => out.push(format!("  host terminal {terminal} | shell")),
-        HostOpen::Revealed { terminal } => {
-            out.push(format!("  host terminal {terminal} | revealed"))
-        }
-        HostOpen::Reported { path, live: None } => out.push(format!(
-            "  host | no live terminal; the workspace stands at {path}"
-        )),
-        HostOpen::Reported {
-            path,
-            live: Some(handle),
-        } => out.push(format!(
-            "  host | terminal {handle} stands at {path}; the host would not bring it forward"
-        )),
-    }
-    out.extend(reply.records.iter().map(record_line));
-    Ok(out.join("\n"))
 }
 
 /// The migration door: one schema-3 source into a fresh schema-4
@@ -2344,7 +1653,7 @@ fn send_door(
     };
     let context = context_of(cli)?;
     identity_fallback_guard(cli, &context, attached_terminal())?;
-    let body = Prose::new(start_body(body, stdin)?)?;
+    let body = Prose::new(body_source(body, stdin)?)?;
     client::handshake(&url);
     let sent = client::send_message(&url, &context, to_num, reply_num, task_num, &body)
         .map_err(Fail::Client)?;
@@ -4059,102 +3368,5 @@ mod test {
         let missing = dir.join("absent.md");
         assert!(revise_body(None, false, Some(missing)).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    fn orca_out(stdout: &str) -> Result<std::process::Output, std::io::Error> {
-        use std::os::unix::process::ExitStatusExt;
-        Ok(std::process::Output {
-            status: std::process::ExitStatus::from_raw(0),
-            stdout: stdout.as_bytes().to_vec(),
-            stderr: Vec::new(),
-        })
-    }
-
-    #[test]
-    fn the_host_classifier_folds_only_a_missing_binary_and_selector_misses() {
-        let args = ["terminal", "close"];
-        // a genuinely absent binary is no host
-        assert!(matches!(
-            classify_orca(Err(std::io::Error::from_raw_os_error(2)), &args),
-            OrcaCall::Nothing
-        ));
-        // a present host that cannot run refuses the teardown path
-        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        assert!(matches!(
-            classify_orca(Err(denied), &args),
-            OrcaCall::Failed(_)
-        ));
-        // a counted close lands
-        let counted = orca_out(r#"{"ok": true, "result": {"closed": 2, "stopped": 2}}"#).unwrap();
-        assert!(matches!(
-            classify_orca(Ok(counted), &args),
-            OrcaCall::Result(ref v) if v["closed"].as_u64() == Some(2)
-        ));
-        // a selector that names no workspace is nothing to close
-        let miss = orca_out(r#"{"ok": false, "error": {"code": "selector_not_found"}}"#).unwrap();
-        assert!(matches!(classify_orca(Ok(miss), &args), OrcaCall::Nothing));
-        // any other host error and unparseable output refuse
-        let broken = orca_out(r#"{"ok": false, "error": {"code": "boom"}}"#).unwrap();
-        assert!(matches!(
-            classify_orca(Ok(broken), &args),
-            OrcaCall::Failed(_)
-        ));
-        let garbage = orca_out("not json").unwrap();
-        assert!(matches!(
-            classify_orca(Ok(garbage), &args),
-            OrcaCall::Failed(_)
-        ));
-    }
-
-    #[test]
-    fn the_clean_report_renders_zero_two_and_one_counts() {
-        let cli = Cli {
-            db: None,
-            repo: None,
-            actor: None,
-            json: false,
-            at: None,
-            server: None,
-            command: Cmd::Identity,
-        };
-        let facts = saccade::workspace::Established {
-            task: TaskId(0),
-            base: GitCommit::new("abc123".to_string()).unwrap(),
-            branch: GitBranch::new("saccade/t-0".to_string()).unwrap(),
-            worktree: WorktreePath::new(std::path::PathBuf::from("/tmp/wt")).unwrap(),
-        };
-        let report = |host: &HostClosed| {
-            render_clean_report(
-                &cli,
-                TaskId(0),
-                &facts,
-                None,
-                host,
-                true,
-                HostDeregister::Removed,
-            )
-            .unwrap()
-        };
-        assert!(
-            report(&HostClosed::Terminals {
-                tabs: 0,
-                stopped: 0
-            })
-            .contains("0 terminal tabs closed, 0 processes stopped")
-        );
-        assert!(
-            report(&HostClosed::Terminals {
-                tabs: 1,
-                stopped: 1
-            })
-            .contains("1 terminal tab closed, 1 process stopped")
-        );
-        assert!(
-            report(&HostClosed::Terminals {
-                tabs: 2,
-                stopped: 2
-            })
-            .contains("2 terminal tabs closed, 2 processes stopped")
-        );
     }
 }

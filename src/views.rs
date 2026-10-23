@@ -12,14 +12,6 @@ use crate::store::{RecordId, World};
 use crate::types::artifact::Artifact;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct WorkspaceFacts {
-    pub task: usize,
-    pub base: String,
-    pub branch: String,
-    pub path: String,
-}
-
 /// One message as the mailbox face renders it: the dense birth
 /// number, the addressed endpoints by theirs, and the delivery state
 /// - bookkeeping, never a claim of reading or agreement.

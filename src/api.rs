@@ -20,12 +20,10 @@ use crate::ActorName;
 use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::events::Event;
-use crate::objects::task::TaskId;
 use crate::store::{Context, RecordId, Scope, Tier, World};
 use crate::types::pointers::WorktreePath;
-use crate::views::WorkspaceFacts;
 use crate::web;
-use crate::workspace::{self, Established, WorkspaceFail};
+use crate::workspace::{self, WorkspaceFail};
 use crate::{Command, Reject};
 
 enum ServerState {
@@ -600,8 +598,6 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/command", post(command))
         .route("/api/v1/records", get(records))
-        .route("/api/v1/workspace/start", post(workspace_start))
-        .route("/api/v1/workspace/open", post(workspace_open))
         .route("/api/v1/workspace/create", post(workspace_create))
         .route("/api/v1/workspace/change", post(workspace_change))
         .route("/api/v1/native/attach", post(native_attach))
@@ -611,250 +607,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/messages/submit", post(message_submit))
         .route("/api/v1/messages/pending", get(messages_pending))
         .route("/api/v1/version", get(version))
-}
-
-impl WorkspaceFacts {
-    fn of(established: &Established) -> Self {
-        WorkspaceFacts {
-            task: established.task.0,
-            base: established.base.as_str().to_string(),
-            branch: established.branch.as_str().to_string(),
-            path: established.worktree.as_path().display().to_string(),
-        }
-    }
-}
-
-/// One workspace operation's outcome.
-#[derive(Serialize, Deserialize)]
-pub struct WorkspaceReply {
-    /// Whether this call birthed the establishment
-    pub established: bool,
-    /// Whether a missing checkout was recreated from its branch tip
-    pub recreated: bool,
-    pub workspace: WorkspaceFacts,
-    /// The establishment record's position: the shared
-    /// workspace/incarnation identity
-    pub incarnation: usize,
-    pub records: Vec<StoredRecord>,
-}
-
-#[derive(Deserialize)]
-struct StartRequest {
-    context: WireContext,
-    task: usize,
-    #[serde(default)]
-    base: Option<String>,
-    #[serde(default)]
-    client: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct OpenRequest {
-    task: usize,
-    #[serde(default)]
-    client: Option<String>,
-}
-
-enum OperationOutcome {
-    Done(WorkspaceReply),
-    Failed(ApiFail),
-}
-
-/// One workspace operation under the held writer lock: establish on
-/// first sight or ensure the recorded environment; a standing
-/// association lands nothing.
-fn workspace_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    actor: Option<String>,
-    received: &AsReceived,
-    task: usize,
-    base: Option<&str>,
-    caller_records: impl FnOnce(RecordId) -> Vec<db::RecordDraft>,
-) -> OperationOutcome {
-    let started = Instant::now();
-    let outcome = run_operation(app, guard, task, base, caller_records);
-    let duration_ms = started.elapsed().as_millis() as u64;
-    match &outcome {
-        OperationOutcome::Done(reply) => {
-            let seqs: Vec<usize> = reply.records.iter().map(|s| s.seq).collect();
-            app.attempts.append(
-                actor.as_deref(),
-                received.client.as_deref(),
-                duration_ms,
-                Outcome::Landed { seqs: &seqs },
-            );
-        }
-        OperationOutcome::Failed(fail) => {
-            let code = match fail {
-                ApiFail::Reject(reject, _) => reject.code(),
-                ApiFail::Degraded(_) => "degraded",
-                ApiFail::Db(_) => "storage",
-                ApiFail::Malformed(_) => "malformed_request",
-                ApiFail::Workspace(effect) => effect.code(),
-                ApiFail::NoRepo => "workspace_no_repo",
-                ApiFail::Refused(_, code, _) => code,
-            };
-            let cursor = match guard {
-                ServerState::Ready(inner) => db::last_seq(&inner.conn)
-                    .map_err(|e| e.to_string())
-                    .ok()
-                    .flatten(),
-                ServerState::Degraded(..) => None,
-            };
-            app.attempts.append(
-                actor.as_deref(),
-                received.client.as_deref(),
-                duration_ms,
-                Outcome::Refused {
-                    code,
-                    cursor,
-                    request: &received.raw,
-                },
-            );
-        }
-    }
-    outcome
-}
-
-fn run_operation(
-    app: &AppState,
-    guard: &mut ServerState,
-    task: usize,
-    base: Option<&str>,
-    caller_records: impl FnOnce(RecordId) -> Vec<db::RecordDraft>,
-) -> OperationOutcome {
-    let ServerState::Ready(inner) = guard else {
-        let ServerState::Degraded(reason, _) = guard else {
-            unreachable!("the state is one of the two")
-        };
-        return OperationOutcome::Failed(ApiFail::Degraded(reason.clone()));
-    };
-    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
-        return OperationOutcome::Failed(ApiFail::NoRepo);
-    };
-    // the world as the file stands: a supported local write must be
-    // visible to the next operation
-    let loadout = match db::load(&inner.conn) {
-        Ok(loadout) => loadout,
-        Err(e) => return OperationOutcome::Failed(ApiFail::Db(e.to_string())),
-    };
-    let world = match loadout.state {
-        db::LoadState::Full(world) => world,
-        db::LoadState::Degraded(reason) => {
-            return OperationOutcome::Failed(ApiFail::Degraded(reason));
-        }
-    };
-    if world.tasks.get(task).is_none() {
-        return OperationOutcome::Failed(ApiFail::Reject(Reject::InvalidTaskId, None));
-    }
-    let task_id = TaskId(task);
-    match world.tasks[task].workspace.as_ref() {
-        Some(recorded_ctx) => {
-            // the association governs: recreate the checkout, never another birth
-            let facts = workspace::recorded(task_id, recorded_ctx);
-            match workspace::ensure_checkout(&repo_root, &facts) {
-                Ok(recreated) => OperationOutcome::Done(WorkspaceReply {
-                    established: false,
-                    recreated,
-                    workspace: WorkspaceFacts::of(&facts),
-                    incarnation: recorded_ctx.birth.0,
-                    records: Vec::new(),
-                }),
-                Err(fail) => OperationOutcome::Failed(ApiFail::Workspace(fail)),
-            }
-        }
-        None => {
-            let home = workspace::worktree_home(&inner.db_path);
-            let established = match workspace::establish(&repo_root, &home, task_id, base) {
-                Ok(facts) => facts,
-                Err(fail) => return OperationOutcome::Failed(ApiFail::Workspace(fail)),
-            };
-            let birth = RecordId(loadout.rows.len());
-            let mut drafts = vec![db::RecordDraft {
-                context: Context::system(),
-                event: Event::WorkspaceEstablished {
-                    task_id,
-                    base: established.base.clone(),
-                    branch: established.branch.clone(),
-                    worktree: established.worktree.clone(),
-                },
-            }];
-            drafts.extend(caller_records(birth));
-            match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
-                Ok(records) => OperationOutcome::Done(WorkspaceReply {
-                    established: true,
-                    recreated: false,
-                    workspace: WorkspaceFacts::of(&established),
-                    incarnation: birth.0,
-                    records,
-                }),
-                Err(ExecuteFail::Reject(reject)) => {
-                    OperationOutcome::Failed(ApiFail::Reject(reject, None))
-                }
-                Err(ExecuteFail::Degraded(reason)) => {
-                    OperationOutcome::Failed(ApiFail::Degraded(reason))
-                }
-                Err(ExecuteFail::Db(e)) => OperationOutcome::Failed(ApiFail::Db(e.to_string())),
-            }
-        }
-    }
-}
-
-async fn workspace_start(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: StartRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let caller = Context {
-        actor: request.context.actor,
-        tier: match request.context.tier {
-            WireTier::Human => Tier::Human,
-            WireTier::Agent => Tier::Agent,
-        },
-        scope: request.context.scope,
-    };
-    let task = request.task;
-    let base = request.base;
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = workspace_operation(
-        &app,
-        &mut guard,
-        Some(caller.actor.as_str().to_string()),
-        &received,
-        task,
-        base.as_deref(),
-        |_| Vec::new(),
-    );
-    respond_operation(guard, outcome)
-}
-
-async fn workspace_open(State(app): State<AppState>, body: Bytes) -> Response {
-    let raw = String::from_utf8_lossy(&body).into_owned();
-    let request: OpenRequest = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
-    };
-    let received = AsReceived {
-        client: request.client,
-        raw,
-    };
-    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = workspace_operation(
-        &app,
-        &mut guard,
-        None,
-        &received,
-        request.task,
-        None,
-        |_| Vec::new(),
-    );
-    respond_operation(guard, outcome)
 }
 
 // -- the task-free workspace controller ----------------------------------
@@ -1738,21 +1490,6 @@ async fn native_launch(
             })),
         )
             .into_response(),
-    }
-}
-
-fn respond_operation(
-    guard: std::sync::MutexGuard<'_, ServerState>,
-    outcome: OperationOutcome,
-) -> Response {
-    drop(guard);
-    match outcome {
-        OperationOutcome::Done(reply) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
-        )
-            .into_response(),
-        OperationOutcome::Failed(fail) => api_failure(fail),
     }
 }
 

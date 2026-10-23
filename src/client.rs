@@ -5,18 +5,7 @@ use crate::Command;
 use crate::api::{Envelope, WireContext, WireTier};
 use crate::db::StoredRecord;
 use crate::store::{Context, Tier};
-use crate::views::WorkspaceFacts;
 use serde::{Deserialize, Serialize};
-
-/// One workspace operation's outcome, the wire's shape.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct WorkspaceReply {
-    pub established: bool,
-    pub recreated: bool,
-    pub workspace: WorkspaceFacts,
-    pub incarnation: usize,
-    pub records: Vec<StoredRecord>,
-}
 
 #[derive(Debug)]
 pub enum ClientFail {
@@ -341,36 +330,6 @@ fn bound(detail: &str) -> String {
     format!("{}...", &flat[..cut])
 }
 
-/// The start operation: first sight establishes the workspace; a task
-/// already holding a workspace is ensured and reported, nothing
-/// landed. No request, comment, or ownership rides it - the prompt is
-/// native input at launch, never a publication.
-pub fn start_workspace(
-    url: &str,
-    context: &Context,
-    task: usize,
-    base: Option<&str>,
-) -> Result<WorkspaceReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/workspace/start",
-        serde_json::json!({
-            "context": {
-                "actor": context.actor.as_str(),
-                "tier": match context.tier {
-                    Tier::Human => "human",
-                    Tier::Agent => "agent",
-                    Tier::System => unreachable!("the API has no system tier"),
-                },
-                "scope": context.scope,
-            },
-            "task": task,
-            "base": base,
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )
-}
-
 // -- the native integration's client half -------------------------------
 
 /// What the native integration learns when its session attaches.
@@ -525,18 +484,6 @@ pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, Cli
         detail: e.to_string(),
     })?;
     Ok(body.messages)
-}
-
-/// The open operation: ensure the recorded environment exists (a
-/// missing checkout is recreated from its branch tip), launching
-/// nothing, landing nothing on a recorded workspace; an unestablished
-/// task births the establishment alone.
-pub fn open_workspace(url: &str, task: usize) -> Result<WorkspaceReply, ClientFail> {
-    post_json(
-        url,
-        "/api/v1/workspace/open",
-        serde_json::json!({ "task": task, "client": env!("CARGO_PKG_VERSION") }),
-    )
 }
 
 // -- the task-free workspace controller's client half --------------------

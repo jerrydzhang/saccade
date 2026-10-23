@@ -115,8 +115,8 @@ repair alone: the body leaves the fold, a tombstone stays.
 ## Working a task
 
 There is no runner in this build. You arrive at a task through whatever
-launched you - a human, a coordinating agent, `sac start` - working in a
-workspace the record names. The tracker's part of the loop:
+launched you - a human, a coordinating agent - working in a workspace
+the record names. The tracker's part of the loop:
 
 1. **Retrieve first** (the protocol above): read your thread whole -
    the spec, prior verdicts, dead ends, parked working state - then the
@@ -125,7 +125,7 @@ workspace the record names. The tracker's part of the loop:
    responsibility, recorded on the ledger, transferring on the next
    claim. A task-scoped helper can contribute without claiming; a
    claim without an incarnation reference is a named external agent's
-   claim. Launching never claims: start and launch transfer no
+   claim. Launching never claims: launch transfers no
    ownership.
 3. **Work and park** conclusions as comments as they form. Deviate
    openly: if the spec cannot be followed as written, say so on the
@@ -161,15 +161,10 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac withdraw c-<n> --note "..."` | any tier | the note's standing-error repair: body out, tombstone stays |
 | `sac artifact t-N <path> [--name ...]` | any tier | park an artifact on the thread - the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
 | `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; nothing is recorded |
-| `sac checkpoint t-N` | any tier | record the task branch's tip as its checkpoint; needs a recorded workspace - none is created by checkpoint |
-| `sac start t-N "initial prompt"` (or `--stdin`; `--base <ref>` names a stacked base) | any tier | establish the task's workspace through the server's own Git effects and submit the pinned native Pi into one host terminal with the prompt as its native first input - no comment publication, no ownership transfer; a repeat start reveals the standing workspace's live terminal or reports its address |
 | `sac launch --workspace <dir> [-- prompt]` / `--new [label] [--base <ref>]` | any tier | launch the composed native Pi task-free: `--workspace` selects an explicit existing directory; `--new` provisions a fresh workspace through the server's Git effects and launches there; a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. No task, claim, or request is provisioned |
 | `sac workspace new [label] [--base <ref>]` | any tier | provision a NEW task-free workspace through the server's Git effects: the label plus a generated uniqueness suffix (workspace-<token> without a label), cut at the named base or the primary HEAD. The birth record's position is the workspace's identity - no task, claim, or incarnation, and no new numbering |
 | `sac workspace switch i-<n> --to <dir> [--resume -- prompt]` | any tier | move a STOPPED native session's saved working directory to an explicit existing one: a held guard refuses (exit the session first) and an unprobeable one refuses as unknown, both before anything moves; the target must already exist; the saved header is retargeted atomically (same native id, body, and history), and the change record lands only after the header actually moved - it asserts the confirmed change, never a running process. `--resume` then continues the same native id there through the ordinary resume door |
 | `sac launch --workspace <dir> --ask "question"` | a registered incarnation | cheap peer creation with an initial question: launches the peer, and once it registers the question goes to it as a durable addressed message from your own scope - the newborn's address is your reply surface. Requires SACCADE_INCARNATION_SEQ; never argv-shaped human input, never a task or ownership |
-| `sac open t-N` | any tier | ensure the recorded environment exists (a missing checkout is recreated from its branch tip); a fresh association births the establishment alone, a standing one reveals its live terminal or reports its address - never a harness launch or ownership change |
-| `sac clean t-N` | any tier | stop the workspace's host terminals and running work, remove the checkout; the branch (unmerged commits included), records, checkpoints, and artifacts stand; a checkout with staged, unstaged, or untracked work refuses first; nothing is recorded |
-| `sac exec t-N -- <command and argv>` | any tier | run a command inside the recorded workspace: identity and routing injected from the record, argv boundaries kept, nothing recorded |
 | `sac identity` | anonymous | report the environment-declared actor/tier, scope, and routing - disclosure, never a liveness claim |
 | `sac list` / `sac show <ids...>` / `sac log` | anonymous | the board, threads and records, raw events |
 | `sac search <terms...> [in:t-N by:NAME kind:K] [-C N]` | anonymous | exact terms over titles, comment prose, explanations; kinds: task, note, offer, accept, reject, use, artifact, explanation |
@@ -181,9 +176,8 @@ Not in this build (later slices, do not assume them): managed
 completion obligations, workspace switching from a live session (a live
 session's guard refuses and tells the operator to exit first), proposal
 machinery of any kind. Launching is the host's:
-`sac start` and `sac launch` ask the host (Orca) for one terminal
-and never supervise it - restarting Saccade leaves native sessions
-alone.
+`sac launch` asks the host (Orca) for one terminal and never
+supervises it - restarting Saccade leaves native sessions alone.
 
 ## Prose
 
@@ -284,55 +278,34 @@ honestly as "now".
 
 ## Workspaces
 
-`sac start t-N "initial prompt"` establishes the workspace: one
-machinery-authored establishment record carries the task reference,
-the canonical base commit (the primary checkout's current HEAD, or
-`--base <ref>`), the branch (`saccade/t-<n>`), and the worktree's
-absolute path - beside the tracker's db, under `worktrees/t-<n>`. That
-record's position births a **historical attribution identity**,
-referenced `i-N`: claims carry it, and it holds no native session -
-a real session's identity is the registration born when the composed
-Pi attaches (`SACCADE_INCARNATION_SEQ` carries it).
-
-The record holds establishment facts, not liveness: a checkout can go
-missing while its association stands. `sac open` (and a repeat start)
-recreate a missing checkout from its branch's current tip - committed
-advancement survives, identity never changes - and leave a present
-checkout's files, uncommitted changes, programs, and ownership alone.
-A branch that no longer exists refuses (`workspace_branch_missing`);
-recovery beyond that is not built.
-
-`sac clean t-N` tears the recorded workspace down: the host's terminals
-and running work in it stop, git removes the checkout, and the branch -
-unmerged commits included - stands with every record, checkpoint, and
-artifact. A checkout carrying staged, unstaged, or untracked work
-refuses (`workspace_dirty`) before anything destructive runs; ignored
-files are not work. A vanished checkout and registration clean again
-as success, and `sac open` afterwards recreates the checkout from the
-retained branch under the same workspace/incarnation identity - never
-a successor. Nothing is recorded and no task state gates it: teardown
-is explicit authorization to terminate running work, never an inference
-about the work's completion, and no state transition fires it.
-
-`sac exec t-N -- <argv>` is the harness-agnostic door into a
-workspace: it injects the session's identity and routing
-(`SACCADE_ACTOR` - the caller's declared attribution preserved, else
-the command's own label, so no wrapper session writes as an unpossessed
-human - `SACCADE_TASK`, `SACCADE_INCARNATION_SEQ`, `SACCADE_WORKSPACE`,
-plus repo, db, and server), overwriting stale bindings inherited from
-another task, and execs the argv with its argument boundaries intact.
-`sac start` submits the pinned native Pi through the same injection.
-A standing workspace never grows a terminal per visit: open and repeat
-start reveal the live terminal the host holds in the worktree, or
-report the address. The record governs; the workspace is a cache.
-
-A workspace can also be born task-free: `sac workspace new` provisions
+A workspace can be born task-free: `sac workspace new` provisions
 through the server's own Git effects - the optional label plus a
-generated uniqueness suffix, `workspace-<token>` without one - and
-lands a creation birth whose record position is the identity: no task,
-no claim, no incarnation, and no new human-facing number. Several
-sessions may select one workspace; selecting an existing directory
-(`sac launch --workspace`) provisions nothing.
+generated uniqueness suffix, `workspace-<token>` without one - cut at
+the named base or the primary HEAD, and lands a creation birth whose
+record position is the identity: no task, no claim, no incarnation,
+and no new human-facing number. The birth carries what the effect
+actually established: the canonical base commit, the branch, and the
+worktree's absolute path - beside the tracker's db, under `worktrees/`.
+Several sessions may select one workspace; selecting an existing
+directory (`sac launch --workspace`) provisions nothing.
+
+`sac launch` submits the composed native Pi into one host terminal at
+the chosen workspace, task-free: a fresh session registers itself as a
+new incarnation when it attaches, and `--resume i-<n>` continues a
+saved one from its recorded locator, validated against the saved
+header. No task, claim, or request is provisioned.
+
+The log may also name task-bound workspaces: a historical
+establishment record carries the task reference, the canonical base
+commit, the branch (`saccade/t-<n>`), and the worktree's absolute
+path. That record's position births a **historical attribution
+identity**, referenced `i-N`: claims carry it, and it holds no native
+session - a real session's identity is the registration born when the
+composed Pi attaches (`SACCADE_INCARNATION_SEQ` carries it). These
+establishments, their checkpoints, and their attribution read and fold
+exactly as always; the commands that established, reopened, executed
+into, checkpointed, or tore such workspaces down are retired. The
+record governs; the workspace is a cache.
 
 A native session's saved working directory moves by explicit change:
 `sac workspace switch i-<n> --to <dir>` resolves the recorded
