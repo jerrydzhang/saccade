@@ -134,9 +134,6 @@ async fn commands_round_trip_over_the_wire() {
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 
-    // the retired raw checkpoint: a valid historical task-bound
-    // workspace stands, authored by the trusted constructors the
-    // retired door once served, and the wire's own spelling refuses
     let hist = scratch_db("roundtrip-hist");
     {
         let mut conn = saccade::db::open(&hist).unwrap();
@@ -166,17 +163,16 @@ async fn commands_round_trip_over_the_wire() {
     }
     let hist_base = spawn_server(&hist).await;
     let (_, standing) = get_json(&hist_base, "/api/v1/records");
-    let standing_rows = json_of(&standing)["records"].as_array().unwrap().clone();
     assert_eq!(
-        standing_rows
+        json_of(&standing)["records"]
+            .as_array()
+            .unwrap()
             .iter()
             .map(|r| r["kind"].as_str().unwrap())
             .collect::<Vec<_>>(),
         ["task_created", "workspace_established"]
     );
 
-    // the post that would previously land now refuses, taught nothing,
-    // the journal untouched
     let (status, body) = post_command(
         &hist_base,
         &envelope(
@@ -188,11 +184,7 @@ async fn commands_round_trip_over_the_wire() {
     assert_eq!(status, 400);
     assert_eq!(json_of(&body)["error"]["code"], "malformed_request");
     let (_, after) = get_json(&hist_base, "/api/v1/records");
-    assert_eq!(
-        json_of(&after)["records"].as_array().unwrap().len(),
-        standing_rows.len(),
-        "the refused checkpoint wrote nothing"
-    );
+    assert_eq!(after, standing, "the refused checkpoint wrote nothing");
     let lines = attempts_lines(&hist);
     let refused = lines.last().expect("the refusal left its line");
     assert_eq!(refused["outcome"], "refused");
