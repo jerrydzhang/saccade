@@ -260,7 +260,7 @@ enum Cmd {
     /// incarnation; --resume continues a saved one from its recorded
     /// locator; --new provisions a fresh workspace first. No task,
     /// claim, or request is provisioned
-    Integrate {
+    Launch {
         /// The workspace directory to work in; it must already exist
         #[arg(long, conflicts_with = "resume")]
         workspace: Option<PathBuf>,
@@ -723,7 +723,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             );
         }
         Cmd::Messages { mailbox } => return messages_door(cli, &destination, mailbox.as_deref()),
-        Cmd::Integrate {
+        Cmd::Launch {
             workspace,
             resume,
             new,
@@ -733,7 +733,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         } => {
             if let Some(labeled) = new.as_deref().map(str::to_owned) {
                 let label = (!labeled.is_empty()).then_some(labeled.as_str());
-                return integrate_new_door(
+                return launch_new_door(
                     cli,
                     &destination,
                     label,
@@ -745,12 +745,12 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             if let Some(question) = ask.as_deref() {
                 let Some(workspace) = workspace.as_deref() else {
                     return Err(Fail::Usage(
-                        "integrate --ask launches a fresh peer: pass --workspace <dir> or --new [label]".into(),
+                        "launch --ask launches a fresh peer: pass --workspace <dir> or --new [label]".into(),
                     ));
                 };
                 return ask_door(cli, &destination, workspace, question);
             }
-            return integrate_door(
+            return launch_door(
                 cli,
                 &destination,
                 workspace.as_deref(),
@@ -2432,20 +2432,20 @@ fn messages_door(
     Ok(out.join("\n"))
 }
 
-/// The integrate door: the composed native Pi in an explicit existing
+/// The launch door: the composed native Pi in an explicit existing
 /// workspace, task-free. A fresh launch registers a new incarnation at
 /// session start; --resume continues a saved one, validated against
 /// its recorded native session before anything launches. A launch
 /// token, when given, rides the routing so the launching door can
 /// learn which incarnation registered under its launch.
-fn integrate_door(
+fn launch_door(
     cli: &Cli,
     destination: &Destination,
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
     prompt: &[String],
 ) -> Result<String, Fail> {
-    let (dir_str, terminal) = integrate_launch(cli, destination, workspace, resume, prompt, None)?;
+    let (dir_str, terminal) = launch_native(cli, destination, workspace, resume, prompt, None)?;
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "workspace": dir_str,
@@ -2461,7 +2461,7 @@ fn integrate_door(
 /// One compose launch through the host: the exact workspace, the
 /// terminal handle, the command line. Mechanics only - rendering and
 /// any follow-on act belong to the calling door.
-fn integrate_launch(
+fn launch_native(
     cli: &Cli,
     destination: &Destination,
     workspace: Option<&std::path::Path>,
@@ -2469,7 +2469,7 @@ fn integrate_launch(
     prompt: &[String],
     launch_token: Option<&str>,
 ) -> Result<(String, String), Fail> {
-    let url = server_url(destination, "integrate")?;
+    let url = server_url(destination, "launch")?;
     let pi = pinned_pi()?;
     let repo = resolve_repo(cli)?;
     let label = command_label(&pi.display().to_string());
@@ -2500,7 +2500,7 @@ fn integrate_launch(
                 .map_err(|e| Fail::Usage(format!("workspace {}: {e}", dir.display())))?;
             if !dir.is_dir() {
                 return Err(Fail::Usage(format!(
-                    "{} is not an existing directory; integrate selects an explicit existing workspace, it never creates one",
+                    "{} is not an existing directory; launch selects an explicit existing workspace, it never creates one",
                     dir.display()
                 )));
             }
@@ -2508,7 +2508,7 @@ fn integrate_launch(
             if !prompt_text.is_empty() {
                 argv.push(prompt_text);
             }
-            (dir, argv, "sac integrate".to_string(), None)
+            (dir, argv, "sac launch".to_string(), None)
         }
         (None, Some(token)) => {
             let loadout = loadout_of(destination)?;
@@ -2597,7 +2597,7 @@ fn integrate_launch(
         }
         _ => {
             return Err(Fail::Usage(
-                "integrate needs an explicit choice: --workspace <dir> for a fresh session, \
+                "launch needs an explicit choice: --workspace <dir> for a fresh session, \
                  --resume i-<n> for a saved one"
                     .into(),
             ));
@@ -2720,23 +2720,23 @@ fn ask_run(
     workspace: &std::path::Path,
     question: &str,
 ) -> Result<AskOutcome, Fail> {
-    let url = server_url(destination, "integrate")?;
+    let url = server_url(destination, "launch")?;
     let context = context_of(cli)?;
     let scope = context.scope.clone().ok_or_else(|| {
         Fail::Usage(
-            "integrate --ask sends as a registered incarnation: declare SACCADE_INCARNATION_SEQ (a human launch needs no question - pass the prompt positionally instead)".into(),
+            "launch --ask sends as a registered incarnation: declare SACCADE_INCARNATION_SEQ (a human launch needs no question - pass the prompt positionally instead)".into(),
         )
     })?;
     let creator = scope.incarnation.ok_or_else(|| {
         Fail::Usage(
-            "integrate --ask sends as a registered incarnation: declare SACCADE_INCARNATION_SEQ"
+            "launch --ask sends as a registered incarnation: declare SACCADE_INCARNATION_SEQ"
                 .into(),
         )
     })?;
     let loadout = loadout_of(destination)?;
     let LoadState::Full(world) = loadout.state else {
         return Err(Fail::Degraded(
-            "integrate --ask needs the world; the log will not fold".into(),
+            "launch --ask needs the world; the log will not fold".into(),
         ));
     };
     if !world.incarnations.contains_key(&creator) {
@@ -2749,7 +2749,7 @@ fn ask_run(
         saccade::Incarnation::Native { .. } => {}
         saccade::Incarnation::Established { .. } => {
             return Err(Fail::Usage(
-                "integrate --ask creates from a live native session; this attribution identity carries no saved native session to create from".into(),
+                "launch --ask creates from a live native session; this attribution identity carries no saved native session to create from".into(),
             ));
         }
     }
@@ -2760,7 +2760,7 @@ fn ask_run(
         .unwrap_or_else(|| format!("seq {}", creator.0.0));
     let token = launch_token();
     let (dir_str, terminal) =
-        integrate_launch(cli, destination, Some(workspace), None, &[], Some(&token))?;
+        launch_native(cli, destination, Some(workspace), None, &[], Some(&token))?;
     // the newborn announces itself through the launch cache; the poll
     // is transport with a hard stop, not a subscription
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -2897,7 +2897,7 @@ fn workspace_switch_door(
     if resume {
         // the change fact already stands; a failed launch says so
         let (dir_str, terminal) =
-            match integrate_launch(cli, destination, None, Some(token), prompt, None) {
+            match launch_native(cli, destination, None, Some(token), prompt, None) {
                 Ok(launch) => launch,
                 Err(e) => return Err(launch_failed(&changed, e)),
             };
@@ -2929,7 +2929,7 @@ fn workspace_switch_door(
         .expect("plain data"));
     }
     Ok(format!(
-        "{changed}\n  the session was stopped; resume it there with `sac integrate --resume i-{}`",
+        "{changed}\n  the session was stopped; resume it there with `sac launch --resume i-{}`",
         reply.num
     ))
 }
@@ -2960,7 +2960,7 @@ fn launch_failed(standing: &str, error: Fail) -> Fail {
 /// then hand the fresh directory to the ordinary doors - fresh launch
 /// or ask, exactly the existing composition. A launch failure leaves
 /// the creation fact true.
-fn integrate_new_door(
+fn launch_new_door(
     cli: &Cli,
     destination: &Destination,
     label: Option<&str>,
@@ -2983,8 +2983,7 @@ fn integrate_new_door(
                 Err(e) => return Err(launch_failed(&provisioned, e)),
             },
             None => {
-                match integrate_launch(cli, destination, Some(Path::new(&path)), None, prompt, None)
-                {
+                match launch_native(cli, destination, Some(Path::new(&path)), None, prompt, None) {
                     Ok((dir_str, terminal)) => {
                         serde_json::json!({"workspace": dir_str, "terminal": terminal})
                     }
@@ -3003,14 +3002,12 @@ fn integrate_new_door(
             Ok(door) => door,
             Err(e) => return Err(launch_failed(&provisioned, e)),
         },
-        None => {
-            match integrate_launch(cli, destination, Some(Path::new(&path)), None, prompt, None) {
-                Ok((dir_str, terminal)) => format!(
-                    "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
-                ),
-                Err(e) => return Err(launch_failed(&provisioned, e)),
-            }
-        }
+        None => match launch_native(cli, destination, Some(Path::new(&path)), None, prompt, None) {
+            Ok((dir_str, terminal)) => format!(
+                "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+            ),
+            Err(e) => return Err(launch_failed(&provisioned, e)),
+        },
     };
     Ok(format!("{}\n{door}", render_birth(&birth)))
 }

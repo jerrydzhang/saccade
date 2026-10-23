@@ -281,7 +281,7 @@ pub fn after_send(app: &AppState, to_id: IncarnationId, to_num: usize) {
                 &url,
                 "--repo",
                 repo_root.display().to_string().as_str(),
-                "integrate",
+                "launch",
                 "--resume",
                 &format!("i-{to_num}"),
             ])

@@ -3477,13 +3477,13 @@ async fn start_open_exec_and_identity_through_the_cli_face() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// A fresh integrate launch scrubs stale inherited identity, task,
-/// workspace, and db routing the child never selected; the routing it
-/// does select rides the launch line.
+/// A fresh launch scrubs stale inherited identity, task, workspace,
+/// and db routing the child never selected; the routing it does select
+/// rides the launch line.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_integrate_launch_scrubs_stale_inheritance() {
+async fn the_launch_scrubs_stale_inheritance() {
     let bin = env!("CARGO_BIN_EXE_sac");
-    let db = scratch_db("integrate-scrub");
+    let db = scratch_db("launch-scrub");
     let (root, _first, _head) = scratch_repo(db.parent().unwrap());
     let base_url = spawn_workspace_server(&db, &root).await;
 
@@ -3503,7 +3503,7 @@ async fn the_integrate_launch_scrubs_stale_inheritance() {
             &base_url,
             "--repo",
             root.to_str().unwrap(),
-            "integrate",
+            "launch",
             "--workspace",
             workspace.to_str().unwrap(),
             "--",
@@ -4141,7 +4141,7 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
             url.clone(),
             "--repo".to_string(),
             root.to_str().unwrap().to_string(),
-            "integrate".to_string(),
+            "launch".to_string(),
             "--resume".to_string(),
             resume.to_string(),
             "--json".to_string(),
@@ -4604,7 +4604,7 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
                     &base_url,
                     "--repo",
                     root.to_str().unwrap(),
-                    "integrate",
+                    "launch",
                     "--workspace",
                     &workspace,
                     "--ask",
@@ -4722,7 +4722,7 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
             &base_url,
             "--repo",
             root.to_str().unwrap(),
-            "integrate",
+            "launch",
             "--workspace",
             workspace.to_str().unwrap(),
             "--ask",
@@ -6132,7 +6132,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     );
     assert!(ok, "{out}{err}");
     assert!(out.contains("workspace changed - saved cwd"), "{out}");
-    assert!(out.contains("sac integrate --resume i-0"), "{out}");
+    assert!(out.contains("sac launch --resume i-0"), "{out}");
 
     // the explicit-new choice rides the ordinary fresh-launch door:
     // provision, then launch, one composition
@@ -6149,7 +6149,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     let pi = stub_pi(home);
 
     let (ok, out, err) = sac(
-        &["integrate", "--new", "trailblaze", "--json"],
+        &["launch", "--new", "trailblaze", "--json"],
         &[
             ("PATH", host_path.as_str()),
             ("FAKE_ORCA_LOG", host_log.to_str().unwrap()),
@@ -6175,7 +6175,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     // a failed launch over the standing provision: the birth pointer
     // and path ride the failure face, never a success claim
     let (ok, out, err) = sac(
-        &["integrate", "--new", "stumble", "--json"],
+        &["launch", "--new", "stumble", "--json"],
         &[
             ("PATH", host_path.as_str()),
             ("FAKE_ORCA_LOG", host_log.to_str().unwrap()),
@@ -6231,7 +6231,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
                     &base_url,
                     "--repo",
                     root.to_str().unwrap(),
-                    "integrate",
+                    "launch",
                     "--new",
                     "inquiry",
                     "--ask",
