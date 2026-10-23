@@ -192,6 +192,11 @@ pub enum Command {
         branch: GitBranch,
         worktree: WorktreePath,
     },
+    /// Retired from the public wire: the name no longer decodes at
+    /// /api/v1/command, so no caller can land a checkpoint; the shape
+    /// stays constructible for the trusted fixtures and decides to its
+    /// historical event.
+    #[serde(skip_deserializing)]
     CheckpointWorkspace {
         task_id: TaskId,
         checkpoint: GitCommit,

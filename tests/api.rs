@@ -133,6 +133,78 @@ async fn commands_round_trip_over_the_wire() {
     assert_eq!(json_of(&body)["error"]["code"], "invalid_reference");
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+
+    // the retired raw checkpoint: a valid historical task-bound
+    // workspace stands, authored by the trusted constructors the
+    // retired door once served, and the wire's own spelling refuses
+    let hist = scratch_db("roundtrip-hist");
+    {
+        let mut conn = saccade::db::open(&hist).unwrap();
+        let now = 1_700_000_000;
+        saccade::db::record(
+            &mut conn,
+            &Context::system(),
+            Command::CreateTask {
+                name: Prose::new("carry a merge through the worktree".into()).unwrap(),
+            },
+            now,
+        )
+        .unwrap();
+        saccade::db::record(
+            &mut conn,
+            &Context::system(),
+            Command::EstablishWorkspace {
+                task_id: TaskId(0),
+                base: saccade::GitCommit::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
+                    .unwrap(),
+                branch: saccade::GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: saccade::WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            now + 1,
+        )
+        .unwrap();
+    }
+    let hist_base = spawn_server(&hist).await;
+    let (_, standing) = get_json(&hist_base, "/api/v1/records");
+    let standing_rows = json_of(&standing)["records"].as_array().unwrap().clone();
+    assert_eq!(
+        standing_rows
+            .iter()
+            .map(|r| r["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["task_created", "workspace_established"]
+    );
+
+    // the post that would previously land now refuses, taught nothing,
+    // the journal untouched
+    let (status, body) = post_command(
+        &hist_base,
+        &envelope(
+            "checkpoint reviewer",
+            "agent",
+            json!({"checkpoint_workspace": {"task_id": 0, "checkpoint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}),
+        ),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(json_of(&body)["error"]["code"], "malformed_request");
+    let (_, after) = get_json(&hist_base, "/api/v1/records");
+    assert_eq!(
+        json_of(&after)["records"].as_array().unwrap().len(),
+        standing_rows.len(),
+        "the refused checkpoint wrote nothing"
+    );
+    let lines = attempts_lines(&hist);
+    let refused = lines.last().expect("the refusal left its line");
+    assert_eq!(refused["outcome"], "refused");
+    assert_eq!(refused["code"], "malformed_request");
+    assert!(
+        refused["request"]
+            .as_str()
+            .is_some_and(|r| r.contains("checkpoint_workspace")),
+        "{refused}"
+    );
+
+    std::fs::remove_dir_all(hist.parent().unwrap()).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
