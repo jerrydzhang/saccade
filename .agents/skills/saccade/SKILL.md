@@ -75,8 +75,9 @@ that skips it burns its reasoning on re-derivation or acts on guesses.
 
 Tasks are named undertakings: `open -> offered -> concluded`, with
 `cancelled` as the human's stop. Ownership is separate from state - a
-claim records whole-task responsibility (human, task-bound incarnation,
-or named external agent), transfers freely, and never gates anything.
+claim records whole-task responsibility (human, an incarnation, or
+named external agent), transfers freely, and never gates anything; a
+native incarnation is task-free, and a claim is never a scope change.
 
 Work concludes through accounts and decisions, all of them comments:
 
@@ -84,17 +85,21 @@ Work concludes through accounts and decisions, all of them comments:
   Any tier may offer; offering is not owner-gated.
 - **Accept** - names the offer (`c-N`), no prose. Moves `offered ->
   concluded`. Accept when the work is actually relied on, not when it
-  is merely finished. A task-bound producer cannot accept its own
-  task's offer.
+  is merely finished. A producer whose declared scope covers the task
+  cannot accept its offer.
 - **Reject** - names the offer with required grounds. Moves `offered ->
   open`, asking reconsideration; it does not establish wrongness. Any
   participant may reject, including the producer. To replace an
   account, reject it while it stands, then offer anew - there is no
   separate withdrawal door, and a second offer on an offered task
   refuses.
-- **Use** - lives on the consuming task, names a source offer and a
-  reason. Records reliance between internal tasks; creates no
-  acceptance, and acceptance creates no use.
+- **Use** - lives on the consuming task and declares a fixed source
+  task with a reason; it names no offer at birth. `sac bind` selects
+  the conclusion it rests on: the source task's current offered or
+  concluded account, chosen with grounds. Rebinding is the same verb,
+  earlier selections stay in the log, a replaced or accepted source
+  never moves the selection, and a different source task is another
+  use. Use creates no acceptance, and acceptance creates no use.
 - **Note** - everything else that parks on a thread or replies to a
   record. Asking a person a question is a note or a message, never a
   separate kind.
@@ -108,9 +113,11 @@ requires an explanation; human reopening of a cancelled one does too.
 Revision repairs presentation only: the prose-carrying variants
 (note, offer, grounds, reason) can be revised - the fold
 presents the latest and names a reviser; the bodyless accept refuses
-the door, references never change, and a substantive change is a
-reject and a fresh offer. Withdrawal is the note's standing-error
-repair alone: the body leaves the fold, a tombstone stays.
+the door, references never change, and a substantive correction is a
+new contribution citing the old one. For an offer account that
+replacement is a reject and a fresh offer. Withdrawal is the note's
+standing-error repair alone: the body leaves the fold, a tombstone
+stays.
 
 ## Working a task
 
@@ -148,13 +155,14 @@ and reopening (`sac reopen t-N --explanation "..."`).
 |---|---|---|
 | `sac create task "name"` | any tier | the reply names what was born |
 | `sac claim t-N` | any tier | ownership transfer; never a state change |
-| `sac comment t-N "..."` / `sac comment c-<n> "..."` | any tier | a note, parked or replied |
+| `sac comment t-N "..."` / `sac comment c-<n> "..."` (`--ref` repeatable) | any tier | a note, parked or replied; each `--ref` earns a `[^k]` citation marker |
 | `sac send --to i-<n> [--reply m-<n>] [--task t-<n>] "body"` (`--stdin`) | a registered incarnation | durable addressed communication: the sender rides the environment, delivery is the recipient's integration's act; never a comment, never a thread entry |
 | `sac messages [i-<n>]` | anonymous | the messages an incarnation participates in, in record order, with their delivery state (pending/submitted - bookkeeping, never a reading or agreement claim); the mailbox defaults to the declared scope |
 | `sac offer t-N "..."` | any tier | the whole-task closing account |
 | `sac accept c-<offer>` | any tier | conclude through the standing offer |
 | `sac reject c-<offer> --grounds "..."` | any tier | reconsideration with grounds; reopens the task |
-| `sac use t-<consumer> c-<offer> --reason "..."` | any tier | record reliance on a source offer |
+| `sac use t-<consumer> --source t-<source> --reason "..."` | any tier | prospective reliance: the consuming task declares its fixed source task, born unbound |
+| `sac bind c-<use> c-<offer> --grounds "..."` | any tier | bind or rebind the use's selection: the source task's current offered or concluded account; earlier selections stay in the log |
 | `sac cancel t-N --explanation "..."` | **human only** | stop an unfinished undertaking |
 | `sac reopen t-N --explanation "..."` | **human only** | resume a cancelled undertaking |
 | `sac revise c-<n> "..."` (prose also by `--stdin` or `--body-file`) | any tier | presentation repair on prose-carrying variants; the fold names a reviser, `sac log` keeps the original |
@@ -173,9 +181,8 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
 
 Not in this build (later slices, do not assume them): managed
-completion obligations, workspace switching from a live session (a live
-session's guard refuses and tells the operator to exit first), proposal
-machinery of any kind. Launching is the host's:
+completion obligations, proposal machinery of any kind. Launching is
+the host's:
 `sac launch` asks the host (Orca) for one terminal and never
 supervises it - restarting Saccade leaves native sessions alone.
 

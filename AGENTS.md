@@ -67,6 +67,10 @@ with them.
   when the object itself is useful to inspect or reuse, not merely because
   it was produced during execution.
 - No LLM calls in any read path; no LLM classification at capture or import.
+- The human read path is part of completion: execution capabilities and
+  recorded facts alone are insufficient. The human must be able to
+  follow work, reasoning, and consequential decisions without depending
+  on a workspace host or a separate coordinator briefing.
 - The journal stays agent-free; the tracker sees only operationalized
   instances, never theory.
 - Workflow fires on triggers, not clocks.

@@ -14,29 +14,25 @@ finding - name it on the thread before proceeding.
   `t-N` tokens, not searches.
 - `invalid_comment_id` - the `c-N` target names no comment; a task birth
   is addressed `t-N`.
-- `not_an_offer` - the `c-N` you accepted, rejected, or used names a
+- `not_an_offer` - the `c-N` you accepted, rejected, or bound names a
   comment that is not an offer.
 - `not_current_offer` - that offer is not the task's standing one (it
   was superseded or consumed). To replace an account, reject it while
-  it stands, then offer anew. A use names the source task's standing
-  Offered or Concluded account; a superseded source is not usable for
-  new reliance.
-- `self_reliance` - the use names its own task's conclusion: use
-  records reliance between different internal undertakings.
+  it stands, then offer anew. A bind selects the source task's current
+  offered or concluded account; a superseded account is not selectable.
+- `self_reliance` - the use names its own task as source: reliance
+  runs between different undertakings.
 - `self_acceptance` - your declared task scope covers the offered task:
-  a task-bound producer cannot accept its own conclusion. Acceptance
-  is an outside consumer's act.
+  a producer scoped to the task cannot accept its own conclusion.
+  Acceptance is an outside consumer's act.
 - `invalid_state_transition` - read the log; the task's state says
   otherwise (a second offer while one stands, a decision on a concluded
   or open task, revising or withdrawing a bodyless or withdrawn
   comment, cancel or reopen from a state that does not admit it).
 - `invalid_incarnation_id` - a claim names an incarnation the record
-  never birthed, or one bound to another task; the reference is `i-N`,
-  the fold's dense incarnation number.
-- `workspace_missing` - the record names no workspace for that task;
-  a checkpoint has nothing to point at.
-- `checkpoint_rewind` - the named head sits behind the recorded
-  checkpoint; a checkpoint advances, never rewinds.
+  never birthed, or a historical establishment bound to another task;
+  a native incarnation is task-free. The reference is `i-N`, the
+  fold's dense incarnation number.
 - `workspace_branch_exists` - provisioning would take a branch name
   the repo already holds; generated names carry a uniqueness suffix,
   so this names a real collision.
