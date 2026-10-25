@@ -12,13 +12,13 @@ use crate::store::{RecordId, World};
 use crate::views::{self, RefTarget, comment_line, show_view};
 use crate::web::{self, ArtifactStore};
 
-/// The committed workbench assets, embedded at compile time from
-/// web/dist - the single-artifact contract the console STYLE/JS
-/// precedent set. `just web-build` regenerates them from web/src.
+/// The workbench assets, embedded at compile time from OUT_DIR - the
+/// build script stages them there with parity proven per input, never
+/// from committed bytes. `just web-build` regenerates from web/src.
 pub mod assets {
-    pub const INDEX: &str = include_str!("../web/dist/index.html");
-    pub const APP: &str = include_str!("../web/dist/app.js");
-    pub const STYLE: &str = include_str!("../web/dist/style.css");
+    pub const INDEX: &str = include_str!(concat!(env!("OUT_DIR"), "/workbench/index.html"));
+    pub const APP: &str = include_str!(concat!(env!("OUT_DIR"), "/workbench/app.js"));
+    pub const STYLE: &str = include_str!(concat!(env!("OUT_DIR"), "/workbench/style.css"));
 }
 
 /// One read the workbench cannot serve honestly: a world that will not

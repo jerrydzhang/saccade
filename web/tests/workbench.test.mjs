@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Workbench } from "../src/workbench.mjs";
+import { Workbench, commandFor, confirmsLanded } from "../src/workbench.mjs";
 
 function workbench() {
   const bench = new Workbench();
@@ -152,4 +152,67 @@ test("draft Unicode remains unchanged around inserted citation markers", () => {
   bench.insertCitation(bench.beginCitation("draft:cursor", 1), 0);
   assert.equal(bench.buffer("draft:cursor").text, "\u03bb[^1] and \ud83d\udc41 stay data.");
   assert.deepEqual(bench.buffer("draft:cursor").references, [0]);
+});
+
+
+function rejectSurface() {
+  const buffer = { id: "draft:grounds", kind: "draft", text: "the edge case still fails",
+    eventual: { kind: "reject", offer: "c-2", offerSeq: 7 }, submission: null };
+  return { kind: "reject", buffer, title: null, body: buffer.text,
+    references: [], home: 0, target: "c-2",
+    get submission() { return buffer.submission; }, set submission(value) { buffer.submission = value; } };
+}
+
+test("a reject command reads the stored offer birth, never a source on the grounds draft", () => {
+  const command = commandFor(rejectSurface(), "jerry");
+  assert.deepEqual(command.comment.kind.reject, { offer: 7, grounds: "the edge case still fails" });
+});
+
+test("a landed reject confirms the same offer birth and the exact grounds bytes", () => {
+  const surface = rejectSurface();
+  const landed = { kind: "commented", actor: "jerry", tier: "human",
+    payload: { home: 0, kind: { reject: { offer: 7, grounds: "the edge case still fails" } } } };
+  assert.equal(confirmsLanded(surface, landed), true);
+  const otherOffer = structuredClone(landed);
+  otherOffer.payload.kind.reject.offer = 9;
+  assert.equal(confirmsLanded(surface, otherOffer), false);
+});
+
+function revisionSurface() {
+  const buffer = { id: "c-0", kind: "comment", text: "the corrected body",
+    source: { seq: 11, kind: "note", title: "The original title", body: "the original body" },
+    revisionPending: {
+      title: "The original title", savedTitle: "the locally saved title",
+      savedBody: "the locally saved body",
+      originalTitle: "The original title", originalBody: "the original body",
+      submission: null,
+    } };
+  return { kind: "revision", buffer, title: buffer.revisionPending.title, body: buffer.text,
+    references: null, home: 0, target: "c-0",
+    get submission() { return buffer.revisionPending.submission; }, set submission(value) { buffer.revisionPending.submission = value; } };
+}
+
+test("the revision patch diffs against the original record bytes, not the local savepoint", () => {
+  const command = commandFor(revisionSurface(), "jerry");
+  assert.deepEqual(command.revise_comment, { id: 11, body: "the corrected body" },
+    "an untouched title sends no title field even after :w moved the savepoint");
+});
+
+test("saving locally never changes the revision patch intent", () => {
+  const surface = revisionSurface();
+  surface.buffer.revisionPending.savedTitle = surface.buffer.revisionPending.title;
+  surface.buffer.revisionPending.savedBody = surface.buffer.text;
+  const command = commandFor(surface, "jerry");
+  assert.deepEqual(command.revise_comment, { id: 11, body: "the corrected body" });
+});
+
+test("a landed revision confirms exactly the fields the patch sent", () => {
+  const surface = revisionSurface();
+  const landed = { kind: "comment_revised", actor: "jerry", tier: "human",
+    payload: { id: 11, body: "the corrected body" } };
+  assert.equal(confirmsLanded(surface, landed), true);
+  const extraField = structuredClone(landed);
+  extraField.payload.title = "a concurrent title lands unbothered";
+  assert.equal(confirmsLanded(surface, extraField), false,
+    "a title the patch never sent is not claimed by the confirmation");
 });

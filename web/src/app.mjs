@@ -6,7 +6,7 @@ import { headerFolding, sectionFold } from "./editor.mjs";
 import { markdown } from "@codemirror/lang-markdown";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { Fzf } from "fzf";
-import { Workbench } from "./workbench.mjs";
+import { Workbench, commandFor, confirmsLanded } from "./workbench.mjs";
 import { richDocuments } from "./rich.mjs";
 import { sourceAppearance } from "./appearance.mjs";
 
@@ -218,7 +218,6 @@ function identifierInfo(buffer) {
 function refreshChrome() {
   const buffer = current();
   $("#bar-mode").textContent = mode() === "View" ? "RENDERED" : mode().toUpperCase();
-  $("#bar-kind").textContent = kindName(buffer.revisionPending ? "comment" === buffer.kind ? buffer.source.kind : buffer.kind : buffer.kind === "draft" && buffer.eventual?.kind === "reject" ? "Draft" : buffer.kind);
   $("#bar-kind").textContent = kindName(buffer.kind === "draft" ? buffer.eventual?.kind === "reject" ? "draft" : "draft" : buffer.revisionPending ? buffer.source.kind : buffer.kind);
   $("#bar-ident").textContent = identifier(buffer);
   $("#bar-info").textContent = identifierInfo(buffer);
@@ -570,7 +569,9 @@ function startRevision() {
   buffer.revisionPending = {
     title: standing.title ?? null,
     savedTitle: standing.title ?? null,
-    savedBody: buffer.text === undefined ? standing.body : standing.body,
+    savedBody: standing.body,
+    originalTitle: standing.title ?? null,
+    originalBody: standing.body,
     submission: null,
   };
   buffer.text = standing.body;
@@ -690,48 +691,6 @@ function acceptSurface(buffer) {
     get submission() { return buffer.decision; },
     set submission(value) { buffer.decision = value; },
   };
-}
-
-function commandFor(surface, actor) {
-  if (surface.kind === "note") {
-    return { comment: { home: surface.home, kind: { note: { title: surface.title, body: surface.body } }, references: surface.references } };
-  }
-  if (surface.kind === "revision") {
-    const id = surface.buffer.source.seq;
-    const title = ["note", "offer"].includes(surface.buffer.source.kind)
-      ? surface.title !== surface.buffer.revisionPending.savedTitle ? surface.title : null
-      : null;
-    const body = surface.body !== surface.buffer.revisionPending.savedBody ? surface.body : null;
-    return { revise_comment: { id, ...(title !== null ? { title } : {}), ...(body !== null ? { body } : {}) } };
-  }
-  if (surface.kind === "accept") {
-    return { comment: { home: surface.home, kind: { accept: { offer: surface.buffer.source.seq } }, references: [] } };
-  }
-  return { comment: { home: surface.home, kind: { reject: { offer: surface.buffer.source.seq, grounds: surface.body } }, references: [] } };
-}
-
-function confirmsLanded(surface, record) {
-  const payload = typeof record.payload === "string" ? JSON.parse(record.payload) : record.payload;
-  if (surface.kind === "note") {
-    return record.kind === "commented" && payload?.home === surface.home
-      && payload?.kind?.note?.title === surface.title
-      && payload?.kind?.note?.body === surface.body
-      && JSON.stringify(payload?.references ?? []) === JSON.stringify(surface.references);
-  }
-  if (surface.kind === "revision") {
-    if (record.kind !== "comment_revised" || payload?.id !== surface.buffer.source.seq) return false;
-    const title = surface.title !== surface.buffer.revisionPending.savedTitle ? surface.title : null;
-    const body = surface.body !== surface.buffer.revisionPending.savedBody ? surface.body : null;
-    const sentTitle = title === null ? undefined : title;
-    const sentBody = body === null ? undefined : body;
-    return (sentTitle === undefined ? payload?.title === undefined : payload?.title === sentTitle)
-      && (sentBody === undefined ? payload?.body === undefined : payload?.body === sentBody);
-  }
-  if (surface.kind === "accept") {
-    return record.kind === "commented" && payload?.kind?.accept?.offer === surface.buffer.source.seq;
-  }
-  return record.kind === "commented" && payload?.kind?.reject?.offer === surface.buffer.source.seq
-    && payload?.kind?.reject?.grounds === surface.body;
 }
 
 function confirmation(surface, actor) {
@@ -873,7 +832,7 @@ function persist() {
     const buffers = [...bench.buffers.values()].map((buffer) => ({
       id: buffer.id, kind: buffer.kind,
       ...(buffer.kind === "draft" ? { text: buffer.text, references: buffer.references, home: buffer.home, submission: buffer.submission, authoredTitle: buffer.authoredTitle, eventual: buffer.eventual, savedText: buffer.savedText } : {}),
-      ...(buffer.revisionPending ? { revisionPending: buffer.revisionPending } : {}),
+      ...(buffer.revisionPending ? { text: buffer.text, revisionPending: buffer.revisionPending } : {}),
       ...(buffer.decision ? { decision: buffer.decision } : {}),
       lastPosition: buffer.lastPosition, inline: buffer.inline,
     }));
@@ -890,6 +849,37 @@ function migrateDraftShape(buffer) {
   buffer.eventual ??= null;
 }
 
+function restoreLegacy() {
+  if (!identity?.legacy_instance) return false;
+  const raw = localStorage.getItem(`saccade-web-vim:${identity.legacy_instance}`);
+  if (!raw) return false;
+  try {
+    const data = JSON.parse(raw);
+    for (const buffer of data.buffers ?? []) {
+      if (buffer.kind === "draft") {
+        // the prototype's generated display name stays display-only
+        bench.register({ id: buffer.id, kind: "draft", title: buffer.title, text: buffer.text,
+          references: buffer.references ?? [], home: buffer.home, submission: buffer.submission ?? null,
+          authoredTitle: "", eventual: null, savedText: buffer.text });
+      } else {
+        published(buffer.id);
+      }
+      const restored = bench.buffers.get(buffer.id);
+      if (!restored) continue;
+      restored.lastPosition = buffer.lastPosition;
+      restored.inline = buffer.inline;
+    }
+    bench.layout = data.layout ?? null;
+    bench.focus = data.focus ?? null;
+    bench.nextView = Math.max(1, data.nextView ?? 1);
+    nextDraft = data.nextDraft ?? 1;
+    for (const view of data.views ?? []) {
+      bench.views.set(view.id, { ...view, positions: new Map(view.positions) });
+    }
+    return bench.views.size > 0;
+  } catch { return false; }
+}
+
 function restore() {
   const raw = localStorage.getItem(storageKey);
   if (!raw) return false;
@@ -900,7 +890,10 @@ function restore() {
       migrateDraftShape(restored);
       restored.lastPosition = buffer.lastPosition;
       restored.inline = buffer.inline;
-      if (buffer.revisionPending) restored.revisionPending = buffer.revisionPending;
+      if (buffer.revisionPending) {
+        restored.text = buffer.text;
+        restored.revisionPending = buffer.revisionPending;
+      }
       if (buffer.decision) restored.decision = buffer.decision;
     }
     bench.layout = data.layout;
@@ -918,8 +911,12 @@ async function reload(announce = true) {
   for (const buffer of bench.buffers.values()) {
     if (buffer.kind === "draft") continue;
     const pending = buffer.revisionPending;
+    const pendingText = pending ? buffer.text : undefined;
     published(buffer.id);
-    if (pending && !buffer.revisionPending) buffer.revisionPending = pending;
+    if (pending && !buffer.revisionPending) {
+      buffer.revisionPending = pending;
+      buffer.text = pendingText;
+    }
     for (const [id, view] of editors) {
       if (bench.view(id).bufferId !== buffer.id) continue;
       if (buffer.revisionPending) continue;
@@ -946,12 +943,12 @@ const registry = [
   { id: "cite", label: "Insert citation", binding: "ci", local: "i", when: () => current().kind === "draft" && current().eventual?.kind !== "reject" && !isReading(), run: () => openPicker("cite") },
   { id: "home-task", label: "Set draft home task", binding: "nh", local: "h", when: () => current().kind === "draft" && current().eventual?.kind !== "reject", run: () => openPicker("home") },
   { id: "review", label: "Review for submission", binding: "nr", local: "r", run: openReview },
-  { id: "revise", label: "Revise this contribution", local: "e", when: revisableContext, run: startRevision },
-  { id: "discard-revision", label: "Discard pending repair", when: () => !!current().revisionPending, run: discardRevision },
+  { id: "revise", label: "Revise this contribution", local: "e", when: () => revisableContext() && !current().revisionPending, run: startRevision },
+  { id: "discard-revision", label: "Discard pending repair", local: "e", when: () => !!current().revisionPending, run: discardRevision },
   { id: "accept", label: "Accept the standing offer", local: "a", when: () => !!standingOffer(current()), run: startAccept },
   { id: "reject", label: "Reject the standing offer with grounds", local: "x", when: () => !!standingOffer(current()), run: startReject },
   { id: "title", label: "Title the focused draft or repair", local: "t", run: editTitle },
-  { id: "write", aliases: ["w"], label: "Save draft locally", when: () => current().kind === "draft" || current().revisionPending, run: () => { const b = current(); if (b.kind === "draft") b.savedText = b.text; if (b.revisionPending) { b.revisionPending.savedTitle = b.revisionPending.title; b.revisionPending.savedBody = b.text; } if (persist()) { refreshChrome(); status("Saved locally in this browser. Nothing sent."); } } },
+  { id: "write", aliases: ["w"], label: "Save draft locally", when: () => current().kind === "draft" || current().revisionPending, run: () => { const b = current(); const prior = { savedText: b.savedText, savedTitle: b.revisionPending?.savedTitle, savedBody: b.revisionPending?.savedBody }; if (b.kind === "draft") b.savedText = b.text; if (b.revisionPending) { b.revisionPending.savedTitle = b.revisionPending.title; b.revisionPending.savedBody = b.text; } if (persist()) { refreshChrome(); status("Saved locally in this browser. Nothing sent."); } else { if (b.kind === "draft") b.savedText = prior.savedText; if (b.revisionPending) { b.revisionPending.savedTitle = prior.savedTitle; b.revisionPending.savedBody = prior.savedBody; } refreshChrome(); } } },
   { id: "undo", label: "Undo edit", when: () => editable(current()), run: () => Vim.handleKey(getCM(currentEditor()), "u") },
   { id: "redo", label: "Redo edit", when: () => editable(current()), run: () => Vim.handleKey(getCM(currentEditor()), "<C-r>") },
   { id: "split-row", aliases: ["vsplit", "vs"], label: "vsplit - split pane beside", binding: "wv", run: () => split("row") },
@@ -1316,8 +1313,8 @@ document.addEventListener("keydown", (event) => {
 function initialBuffer() {
   const hash = /^#c-\d+$/.test(location.hash) ? location.hash.slice(1) : null;
   if (hash) return hash;
-  if (/^\/t\/\d+$/.test(location.pathname)) return location.pathname.slice(1);
-  if (/^\/c\/\d+$/.test(location.pathname)) return location.pathname.slice(1);
+  if (/^\/t\/\d+$/.test(location.pathname)) return location.pathname.slice(1).replace("/", "-");
+  if (/^\/c\/\d+$/.test(location.pathname)) return location.pathname.slice(1).replace("/", "-");
   return "home";
 }
 
@@ -1326,14 +1323,21 @@ async function start() {
   storageKey = `saccade-workbench:${version.db}`;
   identity = await api("/api/v1/workbench/identity");
   snapshot = await api("/api/v1/workbench");
-  if (!restore()) {
+  if (!restore() && !restoreLegacy()) {
     published("home");
     bench.open("home");
-    // a deep link names the first buffer of a fresh session only
-    if (initialBuffer() !== "home") {
-      try { openBuffer(initialBuffer(), bench.focus); } catch { /* deep link names nothing recorded; home stands */ }
-    }
   }
+  const target = initialBuffer();
+  if (target !== "home") {
+    try { openBuffer(target, bench.focus); }
+    catch { status(`The linked ${target} names nothing recorded; home stands.`); }
+  }
+  window.addEventListener("hashchange", () => {
+    const linked = initialBuffer();
+    if (linked === "home") return;
+    try { openBuffer(linked, bench.focus); }
+    catch { status(`The linked ${linked} names nothing recorded.`); }
+  });
   renderLayout(); focusPane(bench.focus);
   status("Space Space: task/contribution/draft | Space sg: content | , e revise, , a accept, , x reject, , t title | : commands");
   window.workbenchUI = { state: () => ({
@@ -1344,4 +1348,4 @@ async function start() {
     actor: identity.actor,
   }) };
 }
-start().catch((error) => { status(`Workbench unavailable: ${error.message}`); });
+start().catch((error) => { console.error(error); try { window.__startDebug = { layout: JSON.stringify(bench.layout), focus: bench.focus, views: [...bench.views.keys()] }; } catch {} status(`Workbench unavailable: ${error.message}`); });

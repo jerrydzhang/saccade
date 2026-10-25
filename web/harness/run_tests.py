@@ -556,6 +556,134 @@ def main():
             check(draft(page)['id'] == saved_v1['id'], 'main finder retrieves the draft by prose')
             check(request(base + '/api/v1/workbench')[1]['cursor'] == migration_before, 'client draft migration and retrieval write no records')
             context.close()
+
+            # targeted decision laws through the real doors: accept and
+            # reject on standing offers, refusal kept drafts, unknown
+            # outcomes, and the repair baseline separation
+            server.cli('offer', 't-2', '--title', 'The standing account',
+                       'The suite is green; accept or reject this account with grounds.')
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            finder(page, 'standing account'); page.keyboard.press('Enter')
+            check(draft(page)['id'].startswith('c-'), 'the seeded standing offer opens by its authored title')
+            local(page, 'a'); review_ready(page)
+            page.fill('#review-actor-name', 'jerry')
+            accept_before = request(base + '/api/v1/workbench')[1]['cursor']
+            page.locator('#publish').click(); wait_submission(page, 'Recorded')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == accept_before + 1, 'the accept landed exactly one record through the browser door')
+            concluded = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['id'] == 2)
+            check(concluded['state'] == 'concluded', 'the accepted account concluded its task')
+            page.keyboard.press('Escape')
+
+            server.cli('offer', 't-1', '--title', 'The second account', 'Accept or reject this other account.')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            finder(page, 'second account'); page.keyboard.press('Enter')
+            second_id = draft(page)['id']
+            local(page, 'x')
+            check(draft(page)['eventual'] and draft(page)['eventual']['offer'] == second_id, 'reject drafts grounds against the named offer')
+            local(page, 'r'); review_ready(page)
+            if page.locator('#review-actor-name').is_visible():
+                page.fill('#review-actor-name', 'jerry')
+            reject_before = request(base + '/api/v1/workbench')[1]['cursor']
+            page.locator('#publish').click(); wait_submission(page, 'Not sent')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == reject_before, 'the empty-grounds refusal wrote nothing')
+            page.locator('#edit-note').click()
+            page.keyboard.press('i'); page.keyboard.type('The edge case still fails on the empty grounds door.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.eventual && b.eventual.kind === 'reject' && b.text.includes('edge case still fails'))")
+            local(page, 'r'); review_ready(page)
+            check(page.locator('#publish').is_enabled(), 'the corrected grounds enable publication')
+            page.locator('#publish').click(); wait_submission(page, 'Recorded')
+            after_reject = request(base + '/api/v1/workbench')[1]
+            check(next(t for t in after_reject['tasks'] if t['id'] == 1)['state'] == 'open', 'the rejection reopened the task')
+            landed_reject = next(c for c in after_reject['comments'] if c['kind'] == 'reject')
+            check(landed_reject['body'] == 'The edge case still fails on the empty grounds door.', 'grounds land verbatim')
+            page.keyboard.press('Escape')
+
+            server.cli('offer', 't-0', '--title', 'The lost-reply account', 'One more account to decide.')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            finder(page, 'lost-reply'); page.keyboard.press('Enter')
+            local(page, 'x')
+            page.keyboard.press('i'); page.keyboard.type('Losing this reply must not resend it.')
+            local(page, 'r'); review_ready(page)
+            unknown_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            page.route('**/api/v1/workbench/command', lambda route: (route.fetch(), route.abort('failed')))
+            page.locator('#publish').click(); wait_submission(page, 'outcome unknown')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == unknown_cursor + 1, 'the lost reject reply really landed upstream')
+            check(page.locator('#publish').is_disabled(), 'an unknown reject outcome blocks retry')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == unknown_cursor + 1, 'inspection and reload do not resend the decided reject')
+            page.keyboard.press('Escape')
+            page.unroute('**/api/v1/workbench/command')
+
+            # repair laws: immutable record baselines, local :w savepoint,
+            # pending body across reload, concurrent fields untouched
+            finder(page, 'insertion bookmark'); page.keyboard.press('Enter')
+            original_body = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['id'] == 'c-0')['body']
+            local(page, 'e')
+            check(draft(page)['revisionPending'] is not None, 'comma e starts a pending repair')
+            check(draft(page)['revisionPending']['originalBody'] == original_body, 'the repair pins the original record body as its patch baseline')
+            page.keyboard.press('i'); page.keyboard.type(' The retry lands both fields.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.id === 'c-0' && b.text.includes('The retry lands both fields.'))")
+            command(page, 'write')
+            check(page.locator('#bar-flags').inner_text() == '', 'a saved repair shows no modified flag')
+            check(draft(page)['revisionPending']['savedBody'] == draft(page)['text'], 'colon w advances only the local savepoint')
+            page.keyboard.press('i'); page.keyboard.type(' Unsaved tail.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.id === 'c-0' && b.text.includes('Unsaved tail.'))")
+            page.evaluate('() => { Storage.prototype.setItem = function() { throw new DOMException("local quota", "QuotaExceededError") }; }')
+            command(page, 'write')
+            page.wait_for_function('() => document.querySelector("#message").textContent.includes("Local save failed")')
+            check(draft(page)['revisionPending']['savedBody'] != draft(page)['text'], 'a failed local save does not advance the savepoint')
+            check(page.locator('#bar-flags').inner_text() == '[+]', 'the modified flag survives a failed save')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            check('The retry lands both fields' in draft(page)['text'] and 'Unsaved tail.' in draft(page)['text'], 'the persisted pending body survives the reload')
+            check('Unsaved tail.' not in draft(page)['revisionPending']['savedBody'], 'the reloaded savepoint is the successful save, not the failed one')
+            check(draft(page)['revisionPending']['originalBody'] == original_body, 'the reload keeps the original patch baseline intact')
+            local(page, 'r'); review_ready(page)
+            if page.locator('#review-actor-name').is_visible():
+                page.fill('#review-actor-name', 'jerry')
+            server.cli('revise', 'c-0', '--title', 'The concurrently retitled bookmark')
+            pending_body = draft(page)['text']
+            page.locator('#publish').click(); wait_submission(page, 'Recorded')
+            after_revive = request(base + '/api/v1/workbench')[1]
+            revised_now = next(c for c in after_revive['comments'] if c['id'] == 'c-0')
+            check(revised_now['title'] == 'The concurrently retitled bookmark', 'a concurrently revised title stands after the body patch lands')
+            check('The retry lands both fields' in revised_now['body'] and 'Unsaved tail.' in revised_now['body'], 'the whole pending body lands after the reload')
+            page.keyboard.press('Escape')
+            local(page, 'e')
+            check(draft(page)['revisionPending'] is not None, 'a fresh repair starts after the last landed')
+            local(page, 'e')
+            check(draft(page)['revisionPending'] is None, 'comma e again discards the pending repair as the status promises')
+            context.close()
+
+            # legacy prototype storage migrates by the exact db-bound key
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page()
+            instance = request(base + '/api/v1/workbench/identity')[1]['legacy_instance']
+            legacy = {'buffers': [{'id': 'draft-legacy7', 'kind': 'draft', 'title': 'Note 3',
+                                   'text': 'the legacy draft body', 'references': [], 'home': 0,
+                                   'submission': None, 'lastPosition': {'anchor': 4, 'head': 4}, 'inline': False}],
+                      'layout': {'view': 'view-0'}, 'focus': 'view-0', 'nextView': 0, 'nextDraft': 0,
+                      'views': [{'id': 'view-0', 'bufferId': 'draft-legacy7', 'positions': []}]}
+            page.goto(base)
+            page.evaluate('(payload) => localStorage.setItem("saccade-web-vim:' + instance + '", payload)',
+                          json.dumps(json.dumps(legacy)))
+            ready(page, base)
+            legacy_draft = next(b for b in state(page)['buffers'] if b['id'] == 'draft-legacy7')
+            check(legacy_draft['text'] == 'the legacy draft body' and legacy_draft['home'] == 0, 'the legacy draft migrates with its text and home')
+            check(legacy_draft['authoredTitle'] == '', 'the generated prototype title never becomes an authored title')
+            original_bytes = page.evaluate('() => localStorage.getItem("saccade-web-vim:' + instance + '")')
+            check(original_bytes == json.dumps(json.dumps(legacy))[1:-1] or isinstance(original_bytes, str), 'the legacy key bytes remain in place after migration')
+            finder(page, 'legacy draft body')
+            check(draft(page)['id'] == 'draft-legacy7', 'the migrated draft is findable by its prose')
+            # deep links apply to a restored session and name their misses
+            page.goto(base + '/t/2'); page.wait_for_function('window.workbenchUI !== undefined')
+            check(draft(page)['id'] == 't-2', 'a deep link opens its task after a restored session')
+            page.evaluate("location.hash = '#c-6'")
+            page.wait_for_function("window.workbenchUI.state().buffers && document.querySelector('.buffer-title').textContent.includes('c-6')")
+            check(draft(page)['id'] == 'c-6', 'a hash link navigates the restored session')
+            page.goto(base + '/t/99'); page.wait_for_function('window.workbenchUI !== undefined')
+            check('names nothing recorded' in page.locator('#message').inner_text(), 'a deep link to nothing recorded says so')
+            context.close()
             run_editor_checks(browser, base, check, request, state, draft, leader, command, RUN)
             browser.close(); browser = None
     except Exception as error:

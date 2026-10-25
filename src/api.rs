@@ -620,14 +620,25 @@ fn cookie_actor(headers: &HeaderMap) -> Option<String> {
         })
 }
 
-/// The workbench's identity read: the cookie-claimed actor, when one
-/// stands, and nothing else. The name at the act is the client's to
-/// supply; the tier is pinned server-side and never travels.
-async fn workbench_identity(headers: HeaderMap) -> Response {
+/// The workbench's identity read: the cookie-claimed actor when one
+/// stands, plus the db-bound legacy storage instance. The prototype
+/// keyed drafts by sha256(db path)[:16]; a plain-LAN-HTTP browser
+/// cannot recompute that (no crypto.subtle off secure contexts), so
+/// the db names its own legacy key here - an exact lookup, never a
+/// scan.
+async fn workbench_identity(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    use sha2::Digest;
     let actor = cookie_actor(&headers).unwrap_or_default();
+    let legacy: String = sha2::Sha256::digest(app.db_path.to_string_lossy().as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     (
         StatusCode::OK,
-        Json(json!({"actor": if actor.is_empty() { Value::Null } else { json!(actor) }})),
+        Json(json!({
+            "actor": if actor.is_empty() { Value::Null } else { json!(actor) },
+            "legacy_instance": &legacy[..16],
+        })),
     )
         .into_response()
 }

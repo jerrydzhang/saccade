@@ -176,3 +176,48 @@ function removeLeaf(node, viewId) {
 function leaves(node) {
   return node.children ? node.children.flatMap(leaves) : [node.view];
 }
+
+// the wire translation and its landed-check: pure over a surface and
+// the folded record, so the model pins them where the controller uses
+// them
+export function commandFor(surface, actor) {
+  if (surface.kind === "note") {
+    return { comment: { home: surface.home, kind: { note: { title: surface.title, body: surface.body } }, references: surface.references } };
+  }
+  if (surface.kind === "revision") {
+    const id = surface.buffer.source.seq;
+    const title = ["note", "offer"].includes(surface.buffer.source.kind)
+      ? surface.title !== surface.buffer.revisionPending.originalTitle ? surface.title : null
+      : null;
+    const body = surface.body !== surface.buffer.revisionPending.originalBody ? surface.body : null;
+    return { revise_comment: { id, ...(title !== null ? { title } : {}), ...(body !== null ? { body } : {}) } };
+  }
+  if (surface.kind === "accept") {
+    return { comment: { home: surface.home, kind: { accept: { offer: surface.buffer.source.seq } }, references: [] } };
+  }
+  return { comment: { home: surface.home, kind: { reject: { offer: surface.buffer.eventual.offerSeq, grounds: surface.body } }, references: [] } };
+}
+
+export function confirmsLanded(surface, record) {
+  const payload = typeof record.payload === "string" ? JSON.parse(record.payload) : record.payload;
+  if (surface.kind === "note") {
+    return record.kind === "commented" && payload?.home === surface.home
+      && payload?.kind?.note?.title === surface.title
+      && payload?.kind?.note?.body === surface.body
+      && JSON.stringify(payload?.references ?? []) === JSON.stringify(surface.references);
+  }
+  if (surface.kind === "revision") {
+    if (record.kind !== "comment_revised" || payload?.id !== surface.buffer.source.seq) return false;
+    const title = surface.title !== surface.buffer.revisionPending.originalTitle ? surface.title : null;
+    const body = surface.body !== surface.buffer.revisionPending.originalBody ? surface.body : null;
+    const sentTitle = title === null ? undefined : title;
+    const sentBody = body === null ? undefined : body;
+    return (sentTitle === undefined ? payload?.title === undefined : payload?.title === sentTitle)
+      && (sentBody === undefined ? payload?.body === undefined : payload?.body === sentBody);
+  }
+  if (surface.kind === "accept") {
+    return record.kind === "commented" && payload?.kind?.accept?.offer === surface.buffer.source.seq;
+  }
+  return record.kind === "commented" && payload?.kind?.reject?.offer === surface.buffer.eventual.offerSeq
+    && payload?.kind?.reject?.grounds === surface.body;
+}

@@ -1518,10 +1518,23 @@ async fn workbench_command_pins_human_attribution_and_binds_submissions() {
         "the refusal wrote nothing"
     );
 
-    // the identity read discloses the cookie-claimed actor alone
+    // the identity read discloses the cookie-claimed actor and this
+    // db's exact legacy storage instance: sha256 of the canonical db
+    // path, the key the prototype wrote drafts under
     let (status, body) = get_json(&base, "/api/v1/workbench/identity");
     assert_eq!(status, 200);
     assert_eq!(json_of(&body)["actor"], json!(null));
+    use sha2::Digest;
+    let canonical = std::fs::canonicalize(&db).unwrap();
+    let legacy: String = sha2::Sha256::digest(canonical.to_string_lossy().as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        json_of(&body)["legacy_instance"],
+        json!(legacy[..16].to_string()),
+        "the legacy instance is exactly the prototype's key suffix"
+    );
     let mut r = ureq::get(&format!("{base}/api/v1/workbench/identity"))
         .config()
         .http_status_as_error(false)
