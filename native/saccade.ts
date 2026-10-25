@@ -692,9 +692,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		})();
 	}
 
-	// Queue one message natively and return: never block on what the
-	// native queue does after the current run. The submission is
-	// confirmed separately, by the delivery observers. Pinned 1.2.0:
+	// Queue one message natively and return: the steer queue delivers at
+	// the next turn boundary, never after the whole run. The submission
+	// is confirmed separately, by the delivery observers. Pinned 1.2.0:
 	// sendUserMessage returns void and its internal failures are
 	// invisible here (the runtime routes them to its own error sink) -
 	// a refused or discarded delivery is recovered at the next
@@ -710,7 +710,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			sessionFile: association.sessionFile,
 		};
 		deliveries.add(delivery);
-		pi.sendUserMessage(delivery.envelope, { deliverAs: "followUp" });
+		pi.sendUserMessage(delivery.envelope, { deliverAs: "steer" });
 	}
 
 	// Release the guards of deliveries that reality no longer holds:
@@ -959,7 +959,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		}
 		if (![...continuations].some((c) => c.data.token === data.token)) {
 			continuations.add({ data, record, envelope });
-			pi.sendUserMessage(envelope, { deliverAs: "followUp" });
+			pi.sendUserMessage(envelope, { deliverAs: "steer" });
 		}
 	}
 
@@ -979,7 +979,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				continue;
 			}
 			if (ctx.isIdle?.() === true && ctx.hasPendingMessages?.() === false) {
-				pi.sendUserMessage(continuation.envelope, { deliverAs: "followUp" });
+				pi.sendUserMessage(continuation.envelope, { deliverAs: "steer" });
 			}
 		}
 	}

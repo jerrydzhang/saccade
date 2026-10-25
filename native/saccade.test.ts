@@ -1,4 +1,4 @@
-// The integration's mechanics and queue contract, pinned against a stateful fake of the native followUp queue.
+// The integration's mechanics and queue contract, pinned against a stateful fake of the native steer queue.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { join } from "node:path";
@@ -145,11 +145,13 @@ class FakeSession {
 	}
 }
 
-// The fake queue drains only after a run ends, firing events before the append.
+// The fake queue drains when the test fires the next turn boundary, events before the append.
 class FakePi implements ExtensionAPI {
 	tools = new Map<string, ToolDefinition>();
 	handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
-	followUps: string[] = [];
+	steers: string[] = [];
+	// the deliverAs mode each accepted send carried, in push order
+	modes: Array<"steer" | "followUp" | undefined> = [];
 	session: FakeSession;
 	// the next sendUserMessage is refused before queue or history
 	failNextSend = 0;
@@ -177,13 +179,17 @@ class FakePi implements ExtensionAPI {
 	// runtime's own error sink - the extension cannot observe them
 	errors: string[] = [];
 	shutdowns = 0;
-	sendUserMessage(content: string, _opts?: unknown) {
+	sendUserMessage(
+		content: string,
+		opts?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
+	) {
 		if (this.failNextSend > 0) {
 			this.failNextSend -= 1;
 			this.errors.push("send_user_message: no auth: the provider refused");
 			return;
 		}
-		this.followUps.push(content);
+		this.steers.push(content);
+		this.modes.push(opts?.deliverAs);
 	}
 	appendEntries: Array<{ type: string; data: unknown }> = [];
 	// when set, appendEntry throws for this custom type: the persistence
@@ -339,7 +345,7 @@ class FakePi implements ExtensionAPI {
 
 	// the queue drains after the tool call returned, events before the append
 	async runQueue() {
-		const queued = this.followUps.splice(0);
+		const queued = this.steers.splice(0);
 		for (const text of queued) {
 			const message = { role: "user", content: text };
 			await this.emit("message_start", { message });
@@ -660,6 +666,17 @@ async function stop(h: Harness): Promise<void> {
 	await h.pi.emit("session_shutdown");
 }
 
+test("queued input rides the steer queue, so it lands at the next turn boundary", async () => {
+	const h = harness("sac-test-24", "/sessions/aaaa1111.jsonl");
+	const me = { incarnation: 0, num: 0 };
+	h.tracker.attachments.set("sac-test-24", me);
+	h.tracker.mailboxes.set(0, [mail({ seq: 60, to: { seq: 0, num: 0 } })]);
+	await h.pi.emit("session_start");
+	// the assertion pins the delivery mode: steer at the next turn boundary, never the run-end followUp
+	assert.deepEqual(h.pi.modes, ["steer"]);
+	await stop(h);
+});
+
 test("a released wait queues and returns; the submission confirms from saved history", async () => {
 	const h = harness("sac-test-01", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
@@ -667,11 +684,11 @@ test("a released wait queues and returns; the submission confirms from saved his
 	h.tracker.mailboxes.set(0, [mail({ seq: 50, to: { seq: 0, num: 0 } })]);
 	// the start drain queues the mail natively; nothing submitted yet
 	await h.pi.emit("session_start");
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 	assert.equal(h.tracker.submissions.length, 0);
 
 	// events before the append submit nothing
-	const envelope = h.pi.followUps[0];
+	const envelope = h.pi.steers[0];
 	const message = { role: "user", content: envelope };
 	await h.pi.emit("message_start", { message });
 	await h.pi.emit("message_end", { message });
@@ -702,7 +719,7 @@ test("the wait tool returns while the queue is still undrained", async () => {
 	);
 	// the tool returned before any queue processing
 	assert.ok(resultText(result).includes("received m-9"));
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 	assert.equal(h.tracker.submissions.length, 0);
 	// and the queued delivery still confirms after the run
 	await h.pi.runQueue();
@@ -731,7 +748,7 @@ test("the wait finishes cancelled when the call aborts, queueing nothing", async
 	assert.ok(
 		resultText(result).includes("the call was cancelled"),
 	);
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	await h.pi.runQueue();
 	await tick();
 	assert.equal(h.tracker.submissions.length, 0);
@@ -744,7 +761,7 @@ test("reassociation cancels a queued delivery: no stale recipient submits", asyn
 	h.tracker.attachments.set("sac-test-04", me);
 	h.tracker.mailboxes.set(0, [mail({ seq: 52, to: { seq: 0, num: 0 } })]);
 	await h.pi.emit("session_start");
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 
 	// a new native session cancels the old association's queued delivery
 	h.pi.session = new FakeSession("bbbb2222", "/sessions/bbbb2222.jsonl");
@@ -752,7 +769,7 @@ test("reassociation cancels a queued delivery: no stale recipient submits", asyn
 	assert.equal(h.tracker.attachments.size, 2);
 
 	// a later boundary never submits the cancelled delivery
-	h.pi.followUps = [];
+	h.pi.steers = [];
 	h.pi.session.entries.push({
 		type: "message",
 		message: { role: "user", content: envelopeText(mail({ seq: 52, to: { seq: 0, num: 0 } })) },
@@ -787,12 +804,12 @@ test("agent possession survives a tracker outage; injected actors win", async ()
 test("a running registered peer receives without any wait tool", async () => {
 	const h = harness("sac-test-06", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	// the bridge holds a parked read; the record's landing wakes it
 	h.tracker.land(0, mail({ seq: 60, num: 5, to: { seq: 0, num: 0 } }));
 	await tick();
-	assert.equal(h.pi.followUps.length, 1);
-	assert.ok(h.pi.followUps[0].includes("[saccade message m-5"));
+	assert.equal(h.pi.steers.length, 1);
+	assert.ok(h.pi.steers[0].includes("[saccade message m-5"));
 	assert.equal(h.tracker.submissions.length, 0);
 	// the queued envelope still confirms from saved history
 	await h.pi.runQueue();
@@ -806,7 +823,7 @@ test("background arrival and the wait tool queue a message once", async () => {
 	await h.pi.emit("session_start");
 	h.tracker.land(0, mail({ seq: 61, num: 6, to: { seq: 0, num: 0 } }));
 	await tick();
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 	// the wait tool sees the same pending message and releases, but
 	// its own queueing is a no-op: one envelope, one path
 	const wait = h.tools("saccade_wait");
@@ -816,7 +833,7 @@ test("background arrival and the wait tool queue a message once", async () => {
 		"saccade_wait",
 	);
 	assert.ok(resultText(result).includes("received m-6"));
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 	await stop(h);
 });
 
@@ -827,16 +844,16 @@ test("a failed bridge read reconnects and keeps delivering", async () => {
 	h.tracker.failNext = 1;
 	h.tracker.land(0, mail({ seq: 62, num: 7, to: { seq: 0, num: 0 } }));
 	await tick();
-	assert.equal(h.pi.followUps.length, 1, "the landing delivered before the failure");
+	assert.equal(h.pi.steers.length, 1, "the landing delivered before the failure");
 	// mail landing while the bridge is in its backoff still arrives
 	const later = mail({ seq: 63, num: 8, to: { seq: 0, num: 0 } });
-	const before = h.pi.followUps.length;
+	const before = h.pi.steers.length;
 	const deadline = Date.now() + 8000;
-	while (h.pi.followUps.length === before && Date.now() < deadline) {
+	while (h.pi.steers.length === before && Date.now() < deadline) {
 		h.tracker.land(0, later);
 		await new Promise((resolve) => setTimeout(resolve, 150));
 	}
-	assert.ok(h.pi.followUps.length > before, "the reconnected bridge delivered");
+	assert.ok(h.pi.steers.length > before, "the reconnected bridge delivered");
 	await stop(h);
 });
 
@@ -844,10 +861,10 @@ test("session shutdown stops the bridge: nothing delivers after it", async () =>
 	const h = harness("sac-test-09", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	await h.pi.emit("session_shutdown");
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	h.tracker.land(0, mail({ seq: 64, num: 9, to: { seq: 0, num: 0 } }));
 	await tick();
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	assert.equal(h.tracker.submissions.length, 0);
 });
 
@@ -861,12 +878,12 @@ test("reassociation strands the old bridge: no stale delivery, no stale submit",
 	// mail for the OLD incarnation lands and wakes every parked read
 	h.tracker.land(0, mail({ seq: 65, num: 1, to: { seq: 0, num: 0 } }));
 	await tick();
-	assert.equal(h.pi.followUps.length, 0, "the old bridge delivered nothing");
+	assert.equal(h.pi.steers.length, 0, "the old bridge delivered nothing");
 	assert.equal(h.tracker.submissions.length, 0);
 	// and the new association still delivers its own
 	h.tracker.land(1, mail({ seq: 66, num: 2, to: { seq: 1, num: 1 } }));
 	await tick();
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 	await stop(h);
 });
 
@@ -878,7 +895,7 @@ test("an extension-source input releases the wait as the message, not as human i
 	h.tracker.land(0, mail({ seq: 70, num: 4, to: { seq: 0, num: 0 } }));
 	await tick();
 	// the queued envelope enters the session as an extension-source input
-	const envelope = h.pi.followUps[0];
+	const envelope = h.pi.steers[0];
 	assert.ok(envelope, "the bridge queued the delivery");
 	await h.pi.emit("input", { source: "extension", text: envelope });
 	const result = await boundary(running, 8000, "saccade_wait");
@@ -898,7 +915,7 @@ test("interactive input keeps the human wording and no correlation", async () =>
 	const result = await boundary(running, 8000, "saccade_wait");
 	const text = resultText(result);
 	assert.ok(text.includes("native human input arrived"), text);
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	await stop(h);
 });
 
@@ -911,14 +928,14 @@ test("a refused native send recovers at the human-input boundary", async () => {
 	await tick();
 	// the refusal is invisible to the extension (void + error sink):
 	// nothing queued, and no promise ever resolved or rejected here
-	assert.equal(h.pi.followUps.length, 0, "the refused send queued nothing");
+	assert.equal(h.pi.steers.length, 0, "the refused send queued nothing");
 	assert.ok(h.pi.errors.length > 0, "the runtime saw the failure");
 	// wakes alone cannot deliver: the guard honestly holds, because
 	// no supported observation says the delivery was lost
 	h.tracker.wake();
 	await tick();
 	await tick();
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	// the human correction is the recovery boundary: the session is
 	// idle with nothing natively pending, the input event reconciles,
 	// and the boundary's own read delivers again
@@ -926,11 +943,11 @@ test("a refused native send recovers at the human-input boundary", async () => {
 	h.pi.pendingNative = false;
 	await h.pi.emit("input", { source: "interactive", text: "fixed the auth" });
 	const deadline = Date.now() + 8000;
-	while (h.pi.followUps.length === 0 && Date.now() < deadline) {
+	while (h.pi.steers.length === 0 && Date.now() < deadline) {
 		h.tracker.wake();
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
-	assert.equal(h.pi.followUps.length, 1, "the reconciled guard re-delivered");
+	assert.equal(h.pi.steers.length, 1, "the reconciled guard re-delivered");
 	assert.equal(h.tracker.submissions.length, 0);
 	await stop(h);
 });
@@ -940,7 +957,7 @@ test("a discarded queued delivery reconciles at an idle settle and redelivers", 
 	await h.pi.emit("session_start");
 	h.tracker.land(0, mail({ seq: 72, num: 6, to: { seq: 0, num: 0 } }));
 	await tick();
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 	// user interruption discarded the queued input: idle, nothing
 	// natively pending, and the envelope never reached saved history
 	h.pi.idle = true;
@@ -952,15 +969,15 @@ test("a discarded queued delivery reconciles at an idle settle and redelivers", 
 	// settle cadence
 	h.tracker.wake();
 	const redeliver = Date.now() + 8000;
-	while (h.pi.followUps.length < 2 && Date.now() < redeliver) {
+	while (h.pi.steers.length < 2 && Date.now() < redeliver) {
 		h.tracker.wake();
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
-	assert.equal(h.pi.followUps.length, 2);
+	assert.equal(h.pi.steers.length, 2);
 	// and the redelivered envelope still confirms from saved history
 	h.pi.session.entries.push({
 		type: "message",
-		message: { role: "user", content: h.pi.followUps[1] },
+		message: { role: "user", content: h.pi.steers[1] },
 	});
 	await h.pi.emit("agent_settled");
 	await tick();
@@ -988,11 +1005,11 @@ test("missing-auth failure with no settle recovers at an explicit wait", async (
 	});
 	h.tracker.wake();
 	const deadline = Date.now() + 8000;
-	while (h.pi.followUps.length === 0 && Date.now() < deadline) {
+	while (h.pi.steers.length === 0 && Date.now() < deadline) {
 		h.tracker.wake();
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
-	assert.equal(h.pi.followUps.length, 1, "the explicit wait re-delivered");
+	assert.equal(h.pi.steers.length, 1, "the explicit wait re-delivered");
 	const result = await boundary(running, 8000, "saccade_wait");
 	assert.ok(resultText(result).includes("received m-7"));
 	await stop(h);
@@ -1014,7 +1031,7 @@ test("another extension's input yields our wait with generic native wording", as
 	assert.ok(text.includes("native input arrived through the integration"), text);
 	assert.ok(!text.includes("human"), `fabricated human origin: ${text}`);
 	assert.ok(!text.includes("received m-"), `fabricated correlation: ${text}`);
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	await stop(h);
 });
 
@@ -2238,13 +2255,13 @@ test("a resumed session consumes the armed handoff and reactivates the own reque
 	assert.equal(process.env.SACCADE_ACTOR, "injected-scope-actor");
 	assert.equal(process.env.SACCADE_TASK, "t-9");
 	// queue first: the done entry is NOT terminal at send time
-	assert.equal(h.pi.followUps.length, 1, "the continuation entered the native queue");
+	assert.equal(h.pi.steers.length, 1, "the continuation entered the native queue");
 	assert.equal(
 		h.pi.appendEntries.some((e) => e.type === "saccade_handoff_done"),
 		false,
 		"activation is not terminal before the saved insert",
 	);
-	const envelope = h.pi.followUps[0] ?? "";
+	const envelope = h.pi.steers[0] ?? "";
 	assert.match(envelope, /^\[saccade workspace handoff \| tool call_res \| change record 411\]/);
 	assert.match(envelope, /Continue the goal you were pursuing/);
 	// the run saves the envelope; the boundary completes the arm terminally
@@ -2269,7 +2286,7 @@ test("a forked or foreign session never consumes the armed handoff", async () =>
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "stale");
 	assert.match((done!.data as HandoffDoneData).reason ?? "", /not this session's/);
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	await stop(h);
 });
 
@@ -2283,7 +2300,7 @@ test("an unmoved or re-moved header marks the arm stale without redirecting it",
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "stale");
 	assert.match((done!.data as HandoffDoneData).reason ?? "", /not the armed target/);
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	await stop(h);
 });
 
@@ -2314,11 +2331,11 @@ test("a tracker outage leaves the arm unconsumed for the next start", async () =
 		false,
 		"an unread correlation is never a stale guess",
 	);
-	assert.equal(h.pi.followUps.length, 0);
+	assert.equal(h.pi.steers.length, 0);
 	// the next start reads the record and queues; the run saves the
 	// envelope and the boundary completes the arm
 	await startWith(h);
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 	await h.pi.runQueue();
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
@@ -2334,7 +2351,7 @@ test("a refused continuation insertion stays unconsumed and re-queues at a later
 	// the queue refuses this insertion: nothing saved, nothing terminal
 	h.pi.failNextSend = 1;
 	await startWith(h);
-	assert.equal(h.pi.followUps.length, 0, "the refused insertion queued nothing");
+	assert.equal(h.pi.steers.length, 0, "the refused insertion queued nothing");
 	assert.equal(
 		h.pi.appendEntries.some((e) => e.type === "saccade_handoff_done"),
 		false,
@@ -2345,7 +2362,7 @@ test("a refused continuation insertion stays unconsumed and re-queues at a later
 	h.pi.idle = true;
 	h.pi.pendingNative = false;
 	await h.pi.emit("agent_settled");
-	assert.equal(h.pi.followUps.length, 1, "the boundary re-queued the envelope");
+	assert.equal(h.pi.steers.length, 1, "the boundary re-queued the envelope");
 	await h.pi.runQueue();
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
@@ -2369,7 +2386,7 @@ test("an envelope already in the saved history completes the arm without re-queu
 	assert.ok(done, "the saved envelope completes the arm at once");
 	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
 	assert.equal((done!.data as HandoffDoneData).record, 418);
-	assert.equal(h.pi.followUps.length, 0, "no duplicate queue for a saved envelope");
+	assert.equal(h.pi.steers.length, 0, "no duplicate queue for a saved envelope");
 	await stop(h);
 });
 
@@ -2381,7 +2398,7 @@ test("a reload between queue and save re-queues at the next start, never a silen
 	const h = harness("resume18", file, "pi", tracker);
 	h.pi.session.entries.push(armedEntry({ sessionFile: file, nativeId: "resume18" }) as any);
 	await startWith(h);
-	assert.equal(h.pi.followUps.length, 1);
+	assert.equal(h.pi.steers.length, 1);
 	assert.equal(
 		h.pi.appendEntries.some((e) => e.type === "saccade_handoff_done"),
 		false,
@@ -2392,7 +2409,7 @@ test("a reload between queue and save re-queues at the next start, never a silen
 	second.tracker.records = tracker.records;
 	second.pi.session.entries.push(...h.pi.session.entries);
 	await second.pi.emit("session_start");
-	assert.equal(second.pi.followUps.length, 1, "the next start re-queues the unsaved envelope");
+	assert.equal(second.pi.steers.length, 1, "the next start re-queues the unsaved envelope");
 	await second.pi.runQueue();
 	const done = second.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
@@ -2413,7 +2430,7 @@ test("an already-consumed arm stays consumed and an older arm is superseded", as
 		data: { token: "handoff-old", outcome: "cancelled", reason: "earlier cancel" },
 	} as any);
 	await startWith(h);
-	assert.equal(h.pi.followUps.length, 1, "the latest arm queued its continuation");
+	assert.equal(h.pi.steers.length, 1, "the latest arm queued its continuation");
 	await h.pi.runQueue();
 	const dones = h.pi.appendEntries.filter((e) => e.type === "saccade_handoff_done");
 	assert.deepEqual(
