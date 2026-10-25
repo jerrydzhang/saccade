@@ -109,6 +109,28 @@
             exec ${pi}/bin/wrapped-pi "$@"
           '';
         };
+        # the workbench frontend, built once from the committed sources
+        # and lock; the binary embeds these three files through the
+        # SACCADE_WEB_ASSETS build interface
+        webAssets = pkgs.buildNpmPackage {
+          pname = "saccade-workbench-web";
+          version = "0.15.0";
+          src = pkgs.lib.sourceByRegex ./web [
+            "^src$"
+            "^src/.*\\.mjs$"
+            "^package\\.json$"
+            "^package-lock\\.json$"
+            "^index\\.html$"
+            "^style\\.css$"
+            "^ascii\\.mjs$"
+            "^copy-assets\\.mjs$"
+          ];
+          npmDepsHash = "sha256-vtELfcqrPnAcODazFjmSQCx0gjcp/JzABR+hcTiOFjI=";
+          installPhase = ''
+            mkdir -p $out
+            cp dist/index.html dist/app.js dist/style.css $out/
+          '';
+        };
         sac = pkgs.rustPlatform.buildRustPackage {
           name = "saccade";
           src = ./.;
@@ -122,6 +144,12 @@
           # the pinned harness this binary's start door launches;
           # SACCADE_PI remains the development override
           SACCADE_PI = "${saccadePi}/bin/saccade-pi";
+          # the embedded workbench assets ride the build interface,
+          # never a runtime path
+          SACCADE_WEB_ASSETS = webAssets;
+          # the door tests need a host pty and a PATH flock; the nix
+          # sandbox has neither, and the suite runs in the devShell
+          doCheck = false;
           preCheck = ''
             export HOME=$(mktemp -d)
           '';
@@ -130,6 +158,8 @@
         };
       in {
         saccade-pi = saccadePi;
+
+        saccade-web-assets = webAssets;
 
         default = pkgs.symlinkJoin {
           name = "saccade";
