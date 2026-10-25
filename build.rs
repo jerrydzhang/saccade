@@ -2,19 +2,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
-/// The workbench assets are a build product, never source. The crate
-/// embeds whatever this script stages into OUT_DIR/workbench, so the
-/// staging rule is parity by proof, not by hope:
-///
-/// - `SACCADE_WEB_ASSETS=<dir>` stages that directory's three files
-///   verbatim (a Nix derivation builds them from the committed sources
-///   and lock, so the derivation is the parity proof).
-/// - Otherwise the inputs are every file the npm build reads - all
-///   `web/src/*.mjs`, the html, the css, both manifests, and both build
-///   helpers - and any input newer than a staged target (or a missing
-///   target) reruns `npm run build`. Embedding known-stale bytes is a
-///   refused build with the one instruction that fixes it, never a
-///   silent fallback.
+/// The crate embeds whatever this script stages into
+/// OUT_DIR/workbench: `SACCADE_WEB_ASSETS=<dir>` stages that
+/// directory verbatim (a Nix derivation owns the parity proof), and
+/// otherwise any build input newer than a staged target reruns the
+/// npm build - a stale embed is a refused build, never a silent
+/// fallback.
 fn main() {
     println!("cargo:rerun-if-env-changed=SACCADE_WEB_ASSETS");
     let web = Path::new("web");
@@ -99,8 +92,8 @@ fn main() {
     }
 }
 
-/// Every mjs source the bundle reads, discovered rather than enumerated
-/// so an added module joins the freshness set by existing.
+/// Every mjs source the bundle reads, so an added module joins the
+/// freshness set by existing.
 fn glob_mjs(dir: &Path) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
         .expect("web/src is a directory")

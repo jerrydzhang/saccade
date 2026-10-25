@@ -194,6 +194,7 @@ summary:focus-visible {
   font-size: 12px;
 }
 #message { color: var(--muted); padding: 0 14px 6px; }
+#message:empty { display: none; }
 #bar {
   display: flex; align-items: center; gap: 10px;
   background: var(--chrome); color: var(--primary);

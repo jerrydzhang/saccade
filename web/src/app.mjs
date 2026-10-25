@@ -6,7 +6,7 @@ import { headerFolding, sectionFold } from "./editor.mjs";
 import { markdown } from "@codemirror/lang-markdown";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { Fzf } from "fzf";
-import { Workbench, commandFor, confirmsLanded } from "./workbench.mjs";
+import { Workbench, commandFor, confirmsLanded, leaves } from "./workbench.mjs";
 import { richDocuments } from "./rich.mjs";
 import { sourceAppearance } from "./appearance.mjs";
 
@@ -65,6 +65,14 @@ function referenceLabel(seq) {
 
 function kindName(kind) {
   return { home: "Home", task: "Task", note: "Note", offer: "Offer", accept: "Accept", reject: "Reject", use: "Use", draft: "Draft" }[kind] ?? kind;
+}
+
+// the bar shows the tracker kind: a draft names its eventual record
+// kind, a comment its actual record kind even mid-revision, and
+// home/task stay themselves
+function statusKind(buffer) {
+  if (buffer.kind === "draft") return buffer.eventual?.kind ?? "draft";
+  return buffer.source?.kind ?? buffer.kind;
 }
 
 function commentText(source) {
@@ -218,7 +226,7 @@ function identifierInfo(buffer) {
 function refreshChrome() {
   const buffer = current();
   $("#bar-mode").textContent = mode() === "View" ? "RENDERED" : mode().toUpperCase();
-  $("#bar-kind").textContent = kindName(buffer.kind === "draft" ? buffer.eventual?.kind === "reject" ? "draft" : "draft" : buffer.revisionPending ? buffer.source.kind : buffer.kind);
+  $("#bar-kind").textContent = kindName(statusKind(buffer));
   $("#bar-ident").textContent = identifier(buffer);
   $("#bar-info").textContent = identifierInfo(buffer);
   $("#bar-flags").textContent = savepoint(buffer);
@@ -942,22 +950,35 @@ const registry = [
   { id: "new", label: "New note", binding: "nn", run: newNote },
   { id: "cite", label: "Insert citation", binding: "ci", local: "i", when: () => current().kind === "draft" && current().eventual?.kind !== "reject" && !isReading(), run: () => openPicker("cite") },
   { id: "home-task", label: "Set draft home task", binding: "nh", local: "h", when: () => current().kind === "draft" && current().eventual?.kind !== "reject", run: () => openPicker("home") },
-  { id: "review", label: "Review for submission", binding: "nr", local: "r", run: openReview },
+  { id: "review", label: "Review for submission", binding: "nr", local: "r", when: () => { const b = current(); return b.kind === "draft" || !!b.revisionPending || !!standingOffer(b); }, run: openReview },
   { id: "revise", label: "Revise this contribution", local: "e", when: () => revisableContext() && !current().revisionPending, run: startRevision },
   { id: "discard-revision", label: "Discard pending repair", local: "e", when: () => !!current().revisionPending, run: discardRevision },
   { id: "accept", label: "Accept the standing offer", local: "a", when: () => !!standingOffer(current()), run: startAccept },
   { id: "reject", label: "Reject the standing offer with grounds", local: "x", when: () => !!standingOffer(current()), run: startReject },
-  { id: "title", label: "Title the focused draft or repair", local: "t", run: editTitle },
+  { id: "title", label: "Title the focused draft or repair", local: "t", when: () => current().kind === "draft" || !!current().revisionPending, run: editTitle },
   { id: "write", aliases: ["w"], label: "Save draft locally", when: () => current().kind === "draft" || current().revisionPending, run: () => { const b = current(); const prior = { savedText: b.savedText, savedTitle: b.revisionPending?.savedTitle, savedBody: b.revisionPending?.savedBody }; if (b.kind === "draft") b.savedText = b.text; if (b.revisionPending) { b.revisionPending.savedTitle = b.revisionPending.title; b.revisionPending.savedBody = b.text; } if (persist()) { refreshChrome(); status("Saved locally in this browser. Nothing sent."); } else { if (b.kind === "draft") b.savedText = prior.savedText; if (b.revisionPending) { b.revisionPending.savedTitle = prior.savedTitle; b.revisionPending.savedBody = prior.savedBody; } refreshChrome(); } } },
-  { id: "undo", label: "Undo edit", when: () => editable(current()), run: () => Vim.handleKey(getCM(currentEditor()), "u") },
-  { id: "redo", label: "Redo edit", when: () => editable(current()), run: () => Vim.handleKey(getCM(currentEditor()), "<C-r>") },
+  { id: "undo", label: "Undo edit", when: () => editable(current()) && !isReading(), run: () => Vim.handleKey(getCM(currentEditor()), "u") },
+  { id: "redo", label: "Redo edit", when: () => editable(current()) && !isReading(), run: () => Vim.handleKey(getCM(currentEditor()), "<C-r>") },
+  { id: "fold-toggle", label: "Toggle Markdown section fold (za)", when: sourceFoldable, run: () => foldHere("a") },
+  { id: "fold-open", label: "Open Markdown section fold (zo)", when: sourceFoldable, run: () => foldHere("o") },
+  { id: "fold-close", label: "Close Markdown section fold (zc)", when: sourceFoldable, run: () => foldHere("c") },
+  { id: "fold-close-all", label: "Close all Markdown sections (zM)", when: sourceFoldable, run: () => foldHere("M") },
+  { id: "fold-open-all", label: "Open all Markdown sections (zR)", when: sourceFoldable, run: () => foldHere("R") },
+  { id: "reader-down", label: "Scroll rendered pane down", when: () => isReading(), run: () => scrollReader(56) },
+  { id: "reader-up", label: "Scroll rendered pane up", when: () => isReading(), run: () => scrollReader(-56) },
+  { id: "reader-top", label: "Scroll rendered pane to top", when: () => isReading(), run: () => scrollReader("top") },
+  { id: "reader-bottom", label: "Scroll rendered pane to bottom", when: () => isReading(), run: () => scrollReader("bottom") },
+  { id: "focus-h", label: "Focus pane left", when: () => bench.views.size > 1, run: () => focusLeaf(-1) },
+  { id: "focus-l", label: "Focus pane right", when: () => bench.views.size > 1, run: () => focusLeaf(1) },
+  { id: "focus-k", label: "Focus pane above", when: () => bench.views.size > 1, run: () => focusLeaf(-1) },
+  { id: "focus-j", label: "Focus pane below", when: () => bench.views.size > 1, run: () => focusLeaf(1) },
   { id: "split-row", aliases: ["vsplit", "vs"], label: "vsplit - split pane beside", binding: "wv", run: () => split("row") },
   { id: "split-column", aliases: ["split", "sp"], label: "split - split pane below", binding: "ws", run: () => split("column") },
   { id: "close", aliases: ["q"], label: "Close pane", binding: "wc", run: closePane },
   { id: "only", label: "Show only current pane", binding: "wo", run: onlyPane },
   ...["h", "j", "k", "l"].map((d) => ({ id: `focus-${d}`, binding: `w${d}`, label: `Focus pane ${{ h: "left", j: "below", k: "above", l: "right" }[d]}`, run: () => neighbor(d) })),
-  { id: "follow", label: "Follow id or reference under cursor", run: follow },
-  { id: "backlinks", label: "Show explicit backlinks", when: () => current().kind === "comment", run: backlinks },
+  { id: "follow", label: "Follow id or reference under cursor", binding: "gd", when: () => !isReading() && !!currentEditor(), run: follow },
+  { id: "backlinks", label: "Show explicit backlinks", binding: "gr", when: () => current().kind === "comment", run: backlinks },
   { id: "rendering", label: "Toggle View / Source", binding: "uv", when: () => ["comment", "draft"].includes(current().kind), run: togglePresentation },
   { id: "back", label: "Jump backward", binding: "jb", run: back },
   { id: "forward", label: "Jump forward", run: forward },
@@ -967,6 +988,31 @@ const registry = [
 
 function commands() {
   return registry.filter((item) => item.when === undefined || item.when());
+}
+
+function sourceFoldable() {
+  return !isReading() && !!currentEditor();
+}
+
+function foldHere(action) {
+  if (!sectionFold(currentEditor(), action)) status("No Markdown section here.");
+}
+
+function scrollReader(amount) {
+  const reader = readers.get(bench.focus);
+  if (!reader) return;
+  reader.scrollTop = amount === "top" ? 0 : amount === "bottom" ? reader.scrollHeight
+    : reader.scrollTop + amount;
+  presentation().scrollTop = reader.scrollTop;
+  persist();
+}
+
+function focusLeaf(step) {
+  const order = leaves(bench.layout);
+  const at = order.indexOf(bench.focus);
+  const target = order[at + step];
+  if (!target) return status("No pane that way.");
+  focusPane(target);
 }
 
 function runCommand(id) {
@@ -1248,9 +1294,13 @@ document.addEventListener("keydown", (event) => {
   if (pendingZ) {
     event.preventDefault(); event.stopImmediatePropagation(); pendingZ = false;
     const action = { A: "a", C: "c", O: "o" }[event.key] ?? event.key;
-    if ("acoMRjk".includes(action) && action.length === 1) {
+    const fold = { a: "fold-toggle", c: "fold-close", o: "fold-open", M: "fold-close-all", R: "fold-open-all" }[action];
+    if (fold) { runCommand(fold); return; }
+    if ("jk".includes(action)) {
       if (!sectionFold(currentEditor(), action)) status("No Markdown section here.");
-    } else if (["z", "t", "b"].includes(event.key)) {
+      return;
+    }
+    if (["z", "t", "b"].includes(event.key)) {
       Vim.handleKey(getCM(currentEditor()), "z"); Vim.handleKey(getCM(currentEditor()), event.key);
     } else status("Section folds: za toggle, zc close, zo open, zM close all, zR open all.");
     return;
@@ -1294,17 +1344,15 @@ document.addEventListener("keydown", (event) => {
   if (pendingG && ["d", "r"].includes(event.key)) {
     event.preventDefault(); event.stopImmediatePropagation(); pendingG = false;
     Vim.handleKey(getCM(currentEditor()), "<Esc>");
-    event.key === "d" ? follow() : backlinks(); return;
+    runCommand(event.key === "d" ? "follow" : "backlinks"); return;
   }
   if (isReading()) {
     const reader = readers.get(bench.focus);
     if (["j", "k", "G"].includes(event.key) || (pendingG && event.key === "g")) {
       event.preventDefault(); event.stopImmediatePropagation();
-      if (event.key === "G") reader.scrollTop = reader.scrollHeight;
-      else if (event.key === "g") reader.scrollTop = 0;
-      else reader.scrollTop += event.key === "j" ? 56 : -56;
-      presentation().scrollTop = reader.scrollTop;
-      pendingG = false; persist(); return;
+      runCommand(event.key === "G" ? "reader-bottom" : (pendingG && event.key === "g") ? "reader-top"
+        : event.key === "j" ? "reader-down" : "reader-up");
+      pendingG = false; return;
     }
   }
   pendingG = event.key === "g" && !pendingG;
@@ -1327,6 +1375,8 @@ async function start() {
     published("home");
     bench.open("home");
   }
+  renderLayout(); focusPane(bench.focus);
+  status("Space Space: task/contribution/draft | Space sg: content | , e revise, , a accept, , x reject, , t title | : commands");
   const target = initialBuffer();
   if (target !== "home") {
     try { openBuffer(target, bench.focus); }
@@ -1338,8 +1388,6 @@ async function start() {
     try { openBuffer(linked, bench.focus); }
     catch { status(`The linked ${linked} names nothing recorded.`); }
   });
-  renderLayout(); focusPane(bench.focus);
-  status("Space Space: task/contribution/draft | Space sg: content | , e revise, , a accept, , x reject, , t title | : commands");
   window.workbenchUI = { state: () => ({
     focus: bench.focus, layout: structuredClone(bench.layout),
     buffers: [...bench.buffers.values()].map(({ id, kind, text, references, home, submission, authoredTitle, eventual, revisionPending, decision }) => ({ id, kind, text, references, home, submission, authoredTitle, eventual, revisionPending, decision })),
@@ -1348,4 +1396,4 @@ async function start() {
     actor: identity.actor,
   }) };
 }
-start().catch((error) => { console.error(error); try { window.__startDebug = { layout: JSON.stringify(bench.layout), focus: bench.focus, views: [...bench.views.keys()] }; } catch {} status(`Workbench unavailable: ${error.message}`); });
+start().catch((error) => { console.error(error); status(`Workbench unavailable: ${error.message}`); });

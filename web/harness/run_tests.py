@@ -309,6 +309,8 @@ def main():
             page.keyboard.press('Escape')
             page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
             check(any(b['id'] == note_id and b['text'] == saved['text'] for b in state(page)['buffers']), 'local draft survives browser reload')
+            if errors:
+                print('PAGE-ERRORS:', errors, flush=True)
             check(not errors, 'keyboard flow has no browser exceptions')
             context.close()
 
@@ -655,34 +657,176 @@ def main():
             check(draft(page)['revisionPending'] is None, 'comma e again discards the pending repair as the status promises')
             context.close()
 
-            # legacy prototype storage migrates by the exact db-bound key
+            # the bar names the tracker kind across record kinds and
+            # draft intents; seeds land through the CLI, not the browser
+            server.cli('create', 'task', 'The kind survey')
+            snapshot = request(base + '/api/v1/workbench')[1]
+            survey = next(t for t in snapshot['tasks'] if t['name'] == 'The kind survey')
+            survey_id = survey['id']
+            server.cli('offer', f't-{survey_id}', '--title', 'The kind offer', 'Accept or reject this survey.')
+            snapshot = request(base + '/api/v1/workbench')[1]
+            offer1_id = next(c for c in snapshot['comments'] if c['kind'] == 'offer' and c['home'] == survey_id)['id']
+            server.cli('reject', offer1_id, '--grounds', 'The survey rejects this first account.')
+            reject_id = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['kind'] == 'reject')['id']
+            server.cli('offer', f't-{survey_id}', '--title', 'The kind second offer', 'One more account to decide.')
+            snapshot = request(base + '/api/v1/workbench')[1]
+            offer2_id = next(c for c in sorted(snapshot['comments'], key=lambda c: c['seq']) if c['kind'] == 'offer' and c['home'] == survey_id and c['id'] != offer1_id)['id']
+            server.cli('accept', offer2_id)
+            accept_id = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['kind'] == 'accept')['id']
+            server.cli('use', f't-{survey_id}', '--source', 't-0', '--reason', 'This survey builds on the cursor note.')
+            use_id = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['kind'] == 'use')['id']
+            server.cli('create', 'task', 'The kind standing task')
+            standing_id = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The kind standing task')['id']
+            server.cli('offer', f't-{standing_id}', '--title', 'The kind standing offer', 'A standing account for the grounds draft.')
+            standing_offer_id = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['kind'] == 'offer' and c['home'] == standing_id)['id']
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            bar = lambda: [page.locator('#bar-mode').inner_text(), page.locator('#bar-kind').inner_text(), page.locator('#bar-ident').inner_text(), page.locator('#bar-info').inner_text(), page.locator('#bar-flags').inner_text()]
+            check(bar() == ['NORMAL', 'Home', 'home', '', '[-]'], 'home opens with the exact mode-kind-ident-info-flags bar tuple')
+            page.goto(base + f'/t/{survey_id}'); page.wait_for_function('window.workbenchUI !== undefined')
+            check(bar()[:3] == ['NORMAL', 'Task', f't-{survey_id}'], 'a task buffer shows the Task kind')
+            def deep(comment_id):
+                page.goto(base + '/' + comment_id.replace('-', '/', 1))
+                page.wait_for_function('window.workbenchUI !== undefined')
+            deep(offer1_id)
+            check(bar()[:3] == ['RENDERED', 'Offer', offer1_id], 'an offer shows its Offer kind rendered')
+            deep(accept_id)
+            check(bar()[:3] == ['RENDERED', 'Accept', accept_id], 'an accept shows its Accept kind')
+            deep(use_id)
+            check(bar()[:3] == ['RENDERED', 'Use', use_id], 'a use shows its Use kind')
+            reject_id = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['kind'] == 'reject')['id']
+            deep(reject_id)
+            check(bar()[:3] == ['RENDERED', 'Reject', reject_id], 'a landed reject shows its Reject kind')
+            page.goto(base); page.wait_for_function('window.workbenchUI !== undefined')
+            finder(page, 'insertion bookmark'); page.keyboard.press('Enter')
+            check(bar()[:3] == ['RENDERED', 'Note', 'c-0'], 'a note shows its Note kind')
+            local(page, 'e')
+            check(bar() == ['NORMAL', 'Note', 'c-0', 'revising', '[+]'] or bar()[:4] == ['NORMAL', 'Note', 'c-0', 'revising'], 'a repair keeps the record kind with the revising info')
+            local(page, 'e')
+            finder(page, 'kind standing offer'); page.keyboard.press('Enter')
+            check(draft(page)['id'] == standing_offer_id, 'the standing survey offer opens for the draft-intent tuple')
+            local(page, 'x')
+            tuple_now = bar()
+            check(tuple_now[1] == 'Reject' and tuple_now[2].startswith('draft:') and tuple_now[3].startswith('rejecting c-'), 'a grounds draft shows the Reject intent kind with its draft ident')
+            context.close()
+
+            # registry parity: folds, reader scroll, and pane focus are
+            # palette commands, and the keys dispatch through them
+            server.cli('comment', 't-1', '--title', 'The foldable report',
+                       '# First section\n\nbody one\n\n## Nested part\n\nbody two under the nested heading.')
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            finder(page, 'foldable report'); page.keyboard.press('Enter')
+            leader(page, 'uv')  # source mode
+            page.keyboard.press('G')  # into the body's last section
+            page.keyboard.press('z'); page.keyboard.press('a')
+            page.wait_for_timeout(200)
+            check(page.locator('.pane.active .cm-foldPlaceholder').count() > 0, 'za folds the section under the cursor through the fold command')
+            command(page, 'Open all Markdown sections')
+            page.wait_for_timeout(200)
+            check(page.locator('.pane.active .cm-foldPlaceholder').count() == 0, 'the palette fold command opens every section')
+            page.keyboard.press(':'); page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('fold')
+            labels = page.locator('#results button').all_inner_texts()
+            page.keyboard.press('Escape')
+            check(sum('Markdown section' in label for label in labels) >= 5, 'the palette lists the five Markdown fold commands')
+            page.keyboard.press(':'); page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('Focus pane')
+            focus_labels = page.locator('#results button').all_inner_texts()
+            page.keyboard.press('Escape')
+            check(sum('Focus pane' in label for label in focus_labels) == 4, 'the palette lists the four pane focus commands')
+            finder(page, 'foldable report'); page.keyboard.press('Enter')
+            leader(page, 'wv')
+            page.locator('.pane').nth(0).locator('.buffer-title').click()
+            focus_before = state(page)['focus']
+            page.keyboard.press('Escape')
+            page.keyboard.down('Control'); page.keyboard.press('w'); page.keyboard.up('Control')
+            page.keyboard.press('l')
+            page.wait_for_timeout(150)
+            check(state(page)['focus'] != focus_before, 'ctrl-w l focuses the pane to the right through its command')
+            page.keyboard.press('Escape')
+            command(page, 'close')
+            # rendered scroll rides its registry command
+            page.set_viewport_size({'width': 1500, 'height': 420})
+            page.goto(base + '/c/6'); page.wait_for_function('window.workbenchUI !== undefined')
+            before_scroll = page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop')
+            page.locator('.pane.active .reading').focus()
+            page.keyboard.press('j'); page.keyboard.press('j')
+            page.wait_for_timeout(150)
+            after_scroll = page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop')
+            check(after_scroll > before_scroll, 'j scrolls the rendered pane through the reader command')
+            # the transient status line sits above the one bottom bar
+            order = page.evaluate('() => [document.querySelector("#message").nextElementSibling === document.querySelector("#bar"), document.querySelector("#message:empty") === null]')
+            page.locator('#open-commands').click()
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.press('Escape')
+            check(order[0], 'the status line renders directly above the single bottom bar')
+            context.close()
+
+            # legacy prototype storage migrates by the exact db-bound key,
+            # in the prototype's own serialization shape
             context = browser.new_context(viewport={'width': 1500, 'height': 980})
             page = context.new_page()
             instance = request(base + '/api/v1/workbench/identity')[1]['legacy_instance']
-            legacy = {'buffers': [{'id': 'draft-legacy7', 'kind': 'draft', 'title': 'Note 3',
-                                   'text': 'the legacy draft body', 'references': [], 'home': 0,
-                                   'submission': None, 'lastPosition': {'anchor': 4, 'head': 4}, 'inline': False}],
-                      'layout': {'view': 'view-0'}, 'focus': 'view-0', 'nextView': 0, 'nextDraft': 0,
-                      'views': [{'id': 'view-0', 'bufferId': 'draft-legacy7', 'positions': []}]}
-            page.goto(base)
-            page.evaluate('(payload) => localStorage.setItem("saccade-web-vim:' + instance + '", payload)',
-                          json.dumps(json.dumps(legacy)))
+            import hashlib
+            other_instance = hashlib.sha256(b'/tmp/another-tracker/workbench.db').hexdigest()[:16]
+            legacy = {'buffers': [
+                {'id': 'draft:1', 'kind': 'draft', 'title': 'Note 1', 'text': 'the legacy cursor note',
+                 'references': [3, 1], 'home': 0, 'submission': None,
+                 'lastPosition': {'anchor': 5, 'head': 5, 'scrollTop': 12}, 'inline': False},
+                {'id': 'draft:2', 'kind': 'draft', 'title': 'Note 2', 'text': 'the unknown legacy draft',
+                 'references': [], 'home': 1,
+                 'submission': {'kind': 'unknown', 'seq': 9, 'message': 'Submission outcome unknown: lost. No retry will be sent; inspect the task record.'},
+                 'lastPosition': {'anchor': 0, 'head': 0, 'scrollTop': 0}, 'inline': True},
+                {'id': 'draft:3', 'kind': 'draft', 'title': 'Note 3', 'text': 'the landed legacy draft',
+                 'references': [1, 2], 'home': 0,
+                 'submission': {'kind': 'landed', 'seq': 4, 'message': 'Recorded as c-0.'},
+                 'lastPosition': {'anchor': 7, 'head': 7, 'scrollTop': 3}, 'inline': False}],
+                'layout': {'axis': 'row', 'ratio': 0.6, 'children': [{'view': 1}, {'view': 2}]},
+                'focus': 1, 'nextView': 3, 'nextDraft': 4,
+                'views': [{'id': 1, 'bufferId': 'draft:1', 'positions': [['draft:1', {'anchor': 9, 'head': 9, 'scrollTop': 40}]]},
+                          {'id': 2, 'bufferId': 'draft:2', 'positions': []}]}
+            other = {'buffers': [{'id': 'draft:9', 'kind': 'draft', 'title': 'Note 9', 'text': 'another tracker draft',
+                                  'references': [], 'home': 0, 'submission': None}],
+                     'layout': {'view': 1}, 'focus': 1, 'nextView': 2, 'nextDraft': 10,
+                     'views': [{'id': 1, 'bufferId': 'draft:9', 'positions': []}]}
+            cursor_before = request(base + '/api/v1/workbench')[1]['cursor']
+            # seed at document-start so no earlier page load can persist
+            # a fresh-format key ahead of the migration
+            seed = json.dumps({'instance': instance, 'legacy': json.dumps(legacy),
+                               'otherInstance': other_instance, 'other': json.dumps(other)})
+            context.add_init_script(
+                "const seed = " + seed + ";"
+                " localStorage.setItem('saccade-web-vim:' + seed.instance, seed.legacy);"
+                " localStorage.setItem('saccade-web-vim:' + seed.otherInstance, seed.other);")
             ready(page, base)
-            legacy_draft = next(b for b in state(page)['buffers'] if b['id'] == 'draft-legacy7')
-            check(legacy_draft['text'] == 'the legacy draft body' and legacy_draft['home'] == 0, 'the legacy draft migrates with its text and home')
-            check(legacy_draft['authoredTitle'] == '', 'the generated prototype title never becomes an authored title')
-            original_bytes = page.evaluate('() => localStorage.getItem("saccade-web-vim:' + instance + '")')
-            check(original_bytes == json.dumps(json.dumps(legacy))[1:-1] or isinstance(original_bytes, str), 'the legacy key bytes remain in place after migration')
-            finder(page, 'legacy draft body')
-            check(draft(page)['id'] == 'draft-legacy7', 'the migrated draft is findable by its prose')
-            # deep links apply to a restored session and name their misses
-            page.goto(base + '/t/2'); page.wait_for_function('window.workbenchUI !== undefined')
-            check(draft(page)['id'] == 't-2', 'a deep link opens its task after a restored session')
-            page.evaluate("location.hash = '#c-6'")
-            page.wait_for_function("window.workbenchUI.state().buffers && document.querySelector('.buffer-title').textContent.includes('c-6')")
-            check(draft(page)['id'] == 'c-6', 'a hash link navigates the restored session')
+            buffers = state(page)['buffers']
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == cursor_before, 'legacy migration writes no records')
+            by_id = {b['id']: b for b in buffers}
+            check('draft:9' not in by_id, "another tracker's legacy key is not imported")
+            check(by_id['draft:1']['text'] == 'the legacy cursor note' and by_id['draft:1']['home'] == 0, 'the legacy draft migrates with its text and home')
+            check(by_id['draft:1']['references'] == [3, 1], 'legacy citation mappings keep their order')
+            check(by_id['draft:2']['submission']['kind'] == 'unknown' and by_id['draft:3']['submission']['kind'] == 'landed', 'unknown and landed submission states ride the migration')
+            check(all(b['authoredTitle'] == '' for b in buffers if b['id'].startswith('draft:')), 'generated prototype nicknames never become authored titles')
+            check(state(page)['layout'] == legacy['layout'] and len(state(page)['panes']) == 2, 'the legacy split layout survives the migration')
+            pane_positions = {p['id']: p['position'] for p in state(page)['panes']}
+            check(pane_positions.get(1, {}).get('head') == 9 and pane_positions.get(2) is not None, 'legacy reading and cursor positions survive')
+            check(page.evaluate('() => localStorage.getItem("saccade-web-vim:' + instance + '")') == json.dumps(legacy), 'the legacy key bytes remain in place after migration')
+            check(page.evaluate('() => localStorage.getItem("saccade-web-vim:' + other_instance + '")') == json.dumps(other), "another tracker's legacy bytes stay untouched")
+            finder(page, 'legacy cursor note')
+            check(draft(page)['id'] == 'draft:1', 'the migrated draft is findable by its prose')
+            command(page, 'new')
+            check(draft(page)['id'] == 'draft:4', 'new drafts continue after the migrated numbering')
+            # deep links apply to a restored session, navigate by hash,
+            # and the startup hint never buries a missing-target naming
+            page.goto(base + '/t/1'); page.wait_for_function('window.workbenchUI !== undefined')
+            check(draft(page)['id'] == 't-1', 'a deep link opens its task after a restored session')
+            check('names nothing recorded' not in page.locator('#message').inner_text(), 'a valid deep link leaves the default hint standing')
             page.goto(base + '/t/99'); page.wait_for_function('window.workbenchUI !== undefined')
-            check('names nothing recorded' in page.locator('#message').inner_text(), 'a deep link to nothing recorded says so')
+            check('names nothing recorded' in page.locator('#message').inner_text(), 'the initial URL names its missing target instead of the hint')
+            page.evaluate("location.hash = '#c-6'")
+            page.wait_for_timeout(250)
+            check(draft(page)['id'] == 'c-6', 'a hash link navigates the restored session')
             context.close()
             run_editor_checks(browser, base, check, request, state, draft, leader, command, RUN)
             browser.close(); browser = None

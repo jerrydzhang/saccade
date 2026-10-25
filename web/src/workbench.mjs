@@ -173,7 +173,7 @@ function removeLeaf(node, viewId) {
   return children.length === 1 ? children[0] : { ...node, children };
 }
 
-function leaves(node) {
+export function leaves(node) {
   return node.children ? node.children.flatMap(leaves) : [node.view];
 }
 
