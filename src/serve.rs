@@ -567,6 +567,8 @@ fn revise_reject(
             seq,
             title: draft_title.to_string(),
             draft: draft_body.to_string(),
+            title_baseline: form_field(fields, "title_baseline").to_string(),
+            body_baseline: form_field(fields, "body_baseline").to_string(),
             error: msg.to_string(),
         }),
         error: (!carried).then(|| msg.to_string()),

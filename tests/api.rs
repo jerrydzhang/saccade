@@ -620,6 +620,7 @@ async fn malformed_bodies_get_typed_envelopes() {
 /// route and would acknowledge any command post, recording each.
 fn fake_peer(
     version: Option<&str>,
+    identity_status: u16,
     budget: usize,
 ) -> (
     String,
@@ -678,10 +679,14 @@ fn fake_peer(
             };
             let reply = match method.as_str() {
                 "GET" => match &version {
-                    Some(v) => format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{{\"version\":\"{v}\",\"db\":\"/fake/peer.db\"}}",
-                        format!("{{\"version\":\"{v}\",\"db\":\"/fake/peer.db\"}}").len(),
-                    ),
+                    Some(v) => {
+                        let body = format!("{{\"version\":\"{v}\",\"db\":\"/fake/peer.db\"}}");
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {length}\r\n\r\n{body}",
+                            status = identity_status,
+                            length = body.len(),
+                        )
+                    }
                     None => "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: 11\r\n\r\n<html></html>".to_string(),
                 },
                 _ => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 14\r\n\r\n{\"records\":[]}".to_string(),
@@ -730,7 +735,7 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
 
     // a same-line, different-minor peer (a 0.14 server to this 0.15
     // binary) never sees the command: the write refuses before posting
-    let (url, posts, handle) = fake_peer(Some("0.14.0"), 1);
+    let (url, posts, handle) = fake_peer(Some("0.14.0"), 200, 1);
     match client::send(&url, &agent, command(), None) {
         Err(ClientFail::VersionMismatch { ours, theirs, .. }) => {
             assert_eq!(ours, env!("CARGO_PKG_VERSION"));
@@ -747,7 +752,7 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
 
     // a patch difference stays compatible: the command posts and the
     // peer's acknowledgment comes back
-    let (url, posts, handle) = fake_peer(Some("0.15.1"), 2);
+    let (url, posts, handle) = fake_peer(Some("0.15.1"), 200, 2);
     let reply =
         client::send(&url, &agent, command(), None).expect("a patch difference is not breaking");
     assert_eq!(reply.records.len(), 0);
@@ -763,7 +768,7 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
     retire_peer(&url, &posts, 2, handle);
 
     // a peer off the 0.x line has no ratified rule: ambiguity refuses
-    let (url, posts, handle) = fake_peer(Some("1.0.0"), 1);
+    let (url, posts, handle) = fake_peer(Some("1.0.0"), 200, 1);
     match client::send(&url, &agent, command(), None) {
         Err(ClientFail::VersionUnproven { why, .. }) => {
             assert!(why.contains("no ratified compatibility rule"), "{why}");
@@ -774,8 +779,8 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
     retire_peer(&url, &posts, 1, handle);
 
     // an unreadable version is unproven, never guessed at
-    for theirs in ["not.a.version", "0.16.0-rc"] {
-        let (url, posts, handle) = fake_peer(Some(theirs), 1);
+    for theirs in ["not.a.version", "0.16.0-rc", "0.15", "0.15.0.extra"] {
+        let (url, posts, handle) = fake_peer(Some(theirs), 200, 1);
         match client::send(&url, &agent, command(), None) {
             Err(ClientFail::VersionUnproven { .. }) => {}
             other => panic!("{theirs} refuses as unproven: {other:?}"),
@@ -786,10 +791,23 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
 
     // a peer without a readable identity route keeps the existing
     // refusal taxonomy: the write never posts
-    let (url, posts, handle) = fake_peer(None, 1);
+    let (url, posts, handle) = fake_peer(None, 404, 1);
     match client::send(&url, &agent, command(), None) {
         Err(ClientFail::Refused { code, .. }) => assert_eq!(code, "malformed_response"),
         other => panic!("a peer with no identity refuses: {other:?}"),
+    }
+    assert!(posts.lock().unwrap().iter().all(|r| r.starts_with("GET")));
+    retire_peer(&url, &posts, 1, handle);
+
+    // a non-success identity answer is no proof even when its body
+    // claims this binary's own version: the status is part of the proof
+    let (url, posts, handle) = fake_peer(Some(env!("CARGO_PKG_VERSION")), 500, 1);
+    match client::send(&url, &agent, command(), None) {
+        Err(ClientFail::Refused { code, detail }) => {
+            assert_eq!(code, "malformed_response");
+            assert!(detail.contains("status 500"), "{detail}");
+        }
+        other => panic!("a failing identity route refuses: {other:?}"),
     }
     assert!(posts.lock().unwrap().iter().all(|r| r.starts_with("GET")));
     retire_peer(&url, &posts, 1, handle);
@@ -1376,7 +1394,7 @@ async fn the_console_revise_door_repairs_titles() {
     assert_eq!(line.body, "fifth take");
 
     // an unchanged submission names no field and refuses, the drafts
-    // kept at the comment's own reveal
+    // kept at the comment's own reveal beside their ORIGINAL baselines
     let (status, body, _) = post_form(
         &format!("{base}/c/0/revise"),
         &[],
@@ -1393,6 +1411,82 @@ async fn the_console_revise_door_repairs_titles() {
     );
     let line = &lines_of(&world_of(&state), 0)[0];
     assert_eq!(line.body, "fifth take", "the refusal wrote nothing");
+
+    // a refused revision keeps the ORIGINAL render baselines, not the
+    // failed drafts: a dirty title survives a marker refusal whose
+    // retry corrects only the body
+    let (status, body, _) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=the+sixth+take&title_baseline=the+fourth+take&body=sixth+take+with+dangling+[^2]&body_baseline=fifth+take&who=jerry",
+    );
+    assert_eq!(status, 400);
+    assert!(
+        body.contains("a citation names an earlier birth record"),
+        "{body}"
+    );
+    // the re-rendered form keeps the dirty title beside the original
+    // baseline, so the retry compares against what stood at render
+    assert!(
+        body.contains("value=\"the sixth take\""),
+        "the dirty title stays prefilled: {body}"
+    );
+    assert!(
+        body.contains("name=\"title_baseline\" value=\"the fourth take\""),
+        "the baseline stays the original render's: {body}"
+    );
+    assert!(
+        body.contains("name=\"body_baseline\" value=\"fifth take\""),
+        "the body baseline stays original too: {body}"
+    );
+    let (status, _, _) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=the+sixth+take&title_baseline=the+fourth+take&body=sixth+take,+corrected&body_baseline=fifth+take&who=jerry",
+    );
+    assert_eq!(status, 303);
+    let line = &lines_of(&world_of(&state), 0)[0];
+    assert_eq!(
+        line.title.as_deref(),
+        Some("the sixth take"),
+        "the still-pending title lands with the corrected body"
+    );
+    assert_eq!(line.body, "sixth take, corrected");
+    let record = last_revision_of(&state);
+    assert!(record.contains("\"title\""), "{record}");
+    assert!(record.contains("corrected"), "{record}");
+
+    // the converse: a name refusal with both fields dirty, retried
+    // with only the name added, lands every pending edit
+    let (status, body, _) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=the+seventh+take&title_baseline=the+sixth+take&body=seventh+take&body_baseline=sixth+take%2C+corrected&who=",
+    );
+    assert_eq!(status, 400);
+    assert!(body.contains("a name is required"), "{body}");
+    let (status, _, _) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=the+seventh+take&title_baseline=the+sixth+take&body=seventh+take&body_baseline=sixth+take%2C+corrected&who=jerry",
+    );
+    assert_eq!(status, 303);
+    let line = &lines_of(&world_of(&state), 0)[0];
+    assert_eq!(line.title.as_deref(), Some("the seventh take"));
+    assert_eq!(line.body, "seventh take");
+
+    // the repairs never touched the citation mapping or the target:
+    // the record addresses c-0's birth and the note holds no references
+    let record = last_revision_of(&state);
+    assert!(
+        record.contains("\"id\":1"),
+        "the revision targets c-0's birth: {record}"
+    );
+    assert!(
+        !record.contains("references"),
+        "a revision never retargets references: {record}"
+    );
+    assert!(lines_of(&world_of(&state), 0)[0].references.is_empty());
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }

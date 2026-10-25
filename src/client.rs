@@ -190,16 +190,15 @@ pub struct ServerIdentity {
 }
 
 /// The version line a peer must prove before any command write posts:
-/// major and minor, patch optional. None when the text is not a
-/// version this rule can read.
+/// exactly the major.minor.patch sac advertises, whole input. None
+/// when the text is truncated, extended, or otherwise not a version
+/// this rule can read.
 fn version_line(text: &str) -> Option<(u64, u64)> {
     let mut parts = text.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
-    match parts.next() {
-        Some(patch) if patch.parse::<u64>().is_err() => None,
-        Some(_) | None => Some((major, minor)),
-    }
+    let _patch = parts.next()?.parse::<u64>().ok()?;
+    parts.next().is_none().then_some((major, minor))
 }
 
 /// Every command write crosses this gate before its POST: a peer on
@@ -250,12 +249,19 @@ pub fn identity(url: &str) -> Result<ServerIdentity, ClientFail> {
         .map_err(|_| ClientFail::ServerUnreachable {
             url: url.to_string(),
         })?;
+    let status = response.status().as_u16();
     let text = response
         .body_mut()
         .read_to_string()
         .map_err(|_| ClientFail::ServerUnreachable {
             url: url.to_string(),
         })?;
+    if status != 200 {
+        return Err(ClientFail::Refused {
+            code: "malformed_response".into(),
+            detail: format!("the identity route answered status {status}"),
+        });
+    }
     let body: serde_json::Value = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
         code: "malformed_response".into(),
         detail: e.to_string(),
