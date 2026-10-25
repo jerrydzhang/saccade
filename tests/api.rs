@@ -1537,6 +1537,356 @@ async fn workbench_command_pins_human_attribution_and_binds_submissions() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
+/// The snapshot carries the record facts a reader needs: use
+/// source/binding, revised/reviser marks, withdrawer naming, task
+/// owner/state, and every href in its rendered html resolves on this
+/// server.
+#[tokio::test(flavor = "multi_thread")]
+async fn workbench_snapshot_carries_record_facts_and_resolving_links() {
+    let db = scratch_db("workbench-facts");
+    let (base, state) = spawn_workbench(&db).await;
+    seed_task(&state, "produce the account");
+    seed_task(&state, "consume the account");
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                home: TaskId(0),
+                kind: CommentKind::Offer {
+                    title: Prose::new("the standing account".into()).unwrap(),
+                    body: Prose::new("suite green, see the plan [^1]".into()).unwrap(),
+                },
+                references: vec![RecordId(0)],
+            },
+            None,
+            bare_request(),
+        )
+        .map(|_| ())
+        .map_err(|e| panic!("{e:?}"))
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                home: TaskId(1),
+                kind: CommentKind::Use {
+                    source: TaskId(0),
+                    reason: Prose::new("builds on the account".into()).unwrap(),
+                    bound: None,
+                },
+                references: Vec::new(),
+            },
+            None,
+            bare_request(),
+        )
+        .map(|_| ())
+        .map_err(|e| panic!("{e:?}"))
+        .unwrap();
+    let use_seq = {
+        let (_, snapshot) = get_json(&base, "/api/v1/workbench");
+        json_of(&snapshot)["comments"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["seq"]
+            .as_u64()
+            .unwrap() as usize
+    };
+    state
+        .execute(
+            &human_ctx(),
+            Command::ClaimTask {
+                id: TaskId(1),
+                incarnation: None,
+            },
+            None,
+            bare_request(),
+        )
+        .map(|_| ())
+        .map_err(|e| panic!("{e:?}"))
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::BindUse {
+                id: CommentId(RecordId(use_seq)),
+                offer: CommentId(RecordId(2)),
+                grounds: Prose::new("the accepted account is the one that landed".into()).unwrap(),
+            },
+            None,
+            bare_request(),
+        )
+        .map(|_| ())
+        .map_err(|e| panic!("{e:?}"))
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::CancelTask {
+                id: TaskId(0),
+                explanation: Prose::new("the producer need dissolved".into()).unwrap(),
+            },
+            None,
+            bare_request(),
+        )
+        .map_err(|e| panic!("cancel refused: {e:?}"))
+        .unwrap();
+
+    let (status, snapshot) = get_json(&base, "/api/v1/workbench");
+    assert_eq!(status, 200);
+    let projection = json_of(&snapshot);
+    let comments = projection["comments"].as_array().unwrap().clone();
+    let uses = comments.iter().find(|c| c["kind"] == "use").unwrap();
+    assert_eq!(
+        uses["source"].as_u64(),
+        Some(0),
+        "a use names its source task"
+    );
+    assert_eq!(
+        uses["binding"]["offer"].as_u64(),
+        Some(0),
+        "the binding names the selected offer by dense number"
+    );
+    assert!(
+        uses["binding"]["grounds"]
+            .as_str()
+            .is_some_and(|g| g.contains("landed")),
+        "the binding carries its grounds"
+    );
+    assert_eq!(
+        projection["tasks"][1]["owner"].as_str(),
+        Some("jerry"),
+        "the owner is a content fact"
+    );
+    assert!(
+        projection["tasks"][0]["explanation"]
+            .as_str()
+            .is_some_and(|e| e.contains("dissolved")),
+        "a cancelled task's explanation rides the projection"
+    );
+
+    // every /t/N href the projection html emits resolves on this server
+    let mut hrefs = Vec::new();
+    for comment in &comments {
+        for href in comment["html"]
+            .as_str()
+            .unwrap_or_default()
+            .split("href=\"")
+            .skip(1)
+        {
+            let path = href.split('"').next().unwrap_or_default();
+            if path.starts_with('/') {
+                hrefs.push(path.to_string());
+            }
+        }
+    }
+    assert!(!hrefs.is_empty(), "the projection renders links");
+    for path in &hrefs {
+        let (status, _) = get_html(&format!("{base}{path}"));
+        assert_eq!(status, 200, "projection href {path} resolves");
+    }
+
+    // deep links to nothing recorded answer 404, not the page
+    for path in ["/t/99", "/c/99"] {
+        let (status, _) = get_html(&format!("{base}{path}"));
+        assert_eq!(
+            status, 200,
+            "{path} serves the workbench page (client resolves)"
+        );
+    }
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The workbench write door keeps the console's CSRF and first-claim
+/// identity laws: cross-site POSTs refuse, a missing name refuses
+/// taught, and a cookieless first claim sets the actor cookie.
+#[tokio::test(flavor = "multi_thread")]
+async fn workbench_command_guards_origin_and_first_claim() {
+    let db = scratch_db("workbench-guards");
+    let (base, state) = spawn_workbench(&db).await;
+    seed_task(&state, "migrate floop");
+    let note = |title: &str, body: &str| {
+        json!({"actor": "jerry", "command": {"comment": {
+            "home": 0,
+            "kind": {"note": {"title": title, "body": body}},
+            "references": [],
+        }}})
+    };
+
+    let (status, body) = post_json_headers(
+        &base,
+        "/api/v1/workbench/command",
+        &note("the finding", "parked finding"),
+        &[("Sec-Fetch-Site", "cross-site"), ("Sec-Fetch-Mode", "cors")],
+    );
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "cross_site_refused",
+        "{body}"
+    );
+
+    let (status, body) = post_json(
+        &base,
+        "/api/v1/workbench/command",
+        &json!({"command": {"create_task": {"name": "no name"}}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("actor")),
+        "the taught refusal names the actor field: {body}"
+    );
+    let (_, projection) = get_json(&base, "/api/v1/workbench");
+    assert!(
+        json_of(&projection)["comments"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "refused guards wrote nothing"
+    );
+
+    let (status, body) = post_json_headers(
+        &base,
+        "/api/v1/workbench/command",
+        &note("the first claim", "cookieless write"),
+        &[],
+    );
+    assert_eq!(status, 200, "{body}");
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// Decisions and revisions through the workbench door: exact standing
+/// target, bodyless accept, grounds-required reject with reopen, the
+/// revised payload carrying exactly the changed fields, and stale
+/// targets refused with taught reasons.
+#[tokio::test(flavor = "multi_thread")]
+async fn workbench_decisions_and_revisions_hold_their_laws() {
+    let db = scratch_db("workbench-doors");
+    let (base, state) = spawn_workbench(&db).await;
+    seed_task(&state, "produce the account");
+    seed_task(&state, "consume the account");
+    let offer = |body: &str| {
+        state
+            .execute(
+                &human_ctx(),
+                Command::Comment {
+                    home: TaskId(0),
+                    kind: CommentKind::Offer {
+                        title: Prose::new("the standing account".into()).unwrap(),
+                        body: Prose::new(body.into()).unwrap(),
+                    },
+                    references: Vec::new(),
+                },
+                None,
+                bare_request(),
+            )
+            .map(|r| r.last().unwrap().seq)
+            .map_err(|e| panic!("{e:?}"))
+            .unwrap()
+    };
+    let offer_seq = offer("the first account");
+    let accept = json!({"actor": "jerry", "command": {"comment": {
+        "home": 0, "kind": {"accept": {"offer": offer_seq}}, "references": [],
+    }}});
+    let reject = |offer_seq: usize| {
+        json!({"actor": "jerry", "command": {"comment": {
+            "home": 1, "kind": {"reject": {"offer": offer_seq, "grounds": "the edge case still fails"}}, "references": [],
+        }}})
+    };
+
+    // accept is bodyless: the landed payload carries no prose or title
+    let (status, body) = post_json(&base, "/api/v1/workbench/command", &accept);
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["records"][0]["kind"], "commented");
+    let payload = &reply["records"][0]["payload"];
+    assert!(payload["kind"]["accept"].get("body").is_none());
+    assert!(payload["kind"]["accept"].get("title").is_none());
+
+    // a decided task refuses a second decision
+    let (status, body) = post_json(&base, "/api/v1/workbench/command", &accept);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "invalid_state_transition",
+        "{body}"
+    );
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("concluded")),
+        "the refusal teaches the task's state: {body}"
+    );
+
+    // reject on the standing offer of the other open task reopens it
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                home: TaskId(1),
+                kind: CommentKind::Offer {
+                    title: Prose::new("the second account".into()).unwrap(),
+                    body: Prose::new("for the grounds door".into()).unwrap(),
+                },
+                references: Vec::new(),
+            },
+            None,
+            bare_request(),
+        )
+        .map(|_| ())
+        .map_err(|e| panic!("{e:?}"))
+        .unwrap();
+    let standing = json_of(&get_json(&base, "/api/v1/workbench").1);
+    let second_num = standing["tasks"][1]["offer"].as_u64().unwrap() as usize;
+    let second = standing["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["num"].as_u64() == Some(second_num as u64))
+        .unwrap()["seq"]
+        .as_u64()
+        .unwrap() as usize;
+    let (status, body) = post_json(&base, "/api/v1/workbench/command", &reject(second));
+    assert_eq!(status, 200, "{body}");
+    let landed = json_of(&body);
+    assert!(
+        landed["records"][0]["payload"]["kind"]["reject"]["grounds"]
+            .as_str()
+            .is_some_and(|g| g == "the edge case still fails"),
+        "grounds land verbatim: {}",
+        landed["records"][0]["payload"]
+    );
+    let (_, after) = get_json(&base, "/api/v1/workbench");
+    assert_eq!(
+        json_of(&after)["tasks"][1]["state"].as_str(),
+        Some("open"),
+        "the rejection reopened the task"
+    );
+
+    // revision through the door sends exactly the changed field
+    let revise_title_only = json!({"actor": "jerry", "command": {"revise_comment": {
+        "id": offer_seq, "title": "the retitled account",
+    }}});
+    let (status, body) = post_json(&base, "/api/v1/workbench/command", &revise_title_only);
+    assert_eq!(status, 200, "{body}");
+    let revised = json_of(&body);
+    assert!(
+        revised["records"][0]["payload"].get("title").is_some()
+            && revised["records"][0]["payload"].get("body").is_none(),
+        "a title-only revision carries no body patch: {}",
+        revised["records"][0]["payload"]
+    );
+    assert_eq!(
+        revised["records"][0]["payload"]["id"].as_u64(),
+        Some(offer_seq as u64),
+        "the revision names the addressed birth"
+    );
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
 /// A load failure refuses; a degraded log still serves its raw rows.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_records_face_keeps_degraded_rows_and_refuses_corruption() {

@@ -34,7 +34,8 @@ rustc-ice-*.txt
 #.idea/
 .devenv/
 
-# the web workbench: committed dist is embedded by cargo; sources rebuild it
+# the web workbench: dist is a generated build product (just web-build)
 web/node_modules/
 web/runs/
 web/harness/__pycache__/
+web/dist/

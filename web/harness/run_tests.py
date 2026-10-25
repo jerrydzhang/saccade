@@ -159,6 +159,10 @@ def main():
             page.keyboard.press('Enter')
             check(draft(page)['id'] == 'c-6', 'content selection opens focused contribution text')
             check(state(page)['mode'] == 'View' and page.locator('.pane.active .reading math').count() == 2 and page.locator('.pane.active .reading table').count() == 1, 'published contributions open in fully rendered View mode')
+            page.keyboard.press(','); page.keyboard.press('a')
+            page.wait_for_timeout(250)
+            check(not page.evaluate("() => document.querySelector('#publication').open"), 'accept is unavailable on a contribution that is not the standing offer')
+            page.keyboard.press('Escape')
             check(page.evaluate('getComputedStyle(document.querySelector(".pane.active .reading .dmath")).display === "block"'), 'display math is a block even when its source shares a prose line')
             page.locator('.pane.active .reading table').hover()
             check(state(page)['mode'] == 'View' and page.locator('.pane.active .reading table').count() == 1, 'mouse interaction does not switch rendered tables to source')
@@ -287,6 +291,7 @@ def main():
             check(draft(page)['authoredTitle'] == 'The cursor rule under review', 'comma t authors the distinct title field')
             local(page, 'r'); review_ready(page)
             check('The cursor rule under review' in page.locator('#review-title').inner_text(), 'review shows the authored title it will record')
+
             check(page.locator('#publish').is_disabled() and page.locator('#review-actor-name').is_visible(), 'a missing claimed name keeps publication disabled until the act names it')
             page.fill('#review-actor-name', 'jerry')
             check(page.locator('#review-body').count() == 0 and page.locator('#publish').is_enabled(), 'Review confirms publication details without duplicating or requiring preview')
@@ -503,7 +508,8 @@ def main():
                 route.request.frame.evaluate('window.workbenchNoteHeld = true')
             page.route('**/workbench/command', delay_note_answer)
             local(page, 'r'); review_ready(page)
-            page.fill('#review-actor-name', 'jerry')
+            if page.locator('#review-actor-name').is_visible():
+                page.fill('#review-actor-name', 'jerry')
             inflight_before = request(base + '/api/v1/workbench')[1]['cursor']
             page.locator('#publish').click()
             page.wait_for_function('window.workbenchNoteHeld === true')
@@ -522,7 +528,8 @@ def main():
             page.wait_for_function('document.querySelector("#title-dialog").open')
             page.fill('#title-input', 'The persistence-failure note'); page.locator('#title-apply').click()
             local(page, 'r'); review_ready(page)
-            page.fill('#review-actor-name', 'jerry')
+            if page.locator('#review-actor-name').is_visible():
+                page.fill('#review-actor-name', 'jerry')
             blocked_before = request(base + '/api/v1/workbench')[1]['cursor']
             page.evaluate('() => { Storage.prototype.setItem = function() { throw new DOMException("local quota", "QuotaExceededError") }; }')
             page.locator('#publish').click(); wait_submission(page, 'Submission not attempted')

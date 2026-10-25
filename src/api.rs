@@ -598,6 +598,14 @@ pub fn routes() -> Router<AppState> {
 
 // -- the workbench read and act faces --------------------------------------
 
+fn actor_cookie(name: &ActorName) -> header::HeaderValue {
+    header::HeaderValue::from_str(&format!(
+        "actor={}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax",
+        name.as_str()
+    ))
+    .expect("a valid actor name is a valid cookie value")
+}
+
 /// The claimed actor a browser's actor cookie names, when one stands.
 fn cookie_actor(headers: &HeaderMap) -> Option<String> {
     headers
@@ -696,6 +704,15 @@ struct WorkbenchCommand {
     command: Command,
 }
 
+/// Whether a request declares itself cross-site, the CSRF guard's
+/// whole reading: same-origin and none (same-origin tools) pass.
+fn cross_site(headers: &HeaderMap) -> bool {
+    matches!(
+        headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()),
+        Some(v) if v != "same-origin" && v != "none"
+    )
+}
+
 /// The workbench's one write door: the console identity rule with the
 /// attribution bound to the submission. A cookie that changed under a
 /// confirmed review refuses loudly, never silently re-attributes; the
@@ -705,6 +722,13 @@ async fn workbench_command(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if cross_site(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": {"code": "cross_site_refused", "detail": "cross-site POST refused"}})),
+        )
+            .into_response();
+    }
     let raw = String::from_utf8_lossy(&body).into_owned();
     let request: WorkbenchCommand = match serde_json::from_slice(&body) {
         Ok(r) => r,
@@ -739,7 +763,7 @@ async fn workbench_command(
             .into_response();
     }
     let context = Context {
-        actor: request.actor,
+        actor: request.actor.clone(),
         tier: Tier::Human,
         scope: None,
     };
@@ -748,8 +772,17 @@ async fn workbench_command(
         client: Some("workbench".into()),
         raw,
     };
+    let first_claim = cookie_actor(&headers).is_none();
     match app.execute(&context, command.clone(), None, received) {
-        Ok(stored) => (StatusCode::OK, Json(json!({"records": &stored}))).into_response(),
+        Ok(stored) => {
+            let mut response = (StatusCode::OK, Json(json!({"records": &stored}))).into_response();
+            if first_claim {
+                response
+                    .headers_mut()
+                    .insert(header::SET_COOKIE, actor_cookie(&request.actor));
+            }
+            response
+        }
         Err(e) => {
             let (status, code, detail) = match e {
                 ExecuteFail::Reject(reject) => {
