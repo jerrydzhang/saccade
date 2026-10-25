@@ -13,8 +13,10 @@ use crate::wire;
 /// file-header stamp identifying a Saccade database.
 const APPLICATION_ID: i32 = i32::from_be_bytes(*b"sacd");
 /// The schema this binary reads and writes.
-pub const SCHEMA_VERSION: i32 = 4;
-/// The schema the offline migration reads: Saccade 0.13.0's stamp.
+pub const SCHEMA_VERSION: i32 = 5;
+/// The oldest schema the offline migration reads: Saccade 0.13.0's
+/// stamp. The chain runs every step in order - a later source schema
+/// enters at its own step.
 pub const MIGRATE_FROM_VERSION: i32 = 3;
 
 #[derive(Debug)]
@@ -560,10 +562,11 @@ mod test {
         }
     }
 
-    fn offer(task: usize, body: &str) -> Command {
+    fn offer(task: usize, title: &str, body: &str) -> Command {
         Command::Comment {
             home: TaskId(task),
             kind: CommentKind::Offer {
+                title: Prose::new(title.into()).unwrap(),
                 body: Prose::new(body.into()).unwrap(),
             },
             references: Vec::new(),
@@ -595,10 +598,11 @@ mod test {
         Prose::new(text.into()).unwrap()
     }
 
-    fn note(body: &str) -> Command {
+    fn note(title: &str, body: &str) -> Command {
         Command::Comment {
             home: TaskId(0),
             kind: CommentKind::Note {
+                title: Prose::new(title.into()).unwrap(),
                 body: Prose::new(body.into()).unwrap(),
             },
             references: Vec::new(),
@@ -619,11 +623,29 @@ mod test {
             11,
         )
         .unwrap();
-        record(&mut conn, &scoped_agent(), note("mid-flight finding"), 11).unwrap();
-        record(&mut conn, &agent(), offer(0, "suite green, 55 tests"), 12).unwrap();
+        record(
+            &mut conn,
+            &scoped_agent(),
+            note("the mid-flight finding", "mid-flight finding"),
+            11,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            offer(0, "suite green", "suite green, 55 tests"),
+            12,
+        )
+        .unwrap();
         record(&mut conn, &human(), accept_on(0, 3), 12).unwrap();
         record(&mut conn, &human(), create("fix bar"), 13).unwrap();
-        record(&mut conn, &agent(), offer(1, "bar fixed the quick way"), 14).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            offer(1, "bar fixed", "bar fixed the quick way"),
+            14,
+        )
+        .unwrap();
         record(
             &mut conn,
             &human(),
@@ -631,7 +653,13 @@ mod test {
             15,
         )
         .unwrap();
-        record(&mut conn, &agent(), offer(1, "edge case held"), 16).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            offer(1, "edge case held", "edge case held"),
+            16,
+        )
+        .unwrap();
         record(&mut conn, &human(), accept_on(1, 8), 16).unwrap();
         record(&mut conn, &human(), create("migrate floop"), 17).unwrap();
         record(
@@ -657,7 +685,7 @@ mod test {
         record(
             &mut conn,
             &agent(),
-            note("the migration waits on a decision"),
+            note("the migration parked", "the migration waits on a decision"),
             20,
         )
         .unwrap();
@@ -754,18 +782,31 @@ mod test {
         };
         let batched = execute_batch(&mut conn, batch, 24).unwrap();
         assert_eq!(batched.len(), 2);
-        record(&mut conn, &agent(), note("post-fold receipt"), 25).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            note("the post-fold receipt", "post-fold receipt"),
+            25,
+        )
+        .unwrap();
         record(
             &mut conn,
             &agent(),
             Command::ReviseComment {
                 id: CommentId(RecordId(23)),
-                body: prose("post-fold receipt, corrected"),
+                title: None,
+                body: Some(prose("post-fold receipt, corrected")),
             },
             26,
         )
         .unwrap();
-        record(&mut conn, &agent(), note("parked mid-flight"), 27).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            note("parked mid-flight", "parked mid-flight"),
+            27,
+        )
+        .unwrap();
         record(
             &mut conn,
             &human(),
@@ -778,7 +819,13 @@ mod test {
         .unwrap();
         // a second source, replaced and rebound: the rebind family rides
         record(&mut conn, &human(), create("rewrite bar properly"), 28).unwrap();
-        record(&mut conn, &agent(), offer(5, "the deeper fix"), 28).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            offer(5, "the deeper fix", "the deeper fix"),
+            28,
+        )
+        .unwrap();
         record(
             &mut conn,
             &agent(),
@@ -812,7 +859,13 @@ mod test {
             30,
         )
         .unwrap();
-        record(&mut conn, &agent(), offer(5, "the fix that holds"), 30).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            offer(5, "the fix that holds", "the fix that holds"),
+            30,
+        )
+        .unwrap();
         record(
             &mut conn,
             &agent(),
@@ -831,6 +884,7 @@ mod test {
             Command::Comment {
                 home: TaskId(3),
                 kind: CommentKind::Note {
+                    title: prose("the adoption rests on foo"),
                     body: prose("rests on the conclusion above [^1], again [^1]"),
                 },
                 references: vec![RecordId(3)],
@@ -921,6 +975,19 @@ mod test {
             36,
         )
         .unwrap();
+        // the title repairs independently of the body: its revision
+        // rides the same family, the body it left stands
+        record(
+            &mut conn,
+            &agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(23)),
+                title: Some(prose("the receipt, re-titled")),
+                body: None,
+            },
+            36,
+        )
+        .unwrap();
         // the write path's world is the one a full reload produces,
         // asserted after the last write of the story
         let (_, returned) = record(
@@ -939,7 +1006,7 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 42);
+        assert_eq!(loadout.rows.len(), 43);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
@@ -1051,14 +1118,33 @@ mod test {
                 .as_str(),
             "post-fold receipt, corrected"
         );
+        // the title-only revision is the same family: the body stands,
+        // the description swaps, the pointer names the latest record
+        assert_eq!(loadout.rows[41].kind, "comment_revised");
+        assert!(
+            loadout.rows[41].payload.contains("the receipt, re-titled"),
+            "{}",
+            loadout.rows[41].payload
+        );
+        assert_eq!(
+            world.comments[&CommentId(RecordId(23))]
+                .comment
+                .kind
+                .title()
+                .unwrap()
+                .as_str(),
+            "the receipt, re-titled"
+        );
         assert_eq!(
             world.comments[&CommentId(RecordId(23))].revised,
             Some(Revision {
-                record: RecordId(24),
+                record: RecordId(41),
                 reviser: agent().actor,
             })
         );
         assert!(loadout.rows[23].payload.contains("post-fold receipt"));
+        // the birth payload carries its own authored title, byte-exact
+        assert!(loadout.rows[23].payload.contains("the post-fold receipt"));
         // the withdrawal family: the note and the tombstone's pointer
         assert_eq!(loadout.rows[26].kind, "comment_withdrawn");
         assert!(
@@ -1194,7 +1280,13 @@ mod test {
         {
             let mut conn = open(&path).expect("create the file-backed log");
             record(&mut conn, &human(), create("implement foo"), 10).unwrap();
-            record(&mut conn, &agent(), offer(0, "suite green"), 11).unwrap();
+            record(
+                &mut conn,
+                &agent(),
+                offer(0, "suite green", "suite green"),
+                11,
+            )
+            .unwrap();
             record(&mut conn, &human(), accept_on(0, 1), 12).unwrap();
         } // connection dropped: WAL checkpoints back into the main file
 

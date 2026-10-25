@@ -1,10 +1,14 @@
-//! The offline migration: one schema-3 log rewritten into schema 4.
-//! The source is never touched; seq and timestamps carry over
-//! unchanged; typed stored reference values stay birth references.
-//! Prose is renumbered onto the fold's public numbering - comment
-//! births to their dense c-N, non-comment records to `seq N`, ranges
-//! to `seq N..M` - and every token that cannot be identified stays
-//! visibly legacy, reported for human review rather than reassigned.
+//! The offline migration: one older log rewritten into the current
+//! schema, one step per schema generation. The source is never
+//! touched; seq and timestamps carry over unchanged; typed stored
+//! reference values stay birth references. The schema-3 step renumbers
+//! prose onto the fold's public numbering - comment births to their
+//! dense c-N, non-comment records to `seq N`, ranges to `seq N..M` -
+//! and every token that cannot be identified stays visibly legacy,
+//! reported for human review rather than reassigned. The schema-4
+//! step backfills the authored titles the deposit variants gained:
+//! each untitled Note and Offer acquires its home task's name, exactly
+//! once, with no read-side inheritance and no semantic rewriting.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -14,8 +18,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{self, StoredRecord};
 
-/// The schema this migration reads, verified before anything else.
-const FROM_VERSION: i32 = db::MIGRATE_FROM_VERSION;
+/// The schema generations this migration reads, verified before
+/// anything else: every step from the source's generation to the
+/// current one runs, in order.
+const SOURCE_VERSIONS: [i32; 2] = [db::MIGRATE_FROM_VERSION, db::MIGRATE_FROM_VERSION + 1];
 
 /// The v3 log's event vocabulary, exactly as Saccade 0.13.0 wrote it:
 /// read here, never folded - the shapes live only as long as the
@@ -72,7 +78,8 @@ impl std::fmt::Display for MigrateFail {
             MigrateFail::Db(e) => write!(f, "storage: {e}"),
             MigrateFail::WrongSchema { found } => write!(
                 f,
-                "the source holds schema v{found}; this migration reads v{FROM_VERSION}"
+                "the source holds schema v{found}; this migration reads v{} or v{}",
+                SOURCE_VERSIONS[0], SOURCE_VERSIONS[1]
             ),
             MigrateFail::Corrupt { seq, detail } => {
                 write!(f, "corrupt record at seq {seq}: {detail}")
@@ -109,6 +116,9 @@ pub struct Report {
     pub ranges_rewritten: usize,
     /// i-N tokens renumbered onto the dense incarnation numbering
     pub incarnation_refs_renumbered: usize,
+    /// Untitled notes and offers that acquired their home task's
+    /// name as title
+    pub titles_backfilled: usize,
     /// every token that could not be identified, kept visibly legacy
     pub legacy: Vec<LegacyRef>,
 }
@@ -151,29 +161,31 @@ impl V3Walk {
     }
 }
 
-/// Open the source read-only and verify it holds the migration's
-/// schema. No write path ever opens it.
-fn open_source(path: &Path) -> Result<Connection, MigrateFail> {
+/// Open the source read-only and verify it holds a schema this
+/// migration reads, returning that generation. No write path ever
+/// opens it.
+fn open_source(path: &Path) -> Result<(Connection, i32), MigrateFail> {
     if !path.exists() {
         return Err(MigrateFail::Db(db::DbError::Missing(path.to_path_buf())));
     }
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let app_id: i32 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if app_id != i32::from_be_bytes(*b"sacd") || version != FROM_VERSION {
+    if app_id != i32::from_be_bytes(*b"sacd") || !SOURCE_VERSIONS.contains(&version) {
         return Err(MigrateFail::WrongSchema { found: version });
     }
-    Ok(conn)
+    Ok((conn, version))
 }
 
-/// Migrate one schema-3 log into a fresh schema-4 tracker: read every
-/// row, rewrite the payloads onto the new law, renumber the prose,
-/// fold the result, and only then write. The source is untouched.
+/// Migrate one older log into a fresh tracker at the current schema:
+/// read every row, run every rewrite step from the source's
+/// generation onward, fold the result, and only then write. The
+/// source is untouched.
 pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
     if out.exists() {
         return Err(MigrateFail::OutputExists(out.to_path_buf()));
     }
-    let src = open_source(source)?;
+    let (src, generation) = open_source(source)?;
     let mut stmt = src.prepare(
         "SELECT seq, event_time, logged_time, actor, tier, kind, payload, scope
          FROM events ORDER BY seq",
@@ -195,6 +207,63 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
     drop(stmt);
     drop(src);
 
+    let mut report = Report {
+        records: rows.len(),
+        ..Default::default()
+    };
+
+    // step one, from schema 3 only: the renumbering onto the public
+    // numbering. A schema-4 source enters past it.
+    let out_rows = if generation == db::MIGRATE_FROM_VERSION {
+        renumber_rows(&rows, &mut report)?
+    } else {
+        rows.clone()
+    };
+    // step two, from schema 4 and after: the authored titles arrive
+    let out_rows = backfill_titles(out_rows, &mut report)?;
+    let out_rows = out_rows;
+
+    // the rewritten log must fold under the new law before anything
+    // is written - a migration that cannot fold writes nothing
+    let loadout = db::fold_rows(out_rows.clone()).map_err(MigrateFail::Db)?;
+    match loadout.state {
+        db::LoadState::Full(_) => {}
+        db::LoadState::Degraded(reason) => {
+            return Err(MigrateFail::Unfoldable {
+                seq: 0,
+                detail: reason,
+            });
+        }
+    }
+
+    let mut dst = db::open(out)?;
+    let txn = dst.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for row in &out_rows {
+        txn.execute(
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                row.seq as i64,
+                row.event_time as i64,
+                row.logged_time as i64,
+                row.actor,
+                row.tier,
+                row.kind,
+                row.payload,
+                row.scope
+            ],
+        )?;
+    }
+    txn.commit()?;
+    Ok(report)
+}
+
+/// The schema-3 step: every row rewritten onto the v4 law, prose
+/// renumbered onto the fold's public numbering.
+fn renumber_rows(
+    rows: &[StoredRecord],
+    mut report: &mut Report,
+) -> Result<Vec<StoredRecord>, MigrateFail> {
     let mut walk = V3Walk {
         comments: BTreeMap::new(),
         task_births: BTreeMap::new(),
@@ -203,8 +272,7 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
     };
     // dense numbering: each birth's position among births of its kind
     let mut comment_births: Vec<usize> = Vec::new();
-    let mut artifact_births: Vec<usize> = Vec::new();
-    for row in &rows {
+    for row in rows {
         match row.kind.as_str() {
             "task_created" => {
                 walk.task_births.insert(row.seq, walk.task_births.len());
@@ -213,7 +281,6 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
                 walk.comments.insert(row.seq, parse_comment(row)?);
                 comment_births.push(row.seq);
             }
-            "artifact_added" => artifact_births.push(row.seq),
             "workspace_established" => walk.incarnation_births.push(row.seq),
             _ => {}
         }
@@ -229,10 +296,6 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
         .enumerate()
         .map(|(n, seq)| (*seq, n))
         .collect();
-    let mut report = Report {
-        records: rows.len(),
-        ..Default::default()
-    };
 
     // the rewriter every prose field passes through
     let is_comment = |seq: usize| comment_number.contains_key(&seq);
@@ -249,7 +312,7 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
     };
 
     let mut out_rows: Vec<StoredRecord> = Vec::with_capacity(rows.len());
-    for row in &rows {
+    for row in rows {
         let payload: serde_json::Value =
             serde_json::from_str(&row.payload).map_err(|e| MigrateFail::Corrupt {
                 seq: row.seq,
@@ -308,40 +371,98 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
         });
     }
     // scope JSON rides typed values: birth references, never renumbered
+    Ok(out_rows)
+}
 
-    // the rewritten log must fold under the new law before anything
-    // is written - a migration that cannot fold writes nothing
-    let loadout = db::fold_rows(out_rows.clone()).map_err(MigrateFail::Db)?;
-    match loadout.state {
-        db::LoadState::Full(_) => {}
-        db::LoadState::Degraded(reason) => {
-            return Err(MigrateFail::Unfoldable {
-                seq: 0,
-                detail: reason,
-            });
+/// The schema-4 step: each untitled Note and Offer acquires its home
+/// task's name as title, exactly once - the authored description the
+/// deposit variants gained. Existing titles stand untouched, every
+/// other family rides byte for byte, and nothing is inferred or
+/// rewritten: the home task's recorded name is the whole derivation.
+fn backfill_titles(
+    rows: Vec<StoredRecord>,
+    report: &mut Report,
+) -> Result<Vec<StoredRecord>, MigrateFail> {
+    // each task's name, by dense birth order: home N names the task
+    // born Nth
+    let mut task_names: Vec<String> = Vec::new();
+    for row in &rows {
+        if row.kind != "task_created" {
+            continue;
         }
+        #[derive(Deserialize)]
+        struct Created {
+            name: String,
+        }
+        let parsed: Created =
+            serde_json::from_str(&row.payload).map_err(|e| MigrateFail::Corrupt {
+                seq: row.seq,
+                detail: e.to_string(),
+            })?;
+        task_names.push(parsed.name);
     }
-
-    let mut dst = db::open(out)?;
-    let txn = dst.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for row in &out_rows {
-        txn.execute(
-            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                row.seq as i64,
-                row.event_time as i64,
-                row.logged_time as i64,
-                row.actor,
-                row.tier,
-                row.kind,
-                row.payload,
-                row.scope
-            ],
-        )?;
+    let mut out_rows = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        if row.kind != "commented" {
+            out_rows.push(row);
+            continue;
+        }
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&row.payload).map_err(|e| MigrateFail::Corrupt {
+                seq: row.seq,
+                detail: e.to_string(),
+            })?;
+        #[derive(Deserialize)]
+        struct Commented {
+            home: usize,
+            kind: serde_json::Value,
+        }
+        let parsed: Commented =
+            serde_json::from_value(payload.clone()).map_err(|e| MigrateFail::Corrupt {
+                seq: row.seq,
+                detail: e.to_string(),
+            })?;
+        let variant = parsed
+            .kind
+            .as_object()
+            .and_then(|m| m.keys().next().cloned())
+            .unwrap_or_default();
+        if variant != "note" && variant != "offer" {
+            out_rows.push(row);
+            continue;
+        }
+        let Some(inner) = parsed.kind.get(&variant) else {
+            out_rows.push(row);
+            continue;
+        };
+        // a title already standing stays as it stands
+        if inner.get("title").is_some_and(|t| !t.is_null()) {
+            out_rows.push(row);
+            continue;
+        }
+        let name = task_names
+            .get(parsed.home)
+            .ok_or_else(|| MigrateFail::Corrupt {
+                seq: row.seq,
+                detail: format!(
+                    "the comment homes on task {} but the log holds {} tasks",
+                    parsed.home,
+                    task_names.len()
+                ),
+            })?;
+        if let Some(inner) = payload.get_mut("kind").and_then(|k| k.get_mut(&variant))
+            && let Some(object) = inner.as_object_mut()
+        {
+            object.insert("title".to_string(), serde_json::Value::String(name.clone()));
+        }
+        row.payload = serde_json::to_string(&payload).map_err(|e| MigrateFail::Corrupt {
+            seq: row.seq,
+            detail: e.to_string(),
+        })?;
+        report.titles_backfilled += 1;
+        out_rows.push(row);
     }
-    txn.commit()?;
-    Ok(report)
+    Ok(out_rows)
 }
 
 fn parse_comment(row: &StoredRecord) -> Result<(v3::Target, usize), MigrateFail> {
@@ -819,7 +940,7 @@ mod test {
             "{report:?}"
         );
 
-        // the output is a schema-4 tracker that folds and reads
+        // the output is a current-schema tracker that folds and reads
         let conn = db::open_read(&out).unwrap();
         let loadout = db::load(&conn).unwrap();
         let db::LoadState::Full(world) = loadout.state else {
@@ -832,7 +953,8 @@ mod test {
         );
         // timestamps preserved
         assert_eq!(loadout.rows[0].event_time, 1000);
-        // the request became a note on its home task, body preserved
+        // the request became a note on its home task, body preserved,
+        // carrying the backfilled title
         let note = serde_json::from_str::<serde_json::Value>(&loadout.rows[5].payload).unwrap();
         assert!(
             note["kind"].as_object().unwrap().contains_key("note"),
@@ -844,6 +966,27 @@ mod test {
                 .as_str()
                 .unwrap()
                 .contains("c-0")
+        );
+        // the title step ran after the renumbering step: every untitled
+        // deposit carries its home task's name - five deposits, two tasks
+        assert_eq!(report.titles_backfilled, 5);
+        assert!(
+            note["kind"]["note"]["title"].as_str() == Some("implement foo"),
+            "{}",
+            loadout.rows[5].payload
+        );
+        let offer = serde_json::from_str::<serde_json::Value>(&loadout.rows[3].payload).unwrap();
+        assert_eq!(
+            offer["kind"]["offer"]["title"].as_str(),
+            Some("implement foo")
+        );
+        let other = serde_json::from_str::<serde_json::Value>(&loadout.rows[8].payload).unwrap();
+        assert!(
+            other["kind"]["offer"]["title"]
+                .as_str()
+                .is_some_and(|t| t.contains("consume foo")),
+            "{}",
+            loadout.rows[8].payload
         );
         // migration's own spellings are ASCII: the range renumbers onto ..
         assert!(
@@ -876,14 +1019,212 @@ mod test {
                 .incarnations
                 .contains_key(&crate::IncarnationId(crate::RecordId(11)))
         );
-        // the accept homed on the offer's task
+        // the accept homed on the offer's task, and the folded deposits
+        // present their backfilled titles
         assert_eq!(
             world.comments[&crate::CommentId(crate::RecordId(4))]
                 .comment
                 .home,
             crate::TaskId(0)
         );
+        assert_eq!(
+            world.comments[&crate::CommentId(crate::RecordId(2))]
+                .comment
+                .kind
+                .title()
+                .map(|t| t.as_str()),
+            Some("implement foo")
+        );
+        assert_eq!(
+            world.comments[&crate::CommentId(crate::RecordId(4))]
+                .comment
+                .kind
+                .title(),
+            None,
+            "the accept carries no title"
+        );
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A schema-4 source backfills each untitled deposit with its home task's name, exactly once, preserving everything else.
+    #[test]
+    fn the_schema4_step_backfills_titles_once() {
+        // an exclusively created unique root: a collision refuses, it
+        // never deletes, and only this test's own root is cleaned
+        let dir = std::env::temp_dir().join(format!(
+            "sac-migrate-v4-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir(&dir).expect("the exclusive scratch root is created, never taken");
+        let source = dir.join("v4.db");
+        {
+            let conn = Connection::open(&source).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE events (
+                     seq INTEGER PRIMARY KEY,
+                     event_time INTEGER NOT NULL,
+                     logged_time INTEGER NOT NULL,
+                     actor TEXT NOT NULL,
+                     tier TEXT NOT NULL,
+                     kind TEXT NOT NULL,
+                     payload TEXT NOT NULL,
+                     scope TEXT NULL
+                 );
+                 PRAGMA application_id = 1935762276;
+                 PRAGMA user_version = 4;",
+            )
+            .unwrap();
+            let insert = |seq: i64, kind: &str, payload: &str| {
+                conn.execute(
+                    "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+                     VALUES (?1, 1000+?1, 2000, 'jerry', 'human', ?2, ?3, NULL)",
+                    params![seq, kind, payload],
+                )
+                .unwrap();
+            };
+            insert(0, "task_created", r#"{"name":"implement foo"}"#);
+            insert(1, "task_created", r#"{"name":"adopt the accounts"}"#);
+            insert(
+                2,
+                "commented",
+                r#"{"home":0,"kind":{"note":{"body":"parked mid-flight"}},"references":[]}"#,
+            );
+            insert(
+                3,
+                "commented",
+                r#"{"home":0,"kind":{"note":{"body":"the fluke is real"}},"references":[]}"#,
+            );
+            insert(
+                4,
+                "commented",
+                r#"{"home":0,"kind":{"offer":{"body":"suite green, 55 tests"}},"references":[]}"#,
+            );
+            insert(
+                5,
+                "commented",
+                r#"{"home":0,"kind":{"accept":{"offer":4}},"references":[]}"#,
+            );
+            insert(
+                6,
+                "commented",
+                r#"{"home":1,"kind":{"use":{"source":0,"reason":"builds on foo"}},"references":[]}"#,
+            );
+            insert(
+                7,
+                "comment_revised",
+                r#"{"id":3,"body":"the fluke is real, corrected"}"#,
+            );
+            insert(
+                8,
+                "comment_withdrawn",
+                r#"{"id":2,"note":"the parking was premature"}"#,
+            );
+            insert(
+                9,
+                "artifact_added",
+                r#"{"root":1,"artifact":{"name":"sweep figure","hash":"e9a92b18a64ca761853cbb18417b3f2e0fa252949cf687a40b43e182d669c699"}}"#,
+            );
+            insert(
+                10,
+                "workspace_established",
+                r#"{"task_id":1,"base":"abc123","branch":"saccade/t-1","worktree":"/repo/wt/t-1"}"#,
+            );
+            insert(
+                11,
+                "commented",
+                r#"{"home":1,"kind":{"offer":{"title":"the standing title","body":"already titled"}},"references":[]}"#,
+            );
+        }
+
+        let out = dir.join("v5.db");
+        let report = migrate(&source, &out).unwrap();
+        // the three untitled deposits acquired their home task's name;
+        // the already-titled offer kept its own
+        assert_eq!(report.titles_backfilled, 3);
+        assert_eq!(report.records, 12);
+
+        let conn = db::open_read(&out).unwrap();
+        let loadout = db::load(&conn).unwrap();
+        let db::LoadState::Full(world) = loadout.state else {
+            panic!("the migrated log folds");
+        };
+        // seqs and timestamps preserved
+        assert_eq!(
+            loadout.rows.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            (0..12).collect::<Vec<_>>()
+        );
+        assert_eq!(loadout.rows[0].event_time, 1000);
+        // the untitled note and offer carry the home task's name
+        let note = serde_json::from_str::<serde_json::Value>(&loadout.rows[2].payload).unwrap();
+        assert_eq!(
+            note["kind"]["note"]["title"].as_str(),
+            Some("implement foo")
+        );
+        let offer = serde_json::from_str::<serde_json::Value>(&loadout.rows[4].payload).unwrap();
+        assert_eq!(
+            offer["kind"]["offer"]["title"].as_str(),
+            Some("implement foo")
+        );
+        let other = serde_json::from_str::<serde_json::Value>(&loadout.rows[11].payload).unwrap();
+        assert_eq!(
+            other["kind"]["offer"]["title"].as_str(),
+            Some("the standing title")
+        );
+        // the accept gains neither a title nor a placeholder body, the
+        // use and the revision ride byte for byte
+        let accept = serde_json::from_str::<serde_json::Value>(&loadout.rows[5].payload).unwrap();
+        assert!(accept["kind"]["accept"].get("title").is_none());
+        assert!(accept["kind"]["accept"].get("body").is_none());
+        assert_eq!(
+            loadout.rows[6].payload,
+            r#"{"home":1,"kind":{"use":{"source":0,"reason":"builds on foo"}},"references":[]}"#
+        );
+        assert_eq!(
+            loadout.rows[7].payload,
+            r#"{"id":3,"body":"the fluke is real, corrected"}"#
+        );
+        assert_eq!(
+            loadout.rows[9].payload,
+            r#"{"root":1,"artifact":{"name":"sweep figure","hash":"e9a92b18a64ca761853cbb18417b3f2e0fa252949cf687a40b43e182d669c699"}}"#
+        );
+
+        // the fold: the revised note presents its corrected body beside
+        // the backfilled title - the older presentation revision never
+        // displaces it
+        let revised = &world.comments[&crate::CommentId(crate::RecordId(3))];
+        assert_eq!(
+            revised.comment.kind.prose().map(|p| p.as_str()),
+            Some("the fluke is real, corrected")
+        );
+        assert_eq!(
+            revised.comment.kind.title().map(|t| t.as_str()),
+            Some("implement foo")
+        );
+        // the withdrawn deposit keeps its title bytes in history and
+        // the read side never discloses them
+        let withdrawn = &world.comments[&crate::CommentId(crate::RecordId(2))];
+        assert!(matches!(
+            withdrawn.comment.state,
+            crate::CommentState::Withdrawn(_)
+        ));
+        assert_eq!(
+            withdrawn.comment.kind.title().map(|t| t.as_str()),
+            Some("implement foo")
+        );
+        let line =
+            crate::views::comment_line(&world, crate::CommentId(crate::RecordId(2))).unwrap();
+        assert_eq!(line.title, None);
+        assert_eq!(line.body, "parked mid-flight");
+
+        // the source stays schema 4, untouched
+        let (raw, version) = open_source(&source).unwrap();
+        assert_eq!(version, 4);
+        drop(raw);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -909,10 +1250,7 @@ mod test {
             Err(MigrateFail::OutputExists(_))
         ));
         // the source was never touched: still schema 3, still readable
-        let conn = open_source(&source).unwrap();
-        let version: i32 = conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
+        let (conn, version) = open_source(&source).unwrap();
         assert_eq!(version, 3);
         drop(conn);
         std::fs::remove_dir_all(&dir).unwrap();

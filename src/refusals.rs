@@ -98,13 +98,16 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                 } => kind.prose().and_then(|prose| {
                     crate::markers::first_unresolved(prose.as_str(), references.len())
                 }),
-                Command::ReviseComment { id, body } => {
+                Command::ReviseComment { id, body, .. } => {
                     let mapped = world
                         .comments
                         .get(id)
                         .map(|ctx| ctx.references.len())
                         .unwrap_or(0);
-                    crate::markers::first_unresolved(body.as_str(), mapped)
+                    let unresolved = body.as_ref().and_then(|prose| {
+                        crate::markers::first_unresolved(prose.as_str(), mapped)
+                    });
+                    unresolved
                 }
                 _ => None,
             };
@@ -197,12 +200,19 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                     ))
                 }
             }
-            Command::ReviseComment { id, .. } => {
+            Command::ReviseComment { id, title, .. } => {
                 let ctx = world.comments.get(id)?;
                 if ctx.withdrawn.is_some() {
                     return Some(format!(
                         "c-{} is withdrawn; the door is terminal - a reached conclusion is a new deposit",
                         num_of(world, *id)
+                    ));
+                }
+                if title.is_some() && ctx.comment.kind.title().is_none() {
+                    return Some(format!(
+                        "c-{} is a {}; titles live on notes and offers alone",
+                        num_of(world, *id),
+                        crate::views::kind_of(&ctx.comment.kind)
                     ));
                 }
                 (ctx.comment.kind.prose().is_none()).then(|| {

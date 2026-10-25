@@ -213,6 +213,10 @@ pub struct CommentLine {
     pub actor: String,
     pub tier: String,
     pub kind: &'static str,
+    /// The authored title, on a live note or offer; every other kind
+    /// and a withdrawn deposit carry none - a withdrawal hides the
+    /// title with the body
+    pub title: Option<String>,
     pub body: String,
     /// The offer a decision names, as its public number
     pub offer: Option<usize>,
@@ -309,6 +313,11 @@ fn line_of(world: &World, cid: CommentId) -> CommentLine {
             "note"
         } else {
             kind_of(&cctx.comment.kind)
+        },
+        title: if matches!(cctx.comment.state, CommentState::Withdrawn(_)) {
+            None
+        } else {
+            cctx.comment.kind.title().map(|t| t.as_str().to_string())
         },
         body: cctx
             .comment
@@ -820,9 +829,23 @@ pub struct SearchRecord {
     pub kind: &'static str,
     /// The author, when the fold keeps one
     pub actor: Option<String>,
+    /// The authored title, on a live note or offer; a withdrawn
+    /// deposit's title is never disclosed
+    pub title: Option<String>,
     pub body: String,
     /// The record's position
     order: usize,
+}
+
+impl SearchRecord {
+    /// The record's searched text: the title line above the body when
+    /// one stands, so a title match points at its own line.
+    pub fn text(&self) -> String {
+        match &self.title {
+            Some(title) => format!("{title}\n{}", self.body),
+            None => self.body.clone(),
+        }
+    }
 }
 
 /// A thread's results: its records after the facets, and the term
@@ -876,6 +899,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                     pointer: format!("t-{i}"),
                     kind: "task",
                     actor: Some(ctx.birth_actor.as_str().to_string()),
+                    title: None,
                     body: title.to_string(),
                     order: ctx.birth.0,
                 },
@@ -890,6 +914,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                         pointer: format!("t-{i} explanation"),
                         kind: "explanation",
                         actor: None,
+                        title: None,
                         body: text.to_string(),
                         order: usize::MAX,
                     },
@@ -906,6 +931,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                         pointer: format!("seq {rid}", rid = rid.0),
                         kind: "artifact",
                         actor: None,
+                        title: None,
                         body: name.to_string(),
                         order: rid.0,
                     },
@@ -925,6 +951,17 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
             .prose()
             .map(|p| p.as_str().to_string())
             .unwrap_or_default();
+        // a live note or offer's title searches beside its body; a
+        // withdrawn deposit's title left with the body
+        let title = if matches!(cctx.comment.state, CommentState::Withdrawn(_)) {
+            None
+        } else {
+            cctx.comment.kind.title().map(|t| t.as_str().to_string())
+        };
+        let text = match &title {
+            Some(title) => format!("{title}\n{body}"),
+            None => body.clone(),
+        };
         // the structural edges: the home, the use's source, the offer
         // a decision names, the current binding, the citations
         let mut refs = vec![Ref::Task(cctx.comment.home)];
@@ -945,9 +982,9 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
             }
         }
         let matched = query.terms.iter().all(|t| match t {
-            Term::Comment(_) => comment_match(t, &body, &refs),
-            Term::Task(id) => text_match(t, &body) || refs.contains(&Ref::Task(*id)),
-            Term::Plain(_) => text_match(t, &body),
+            Term::Comment(_) => comment_match(t, &text, &refs),
+            Term::Task(id) => text_match(t, &text) || refs.contains(&Ref::Task(*id)),
+            Term::Plain(_) => text_match(t, &text),
         });
         if matched {
             matches.push((
@@ -961,6 +998,7 @@ pub fn search(world: &World, query: &SearchQuery) -> Result<Vec<SearchGroup>, Se
                     ),
                     kind: kind_of(&cctx.comment.kind),
                     actor: Some(cctx.actor.as_str().to_string()),
+                    title,
                     body,
                     order: id.0.0,
                 },
@@ -1095,13 +1133,14 @@ mod test {
     fn the_thread_is_flat_in_birth_order() {
         let human = human();
         let agent = agent();
-        let note = |seq: usize, ctx: &Context, home: TaskId, body: &str| Record {
+        let note = |seq: usize, ctx: &Context, home: TaskId, title: &str, body: &str| Record {
             id: RecordId(seq),
             timestamp: seq as u64,
             context: ctx.clone(),
             event: Event::Commented {
                 home,
                 kind: CommentKind::Note {
+                    title: Prose::new(title.into()).unwrap(),
                     body: Prose::new(body.into()).unwrap(),
                 },
                 references: Vec::new(),
@@ -1118,15 +1157,34 @@ mod test {
         let world = World::replay(vec![
             birth(0, &human, "real work"),
             birth(1, &human, "other work"),
-            note(2, &agent, TaskId(0), "triage: how is sections, undecided"),
+            note(
+                2,
+                &agent,
+                TaskId(0),
+                "the sections question",
+                "triage: how is sections, undecided",
+            ),
             note(
                 3,
                 &human,
                 TaskId(0),
+                "the tree verdict",
                 "no - pure tree, canvas verdict pending",
             ),
-            note(4, &agent, TaskId(0), "noted, parked with owner"),
-            note(5, &human, TaskId(1), "belongs to the other thread"),
+            note(
+                4,
+                &agent,
+                TaskId(0),
+                "parked with the owner",
+                "noted, parked with owner",
+            ),
+            note(
+                5,
+                &human,
+                TaskId(1),
+                "the other thread's note",
+                "belongs to the other thread",
+            ),
         ])
         .unwrap();
 
@@ -1191,6 +1249,7 @@ mod test {
                 event: Event::Commented {
                     home: TaskId(0),
                     kind: CommentKind::Note {
+                        title: Prose::new("the first deposit".into()).unwrap(),
                         body: Prose::new("first deposit".into()).unwrap(),
                     },
                     references: Vec::new(),
@@ -1203,6 +1262,7 @@ mod test {
                 event: Event::Commented {
                     home: TaskId(0),
                     kind: CommentKind::Note {
+                        title: Prose::new("a later note".into()).unwrap(),
                         body: Prose::new("a later note".into()).unwrap(),
                     },
                     references: vec![RecordId(1)],
@@ -1226,7 +1286,8 @@ mod test {
                 context: human,
                 event: Event::CommentRevised {
                     id: CommentId(RecordId(1)),
-                    body: Prose::new("first deposit, corrected".into()).unwrap(),
+                    title: None,
+                    body: Some(Prose::new("first deposit, corrected".into()).unwrap()),
                 },
             },
         ])
@@ -1321,6 +1382,7 @@ mod test {
                     Tier::Human,
                     TaskId(0),
                     CommentKind::Note {
+                        title: offer_body("a parked finding"),
                         body: offer_body("parked finding"),
                     },
                     Vec::new(),
@@ -1331,6 +1393,7 @@ mod test {
                     Tier::Agent,
                     TaskId(0),
                     CommentKind::Note {
+                        title: offer_body("the reply"),
                         body: offer_body("the reply, citing [^1]"),
                     },
                     vec![RecordId(1)],
@@ -1396,6 +1459,7 @@ mod test {
                     Tier::Agent,
                     TaskId(0),
                     CommentKind::Note {
+                        title: offer_body("a parked finding"),
                         body: offer_body("parked finding"),
                     },
                     Vec::new(),
@@ -1406,6 +1470,7 @@ mod test {
                     Tier::Human,
                     TaskId(0),
                     CommentKind::Note {
+                        title: offer_body("the same target twice"),
                         body: offer_body("again [^1] and again [^1]"),
                     },
                     vec![RecordId(1), RecordId(1)],
@@ -1470,6 +1535,7 @@ mod test {
                     Tier::Human,
                     TaskId(0),
                     CommentKind::Note {
+                        title: offer_body("everything cited at once"),
                         body: offer_body(
                             "the task [^1], the worker [^2], the figure [^3], the claim [^4]",
                         ),
@@ -1517,6 +1583,7 @@ mod test {
                     Tier::Agent,
                     TaskId(0),
                     CommentKind::Offer {
+                        title: offer_body("suite green"),
                         body: offer_body("suite green"),
                     },
                     Vec::new(),
@@ -1546,6 +1613,7 @@ mod test {
                     Tier::Agent,
                     TaskId(3),
                     CommentKind::Offer {
+                        title: offer_body("awaiting its consumer"),
                         body: offer_body("awaiting its consumer"),
                     },
                     Vec::new(),
@@ -1615,6 +1683,7 @@ mod test {
                     Tier::Agent,
                     TaskId(0),
                     CommentKind::Offer {
+                        title: offer_body("suite green"),
                         body: offer_body("suite green"),
                     },
                     Vec::new(),
@@ -1625,6 +1694,7 @@ mod test {
                     Tier::Agent,
                     TaskId(1),
                     CommentKind::Note {
+                        title: offer_body("a question first"),
                         body: offer_body("a question first"),
                     },
                     Vec::new(),
@@ -1668,6 +1738,7 @@ mod test {
                     Tier::Agent,
                     TaskId(0),
                     CommentKind::Offer {
+                        title: offer_body("suite green"),
                         body: offer_body("suite green, 55 tests"),
                     },
                     Vec::new(),
@@ -1678,7 +1749,8 @@ mod test {
                     context: ctx(Tier::Human),
                     event: Event::CommentRevised {
                         id: CommentId(RecordId(1)),
-                        body: offer_body("suite green, 56 tests"),
+                        title: None,
+                        body: Some(offer_body("suite green, 56 tests")),
                     },
                 },
             ])
@@ -1701,6 +1773,7 @@ mod test {
                     Tier::Agent,
                     TaskId(0),
                     CommentKind::Note {
+                        title: offer_body("parked mid-flight"),
                         body: offer_body("parked mid-flight"),
                     },
                     Vec::new(),
@@ -1747,6 +1820,7 @@ mod test {
                     event: Event::Commented {
                         home: TaskId(0),
                         kind: CommentKind::Note {
+                            title: offer_body("a scoped helper's note"),
                             body: offer_body("scoped helper's note"),
                         },
                         references: Vec::new(),
@@ -1774,6 +1848,7 @@ mod test {
                     Tier::Agent,
                     TaskId(1),
                     CommentKind::Offer {
+                        title: offer_body("suite green"),
                         body: offer_body("suite green"),
                     },
                     Vec::new(),
@@ -1812,6 +1887,7 @@ mod test {
                     Tier::Agent,
                     TaskId(1),
                     CommentKind::Offer {
+                        title: offer_body("suite green"),
                         body: offer_body("suite green"),
                     },
                     Vec::new(),
@@ -1903,13 +1979,21 @@ mod test {
             )
         }
 
-        fn note(seq: usize, at: u64, ctx: &Context, home: TaskId, body: &str) -> Record {
+        fn note(
+            seq: usize,
+            at: u64,
+            ctx: &Context,
+            home: TaskId,
+            title: &str,
+            body: &str,
+        ) -> Record {
             comment(
                 seq,
                 at,
                 ctx,
                 home,
                 CommentKind::Note {
+                    title: Prose::new(title.into()).unwrap(),
                     body: Prose::new(body.into()).unwrap(),
                 },
                 Vec::new(),
@@ -1931,6 +2015,7 @@ mod test {
                     20,
                     &jerry,
                     TaskId(0),
+                    "the fluke blocks foo",
                     "parked: the fluke blocks foo\ntelemetries abound here",
                 ),
                 comment(
@@ -1939,17 +2024,26 @@ mod test {
                     &pi,
                     TaskId(0),
                     CommentKind::Note {
+                        title: Prose::new("the fluke is real".into()).unwrap(),
                         body: Prose::new("the fluke is real; floop proceeds".into()).unwrap(),
                     },
                     vec![RecordId(2)],
                 ),
                 task(4, 40, &jerry, "t-490 the id boundary guard"),
-                note(5, 50, &pi, TaskId(1), "t-0 waits on this thread"),
+                note(
+                    5,
+                    50,
+                    &pi,
+                    TaskId(1),
+                    "waiting on t-0",
+                    "t-0 waits on this thread",
+                ),
                 note(
                     6,
                     60,
                     &pi,
                     TaskId(1),
+                    "the run answered",
                     "the run answered\nsee c-123 for the trail",
                 ),
                 record(
@@ -1967,6 +2061,7 @@ mod test {
                     &bot,
                     TaskId(1),
                     CommentKind::Offer {
+                        title: Prose::new("the floop migration landed".into()).unwrap(),
                         body: Prose::new(
                             "suite 9 green; the floop migration landed per c-0".into(),
                         )
@@ -1980,6 +2075,7 @@ mod test {
                     &bot,
                     TaskId(0),
                     CommentKind::Note {
+                        title: Prose::new("foo done".into()).unwrap(),
                         body: Prose::new("done, per the plan above".into()).unwrap(),
                     },
                     vec![RecordId(2)],
@@ -2031,6 +2127,7 @@ mod test {
                     &jerry,
                     TaskId(0),
                     CommentKind::Note {
+                        title: Prose::new("the verdict".into()).unwrap(),
                         body: Prose::new("the verdict cites the figure above".into()).unwrap(),
                     },
                     vec![RecordId(1)],
@@ -2085,14 +2182,22 @@ mod test {
             let jerry = ctx(Tier::Human, "jerry");
             let world = World::replay(vec![
                 task(0, 0, &jerry, "hold the verdict"),
-                note(2, 2, &jerry, TaskId(0), "the floop verdict lands"),
+                note(
+                    2,
+                    2,
+                    &jerry,
+                    TaskId(0),
+                    "the verdict lands",
+                    "the floop verdict lands",
+                ),
                 record(
                     3,
                     3,
                     &jerry,
                     Event::CommentRevised {
                         id: CommentId(RecordId(2)),
-                        body: Prose::new("the blorp verdict lands".into()).unwrap(),
+                        title: None,
+                        body: Some(Prose::new("the blorp verdict lands".into()).unwrap()),
                     },
                 ),
             ])
@@ -2111,7 +2216,14 @@ mod test {
             let pi = ctx(Tier::Agent, "pi");
             let world = World::replay(vec![
                 task(0, 0, &jerry, "hold the verdict"),
-                note(2, 2, &pi, TaskId(0), "the floop verdict lands"),
+                note(
+                    2,
+                    2,
+                    &pi,
+                    TaskId(0),
+                    "the verdict lands",
+                    "the floop verdict lands",
+                ),
                 record(
                     3,
                     3,
@@ -2129,6 +2241,7 @@ mod test {
                     &jerry,
                     TaskId(0),
                     CommentKind::Note {
+                        title: Prose::new("the verdict stands".into()).unwrap(),
                         body: Prose::new("the verdict lives on".into()).unwrap(),
                     },
                     vec![RecordId(2)],
@@ -2262,22 +2375,30 @@ mod test {
             )
         }
 
-        fn note(seq: usize, home: TaskId, body: &str) -> (usize, Event) {
+        fn note(seq: usize, home: TaskId, title: &str, body: &str) -> (usize, Event) {
             comment(
                 seq,
                 home,
                 CommentKind::Note {
+                    title: Prose::new(title.into()).unwrap(),
                     body: Prose::new(body.into()).unwrap(),
                 },
                 Vec::new(),
             )
         }
 
-        fn note_on(seq: usize, home: TaskId, body: &str, refs: Vec<RecordId>) -> (usize, Event) {
+        fn note_on(
+            seq: usize,
+            home: TaskId,
+            title: &str,
+            body: &str,
+            refs: Vec<RecordId>,
+        ) -> (usize, Event) {
             comment(
                 seq,
                 home,
                 CommentKind::Note {
+                    title: Prose::new(title.into()).unwrap(),
                     body: Prose::new(body.into()).unwrap(),
                 },
                 refs,
@@ -2294,14 +2415,22 @@ mod test {
                     1,
                     TaskId(0),
                     CommentKind::Offer {
+                        title: Prose::new("suite green".into()).unwrap(),
                         body: Prose::new("suite green, ready for review".into()).unwrap(),
                     },
                     Vec::new(),
                 ),
-                note_on(2, TaskId(0), "sibling chatter", Vec::new()),
+                note_on(
+                    2,
+                    TaskId(0),
+                    "sibling chatter",
+                    "sibling chatter",
+                    Vec::new(),
+                ),
                 note_on(
                     3,
                     TaskId(0),
+                    "one question first",
                     "one question first, citing the offer [^1]",
                     vec![RecordId(1)],
                 ),
@@ -2309,6 +2438,7 @@ mod test {
                 note_on(
                     5,
                     TaskId(0),
+                    "answered precisely",
                     "answered in the body; see c-0 for the offer",
                     Vec::new(),
                 ),
@@ -2316,7 +2446,8 @@ mod test {
                     6,
                     Event::CommentRevised {
                         id: CommentId(RecordId(5)),
-                        body: Prose::new("answered more precisely".into()).unwrap(),
+                        title: None,
+                        body: Some(Prose::new("answered more precisely".into()).unwrap()),
                     },
                 ),
                 comment(
@@ -2327,7 +2458,7 @@ mod test {
                     },
                     Vec::new(),
                 ),
-                note(8, TaskId(1), "the other thread"),
+                note(8, TaskId(1), "the other thread", "the other thread"),
                 comment(
                     9,
                     TaskId(1),
@@ -2359,7 +2490,8 @@ mod test {
                     12,
                     Event::CommentRevised {
                         id: CommentId(RecordId(1)),
-                        body: Prose::new("the account, restated".into()).unwrap(),
+                        title: None,
+                        body: Some(Prose::new("the account, restated".into()).unwrap()),
                     },
                 ),
                 (
@@ -2373,6 +2505,7 @@ mod test {
                     14,
                     TaskId(1),
                     CommentKind::Offer {
+                        title: Prose::new("floop migrated".into()).unwrap(),
                         body: Prose::new("floop migrated, review welcome".into()).unwrap(),
                     },
                     Vec::new(),
@@ -2390,6 +2523,7 @@ mod test {
                     16,
                     TaskId(1),
                     CommentKind::Offer {
+                        title: Prose::new("the index rides along".into()).unwrap(),
                         body: Prose::new("the index rides along now".into()).unwrap(),
                     },
                     Vec::new(),

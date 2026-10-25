@@ -116,6 +116,7 @@ mod test {
             Event::Commented {
                 home: TaskId(0),
                 kind: CommentKind::Note {
+                    title: Prose::new("the leaning sections, owner jerry".into()).unwrap(),
                     body: Prose::new("leaning sections, owner: jerry".into()).unwrap(),
                 },
                 references: vec![RecordId(3)],
@@ -123,6 +124,7 @@ mod test {
             Event::Commented {
                 home: TaskId(0),
                 kind: CommentKind::Offer {
+                    title: Prose::new("foo done, suite green".into()).unwrap(),
                     body: Prose::new("suite green, 55 tests".into()).unwrap(),
                 },
                 references: Vec::new(),
@@ -170,7 +172,18 @@ mod test {
             },
             Event::CommentRevised {
                 id: CommentId(RecordId(6)),
-                body: Prose::new("which way do you want it, exactly?".into()).unwrap(),
+                title: Some(Prose::new("which way the question asks, exactly".into()).unwrap()),
+                body: Some(Prose::new("which way do you want it, exactly?".into()).unwrap()),
+            },
+            Event::CommentRevised {
+                id: CommentId(RecordId(6)),
+                title: None,
+                body: Some(Prose::new("the account, reworded".into()).unwrap()),
+            },
+            Event::CommentRevised {
+                id: CommentId(RecordId(6)),
+                title: Some(Prose::new("the account, retitled".into()).unwrap()),
+                body: None,
             },
             Event::CommentWithdrawn {
                 id: CommentId(RecordId(6)),

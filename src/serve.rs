@@ -245,6 +245,7 @@ fn respond_post(req: &Req, app: &AppState) -> Response {
 /// fragment back, anything else a 303 to the comment's home thread.
 fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> Response {
     let raw = form_field(fields, "body");
+    let raw_title = form_field(fields, "title");
     let snapshot = match app.snapshot() {
         Ok(s) => s,
         Err(fail) => {
@@ -259,6 +260,10 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     if Prose::new(addr.body.clone()).is_err() {
         return compose_reject(req, app, n, fields, "a comment needs words");
     }
+    let title = match Prose::new(raw_title.to_string()) {
+        Ok(title) => title,
+        Err(_) => return compose_reject(req, app, n, fields, "a note needs a title"),
+    };
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
         Err(msg) => return compose_reject(req, app, n, fields, &msg),
@@ -266,6 +271,7 @@ fn compose(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> 
     let command = Command::Comment {
         home: addr.home,
         kind: CommentKind::Note {
+            title,
             body: Prose::new(addr.body.clone()).unwrap(),
         },
         references: addr.references,
@@ -391,33 +397,35 @@ fn accept(req: &Req, app: &AppState, n: usize, fields: &[(String, String)]) -> R
     }
 }
 
-/// The revise door: one comment, one body, one name. The URL carries
-/// the comment's public number, resolved against the fold. Identity is
-/// claimed at the act, the tier pinned human - the console revises
-/// any comment - and the 303 returns to the comment's home thread.
-/// A refusal re-renders with the reason and the kept draft at the
-/// comment's own reveal, so the wording stays editable in place.
+/// The revise door: one comment, its title and/or body, one name. The
+/// URL carries the comment's public number, resolved against the fold.
+/// Identity is claimed at the act, the tier pinned human - the console
+/// revises any comment - and the 303 returns to the comment's home
+/// thread. A refusal re-renders with the reason and the kept drafts at
+/// the comment's own reveal, so the wording stays editable in place.
 fn revise(req: &Req, app: &AppState, num: usize, fields: &[(String, String)]) -> Response {
     let Some((root, id)) = comment_of(app, num) else {
         return page(app, 404, &format!("no comment c-{num}"));
     };
-    let body = form_field(fields, "body");
-    if Prose::new(body.to_string()).is_err() {
-        return revise_reject(req, app, root, num, body, fields, "a comment needs words");
+    let draft_title = form_field(fields, "title");
+    let draft_body = form_field(fields, "body");
+    // an empty field is an absent one: a revision carries the fields
+    // it names, at least one
+    let title = Prose::new(draft_title.to_string()).ok();
+    let body = Prose::new(draft_body.to_string()).ok();
+    let reject =
+        |msg: &str| revise_reject(req, app, root, num, draft_title, draft_body, fields, msg);
+    if title.is_none() && body.is_none() {
+        return reject("a revision needs a title or a body");
     }
     let (context, first_claim) = match identity(req, fields) {
         Ok(ok) => ok,
-        Err(msg) => return revise_reject(req, app, root, num, body, fields, &msg),
+        Err(msg) => return reject(&msg),
     };
-    let command = Command::ReviseComment {
-        id,
-        body: Prose::new(body.to_string()).unwrap(),
-    };
+    let command = Command::ReviseComment { id, title, body };
     match app.execute(&context, command, None, console_request(req)) {
         Ok(_) => redirect(&format!("/t/{root}#c-{num}"), first_claim.as_deref()),
-        Err(ExecuteFail::Reject(r)) => {
-            revise_reject(req, app, root, num, body, fields, &reject_text(&r))
-        }
+        Err(ExecuteFail::Reject(r)) => reject(&reject_text(&r)),
         Err(ExecuteFail::Degraded(reason)) => {
             page(app, 503, &format!("world projection unavailable: {reason}"))
         }
@@ -496,6 +504,7 @@ fn compose_reject(
     let form = web::FormState {
         error: Some(msg.to_string()),
         draft: form_field(fields, "body").to_string(),
+        draft_title: form_field(fields, "title").to_string(),
         who: form_who(req, fields),
         ..Default::default()
     };
@@ -539,7 +548,8 @@ fn revise_reject(
     app: &AppState,
     n: usize,
     seq: usize,
-    body: &str,
+    draft_title: &str,
+    draft_body: &str,
     fields: &[(String, String)],
     msg: &str,
 ) -> Response {
@@ -547,7 +557,8 @@ fn revise_reject(
     let form = web::FormState {
         revise: carried.then(|| web::ReviseForm {
             seq,
-            draft: body.to_string(),
+            title: draft_title.to_string(),
+            draft: draft_body.to_string(),
             error: msg.to_string(),
         }),
         error: (!carried).then(|| msg.to_string()),

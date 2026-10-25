@@ -123,6 +123,7 @@ mod test {
         Event::Commented {
             home: TaskId(0),
             kind: CommentKind::Note {
+                title: Prose::new("a filler title".into()).unwrap(),
                 body: Prose::new("filler".into()).unwrap(),
             },
             references: Vec::new(),
@@ -133,6 +134,7 @@ mod test {
         Event::Commented {
             home: TaskId(0),
             kind: CommentKind::Offer {
+                title: Prose::new("a filler title".into()).unwrap(),
                 body: Prose::new("filler".into()).unwrap(),
             },
             references: Vec::new(),

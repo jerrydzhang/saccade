@@ -78,6 +78,10 @@ enum Cmd {
     /// (c-<n>: the note homes on that comment's task and cites it)
     Comment {
         target: String,
+        /// The authored title: the concise whole-contribution
+        /// description, required at birth
+        #[arg(long)]
+        title: String,
         body: String,
         /// A citation the mapping carries: c-<n>, t-<n>, or a bare
         /// <seq>; repeatable, each earning the next [^k] marker
@@ -112,7 +116,14 @@ enum Cmd {
         mailbox: Option<String>,
     },
     /// Offer the whole-task closing account (t-<n> only: a broadcast)
-    Offer { id: String, body: String },
+    Offer {
+        id: String,
+        /// The authored title: the concise whole-contribution
+        /// description, required at birth
+        #[arg(long)]
+        title: String,
+        body: String,
+    },
     /// Accept an offered conclusion: the offer it accepts (c-<n>)
     Accept { offer: String },
     /// Reject an offered conclusion with grounds, asking reconsideration
@@ -143,13 +154,17 @@ enum Cmd {
         #[arg(long)]
         grounds: String,
     },
-    /// Revise a comment's prose: the fold presents the latest and names
-    /// a reviser who differs from the birth author, the log keeps the
-    /// original
+    /// Revise a comment's presentation: a note or an offer repairs its
+    /// title and/or body independently, the other prose variants their
+    /// body - the fold presents the latest and names a reviser who
+    /// differs from the birth author, the log keeps the original
     Revise {
         id: String,
+        /// The revised title, as an argument (notes and offers alone)
+        #[arg(long)]
+        title: Option<String>,
         /// The revised prose, as an argument
-        #[arg(required_unless_present_any = ["stdin", "body_file"])]
+        #[arg(required_unless_present_any = ["title", "stdin", "body_file"])]
         body: Option<String>,
         /// Read the revised prose from stdin instead of an argument
         #[arg(long, conflicts_with_all = ["body", "body_file"])]
@@ -188,8 +203,9 @@ enum Cmd {
         #[arg(long)]
         withdrawn: bool,
     },
-    /// Search the folded record: exact terms over task titles, comment
-    /// prose, and explanations; an id term is a reference search
+    /// Search the folded record: exact terms over task titles, note
+    /// and offer titles, comment prose, and explanations; an id term
+    /// is a reference search
     Search {
         /// Terms to match (a record must match them all) and
         /// only-show-me facets:
@@ -267,10 +283,12 @@ enum Cmd {
     /// Report this session's environment-declared identity and routing:
     /// disclosure, never a liveness claim or proof of ownership
     Identity,
-    /// Migrate a schema-3 tracker into a fresh schema-4 one: the
-    /// source stays untouched, seq and timestamps carry over, prose
-    /// renumbers onto the fold's public numbering, and anything that
-    /// cannot be identified stays visibly legacy and reported
+    /// Migrate a schema-3 or schema-4 tracker into a fresh one at
+    /// this binary's schema: the source stays untouched, seq and
+    /// timestamps carry over, prose renumbers onto the fold's public
+    /// numbering, untitled notes and offers acquire their home task's
+    /// name as title, and anything that cannot be identified stays
+    /// visibly legacy and reported
     Migrate {
         /// The fresh tracker to write; must not exist
         #[arg(long)]
@@ -536,24 +554,31 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             id: parse_task_id(id)?,
             explanation: Prose::new(explanation.clone())?,
         },
-        Cmd::Comment { target, body, refs } => {
+        Cmd::Comment {
+            target,
+            title,
+            body,
+            refs,
+        } => {
             let world = world_of(&destination)?;
             let (home, mut references) = comment_address(&world, target)?;
             for token in refs {
                 references.push(resolve_ref(&world, token)?);
             }
             let body = Prose::new(body.clone())?;
+            let title = Prose::new(title.clone())?;
             Command::Comment {
                 home,
-                kind: CommentKind::Note { body },
+                kind: CommentKind::Note { title, body },
                 references,
             }
         }
-        Cmd::Offer { id, body } => {
+        Cmd::Offer { id, title, body } => {
             let body = Prose::new(body.clone())?;
+            let title = Prose::new(title.clone())?;
             Command::Comment {
                 home: parse_task_id(id)?,
-                kind: CommentKind::Offer { body },
+                kind: CommentKind::Offer { title, body },
                 references: Vec::new(),
             }
         }
@@ -606,14 +631,24 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         }
         Cmd::Revise {
             id,
+            title,
             body,
             stdin,
             body_file,
         } => {
             let world = world_of(&destination)?;
+            let title = match title {
+                Some(given) => Some(Prose::new(given.clone())?),
+                None => None,
+            };
+            let body = match (body.clone(), *stdin, body_file.clone()) {
+                (None, false, None) => None,
+                (body, stdin, file) => Some(Prose::new(revise_body(body, stdin, file)?)?),
+            };
             Command::ReviseComment {
                 id: resolve_comment(&world, id)?,
-                body: Prose::new(revise_body(body.clone(), *stdin, body_file.clone())?)?,
+                title,
+                body,
             }
         }
         Cmd::Withdraw { id, note } => {
@@ -1366,6 +1401,7 @@ fn migrate_door(
             "record_refs_rewritten": report.record_refs_rewritten,
             "ranges_rewritten": report.ranges_rewritten,
             "incarnation_refs_renumbered": report.incarnation_refs_renumbered,
+            "titles_backfilled": report.titles_backfilled,
             "legacy": legacy,
             "out": out.display().to_string(),
         }))
@@ -1386,6 +1422,10 @@ fn migrate_door(
         report.record_refs_rewritten,
         report.ranges_rewritten,
         report.incarnation_refs_renumbered
+    ));
+    lines.push(format!(
+        "  {} notes and offers titled with their home task's name",
+        report.titles_backfilled
     ));
     if report.legacy.is_empty() {
         lines.push("  no unresolved references".into());
@@ -2582,13 +2622,17 @@ fn comment_block(line: &CommentLine, reveal: bool) -> Vec<String> {
         ));
     }
     if line.withdrawn {
-        // the tombstone: one line, the note
+        // the tombstone: one line, the note - the title left with the
+        // body and stays undisclosed even beside a revealed body
         let note = line.withdrawal_note.as_deref().unwrap_or_default();
         out.push(wrap(&format!("withdrawn: {note}"), WIDTH, "  ", "  "));
         if reveal {
             out.push(wrap(&format!("body: {}", line.body), WIDTH, "  ", "  "));
         }
         return out;
+    }
+    if let Some(title) = &line.title {
+        out.push(wrap(&format!("title  {title}"), WIDTH, "  ", "  "));
     }
     if !line.body.is_empty() {
         out.push(wrap(&line.body, WIDTH, "  ", "  "));
@@ -2794,8 +2838,8 @@ fn show_value(
 
 /// A comment as the json face renders it: the thread line's facts with
 /// the prose whole - the folded bytes, never the wrapped ones. A
-/// withdrawn note's body is null unless revealed; the tombstone's
-/// facts ride beside it.
+/// withdrawn note's body is null unless revealed, its title never
+/// disclosed; the tombstone's facts ride beside it.
 fn comment_value(line: &CommentLine, reveal: bool) -> serde_json::Value {
     let hidden = line.body.is_empty() || (line.withdrawn && !reveal);
     let body = if hidden {
@@ -2810,6 +2854,7 @@ fn comment_value(line: &CommentLine, reveal: bool) -> serde_json::Value {
         "home": format!("t-{}", line.home.0),
         "offer": line.offer,
         "source": line.source.map(|t| format!("t-{}", t.0)),
+        "title": line.title,
         "binding": line.binding.as_ref().map(|b| serde_json::json!({
             "offer": b.offer,
             "grounds": b.grounds,
@@ -2953,6 +2998,7 @@ fn render_search(
                         "pointer": r.pointer,
                         "kind": r.kind,
                         "actor": r.actor,
+                        "title": r.title,
                         "body": r.body,
                     })).collect::<Vec<_>>(),
                 });
@@ -2988,7 +3034,7 @@ fn render_search(
                 .unwrap_or_default();
             let prefix = format!("  {}  {actor}", r.pointer);
             let budget = WIDTH.saturating_sub(prefix.chars().count());
-            let line = matched_line(&query.terms, &r.body);
+            let line = matched_line(&query.terms, &r.text());
             out.push(format!("{prefix}{}", glimpse(&line, budget)));
         }
     }

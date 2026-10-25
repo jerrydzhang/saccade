@@ -32,14 +32,19 @@ pub struct UseBinding {
 /// The payload a comment carries. Every variant lives on one explicit
 /// home task; an Offer addresses its whole task; Accept and Reject
 /// name the offer they decide; a Use declares its fixed source task.
+/// A Note and an Offer are born with their own authored title - the
+/// concise whole-contribution description - beside the body; every
+/// other variant is untitled.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommentKind {
     Note {
+        title: Prose,
         body: Prose,
     },
     /// The whole-task closing account: broadcast, never a point reply
     Offer {
+        title: Prose,
         body: Prose,
     },
     /// Bodyless by law: acceptance is the reference, never prose
@@ -66,10 +71,19 @@ impl CommentKind {
     /// None for the bodyless Accept, which the revision door refuses.
     pub fn prose(&self) -> Option<&Prose> {
         match self {
-            CommentKind::Note { body } | CommentKind::Offer { body } => Some(body),
+            CommentKind::Note { body, .. } | CommentKind::Offer { body, .. } => Some(body),
             CommentKind::Accept { .. } => None,
             CommentKind::Reject { grounds, .. } => Some(grounds),
             CommentKind::Use { reason, .. } => Some(reason),
+        }
+    }
+
+    /// The authored title, on the deposit variants alone: notes and
+    /// offers carry one at birth, every other variant none.
+    pub fn title(&self) -> Option<&Prose> {
+        match self {
+            CommentKind::Note { title, .. } | CommentKind::Offer { title, .. } => Some(title),
+            _ => None,
         }
     }
 
@@ -245,12 +259,14 @@ mod tables {
 
     fn note() -> CommentKind {
         CommentKind::Note {
+            title: Prose::new("a filler title".into()).unwrap(),
             body: Prose::new("filler".into()).unwrap(),
         }
     }
 
     fn offer() -> CommentKind {
         CommentKind::Offer {
+            title: Prose::new("a filler title".into()).unwrap(),
             body: Prose::new("filler".into()).unwrap(),
         }
     }
@@ -363,7 +379,8 @@ mod tables {
             comment_event(use_of()),
             Event::CommentRevised {
                 id: CommentId(RecordId(1)),
-                body: Prose::new("filler".into()).unwrap(),
+                title: Some(Prose::new("a filler title".into()).unwrap()),
+                body: Some(Prose::new("filler".into()).unwrap()),
             },
             Event::TaskClaimed {
                 id: crate::TaskId(0),
@@ -405,7 +422,8 @@ mod tables {
 
     /// Accept carries no prose; every other variant's prose is the
     /// revision door's swap surface, the decisions name exactly the
-    /// offer they reference, and a use names its source task.
+    /// offer they reference, a use names its source task, and the
+    /// authored title rides the deposit variants alone.
     #[test]
     fn prose_and_offer_surface_of_each_variant() {
         assert!(accept().prose().is_none());
@@ -419,5 +437,10 @@ mod tables {
         assert_eq!(offer().offer(), None);
         assert_eq!(use_of().source(), Some(crate::TaskId(1)));
         assert_eq!(note().source(), None);
+        assert!(note().title().is_some());
+        assert!(offer().title().is_some());
+        for kind in [accept(), reject(), use_of()] {
+            assert!(kind.title().is_none(), "{kind:?} carries no title");
+        }
     }
 }

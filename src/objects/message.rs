@@ -94,7 +94,8 @@ mod tables {
             },
             Event::CommentRevised {
                 id: crate::CommentId(RecordId(0)),
-                body: Prose::new("filler".into()).unwrap(),
+                title: None,
+                body: Some(Prose::new("filler".into()).unwrap()),
             },
         ]
     }

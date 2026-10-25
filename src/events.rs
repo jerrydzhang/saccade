@@ -36,20 +36,26 @@ pub enum Event {
         explanation: Prose,
     },
     // Comment events
-    /// The payload is its variant, body included; Accept carries none.
-    /// Every comment names its one home task and carries its citation
-    /// mapping: marker k names references[k-1].
+    /// The payload is its variant, title and body included on the
+    /// deposits; Accept carries neither. Every comment names its one
+    /// home task and carries its citation mapping: marker k names
+    /// references[k-1].
     Commented {
         home: TaskId,
         kind: CommentKind,
         references: Vec<RecordRef>,
     },
     /// A presentation repair, not a transition: the fold swaps the
-    /// variant's prose and points at the latest revision record - the
-    /// original bytes stay in their birth event, references never change.
+    /// variant's prose and/or its title - each independently, at
+    /// least one required - and points at the latest revision record.
+    /// The original bytes stay in their birth event, references never
+    /// change, and no other variant takes a title.
     CommentRevised {
         id: CommentId,
-        body: Prose,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<Prose>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<Prose>,
     },
     /// The standing-error repair: the deposit's implicit claim - this
     /// is reached, this earns residency - was false. The body leaves
@@ -168,7 +174,10 @@ pub enum Command {
     },
     ReviseComment {
         id: CommentId,
-        body: Prose,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<Prose>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<Prose>,
     },
     WithdrawComment {
         id: CommentId,

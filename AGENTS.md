@@ -225,13 +225,19 @@ Rules:
   human. Judgment acts (cancel, reopen) are human-only and executed
   with an explanation, never proposed.
 - Comments carry note, offer, accept, reject, or use payloads, an explicit
-  home task, and structured citation mappings, never a recipient. Requests
-  are messages. Offer addresses its whole task; accept and reject name its
-  current offer. A use declares a fixed other source task; explicit binding
-  or rebinding selects that task's current Offered or Concluded account with
-  grounds. Earlier selections remain recorded, and source replacement or
-  acceptance never changes the selection automatically. Changing source
-  task creates another use. Use never creates acceptance, nor acceptance use.
+  home task, and structured citation mappings, never a recipient. Notes
+  and offers carry their own authored title at birth - required,
+  rendered as plain text beside the prose, revisable in presentation
+  independently of the body; accept stays untitled and bodyless, and
+  no other kind takes a title. Withdrawal hides a note's title and
+  body together. Requests are messages. Offer addresses its whole
+  task; accept and reject name its current offer. A use declares a
+  fixed other source task; explicit binding or rebinding selects that
+  task's current Offered or Concluded account with grounds. Earlier
+  selections remain recorded, and source replacement or acceptance
+  never changes the selection automatically. Changing source task
+  creates another use. Use never creates acceptance, nor acceptance
+  use.
 
 ## Edit mechanics (scar tissue)
 

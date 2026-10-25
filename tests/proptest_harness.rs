@@ -49,6 +49,8 @@ enum Action {
     Revise {
         comment: u8,
         human: bool,
+        /// 0: body alone, 1: title alone, 2: both
+        patch: u8,
     },
     WithdrawComment {
         comment: u8,
@@ -297,9 +299,11 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
                 home,
                 kind: match variant % 5 {
                     0 => CommentKind::Note {
+                        title: Prose::new("generated note title".into()).unwrap(),
                         body: Prose::new("generated note".into()).unwrap(),
                     },
                     1 => CommentKind::Offer {
+                        title: Prose::new("generated account title".into()).unwrap(),
                         body: Prose::new("generated account".into()).unwrap(),
                     },
                     2 => CommentKind::Accept {
@@ -342,9 +346,10 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
                 grounds: Prose::new("generated grounds".into()).unwrap(),
             }
         }
-        Action::Revise { .. } => Command::ReviseComment {
+        Action::Revise { patch, .. } => Command::ReviseComment {
             id: comment_at(world, action.number("comment")),
-            body: Prose::new("generated revision".into()).unwrap(),
+            title: (patch % 3 != 0).then(|| Prose::new("generated retitle".into()).unwrap()),
+            body: (patch % 3 != 1).then(|| Prose::new("generated revision".into()).unwrap()),
         },
         Action::WithdrawComment { .. } => Command::WithdrawComment {
             id: comment_at(world, action.number("comment")),
@@ -503,7 +508,13 @@ fn action_strategy() -> BoxedStrategy<Action> {
                 human,
             }
         }),
-        2 => id(|comment, human| Action::Revise { comment, human }),
+        2 => (any::<u8>(), human_coin(), any::<u8>()).prop_map(|(comment, human, patch)| {
+            Action::Revise {
+                comment,
+                human,
+                patch,
+            }
+        }),
         2 => id(|comment, human| Action::WithdrawComment { comment, human }),
         2 => id(|task, human| Action::Artifact { task, human }),
         2 => any::<u8>().prop_map(|task| Action::Establish { task }),

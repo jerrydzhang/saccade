@@ -28,7 +28,8 @@ finding - name it on the thread before proceeding.
 - `invalid_state_transition` - read the log; the task's state says
   otherwise (a second offer while one stands, a decision on a concluded
   or open task, revising or withdrawing a bodyless or withdrawn
-  comment, cancel or reopen from a state that does not admit it).
+  comment, supplying a title to a kind that carries none, cancel or
+  reopen from a state that does not admit it).
 - `invalid_incarnation_id` - a claim names an incarnation the record
   never birthed, or a historical establishment bound to another task;
   a native incarnation is task-free. The reference is `i-N`, the
@@ -74,8 +75,9 @@ finding - name it on the thread before proceeding.
 - `workspace_no_repo` - the serving edge resolved no repo root at boot,
   so it cannot run workspace effects.
 - `invalid_actor` - the actor name is empty or carries edge whitespace.
-- `reason_required` - the prose is empty or whitespace; names, bodies,
-  grounds, reasons, and explanations need words.
+- `reason_required` - the prose is empty or whitespace; names, titles,
+  bodies, grounds, reasons, and explanations need words - and a
+  revision names at least one field to repair.
 - `degraded` - a newer binary wrote events this one can't understand.
   Writes and `list` refuse; `sac log` still works. Report it; upgrading
   fixes it.

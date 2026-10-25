@@ -129,10 +129,11 @@ pub struct Focus {
     pub thread: ThreadView,
 }
 
-/// A refused revise, rendered at its own comment's reveal: the draft
-/// stays editable and the reason sits beside it.
+/// A refused revise, rendered at its own comment's reveal: the drafts
+/// stay editable and the reason sits beside them.
 pub struct ReviseForm {
     pub seq: usize,
+    pub title: String,
     pub draft: String,
     pub error: String,
 }
@@ -141,6 +142,8 @@ pub struct ReviseForm {
 pub struct FormState {
     pub error: Option<String>,
     pub draft: String,
+    /// The compose dock's kept title draft, on a refused compose
+    pub draft_title: String,
     pub note: String,
     /// The actor name prefilled into every act form - the cookie's
     /// value when one exists, blank for a fresh browser.
@@ -582,8 +585,31 @@ fn node_html(
         } else {
             ""
         };
+        // a titled row repairs its title beside its body: a kept draft
+        // that named a title wins, an empty one falls back to what stands
+        let title_input = line
+            .title
+            .as_deref()
+            .map(|_| {
+                let value = form
+                    .revise
+                    .as_ref()
+                    .filter(|r| r.seq == line.num)
+                    .map(|r| r.title.clone())
+                    .filter(|t| !t.is_empty())
+                    .or_else(|| line.title.clone())
+                    .map(|t| esc(&t))
+                    .unwrap_or_default();
+                format!("<input name=\"title\" placeholder=\"title\" value=\"{value}\">\n")
+            })
+            .unwrap_or_default();
+        let title_line = line
+            .title
+            .as_deref()
+            .map(|t| format!("<div class=\"ntitle\">{}</div>\n", esc(t)))
+            .unwrap_or_default();
         format!(
-            "<div class=\"nbody\">{}</div>\n<details class=\"revise\"{open}><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n<textarea name=\"body\" rows=\"2\">{draft}</textarea>\n{refused}<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n",
+            "{title_line}<div class=\"nbody\">{}</div>\n<details class=\"revise\"{open}><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n{title_input}<textarea name=\"body\" rows=\"2\">{draft}</textarea>\n{refused}<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n",
             prose_html(&line.body, &line.references, store),
             seq = line.num,
             who_input = who_input(&form.who),
@@ -978,8 +1004,13 @@ pub fn compose_section(task: usize, form: &FormState) -> String {
         .map(|e| format!("<div class=\"formerr\">{}</div>\n", esc(e)))
         .unwrap_or_default();
     format!(
-        "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<div id=\"address\" class=\"addrline mono\"></div>\n<textarea id=\"body\" name=\"body\" rows=\"2\" placeholder=\"write\">{}</textarea>\n{error}<div class=\"sendrow\">{who}<button class=\"sendbtn\" type=\"submit\">send</button></div>\n</form>\n</section>\n",
-        esc(&form.draft),
+        "<section id=\"compose\">\n<form id=\"cform\" data-task=\"{task}\" method=\"post\" action=\"/compose\">\n<input type=\"hidden\" name=\"task\" value=\"{task}\">\n<div id=\"address\" class=\"addrline mono\"></div>\n<input id=\"title\" name=\"title\" placeholder=\"title - the whole note in one line\"{title_value}>\n<textarea id=\"body\" name=\"body\" rows=\"2\" placeholder=\"write\">{draft}</textarea>\n{error}<div class=\"sendrow\">{who}<button class=\"sendbtn\" type=\"submit\">send</button></div>\n</form>\n</section>\n",
+        title_value = if form.draft_title.is_empty() {
+            String::new()
+        } else {
+            format!(" value=\"{}\"", esc(&form.draft_title))
+        },
+        draft = esc(&form.draft),
         who = who_input(&form.who),
     )
 }
@@ -1044,6 +1075,7 @@ document.addEventListener('submit', (e) => {
       if (cur) cur.replaceWith(sec);
       if (swap.r.ok) {
         f.elements.body.value = '';
+        if (f.elements.title) f.elements.title.value = '';
         document.getElementById('address').textContent = '';
       }
       restoreReading(anchor);
@@ -1233,6 +1265,7 @@ header .rname {
 .nwho.human { color: #c4a6a8; }
 .nwho.agent { color: #6d6562; }
 .nseq { font-size: 11px; color: #4a4543; }
+.ntitle { font-size: 13.5px; font-weight: 600; color: #e8e3df; overflow-wrap: anywhere; }
 .nbody { font-size: 13.5px; line-height: 1.55; color: #d4ceca; overflow-wrap: anywhere; }
 /* markdown children: restrained to the thread's scale */
 .nbody p { margin: 0 0 .45em; }
@@ -1433,8 +1466,9 @@ mod tests {
         }
     }
 
-    fn note(body: &str) -> CommentKind {
+    fn note(title: &str, body: &str) -> CommentKind {
         CommentKind::Note {
+            title: Prose::new(title.into()).unwrap(),
             body: Prose::new(body.into()).unwrap(),
         }
     }
@@ -1444,6 +1478,7 @@ mod tests {
         at: u64,
         ctx: &Context,
         home: TaskId,
+        title: &str,
         body: &str,
         refs: Vec<RecordId>,
     ) -> Record {
@@ -1453,14 +1488,15 @@ mod tests {
             ctx,
             Event::Commented {
                 home,
-                kind: note(body),
+                kind: note(title, body),
                 references: refs,
             },
         )
     }
 
-    fn offer_kind(body: &str) -> CommentKind {
+    fn offer_kind(title: &str, body: &str) -> CommentKind {
         CommentKind::Offer {
+            title: Prose::new(title.into()).unwrap(),
             body: Prose::new(body.into()).unwrap(),
         }
     }
@@ -1478,9 +1514,33 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            note_on(2, 2, human(), TaskId(0), "the finding", Vec::new()),
-            note_on(4, 4, agent(), TaskId(0), "the answer", Vec::new()),
-            note_on(6, 6, human(), TaskId(0), "the verdict", Vec::new()),
+            note_on(
+                2,
+                2,
+                human(),
+                TaskId(0),
+                "the finding",
+                "the finding",
+                Vec::new(),
+            ),
+            note_on(
+                4,
+                4,
+                agent(),
+                TaskId(0),
+                "the answer",
+                "the answer",
+                Vec::new(),
+            ),
+            note_on(
+                6,
+                6,
+                human(),
+                TaskId(0),
+                "the verdict",
+                "the verdict",
+                Vec::new(),
+            ),
         ])
         .unwrap()
     }
@@ -1595,7 +1655,7 @@ mod tests {
                 agent(),
                 Event::Commented {
                     home: TaskId(0),
-                    kind: offer_kind("suite green <34>"),
+                    kind: offer_kind("suite green", "suite green <34>"),
                     references: Vec::new(),
                 },
             ),
@@ -1624,6 +1684,7 @@ mod tests {
                 3_140 * 3600,
                 human(),
                 TaskId(1),
+                "the build request",
                 "please build it, per c-0",
                 Vec::new(),
             ),
@@ -1632,6 +1693,7 @@ mod tests {
                 3_160 * 3600,
                 agent(),
                 TaskId(1),
+                "the reply",
                 "reply body",
                 Vec::new(),
             ),
@@ -1640,6 +1702,7 @@ mod tests {
                 3_200 * 3600,
                 human(),
                 TaskId(1),
+                "a lonely note",
                 "lonely note",
                 Vec::new(),
             ),
@@ -1666,7 +1729,7 @@ mod tests {
                 agent(),
                 Event::Commented {
                     home: TaskId(2),
-                    kind: offer_kind("awaiting its consumer"),
+                    kind: offer_kind("awaiting its consumer", "awaiting its consumer"),
                     references: Vec::new(),
                 },
             ),
@@ -1899,14 +1962,23 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            note_on(1, 10, agent(), TaskId(0), "first take", Vec::new()),
+            note_on(
+                1,
+                10,
+                agent(),
+                TaskId(0),
+                "the opening verdict",
+                "first take",
+                Vec::new(),
+            ),
             record(
                 2,
                 20,
                 human(),
                 Event::CommentRevised {
                     id: CommentId(RecordId(1)),
-                    body: Prose::new("second take".into()).unwrap(),
+                    title: None,
+                    body: Some(Prose::new("second take".into()).unwrap()),
                 },
             ),
         ])
@@ -1932,7 +2004,15 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            note_on(1, 10, agent(), TaskId(0), "hasty words", Vec::new()),
+            note_on(
+                1,
+                10,
+                agent(),
+                TaskId(0),
+                "hasty words",
+                "hasty words",
+                Vec::new(),
+            ),
             record(
                 2,
                 20,
@@ -2011,7 +2091,7 @@ mod tests {
                 human(),
                 Event::Commented {
                     home: TaskId(0),
-                    kind: offer_kind("suite green, per the figure [^1]"),
+                    kind: offer_kind("suite green", "suite green, per the figure [^1]"),
                     references: vec![RecordId(1)],
                 },
             ),
@@ -2040,6 +2120,7 @@ mod tests {
                 6,
                 human(),
                 TaskId(1),
+                "bare ids stay words",
                 "see c-0 and the figure - no links, just words; c-99 unresolved",
                 Vec::new(),
             ),
@@ -2103,12 +2184,21 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            note_on(1, 1, human(), TaskId(0), "the finding", Vec::new()),
+            note_on(
+                1,
+                1,
+                human(),
+                TaskId(0),
+                "the finding",
+                "the finding",
+                Vec::new(),
+            ),
             note_on(
                 2,
                 2,
                 human(),
                 TaskId(0),
+                "the citations",
                 "the comment [^1], the task [^2], the void [^3]",
                 vec![RecordId(1), RecordId(0)],
             ),
@@ -2145,6 +2235,7 @@ mod tests {
                 1,
                 human(),
                 TaskId(0),
+                "the bold verdict",
                 "the <b>bold</b> verdict & [^1]",
                 vec![RecordId(0)],
             ),
@@ -2189,7 +2280,7 @@ mod tests {
                 agent(),
                 Event::Commented {
                     home: TaskId(1),
-                    kind: offer_kind("suite green"),
+                    kind: offer_kind("suite green", "suite green"),
                     references: Vec::new(),
                 },
             ),
@@ -2243,7 +2334,7 @@ mod tests {
                     name: Prose::new("real work".into()).unwrap(),
                 },
             ),
-            note_on(1, 1, human(), TaskId(0), body, Vec::new()),
+            note_on(1, 1, human(), TaskId(0), "the finding", body, Vec::new()),
         ])
         .unwrap()
     }
@@ -2321,6 +2412,7 @@ mod tests {
         let form = FormState {
             revise: Some(ReviseForm {
                 seq: 3,
+                title: "the refused title".into(),
                 draft: "the refused wording".into(),
                 error: "a comment needs words".into(),
             }),

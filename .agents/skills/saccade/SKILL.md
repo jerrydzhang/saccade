@@ -55,7 +55,7 @@ that skips it burns its reasoning on re-derivation or acts on guesses.
    the context around it: the thread, `sac log`, the code the record names.
    Deep reasoning comes last and only on what retrieval didn't answer.
    Deep-first reasoning is the failure mode, not a style.
-2. **Park conclusions at altitude** as they form (`sac comment t-N "..."`) -
+2. **Park conclusions at altitude** as they form (`sac comment t-N --title "..." "..."`) -
    parking is durability: an unparked conclusion dies with your context, a
    parked one survives reboot, handoff, and the next session. Park each
    conclusion when it forms, never batched at delivery - a crash between
@@ -81,8 +81,9 @@ native incarnation is task-free, and a claim is never a scope change.
 
 Work concludes through accounts and decisions, all of them comments:
 
-- **Offer** - the whole-task closing account. Moves `open -> offered`.
-  Any tier may offer; offering is not owner-gated.
+- **Offer** - the whole-task closing account, born with its authored
+  title (the concise whole-account description, `--title`). Moves
+  `open -> offered`. Any tier may offer; offering is not owner-gated.
 - **Accept** - names the offer (`c-N`), no prose. Moves `offered ->
   concluded`. Accept when the work is actually relied on, not when it
   is merely finished. An agent whose declared scope covers the task
@@ -101,8 +102,9 @@ Work concludes through accounts and decisions, all of them comments:
   never moves the selection, and a different source task is another
   use. Use creates no acceptance, and acceptance creates no use.
 - **Note** - everything else that parks on a thread or replies to a
-  record. A note may record a question or a finding; a request
-  addressed to a peer is a message, not a note; native human
+  record, born with its authored title (`--title`, required - never
+  synthesized for you). A note may record a question or a finding; a
+  request addressed to a peer is a message, not a note; native human
   conversation stays native. No separate request kind exists.
 
 Older offers stay addressable; decisions naming a superseded offer
@@ -111,14 +113,16 @@ faults belong in new tasks. Human cancellation of an unfinished task
 requires an explanation; human reopening of a cancelled one does too.
 `offered` is a normal persistent state, not a queue to clear.
 
-Revision repairs presentation only: the prose-carrying variants
-(note, offer, grounds, reason) can be revised - the fold
-presents the latest and names a reviser; the bodyless accept refuses
-the door, references never change, and a substantive correction is a
+Revision repairs presentation only: a note or an offer revises its
+title and/or its body independently (`sac revise c-N --title "..."`,
+or a body alone), and the other prose-carrying variants (grounds,
+reason) their body - the fold presents the latest and names a
+reviser; the bodyless accept refuses the door, no other kind takes a
+title, references never change, and a substantive correction is a
 new contribution citing the old one. For an offer account that
 replacement is a reject and a fresh offer. Withdrawal is the note's
-standing-error repair alone: the body leaves the fold, a tombstone
-stays.
+standing-error repair alone: the title and body leave the fold
+together, a tombstone stays.
 
 ## Working a task
 
@@ -138,7 +142,7 @@ the record names. The tracker's part of the loop:
 3. **Work and park** conclusions as comments as they form. Deviate
    openly: if the spec cannot be followed as written, say so on the
    thread with evidence.
-4. **Offer** the whole-task account (`sac offer t-N "..."`): outcome,
+4. **Offer** the whole-task account (`sac offer t-N --title "..." "..."`): outcome,
    evidence - what changed, which tests ran with counts, which
    commands were exercised, which files were touched, omissions and
    deviations. The offer is what a consumer reviews.
@@ -156,17 +160,17 @@ and reopening (`sac reopen t-N --explanation "..."`).
 |---|---|---|
 | `sac create task "name"` | any tier | the reply names what was born |
 | `sac claim t-N` | any tier | ownership transfer; never a state change |
-| `sac comment t-N "..."` / `sac comment c-<n> "..."` (`--ref` repeatable) | any tier | a note, parked or replied; each `--ref` earns a `[^k]` citation marker |
+| `sac comment t-N --title "..." "..."` / `sac comment c-<n> --title "..." "..."` (`--ref` repeatable) | any tier | a note with its authored title, parked or replied; each `--ref` earns a `[^k]` citation marker |
 | `sac send --to i-<n> [--reply m-<n>] [--task t-<n>] "body"` (`--stdin`) | a registered incarnation | durable addressed communication: the sender rides the environment, delivery is the recipient's integration's act; never a comment, never a thread entry |
 | `sac messages [i-<n>]` | anonymous | the messages an incarnation participates in, in record order, with their delivery state (pending/submitted - bookkeeping, never a reading or agreement claim); the mailbox defaults to the declared scope |
-| `sac offer t-N "..."` | any tier | the whole-task closing account |
+| `sac offer t-N --title "..." "..."` | any tier | the whole-task closing account with its authored title |
 | `sac accept c-<offer>` | any tier | conclude through the standing offer |
 | `sac reject c-<offer> --grounds "..."` | any tier | reconsideration with grounds; reopens the task |
 | `sac use t-<consumer> --source t-<source> --reason "..."` | any tier | prospective reliance: the consuming task declares its fixed source task, born unbound |
 | `sac bind c-<use> c-<offer> --grounds "..."` | any tier | bind or rebind the use's selection: the source task's current offered or concluded account; earlier selections stay in the log |
 | `sac cancel t-N --explanation "..."` | **human only** | stop an unfinished undertaking |
 | `sac reopen t-N --explanation "..."` | **human only** | resume a cancelled undertaking |
-| `sac revise c-<n> "..."` (prose also by `--stdin` or `--body-file`) | any tier | presentation repair on prose-carrying variants; the fold names a reviser, `sac log` keeps the original |
+| `sac revise c-<n> [--title "..."] ["..."]` (prose also by `--stdin` or `--body-file`; at least one field) | any tier | presentation repair: a note or offer's title and/or body, the other variants' body; the fold names a reviser, `sac log` keeps the original |
 | `sac withdraw c-<n> --note "..."` | any tier | the note's standing-error repair: body out, tombstone stays |
 | `sac artifact t-N <path> [--name ...]` | any tier | park an artifact on the thread - the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
 | `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; nothing is recorded |
@@ -203,8 +207,8 @@ backslashes. A formula the renderer cannot parse keeps its source bytes.
 ## Searching
 
 `sac search` finds records by exact terms over the folded text fields -
-task titles, comment prose, cancellation explanations, and artifact
-names. No ranking, no fuzzy: a term matches as a whole, word-bounded,
+task titles, note and offer titles, comment prose, cancellation
+explanations, and artifact names. No ranking, no fuzzy: a term matches as a whole, word-bounded,
 case-folded, or it doesn't. Results are thread-grouped pointers with
 one matched line each, in record order.
 

@@ -62,7 +62,9 @@ pub fn decide(command: Command) -> Vec<Event> {
             kind,
             references,
         }],
-        Command::ReviseComment { id, body } => vec![Event::CommentRevised { id, body }],
+        Command::ReviseComment { id, title, body } => {
+            vec![Event::CommentRevised { id, title, body }]
+        }
         Command::WithdrawComment { id, note } => vec![Event::CommentWithdrawn { id, note }],
         Command::BindUse { id, offer, grounds } => vec![Event::UseBound { id, offer, grounds }],
         Command::Artifact { root, artifact } => vec![Event::ArtifactAdded { root, artifact }],
@@ -189,7 +191,10 @@ mod test {
             (
                 Event::Commented {
                     home: TaskId(0),
-                    kind: CommentKind::Note { body: prose() },
+                    kind: CommentKind::Note {
+                        title: prose(),
+                        body: prose(),
+                    },
                     references: Vec::new(),
                 },
                 AnyTier,
@@ -197,7 +202,10 @@ mod test {
             (
                 Event::Commented {
                     home: TaskId(0),
-                    kind: CommentKind::Offer { body: prose() },
+                    kind: CommentKind::Offer {
+                        title: prose(),
+                        body: prose(),
+                    },
                     references: Vec::new(),
                 },
                 AnyTier,
@@ -246,7 +254,8 @@ mod test {
             (
                 Event::CommentRevised {
                     id: CommentId(RecordId(0)),
-                    body: prose(),
+                    title: Some(prose()),
+                    body: Some(prose()),
                 },
                 AnyTier,
             ),
@@ -367,12 +376,16 @@ mod test {
             },
             Command::Comment {
                 home: TaskId(0),
-                kind: CommentKind::Offer { body: prose() },
+                kind: CommentKind::Offer {
+                    title: prose(),
+                    body: prose(),
+                },
                 references: vec![RecordId(0)],
             },
             Command::ReviseComment {
                 id: CommentId(RecordId(0)),
-                body: prose(),
+                title: Some(prose()),
+                body: Some(prose()),
             },
             Command::WithdrawComment {
                 id: CommentId(RecordId(0)),

@@ -101,7 +101,7 @@ async fn commands_round_trip_over_the_wire() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"home": 0, "kind": {"offer": {"body": "suite green"}}, "references": []}}),
+            json!({"comment": {"home": 0, "kind": {"offer": {"title": "suite green", "body": "suite green"}}, "references": []}}),
         ),
     );
     assert_eq!(status, 200);
@@ -119,6 +119,27 @@ async fn commands_round_trip_over_the_wire() {
     );
     assert_eq!(status, 200);
 
+    // a title-only revision rides the same wire: the fold swaps the
+    // description and leaves the body standing
+    let (status, body) = post_command(
+        &base_url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"revise_comment": {"id": 2, "title": "foo done, retitled"}}),
+        ),
+    );
+    assert_eq!(status, 200);
+    let reply = json_of(&body);
+    assert_eq!(reply["records"][0]["kind"], "comment_revised");
+    assert!(
+        reply["records"][0]["payload"]
+            .to_string()
+            .contains("retitled"),
+        "{}",
+        reply["records"][0]["payload"]
+    );
+
     // the authoring ingress rides the wire: a marker the mapping
     // cannot resolve refuses with its taught reason
     let (status, body) = post_command(
@@ -126,7 +147,7 @@ async fn commands_round_trip_over_the_wire() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"home": 0, "kind": {"note": {"body": "dangling [^1]"}}, "references": []}}),
+            json!({"comment": {"home": 0, "kind": {"note": {"title": "a dangling marker", "body": "dangling [^1]"}}, "references": []}}),
         ),
     );
     assert_eq!(status, 400);
@@ -219,7 +240,7 @@ async fn the_tier_law_holds_through_http() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"home": 0, "kind": {"offer": {"body": "first account"}}, "references": []}}),
+            json!({"comment": {"home": 0, "kind": {"offer": {"title": "first account", "body": "first account"}}, "references": []}}),
         ),
     );
     let (status, body) = post_command(
@@ -227,7 +248,7 @@ async fn the_tier_law_holds_through_http() {
         &envelope(
             "pi",
             "agent",
-            json!({"comment": {"home": 0, "kind": {"offer": {"body": "replacement"}}, "references": []}}),
+            json!({"comment": {"home": 0, "kind": {"offer": {"title": "replacement", "body": "replacement"}}, "references": []}}),
         ),
     );
     assert_eq!(status, 400);
@@ -631,6 +652,7 @@ async fn client_send_lands_and_refuses_through_the_wire() {
         Command::Comment {
             home: saccade::TaskId(9),
             kind: saccade::CommentKind::Note {
+                title: saccade::Prose::new("a note to nothing".into()).unwrap(),
                 body: saccade::Prose::new("talking to nothing".into()).unwrap(),
             },
             references: Vec::new(),
@@ -988,7 +1010,7 @@ async fn compose_lands_a_note_and_routes_addresses() {
     let (status, _, loc) = post_form(
         &format!("{base}/compose"),
         &[],
-        "task=0&body=kick+off&who=jerry",
+        "task=0&title=kick+off&body=kick+off&who=jerry",
     );
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
@@ -1001,14 +1023,28 @@ async fn compose_lands_a_note_and_routes_addresses() {
     assert_eq!(lines[0].seq, 2);
     assert_eq!(lines[0].num, 0);
     assert_eq!(lines[0].kind, "note");
+    assert_eq!(lines[0].title.as_deref(), Some("kick off"));
     assert_eq!(lines[0].body, "kick off");
+
+    // a compose without a title refuses: the note's title is authored,
+    // never synthesized, and the refused draft stays editable
+    let (status, body, _) = post_form(
+        &format!("{base}/compose"),
+        &[],
+        "task=0&body=no+title+given&who=jerry",
+    );
+    assert_eq!(status, 400);
+    assert!(body.contains("a note needs a title"), "{body}");
+    assert!(body.contains("no title given"), "the body draft survives");
+    let world = world_of(&state);
+    assert_eq!(world.comments.len(), 1, "the refusal wrote nothing");
 
     // @c-0 cites: the marker rides the body, the mapping carries the
     // edge, the redirect stays on the citing comment's home thread
     let (status, _, loc) = post_form(
         &format!("{base}/compose"),
         &[],
-        "task=0&body=saw+it+%40c-0&who=jerry",
+        "task=0&title=the+cite&body=saw+it+%40c-0&who=jerry",
     );
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/0#c-1"));
@@ -1025,7 +1061,7 @@ async fn compose_lands_a_note_and_routes_addresses() {
     let (status, _, loc) = post_form(
         &format!("{base}/compose"),
         &[],
-        "task=0&body=%40t-1+belongs+there&who=jerry",
+        "task=0&title=the+rehome&body=%40t-1+belongs+there&who=jerry",
     );
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/1#c-2"));
@@ -1037,7 +1073,7 @@ async fn compose_lands_a_note_and_routes_addresses() {
     let (status, _, loc) = post_form(
         &format!("{base}/compose"),
         &[],
-        "task=0&body=see+t-1+and+c-0&who=jerry",
+        "task=0&title=bare+ids&body=see+t-1+and+c-0&who=jerry",
     );
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/0#c-3"));
@@ -1048,12 +1084,72 @@ async fn compose_lands_a_note_and_routes_addresses() {
     assert_eq!(last.body, "see t-1 and c-0");
     assert!(last.references.is_empty(), "bare ids stay prose");
 
-    // the console renders the focused thread with the comment in it
+    // the console renders the focused thread with the comment in it,
+    // the authored title its own text line beside the body
     let (status, html) = get_html(&format!("{base}/t/0"));
     assert_eq!(status, 200);
     assert!(html.contains("migrate floop"));
     assert!(html.contains("kick off"));
+    assert!(
+        html.contains("<div class=\"ntitle\">kick off</div>"),
+        "{html}"
+    );
     assert!(html.contains("action=\"/compose\""));
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The console revise door repairs a note's title and body through the form and refuses a revision naming neither field.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_console_revise_door_repairs_titles() {
+    let db = scratch_db("console-revise-title");
+    let (base, state) = spawn_console(&db).await;
+    seed_task(&state, "migrate floop");
+    let (status, _, loc) = post_form(
+        &format!("{base}/compose"),
+        &[],
+        "task=0&title=the+first+take&body=first+take&who=jerry",
+    );
+    assert_eq!(status, 303);
+    assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
+
+    // both fields repair: the redirect returns to the comment
+    let (status, _, loc) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=the+second+take&body=second+take&who=jerry",
+    );
+    assert_eq!(status, 303);
+    assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
+    let line = &lines_of(&world_of(&state), 0)[0];
+    assert_eq!(line.title.as_deref(), Some("the second take"));
+    assert_eq!(line.body, "second take");
+
+    // an empty title field is a title left standing, never cleared
+    let (status, _, _) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=&body=third+take&who=jerry",
+    );
+    assert_eq!(status, 303);
+    let line = &lines_of(&world_of(&state), 0)[0];
+    assert_eq!(line.title.as_deref(), Some("the second take"));
+    assert_eq!(line.body, "third take");
+
+    // a revision naming neither field refuses, the drafts kept at
+    // the comment's own reveal
+    let (status, body, _) = post_form(&format!("{base}/c/0/revise"), &[], "title=&body=&who=jerry");
+    assert_eq!(status, 400);
+    assert!(
+        body.contains("a revision needs a title or a body"),
+        "{body}"
+    );
+    assert!(
+        body.contains("value=\"the second take\""),
+        "the refused title draft stays editable: {body}"
+    );
+    let line = &lines_of(&world_of(&state), 0)[0];
+    assert_eq!(line.body, "third take", "the refusal wrote nothing");
+
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
@@ -1071,7 +1167,7 @@ async fn compose_fetch_swaps_the_thread_section() {
             ("Sec-Fetch-Site", "same-origin"),
             ("Sec-Fetch-Mode", "cors"),
         ],
-        "task=0&body=build+it&who=jerry",
+        "task=0&title=build+it&body=build+it&who=jerry",
     );
     assert_eq!(status, 200);
     assert!(
@@ -1090,7 +1186,7 @@ async fn compose_fetch_swaps_the_thread_section() {
     let (status, _, _) = post_form(
         &format!("{base}/compose"),
         &[("Sec-Fetch-Site", "cross-site"), ("Sec-Fetch-Mode", "cors")],
-        "task=0&body=evil",
+        "task=0&title=evil&body=evil",
     );
     assert_eq!(status, 403);
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
@@ -1170,6 +1266,7 @@ async fn a_local_write_shows_on_every_server_face() {
         Command::Comment {
             home: TaskId(0),
             kind: CommentKind::Note {
+                title: Prose::new("the local write".into()).unwrap(),
                 body: Prose::new("LOCAL_MARKER".into()).unwrap(),
             },
             references: Vec::new(),
@@ -1287,7 +1384,7 @@ async fn compose_fetch_rehome_redirects_instead_of_swapping() {
             ("Sec-Fetch-Site", "same-origin"),
             ("Sec-Fetch-Mode", "cors"),
         ],
-        "task=0&body=%40t-1+belongs+there&who=jerry",
+        "task=0&title=the+rehome&body=%40t-1+belongs+there&who=jerry",
     );
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/1#c-0"));
@@ -1322,6 +1419,7 @@ async fn every_task_href_the_console_emits_resolves() {
             Command::Comment {
                 home: TaskId(1),
                 kind: CommentKind::Offer {
+                    title: Prose::new("the standing account".into()).unwrap(),
                     body: Prose::new("the standing account".into()).unwrap(),
                 },
                 references: Vec::new(),
@@ -1338,6 +1436,7 @@ async fn every_task_href_the_console_emits_resolves() {
             Command::Comment {
                 home: TaskId(0),
                 kind: CommentKind::Note {
+                    title: Prose::new("a note worth keeping".into()).unwrap(),
                     body: Prose::new("a note worth keeping, citing [^1]".into()).unwrap(),
                 },
                 references: vec![RecordId(3)],
@@ -1411,6 +1510,7 @@ async fn decision_forms_carry_the_actor_name() {
             Command::Comment {
                 home: TaskId(0),
                 kind: CommentKind::Offer {
+                    title: Prose::new("suite green".into()).unwrap(),
                     body: Prose::new("suite green".into()).unwrap(),
                 },
                 references: Vec::new(),
@@ -1471,6 +1571,7 @@ async fn decision_forms_carry_the_actor_name() {
             Command::Comment {
                 home: TaskId(1),
                 kind: CommentKind::Offer {
+                    title: Prose::new("the second account".into()).unwrap(),
                     body: Prose::new("the second account".into()).unwrap(),
                 },
                 references: Vec::new(),
@@ -1520,6 +1621,7 @@ async fn decision_forms_carry_the_actor_name() {
             Command::Comment {
                 home: TaskId(1),
                 kind: CommentKind::Offer {
+                    title: Prose::new("the third account".into()).unwrap(),
                     body: Prose::new("the third account".into()).unwrap(),
                 },
                 references: Vec::new(),
@@ -1585,6 +1687,7 @@ async fn a_refused_console_decision_leaves_its_line() {
             Command::Comment {
                 home: TaskId(0),
                 kind: CommentKind::Offer {
+                    title: Prose::new("the first account".into()).unwrap(),
                     body: Prose::new("the first account".into()).unwrap(),
                 },
                 references: Vec::new(),
@@ -1613,6 +1716,7 @@ async fn a_refused_console_decision_leaves_its_line() {
             Command::Comment {
                 home: TaskId(0),
                 kind: CommentKind::Offer {
+                    title: Prose::new("the replacement account".into()).unwrap(),
                     body: Prose::new("the replacement account".into()).unwrap(),
                 },
                 references: Vec::new(),
@@ -1700,10 +1804,28 @@ fn search_reads_the_record_through_the_cli_face() {
     };
 
     assert!(sac(&["create", "task", "migrate floop"]).0);
-    assert!(sac(&["comment", "t-0", "the floop migration proceeds"]).0);
+    assert!(
+        sac(&[
+            "comment",
+            "t-0",
+            "--title",
+            "the floop migration proceeds",
+            "the floop migration proceeds"
+        ])
+        .0
+    );
     assert!(sac(&["create", "task", "floop guard"]).0);
     assert!(sac(&["claim", "t-0"]).0);
-    assert!(sac(&["offer", "t-0", "floop landed; suite green"]).0);
+    assert!(
+        sac(&[
+            "offer",
+            "t-0",
+            "--title",
+            "floop landed",
+            "floop landed; suite green"
+        ])
+        .0
+    );
 
     let (ok, out, _) = sac(&["search", "floop"]);
     assert!(ok, "{out}");
@@ -1715,7 +1837,9 @@ fn search_reads_the_record_through_the_cli_face() {
         .expect("the owning thread groups first");
     assert_eq!(lines[t0 + 1], "  t-0  pi  migrate floop");
     assert_eq!(lines[t0 + 2], "  c-0  pi  the floop migration proceeds");
-    assert_eq!(lines[t0 + 3], "  c-1  pi  floop landed; suite green");
+    // a title match points at its own line: the offer's authored
+    // title answers the term before its body does
+    assert_eq!(lines[t0 + 3], "  c-1  pi  floop landed");
     assert!(lines.contains(&"t-1  floop guard"), "{out}");
 
     // narrowing prints visible counts; the filtered thread stays visible
@@ -1729,6 +1853,8 @@ fn search_reads_the_record_through_the_cli_face() {
         sac(&[
             "comment",
             "t-1",
+            "--title",
+            "floop guards the door",
             "floop guards the door\nthe second line holds the detail"
         ])
         .0
@@ -1785,12 +1911,13 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(err.contains("c-907 -C 3"), "{err}");
 
     // show opens comments by their public number in the thread view's
-    // body format - the multi-line note is the tracker's third comment
+    // body format - the multi-line note is the tracker's third
+    // comment, its authored title the first line under the header
     let (ok, out, _) = sac(&["show", "c-2"]);
     assert!(ok, "{out}");
     assert_eq!(
         out.trim_end(),
-        "  c-2  pi [note]\n  floop guards the door the second line holds the detail\ncursor 5"
+        "  c-2  pi [note]\n  title floop guards the door\n  floop guards the door the second line holds the detail\ncursor 5"
     );
     let (ok, out, _) = sac(&["show", "5"]);
     assert!(ok, "{out}");
@@ -1853,7 +1980,7 @@ fn search_reads_the_record_through_the_cli_face() {
     assert!(ok, "{out}");
     assert_eq!(
         out.trim_end(),
-        "  c-1  pi [offer]\n  floop landed; suite green\ncursor 6"
+        "  c-1  pi [offer]\n  title floop landed\n  floop landed; suite green\ncursor 6"
     );
     let (ok, _, err) = sac(&["show", "bogus"]);
     assert!(!ok);
@@ -1947,9 +2074,18 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     );
     let answer = "the reply rides the thread its root holds";
     assert!(sac(&["create", "task", "byte door"]).0);
-    assert!(sac(&["comment", "t-0", &body]).0);
-    assert!(sac(&["comment", "c-0", answer]).0);
-    assert!(sac(&["comment", "t-0", "a short third note"]).0);
+    assert!(sac(&["comment", "t-0", "--title", "the byte door note", &body]).0);
+    assert!(sac(&["comment", "c-0", "--title", "the reply", answer]).0);
+    assert!(
+        sac(&[
+            "comment",
+            "t-0",
+            "--title",
+            "a short third note",
+            "a short third note"
+        ])
+        .0
+    );
     assert!(sac(&["revise", "c-2", "revised bytes"]).0);
 
     // the thread's json face: bodies byte-exact, replies folded in,
@@ -2251,18 +2387,33 @@ async fn local_replies_match_the_wire() {
     );
 
     // a comment and a claim answer with their records, both paths
-    let noted = local(&local_db, &["--json", "comment", "t-0", "the note"]);
+    let noted = local(
+        &local_db,
+        &[
+            "--json", "comment", "t-0", "--title", "the note", "the note",
+        ],
+    );
     assert_eq!(noted["records"][0]["kind"], "commented");
     let claimed = local(&local_db, &["--json", "claim", "t-0"]);
     assert_eq!(claimed["records"][0]["kind"], "task_claimed");
 
     // an offer answers with its records, both paths, identical shapes
-    let offered = local(&local_db, &["--json", "offer", "t-0", "suite green"]);
+    let offered = local(
+        &local_db,
+        &[
+            "--json",
+            "offer",
+            "t-0",
+            "--title",
+            "suite green",
+            "suite green",
+        ],
+    );
     assert_eq!(offered["records"][0]["kind"], "commented");
     let (_, body) = post_command(
         &served,
         &json!({"context": {"actor": "pi", "tier": "agent"},
-                 "command": {"comment": {"home": 0, "kind": {"offer": {"body": "suite green"}}, "references": []}}}),
+                 "command": {"comment": {"home": 0, "kind": {"offer": {"title": "suite green", "body": "suite green"}}, "references": []}}}),
     );
     let served_offered = json_of(&body);
     assert_eq!(
@@ -2348,7 +2499,13 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     };
 
     sac_quiet(&["create", "task", "wait for the reply"]); // seq 0
-    sac_quiet(&["comment", "t-0", "the opening note"]); // seq 1 -> c-1
+    sac_quiet(&[
+        "comment",
+        "t-0",
+        "--title",
+        "the opening note",
+        "the opening note",
+    ]); // seq 1 -> c-1
 
     // activity that committed before the wait: caught, never blocked
     let (seqs, cursor) = observed(spawn_waiter(&[
@@ -2359,11 +2516,23 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
 
     // the cursor a read disclosed: a write landing between the read
     // and the wait is already committed when the wait checks first
-    sac_quiet(&["comment", "t-0", "a follow-up note"]); // seq 2
+    sac_quiet(&[
+        "comment",
+        "t-0",
+        "--title",
+        "a follow-up note",
+        "a follow-up note",
+    ]); // seq 2
     let (_, out, _) = sac(&["--json", "log"]);
     let log: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(log["cursor"], 2);
-    sac_quiet(&["comment", "t-0", "a late addition"]); // seq 3
+    sac_quiet(&[
+        "comment",
+        "t-0",
+        "--title",
+        "a late addition",
+        "a late addition",
+    ]); // seq 3
     let (seqs, cursor) = observed(spawn_waiter(&[
         "t-0", "--after", "2", "--until", "activity",
     ]));
@@ -2377,7 +2546,13 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
         child.try_wait().unwrap().is_none(),
         "the wait woke with nothing matching"
     );
-    sac_quiet(&["comment", "c-0", "the reply on the note"]); // seq 4
+    sac_quiet(&[
+        "comment",
+        "c-0",
+        "--title",
+        "the reply",
+        "the reply on the note",
+    ]); // seq 4
     let (seqs, cursor) = observed(child);
     assert_eq!(seqs, vec![4]);
     assert_eq!(cursor, 4);
@@ -2392,13 +2567,25 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
 
     // the sibling neither wakes the comment wait nor rides in its records
     let mut child = spawn_waiter(&["c-0", "--after", "4", "--until", "activity"]);
-    sac_quiet(&["comment", "t-0", "an unrelated sibling"]); // seq 5
+    sac_quiet(&[
+        "comment",
+        "t-0",
+        "--title",
+        "an unrelated sibling",
+        "an unrelated sibling",
+    ]); // seq 5
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert!(
         child.try_wait().unwrap().is_none(),
         "unrelated activity woke the comment wait"
     );
-    sac_quiet(&["comment", "c-0", "the real reply"]); // seq 6
+    sac_quiet(&[
+        "comment",
+        "c-0",
+        "--title",
+        "the real reply",
+        "the real reply",
+    ]); // seq 6
     let (seqs, cursor) = observed(child);
     assert_eq!(seqs, vec![6]);
     assert_eq!(cursor, 6);
@@ -2412,13 +2599,25 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
 
     // the offer wait stays down through a note and wakes on the offer's birth
     let mut child = spawn_waiter(&["t-0", "--after", "6", "--until", "offer"]);
-    sac_quiet(&["comment", "t-0", "still only chatter"]); // seq 7
+    sac_quiet(&[
+        "comment",
+        "t-0",
+        "--title",
+        "still only chatter",
+        "still only chatter",
+    ]); // seq 7
     std::thread::sleep(std::time::Duration::from_millis(800));
     assert!(
         child.try_wait().unwrap().is_none(),
         "a note woke the offer wait"
     );
-    sac_quiet(&["offer", "t-0", "the account, ready for review"]); // seq 8
+    sac_quiet(&[
+        "offer",
+        "t-0",
+        "--title",
+        "the account",
+        "the account, ready for review",
+    ]); // seq 8
     let (seqs, cursor) = observed(child);
     assert_eq!(seqs, vec![8]);
     assert_eq!(cursor, 8);
@@ -2511,7 +2710,13 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
         wire_waiter.try_wait().unwrap().is_none(),
         "the wire wait woke with nothing matching"
     );
-    sac_quiet(&["comment", "t-0", "the served reply"]); // seq 10
+    sac_quiet(&[
+        "comment",
+        "t-0",
+        "--title",
+        "the served reply",
+        "the served reply",
+    ]); // seq 10
     let (seqs, cursor) = observed(wire_waiter);
     assert_eq!(seqs, vec![10]);
     assert_eq!(cursor, 10);
@@ -4271,7 +4476,13 @@ fn piped_human_prose_passes_and_unattended_refuses() {
     // piped prose, terminal stdout and stderr: the human writes
     let out = run_with_terminals(
         bin,
-        &args(&["comment", "t-0", "piped prose from a human shell"]),
+        &args(&[
+            "comment",
+            "t-0",
+            "--title",
+            "piped prose",
+            "piped prose from a human shell",
+        ]),
         true,
         true,
     );
@@ -4293,7 +4504,13 @@ fn piped_human_prose_passes_and_unattended_refuses() {
     // no terminal anywhere and no SACCADE_ACTOR: refusal, taught
     let out = run_with_terminals(
         bin,
-        &args(&["comment", "t-0", "no terminal in sight"]),
+        &args(&[
+            "comment",
+            "t-0",
+            "--title",
+            "no terminal",
+            "no terminal in sight",
+        ]),
         false,
         false,
     );
@@ -4474,6 +4691,8 @@ fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
             db_a.to_str().unwrap(),
             "comment",
             "t-0",
+            "--title",
+            "a local note",
             "a local note",
         ],
         &[("SACCADE_ACTOR", "pi")],
@@ -4902,7 +5121,16 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     assert!(sac(&["create", "task", "migrate floop"]).0); // seq 3, t-3
     assert!(sac(&["claim", "t-1"]).0); // seq 4
     assert!(sac(&["claim", "t-2"]).0); // seq 5
-    assert!(sac(&["offer", "t-0", "the first account"]).0); // seq 6 -> c-0
+    assert!(
+        sac(&[
+            "offer",
+            "t-0",
+            "--title",
+            "the first account",
+            "the first account"
+        ])
+        .0
+    ); // seq 6 -> c-0
     assert!(sac(&["create", "task", "consume the account"]).0); // seq 7, t-4
     assert!(
         sac(&[
@@ -4998,7 +5226,16 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     // the explicit rebind selects the replacement (the replacement
     // offer c-3 lands at seq 11); acceptance of the selected
     // conclusion changes nothing
-    assert!(sac(&["offer", "t-0", "the replacement"]).0); // seq 11 -> c-3
+    assert!(
+        sac(&[
+            "offer",
+            "t-0",
+            "--title",
+            "the replacement",
+            "the replacement"
+        ])
+        .0
+    ); // seq 11 -> c-3
     assert!(sac(&["bind", "c-1", "c-3", "--grounds", "the replacement held"]).0); // seq 12
     assert!(sac(&["accept", "c-3"]).0); // seq 13 -> c-4
     let (ok, out, _) = sac(&["show", "t-4"]);
@@ -5012,7 +5249,16 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     assert!(!ok, "{err}");
     assert!(err.contains("self_reliance"), "{err}");
     assert!(sac(&["create", "task", "an unrelated producer"]).0); // seq 14, t-5
-    assert!(sac(&["offer", "t-5", "an outside account"]).0); // seq 15 -> c-5
+    assert!(
+        sac(&[
+            "offer",
+            "t-5",
+            "--title",
+            "an outside account",
+            "an outside account"
+        ])
+        .0
+    ); // seq 15 -> c-5
     let (ok, _, err) = sac(&["bind", "c-1", "c-5", "--grounds", "not my source"]);
     assert!(!ok, "{err}");
     assert!(err.contains("invalid_state_transition"), "{err}");
@@ -5023,6 +5269,8 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
         sac(&[
             "comment",
             "t-4",
+            "--title",
+            "the adoption rests on foo",
             "rests on the conclusion [^1]",
             "--ref",
             "c-3"
@@ -5032,13 +5280,49 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     let (ok, out, _) = sac(&["show", "t-4"]);
     assert!(ok, "{out}");
     assert!(out.contains("->c-3"), "{out}");
-    assert!(sac(&["comment", "c-0", "replying to the account"]).0);
+    assert!(
+        sac(&[
+            "comment",
+            "c-0",
+            "--title",
+            "the reply",
+            "replying to the account"
+        ])
+        .0
+    );
     let (ok, out, _) = sac(&["show", "t-0"]);
     assert!(ok, "{out}");
     assert!(out.contains("->c-0"), "the reply cites its parent: {out}");
-    let (ok, _, err) = sac(&["comment", "t-4", "dangling [^2]", "--ref", "c-3"]);
+    let (ok, _, err) = sac(&[
+        "comment",
+        "t-4",
+        "--title",
+        "a dangling marker",
+        "dangling [^2]",
+        "--ref",
+        "c-3",
+    ]);
     assert!(!ok, "{err}");
     assert!(err.contains("marker [^2]"), "{err}");
+    // the presentation revision door carries the title: the offer
+    // repairs its title alone, its body standing untouched
+    let (ok, out, _) = sac(&["revise", "c-0", "--title", "the account, retitled"]);
+    assert!(ok, "{out}");
+    let (ok, out, _) = sac(&["show", "c-0"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("title the account, retitled"), "{out}");
+    assert!(
+        out.contains("the first account"),
+        "the body it left stands: {out}"
+    );
+    // a title never lands on the kinds that carry none: the use
+    // refuses it with its teaching, never a silent ignore
+    let (ok, _, err) = sac(&["revise", "c-1", "--title", "no title for a use"]);
+    assert!(!ok, "{err}");
+    assert!(
+        err.contains("titles live on notes and offers alone"),
+        "{err}"
+    );
 
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
@@ -5121,6 +5405,12 @@ fn the_migrate_door_rewrites_a_schema3_tracker() {
     let report = String::from_utf8_lossy(&migrated.stdout).into_owned();
     assert!(report.contains("migrated 6 records"), "{report}");
     assert!(report.contains("1 uses born bound"), "{report}");
+    // the chained title step: the v3 story's deposits titled with
+    // their home tasks' names
+    assert!(
+        report.contains("2 notes and offers titled with their home task's name"),
+        "{report}"
+    );
     assert!(
         report.contains("1 unresolved references stay legacy"),
         "{report}"
@@ -5159,6 +5449,11 @@ fn the_migrate_door_rewrites_a_schema3_tracker() {
     assert!(ok, "{out}");
     assert!(out.contains("uses t-0"), "{out}");
     assert!(out.contains("bound c-1"), "{out}");
+    // the backfilled titles read on the thread: each deposit names its
+    // home task, the decisions carry none
+    let (ok, out, _) = show(&["show", "t-0"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("title implement foo"), "{out}");
     // the mapping stayed empty: no graph edges were invented
     assert!(!out.contains("->"), "old comments cite nothing: {out}");
 
@@ -5185,6 +5480,95 @@ fn the_migrate_door_rewrites_a_schema3_tracker() {
         "{}",
         String::from_utf8_lossy(&read.stderr)
     );
+
+    // a schema-4 source enters at the title step alone
+    let v4 = dir.join("v4src.db");
+    {
+        let conn = rusqlite::Connection::open(&v4).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                 seq INTEGER PRIMARY KEY,
+                 event_time INTEGER NOT NULL,
+                 logged_time INTEGER NOT NULL,
+                 actor TEXT NOT NULL,
+                 tier TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 payload TEXT NOT NULL,
+                 scope TEXT NULL
+             );
+             PRAGMA application_id = 1935762276;
+             PRAGMA user_version = 4;",
+        )
+        .unwrap();
+        let insert = |seq: i64, kind: &str, payload: &str| {
+            conn.execute(
+                "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload, scope)
+                 VALUES (?1, 1000+?1, 2000, 'jerry', 'human', ?2, ?3, NULL)",
+                rusqlite::params![seq, kind, payload],
+            )
+            .unwrap();
+        };
+        insert(0, "task_created", r#"{"name":"implement foo"}"#);
+        insert(
+            1,
+            "commented",
+            r#"{"home":0,"kind":{"note":{"body":"parked mid-flight"}},"references":[]}"#,
+        );
+        insert(
+            2,
+            "commented",
+            r#"{"home":0,"kind":{"offer":{"body":"suite green"}},"references":[]}"#,
+        );
+        insert(
+            3,
+            "commented",
+            r#"{"home":0,"kind":{"accept":{"offer":2}},"references":[]}"#,
+        );
+        insert(
+            4,
+            "comment_revised",
+            r#"{"id":1,"body":"parked mid-flight, corrected"}"#,
+        );
+    }
+    let v5 = dir.join("v5.db");
+    let migrated = std::process::Command::new(bin)
+        .arg("--db")
+        .arg(&v4)
+        .args(["migrate", "--out"])
+        .arg(&v5)
+        .env("SACCADE_ACTOR", "pi")
+        .output()
+        .expect("spawn sac migrate");
+    assert!(
+        migrated.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&migrated.stderr)
+    );
+    let report = String::from_utf8_lossy(&migrated.stdout).into_owned();
+    assert!(
+        report.contains("2 notes and offers titled with their home task's name"),
+        "{report}"
+    );
+    let show_v5 = |args: &[&str]| {
+        let out = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&v5)
+            .env("SACCADE_ACTOR", "pi")
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (ok, out, _) = show_v5(&["show", "c-0"]);
+    assert!(ok, "{out}");
+    // the older presentation revision replays onto the backfilled
+    // title: the corrected body stands beside the task's name
+    assert!(out.contains("title implement foo"), "{out}");
+    assert!(out.contains("parked mid-flight, corrected"), "{out}");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

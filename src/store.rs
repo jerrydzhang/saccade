@@ -466,7 +466,11 @@ impl World {
                     },
                 );
             }
-            Event::CommentRevised { id, ref body } => {
+            Event::CommentRevised {
+                id,
+                ref title,
+                ref body,
+            } => {
                 let home = self
                     .comments
                     .get(&id)
@@ -479,12 +483,41 @@ impl World {
                 if matches!(comment_ctx.comment.state, CommentState::Withdrawn(_)) {
                     return Err(Reason::InvalidStateTransition);
                 }
-                // the bodyless Accept carries no prose to repair
+                // a title swaps only on the deposit variants that carry
+                // one; the other variants refuse it, never ignore it
                 match &mut comment_ctx.comment.kind {
-                    CommentKind::Note { body: prose }
-                    | CommentKind::Offer { body: prose }
-                    | CommentKind::Reject { grounds: prose, .. }
-                    | CommentKind::Use { reason: prose, .. } => *prose = body.clone(),
+                    CommentKind::Note {
+                        title: slot,
+                        body: prose,
+                    }
+                    | CommentKind::Offer {
+                        title: slot,
+                        body: prose,
+                    } => {
+                        if let Some(next) = title {
+                            *slot = next.clone();
+                        }
+                        if let Some(next) = body {
+                            *prose = next.clone();
+                        }
+                    }
+                    CommentKind::Reject { grounds, .. } => {
+                        if title.is_some() {
+                            return Err(Reason::InvalidStateTransition);
+                        }
+                        if let Some(next) = body {
+                            *grounds = next.clone();
+                        }
+                    }
+                    CommentKind::Use { reason, .. } => {
+                        if title.is_some() {
+                            return Err(Reason::InvalidStateTransition);
+                        }
+                        if let Some(next) = body {
+                            *reason = next.clone();
+                        }
+                    }
+                    // the bodyless Accept carries no prose to repair
                     CommentKind::Accept { .. } => return Err(Reason::InvalidStateTransition),
                 }
                 comment_ctx.revised = Some(Revision {
@@ -826,11 +859,17 @@ pub fn execute(
                 return Err(Reject::InvalidReference);
             }
         }
-        Command::ReviseComment { id, body } => {
+        Command::ReviseComment { id, title, body } => {
+            // a revision names at least one field to repair
+            if title.is_none() && body.is_none() {
+                return Err(Reject::ReasonRequired);
+            }
             if let Some(ctx) = world.comments.get(id)
-                && ctx.comment.kind.prose().is_some()
-                && !matches!(&ctx.comment.state, CommentState::Withdrawn(_))
-                && crate::markers::first_unresolved(body.as_str(), ctx.references.len()).is_some()
+                && let Some(prose) = body.as_ref().filter(|_| {
+                    ctx.comment.kind.prose().is_some()
+                        && !matches!(&ctx.comment.state, CommentState::Withdrawn(_))
+                })
+                && crate::markers::first_unresolved(prose.as_str(), ctx.references.len()).is_some()
             {
                 return Err(Reject::InvalidReference);
             }
@@ -938,27 +977,36 @@ mod test {
         Prose::new(text.into()).unwrap()
     }
 
-    fn note(home: TaskId, body: &str) -> Command {
+    fn note(home: TaskId, title: &str, body: &str) -> Command {
         Command::Comment {
             home,
-            kind: CommentKind::Note { body: prose(body) },
+            kind: CommentKind::Note {
+                title: prose(title),
+                body: prose(body),
+            },
             references: Vec::new(),
         }
     }
 
     /// A note citing the given births through its markers.
-    fn citing_note(home: TaskId, body: &str, references: Vec<RecordId>) -> Command {
+    fn citing_note(home: TaskId, title: &str, body: &str, references: Vec<RecordId>) -> Command {
         Command::Comment {
             home,
-            kind: CommentKind::Note { body: prose(body) },
+            kind: CommentKind::Note {
+                title: prose(title),
+                body: prose(body),
+            },
             references,
         }
     }
 
-    fn offer(id: TaskId, body: &str) -> Command {
+    fn offer(id: TaskId, title: &str, body: &str) -> Command {
         Command::Comment {
             home: id,
-            kind: CommentKind::Offer { body: prose(body) },
+            kind: CommentKind::Offer {
+                title: prose(title),
+                body: prose(body),
+            },
             references: Vec::new(),
         }
     }
@@ -1032,13 +1080,17 @@ mod test {
         .unwrap();
         log.execute(
             agent_ctx.clone(),
-            note(TaskId(0), "mid-flight finding parked"),
+            note(
+                TaskId(0),
+                "foo parked a blocker",
+                "mid-flight finding parked",
+            ),
             2,
         )
         .unwrap();
         log.execute(
             agent_ctx.clone(),
-            offer(TaskId(0), "suite green, 55 tests"),
+            offer(TaskId(0), "foo concluded green", "suite green, 55 tests"),
             3,
         )
         .unwrap();
@@ -1064,7 +1116,11 @@ mod test {
         .unwrap();
         log.execute(
             agent_ctx.clone(),
-            offer(TaskId(1), "bar fixed the quick way"),
+            offer(
+                TaskId(1),
+                "bar done the quick way",
+                "bar fixed the quick way",
+            ),
             7,
         )
         .unwrap();
@@ -1076,7 +1132,11 @@ mod test {
         .unwrap();
         log.execute(
             agent_ctx.clone(),
-            offer(TaskId(1), "edge case held, suite green"),
+            offer(
+                TaskId(1),
+                "bar done, edge case held",
+                "edge case held, suite green",
+            ),
             9,
         )
         .unwrap();
@@ -1102,7 +1162,11 @@ mod test {
         .unwrap();
         log.execute(
             agent_ctx.clone(),
-            note(TaskId(2), "the migration waits on a decision"),
+            note(
+                TaskId(2),
+                "floop migration parked",
+                "the migration waits on a decision",
+            ),
             13,
         )
         .unwrap();
@@ -1152,6 +1216,7 @@ mod test {
             agent_ctx.clone(),
             citing_note(
                 TaskId(3),
+                "the adoption rests on foo",
                 "rests on the conclusion above [^1], again [^1]",
                 vec![RecordId(3)],
             ),
@@ -1167,8 +1232,12 @@ mod test {
             20,
         )
         .unwrap();
-        log.execute(agent_ctx.clone(), offer(TaskId(4), "the deeper fix"), 21)
-            .unwrap();
+        log.execute(
+            agent_ctx.clone(),
+            offer(TaskId(4), "bar rewritten properly", "the deeper fix"),
+            21,
+        )
+        .unwrap();
         log.execute(
             agent_ctx.clone(),
             use_of(TaskId(3), TaskId(4), "bar's rework is the real foundation"),
@@ -1186,7 +1255,7 @@ mod test {
         .unwrap();
         log.execute(
             agent_ctx.clone(),
-            offer(TaskId(4), "the fix that holds"),
+            offer(TaskId(4), "bar fixed for good", "the fix that holds"),
             25,
         )
         .unwrap();
@@ -1325,10 +1394,18 @@ mod test {
             1,
         )
         .unwrap();
-        log.execute(agent(), offer(TaskId(0), "the first account"), 2)
-            .unwrap();
+        log.execute(
+            agent(),
+            offer(TaskId(0), "foo accounted", "the first account"),
+            2,
+        )
+        .unwrap();
         // offered tasks admit no second offer: reject, then offer anew
-        let refused = log.execute(agent(), offer(TaskId(0), "a replacement account"), 3);
+        let refused = log.execute(
+            agent(),
+            offer(TaskId(0), "a second account", "a replacement account"),
+            3,
+        );
         assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
         assert_eq!(log.records().len(), 2);
     }
@@ -1434,8 +1511,12 @@ mod test {
         let citing = &world.comments[&CommentId(RecordId(19))];
         assert!(matches!(
             &citing.comment.kind,
-            CommentKind::Note { body } if body.as_str().contains("[^1]")
+            CommentKind::Note { body, .. } if body.as_str().contains("[^1]")
         ));
+        assert_eq!(
+            citing.comment.kind.title().map(|t| t.as_str()),
+            Some("the adoption rests on foo")
+        );
     }
 
     #[test]
@@ -1487,14 +1568,22 @@ mod test {
         assert_eq!(log.world().tasks[4].task.state, TaskState::Open);
 
         // a scope on another task accepts freely; humans ignore scope
-        log.execute(agent(), offer(TaskId(4), "the second account"), 28)
-            .unwrap();
+        log.execute(
+            agent(),
+            offer(TaskId(4), "the second account", "offered after the reject"),
+            28,
+        )
+        .unwrap();
         log.execute(scoped_agent(2), accept_on(TaskId(4), 28), 29)
             .unwrap();
         let mut scoped_human = scoped_agent(3);
         scoped_human.tier = Tier::Human;
-        log.execute(agent(), offer(TaskId(2), "the floop account"), 30)
-            .unwrap();
+        log.execute(
+            agent(),
+            offer(TaskId(2), "floop proceeds", "the floop account"),
+            30,
+        )
+        .unwrap();
         log.execute(scoped_human, accept_on(TaskId(2), 30), 32)
             .unwrap();
         assert_eq!(log.world().tasks[2].task.state, TaskState::Concluded);
@@ -1597,8 +1686,16 @@ mod test {
         );
 
         // a comment never reopens a cancelled task
-        log.execute(agent(), note(TaskId(3), "please resume the adoption"), 100)
-            .unwrap();
+        log.execute(
+            agent(),
+            note(
+                TaskId(3),
+                "asking for a reopen",
+                "please resume the adoption",
+            ),
+            100,
+        )
+        .unwrap();
         assert!(matches!(
             log.world().tasks[3].task.state,
             TaskState::Cancelled(_)
@@ -1718,8 +1815,12 @@ mod test {
             2,
         )
         .unwrap();
-        log.execute(agent(), offer(TaskId(1), "the first account"), 3)
-            .unwrap();
+        log.execute(
+            agent(),
+            offer(TaskId(1), "the rework accounted", "the first account"),
+            3,
+        )
+        .unwrap();
         log.execute(
             agent(),
             use_of(TaskId(0), TaskId(1), "builds on the rework"),
@@ -1753,8 +1854,12 @@ mod test {
         let refused = log.execute(agent(), bind(3, 2, "gone"), 7);
         assert!(matches!(refused, Err(Reject::NotCurrentOffer)));
 
-        log.execute(agent(), offer(TaskId(1), "the replacement"), 8)
-            .unwrap();
+        log.execute(
+            agent(),
+            offer(TaskId(1), "the rework replaced", "the replacement"),
+            8,
+        )
+        .unwrap();
         log.execute(agent(), bind(3, 6, "the replacement held under review"), 9)
             .unwrap();
         assert_eq!(
@@ -1798,8 +1903,12 @@ mod test {
             2,
         )
         .unwrap();
-        log.execute(agent(), offer(TaskId(1), "suite green"), 3)
-            .unwrap();
+        log.execute(
+            agent(),
+            offer(TaskId(1), "foo concluded green", "suite green"),
+            3,
+        )
+        .unwrap();
         let record = Record {
             id: RecordId(3),
             timestamp: 4,
@@ -1874,7 +1983,7 @@ mod test {
             2,
         )
         .unwrap();
-        log.execute(agent(), offer(TaskId(1), "the account"), 3)
+        log.execute(agent(), offer(TaskId(1), "bar accounted", "the account"), 3)
             .unwrap();
         log.execute(human(), reject_on(TaskId(1), 2, "not good enough"), 4)
             .unwrap();
@@ -1911,14 +2020,24 @@ mod test {
         // a marker beyond the mapping refuses at the ingress
         let refused = log.execute(
             agent(),
-            citing_note(TaskId(3), "an unresolvable [^2]", vec![RecordId(3)]),
+            citing_note(
+                TaskId(3),
+                "a dangling marker",
+                "an unresolvable [^2]",
+                vec![RecordId(3)],
+            ),
             40,
         );
         assert!(matches!(refused, Err(Reject::InvalidReference)));
         // zero is no marker position either
         let refused = log.execute(
             agent(),
-            citing_note(TaskId(3), "no zeroth [^0]", vec![RecordId(3)]),
+            citing_note(
+                TaskId(3),
+                "a zeroth marker",
+                "no zeroth [^0]",
+                vec![RecordId(3)],
+            ),
             40,
         );
         assert!(matches!(refused, Err(Reject::InvalidReference)));
@@ -1928,6 +2047,7 @@ mod test {
             agent(),
             citing_note(
                 TaskId(3),
+                "an oversized marker",
                 &format!("oversized [^{oversized}]"),
                 vec![RecordId(3)],
             ),
@@ -1939,7 +2059,11 @@ mod test {
         // mapping at all
         log.execute(
             agent(),
-            note(TaskId(3), "the marker syntax is `[^1]` and $[^1]$ is math"),
+            note(
+                TaskId(3),
+                "marker syntax is literal",
+                "the marker syntax is `[^1]` and $[^1]$ is math",
+            ),
             40,
         )
         .unwrap();
@@ -1950,7 +2074,8 @@ mod test {
             agent(),
             Command::ReviseComment {
                 id: CommentId(RecordId(19)),
-                body: prose("reworded, still [^1]"),
+                title: None,
+                body: Some(prose("reworded, still [^1]")),
             },
             41,
         )
@@ -1959,7 +2084,8 @@ mod test {
             agent(),
             Command::ReviseComment {
                 id: CommentId(RecordId(19)),
-                body: prose("retargeted [^2]"),
+                title: None,
+                body: Some(prose("retargeted [^2]")),
             },
             42,
         );
@@ -1975,6 +2101,7 @@ mod test {
             event: Event::Commented {
                 home: TaskId(3),
                 kind: CommentKind::Note {
+                    title: prose("a historical note"),
                     body: prose(&format!("historical [^{oversized}]")),
                 },
                 references: vec![RecordId(3)],
@@ -2013,6 +2140,7 @@ mod test {
             agent(),
             citing_note(
                 TaskId(3),
+                "everything cites",
                 "foo's account [^1], the task [^2], the figure [^3], the claim [^4], the binding [^5]",
                 vec![RecordId(3), RecordId(0), RecordId(artifact_seq), RecordId(1), RecordId(18)],
             ),
@@ -2025,7 +2153,8 @@ mod test {
             agent(),
             Command::ReviseComment {
                 id: CommentId(RecordId(2)),
-                body: prose("mid-flight finding parked, corrected"),
+                title: None,
+                body: Some(prose("mid-flight finding parked, corrected")),
             },
             29,
         )
@@ -2033,7 +2162,12 @@ mod test {
         let revision_seq = log.records().len() - 1;
         log.execute(
             agent(),
-            citing_note(TaskId(3), "the repair [^1]", vec![RecordId(revision_seq)]),
+            citing_note(
+                TaskId(3),
+                "citing the repair",
+                "the repair [^1]",
+                vec![RecordId(revision_seq)],
+            ),
             30,
         )
         .unwrap();
@@ -2042,7 +2176,12 @@ mod test {
         // filled: earlier numeric position alone is not existence
         let refused = log.execute(
             agent(),
-            citing_note(TaskId(3), "out of reach [^1]", vec![RecordId(999)]),
+            citing_note(
+                TaskId(3),
+                "an unreachable cite",
+                "out of reach [^1]",
+                vec![RecordId(999)],
+            ),
             31,
         );
         assert!(matches!(refused, Err(Reject::InvalidReference)));
@@ -2053,6 +2192,7 @@ mod test {
             event: Event::Commented {
                 home: TaskId(3),
                 kind: CommentKind::Note {
+                    title: prose("a note with a hole"),
                     body: prose("a hole in the log [^1]"),
                 },
                 references: vec![RecordId(499)],
@@ -2075,7 +2215,8 @@ mod test {
             agent(),
             Command::ReviseComment {
                 id: CommentId(RecordId(9)),
-                body: prose("edge case held, suite green - 56 tests"),
+                title: None,
+                body: Some(prose("edge case held, suite green - 56 tests")),
             },
             99,
         )
@@ -2083,7 +2224,7 @@ mod test {
         let ctx = &log.world().comments[&CommentId(RecordId(9))];
         assert!(matches!(
             &ctx.comment.kind,
-            CommentKind::Offer { body } if body.as_str().contains("56 tests")
+            CommentKind::Offer { body, .. } if body.as_str().contains("56 tests")
         ));
         assert_eq!(
             ctx.revised,
@@ -2093,13 +2234,61 @@ mod test {
             })
         );
 
+        // a title-only revision repairs the description alone: the
+        // body it left stands untouched
+        log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(9)),
+                title: Some(prose("bar done, edge case held - corrected")),
+                body: None,
+            },
+            103,
+        )
+        .unwrap();
+        let ctx = &log.world().comments[&CommentId(RecordId(9))];
+        assert!(matches!(
+            &ctx.comment.kind,
+            CommentKind::Offer { title, body }
+                if title.as_str() == "bar done, edge case held - corrected"
+                    && body.as_str().contains("56 tests")
+        ));
+
+        // a title never lands on the kinds that carry none: the
+        // reject and the use refuse it, never ignore it
+        for id in [8usize, 17] {
+            let refused = log.execute(
+                agent(),
+                Command::ReviseComment {
+                    id: CommentId(RecordId(id)),
+                    title: Some(prose("a title no verdict carries")),
+                    body: None,
+                },
+                104,
+            );
+            assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
+        }
+
+        // a revision names at least one field to repair
+        let refused = log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(9)),
+                title: None,
+                body: None,
+            },
+            105,
+        );
+        assert!(matches!(refused, Err(Reject::ReasonRequired)));
+
         // the bodyless Accept carries no prose to repair: marker
         // validation skips it, the transition refusal still lands
         let refused = log.execute(
             human(),
             Command::ReviseComment {
                 id: CommentId(RecordId(10)),
-                body: prose("no prose to swap [^1]"),
+                title: None,
+                body: Some(prose("no prose to swap [^1]")),
             },
             100,
         );
@@ -2110,7 +2299,8 @@ mod test {
             human(),
             Command::ReviseComment {
                 id: CommentId(RecordId(99)),
-                body: prose("addresses nothing [^1]"),
+                title: None,
+                body: Some(prose("addresses nothing [^1]")),
             },
             101,
         );
@@ -2122,7 +2312,8 @@ mod test {
             agent(),
             Command::ReviseComment {
                 id: CommentId(RecordId(19)),
-                body: prose("rests on the conclusion above, reworded [^1]"),
+                title: Some(prose("the adoption rests on foo - reworded")),
+                body: Some(prose("rests on the conclusion above, reworded [^1]")),
             },
             102,
         )
@@ -2136,7 +2327,7 @@ mod test {
             Event::Commented { references, .. } => assert_eq!(*references, vec![RecordId(3)]),
             other => panic!("the birth keeps its shape: {other:?}"),
         }
-        assert_eq!(log.records().len(), RECORD_COUNT + 2);
+        assert_eq!(log.records().len(), RECORD_COUNT + 3);
     }
 
     #[test]
@@ -2176,7 +2367,8 @@ mod test {
             },
             Command::ReviseComment {
                 id: note_id,
-                body: prose("repair in place [^1]"),
+                title: None,
+                body: Some(prose("repair in place [^1]")),
             },
         ] {
             let refused = log.execute(agent(), command, 100);
@@ -2220,7 +2412,11 @@ mod test {
         for (id, state) in [(0, "concluded"), (2, "cancelled")] {
             log.execute(
                 agent(),
-                note(TaskId(id), &format!("for the record, on the {state} task")),
+                note(
+                    TaskId(id),
+                    &format!("a note on the {state} task"),
+                    &format!("for the record, on the {state} task"),
+                ),
                 99,
             )
             .unwrap_or_else(|e| panic!("note on {state} task refused: {e:?}"));
@@ -2228,7 +2424,11 @@ mod test {
         assert_eq!(log.records().len(), before + 2);
 
         // only an unknown home task refuses, writing nothing
-        let refused = log.execute(agent(), note(TaskId(9), "no such home"), 100);
+        let refused = log.execute(
+            agent(),
+            note(TaskId(9), "a homeless note", "no such home"),
+            100,
+        );
         assert!(matches!(refused, Err(Reject::InvalidTaskId)));
         assert_eq!(log.records().len(), before + 2);
     }
@@ -2849,8 +3049,12 @@ mod test {
             2,
         )
         .unwrap();
-        log.execute(agent(), offer(TaskId(0), "suite green, 55 tests"), 3)
-            .unwrap();
+        log.execute(
+            agent(),
+            offer(TaskId(0), "foo concluded green", "suite green, 55 tests"),
+            3,
+        )
+        .unwrap();
 
         // the native session declares no task: its scope covers nothing
         let mut session = native_session(0);
@@ -2868,8 +3072,12 @@ mod test {
         )
         .unwrap();
         let scoped = scoped_agent(1);
-        log.execute(scoped.clone(), offer(TaskId(1), "bar fixed"), 6)
-            .unwrap();
+        log.execute(
+            scoped.clone(),
+            offer(TaskId(1), "bar fixed", "bar fixed"),
+            6,
+        )
+        .unwrap();
         let refused = log.execute(scoped, accept_on(TaskId(1), 5), 7);
         assert!(matches!(refused, Err(Reject::SelfAcceptance)));
     }
