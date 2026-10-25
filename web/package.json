@@ -1,0 +1,21 @@
+{
+  "name": "saccade-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/app.mjs --bundle --format=esm --charset=ascii --minify-whitespace --legal-comments=eof --outfile=dist/app.js && node ascii.mjs dist/app.js && node copy-assets.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@lezer/highlight": "1.2.5",
+    "@replit/codemirror-vim": "6.4.0",
+    "codemirror": "6.0.2",
+    "esbuild": "0.28.2",
+    "fzf": "0.5.2"
+  }
+}

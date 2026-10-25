@@ -20,6 +20,7 @@ pub mod types;
 pub mod views;
 pub mod web;
 pub mod wire;
+pub mod workbench;
 pub mod workspace;
 
 use serde::{Deserialize, Serialize};

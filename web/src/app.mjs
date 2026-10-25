@@ -1,0 +1,1347 @@
+import { EditorState, EditorSelection, Prec } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import { minimalSetup } from "codemirror";
+import { lineNumbers } from "@codemirror/view";
+import { headerFolding, sectionFold } from "./editor.mjs";
+import { markdown } from "@codemirror/lang-markdown";
+import { vim, Vim, getCM } from "@replit/codemirror-vim";
+import { Fzf } from "fzf";
+import { Workbench } from "./workbench.mjs";
+import { richDocuments } from "./rich.mjs";
+import { sourceAppearance } from "./appearance.mjs";
+
+const bench = new Workbench();
+const editors = new Map();
+const readers = new Map();
+const panes = new Map();
+const history = new Map();
+const observedModes = new WeakSet();
+let snapshot, identity, storageKey;
+let picker = null;
+let leader = null;         // " " global prefix pieces, or "," local
+let pendingG = false;
+let pendingZ = false;
+let pendingWindow = false;
+let pickerPreviewGeneration = 0;
+let reviewBufferId = null;
+let reviewConfirmation = null;
+let submitting = false;
+let nextDraft = 1;
+let messageTimer = 0;
+const $ = (selector) => document.querySelector(selector);
+const el = (tag, text, className) => {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+};
+const task = (id) => snapshot.tasks.find((item) => item.id === id);
+const comment = (id) => snapshot.comments.find((item) => item.id === id);
+const birth = (seq) => snapshot.comments.find((item) => item.seq === seq);
+const current = () => bench.buffer(bench.view().bufferId);
+const currentEditor = () => editors.get(bench.focus);
+const time = (value) => new Date(value * 1000).toISOString();
+
+async function api(path, body) {
+  const response = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) throw Object.assign(new Error(typeof data.error === "string" ? data.error : JSON.stringify(data.error)), { data });
+  return data;
+}
+
+function status(text) {
+  const node = $("#message");
+  node.textContent = text;
+  clearTimeout(messageTimer);
+  if (text) messageTimer = setTimeout(() => { node.textContent = ""; }, 6000);
+}
+
+function referenceLabel(seq) {
+  const source = birth(seq);
+  return source ? `${source.id}  t-${source.home} ${task(source.home)?.name ?? ""}` : `record ${seq}`;
+}
+
+function kindName(kind) {
+  return { home: "Home", task: "Task", note: "Note", offer: "Offer", accept: "Accept", reject: "Reject", use: "Use", draft: "Draft" }[kind] ?? kind;
+}
+
+function commentText(source) {
+  const lines = [
+    `${source.id}  ${source.kind}${source.title ? `  ${source.title}` : ""}`,
+    `home: t-${source.home}  ${task(source.home)?.name ?? ""}`,
+    `by: ${source.actor}/${source.tier}`,
+    `event_time: ${time(source.born_at)}`,
+  ];
+  if (source.revised) lines.push(`presentation: revised${source.reviser ? ` by ${source.reviser}` : ""}`);
+  if (source.withdrawn) lines.push(`presentation: withdrawn\n${source.withdrawal_note}`);
+  if (source.offer !== null) lines.push(`offer: c-${source.offer}`);
+  if (source.source !== null) lines.push(`source: t-${source.source}`);
+  if (source.binding) lines.push(`selected offer: c-${source.binding.offer}\ngrounds: ${source.binding.grounds}`);
+  const body = source.withdrawn ? source.withdrawal_note ?? "" : source.body;
+  const bodyFrom = lines.join("\n").length + 2;
+  const richSpans = (source.rich_ranges ?? []).map((span) => ({ ...span, from: bodyFrom + span.from, to: bodyFrom + span.to }));
+  lines.push("", body);
+  if (source.references.length) {
+    lines.push("", "References");
+    source.references.forEach((seq, n) => {
+      lines.push(`[^${n + 1}]: ${referenceLabel(seq)}`);
+      const artifact = source.artifact_previews?.find((item) => item.index === n);
+      if (artifact) {
+        const at = lines.join("\n").length;
+        richSpans.push({ from: at, to: at, kind: "artifact", html: artifact.html });
+      }
+    });
+  }
+  if (source.cited_by.length) {
+    lines.push("", "Cited by");
+    for (const num of source.cited_by) {
+      const citing = comment(`c-${num}`);
+      lines.push(`${citing.id}  t-${citing.home}  ${citing.actor}`, citing.body || citing.withdrawal_note || citing.kind, "");
+    }
+  }
+  return { text: lines.join("\n"), richSpans, bodyFrom, bodyTo: bodyFrom + body.length };
+}
+
+function published(id) {
+  let data;
+  if (id === "home") {
+    data = { id, kind: "home", title: "Home", text: "Saccade\n\nFind work, inspect contributions, and write with sources beside you.\n\n: opens commands\nSpace Space  find task, contribution, or local draft\nSpace sg  search recorded content\n, e  revise the focused contribution\n, a / , x  accept / reject the standing offer\n, t  title the focused draft\ngd  follow id or citation\ngr  show backlinks\nCtrl+O / Ctrl+I  jump backward / forward\nSpace nn  new note\n\nOpen only the buffers and panes you want." };
+  } else if (id.startsWith("t-")) {
+    const source = task(Number(id.slice(2)));
+    if (!source) throw new Error("task is unavailable");
+    const lines = [`${id}  ${source.name}`, `state: ${source.state}`, `owner: ${source.owner ?? "none recorded"}`];
+    if (source.explanation) lines.push(`explanation: ${source.explanation}`);
+    lines.push("", "Contributions");
+    for (const item of snapshot.comments.filter((c) => c.home === source.id)) {
+      lines.push("", `${item.id}  ${item.kind}${item.title ? `  ${item.title}` : ""}  ${item.actor}  ${time(item.born_at)}`,
+        item.body || item.withdrawal_note || item.kind);
+    }
+    data = { id, kind: "task", title: `${id} ${source.name}`, home: source.id, text: lines.join("\n") };
+  } else {
+    const source = comment(id);
+    if (!source) throw new Error("contribution is unavailable");
+    data = { id, kind: "comment", title: `${id} | ${source.title ?? task(source.home)?.name ?? ""}`, home: source.home, ...commentText(source), source };
+  }
+  const existing = bench.buffers.get(id);
+  if (existing) {
+    const keepRevision = existing.revisionPending;
+    const keep = keepRevision ? { text: existing.text, title: existing.title } : {};
+    Object.assign(existing, data, keep);
+    if (!keepRevision) existing.source = data.source;
+  }
+  return existing ?? bench.register(data);
+}
+
+function clampSelection(buffer, position) {
+  const size = buffer.text.length;
+  return EditorSelection.single(Math.min(position.anchor, size), Math.min(position.head, size));
+}
+
+function editable(buffer) {
+  return buffer.kind === "draft" || !!buffer.revisionPending;
+}
+
+function editorState(buffer, position) {
+  if (!buffer.master || buffer.master.doc.toString() !== buffer.text) {
+    buffer.master = EditorState.create({
+      doc: buffer.text,
+      extensions: [vim(), minimalSetup, sourceAppearance, lineNumbers(), headerFolding, markdown({ completeHTMLTags: false, pasteURLAsLink: false }), richDocuments(buffer), EditorView.lineWrapping,
+        EditorState.readOnly.of(!editable(buffer)),
+        EditorState.transactionFilter.of((tr) => !editable(buffer) && tr.docChanged ? [] : tr),
+        Prec.highest(keymap.of([{ key: "Escape", run: () => false }])),
+        EditorView.theme({ "&": { height: "100%", fontSize: "15px" }, ".cm-scroller": { overflow: "auto", fontFamily: "var(--mono)" }, ".cm-content": { padding: "16px 12px 160px" }, ".cm-focused": { outline: "none" } }),
+      ],
+    });
+  }
+  return buffer.master.update({ selection: clampSelection(buffer, position) }).state;
+}
+
+function presentation(viewId = bench.focus) {
+  const pane = bench.view(viewId);
+  pane.presentations ??= {};
+  return pane.presentations[pane.bufferId] ??= { mode: "view", scrollTop: 0, sourceSeen: false };
+}
+
+function isReading(viewId = bench.focus) {
+  const pane = bench.views.get(viewId);
+  return !!pane && ["comment", "draft"].includes(bench.buffer(pane.bufferId).kind) && presentation(viewId).mode === "view";
+}
+
+function remember(viewId) {
+  if (isReading(viewId)) return;
+  const view = editors.get(viewId);
+  if (!view || !bench.views.has(viewId)) return;
+  const selection = view.state.selection.main;
+  bench.remember({ anchor: selection.anchor, head: selection.head, scrollTop: view.scrollDOM.scrollTop }, viewId);
+}
+
+function mode() {
+  if (isReading()) return "View";
+  const cm = currentEditor() && getCM(currentEditor());
+  const state = cm?.state.vim;
+  return state?.insertMode ? "Insert" : state?.visualMode ? "Visual" : "Normal";
+}
+
+function observeMode(view) {
+  const cm = getCM(view);
+  if (!observedModes.has(cm)) {
+    observedModes.add(cm);
+    cm.on("vim-mode-change", () => queueMicrotask(refreshChrome));
+  }
+}
+
+function savepoint(buffer) {
+  if (buffer.revisionPending) {
+    const changed = buffer.revisionPending.title !== buffer.revisionPending.savedTitle
+      || buffer.text !== buffer.revisionPending.savedBody;
+    return changed ? "[+]" : "";
+  }
+  if (buffer.kind !== "draft") return "[-]";
+  return buffer.text !== (buffer.savedText ?? "") ? "[+]" : "";
+}
+
+function identifier(buffer) {
+  return buffer.id;
+}
+
+function identifierInfo(buffer) {
+  if (buffer.revisionPending) return "revising";
+  if (buffer.kind === "draft") {
+    if (buffer.eventual?.kind === "reject") return `rejecting c-${buffer.eventual.offer}`;
+    return "";
+  }
+  return "";
+}
+
+function refreshChrome() {
+  const buffer = current();
+  $("#bar-mode").textContent = mode() === "View" ? "RENDERED" : mode().toUpperCase();
+  $("#bar-kind").textContent = kindName(buffer.revisionPending ? "comment" === buffer.kind ? buffer.source.kind : buffer.kind : buffer.kind === "draft" && buffer.eventual?.kind === "reject" ? "Draft" : buffer.kind);
+  $("#bar-kind").textContent = kindName(buffer.kind === "draft" ? buffer.eventual?.kind === "reject" ? "draft" : "draft" : buffer.revisionPending ? buffer.source.kind : buffer.kind);
+  $("#bar-ident").textContent = identifier(buffer);
+  $("#bar-info").textContent = identifierInfo(buffer);
+  $("#bar-flags").textContent = savepoint(buffer);
+  for (const [id, node] of panes) {
+    node.classList.toggle("active", id === bench.focus);
+    const view = bench.views.get(id);
+    if (!view) continue;
+    const paneBuffer = bench.buffer(view.bufferId);
+    node.querySelector(".buffer-title").textContent = paneBuffer.revisionPending
+      ? `${paneBuffer.id} (revising)` : paneBuffer.id === "home" ? "Home" : paneBuffer.id.startsWith("t-")
+        ? `t-${paneBuffer.home} ${task(paneBuffer.home)?.name ?? ""}` : paneBuffer.id;
+  }
+}
+
+function focusPane(id) {
+  bench.focus = id;
+  refreshChrome();
+  if (isReading(id)) readers.get(id)?.focus(); else editors.get(id)?.focus();
+}
+
+function dispatch(viewId, transactions, view) {
+  view.update(transactions);
+  const buffer = bench.buffer(bench.view(viewId).bufferId);
+  const changed = transactions.some((tr) => tr.docChanged);
+  if (changed) {
+    const text = view.state.doc.toString();
+    if (buffer.text !== text) bench.edit(buffer.id, text);
+    let changes = transactions[0].changes;
+    for (const tr of transactions.slice(1)) changes = changes.compose(tr.changes);
+    buffer.master = view.state;
+    for (const [otherId, other] of editors) {
+      if (otherId === viewId || bench.view(otherId).bufferId !== buffer.id) continue;
+      const selection = other.state.selection.map(changes);
+      const scroll = other.scrollDOM.scrollTop;
+      other.setState(buffer.master.update({ selection }).state);
+      observeMode(other);
+      other.scrollDOM.scrollTop = scroll;
+      remember(otherId);
+    }
+  } else buffer.master = view.state;
+  remember(viewId);
+  for (const id of editors.keys()) {
+    if (bench.view(id).bufferId === buffer.id && isReading(id)) showPresentation(id);
+  }
+  if (reviewBufferId) setPublishEnabled();
+  persist();
+  refreshChrome();
+}
+
+function mountEditor(viewId, node) {
+  const pane = bench.view(viewId);
+  const buffer = bench.buffer(pane.bufferId);
+  const previous = editors.get(viewId);
+  if (previous && previous.bufferId === buffer.id && buffer.master) { showPresentation(viewId); return; }
+  previous?.destroy();
+  const host = node.querySelector(".document");
+  host.replaceChildren();
+  const position = bench.position(viewId);
+  const view = new EditorView({ state: editorState(buffer, position), parent: host,
+    dispatchTransactions: (transactions, editor) => dispatch(viewId, transactions, editor),
+  });
+  view.bufferId = buffer.id;
+  editors.set(viewId, view);
+  const reader = el("article", undefined, "reading rich");
+  reader.tabIndex = 0;
+  reader.setAttribute("aria-label", "Rendered document");
+  host.append(reader); readers.set(viewId, reader);
+  reader.addEventListener("focusin", () => { bench.focus = viewId; refreshChrome(); });
+  reader.addEventListener("scroll", () => {
+    if (readers.get(viewId) === reader && isReading(viewId) && !reader.pendingSignature) { presentation(viewId).scrollTop = reader.scrollTop; persist(); }
+  });
+  showPresentation(viewId);
+  view.scrollDOM.addEventListener("scroll", () => { if (!isReading(viewId)) { remember(viewId); persist(); } });
+  view.contentDOM.addEventListener("focus", () => { bench.focus = viewId; refreshChrome(); });
+  observeMode(view);
+  requestAnimationFrame(() => { view.scrollDOM.scrollTop = position.scrollTop; });
+}
+
+function showPresentation(viewId) {
+  const reader = readers.get(viewId), editor = editors.get(viewId);
+  if (!reader || !editor) return;
+  const buffer = bench.buffer(bench.view(viewId).bufferId);
+  const reading = isReading(viewId);
+  editor.dom.hidden = reading;
+  reader.hidden = !reading;
+  if (!reading) {
+    reader.previewToken = null; reader.pendingSignature = null;
+    return;
+  }
+  if (buffer.kind === "draft" || buffer.revisionPending) {
+    showDraft(viewId, reader, buffer);
+    return;
+  }
+  const signature = JSON.stringify([buffer.text, buffer.source.html]);
+  if (reader.signature !== signature) {
+    const header = el("pre", buffer.text.slice(0, buffer.bodyFrom - 2), "reading-meta");
+    const home = el("a", `Open home t-${buffer.home}`);
+    home.href = `/t/${buffer.home}`; home.dataset.recordTarget = `t-${buffer.home}`;
+    const body = el("div"); body.innerHTML = buffer.source.html;
+    const footer = el("pre", buffer.text.slice(buffer.bodyTo), "reading-meta");
+    reader.replaceChildren(header, home, body, footer);
+    reader.signature = signature;
+  }
+  requestAnimationFrame(() => { if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop; });
+}
+
+function draftSignature(buffer) {
+  if (buffer.revisionPending) {
+    return JSON.stringify([buffer.revision, buffer.text, buffer.source.references, buffer.revisionPending.title]);
+  }
+  return JSON.stringify([buffer.revision, buffer.text, buffer.references]);
+}
+
+function showDraft(viewId, reader, buffer) {
+  const signature = draftSignature(buffer);
+  if (reader.signature === signature || reader.pendingSignature === signature) return;
+  const token = {};
+  reader.previewToken = token; reader.pendingSignature = signature;
+  let body = reader.querySelector(".draft-body");
+  const revising = !!buffer.revisionPending;
+  if (!body) {
+    body = el("div", "Rendering draft...", "draft-body");
+    reader.replaceChildren(el("p", revising ? "Proposed repair preview. Viewing does not publish." : "Local draft preview. Viewing does not publish.", "reading-meta"), body);
+  } else if (reader.signature === null) {
+    reader.replaceChildren(el("p", revising ? "Proposed repair preview. Viewing does not publish." : "Local draft preview. Viewing does not publish.", "reading-meta"), body);
+  }
+  if (revising && buffer.revisionPending.title) {
+    const title = el("h2", buffer.revisionPending.title, "draft-title");
+    reader.prepend(title);
+  }
+  reader.setAttribute("aria-busy", "true");
+  const references = revising ? buffer.source.references : buffer.references;
+  const valid = () => readers.get(viewId) === reader && reader.previewToken === token && isReading(viewId) && bench.view(viewId).bufferId === buffer.id && draftSignature(buffer) === signature;
+  api("/api/v1/workbench/preview", { body: buffer.text, references: [...references] }).then((result) => {
+    if (!valid()) return;
+    body.innerHTML = result.html;
+    reader.signature = signature; reader.pendingSignature = null;
+    reader.setAttribute("aria-busy", "false");
+    reader.scrollTop = presentation(viewId).scrollTop;
+  }).catch((error) => {
+    if (!valid()) return;
+    reader.pendingSignature = null;
+    reader.setAttribute("aria-busy", "false");
+    if (!reader.signature) body.textContent = `Draft preview unavailable: ${error.message}. Source remains available; viewing does not publish.`;
+    else status(`Draft preview update unavailable: ${error.message}. Previous rendering retained; Source has the current text.`);
+  });
+}
+
+function button(text, fn, title) {
+  const node = el("button", text);
+  node.type = "button";
+  if (title) node.title = title;
+  node.addEventListener("click", fn);
+  return node;
+}
+
+function paneNode(viewId) {
+  if (panes.has(viewId)) return panes.get(viewId);
+  const node = el("section", undefined, "pane");
+  node.dataset.pane = viewId;
+  const header = el("header", undefined, "pane-header");
+  const title = button("", () => { focusPane(viewId); openPicker("tasks"); }, "Find task, contribution, or local draft (Space Space)");
+  title.className = "buffer-title";
+  title.draggable = true;
+  title.addEventListener("dragstart", (event) => event.dataTransfer.setData("text/x-saccade-pane", String(viewId)));
+  header.append(title);
+  node.append(header, el("div", undefined, "document"));
+  node.addEventListener("pointerdown", () => { bench.focus = viewId; refreshChrome(); });
+  node.addEventListener("dragover", (event) => {
+    if ([...event.dataTransfer.types].includes("text/x-saccade-pane")) event.preventDefault();
+  });
+  node.addEventListener("drop", (event) => {
+    const origin = Number(event.dataTransfer.getData("text/x-saccade-pane"));
+    if (bench.views.has(origin)) {
+      event.preventDefault(); remember(origin); remember(viewId);
+      bench.swapPanes(origin, viewId); renderLayout(); focusPane(origin);
+    }
+  });
+  panes.set(viewId, node);
+  return node;
+}
+
+function renderLayout() {
+  for (const [id, view] of editors) {
+    if (!bench.views.has(id)) { view.destroy(); editors.delete(id); readers.delete(id); panes.get(id)?.remove(); panes.delete(id); }
+  }
+  function build(tree) {
+    if (tree.view) {
+      const node = paneNode(tree.view);
+      node.style.flex = "";
+      mountEditor(tree.view, node);
+      return node;
+    }
+    const node = el("div", undefined, `split ${tree.axis}`);
+    const left = build(tree.children[0]), right = build(tree.children[1]);
+    const divider = el("div", undefined, "divider");
+    divider.setAttribute("role", "separator");
+    divider.setAttribute("aria-label", "Resize panes");
+    divider.setAttribute("aria-orientation", tree.axis === "row" ? "vertical" : "horizontal");
+    divider.tabIndex = 0;
+    function resize(ratio) {
+      tree.ratio = Math.max(0.15, Math.min(0.85, ratio));
+      left.style.flex = `${tree.ratio} 1 0`; right.style.flex = `${1 - tree.ratio} 1 0`;
+    }
+    resize(tree.ratio);
+    divider.addEventListener("pointerdown", (event) => { divider.setPointerCapture(event.pointerId); event.preventDefault(); });
+    divider.addEventListener("pointermove", (event) => {
+      if (!divider.hasPointerCapture(event.pointerId)) return;
+      const rect = node.getBoundingClientRect();
+      resize(tree.axis === "row" ? (event.clientX - rect.left) / rect.width : (event.clientY - rect.top) / rect.height);
+    });
+    divider.addEventListener("pointerup", () => persist());
+    divider.addEventListener("keydown", (event) => {
+      if (["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(event.key)) {
+        event.preventDefault(); resize(tree.ratio + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -0.05 : 0.05)); persist();
+      }
+    });
+    node.append(left, divider, right);
+    return node;
+  }
+  $("#work").replaceChildren(build(bench.layout));
+  refreshChrome();
+  persist();
+}
+
+function jumpState(viewId) {
+  if (!history.has(viewId)) history.set(viewId, { back: [], forward: [] });
+  return history.get(viewId);
+}
+
+function jumpLocation(viewId) {
+  return { bufferId: bench.view(viewId).bufferId, position: bench.position(viewId), presentation: ["comment", "draft"].includes(bench.buffer(bench.view(viewId).bufferId).kind) ? structuredClone(presentation(viewId)) : null };
+}
+
+function pushHistory(viewId) {
+  const stack = jumpState(viewId);
+  stack.back.push(jumpLocation(viewId));
+  stack.forward.length = 0;
+}
+
+function openBuffer(id, viewId = bench.focus, preferred = "view") {
+  remember(viewId);
+  if (!bench.buffers.has(id)) published(id);
+  if (bench.view(viewId).bufferId !== id) pushHistory(viewId);
+  bench.open(id, viewId);
+  if (["comment", "draft"].includes(bench.buffer(id).kind)) presentation(viewId).mode = preferred;
+  renderLayout(); focusPane(viewId);
+}
+
+function split(axis, id = bench.view().bufferId) {
+  remember(bench.focus);
+  const same = id === bench.view().bufferId && ["comment", "draft"].includes(current().kind) ? structuredClone(presentation()) : null;
+  bench.split(axis, id);
+  if (same) { presentation(); bench.view().presentations[id] = same; }
+  renderLayout(); focusPane(bench.focus);
+}
+
+function closePane() {
+  remember(bench.focus);
+  if (!bench.closePane()) { status("The final pane remains open. Switch its buffer instead."); return; }
+  renderLayout(); focusPane(bench.focus);
+}
+
+function onlyPane() {
+  for (const id of bench.views.keys()) remember(id);
+  bench.onlyPane(); renderLayout(); focusPane(bench.focus);
+}
+
+function neighbor(direction) {
+  const currentRect = panes.get(bench.focus).getBoundingClientRect();
+  const x = currentRect.x + currentRect.width / 2, y = currentRect.y + currentRect.height / 2;
+  const options = [...panes].filter(([id]) => id !== bench.focus).map(([id, node]) => {
+    const rect = node.getBoundingClientRect();
+    return { id, dx: rect.x + rect.width / 2 - x, dy: rect.y + rect.height / 2 - y };
+  }).filter((p) => ({ h: p.dx < 0, l: p.dx > 0, j: p.dy > 0, k: p.dy < 0 })[direction]);
+  options.sort((a, b) => Math.hypot(a.dx, a.dy) - Math.hypot(b.dx, b.dy));
+  if (options[0]) focusPane(options[0].id);
+}
+
+function jump(direction) {
+  const stack = jumpState(bench.focus);
+  const entry = stack[direction].pop();
+  if (!entry) return status(`No ${direction === "back" ? "earlier" : "later"} location in this pane.`);
+  remember(bench.focus);
+  stack[direction === "back" ? "forward" : "back"].push(jumpLocation(bench.focus));
+  bench.open(entry.bufferId); bench.remember(entry.position);
+  if (entry.presentation) {
+    presentation();
+    bench.view().presentations[entry.bufferId] = structuredClone(entry.presentation);
+  }
+  renderLayout(); focusPane(bench.focus);
+}
+
+function back() { jump("back"); }
+function forward() { jump("forward"); }
+
+function backlinks() {
+  if (current().kind !== "comment") return status("Open a contribution to inspect its explicit backlinks.");
+  openPicker("backlinks");
+}
+
+function togglePresentation() {
+  const id = bench.focus;
+  const state = presentation(id);
+  const reading = isReading(id);
+  const editor = currentEditor(), reader = readers.get(id);
+  const ratio = reader.scrollTop / Math.max(1, reader.scrollHeight - reader.clientHeight);
+  if (reading) state.scrollTop = reader.scrollTop; else remember(id);
+  if (!reading) {
+    const selection = mode() === "Normal" ? editor.state.selection : null;
+    Vim.handleKey(getCM(editor), "<Esc>");
+    if (selection) editor.dispatch({ selection });
+    state.sourceSeen = true;
+  }
+  state.mode = reading ? "source" : "view";
+  showPresentation(id); focusPane(id);
+  if (reading && !state.sourceSeen) {
+    const initialSelection = editor.state.selection;
+    requestAnimationFrame(() => {
+      if (editors.get(id) !== editor || isReading(id) || editor.state.selection !== initialSelection) return;
+      editor.scrollDOM.scrollTop = ratio * Math.max(0, editor.scrollDOM.scrollHeight - editor.scrollDOM.clientHeight);
+      const at = editor.lineBlockAtHeight(editor.scrollDOM.scrollTop).from;
+      editor.dispatch({ selection: { anchor: at } });
+      remember(id); persist();
+    });
+  }
+  if (reading) state.sourceSeen = true;
+  persist();
+  status(reading ? `Source: ${editable(current()) ? "editable" : "read-only"} Vim text. Space uv returns to View.` : "View: j/k scroll; Tab or mouse selects links. Space uv opens Source.");
+}
+
+// -- the surfaces that mutate -------------------------------------------------
+
+function nextDraftId() { return `draft:${nextDraft++}`; }
+
+function newNote() {
+  const home = current().home ?? null;
+  const id = nextDraftId();
+  bench.register({ id, kind: "draft", title: `Note ${id.slice(6)}`, text: "", home, references: [], submission: null, authoredTitle: "", eventual: null, savedText: "" });
+  openBuffer(id, bench.focus, "source");
+}
+
+function startRevision() {
+  const buffer = current();
+  if (buffer.kind !== "comment" || !buffer.source) return;
+  if (buffer.revisionPending) { status("This contribution already has a pending repair under review."); return; }
+  const standing = buffer.source;
+  buffer.revisionPending = {
+    title: standing.title ?? null,
+    savedTitle: standing.title ?? null,
+    savedBody: buffer.text === undefined ? standing.body : standing.body,
+    submission: null,
+  };
+  buffer.text = standing.body;
+  buffer.master = null;
+  presentation().mode = "source";
+  renderLayout(); focusPane(bench.focus);
+  status(`Revising ${buffer.id}: edit Source, View previews the proposed repair, , r reviews it. , e again discards.`);
+}
+
+function discardRevision() {
+  const buffer = current();
+  if (buffer.kind !== "comment" || !buffer.revisionPending) return status("No pending repair on this buffer.");
+  buffer.revisionPending = null;
+  published(buffer.id);
+  buffer.master = null;
+  renderLayout(); focusPane(bench.focus);
+  status(`Pending repair on ${buffer.id} discarded; the recorded contribution stands.`);
+}
+
+function standingOffer(buffer) {
+  if (buffer.kind !== "comment" || !buffer.source) return null;
+  if (buffer.source.kind !== "offer" || buffer.source.withdrawn) return null;
+  const home = task(buffer.source.home);
+  if (!home || home.state !== "offered" || home.offer !== buffer.source.num) return null;
+  return buffer.source;
+}
+
+function startAccept() {
+  const buffer = current();
+  const offer = standingOffer(buffer);
+  if (!offer) return status("Accept applies to the standing offer of an offered task.");
+  openReview();
+}
+
+function startReject() {
+  const buffer = current();
+  const offer = standingOffer(buffer);
+  if (!offer) return status("Reject applies to the standing offer of an offered task.");
+  const existing = [...bench.buffers.values()].find((b) => b.kind === "draft" && b.eventual?.kind === "reject" && b.eventual.offer === offer.id);
+  if (existing) { openBuffer(existing.id, bench.focus, "source"); status(`Grounds draft for ${offer.id} already open.`); return; }
+  const id = nextDraftId();
+  bench.register({ id, kind: "draft", title: `Grounds ${id.slice(6)}`, text: "", home: offer.home, references: [], submission: null, authoredTitle: "", eventual: { kind: "reject", offer: offer.id, offerSeq: offer.seq }, savedText: "" });
+  openBuffer(id, bench.focus, "source");
+  status(`Grounds for rejecting ${offer.id}: , r reviews the decision. Home and target are fixed.`);
+}
+
+function editTitle() {
+  const buffer = current();
+  let target;
+  if (buffer.revisionPending) {
+    if (!["note", "offer"].includes(buffer.source.kind)) return status("Only notes and offers carry a title.");
+    target = {
+      get: () => buffer.revisionPending.title ?? "",
+      set: (value) => { buffer.revisionPending.title = value; },
+    };
+  } else if (buffer.kind === "draft" && buffer.eventual?.kind !== "reject") {
+    target = {
+      get: () => buffer.authoredTitle ?? "",
+      set: (value) => { buffer.authoredTitle = value; },
+    };
+  } else return status("Titles belong to note drafts and note or offer repairs.");
+  $("#title-input").value = target.get();
+  $("#title-dialog").showModal();
+  $("#title-input").focus();
+  $("#title-apply").onclick = () => {
+    const value = $("#title-input").value.trim();
+    target.set(value);
+    persist(); refreshChrome();
+    $("#title-dialog").close();
+    if (reviewBufferId === buffer.id) openReview();
+    status(value ? `Title set: ${value}` : "Title cleared; publication requires one.");
+  };
+}
+
+function draftSurface(buffer) {
+  if (buffer.revisionPending) {
+    const pending = buffer.revisionPending;
+    return {
+      kind: "revision", buffer,
+      title: ["note", "offer"].includes(buffer.source.kind) ? pending.title : null,
+      body: buffer.text,
+      references: buffer.source.references,
+      home: buffer.source.home,
+      target: buffer.id,
+      get submission() { return buffer.revisionPending?.submission; },
+      set submission(value) { if (buffer.revisionPending) buffer.revisionPending.submission = value; },
+    };
+  }
+  if (buffer.kind !== "draft") return null;
+  if (buffer.eventual?.kind === "reject") {
+    return {
+      kind: "reject", buffer,
+      title: null, body: buffer.text,
+      references: [], home: buffer.eventual.offerSeq === undefined ? buffer.home : comment(buffer.eventual.offer)?.home,
+      target: buffer.eventual.offer,
+      get submission() { return buffer.submission; },
+      set submission(value) { buffer.submission = value; },
+    };
+  }
+  return {
+    kind: "note", buffer,
+    title: buffer.authoredTitle, body: buffer.text,
+    references: buffer.references, home: buffer.home,
+    target: null,
+    get submission() { return buffer.submission; },
+    set submission(value) { buffer.submission = value; },
+  };
+}
+
+function acceptSurface(buffer) {
+  const offer = standingOffer(buffer);
+  if (!offer) return null;
+  buffer.decision ??= {};
+  return {
+    kind: "accept", buffer, title: null, body: null, references: null,
+    home: offer.home, target: offer.id,
+    get submission() { return buffer.decision; },
+    set submission(value) { buffer.decision = value; },
+  };
+}
+
+function commandFor(surface, actor) {
+  if (surface.kind === "note") {
+    return { comment: { home: surface.home, kind: { note: { title: surface.title, body: surface.body } }, references: surface.references } };
+  }
+  if (surface.kind === "revision") {
+    const id = surface.buffer.source.seq;
+    const title = ["note", "offer"].includes(surface.buffer.source.kind)
+      ? surface.title !== surface.buffer.revisionPending.savedTitle ? surface.title : null
+      : null;
+    const body = surface.body !== surface.buffer.revisionPending.savedBody ? surface.body : null;
+    return { revise_comment: { id, ...(title !== null ? { title } : {}), ...(body !== null ? { body } : {}) } };
+  }
+  if (surface.kind === "accept") {
+    return { comment: { home: surface.home, kind: { accept: { offer: surface.buffer.source.seq } }, references: [] } };
+  }
+  return { comment: { home: surface.home, kind: { reject: { offer: surface.buffer.source.seq, grounds: surface.body } }, references: [] } };
+}
+
+function confirmsLanded(surface, record) {
+  const payload = typeof record.payload === "string" ? JSON.parse(record.payload) : record.payload;
+  if (surface.kind === "note") {
+    return record.kind === "commented" && payload?.home === surface.home
+      && payload?.kind?.note?.title === surface.title
+      && payload?.kind?.note?.body === surface.body
+      && JSON.stringify(payload?.references ?? []) === JSON.stringify(surface.references);
+  }
+  if (surface.kind === "revision") {
+    if (record.kind !== "comment_revised" || payload?.id !== surface.buffer.source.seq) return false;
+    const title = surface.title !== surface.buffer.revisionPending.savedTitle ? surface.title : null;
+    const body = surface.body !== surface.buffer.revisionPending.savedBody ? surface.body : null;
+    const sentTitle = title === null ? undefined : title;
+    const sentBody = body === null ? undefined : body;
+    return (sentTitle === undefined ? payload?.title === undefined : payload?.title === sentTitle)
+      && (sentBody === undefined ? payload?.body === undefined : payload?.body === sentBody);
+  }
+  if (surface.kind === "accept") {
+    return record.kind === "commented" && payload?.kind?.accept?.offer === surface.buffer.source.seq;
+  }
+  return record.kind === "commented" && payload?.kind?.reject?.offer === surface.buffer.source.seq
+    && payload?.kind?.reject?.grounds === surface.body;
+}
+
+function confirmation(surface, actor) {
+  return { id: surface.buffer.id, revision: surface.buffer.revision, kind: surface.kind,
+    body: surface.body, home: surface.home, references: surface.references ? [...surface.references] : null,
+    title: surface.title, actor };
+}
+
+function openReview() {
+  const buffer = current();
+  let surface = draftSurface(buffer) ?? acceptSurface(buffer);
+  if (!surface || (surface.kind === "note" && buffer.kind !== "draft")) surface = null;
+  if (!surface) return status("Nothing reviewable is focused: open a draft, a repair, or the standing offer.");
+  remember(bench.focus);
+  reviewBufferId = buffer.id;
+  const actor = identity.actor ?? $("#review-actor-name").value.trim();
+  reviewConfirmation = confirmation(surface, actor || null);
+  $("#review-kind").textContent = { note: "Note", revision: `Revise ${buffer.source?.kind ?? ""} ${buffer.id}`, accept: `Accept ${buffer.id}`, reject: `Reject ${surface.target}` }[surface.kind];
+  if (surface.kind === "note") {
+    $("#review-home").replaceChildren(new Option("Choose home task", ""), ...snapshot.tasks.map((item) => new Option(`t-${item.id} ${item.name}`, String(item.id))));
+    $("#review-home").value = buffer.home === null ? "" : String(buffer.home);
+    $("#review-home").hidden = false;
+    $("#review-home-label").hidden = false;
+  } else {
+    $("#review-home").replaceChildren();
+    $("#review-home").hidden = true;
+    $("#review-home-label").hidden = true;
+    $("#review-fixed-home").textContent = `Home t-${surface.home} ${task(surface.home)?.name ?? ""} (fixed)`;
+  }
+  $("#review-fixed-home").hidden = surface.kind === "note";
+  $("#review-title").textContent = surface.kind === "note"
+    ? (surface.title || "(unset - press , t)")
+    : surface.title === null ? "" : surface.title;
+  $("#review-title-row").hidden = surface.title === null && surface.kind !== "note";
+  if (identity.actor) {
+    $("#review-actor-name").value = identity.actor;
+    $("#review-actor-name").hidden = true;
+    $("#review-by").textContent = `${identity.actor}/human`;
+  } else {
+    $("#review-actor-name").hidden = false;
+    $("#review-by").textContent = "human (name required below)";
+  }
+  const refs = $("#review-references");
+  refs.replaceChildren();
+  if (surface.references === null) {
+    refs.append(el("li", "none - acceptance is the reference"));
+  } else if (surface.references.length === 0) {
+    refs.append(el("li", "none"));
+  } else {
+    for (const [index, seq] of surface.references.entries()) refs.append(el("li", `[^${index + 1}] ${referenceLabel(seq)}`));
+  }
+  $("#publication-status").textContent = surface.submission?.message ?? "Nothing sent.";
+  $("#publish").textContent = { note: "Publish note once", revision: "Confirm revision once", accept: "Confirm accept once", reject: "Publish rejection once" }[surface.kind];
+  $("#publication").showModal();
+  setPublishEnabled();
+}
+
+function setPublishEnabled() {
+  const buffer = reviewBufferId && bench.buffers.get(reviewBufferId);
+  const surface = buffer && (draftSurface(buffer) ?? acceptSurface(buffer));
+  const actor = identity.actor ?? $("#review-actor-name").value.trim();
+  const currentConfirmation = surface && actor && JSON.stringify(reviewConfirmation) === JSON.stringify(confirmation(surface, actor));
+  const valid = surface && (surface.kind !== "note" || (surface.home !== null && surface.title));
+  $("#publish").disabled = !surface || !currentConfirmation || !valid || !actor || submitting
+    || ["unknown", "landed"].includes(surface.submission?.kind);
+  if (buffer && !currentConfirmation && surface && !surface.submission && $("#publication").open) $("#publication-status").textContent = "Draft changed. Return and review the current surface before sending.";
+}
+
+async function send(surface, actor) {
+  const request = { actor, command: commandFor(surface, actor) };
+  const response = await fetch("/api/v1/workbench/command", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+  let data;
+  try { data = await response.json(); } catch { throw new Error("The response could not be read."); }
+  if (!response.ok) {
+    throw Object.assign(new Error("refused"), { refused: true, detail: typeof data.error === "string" ? data.error : `${data.error?.code}: ${data.error?.detail ?? ""}` });
+  }
+  const records = data.records;
+  if (!Array.isArray(records) || records.length !== 1 || !confirmsLanded(surface, records[0]) || records[0].actor !== actor || records[0].tier !== "human") {
+    throw new Error("The response did not confirm the exact expected record.");
+  }
+  return records[0];
+}
+
+async function publish() {
+  const buffer = bench.buffers.get(reviewBufferId);
+  const surface = buffer && (draftSurface(buffer) ?? acceptSurface(buffer));
+  setPublishEnabled();
+  if ($("#publish").disabled || !surface) return;
+  const actor = identity.actor ?? $("#review-actor-name").value.trim();
+  submitting = true; setPublishEnabled();
+  surface.submission = { kind: "unknown", message: "Submission was initiated but no final answer is confirmed. Inspect the task record before another attempt." };
+  if (!persist()) {
+    submitting = false;
+    surface.submission = { kind: "blocked", message: "Submission not attempted: local submission state could not be saved." };
+    $("#publication-status").textContent = surface.submission.message;
+    setPublishEnabled();
+    return;
+  }
+  $("#publication-status").textContent = "Submitting once...";
+  try {
+    const record = await send(surface, actor);
+    let message = `Recorded at birth record ${record.seq}.`;
+    try {
+      await reload(false);
+      const born = surface.kind === "revision" ? buffer.source : birth(record.seq);
+      if (born) message = `Recorded as ${surface.kind === "revision" ? buffer.id : born.id}.`;
+    } catch { message += " Refresh unavailable."; }
+    surface.submission = { kind: "landed", seq: record.seq, message };
+    $("#publication-status").textContent = message;
+    if (surface.kind === "revision") {
+      buffer.revisionPending = null;
+      published(buffer.id);
+      buffer.master = null;
+    }
+  } catch (error) {
+    if (error.refused) {
+      surface.submission = { kind: "refused", message: `Not sent: ${error.detail}. The draft is retained for correction.` };
+    } else {
+      surface.submission = { kind: "unknown", message: `Submission outcome unknown: ${error.message} No retry will be sent; inspect the task record.` };
+    }
+  } finally {
+    submitting = false;
+    if (surface.submission?.message) $("#publication-status").textContent = surface.submission.message;
+    persist(); setPublishEnabled(); refreshChrome();
+  }
+}
+
+function closeReview() {
+  if (submitting) return;
+  reviewConfirmation = null;
+  reviewBufferId = null; $("#publication").close(); focusPane(bench.focus);
+}
+
+function persist() {
+  if (!storageKey) return false;
+  try {
+    const buffers = [...bench.buffers.values()].map((buffer) => ({
+      id: buffer.id, kind: buffer.kind,
+      ...(buffer.kind === "draft" ? { text: buffer.text, references: buffer.references, home: buffer.home, submission: buffer.submission, authoredTitle: buffer.authoredTitle, eventual: buffer.eventual, savedText: buffer.savedText } : {}),
+      ...(buffer.revisionPending ? { revisionPending: buffer.revisionPending } : {}),
+      ...(buffer.decision ? { decision: buffer.decision } : {}),
+      lastPosition: buffer.lastPosition, inline: buffer.inline,
+    }));
+    localStorage.setItem(storageKey, JSON.stringify({ buffers, layout: bench.layout, focus: bench.focus,
+      nextView: bench.nextView, nextDraft, views: [...bench.views.values()].map((view) => ({ ...view, positions: [...view.positions] })) }));
+    return true;
+  } catch { status("Local save failed. Open drafts remain in memory; do not close this browser."); return false; }
+}
+
+function migrateDraftShape(buffer) {
+  if (buffer.kind !== "draft") return;
+  buffer.authoredTitle ??= "";
+  buffer.savedText ??= "";
+  buffer.eventual ??= null;
+}
+
+function restore() {
+  const raw = localStorage.getItem(storageKey);
+  if (!raw) return false;
+  try {
+    const data = JSON.parse(raw);
+    for (const buffer of data.buffers) {
+      const restored = buffer.kind === "draft" ? bench.register(buffer) : published(buffer.id);
+      migrateDraftShape(restored);
+      restored.lastPosition = buffer.lastPosition;
+      restored.inline = buffer.inline;
+      if (buffer.revisionPending) restored.revisionPending = buffer.revisionPending;
+      if (buffer.decision) restored.decision = buffer.decision;
+    }
+    bench.layout = data.layout;
+    bench.focus = data.focus;
+    bench.nextView = data.nextView;
+    nextDraft = data.nextDraft;
+    bench.views = new Map(data.views.map((view) => [view.id, { ...view, positions: new Map(view.positions) }]));
+    return bench.views.has(bench.focus);
+  } catch { bench.views.clear(); bench.layout = null; bench.focus = null; return false; }
+}
+
+async function reload(announce = true) {
+  const fresh = await api("/api/v1/workbench");
+  snapshot = fresh;
+  for (const buffer of bench.buffers.values()) {
+    if (buffer.kind === "draft") continue;
+    const pending = buffer.revisionPending;
+    published(buffer.id);
+    if (pending && !buffer.revisionPending) buffer.revisionPending = pending;
+    for (const [id, view] of editors) {
+      if (bench.view(id).bufferId !== buffer.id) continue;
+      if (buffer.revisionPending) continue;
+      view.setState(editorState(buffer, bench.position(id)));
+      observeMode(view);
+    }
+  }
+  refreshChrome();
+  if (announce) status("Recorded material refreshed. Draft references were not retargeted.");
+}
+
+// -- the command registry ------------------------------------------------------
+
+function revisableContext() {
+  const buffer = current();
+  return buffer.kind === "comment" && buffer.source && !buffer.source.withdrawn
+    && ["note", "offer", "reject", "use"].includes(buffer.source.kind);
+}
+
+const registry = [
+  { id: "tasks", label: "Find task, contribution, or local draft", binding: " ", run: () => openPicker("tasks") },
+  { id: "contents", label: "Search recorded content", binding: "sg", run: () => openPicker("contents") },
+  { id: "new", label: "New note", binding: "nn", run: newNote },
+  { id: "cite", label: "Insert citation", binding: "ci", local: "i", when: () => current().kind === "draft" && current().eventual?.kind !== "reject" && !isReading(), run: () => openPicker("cite") },
+  { id: "home-task", label: "Set draft home task", binding: "nh", local: "h", when: () => current().kind === "draft" && current().eventual?.kind !== "reject", run: () => openPicker("home") },
+  { id: "review", label: "Review for submission", binding: "nr", local: "r", run: openReview },
+  { id: "revise", label: "Revise this contribution", local: "e", when: revisableContext, run: startRevision },
+  { id: "discard-revision", label: "Discard pending repair", when: () => !!current().revisionPending, run: discardRevision },
+  { id: "accept", label: "Accept the standing offer", local: "a", when: () => !!standingOffer(current()), run: startAccept },
+  { id: "reject", label: "Reject the standing offer with grounds", local: "x", when: () => !!standingOffer(current()), run: startReject },
+  { id: "title", label: "Title the focused draft or repair", local: "t", run: editTitle },
+  { id: "write", aliases: ["w"], label: "Save draft locally", when: () => current().kind === "draft" || current().revisionPending, run: () => { const b = current(); if (b.kind === "draft") b.savedText = b.text; if (b.revisionPending) { b.revisionPending.savedTitle = b.revisionPending.title; b.revisionPending.savedBody = b.text; } if (persist()) { refreshChrome(); status("Saved locally in this browser. Nothing sent."); } } },
+  { id: "undo", label: "Undo edit", when: () => editable(current()), run: () => Vim.handleKey(getCM(currentEditor()), "u") },
+  { id: "redo", label: "Redo edit", when: () => editable(current()), run: () => Vim.handleKey(getCM(currentEditor()), "<C-r>") },
+  { id: "split-row", aliases: ["vsplit", "vs"], label: "vsplit - split pane beside", binding: "wv", run: () => split("row") },
+  { id: "split-column", aliases: ["split", "sp"], label: "split - split pane below", binding: "ws", run: () => split("column") },
+  { id: "close", aliases: ["q"], label: "Close pane", binding: "wc", run: closePane },
+  { id: "only", label: "Show only current pane", binding: "wo", run: onlyPane },
+  ...["h", "j", "k", "l"].map((d) => ({ id: `focus-${d}`, binding: `w${d}`, label: `Focus pane ${{ h: "left", j: "below", k: "above", l: "right" }[d]}`, run: () => neighbor(d) })),
+  { id: "follow", label: "Follow id or reference under cursor", run: follow },
+  { id: "backlinks", label: "Show explicit backlinks", when: () => current().kind === "comment", run: backlinks },
+  { id: "rendering", label: "Toggle View / Source", binding: "uv", when: () => ["comment", "draft"].includes(current().kind), run: togglePresentation },
+  { id: "back", label: "Jump backward", binding: "jb", run: back },
+  { id: "forward", label: "Jump forward", run: forward },
+  { id: "home", label: "Open home buffer", binding: "hh", run: () => openBuffer("home") },
+  { id: "reload", label: "Refresh recorded material", run: reload },
+];
+
+function commands() {
+  return registry.filter((item) => item.when === undefined || item.when());
+}
+
+function runCommand(id) {
+  pendingWindow = false; pendingZ = false;
+  const command = commands().find((item) => item.id === id);
+  if (!command) return status("That command is not available in this buffer.");
+  Promise.resolve(command.run()).catch((error) => status(error.message));
+}
+
+function showLeader(prefix) {
+  const scope = leader === "," ? "," : "Space ";
+  const options = commands().flatMap((command) => {
+    const entries = [];
+    if (leader !== "," && command.binding && command.binding.startsWith(prefix) && prefix !== "") entries.push([command.binding, command]);
+    if (leader !== "," && command.binding === " " && prefix === "") entries.push(["Space", command]);
+    if (leader === "," && command.local && prefix === "") entries.push([`, ${command.local}`, command]);
+    return entries;
+  });
+  $("#leader").textContent = `${scope}${prefix}  |  ${options.map(([keys, command]) => `${keys}: ${command.label}`).join("  |  ")}`;
+  $("#leader").hidden = false;
+}
+
+function cancelLeader() { leader = null; $("#leader").hidden = true; }
+
+function candidateComments(query) {
+  const exact = /^c-\d+$/.test(query.trim());
+  return exact ? snapshot.comments.filter((item) => item.id === query.trim()) : snapshot.comments.filter((item) => !item.withdrawn);
+}
+
+function candidates() {
+  const query = $("#query").value;
+  let list, selector;
+  if (picker.kind === "commands") {
+    list = commands();
+    const exact = list.find((item) => item.id === query || item.aliases?.includes(query));
+    if (exact) return [exact];
+    selector = (item) => `${item.label} ${item.id}`;
+  } else if (["tasks", "home"].includes(picker.kind)) {
+    list = snapshot.tasks;
+    if (/^t-\d+$/.test(query.trim())) return list.filter((item) => `t-${item.id}` === query.trim()).map((item) => ({ ...item, finderType: "task" }));
+    list = list.map((item) => ({ ...item, finderType: "task" }));
+    if (picker.kind === "tasks") {
+      list.push(...[...bench.buffers.values()].filter((buffer) => buffer.kind === "draft").map((buffer) => ({ ...buffer, finderType: "draft" })));
+      list.push(...snapshot.comments.filter((item) => ["note", "offer"].includes(item.kind) && !item.withdrawn).map((item) => ({ ...item, finderType: "comment" })));
+    }
+    selector = (item) => item.finderType === "draft" ? `${item.text} ${task(item.home)?.name ?? ""}`
+      : item.finderType === "comment" ? `${item.title ?? ""} ${item.body}`
+      : item.name;
+  } else if (picker.kind === "backlinks") {
+    list = (comment(picker.sourceId)?.cited_by ?? []).map((num) => comment(`c-${num}`));
+    selector = (item) => item.body || item.withdrawal_note || item.kind;
+  } else {
+    list = candidateComments(query);
+    if (/^c-\d+$/.test(query.trim())) return list;
+    selector = (item) => `${item.title ?? ""} ${item.body}`;
+  }
+  return query ? new Fzf(list, { selector }).find(query).map((entry) => entry.item) : list;
+}
+
+function excerpt(text) {
+  const line = text.split(/\r?\n/).find((part) => part.trim()) ?? "";
+  if (line.length <= 160) return line;
+  const end = line.lastIndexOf(" ", 160);
+  return `${line.slice(0, end > 0 ? end : 160)}...`;
+}
+
+function candidateLabel(item) {
+  if (picker.kind === "commands") return item.label;
+  if (["tasks", "home"].includes(picker.kind)) {
+    if (item.finderType === "task") return `Task t-${item.id}  ${item.name}`;
+    if (item.finderType === "comment") return `${kindName(item.kind)} ${item.id}  ${item.title}\nt-${item.home} ${task(item.home)?.name ?? ""}  ${item.actor}`;
+    const label = item.submission?.kind === "landed" ? "Recorded local copy" : item.submission?.kind === "unknown" ? "Local draft | submission unconfirmed" : "Local draft";
+    return `${label} | ${item.home === null ? "no home selected" : `t-${item.home} ${task(item.home)?.name ?? ""}`}\n${excerpt(item.text) || "(empty draft)"}`;
+  }
+  return `${item.id}  ${item.actor} | t-${item.home} ${task(item.home)?.name ?? ""}\n${excerpt(item.title ? `${item.title} - ${item.body || item.withdrawal_note}` : item.withdrawn ? item.withdrawal_note : item.body)}`;
+}
+
+function renderPicker() {
+  picker.items = candidates();
+  picker.selected = Math.max(0, Math.min(picker.selected, picker.items.length - 1));
+  $("#results").replaceChildren();
+  picker.items.forEach((item, index) => {
+    const node = el("button", candidateLabel(item), index === picker.selected ? "selected" : "");
+    node.type = "button";
+    node.setAttribute("role", "option");
+    node.setAttribute("aria-selected", String(index === picker.selected));
+    node.addEventListener("click", () => { picker.selected = index; choose(false); });
+    node.addEventListener("mouseenter", () => { picker.selected = index; highlightPicker(); });
+    $("#results").append(node);
+  });
+  highlightPicker();
+}
+
+function highlightPicker() {
+  const nodes = [...$("#results").children];
+  nodes.forEach((node, i) => { node.classList.toggle("selected", i === picker.selected); node.setAttribute("aria-selected", String(i === picker.selected)); });
+  nodes[picker.selected]?.scrollIntoView({ block: "nearest" });
+  const item = picker.items[picker.selected];
+  const generation = ++pickerPreviewGeneration;
+  const activePicker = picker;
+  const host = $("#picker-preview");
+  host.replaceChildren();
+  if (!item) { host.textContent = "No matching material."; return; }
+  if (["cite", "contents", "backlinks"].includes(picker.kind)) {
+    host.append(el("pre", `${item.id}  ${item.kind}\nhome: t-${item.home} ${task(item.home)?.name ?? ""}\nby: ${item.actor}/${item.tier}\nevent_time: ${time(item.born_at)}${item.revised ? "\npresentation: revised" : ""}${item.withdrawn ? "\npresentation: withdrawn" : ""}${item.title ? `\ntitle: ${item.title}` : ""}`));
+    const body = el("div", undefined, "rich"); body.innerHTML = item.html;
+    host.append(body);
+  } else if (["tasks", "home"].includes(picker.kind) && item.finderType === "comment") {
+    host.append(el("pre", `${item.id}  ${item.kind}\nt-${item.home} ${task(item.home)?.name ?? ""}  by ${item.actor}`));
+    const body = el("div", undefined, "rich"); body.innerHTML = item.html; host.append(body);
+  } else if (item.finderType === "draft") {
+    host.append(el("pre", `Local draft\nhome: ${item.home === null ? "not selected" : `t-${item.home} ${task(item.home)?.name ?? ""}`}${item.authoredTitle ? `\ntitle: ${item.authoredTitle}` : ""}`));
+    const body = el("div", item.text, "rich"); host.append(body);
+    api("/api/v1/workbench/preview", { body: item.text, references: item.references }).then((result) => {
+      if (picker === activePicker && pickerPreviewGeneration === generation) body.innerHTML = result.html;
+    }).catch(() => {});
+  } else if (["tasks", "home"].includes(picker.kind)) {
+    host.append(el("pre", `t-${item.id}  ${item.name}\nstate: ${item.state}`));
+    for (const source of snapshot.comments.filter((c) => c.home === item.id && !c.withdrawn)) {
+      host.append(el("h3", `${source.id}  ${source.actor}`));
+      const body = el("div", undefined, "rich"); body.innerHTML = source.html; host.append(body);
+    }
+  } else host.append(el("pre", item.text ?? item.label));
+}
+
+function closePicker() {
+  const origin = picker?.viewId;
+  picker = null;
+  $("#picker").close();
+  if (origin && bench.views.has(origin)) focusPane(origin);
+}
+
+function openPicker(kind) {
+  cancelLeader(); pendingZ = false; pendingWindow = false;
+  $("#picker").classList.toggle("commands", kind === "commands");
+  $("#picker-preview").hidden = kind === "commands";
+  $("#choose").textContent = kind === "commands" ? "Run command" : "Open / select";
+  $("#picker-hint").textContent = kind === "commands" ? "Up/Down choose | Enter run | Escape cancel" : "Up/Down preview | Enter select | Shift+Enter beside | Escape cancel";
+  remember(bench.focus);
+  const buffer = current();
+  if (kind === "cite" && buffer.kind !== "draft") return status("Insert citations while drafting.");
+  picker = { kind, viewId: bench.focus, sourceId: buffer.id, selected: 0, items: [],
+    ticket: kind === "cite" ? bench.beginCitation(buffer.id, currentEditor().state.selection.main.head) : null };
+  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task" })[kind];
+  $("#query").value = "";
+  $("#beside").hidden = ["commands", "cite", "home"].includes(kind);
+  renderPicker();
+  $("#picker").showModal();
+  $("#query").focus();
+}
+
+function choose(beside) {
+  const selection = picker.items[picker.selected];
+  if (!selection) return;
+  const { kind, ticket, viewId } = picker;
+  closePicker();
+  if (kind === "commands") return runCommand(selection.id);
+  if (kind === "home") {
+    const buffer = bench.buffer(bench.view(viewId).bufferId);
+    buffer.home = selection.id; persist(); refreshChrome(); return;
+  }
+  if (kind === "cite") {
+    try {
+      const { marker, cursor } = bench.insertCitation(ticket, selection.seq);
+      const view = editors.get(viewId);
+      view.dispatch({ changes: { from: ticket.at, insert: marker }, selection: { anchor: cursor } });
+      persist(); focusPane(viewId); status(`Inserted ${marker} for ${selection.id}.`);
+    } catch (error) { status(error.message); }
+    return;
+  }
+  const id = selection.finderType === "task" ? `t-${selection.id}` : selection.finderType === "comment" ? selection.id : selection.id;
+  if (!bench.buffers.has(id)) published(id);
+  if (beside) split("row", id); else openBuffer(id, viewId);
+}
+
+function follow() {
+  if (isReading()) {
+    const link = document.activeElement.closest("a,[data-record-target]");
+    if (link && readers.get(bench.focus).contains(link)) link.click();
+    else status("View: Tab to a link and press Enter or gd, or click it. Space uv opens Source for cursor-based following.");
+    return;
+  }
+  const view = currentEditor();
+  const at = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(at);
+  const offset = at - line.from;
+  const token = [...line.text.matchAll(/c-\d+|t-\d+|\[\^(\d+)\]/g)].find((match) => offset >= match.index && offset <= match.index + match[0].length);
+  if (!token) return status("No id or reference under the cursor.");
+  if (token[1]) {
+    const buffer = current();
+    const references = buffer.kind === "draft" ? buffer.references : buffer.source?.references;
+    const source = birth(references?.[Number(token[1]) - 1]);
+    if (!source) return status("That reference does not name a contribution in this view.");
+    openBuffer(source.id);
+  } else {
+    try { openBuffer(token[0]); } catch (error) { status(error.message); }
+  }
+}
+
+// -- wiring --------------------------------------------------------------------
+
+$("#query").addEventListener("input", () => { picker.selected = 0; renderPicker(); });
+$("#picker").addEventListener("keydown", (event) => {
+  if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+    event.preventDefault(); picker.selected = Math.max(0, Math.min(picker.items.length - 1, picker.selected + (event.key === "ArrowDown" ? 1 : -1))); highlightPicker();
+  } else if (event.key === "Enter" && event.target.tagName !== "BUTTON" && event.target.tagName !== "A") {
+    event.preventDefault(); choose(event.shiftKey && !["commands", "cite", "home"].includes(picker.kind));
+  }
+});
+$("#picker").addEventListener("cancel", (event) => { event.preventDefault(); closePicker(); });
+$("#picker-close").onclick = closePicker;
+$("#choose").onclick = () => choose(false);
+$("#beside").onclick = () => choose(true);
+$("#publication").addEventListener("cancel", (event) => { event.preventDefault(); closeReview(); });
+$("#edit-note").onclick = closeReview;
+$("#publish").onclick = publish;
+$("#review-home").onchange = (event) => {
+  const buffer = bench.buffer(reviewBufferId);
+  buffer.home = event.target.value === "" ? null : Number(event.target.value);
+  if (reviewConfirmation) reviewConfirmation.home = buffer.home;
+  persist(); refreshChrome(); setPublishEnabled();
+};
+$("#review-actor-name").addEventListener("input", (event) => {
+  if (reviewConfirmation) reviewConfirmation.actor = event.target.value.trim() || null;
+  setPublishEnabled();
+});
+$("#inspect-task").onclick = () => { const home = bench.buffer(reviewBufferId)?.home; closeReview(); if (home !== null && home !== undefined) openBuffer(`t-${home}`); };
+$("#open-commands").onclick = () => { focusPane(bench.focus); openPicker("commands"); };
+$("#title-dialog").addEventListener("cancel", (event) => event.preventDefault());
+$("#title-cancel").onclick = () => $("#title-dialog").close();
+
+document.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-record-target]");
+  if (target) {
+    event.preventDefault();
+    openBuffer(target.dataset.recordTarget);
+    return;
+  }
+  const link = event.target.closest(".rich a");
+  if (!link) return;
+  const url = new URL(link.href);
+  if (url.origin !== location.origin || !/^\/t\/\d+$/.test(url.pathname)) return;
+  event.preventDefault();
+  const id = /^#c-\d+$/.test(url.hash) ? url.hash.slice(1) : `t-${url.pathname.slice(3)}`;
+  if (picker) closePicker();
+  if (reviewBufferId) closeReview();
+  if (!bench.buffers.has(id)) published(id);
+  if (event.shiftKey) split("row", id); else openBuffer(id);
+});
+
+// Only the requested Normal-mode jump chords override browser navigation.
+document.addEventListener("keydown", (event) => {
+  if (!snapshot || $("#picker").open || $("#publication").open || $("#title-dialog").open || event.isComposing) return;
+  if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "w" && event.target.closest(".cm-content,.reading") && ["Normal", "View"].includes(mode())) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    pendingWindow = true; pendingZ = false; cancelLeader(); return;
+  }
+  if (event.ctrlKey && !event.metaKey && !event.altKey && ["i", "o"].includes(event.key.toLowerCase()) && event.target.closest(".cm-content,.reading") && ["Normal", "View"].includes(mode())) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    pendingG = false; cancelLeader();
+    event.key.toLowerCase() === "o" ? back() : forward();
+    return;
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    if ((event.ctrlKey || event.metaKey) && "dflnoprtuw".includes(event.key.toLowerCase())) {
+      event.stopImmediatePropagation();
+    }
+    return;
+  }
+  if (event.target.closest("input,textarea") || !event.target.closest(".cm-editor,.reading") || mode() === "Insert") return;
+  if (mode() === "Visual" && ![" "].includes(event.key)) return;
+  if (event.key === "Escape") { cancelLeader(); pendingG = false; pendingZ = false; pendingWindow = false; return; }
+  if (pendingWindow) {
+    event.preventDefault(); event.stopImmediatePropagation(); pendingWindow = false;
+    const id = { v: "split-row", s: "split-column", c: "close", q: "close", o: "only", h: "focus-h", j: "focus-j", k: "focus-k", l: "focus-l" }[event.key];
+    if (id) runCommand(id); else status("Ctrl+W: v/s split, c close, o only, h/j/k/l focus.");
+    return;
+  }
+  if (pendingZ) {
+    event.preventDefault(); event.stopImmediatePropagation(); pendingZ = false;
+    const action = { A: "a", C: "c", O: "o" }[event.key] ?? event.key;
+    if ("acoMRjk".includes(action) && action.length === 1) {
+      if (!sectionFold(currentEditor(), action)) status("No Markdown section here.");
+    } else if (["z", "t", "b"].includes(event.key)) {
+      Vim.handleKey(getCM(currentEditor()), "z"); Vim.handleKey(getCM(currentEditor()), event.key);
+    } else status("Section folds: za toggle, zc close, zo open, zM close all, zR open all.");
+    return;
+  }
+  if (event.key === "z" && mode() === "Normal") {
+    event.preventDefault(); event.stopImmediatePropagation();
+    Vim.handleKey(getCM(currentEditor()), "<Esc>"); pendingG = false; pendingZ = true; return;
+  }
+  if (leader !== null) {
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (leader === ",") {
+      cancelLeader();
+      const command = commands().find((item) => item.local === event.key);
+      if (command) runCommand(command.id);
+      else status("Comma commands: " + commands().filter((item) => item.local).map((item) => `${item.local} ${item.label.toLowerCase()}`).join(", "));
+      return;
+    }
+    const next = leader + event.key;
+    const bound = commands().find((item) => item.binding === next);
+    if (bound) { cancelLeader(); runCommand(bound.id); }
+    else if (next === " ") { cancelLeader(); runCommand("tasks"); }
+    else if (commands().some((item) => item.binding?.startsWith(next))) { leader = next; showLeader(next); }
+    else { cancelLeader(); status("Unknown leader sequence. Space shows available commands."); }
+    return;
+  }
+  if (event.key === ":") {
+    if (pendingG) Vim.handleKey(getCM(currentEditor()), "<Esc>");
+    pendingG = false;
+    event.preventDefault(); event.stopImmediatePropagation(); openPicker("commands"); return;
+  }
+  if (event.key === " " && ["Normal", "View"].includes(mode())) {
+    if (pendingG) Vim.handleKey(getCM(currentEditor()), "<Esc>");
+    pendingG = false;
+    event.preventDefault(); event.stopImmediatePropagation(); leader = ""; showLeader(""); return;
+  }
+  if (event.key === "," && ["Normal", "View"].includes(mode())) {
+    if (pendingG) Vim.handleKey(getCM(currentEditor()), "<Esc>");
+    pendingG = false;
+    event.preventDefault(); event.stopImmediatePropagation(); leader = ","; showLeader(""); return;
+  }
+  if (pendingG && ["d", "r"].includes(event.key)) {
+    event.preventDefault(); event.stopImmediatePropagation(); pendingG = false;
+    Vim.handleKey(getCM(currentEditor()), "<Esc>");
+    event.key === "d" ? follow() : backlinks(); return;
+  }
+  if (isReading()) {
+    const reader = readers.get(bench.focus);
+    if (["j", "k", "G"].includes(event.key) || (pendingG && event.key === "g")) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (event.key === "G") reader.scrollTop = reader.scrollHeight;
+      else if (event.key === "g") reader.scrollTop = 0;
+      else reader.scrollTop += event.key === "j" ? 56 : -56;
+      presentation().scrollTop = reader.scrollTop;
+      pendingG = false; persist(); return;
+    }
+  }
+  pendingG = event.key === "g" && !pendingG;
+}, true);
+
+function initialBuffer() {
+  const hash = /^#c-\d+$/.test(location.hash) ? location.hash.slice(1) : null;
+  if (hash) return hash;
+  if (/^\/t\/\d+$/.test(location.pathname)) return location.pathname.slice(1);
+  if (/^\/c\/\d+$/.test(location.pathname)) return location.pathname.slice(1);
+  return "home";
+}
+
+async function start() {
+  const version = await api("/api/v1/version");
+  storageKey = `saccade-workbench:${version.db}`;
+  identity = await api("/api/v1/workbench/identity");
+  snapshot = await api("/api/v1/workbench");
+  if (!restore()) {
+    published("home");
+    bench.open("home");
+    // a deep link names the first buffer of a fresh session only
+    if (initialBuffer() !== "home") {
+      try { openBuffer(initialBuffer(), bench.focus); } catch { /* deep link names nothing recorded; home stands */ }
+    }
+  }
+  renderLayout(); focusPane(bench.focus);
+  status("Space Space: task/contribution/draft | Space sg: content | , e revise, , a accept, , x reject, , t title | : commands");
+  window.workbenchUI = { state: () => ({
+    focus: bench.focus, layout: structuredClone(bench.layout),
+    buffers: [...bench.buffers.values()].map(({ id, kind, text, references, home, submission, authoredTitle, eventual, revisionPending, decision }) => ({ id, kind, text, references, home, submission, authoredTitle, eventual, revisionPending, decision })),
+    panes: [...bench.views.values()].map((pane) => ({ id: pane.id, bufferId: pane.bufferId, position: bench.position(pane.id) })),
+    mode: mode(), cursor: snapshot.cursor, presentation: isReading() ? "view" : "source",
+    actor: identity.actor,
+  }) };
+}
+start().catch((error) => { status(`Workbench unavailable: ${error.message}`); });

@@ -36,6 +36,13 @@ with `restart.on = "on_failure"` (max 10) and a readiness probe on
   operations spawn one-shot git runs under the writer lock; nothing
   long-lived is ever kept.
 
+The web UI: the accepted dark workbench is the single page at /,
+served same-origin by `sac serve` from assets embedded in the binary
+(`just web-build` regenerates web/dist from web/src; cargo embeds the
+committed dist). /t/N and /c/N deep-link into it. The dashboard page
+and its form doors are retired; the artifact bytes door /a/<hash> and
+the /api/v1 contracts are unchanged.
+
 Consumers pin a release with a flake input:
 `saccade.url = "github:jerrydzhang/saccade/v0.1.0"` - the lockfile is
 the version identity, a bump is a config commit, and from the first

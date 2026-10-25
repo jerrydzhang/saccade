@@ -1,0 +1,576 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+import urllib.error
+import urllib.request
+from playwright.sync_api import sync_playwright
+from server import Server
+from editor_checks import run_editor_checks
+
+ROOT = Path(__file__).resolve().parents[1]
+RUNS = ROOT / 'runs'
+RUNS.mkdir(exist_ok=True)
+RUN = Path(tempfile.mkdtemp(prefix='browser-', dir=RUNS))
+ENV = {'PATH': os.environ['PATH'] + ':/etc/profiles/per-user/jerry/bin:/run/current-system/sw/bin', 'HOME': str(RUN / 'scratch/home'),
+       'TMPDIR': str(RUN / 'scratch/tmp'),
+       'PLAYWRIGHT_BROWSERS_PATH': '/nix/store/9ibf73nllmrcqx4w7x5jayfxanv2gyfq-playwright-browsers'}
+checks = []
+
+
+def check(ok, name):
+    checks.append({'name': name, 'passed': bool(ok)})
+    print(('PASS ' if ok else 'FAIL ') + name, flush=True)
+    if not ok:
+        raise AssertionError(name)
+
+
+def request(url, data=None, headers=None):
+    req = urllib.request.Request(url, data=json.dumps(data).encode() if data is not None else None,
+                                 headers={'Content-Type': 'application/json', **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as error:
+        return error.code, json.load(error)
+
+
+def state(page):
+    return page.evaluate('window.workbenchUI.state()')
+
+
+def draft(page):
+    data = state(page)
+    selected = next(p for p in data['panes'] if p['id'] == data['focus'])['bufferId']
+    return next(b for b in data['buffers'] if b['id'] == selected)
+
+
+def command(page, name):
+    page.keyboard.press('Escape')
+    page.keyboard.press(':')
+    page.wait_for_function('document.querySelector("#picker").open')
+    page.keyboard.type(name)
+    page.keyboard.press('Enter')
+
+
+def choose_id(page, name, beside=False):
+    page.wait_for_function('document.querySelector("#picker").open')
+    page.keyboard.type(name)
+    page.keyboard.press('Shift+Enter' if beside else 'Enter')
+    page.wait_for_function('!document.querySelector("#picker").open')
+
+
+def leader(page, keys):
+    page.keyboard.press('Escape')
+    page.keyboard.press('Space')
+    page.keyboard.type(keys)
+
+
+def local(page, key):
+    page.keyboard.press('Escape')
+    page.keyboard.press(',')
+    page.keyboard.type(key)
+
+
+def finder(page, query):
+    page.keyboard.press('Escape')
+    page.keyboard.press('Space')
+    page.keyboard.press('Space')
+    page.wait_for_function('document.querySelector("#picker").open')
+    page.keyboard.type(query)
+
+
+def ready(page, base):
+    page.goto(base)
+    page.wait_for_function('window.workbenchUI !== undefined')
+
+
+def review_ready(page):
+    page.wait_for_function('document.querySelector("#publication").open')
+
+
+def wait_submission(page, word):
+    page.wait_for_function('(word) => document.querySelector("#publication-status").textContent.includes(word)', arg=word)
+
+
+def main():
+    server = Server(RUN / 'scratch')
+    browser = None
+    page = None
+    failed = None
+    try:
+        server.start()
+        base = server.url
+        status, original = request(base + '/api/v1/workbench')
+        check(status == 200, 'canonical snapshot is served by the real core')
+        check(original['comments'][1]['revised'] and 'Refernces' not in original['comments'][1]['body'], 'canonical revision projection replaces presentation text')
+        withdrawn = next(c for c in original['comments'] if c['id'] == 'c-3')
+        check(withdrawn['withdrawn'] and not withdrawn['body'] and withdrawn['title'] is None, 'withdrawn prose and title stay out of current content')
+        check(next(c for c in original['comments'] if c['id'] == 'c-0')['cited_by'] == [2], 'backlinks reverse born explicit mappings')
+        before = original['cursor']
+        # the write door refuses attribution drift and mismatched cookies
+        mismatch, body = request(base + '/api/v1/workbench/command',
+                                 {'actor': 'jerry', 'command': {'create_task': {'name': 'not allowed'}}},
+                                 headers={'Cookie': 'actor=someone-else'})
+        check(mismatch == 409 and body['error']['code'] == 'actor_changed', 'the write door binds the submission to the claimed cookie')
+        malformed, body = request(base + '/api/v1/workbench/command', {'command': {'create_task': {'name': 'no actor'}}})
+        check(malformed == 400, 'a submission without an actor refuses')
+        check(request(base + '/api/v1/workbench')[1]['cursor'] == before, 'door refusals change no records')
+        check(next(c for c in original['comments'] if c['id'] == 'c-0')['title'] == 'The insertion bookmark', 'authored titles ride the projection')
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            ready(page, base)
+            check(len(state(page)['panes']) == 1 and state(page)['mode'] == 'Normal', 'one text-first home pane opens in Normal mode')
+            page.screenshot(path=str(RUN / '01-home.png'))
+            for axis, binding in [('beside', 'wv'), ('below', 'ws')]:
+                for close_index in (0, 1):
+                    leader(page, binding)
+                    divider = page.locator('.divider'); rect = divider.bounding_box()
+                    x, y = rect['x'] + rect['width'] / 2, rect['y'] + rect['height'] / 2
+                    page.mouse.move(x, y); page.mouse.down()
+                    page.mouse.move(x + (90 if axis == 'beside' else 0), y + (70 if axis == 'below' else 0)); page.mouse.up()
+                    page.locator('.pane').nth(close_index).locator('.buffer-title').click()
+                    command(page, 'close')
+                    full = page.evaluate('() => { const p = document.querySelector(".pane").getBoundingClientRect(), w = document.querySelector("#work").getBoundingClientRect(); return Math.abs(p.width-w.width)<2 && Math.abs(p.height-w.height)<2; }')
+                    check(len(state(page)['panes']) == 1 and full, f'closing resized {axis} pane {close_index} expands survivor to full work area')
+            leader(page, 'wv'); leader(page, 'ws')
+            command(page, 'close'); command(page, 'close')
+            check(page.evaluate('Math.abs(document.querySelector(".pane").getBoundingClientRect().width-document.querySelector("#work").getBoundingClientRect().width)<2'), 'nested split collapse also removes inherited leaf sizing')
+            check(page.locator('#switch-buffer').count() == 0, 'navigation does not expose a buffer-management picker')
+            finder(page, 'cttn')
+            first_result = page.locator('#results button').first.inner_text()
+            check(first_result.startswith('Task t-0') and 'Preserve' in first_result, 'task names narrow fuzzily with the best match first')
+            page.keyboard.press('Enter')
+            check(draft(page)['id'] == 't-0', 'finder selection opens task buffer')
+            leader(page, 'sg')
+            page.keyboard.type('c-6')
+            check(page.locator('#picker-preview math').count() > 0, 'content picker previews canonical MathML')
+            check(page.locator('#picker-preview table').count() == 1, 'content picker previews a rendered table')
+            check(page.locator('#picker-preview img[src="x"]').count() == 0, 'core renderer keeps hostile HTML as text')
+            page.screenshot(path=str(RUN / '02-rich-picker.png'))
+            page.keyboard.press('Enter')
+            check(draft(page)['id'] == 'c-6', 'content selection opens focused contribution text')
+            check(state(page)['mode'] == 'View' and page.locator('.pane.active .reading math').count() == 2 and page.locator('.pane.active .reading table').count() == 1, 'published contributions open in fully rendered View mode')
+            check(page.evaluate('getComputedStyle(document.querySelector(".pane.active .reading .dmath")).display === "block"'), 'display math is a block even when its source shares a prose line')
+            page.locator('.pane.active .reading table').hover()
+            check(state(page)['mode'] == 'View' and page.locator('.pane.active .reading table').count() == 1, 'mouse interaction does not switch rendered tables to source')
+            page.set_viewport_size({'width': 1500, 'height': 480})
+            page.locator('.pane.active .reading').focus()
+            page.keyboard.press('j')
+            check(page.locator('.pane.active .reading').evaluate('(node) => node.scrollTop > 0'), 'View j scrolls pixels without moving a text cursor across blocks')
+            page.keyboard.press('k')
+            check(page.locator('.pane.active .reading').evaluate('(node) => node.scrollTop === 0'), 'View k scrolls upward through the same document')
+            page.set_viewport_size({'width': 1500, 'height': 980})
+            page.screenshot(path=str(RUN / '02-view-contribution.png'))
+            leader(page, 'uv')
+            check(state(page)['mode'] == 'Normal' and page.locator('.pane.active .reading').is_hidden() and '$x^2+1$' in draft(page)['text'], 'Space uv opens original read-only Source with no replacements')
+            page.keyboard.press('/'); page.keyboard.type('Action'); page.keyboard.press('Enter'); page.keyboard.press('0')
+            source_head = next(p['position']['head'] for p in state(page)['panes'] if p['id'] == state(page)['focus'])
+            page.keyboard.press('j')
+            next_head = next(p['position']['head'] for p in state(page)['panes'] if p['id'] == state(page)['focus'])
+            check(draft(page)['text'][:next_head].count('\n') == draft(page)['text'][:source_head].count('\n') + 1, 'Source j visits the next raw table line without skipping a rendered block')
+            page.keyboard.press('V'); page.keyboard.press('y')
+            check(state(page)['mode'] == 'Normal', 'Source Visual line selection and yank retain Vim interaction')
+            leader(page, 'uv')
+            check(state(page)['mode'] == 'View', 'the same Space uv binding returns from Source to View')
+            command(page, 'rendering')
+            check(state(page)['mode'] == 'Normal', 'the palette toggle provides the same View to Source action')
+            leader(page, 'wv'); leader(page, 'uv')
+            check(page.locator('.reading:visible').count() == 1 and page.locator('.cm-editor:visible').count() == 1, 'two panes of one contribution can independently show View and Source')
+            page.set_viewport_size({'width': 1500, 'height': 480})
+            page.keyboard.press('G')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            page.wait_for_function('document.querySelector(".pane.active .reading").scrollTop > 0')
+            check(page.locator('.reading:visible').count() == 1 and page.locator('.cm-editor:visible').count() == 1, 'presentation choices and rendered reading position survive reload')
+            leader(page, 'wo'); leader(page, 'uv')
+            page.set_viewport_size({'width': 1500, 'height': 980})
+            before_text = draft(page)['text']
+            page.keyboard.press('i'); page.keyboard.type('do not rewrite published text'); page.keyboard.press('Escape')
+            check(draft(page)['text'] == before_text, 'Vim editing cannot mutate published buffers')
+            page.keyboard.type('ggdd')
+            check(draft(page)['text'] == before_text, 'Vim delete operators also respect published read-only state')
+            page.keyboard.press('/'); page.keyboard.type('Action'); page.keyboard.press('Enter'); page.keyboard.type('0j')
+            at = next(p['position']['head'] for p in state(page)['panes'] if p['id'] == state(page)['focus'])
+            expected_yank = before_text[at:before_text.index('\n', at)]
+            page.keyboard.type('Vy')
+            command(page, 'new')
+            page.keyboard.press('p')
+            check(draft(page)['text'] == '\n' + expected_yank, 'raw Source line yank pastes exactly after the empty draft line')
+            page.keyboard.press('u')
+            page.keyboard.press('i'); page.keyboard.type('Check: the cursor.'); page.keyboard.press('Escape')
+            note_id = draft(page)['id']
+            check(draft(page)['text'] == 'Check: the cursor.' and state(page)['mode'] == 'Normal', 'draft Insert mode types colon and spaces literally and Escape returns Normal')
+            page.keyboard.type('ggvl')
+            check(state(page)['mode'] == 'Visual' and 'VISUAL' in page.locator('#bar').inner_text(), 'Vim Visual mode selects document text and the status bar names it')
+            page.keyboard.type('yp')
+            check(draft(page)['text'] != 'Check: the cursor.', 'Vim yank and paste use the selected text')
+            page.keyboard.press('u'); page.keyboard.press('$')
+            check(draft(page)['text'] == 'Check: the cursor.', 'Vim undo restores text after visual paste')
+            command(page, 'w')
+            check('[-]' not in page.locator('#bar').inner_text() and '[+]' not in page.locator('#bar').inner_text(), 'colon w checkpoints the savepoint and clears the [+] flag')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == before, 'colon w saves locally without publication')
+            local(page, 'i'); choose_id(page, 'c-0')
+            first = draft(page)
+            source_seq = next(c for c in original['comments'] if c['id'] == 'c-0')['seq']
+            check(first['text'] == 'Check: the cursor[^1].' and first['references'] == [source_seq], 'draft-first exact-id citation inserts at saved cursor with birth-record mapping')
+            local(page, 'i'); choose_id(page, 'c-0')
+            check(draft(page)['text'].count('[^1]') == 2 and draft(page)['references'] == [source_seq], 'repeated source reuses its marker without duplicating mappings')
+            saved = draft(page)
+            local(page, 'i'); page.keyboard.type('c-1'); page.keyboard.press('Escape')
+            check(draft(page)['text'] == saved['text'] and draft(page)['references'] == saved['references'], 'cancelling a citation picker leaves draft intact')
+            leader(page, 'wv')
+            page.keyboard.type('gg')
+            data = state(page)
+            positions = [p['position']['head'] for p in data['panes']]
+            check(len(data['panes']) == 2 and positions[0] != positions[1], 'two panes of one draft have independent cursor positions')
+            right_pane = state(page)['focus']
+            leader(page, 'wh'); check(state(page)['focus'] != right_pane, 'leader focuses the pane on the left')
+            leader(page, 'wl'); check(state(page)['focus'] == right_pane, 'leader focuses the pane on the right')
+            page.keyboard.press('i'); page.keyboard.type('Prefix '); page.keyboard.press('Escape')
+            check(draft(page)['text'].startswith('Prefix '), 'editing a split draft updates the shared document')
+            check(page.locator('.pane .cm-content').all_text_contents()[0] == page.locator('.pane .cm-content').all_text_contents()[1], 'both draft views display the same edited document')
+            page.keyboard.press('u')
+            check(not draft(page)['text'].startswith('Prefix '), 'Vim undo operates on the shared draft')
+            command(page, 'redo'); check(draft(page)['text'].startswith('Prefix '), 'palette redo reaches Vim history without stealing browser reload')
+            page.keyboard.press('u')
+            leader(page, 'ws'); lower_pane = state(page)['focus']
+            leader(page, 'wk'); check(state(page)['focus'] != lower_pane, 'leader focuses the pane above')
+            leader(page, 'wj'); check(state(page)['focus'] == lower_pane, 'leader focuses the pane below')
+            leader(page, 'wo')
+            check(len(state(page)['panes']) == 1 and any(b['id'] == note_id for b in state(page)['buffers']), 'closing other panes keeps the draft buffer')
+            leader(page, 'sg'); choose_id(page, 'c-2', beside=True)
+            check(len(state(page)['panes']) == 2 and any(p['bufferId'] == note_id for p in state(page)['panes']), 'opening a source beside retains the draft pane')
+            page.screenshot(path=str(RUN / '03-sources-and-draft.png'))
+            leader(page, 'uv')
+            page.keyboard.press('/')
+            page.keyboard.type('\\[\\^1\\]')
+            page.keyboard.press('Enter')
+            page.keyboard.type('gd')
+            check(draft(page)['id'] == 'c-0', 'Vim search and gd follow an explicit citation under the cursor')
+            page.keyboard.press('Control+o')
+            check(draft(page)['id'] == 'c-2', 'Ctrl+O restores the prior contribution location')
+            page.keyboard.press('Control+i')
+            check(draft(page)['id'] == 'c-0', 'Ctrl+I traverses forward through the jump list')
+            page.keyboard.type('gr')
+            check(page.locator('#results button').count() == 1 and 'c-2' in page.locator('#results button').inner_text(), 'gr shows explicit backlinks with source context')
+            check('picker starts from the draft' in page.locator('#picker-preview').inner_text(), 'backlink preview exposes unchanged citing prose')
+            page.keyboard.press('Enter')
+            check(draft(page)['id'] == 'c-2', 'backlink selection opens the citing contribution')
+            finder(page, 'Check:')
+            results = page.locator('#results button').all_inner_texts()
+            check(any(label.startswith('Local draft') for label in results), 'recorded titles beside tasks still leave the local draft findable')
+            page.keyboard.press('Escape')
+            finder(page, 'Check: the cursor.')
+            page.keyboard.press('Enter')
+            check(draft(page)['id'] == note_id and draft(page)['text'] == saved['text'], 'main finder searches draft prose and restores its existing document')
+            page.screenshot(path=str(RUN / '03-shared-draft-buffers.png'))
+            check(state(page)['mode'] == 'View', 'opening an existing draft defaults to rendered View')
+            page.wait_for_function('document.querySelectorAll(".pane.active .reading .mref").length === 2')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == before, 'draft View renders current repeated citations without publication')
+            # the authored title is required and distinct from the display name
+            check(draft(page)['authoredTitle'] == '', 'a new draft starts without an authored title')
+            local(page, 'r'); review_ready(page)
+            check(page.locator('#publish').is_disabled() and 'unset' in page.locator('#review-title').inner_text(), 'publication refuses a note without an authored title')
+            page.locator('#edit-note').click()
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#title-dialog").open')
+            page.fill('#title-input', 'The cursor rule under review')
+            page.locator('#title-apply').click()
+            check(draft(page)['authoredTitle'] == 'The cursor rule under review', 'comma t authors the distinct title field')
+            local(page, 'r'); review_ready(page)
+            check('The cursor rule under review' in page.locator('#review-title').inner_text(), 'review shows the authored title it will record')
+            check(page.locator('#publish').is_disabled() and page.locator('#review-actor-name').is_visible(), 'a missing claimed name keeps publication disabled until the act names it')
+            page.fill('#review-actor-name', 'jerry')
+            check(page.locator('#review-body').count() == 0 and page.locator('#publish').is_enabled(), 'Review confirms publication details without duplicating or requiring preview')
+            for _ in range(20):
+                if page.evaluate('document.activeElement.id') == 'publish':
+                    break
+                page.keyboard.press('Tab')
+            check(page.evaluate('document.activeElement.id') == 'publish', 'publish is reachable through ordinary keyboard focus')
+            page.keyboard.press('Enter'); wait_submission(page, 'Recorded as')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == before + 1, 'keyboard-only flow publishes exactly one real note')
+            landed = request(base + '/api/v1/workbench')[1]['comments'][-1]
+            check(landed['title'] == 'The cursor rule under review' and landed['kind'] == 'note', 'the landed note carries the authored title')
+            check(page.locator('#publish').is_disabled(), 'confirmed publication prevents a duplicate submission')
+            page.screenshot(path=str(RUN / '04-keyboard-publication.png'))
+            page.keyboard.press('Escape')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            check(any(b['id'] == note_id and b['text'] == saved['text'] for b in state(page)['buffers']), 'local draft survives browser reload')
+            check(not errors, 'keyboard flow has no browser exceptions')
+            context.close()
+
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); page.on('pageerror', lambda error: errors.append(str(error)))
+            ready(page, base)
+            # mouse flow through the palette: the same commands the keys run
+            page.locator('#open-commands').click()
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('find task'); page.keyboard.press('Enter')
+            page.wait_for_function('(t) => document.querySelector("#picker-title").textContent.includes(t)', arg="Find task")
+            page.keyboard.type('Keep buffers'); page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            page.locator('#open-commands').click()
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('new note'); page.keyboard.press('Enter')
+            page.keyboard.press('i')
+            page.keyboard.type('Mouse draft with $x^2$ and a source ')
+            # the touch/mouse route: the palette runs the same cite command without exiting Insert
+            page.locator('#open-commands').click()
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('insert citation'); page.keyboard.press('Enter')
+            choose_id(page, 'c-7')
+            page.wait_for_function('document.querySelector("#picker-preview img")?.naturalWidth > 0')
+            check(page.locator('#picker-preview img').count() == 1, 'citation picker loads server-held artifact bytes')
+            check(draft(page)['text'].endswith('[^1]') and state(page)['mode'] == 'Insert', 'mouse citation insertion preserves Insert mode and cursor')
+            page.keyboard.press('Escape'); leader(page, 'uv')
+            page.wait_for_function('document.querySelector(".pane.active .reading math") !== null')
+            check(page.locator('.pane.active .reading math').count() > 0, 'draft View renders math through the canonical renderer')
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#title-dialog").open')
+            page.fill('#title-input', 'The mouse-authored finding'); page.locator('#title-apply').click()
+            local(page, 'r'); review_ready(page)
+            check('t-1' in page.locator('#review-home option:checked').inner_text(), 'draft home stays explicit in publication review')
+            page.fill('#review-actor-name', 'jerry')
+            mouse_before = request(base + '/api/v1/workbench')[1]['cursor']
+            page.locator('#publish').click(); wait_submission(page, 'Recorded as')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == mouse_before + 1, 'mouse-driven flow publishes exactly one note')
+            page.locator('#edit-note').click()
+            leader(page, 'wv')
+            divider = page.locator('.divider').first
+            rect = divider.bounding_box()
+            old_ratio = state(page)['layout']['ratio']
+            page.mouse.move(rect['x'] + 3, rect['y'] + rect['height'] / 2); page.mouse.down()
+            page.mouse.move(rect['x'] + 100, rect['y'] + rect['height'] / 2); page.mouse.up()
+            check(state(page)['layout']['ratio'] != old_ratio, 'mouse dragging resizes pane arrangement')
+            leader(page, 'sg'); choose_id(page, 'c-6', beside=True)
+            source_title = page.locator('.pane.active .buffer-title')
+            target_pane = page.locator('.pane:not(.active)').first
+            source_title.drag_to(target_pane)
+            check({p['bufferId'] for p in state(page)['panes']} == {'c-6', note_id} and state(page)['layout']['children'][0]['view'] == state(page)['focus'], 'dragging a pane swaps locations without replacing either document')
+            check(any(b['kind'] == 'draft' for b in state(page)['buffers']), 'dragging pane contents retains unpublished buffer data')
+            page.screenshot(path=str(RUN / '05-mouse-panes.png'))
+            leader(page, 'sg'); choose_id(page, 'c-7')
+            page.wait_for_function('document.querySelector(".pane.active .reading img")?.naturalWidth > 0')
+            check(page.locator('.pane.active .reading img').count() == 1, 'published artifact figure is inspectable inside its contribution buffer')
+            page.locator('.pane.active .reading [data-record-target="t-2"]').click()
+            check(draft(page)['id'] == 't-2', 'structured metadata links can also be followed with the mouse')
+            page.keyboard.press('Control+o')
+            check(draft(page)['id'] == 'c-7', 'mouse link navigation records a jump-list return location')
+            context.close()
+
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            finder(page, 'cursor')
+            page.keyboard.press('Enter')
+            command(page, 'new')
+            page.keyboard.press('i'); page.keyboard.type('Unresolved marker [^9]')
+            rejected_text = draft(page)['text']
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#title-dialog").open')
+            page.fill('#title-input', 'The refused marker note'); page.locator('#title-apply').click()
+            local(page, 'r'); review_ready(page)
+            page.fill('#review-actor-name', 'jerry')
+            refusal_before = request(base + '/api/v1/workbench')[1]['cursor']
+            page.locator('#publish').click(); wait_submission(page, 'Not sent')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == refusal_before, 'actual core marker refusal lands no record')
+            page.locator('#edit-note').click()
+            check(draft(page)['text'] == rejected_text, 'core refusal preserves the draft')
+            # a refused submission can be corrected and retried
+            page.locator('.pane.active').click()
+            page.keyboard.type('ggdG'); page.keyboard.press('i'); page.keyboard.type('A resolved body for the corrected retry.')
+            page.keyboard.press('Escape')
+            check('[+]' in page.locator('#bar').inner_text(), 'a corrected refusal shows the modified flag')
+            local(page, 'r'); review_ready(page)
+            check(page.locator('#publish').is_enabled(), 'a proved core refusal enables the corrected retry')
+            page.locator('#publish').click(); wait_submission(page, 'Recorded as')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == refusal_before + 1, 'the corrected retry lands exactly one note')
+            page.keyboard.press('Escape')
+            command(page, 'new'); page.keyboard.press('i'); page.keyboard.type('A response can be lost after the note lands.')
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#title-dialog").open')
+            page.fill('#title-input', 'The lost response note'); page.locator('#title-apply').click()
+            local(page, 'r'); review_ready(page)
+            page.fill('#review-actor-name', 'jerry')
+            unknown_before = request(base + '/api/v1/workbench')[1]['cursor']
+
+            def lose_response(route):
+                route.fetch()
+                route.abort('failed')
+            page.route('**/api/v1/workbench/command', lose_response)
+            page.locator('#publish').click(); wait_submission(page, 'outcome unknown')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == unknown_before + 1, 'response-loss scenario really lands the note upstream')
+            check(page.locator('#publish').is_disabled(), 'unknown outcome blocks retry')
+            page.locator('#edit-note').click()
+            check(draft(page)['text'] == 'A response can be lost after the note lands.', 'lost response preserves draft text')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            local(page, 'r'); review_ready(page)
+            check(page.locator('#publish').is_disabled() and 'unknown' in page.locator('#publication-status').inner_text(), 'unknown state survives reload without resending')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == unknown_before + 1, 'inspection and reload do not retry the landed request')
+            page.screenshot(path=str(RUN / '06-unknown-outcome.png'))
+            check(page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'desktop workbench has no page overflow')
+            context.close()
+            context = browser.new_context(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
+            page = context.new_page(); ready(page, base)
+            leader(page, 'sg')
+            page.keyboard.type('c-6')
+            check(page.locator('#picker-preview math').count() > 0 and page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'narrow touch viewport retains rich picker without page overflow')
+            page.screenshot(path=str(RUN / '07-narrow-picker.png'))
+            page.locator('#picker-close').click()
+            page.locator('#open-commands').tap()
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('new note'); page.keyboard.press('Enter')
+            check(page.locator('#open-commands').bounding_box()['height'] >= 40, 'the touch opener is a comfortable hit area')
+            local(page, 'r'); review_ready(page)
+            check(page.locator('#publish').is_disabled(), 'draft without a home or title cannot be published')
+            page.locator('#review-home').select_option('0')
+            check(page.locator('#publish').is_disabled(), 'a home alone cannot replace the authored title')
+            page.locator('#edit-note').click()
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#title-dialog").open')
+            page.fill('#title-input', 'The narrow view note'); page.locator('#title-apply').click()
+            local(page, 'r'); review_ready(page)
+            page.fill('#review-actor-name', 'jerry')
+            check(page.locator('#publish').is_enabled(), 'explicit home title and claimed name enable the reviewed draft action')
+            page.keyboard.press('Escape')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == unknown_before + 1, 'narrow-view review and home selection write nothing')
+            context.close()
+
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            finder(page, 'cursor')
+            page.keyboard.press('Enter')
+            command(page, 'new')
+            page.keyboard.press('i'); page.keyboard.type('Old preview.')
+            page.keyboard.press('Escape')
+            held_preview = []
+            def delay_first_preview(route):
+                if not held_preview:
+                    response = route.fetch()
+                    held_preview.append((route, response))
+                    route.request.frame.evaluate('window.workbenchPreviewHeld = true')
+                else:
+                    route.continue_()
+            page.route('**/workbench/preview', delay_first_preview)
+            leader(page, 'uv')
+            page.wait_for_function('window.workbenchPreviewHeld === true')
+            check(state(page)['mode'] == 'View', 'draft View can wait for its renderer without starting publication')
+            leader(page, 'uv')
+            page.keyboard.type('ggdG'); page.keyboard.press('i'); page.keyboard.type('New preview.'); page.keyboard.press('Escape')
+            leader(page, 'uv')
+            page.wait_for_function('document.querySelector(".pane.active .reading").textContent.includes("New preview.")')
+            held_preview[0][0].fulfill(response=held_preview[0][1])
+            page.evaluate('new Promise(requestAnimationFrame)')
+            check('New preview.' in page.locator('.pane.active .reading').inner_text() and 'Old preview.' not in page.locator('.pane.active .reading').inner_text(), 'late old draft preview cannot replace the current draft View')
+            page.unroute('**/workbench/preview', delay_first_preview)
+            leader(page, 'uv')
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#title-dialog").open')
+            page.fill('#title-input', 'The preview note'); page.locator('#title-apply').click()
+            local(page, 'r'); review_ready(page)
+            page.fill('#review-actor-name', 'jerry')
+            check(page.locator('#publish').is_enabled() and page.locator('#review-body').count() == 0, 'publication confirmation is independent of rendered preview')
+            page.locator('.pane.active .cm-content').evaluate('(node) => { node.textContent = "Changed after confirmation."; node.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "insertText", data: "Changed after confirmation."})); }')
+            page.wait_for_function('window.workbenchUI.state().buffers.some(b => b.text === "Changed after confirmation.")')
+            check(page.locator('#publish').is_disabled(), 'editing a draft invalidates its open publication confirmation')
+            page.locator('#review-home').select_option('1')
+            check(page.locator('#publish').is_disabled(), 'changing home cannot revalidate a changed draft body')
+            page.locator('#edit-note').click(); local(page, 'r'); review_ready(page)
+            check(page.locator('#publish').is_enabled(), 'reviewing the current draft creates a fresh publication confirmation')
+            page.locator('#edit-note').click()
+            page.keyboard.press('Escape')
+            saved_point = next(p['position'] for p in state(page)['panes'] if p['id'] == state(page)['focus'])
+            leader(page, 'uv'); leader(page, 'uv')
+            check(next(p['position']['head'] for p in state(page)['panes'] if p['id'] == state(page)['focus']) == saved_point['head'], 'draft View Source round trip retains the editing cursor')
+            local_before = request(base + '/api/v1/workbench')[1]['cursor']
+            leader(page, 'wv'); leader(page, 'uv'); leader(page, 'wh')
+            page.keyboard.press('A'); page.keyboard.type(' More context.'); page.keyboard.press('Escape')
+            page.wait_for_function('document.querySelector(".pane:not(.active) .reading").textContent.includes("More context.")')
+            check('More context.' in page.locator('.pane:not(.active) .reading').inner_text(), 'editing Source refreshes another pane showing the same draft View')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == local_before, 'draft editing and View refresh add no records')
+            leader(page, 'wo')
+            held_note = []
+            def delay_note_answer(route):
+                route.fetch()
+                held_note.append(route)
+                route.request.frame.evaluate('window.workbenchNoteHeld = true')
+            page.route('**/workbench/command', delay_note_answer)
+            local(page, 'r'); review_ready(page)
+            page.fill('#review-actor-name', 'jerry')
+            inflight_before = request(base + '/api/v1/workbench')[1]['cursor']
+            page.locator('#publish').click()
+            page.wait_for_function('window.workbenchNoteHeld === true')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == inflight_before + 1, 'in-flight reload scenario lands one real upstream note')
+            check(page.evaluate('JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k => k.startsWith("saccade-workbench:")))).buffers.find(b => b.kind === "draft").submission.kind') == 'unknown', 'unconfirmed submission state is saved before its answer arrives')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            local(page, 'r'); review_ready(page)
+            check(page.locator('#publish').is_disabled(), 'reload during a pending answer cannot silently enable resubmission')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == inflight_before + 1, 'in-flight reload creates no second record')
+            held_note[0].abort('failed')
+            page.unroute('**/workbench/command', delay_note_answer)
+            page.locator('#edit-note').click()
+            command(page, 'new')
+            page.keyboard.press('i'); page.keyboard.type('Keep this draft when local persistence fails.')
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#title-dialog").open')
+            page.fill('#title-input', 'The persistence-failure note'); page.locator('#title-apply').click()
+            local(page, 'r'); review_ready(page)
+            page.fill('#review-actor-name', 'jerry')
+            blocked_before = request(base + '/api/v1/workbench')[1]['cursor']
+            page.evaluate('() => { Storage.prototype.setItem = function() { throw new DOMException("local quota", "QuotaExceededError") }; }')
+            page.locator('#publish').click(); wait_submission(page, 'Submission not attempted')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == blocked_before, 'failed local submission-state save prevents forwarding')
+            page.locator('#edit-note').click()
+            check(draft(page)['text'] == 'Keep this draft when local persistence fails.', 'persistence failure keeps the in-memory draft')
+            context.close()
+
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            finder(page, 'cursor')
+            page.keyboard.press('Enter')
+            command(page, 'new')
+            page.keyboard.press('i'); page.keyboard.type('Keep my unfinished migration draft.')
+            page.keyboard.press('Escape')
+            local(page, 'i'); choose_id(page, 'c-0')
+            saved_v1 = draft(page)
+            migration_before = request(base + '/api/v1/workbench')[1]['cursor']
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            restored_current = draft(page)
+            check(restored_current['text'] == saved_v1['text'] and restored_current['references'] == saved_v1['references'] and restored_current['home'] == saved_v1['home'], 'client-local draft text, home and references survive a reload')
+            check(restored_current['authoredTitle'] == saved_v1['authoredTitle'], 'draft migration keeps the authored-title field distinct')
+            finder(page, 'unfinished migration')
+            check(draft(page)['id'] == saved_v1['id'], 'main finder retrieves the draft by prose')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == migration_before, 'client draft migration and retrieval write no records')
+            context.close()
+            run_editor_checks(browser, base, check, request, state, draft, leader, command, RUN)
+            browser.close(); browser = None
+    except Exception as error:
+        failed = str(error)
+        traceback.print_exc()
+        if page:
+            try:
+                page.screenshot(path=str(RUN / 'failure.png'))
+                (RUN / 'failure.html').write_text(page.content())
+            except Exception:
+                pass
+    finally:
+        if browser:
+            try:
+                browser.close()
+            except Exception as error:
+                print(f'Browser connection already closed during context teardown: {error}', flush=True)
+        server.close()
+        (RUN / 'checks.json').write_text(json.dumps({'checks': checks, 'failure': failed}, indent=2))
+        print(f'RUN {RUN}; {len(checks)} checks; failure={failed}', flush=True)
+    return 1 if failed else 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -33,3 +33,8 @@ rustc-ice-*.txt
 #  the entire idea folder.
 #.idea/
 .devenv/
+
+# the web workbench: committed dist is embedded by cargo; sources rebuild it
+web/node_modules/
+web/runs/
+web/harness/__pycache__/

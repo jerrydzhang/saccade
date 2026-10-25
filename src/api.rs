@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -22,7 +22,6 @@ use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::events::Event;
 use crate::store::{Context, RecordId, Scope, Tier, World};
 use crate::types::pointers::WorktreePath;
-use crate::web;
 use crate::workspace::{self, WorkspaceFail};
 use crate::{Command, Reject};
 
@@ -182,9 +181,6 @@ pub struct AppState {
     artifacts: Option<std::path::PathBuf>,
     /// The serving repo's root, when boot resolved one.
     repo_root: Option<std::path::PathBuf>,
-    /// The serving repo's name, when boot resolved a root; the
-    /// console's chrome names its instance by it.
-    repo_name: Option<web::RepoName>,
 }
 
 pub struct Snapshot {
@@ -252,7 +248,6 @@ impl AppState {
             bridge: BridgeCache::default(),
             artifacts: None,
             repo_root: None,
-            repo_name: None,
         })
     }
 
@@ -275,18 +270,6 @@ impl AppState {
     /// The serving repo's root, when boot resolved one.
     pub fn repo_root(&self) -> Option<&Path> {
         self.repo_root.as_deref()
-    }
-
-    /// Name the serving repo; the console's chrome names its
-    /// instance by it.
-    pub fn with_repo_name(mut self, name: web::RepoName) -> Self {
-        self.repo_name = Some(name);
-        self
-    }
-
-    /// The serving repo's name, when a serve resolved one.
-    pub fn repo_name(&self) -> Option<&web::RepoName> {
-        self.repo_name.as_ref()
     }
 
     /// The artifact store's home, when this server knows one.
@@ -607,6 +590,184 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/messages/submit", post(message_submit))
         .route("/api/v1/messages/pending", get(messages_pending))
         .route("/api/v1/version", get(version))
+        .route("/api/v1/workbench", get(workbench))
+        .route("/api/v1/workbench/preview", post(workbench_preview))
+        .route("/api/v1/workbench/identity", get(workbench_identity))
+        .route("/api/v1/workbench/command", post(workbench_command))
+}
+
+// -- the workbench read and act faces --------------------------------------
+
+/// The claimed actor a browser's actor cookie names, when one stands.
+fn cookie_actor(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())?
+        .split(';')
+        .find_map(|pair| {
+            pair.trim()
+                .strip_prefix("actor=")
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        })
+}
+
+/// The workbench's identity read: the cookie-claimed actor, when one
+/// stands, and nothing else. The name at the act is the client's to
+/// supply; the tier is pinned server-side and never travels.
+async fn workbench_identity(headers: HeaderMap) -> Response {
+    let actor = cookie_actor(&headers).unwrap_or_default();
+    (
+        StatusCode::OK,
+        Json(json!({"actor": if actor.is_empty() { Value::Null } else { json!(actor) }})),
+    )
+        .into_response()
+}
+
+/// The folded workbench projection: canonical rendered bodies, citation
+/// edges, and the cursor, read straight off the store's own fold. A
+/// degraded fold refuses honestly; nothing writes.
+async fn workbench(State(app): State<AppState>) -> Response {
+    let snapshot = match app.snapshot() {
+        Ok(s) => s,
+        Err(ReadFail::Degraded(degraded)) => {
+            // the raw rows still travel through the records face; the
+            // workbench projection itself refuses honestly
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": {"code": "degraded", "detail": degraded.reason}})),
+            )
+                .into_response();
+        }
+        Err(ReadFail::Db(reason)) => return api_failure(ApiFail::Db(reason)),
+    };
+    let store = match app.artifacts_dir() {
+        Some(dir) => crate::web::ArtifactStore::at(dir.to_path_buf()),
+        None => crate::web::ArtifactStore::default(),
+    };
+    match crate::workbench::snapshot(&snapshot.world, &snapshot.rows, &store) {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(fail) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": {"code": "degraded", "detail": fail.reason()}})),
+        )
+            .into_response(),
+    }
+}
+
+/// The rows a snapshot holds, for the preview's reference existence.
+fn loadout_of(snapshot: &Snapshot) -> crate::db::Loadout {
+    crate::db::Loadout {
+        rows: snapshot.rows.clone(),
+        state: crate::db::LoadState::Full(snapshot.world.clone()),
+    }
+}
+
+/// The stateless draft preview: one body against fixed references,
+/// rendered by the canonical renderer. It never writes and never
+/// remembers; an unknown reference refuses.
+async fn workbench_preview(State(app): State<AppState>, body: Bytes) -> Response {
+    let request: crate::workbench::PreviewRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let snapshot = match app.snapshot() {
+        Ok(s) => s,
+        Err(fail) => return api_failure(ApiFail::Db(fail.reason().to_string())),
+    };
+    let store = match app.artifacts_dir() {
+        Some(dir) => crate::web::ArtifactStore::at(dir.to_path_buf()),
+        None => crate::web::ArtifactStore::default(),
+    };
+    match crate::workbench::preview(&loadout_of(&snapshot), &snapshot.world, &request, &store) {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(detail) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"code": "invalid_reference", "detail": detail}})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct WorkbenchCommand {
+    /// The name the review surface showed; the door records exactly it
+    actor: ActorName,
+    command: Command,
+}
+
+/// The workbench's one write door: the console identity rule with the
+/// attribution bound to the submission. A cookie that changed under a
+/// confirmed review refuses loudly, never silently re-attributes; the
+/// tier is pinned human and the scope stays empty.
+async fn workbench_command(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: WorkbenchCommand = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            let cursor = app
+                .snapshot()
+                .ok()
+                .and_then(|s| s.rows.last().map(|r| r.seq));
+            app.attempts.append(
+                None,
+                None,
+                0,
+                Outcome::Refused {
+                    code: "malformed_request",
+                    cursor,
+                    request: &raw,
+                },
+            );
+            return api_failure(ApiFail::Malformed(e.to_string()));
+        }
+    };
+    if let Some(claimed) = cookie_actor(&headers)
+        && claimed != request.actor.as_str()
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": {"code": "actor_changed", "detail": format!(
+                "this browser claims actor {claimed} while the review confirmed {}; re-review under one name",
+                request.actor.as_str()
+            )}})),
+        )
+            .into_response();
+    }
+    let context = Context {
+        actor: request.actor,
+        tier: Tier::Human,
+        scope: None,
+    };
+    let command = request.command;
+    let received = AsReceived {
+        client: Some("workbench".into()),
+        raw,
+    };
+    match app.execute(&context, command.clone(), None, received) {
+        Ok(stored) => (StatusCode::OK, Json(json!({"records": &stored}))).into_response(),
+        Err(e) => {
+            let (status, code, detail) = match e {
+                ExecuteFail::Reject(reject) => {
+                    let taught = app
+                        .snapshot()
+                        .ok()
+                        .and_then(|s| crate::refusals::teach(&s.world, &command, &reject));
+                    ApiFail::Reject(reject, taught).parts()
+                }
+                other => ApiFail::from(other).parts(),
+            };
+            (
+                status,
+                Json(json!({"error": {"code": code, "detail": detail}})),
+            )
+                .into_response()
+        }
+    }
 }
 
 // -- the task-free workspace controller ----------------------------------

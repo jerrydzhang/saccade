@@ -536,6 +536,25 @@ fn post_json(base_url: &str, path: &str, body: &Value) -> (u16, String) {
 }
 
 /// Get one JSON path.
+fn post_json_headers(
+    base_url: &str,
+    path: &str,
+    body: &Value,
+    headers: &[(&str, &str)],
+) -> (u16, String) {
+    let mut r = ureq::post(&format!("{base_url}{path}"))
+        .config()
+        .http_status_as_error(false)
+        .build();
+    for (k, v) in headers {
+        r = r.header(*k, *v);
+    }
+    let mut r = r
+        .send_json(body.clone())
+        .expect("the loopback server answers");
+    (r.status().as_u16(), r.body_mut().read_to_string().unwrap())
+}
+
 fn get_json(base_url: &str, path: &str) -> (u16, String) {
     let mut response = ureq::get(&format!("{base_url}{path}"))
         .config()
@@ -1066,7 +1085,7 @@ use saccade::types::actor::ActorName;
 use saccade::views::task_view;
 use saccade::{Command, Prose, TaskId};
 
-async fn spawn_console(db_path: &std::path::Path) -> (String, ConsoleState) {
+async fn spawn_workbench(db_path: &std::path::Path) -> (String, ConsoleState) {
     let repo = db_path.parent().unwrap().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     sh(&repo, &["init", "--initial-branch=main"]);
@@ -1223,274 +1242,6 @@ fn seed_task(state: &ConsoleState, name: &str) {
         .expect("the seed task lands");
 }
 
-/// A compose lands a note on the composer's task, anchored by the 303.
-#[tokio::test(flavor = "multi_thread")]
-async fn compose_lands_a_note_and_routes_addresses() {
-    let db = scratch_db("console-note");
-    let (base, state) = spawn_console(&db).await;
-    seed_task(&state, "migrate floop");
-    seed_task(&state, "other work");
-
-    // a plain form post takes the 303 to the home thread, anchored
-    let (status, _, loc) = post_form(
-        &format!("{base}/compose"),
-        &[],
-        "task=0&title=kick+off&body=kick+off&who=jerry",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
-
-    let world = world_of(&state);
-    let c = &world.comments[&CommentId(RecordId(2))];
-    assert!(matches!(c.comment.kind, CommentKind::Note { .. }));
-    let lines = lines_of(&world, 0);
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].seq, 2);
-    assert_eq!(lines[0].num, 0);
-    assert_eq!(lines[0].kind, "note");
-    assert_eq!(lines[0].title.as_deref(), Some("kick off"));
-    assert_eq!(lines[0].body, "kick off");
-
-    // a compose without a title refuses: the note's title is authored,
-    // never synthesized, and the refused draft stays editable
-    let (status, body, _) = post_form(
-        &format!("{base}/compose"),
-        &[],
-        "task=0&body=no+title+given&who=jerry",
-    );
-    assert_eq!(status, 400);
-    assert!(body.contains("a note needs a title"), "{body}");
-    assert!(body.contains("no title given"), "the body draft survives");
-    let world = world_of(&state);
-    assert_eq!(world.comments.len(), 1, "the refusal wrote nothing");
-
-    // @c-0 cites: the marker rides the body, the mapping carries the
-    // edge, the redirect stays on the citing comment's home thread
-    let (status, _, loc) = post_form(
-        &format!("{base}/compose"),
-        &[],
-        "task=0&title=the+cite&body=saw+it+%40c-0&who=jerry",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0#c-1"));
-    let world = world_of(&state);
-    let lines = lines_of(&world, 0);
-    assert_eq!(lines[1].seq, 3);
-    assert_eq!(lines[1].body, "saw it [^1]");
-    assert_eq!(
-        lines[1].references,
-        vec![saccade::views::RefTarget::Comment { num: 0, task: 0 }]
-    );
-
-    // @t-1 rehomes: the redirect follows the comment to its new task
-    let (status, _, loc) = post_form(
-        &format!("{base}/compose"),
-        &[],
-        "task=0&title=the+rehome&body=%40t-1+belongs+there&who=jerry",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/1#c-2"));
-    let world = world_of(&state);
-    assert_eq!(lines_of(&world, 1)[0].seq, 4);
-    assert_eq!(lines_of(&world, 0).len(), 2, "it left t-0");
-
-    // bare ids are prose: unaddressed, uncited, on the composer's task
-    let (status, _, loc) = post_form(
-        &format!("{base}/compose"),
-        &[],
-        "task=0&title=bare+ids&body=see+t-1+and+c-0&who=jerry",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0#c-3"));
-    let world = world_of(&state);
-    let lines = lines_of(&world, 0);
-    let last = lines.last().unwrap();
-    assert_eq!(last.seq, 5);
-    assert_eq!(last.body, "see t-1 and c-0");
-    assert!(last.references.is_empty(), "bare ids stay prose");
-
-    // the console renders the focused thread with the comment in it,
-    // the authored title its own text line beside the body
-    let (status, html) = get_html(&format!("{base}/t/0"));
-    assert_eq!(status, 200);
-    assert!(html.contains("migrate floop"));
-    assert!(html.contains("kick off"));
-    assert!(
-        html.contains("<div class=\"ntitle\">kick off</div>"),
-        "{html}"
-    );
-    assert!(html.contains("action=\"/compose\""));
-    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
-}
-
-/// The console revise door repairs a note's title and body through the form and refuses a revision naming neither field.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_console_revise_door_repairs_titles() {
-    let db = scratch_db("console-revise-title");
-    let (base, state) = spawn_console(&db).await;
-    seed_task(&state, "migrate floop");
-    let (status, _, loc) = post_form(
-        &format!("{base}/compose"),
-        &[],
-        "task=0&title=the+first+take&body=first+take&who=jerry",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
-
-    // both fields repair when both differ from their baselines
-    let (status, _, loc) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+second+take&title_baseline=the+first+take&body=second+take&body_baseline=first+take&who=jerry",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
-    let line = &lines_of(&world_of(&state), 0)[0];
-    assert_eq!(line.title.as_deref(), Some("the second take"));
-    assert_eq!(line.body, "second take");
-    let record = last_revision_of(&state);
-    assert!(record.contains("\"title\""), "{record}");
-    assert!(record.contains("\"body\""), "{record}");
-
-    // a body-only edit patches only the body: the untouched title,
-    // stale or not, never re-lands
-    let (status, _, _) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+second+take&title_baseline=the+second+take&body=third+take&body_baseline=second+take&who=jerry",
-    );
-    assert_eq!(status, 303);
-    let line = &lines_of(&world_of(&state), 0)[0];
-    assert_eq!(line.title.as_deref(), Some("the second take"));
-    assert_eq!(line.body, "third take");
-    let record = last_revision_of(&state);
-    assert!(!record.contains("title"), "{record}");
-    assert!(record.contains("third take"), "{record}");
-
-    // a title-only edit patches only the title
-    let (status, _, _) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+fourth+take&title_baseline=the+second+take&body=third+take&body_baseline=third+take&who=jerry",
-    );
-    assert_eq!(status, 303);
-    let line = &lines_of(&world_of(&state), 0)[0];
-    assert_eq!(line.title.as_deref(), Some("the fourth take"));
-    assert_eq!(line.body, "third take");
-    let record = last_revision_of(&state);
-    assert!(record.contains("the fourth take"), "{record}");
-    assert!(!record.contains("body"), "{record}");
-
-    // a stale untouched prefill never restores: the baseline says the
-    // title was not edited, so the standing title survives the edit
-    let (status, _, _) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+second+take&title_baseline=the+second+take&body=fifth+take&body_baseline=third+take&who=jerry",
-    );
-    assert_eq!(status, 303);
-    let line = &lines_of(&world_of(&state), 0)[0];
-    assert_eq!(line.title.as_deref(), Some("the fourth take"));
-    assert_eq!(line.body, "fifth take");
-
-    // an unchanged submission names no field and refuses, the drafts
-    // kept at the comment's own reveal beside their ORIGINAL baselines
-    let (status, body, _) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+fourth+take&title_baseline=the+fourth+take&body=fifth+take&body_baseline=fifth+take&who=jerry",
-    );
-    assert_eq!(status, 400);
-    assert!(
-        body.contains("a revision needs a title or a body"),
-        "{body}"
-    );
-    assert!(
-        body.contains("value=\"the fourth take\""),
-        "the refused title draft stays editable: {body}"
-    );
-    let line = &lines_of(&world_of(&state), 0)[0];
-    assert_eq!(line.body, "fifth take", "the refusal wrote nothing");
-
-    // a refused revision keeps the ORIGINAL render baselines, not the
-    // failed drafts: a dirty title survives a marker refusal whose
-    // retry corrects only the body
-    let (status, body, _) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+sixth+take&title_baseline=the+fourth+take&body=sixth+take+with+dangling+[^2]&body_baseline=fifth+take&who=jerry",
-    );
-    assert_eq!(status, 400);
-    assert!(
-        body.contains("a citation names an earlier birth record"),
-        "{body}"
-    );
-    // the re-rendered form keeps the dirty title beside the original
-    // baseline, so the retry compares against what stood at render
-    assert!(
-        body.contains("value=\"the sixth take\""),
-        "the dirty title stays prefilled: {body}"
-    );
-    assert!(
-        body.contains("name=\"title_baseline\" value=\"the fourth take\""),
-        "the baseline stays the original render's: {body}"
-    );
-    assert!(
-        body.contains("name=\"body_baseline\" value=\"fifth take\""),
-        "the body baseline stays original too: {body}"
-    );
-    let (status, _, _) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+sixth+take&title_baseline=the+fourth+take&body=sixth+take,+corrected&body_baseline=fifth+take&who=jerry",
-    );
-    assert_eq!(status, 303);
-    let line = &lines_of(&world_of(&state), 0)[0];
-    assert_eq!(
-        line.title.as_deref(),
-        Some("the sixth take"),
-        "the still-pending title lands with the corrected body"
-    );
-    assert_eq!(line.body, "sixth take, corrected");
-    let record = last_revision_of(&state);
-    assert!(record.contains("\"title\""), "{record}");
-    assert!(record.contains("corrected"), "{record}");
-
-    // the converse: a name refusal with both fields dirty, retried
-    // with only the name added, lands every pending edit
-    let (status, body, _) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+seventh+take&title_baseline=the+sixth+take&body=seventh+take&body_baseline=sixth+take%2C+corrected&who=",
-    );
-    assert_eq!(status, 400);
-    assert!(body.contains("a name is required"), "{body}");
-    let (status, _, _) = post_form(
-        &format!("{base}/c/0/revise"),
-        &[],
-        "title=the+seventh+take&title_baseline=the+sixth+take&body=seventh+take&body_baseline=sixth+take%2C+corrected&who=jerry",
-    );
-    assert_eq!(status, 303);
-    let line = &lines_of(&world_of(&state), 0)[0];
-    assert_eq!(line.title.as_deref(), Some("the seventh take"));
-    assert_eq!(line.body, "seventh take");
-
-    // the repairs never touched the citation mapping or the target:
-    // the record addresses c-0's birth and the note holds no references
-    let record = last_revision_of(&state);
-    assert!(
-        record.contains("\"id\":1"),
-        "the revision targets c-0's birth: {record}"
-    );
-    assert!(
-        !record.contains("references"),
-        "a revision never retargets references: {record}"
-    );
-    assert!(lines_of(&world_of(&state), 0)[0].references.is_empty());
-
-    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
-}
-
 /// The last comment_revised record's payload, as the door's patch
 /// intent landed it.
 fn last_revision_of(state: &ConsoleState) -> String {
@@ -1506,42 +1257,283 @@ fn last_revision_of(state: &ConsoleState) -> String {
     }
 }
 
-/// The fragment contract: a fetch compose gets the thread section back
-/// in place of a redirect; a cross-site post is refused outright.
+/// The workbench page owns /, /t/N, and /c/N deep links, and the
+/// embedded assets answer with their content types.
 #[tokio::test(flavor = "multi_thread")]
-async fn compose_fetch_swaps_the_thread_section() {
-    let db = scratch_db("console-fragment");
-    let (base, state) = spawn_console(&db).await;
+async fn the_workbench_page_serves_root_and_deep_links() {
+    let db = scratch_db("workbench-page");
+    let (base, state) = spawn_workbench(&db).await;
     seed_task(&state, "migrate floop");
+    for path in ["/", "/t/0", "/c/0"] {
+        let (status, html) = get_html(&format!("{base}{path}"));
+        assert_eq!(status, 200, "{path}");
+        assert!(html.to_lowercase().contains("saccade"), "{path}: {html}");
+    }
+    let (status, _) = get_html(&format!("{base}/gone"));
+    assert_eq!(status, 404);
+    for (path, kind) in [("/app.js", "text/javascript"), ("/style.css", "text/css")] {
+        let mut r = ureq::get(&format!("{base}{path}"))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200, "{path}");
+        assert!(
+            r.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with(kind)),
+            "{path}"
+        );
+        let _ = r.body_mut().read_to_string().unwrap();
+    }
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
 
-    let (status, body, loc) = post_form(
-        &format!("{base}/compose"),
-        &[
-            ("Sec-Fetch-Site", "same-origin"),
-            ("Sec-Fetch-Mode", "cors"),
-        ],
-        "task=0&title=build+it&body=build+it&who=jerry",
-    );
+/// The snapshot is the canonical projection: authored titles ride the
+/// deposits, html comes from the shared renderer, backlinks reverse
+/// the fold's own mappings, and withdrawn hides title with body while
+/// the cursor names the log.
+#[tokio::test(flavor = "multi_thread")]
+async fn workbench_snapshot_projects_the_canonical_fold() {
+    let db = scratch_db("workbench-snapshot");
+    let (base, state) = spawn_workbench(&db).await;
+    seed_task(&state, "migrate floop");
+    seed_task(&state, "other work");
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                home: TaskId(0),
+                kind: CommentKind::Note {
+                    title: Prose::new("the finding".into()).unwrap(),
+                    body: Prose::new("parked finding".into()).unwrap(),
+                },
+                references: Vec::new(),
+            },
+            None,
+            bare_request(),
+        )
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                home: TaskId(0),
+                kind: CommentKind::Note {
+                    title: Prose::new("the withdrawal".into()).unwrap(),
+                    body: Prose::new("soon gone".into()).unwrap(),
+                },
+                references: Vec::new(),
+            },
+            None,
+            bare_request(),
+        )
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                home: TaskId(1),
+                kind: CommentKind::Note {
+                    title: Prose::new("the reply".into()).unwrap(),
+                    body: Prose::new("rests on the finding [^1]".into()).unwrap(),
+                },
+                references: vec![RecordId(2)],
+            },
+            None,
+            bare_request(),
+        )
+        .map(|_| ())
+        .map_err(|e| panic!("{e:?}"))
+        .unwrap();
+    state
+        .execute(
+            &human_ctx(),
+            Command::WithdrawComment {
+                id: CommentId(RecordId(3)),
+                note: Prose::new("parked in the wrong place".into()).unwrap(),
+            },
+            None,
+            bare_request(),
+        )
+        .map(|_| ())
+        .map_err(|e| panic!("{e:?}"))
+        .unwrap();
+
+    let (status, body) = get_json(&base, "/api/v1/workbench");
     assert_eq!(status, 200);
-    assert!(
-        loc.is_none(),
-        "a fetch takes the fragment, never a redirect"
+    let projection = json_of(&body);
+    let comments = projection["comments"].as_array().unwrap().clone();
+    assert_eq!(comments.len(), 3);
+    assert_eq!(comments[0]["title"].as_str(), Some("the finding"));
+    assert_eq!(comments[0]["kind"].as_str(), Some("note"));
+    assert_eq!(
+        comments[0]["html"].as_str(),
+        Some("<p>parked finding</p>\n")
     );
-    assert!(
-        body.starts_with("<section id=\"thread\""),
-        "the fragment is the thread section, attributes may follow"
+    // backlinks reverse the fold's explicit mapping, dense numbers
+    assert_eq!(comments[0]["cited_by"].as_array().unwrap().len(), 1);
+    let withdrawn = &comments[1];
+    assert_eq!(withdrawn["withdrawn"].as_bool(), Some(true));
+    assert_eq!(withdrawn["body"].as_str(), Some(""));
+    assert_eq!(withdrawn["title"].as_str(), None);
+    assert_eq!(withdrawn["kind"].as_str(), Some("note"));
+    assert_eq!(projection["cursor"].as_i64(), Some(5));
+    assert_eq!(
+        projection["tasks"][0]["name"].as_str(),
+        Some("migrate floop")
     );
-    assert!(body.contains("build it"));
-    // the comment landed once
-    assert_eq!(world_of(&state).comments.len(), 1);
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
 
-    // cross-site posts are refused at the door
-    let (status, _, _) = post_form(
-        &format!("{base}/compose"),
-        &[("Sec-Fetch-Site", "cross-site"), ("Sec-Fetch-Mode", "cors")],
-        "task=0&title=evil&body=evil",
+/// The preview renders one body against fixed references through the
+/// canonical renderer; unknown references refuse and nothing writes.
+#[tokio::test(flavor = "multi_thread")]
+async fn workbench_preview_renders_and_refuses_unknown_references() {
+    let db = scratch_db("workbench-preview");
+    let (base, state) = spawn_workbench(&db).await;
+    seed_task(&state, "migrate floop");
+    state
+        .execute(
+            &human_ctx(),
+            Command::Comment {
+                home: TaskId(0),
+                kind: CommentKind::Note {
+                    title: Prose::new("the finding".into()).unwrap(),
+                    body: Prose::new("parked finding".into()).unwrap(),
+                },
+                references: Vec::new(),
+            },
+            None,
+            bare_request(),
+        )
+        .map(|_| ())
+        .map_err(|e| panic!("{e:?}"))
+        .unwrap();
+    let before = get_json(&base, "/api/v1/workbench").1;
+
+    let (status, body) = post_json(
+        &base,
+        "/api/v1/workbench/preview",
+        &json!({"body": "the reply cites [^1]", "references": [1]}),
     );
-    assert_eq!(status, 403);
+    assert_eq!(status, 200, "{body}");
+    let html = json_of(&body)["html"].as_str().unwrap().to_string();
+    assert!(html.contains("class=\"mref\""), "{html}");
+
+    let (status, body) = post_json(
+        &base,
+        "/api/v1/workbench/preview",
+        &json!({"body": "dangling", "references": [99]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "invalid_reference",
+        "{body}"
+    );
+    let after = get_json(&base, "/api/v1/workbench").1;
+    assert_eq!(
+        json_of(&before)["cursor"],
+        json_of(&after)["cursor"],
+        "the preview never writes"
+    );
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The workbench write door keeps the console identity law with the
+/// attribution bound to the submission: the actor is exactly the name
+/// the review showed, the tier is pinned human with no scope, and a
+/// cookie that changed under a confirmed review refuses loudly.
+#[tokio::test(flavor = "multi_thread")]
+async fn workbench_command_pins_human_attribution_and_binds_submissions() {
+    let db = scratch_db("workbench-command");
+    let (base, state) = spawn_workbench(&db).await;
+    seed_task(&state, "migrate floop");
+    let note = |title: &str, body: &str| {
+        json!({"actor": "jerry", "command": {"comment": {
+            "home": 0,
+            "kind": {"note": {"title": title, "body": body}},
+            "references": [],
+        }}})
+    };
+
+    let (status, body) = post_json(
+        &base,
+        "/api/v1/workbench/command",
+        &note("the finding", "parked finding"),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["records"][0]["kind"], "commented");
+    assert_eq!(reply["records"][0]["actor"], "jerry");
+    assert_eq!(reply["records"][0]["tier"], "human");
+
+    // the cookie binds: a matching claim passes, a changed one refuses
+    let (status, body) = post_json_headers(
+        &base,
+        "/api/v1/workbench/command",
+        &note("the second", "another finding"),
+        &[("Cookie", "actor=jerry")],
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post_json_headers(
+        &base,
+        "/api/v1/workbench/command",
+        &note("the third", "a third finding"),
+        &[("Cookie", "actor=someone-else")],
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "actor_changed", "{body}");
+
+    // a core refusal arrives typed with its teaching and writes nothing
+    let before = get_json(&base, "/api/v1/workbench").1;
+    let (status, body) = post_json(
+        &base,
+        "/api/v1/workbench/command",
+        &json!({"actor": "jerry", "command": {"comment": {
+            "home": 0,
+            "kind": {"note": {"title": "dangling", "body": "marker [^2]"}},
+            "references": [],
+        }}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "invalid_reference",
+        "{body}"
+    );
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("marker")),
+        "{body}"
+    );
+    let after = get_json(&base, "/api/v1/workbench").1;
+    assert_eq!(
+        json_of(&before)["cursor"],
+        json_of(&after)["cursor"],
+        "the refusal wrote nothing"
+    );
+
+    // the identity read discloses the cookie-claimed actor alone
+    let (status, body) = get_json(&base, "/api/v1/workbench/identity");
+    assert_eq!(status, 200);
+    assert_eq!(json_of(&body)["actor"], json!(null));
+    let mut r = ureq::get(&format!("{base}/api/v1/workbench/identity"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .header("Cookie", "actor=jerry")
+        .call()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    assert_eq!(
+        json_of(&r.body_mut().read_to_string().unwrap())["actor"],
+        json!("jerry")
+    );
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
@@ -1550,7 +1542,7 @@ async fn compose_fetch_swaps_the_thread_section() {
 async fn the_records_face_keeps_degraded_rows_and_refuses_corruption() {
     // a corrupt payload of a known kind: the log will not even load
     let db = scratch_db("records-corrupt");
-    let (base, state) = spawn_console(&db).await;
+    let (base, state) = spawn_workbench(&db).await;
     seed_task(&state, "before the damage");
     rusqlite::Connection::open(&db)
         .unwrap()
@@ -1569,13 +1561,20 @@ async fn the_records_face_keeps_degraded_rows_and_refuses_corruption() {
     assert_eq!(r.status().as_u16(), 500);
     let body = r.body_mut().read_to_string().unwrap();
     assert_eq!(json_of(&body)["error"]["code"], "database_error");
-    let (_, html) = get_html(&format!("{base}/t/0"));
-    assert!(html.contains("corrupt"), "{html}");
+    let (status, body) = get_json(&base, "/api/v1/workbench");
+    assert_eq!(status, 500);
+    assert_eq!(json_of(&body)["error"]["code"], "storage", "{body}");
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("corrupt record at seq 1")),
+        "{body}"
+    );
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 
     // an unknown kind: the world will not fold, the rows still travel
     let db = scratch_db("records-degraded");
-    let (base, state) = spawn_console(&db).await;
+    let (base, state) = spawn_workbench(&db).await;
     seed_task(&state, "before the damage");
     rusqlite::Connection::open(&db)
         .unwrap()
@@ -1594,8 +1593,9 @@ async fn the_records_face_keeps_degraded_rows_and_refuses_corruption() {
     assert_eq!(r.status().as_u16(), 200);
     let body = r.body_mut().read_to_string().unwrap();
     assert_eq!(json_of(&body)["records"].as_array().unwrap().len(), 2);
-    let (_, html) = get_html(&format!("{base}/t/0"));
-    assert!(html.contains("unavailable"), "{html}");
+    let (status, body) = get_json(&base, "/api/v1/workbench");
+    assert_eq!(status, 503);
+    assert_eq!(json_of(&body)["error"]["code"], "degraded", "{body}");
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -1604,7 +1604,7 @@ async fn the_records_face_keeps_degraded_rows_and_refuses_corruption() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_local_write_shows_on_every_server_face() {
     let db = scratch_db("local-visible");
-    let (base, state) = spawn_console(&db).await;
+    let (base, state) = spawn_workbench(&db).await;
     seed_task(&state, "server-born task");
 
     let local = Context {
@@ -1628,8 +1628,14 @@ async fn a_local_write_shows_on_every_server_face() {
     )
     .unwrap();
 
-    let (_, html) = get_html(&format!("{base}/t/0"));
-    assert!(html.contains("LOCAL_MARKER"), "console reads the file");
+    let (_, snapshot) = get_json(&base, "/api/v1/workbench");
+    let comments = json_of(&snapshot)["comments"].as_array().unwrap().clone();
+    assert!(
+        comments
+            .iter()
+            .any(|c| c["body"].as_str() == Some("LOCAL_MARKER")),
+        "{comments:?}"
+    );
     let (_, body) = {
         let mut r = ureq::get(&format!("{base}/api/v1/records"))
             .config()
@@ -1653,9 +1659,20 @@ async fn a_local_write_shows_on_every_server_face() {
             bare_request(),
         )
         .expect("the server write lands");
-    let (_, html) = get_html(&format!("{base}/t/0"));
-    assert!(html.contains("LOCAL_MARKER"), "{html}");
-    assert!(html.contains("owned by"), "{html}");
+    let (_, snapshot) = get_json(&base, "/api/v1/workbench");
+    let projection = json_of(&snapshot);
+    assert!(
+        projection["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["body"].as_str() == Some("LOCAL_MARKER")),
+        "{projection}"
+    );
+    assert!(
+        projection["tasks"][0]["owner"].as_str() == Some("jerry"),
+        "{projection}"
+    );
 
     // a refusal names the log's fresh cursor, external writes included
     state
@@ -1677,463 +1694,6 @@ async fn a_local_write_shows_on_every_server_face() {
         .expect("the refusal took a line");
     assert_eq!(refused["cursor"], 2);
 
-    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
-}
-
-/// The console GET: unfocused at / and focused and composed at /t/N.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_console_renders_board_and_focused_thread() {
-    let db = scratch_db("console-read");
-    let (base, state) = spawn_console(&db).await;
-    seed_task(&state, "migrate floop");
-    state
-        .execute(
-            &human_ctx(),
-            Command::ClaimTask {
-                id: TaskId(0),
-                incarnation: None,
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-
-    let (status, home) = get_html(&format!("{base}/"));
-    assert_eq!(status, 200);
-    assert!(
-        home.contains("migrate floop"),
-        "the board browses live work"
-    );
-    assert!(home.contains("no task focused"));
-    // no strip section renders anywhere
-    assert!(!home.contains("OWNED | LAST RECORD"), "{home}");
-    assert!(!home.contains("SUPERVISION"), "{home}");
-
-    let (status, focused) = get_html(&format!("{base}/t/0"));
-    assert_eq!(status, 200);
-    assert!(focused.contains("migrate floop"));
-    assert!(
-        focused.contains("t-0 | owned by jerry"),
-        "the head names the owner"
-    );
-
-    // an unknown task is a clean 404
-    let (status, _) = get_html(&format!("{base}/t/99"));
-    assert_eq!(status, 404);
-    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
-}
-
-/// A rehoming compose answers a fetch with the same 303 a form post takes.
-#[tokio::test(flavor = "multi_thread")]
-async fn compose_fetch_rehome_redirects_instead_of_swapping() {
-    let db = scratch_db("console-rehome-fetch");
-    let (base, state) = spawn_console(&db).await;
-    seed_task(&state, "migrate floop");
-    seed_task(&state, "other work");
-
-    let (status, body, loc) = post_form(
-        &format!("{base}/compose"),
-        &[
-            ("Sec-Fetch-Site", "same-origin"),
-            ("Sec-Fetch-Mode", "cors"),
-        ],
-        "task=0&title=the+rehome&body=%40t-1+belongs+there&who=jerry",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/1#c-0"));
-    assert!(!body.contains("<section"), "no fragment rides the redirect");
-    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
-}
-
-/// Every /t/... href the console page emits resolves: the rail is the
-/// frame's navigation, so a dead link there is a dead frame. This pins
-/// the rail's token-vs-number contract (c-585) across every link
-/// form the page carries.
-#[tokio::test(flavor = "multi_thread")]
-async fn every_task_href_the_console_emits_resolves() {
-    let db = scratch_db("console-hrefs");
-    let (base, state) = spawn_console(&db).await;
-    seed_task(&state, "migrate floop");
-    seed_task(&state, "other work");
-    state
-        .execute(
-            &human_ctx(),
-            Command::ClaimTask {
-                id: TaskId(0),
-                incarnation: None,
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-    state
-        .execute(
-            &human_ctx(),
-            Command::Comment {
-                home: TaskId(1),
-                kind: CommentKind::Offer {
-                    title: Prose::new("the standing account".into()).unwrap(),
-                    body: Prose::new("the standing account".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-    // a comment citing the offer through its marker so the anchor
-    // link form lights up
-    state
-        .execute(
-            &human_ctx(),
-            Command::Comment {
-                home: TaskId(0),
-                kind: CommentKind::Note {
-                    title: Prose::new("a note worth keeping".into()).unwrap(),
-                    body: Prose::new("a note worth keeping, citing [^1]".into()).unwrap(),
-                },
-                references: vec![RecordId(3)],
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-
-    // harvest every /t/... href from the unfocused and focused pages
-    let mut hrefs: Vec<String> = Vec::new();
-    for path in ["/", "/t/0"] {
-        let (_, html) = get_html(&format!("{base}{path}"));
-        let mut rest = html.as_str();
-        while let Some(i) = rest.find("href=\"/t/") {
-            rest = &rest[i + 6..];
-            let end = rest.find('"').expect("the href closes");
-            let href = &rest[..end];
-            hrefs.push(href.to_string());
-            rest = &rest[end..];
-        }
-    }
-    hrefs.sort();
-    hrefs.dedup();
-    // both link forms light up
-    assert!(
-        hrefs.iter().any(|h| !h.contains('#')) && hrefs.iter().any(|h| h.contains("#c-")),
-        "the fixture should light up every link form, got {hrefs:?}"
-    );
-    assert!(
-        !hrefs.iter().any(|h| h.starts_with("/t/t-")),
-        "no token-in-href may survive: {hrefs:?}"
-    );
-    for href in &hrefs {
-        let path = href.split('#').next().unwrap();
-        let (status, _) = get_html(&format!("{base}{path}"));
-        assert_eq!(status, 200, "{href} does not resolve");
-    }
-
-    // the visible labels stay the token form
-    let (_, focused) = get_html(&format!("{base}/t/0"));
-    assert!(focused.contains(">t-0<"));
-    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
-}
-
-/// Identity is claimed at the act, on every decision form.
-#[tokio::test(flavor = "multi_thread")]
-async fn decision_forms_carry_the_actor_name() {
-    let db = scratch_db("console-identity");
-    let (base, state) = spawn_console(&db).await;
-    seed_task(&state, "migrate floop");
-    let pi = Context {
-        actor: ActorName::new("pi".into()).unwrap(),
-        tier: Tier::Agent,
-        scope: None,
-    };
-    state
-        .execute(
-            &pi,
-            Command::ClaimTask {
-                id: TaskId(0),
-                incarnation: None,
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-    state
-        .execute(
-            &pi,
-            Command::Comment {
-                home: TaskId(0),
-                kind: CommentKind::Offer {
-                    title: Prose::new("suite green".into()).unwrap(),
-                    body: Prose::new("suite green".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-    // the focused page renders the decision doors on the offer's row
-    let (status, html) = get_html(&format!("{base}/t/0"));
-    assert_eq!(status, 200);
-    assert!(html.contains("* OFFERED"));
-    assert!(html.contains("action=\"/t/0/reject\""));
-    assert!(html.contains("formaction=\"/t/0/accept\""));
-
-    // a cookieless accept without a name refuses, naming the fix
-    let (status, body, _) = post_form(&format!("{base}/t/0/accept"), &[], "accept=1&offer=2");
-    assert_eq!(status, 400);
-    assert!(body.contains("a name is required to record the act"));
-
-    // a cookieless accept with who records human tier under that name,
-    // and the first claim sets the cookie like compose does
-    let (status, _, loc, cookie) = post_form_ck(
-        &format!("{base}/t/0/accept"),
-        &[],
-        "accept=1&who=jerry&offer=2",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(loc.as_deref(), Some("/t/0"));
-    assert!(
-        cookie
-            .as_deref()
-            .is_some_and(|c| c.starts_with("actor=jerry")),
-        "the first claim claims the cookie: {cookie:?}"
-    );
-    let snap = match state.snapshot() {
-        Ok(s) => s,
-        Err(_) => panic!("the snapshot refused"),
-    };
-    let accepted = snap
-        .rows
-        .iter()
-        .rev()
-        .find(|r| r.kind == "commented" && r.payload.contains("accept"))
-        .expect("the accept landed");
-    assert_eq!(accepted.actor, "jerry");
-    assert_eq!(accepted.tier, "human");
-    assert_eq!(
-        task_view(&world_of(&state), TaskId(0)).unwrap().state,
-        "concluded"
-    );
-
-    // a producer may reject its own account with grounds
-    seed_task(&state, "other work");
-    state
-        .execute(
-            &pi,
-            Command::Comment {
-                home: TaskId(1),
-                kind: CommentKind::Offer {
-                    title: Prose::new("the second account".into()).unwrap(),
-                    body: Prose::new("the second account".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-    // grounds are required: the empty form refuses at the console door
-    let (status, body, _) = post_form(
-        &format!("{base}/t/1/reject"),
-        &[],
-        "reject=1&who=jerry&grounds=+&offer=5",
-    );
-    assert_eq!(status, 400);
-    assert!(body.contains("a rejection needs grounds"), "{body}");
-
-    let (status, _, loc, _) = post_form_ck(
-        &format!("{base}/t/1/reject"),
-        &[],
-        "reject=1&who=jerry&grounds=the+edge+case+still+fails&offer=5",
-    );
-    assert_eq!(status, 303, "the named rejection lands");
-    assert_eq!(loc.as_deref(), Some("/t/1"));
-    let snap = match state.snapshot() {
-        Ok(s) => s,
-        Err(_) => panic!("the snapshot refused"),
-    };
-    let rejected = snap
-        .rows
-        .iter()
-        .rev()
-        .find(|r| r.kind == "commented" && r.payload.contains("reject"))
-        .expect("the rejection landed");
-    assert_eq!(rejected.actor, "jerry");
-    assert!(rejected.payload.contains("the edge case still fails"));
-    assert_eq!(
-        task_view(&world_of(&state), TaskId(1)).unwrap().state,
-        "open"
-    );
-
-    // the rendered forms carry the who input, prefilled from the actor
-    // cookie when one exists
-    state
-        .execute(
-            &pi,
-            Command::Comment {
-                home: TaskId(1),
-                kind: CommentKind::Offer {
-                    title: Prose::new("the third account".into()).unwrap(),
-                    body: Prose::new("the third account".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-    let mut r = ureq::get(&format!("{base}/t/1"))
-        .config()
-        .http_status_as_error(false)
-        .build()
-        .header("Cookie", "actor=jerry")
-        .call()
-        .expect("the loopback server answers");
-    let with_cookie = r.body_mut().read_to_string().unwrap();
-    // every who input the page carries prefills from the cookie
-    let who_inputs = with_cookie.matches("name=\"who\"").count();
-    assert!(
-        who_inputs >= 3,
-        "the page carries its act forms: {who_inputs}"
-    );
-    assert_eq!(
-        with_cookie.matches("value=\"jerry\"").count(),
-        who_inputs,
-        "every act form prefills from the cookie"
-    );
-
-    let (status, blank) = get_html(&format!("{base}/t/1"));
-    assert_eq!(status, 200);
-    assert_eq!(
-        blank.matches("name=\"who\"").count(),
-        blank.matches("value=\"\"").count(),
-        "blank for a fresh browser, never absent"
-    );
-    // one form: reject the action, accept on formaction, one who field
-    let doors = blank
-        .split("class=\"jform\"")
-        .nth(1)
-        .expect("the decision doors render")
-        .split("</form>")
-        .next()
-        .unwrap();
-    assert_eq!(doors.split("name=\"who\"").count() - 1, 1, "{doors}");
-    assert!(doors.contains("name=\"accept\""), "{doors}");
-    assert!(doors.contains("name=\"reject\""), "{doors}");
-    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
-}
-
-/// A console refusal through judgment leaves its fat line: the raw form
-/// body, the code, and no client binary to name. The stale-form
-/// scenario rides here: a page rendered for one offer cannot decide its
-/// replacement - the form names the offer it showed, and the fold's
-/// stale-offer guard refuses it.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_refused_console_decision_leaves_its_line() {
-    let db = scratch_db("console-refused");
-    let (base, state) = spawn_console(&db).await;
-    seed_task(&state, "migrate floop");
-    state
-        .execute(
-            &human_ctx(),
-            Command::Comment {
-                home: TaskId(0),
-                kind: CommentKind::Offer {
-                    title: Prose::new("the first account".into()).unwrap(),
-                    body: Prose::new("the first account".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-
-    // the decision forms carry the offer they rendered
-    let (_, html) = get_html(&format!("{base}/t/0"));
-    assert!(html.contains("name=\"offer\" value=\"1\""), "{html}");
-
-    // the page's reject form rejects offer 1, opening the task again
-    let (status, _, _) = post_form(
-        &format!("{base}/t/0/reject"),
-        &[],
-        "reject=1&who=jerry&grounds=the+edge+case+fails&offer=1",
-    );
-    assert_eq!(status, 303);
-
-    // a replacement offer stands
-    state
-        .execute(
-            &human_ctx(),
-            Command::Comment {
-                home: TaskId(0),
-                kind: CommentKind::Offer {
-                    title: Prose::new("the replacement account".into()).unwrap(),
-                    body: Prose::new("the replacement account".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-            None,
-            bare_request(),
-        )
-        .unwrap();
-
-    // the stale accept form names offer 1 and refuses
-    let (status, body, _) = post_form(
-        &format!("{base}/t/0/accept"),
-        &[],
-        "accept=1&who=jerry&offer=1",
-    );
-    assert_eq!(status, 400);
-    assert!(
-        body.contains("that offer is not the task's standing one"),
-        "{body}"
-    );
-
-    // the stale reject form meets the same guard, its grounds kept
-    // verbatim as an editable draft
-    let (status, body, _) = post_form(
-        &format!("{base}/t/0/reject"),
-        &[],
-        "reject=1&who=jerry&grounds=SPECIFIC_DRAFT_LOSS_CHECK&offer=1",
-    );
-    assert_eq!(status, 400);
-    assert!(
-        body.contains("that offer is not the task's standing one"),
-        "{body}"
-    );
-    assert!(
-        body.contains(">SPECIFIC_DRAFT_LOSS_CHECK</textarea>"),
-        "the refused grounds ride back inside the textarea: {body}"
-    );
-
-    let (status, _, _, _) = post_form_ck(
-        &format!("{base}/t/0/accept"),
-        &[],
-        "accept=1&who=jerry&offer=3",
-    );
-    assert_eq!(status, 303);
-    assert_eq!(
-        task_view(&world_of(&state), TaskId(0)).unwrap().state,
-        "concluded"
-    );
-
-    // the decided task's second accept refuses
-    let (status, body, _) = post_form(
-        &format!("{base}/t/0/accept"),
-        &[],
-        "accept=1&who=jerry&offer=3",
-    );
-    assert_eq!(status, 400);
-    assert!(body.contains("InvalidStateTransition"), "{body}");
-    let lines = attempts_lines(&db);
-    let refused = &lines[lines.len() - 1];
-    assert_eq!(refused["outcome"], "refused");
-    assert_eq!(refused["code"], "invalid_state_transition");
-    assert_eq!(refused["actor"], "jerry");
-    assert_eq!(refused["client"], Value::Null);
-    assert_eq!(refused["request"], "accept=1&who=jerry&offer=3");
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
