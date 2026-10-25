@@ -409,10 +409,18 @@ fn revise(req: &Req, app: &AppState, num: usize, fields: &[(String, String)]) ->
     };
     let draft_title = form_field(fields, "title");
     let draft_body = form_field(fields, "body");
-    // an empty field is an absent one: a revision carries the fields
-    // it names, at least one
-    let title = Prose::new(draft_title.to_string()).ok();
-    let body = Prose::new(draft_body.to_string()).ok();
+    // a prefilled form carries what changed: a field equal to its
+    // render baseline was untouched and is absent from the command,
+    // so a stale prefilled value never silently re-lands
+    let title_baseline = form_field(fields, "title_baseline");
+    let body_baseline = form_field(fields, "body_baseline");
+    let changed = |draft: &str, baseline: &str| {
+        (draft != baseline)
+            .then(|| Prose::new(draft.to_string()).ok())
+            .flatten()
+    };
+    let title = changed(draft_title, title_baseline);
+    let body = changed(draft_body, body_baseline);
     let reject =
         |msg: &str| revise_reject(req, app, root, num, draft_title, draft_body, fields, msg);
     if title.is_none() && body.is_none() {

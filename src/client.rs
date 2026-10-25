@@ -22,6 +22,23 @@ pub enum ClientFail {
         serves: String,
         expected: std::path::PathBuf,
     },
+    /// The server's version is known and breaking against this
+    /// binary's: a 0.x minor bump breaks the wire, binaries move in
+    /// step, and no command write may be posted across the line.
+    VersionMismatch {
+        url: String,
+        ours: &'static str,
+        theirs: String,
+    },
+    /// The server's version could not be established, or no ratified
+    /// compatibility rule spans the two version lines: the write
+    /// refuses rather than guessing.
+    VersionUnproven {
+        url: String,
+        ours: &'static str,
+        theirs: String,
+        why: String,
+    },
 }
 
 impl ClientFail {
@@ -31,6 +48,8 @@ impl ClientFail {
             ClientFail::Refused { .. } => "server_refused",
             ClientFail::Undiscovered { .. } => "server_undiscovered",
             ClientFail::Mismatch { .. } => "server_mismatch",
+            ClientFail::VersionMismatch { .. } => "server_version_mismatch",
+            ClientFail::VersionUnproven { .. } => "server_version_unproven",
         }
     }
 }
@@ -57,6 +76,21 @@ impl std::fmt::Display for ClientFail {
                 f,
                 "the server at {url} serves {serves}, not {}; the address hint is stale or points elsewhere",
                 expected.display()
+            ),
+            ClientFail::VersionMismatch { url, ours, theirs } => write!(
+                f,
+                "the server at {url} runs sac {theirs}, this binary is sac {ours}; \
+                 a 0.x minor bump is breaking - move the binaries in step before writing"
+            ),
+            ClientFail::VersionUnproven {
+                url,
+                ours,
+                theirs,
+                why,
+            } => write!(
+                f,
+                "the server at {url} reports version '{theirs}', this binary is sac {ours}; \
+                 {why} - no command write was sent"
             ),
         }
     }
@@ -97,6 +131,7 @@ pub fn send(
     command: Command,
     at: Option<u64>,
 ) -> Result<Reply, ClientFail> {
+    require_compatible_peer(url)?;
     let envelope = Envelope {
         context: WireContext {
             actor: context.actor.clone(),
@@ -152,6 +187,58 @@ pub fn send(
 pub struct ServerIdentity {
     pub version: String,
     pub db: Option<String>,
+}
+
+/// The version line a peer must prove before any command write posts:
+/// major and minor, patch optional. None when the text is not a
+/// version this rule can read.
+fn version_line(text: &str) -> Option<(u64, u64)> {
+    let mut parts = text.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    match parts.next() {
+        Some(patch) if patch.parse::<u64>().is_err() => None,
+        Some(_) | None => Some((major, minor)),
+    }
+}
+
+/// Every command write crosses this gate before its POST: a peer on
+/// the same major and minor is compatible whatever its patch, a peer
+/// on the same 0.x line with a different minor is breaking (the wire
+/// may have silently dropped fields), and a peer off the major line
+/// or without a readable version is refused rather than guessed at.
+fn require_compatible_peer(url: &str) -> Result<(), ClientFail> {
+    let ours = env!("CARGO_PKG_VERSION");
+    let id = identity(url)?;
+    let theirs = version_line(&id.version);
+    let mine = version_line(ours).expect("CARGO_PKG_VERSION is major.minor.patch");
+    let Some((major, minor)) = theirs else {
+        return Err(ClientFail::VersionUnproven {
+            url: url.to_string(),
+            ours,
+            theirs: id.version,
+            why: "the version does not read as major.minor[.patch]".into(),
+        });
+    };
+    if major != mine.0 {
+        return Err(ClientFail::VersionUnproven {
+            url: url.to_string(),
+            ours,
+            theirs: id.version,
+            why: format!(
+                "no ratified compatibility rule spans the {major} and {} version lines",
+                mine.0
+            ),
+        });
+    }
+    if minor != mine.1 {
+        return Err(ClientFail::VersionMismatch {
+            url: url.to_string(),
+            ours,
+            theirs: id.version,
+        });
+    }
+    Ok(())
 }
 
 pub fn identity(url: &str) -> Result<ServerIdentity, ClientFail> {

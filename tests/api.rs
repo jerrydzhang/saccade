@@ -585,7 +585,214 @@ async fn malformed_bodies_get_typed_envelopes() {
     );
     assert_eq!(status, 400);
 
+    // a pre-title (v4-shaped) note or offer no longer parses: the
+    // 0.15 wire refuses the birth rather than silently dropping the
+    // field an old server would have ignored
+    for kind in ["note", "offer"] {
+        let (status, body) = post_command(
+            &base_url,
+            &envelope(
+                "pi",
+                "agent",
+                json!({"comment": {"home": 0, "kind": {kind: {"body": "suite green"}}, "references": []}}),
+            ),
+        );
+        assert_eq!(status, 400, "{kind}");
+        assert_eq!(
+            json_of(&body)["error"]["code"],
+            "malformed_request",
+            "{kind}: {body}"
+        );
+    }
+    // nothing landed: the log holds only the parse-door refusal lines
+    let (_, standing) = get_json(&base_url, "/api/v1/records");
+    assert!(
+        json_of(&standing)["records"]
+            .as_array()
+            .is_some_and(|r| r.is_empty()),
+        "{standing}"
+    );
+
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// A pinned fake peer for the version gate: it answers the identity
+/// route and would acknowledge any command post, recording each.
+fn fake_peer(
+    version: Option<&str>,
+    budget: usize,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let posts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let posted = std::sync::Arc::clone(&posts);
+    let version = version.map(str::to_string);
+    let handle = std::thread::spawn(move || {
+        let read_request = |stream: &mut std::net::TcpStream| -> Option<String> {
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut byte) {
+                    Ok(0) | Err(_) => return None,
+                    Ok(_) => head.push(byte[0]),
+                }
+            }
+            let text = String::from_utf8_lossy(&head).into_owned();
+            let mut lines = text.lines();
+            let request = lines.next()?.to_string();
+            let mut length = 0usize;
+            for line in lines {
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            if length > 0 && stream.read_exact(&mut body).is_err() {
+                return None;
+            }
+            posted
+                .lock()
+                .expect("the post log holds")
+                .push(format!("{request} {}", String::from_utf8_lossy(&body)));
+            Some(
+                request
+                    .split(' ')
+                    .next()
+                    .map(str::to_string)
+                    .unwrap_or_default(),
+            )
+        };
+        let mut served = 0usize;
+        while served < budget {
+            let Ok((mut stream, _peer)) = listener.accept() else {
+                break;
+            };
+            let Some(method) = read_request(&mut stream) else {
+                served += 1;
+                continue;
+            };
+            let reply = match method.as_str() {
+                "GET" => match &version {
+                    Some(v) => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{{\"version\":\"{v}\",\"db\":\"/fake/peer.db\"}}",
+                        format!("{{\"version\":\"{v}\",\"db\":\"/fake/peer.db\"}}").len(),
+                    ),
+                    None => "HTTP/1.1 404 Not Found\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: 11\r\n\r\n<html></html>".to_string(),
+                },
+                _ => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 14\r\n\r\n{\"records\":[]}".to_string(),
+            };
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+            served += 1;
+        }
+    });
+    (format!("http://{addr}"), posts, handle)
+}
+
+/// Drain a fake peer's unused budget with empty connections, then wait
+/// for its thread: nothing is left running and nothing is discovered.
+fn retire_peer(
+    addr: &str,
+    posts: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    budget: usize,
+    handle: std::thread::JoinHandle<()>,
+) {
+    let live = posts.lock().expect("the post log holds").len();
+    for _ in live..budget {
+        let _ = std::net::TcpStream::connect(addr);
+    }
+    handle.join().expect("the fake peer thread exits");
+}
+
+/// A command write posts only to a peer on this binary's version line:
+/// the same minor whatever the patch; any other version, or none the
+/// rule can read, refuses before the POST leaves.
+#[tokio::test(flavor = "multi_thread")]
+async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
+    use saccade::Command;
+    use saccade::client::{self, ClientFail};
+    use saccade::store::{Context, Tier};
+    use saccade::types::actor::ActorName;
+
+    let agent = Context {
+        actor: ActorName::new("saccade bot".into()).unwrap(),
+        tier: Tier::Agent,
+        scope: None,
+    };
+    let command = || Command::CreateTask {
+        name: saccade::Prose::new("across the line".into()).unwrap(),
+    };
+
+    // a same-line, different-minor peer (a 0.14 server to this 0.15
+    // binary) never sees the command: the write refuses before posting
+    let (url, posts, handle) = fake_peer(Some("0.14.0"), 1);
+    match client::send(&url, &agent, command(), None) {
+        Err(ClientFail::VersionMismatch { ours, theirs, .. }) => {
+            assert_eq!(ours, env!("CARGO_PKG_VERSION"));
+            assert_eq!(theirs, "0.14.0");
+        }
+        other => panic!("a breaking peer refuses the write: {other:?}"),
+    }
+    assert!(
+        posts.lock().unwrap().iter().all(|r| r.starts_with("GET")),
+        "no command body reached the peer: {:?}",
+        posts.lock().unwrap()
+    );
+    retire_peer(&url, &posts, 1, handle);
+
+    // a patch difference stays compatible: the command posts and the
+    // peer's acknowledgment comes back
+    let (url, posts, handle) = fake_peer(Some("0.15.1"), 2);
+    let reply =
+        client::send(&url, &agent, command(), None).expect("a patch difference is not breaking");
+    assert_eq!(reply.records.len(), 0);
+    assert!(
+        posts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.starts_with("POST /api/v1/command")),
+        "{:?}",
+        posts.lock().unwrap()
+    );
+    retire_peer(&url, &posts, 2, handle);
+
+    // a peer off the 0.x line has no ratified rule: ambiguity refuses
+    let (url, posts, handle) = fake_peer(Some("1.0.0"), 1);
+    match client::send(&url, &agent, command(), None) {
+        Err(ClientFail::VersionUnproven { why, .. }) => {
+            assert!(why.contains("no ratified compatibility rule"), "{why}");
+        }
+        other => panic!("an unruled version line refuses: {other:?}"),
+    }
+    assert!(posts.lock().unwrap().iter().all(|r| r.starts_with("GET")));
+    retire_peer(&url, &posts, 1, handle);
+
+    // an unreadable version is unproven, never guessed at
+    for theirs in ["not.a.version", "0.16.0-rc"] {
+        let (url, posts, handle) = fake_peer(Some(theirs), 1);
+        match client::send(&url, &agent, command(), None) {
+            Err(ClientFail::VersionUnproven { .. }) => {}
+            other => panic!("{theirs} refuses as unproven: {other:?}"),
+        }
+        assert!(posts.lock().unwrap().iter().all(|r| r.starts_with("GET")));
+        retire_peer(&url, &posts, 1, handle);
+    }
+
+    // a peer without a readable identity route keeps the existing
+    // refusal taxonomy: the write never posts
+    let (url, posts, handle) = fake_peer(None, 1);
+    match client::send(&url, &agent, command(), None) {
+        Err(ClientFail::Refused { code, .. }) => assert_eq!(code, "malformed_response"),
+        other => panic!("a peer with no identity refuses: {other:?}"),
+    }
+    assert!(posts.lock().unwrap().iter().all(|r| r.starts_with("GET")));
+    retire_peer(&url, &posts, 1, handle);
 }
 
 /// The client is the CLI's write path: the envelope it builds lands, the
@@ -1112,45 +1319,97 @@ async fn the_console_revise_door_repairs_titles() {
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
 
-    // both fields repair: the redirect returns to the comment
+    // both fields repair when both differ from their baselines
     let (status, _, loc) = post_form(
         &format!("{base}/c/0/revise"),
         &[],
-        "title=the+second+take&body=second+take&who=jerry",
+        "title=the+second+take&title_baseline=the+first+take&body=second+take&body_baseline=first+take&who=jerry",
     );
     assert_eq!(status, 303);
     assert_eq!(loc.as_deref(), Some("/t/0#c-0"));
     let line = &lines_of(&world_of(&state), 0)[0];
     assert_eq!(line.title.as_deref(), Some("the second take"));
     assert_eq!(line.body, "second take");
+    let record = last_revision_of(&state);
+    assert!(record.contains("\"title\""), "{record}");
+    assert!(record.contains("\"body\""), "{record}");
 
-    // an empty title field is a title left standing, never cleared
+    // a body-only edit patches only the body: the untouched title,
+    // stale or not, never re-lands
     let (status, _, _) = post_form(
         &format!("{base}/c/0/revise"),
         &[],
-        "title=&body=third+take&who=jerry",
+        "title=the+second+take&title_baseline=the+second+take&body=third+take&body_baseline=second+take&who=jerry",
     );
     assert_eq!(status, 303);
     let line = &lines_of(&world_of(&state), 0)[0];
     assert_eq!(line.title.as_deref(), Some("the second take"));
     assert_eq!(line.body, "third take");
+    let record = last_revision_of(&state);
+    assert!(!record.contains("title"), "{record}");
+    assert!(record.contains("third take"), "{record}");
 
-    // a revision naming neither field refuses, the drafts kept at
-    // the comment's own reveal
-    let (status, body, _) = post_form(&format!("{base}/c/0/revise"), &[], "title=&body=&who=jerry");
+    // a title-only edit patches only the title
+    let (status, _, _) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=the+fourth+take&title_baseline=the+second+take&body=third+take&body_baseline=third+take&who=jerry",
+    );
+    assert_eq!(status, 303);
+    let line = &lines_of(&world_of(&state), 0)[0];
+    assert_eq!(line.title.as_deref(), Some("the fourth take"));
+    assert_eq!(line.body, "third take");
+    let record = last_revision_of(&state);
+    assert!(record.contains("the fourth take"), "{record}");
+    assert!(!record.contains("body"), "{record}");
+
+    // a stale untouched prefill never restores: the baseline says the
+    // title was not edited, so the standing title survives the edit
+    let (status, _, _) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=the+second+take&title_baseline=the+second+take&body=fifth+take&body_baseline=third+take&who=jerry",
+    );
+    assert_eq!(status, 303);
+    let line = &lines_of(&world_of(&state), 0)[0];
+    assert_eq!(line.title.as_deref(), Some("the fourth take"));
+    assert_eq!(line.body, "fifth take");
+
+    // an unchanged submission names no field and refuses, the drafts
+    // kept at the comment's own reveal
+    let (status, body, _) = post_form(
+        &format!("{base}/c/0/revise"),
+        &[],
+        "title=the+fourth+take&title_baseline=the+fourth+take&body=fifth+take&body_baseline=fifth+take&who=jerry",
+    );
     assert_eq!(status, 400);
     assert!(
         body.contains("a revision needs a title or a body"),
         "{body}"
     );
     assert!(
-        body.contains("value=\"the second take\""),
+        body.contains("value=\"the fourth take\""),
         "the refused title draft stays editable: {body}"
     );
     let line = &lines_of(&world_of(&state), 0)[0];
-    assert_eq!(line.body, "third take", "the refusal wrote nothing");
+    assert_eq!(line.body, "fifth take", "the refusal wrote nothing");
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The last comment_revised record's payload, as the door's patch
+/// intent landed it.
+fn last_revision_of(state: &ConsoleState) -> String {
+    match state.snapshot() {
+        Ok(s) => s
+            .rows
+            .iter()
+            .rev()
+            .find(|r| r.kind == "comment_revised")
+            .map(|r| r.payload.clone())
+            .expect("a revision landed"),
+        Err(_) => panic!("the snapshot refused"),
+    }
 }
 
 /// The fragment contract: a fetch compose gets the thread section back
@@ -2221,6 +2480,48 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     let (ok, out, _) = pipe("t-0\n", &["show", "--stdin"]);
     assert!(ok, "{out}");
     assert_eq!(out.lines().last().unwrap(), "cursor 4", "{out}");
+
+    // a withdrawn deposit's title never discloses: default show, the
+    // reveal flag, and the json face all withhold it while the log
+    // keeps the historical bytes
+    assert!(
+        sac(&[
+            "comment",
+            "t-0",
+            "--title",
+            "the withdraw-me title",
+            "the withdraw-me body"
+        ])
+        .0
+    );
+    assert!(sac(&["withdraw", "c-3", "--note", "parked in the wrong place"]).0);
+    let (ok, out, _) = sac(&["show", "c-3"]);
+    assert!(ok, "{out}");
+    assert!(!out.contains("withdraw-me"), "default view: {out}");
+    let (ok, out, _) = sac(&["show", "--withdrawn", "c-3"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("body: the withdraw-me body"),
+        "the reveal names the body: {out}"
+    );
+    assert!(
+        !out.contains("withdraw-me title"),
+        "the reveal never titles: {out}"
+    );
+    let (ok, out, _) = sac(&["show", "--json", "--withdrawn", "c-3"]);
+    assert!(ok, "{out}");
+    let json: Value = serde_json::from_str(&out).expect("the json face parses");
+    assert_eq!(json["blocks"][0]["title"], json!(null));
+    assert_eq!(json["blocks"][0]["body"], json!("the withdraw-me body"));
+    let (ok, out, _) = sac(&["search", "withdraw-me"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("no matches"), "{out}");
+    let (ok, out, _) = sac(&["log", "--json"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("the withdraw-me title"),
+        "the log keeps the historical bytes: {out}"
+    );
 
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
@@ -5388,7 +5689,7 @@ fn the_migrate_door_rewrites_a_schema3_tracker() {
             r#"{"target":{"task":1},"kind":{"use":{"offer":2,"reason":"builds on foo, per c-1"}}}"#,
         );
     }
-    let out_db = dir.join("v4.db");
+    let out_db = dir.join("v5.db");
     let migrated = std::process::Command::new(bin)
         .arg("--db")
         .arg(&v3)
@@ -5530,7 +5831,7 @@ fn the_migrate_door_rewrites_a_schema3_tracker() {
             r#"{"id":1,"body":"parked mid-flight, corrected"}"#,
         );
     }
-    let v5 = dir.join("v5.db");
+    let v5 = dir.join("v5-from-v4.db");
     let migrated = std::process::Command::new(bin)
         .arg("--db")
         .arg(&v4)

@@ -587,20 +587,22 @@ fn node_html(
         };
         // a titled row repairs its title beside its body: a kept draft
         // that named a title wins, an empty one falls back to what stands
+        let shown_title = form
+            .revise
+            .as_ref()
+            .filter(|r| r.seq == line.num)
+            .map(|r| r.title.clone())
+            .filter(|t| !t.is_empty())
+            .or_else(|| line.title.clone())
+            .unwrap_or_default();
         let title_input = line
             .title
             .as_deref()
             .map(|_| {
-                let value = form
-                    .revise
-                    .as_ref()
-                    .filter(|r| r.seq == line.num)
-                    .map(|r| r.title.clone())
-                    .filter(|t| !t.is_empty())
-                    .or_else(|| line.title.clone())
-                    .map(|t| esc(&t))
-                    .unwrap_or_default();
-                format!("<input name=\"title\" placeholder=\"title\" value=\"{value}\">\n")
+                format!(
+                    "<input name=\"title\" placeholder=\"title\" value=\"{value}\">\n<input type=\"hidden\" name=\"title_baseline\" value=\"{value}\">\n",
+                    value = esc(&shown_title),
+                )
             })
             .unwrap_or_default();
         let title_line = line
@@ -609,7 +611,7 @@ fn node_html(
             .map(|t| format!("<div class=\"ntitle\">{}</div>\n", esc(t)))
             .unwrap_or_default();
         format!(
-            "{title_line}<div class=\"nbody\">{}</div>\n<details class=\"revise\"{open}><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n{title_input}<textarea name=\"body\" rows=\"2\">{draft}</textarea>\n{refused}<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n",
+            "{title_line}<div class=\"nbody\">{}</div>\n<details class=\"revise\"{open}><summary>revise</summary>\n<form class=\"rform\" method=\"post\" action=\"/c/{seq}/revise\">\n{title_input}<textarea name=\"body\" rows=\"2\">{draft}</textarea>\n<input type=\"hidden\" name=\"body_baseline\" value=\"{draft}\">\n{refused}<div class=\"jbtns\">{who_input}<button class=\"sendbtn\" name=\"revise\" value=\"1\" type=\"submit\">revise</button></div>\n</form>\n</details>\n",
             prose_html(&line.body, &line.references, store),
             seq = line.num,
             who_input = who_input(&form.who),

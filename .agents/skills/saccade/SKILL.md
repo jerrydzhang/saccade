@@ -171,7 +171,7 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac cancel t-N --explanation "..."` | **human only** | stop an unfinished undertaking |
 | `sac reopen t-N --explanation "..."` | **human only** | resume a cancelled undertaking |
 | `sac revise c-<n> [--title "..."] ["..."]` (prose also by `--stdin` or `--body-file`; at least one field) | any tier | presentation repair: a note or offer's title and/or body, the other variants' body; the fold names a reviser, `sac log` keeps the original |
-| `sac withdraw c-<n> --note "..."` | any tier | the note's standing-error repair: body out, tombstone stays |
+| `sac withdraw c-<n> --note "..."` | any tier | the note's standing-error repair: title and body out, tombstone stays |
 | `sac artifact t-N <path> [--name ...]` | any tier | park an artifact on the thread - the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
 | `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; nothing is recorded |
 | `sac launch --workspace <dir> [-- prompt]` / `--new [label] [--base <ref>]` | any tier | launch the composed native Pi task-free: `--workspace` selects an explicit existing directory; `--new` provisions a fresh workspace through the server's Git effects and launches there; a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. No task, claim, or request is provisioned |

@@ -221,7 +221,6 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
     };
     // step two, from schema 4 and after: the authored titles arrive
     let out_rows = backfill_titles(out_rows, &mut report)?;
-    let out_rows = out_rows;
 
     // the rewritten log must fold under the new law before anything
     // is written - a migration that cannot fold writes nothing
@@ -1233,20 +1232,20 @@ mod test {
         let dir = std::env::temp_dir().join(format!("sac-migrate-refuse-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // a v4 tracker is not a migration source
-        let v4 = dir.join("v4.db");
+        // a current-schema tracker is not a migration source
+        let current = dir.join("current.db");
         {
-            let conn = db::open(&v4).unwrap();
+            let conn = db::open(&current).unwrap();
             drop(conn);
         }
         assert!(matches!(
-            migrate(&v4, &dir.join("out.db")),
+            migrate(&current, &dir.join("out.db")),
             Err(MigrateFail::WrongSchema { .. })
         ));
         // a fresh output only
         let source = v3_db(&dir, "v3b.db");
         assert!(matches!(
-            migrate(&source, &v4),
+            migrate(&source, &current),
             Err(MigrateFail::OutputExists(_))
         ));
         // the source was never touched: still schema 3, still readable

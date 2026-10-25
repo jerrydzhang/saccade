@@ -2327,7 +2327,34 @@ mod test {
             Event::Commented { references, .. } => assert_eq!(*references, vec![RecordId(3)]),
             other => panic!("the birth keeps its shape: {other:?}"),
         }
-        assert_eq!(log.records().len(), RECORD_COUNT + 3);
+        // an explicitly supplied value equal to its predecessor still
+        // lands a revision record: the door never de-duplicates
+        let standing = &log.world().comments[&CommentId(RecordId(19))];
+        let (title, body) = match &standing.comment.kind {
+            CommentKind::Note { title, body } => (title.clone(), body.clone()),
+            other => panic!("the citing comment is a note: {other:?}"),
+        };
+        let before = log.records().len();
+        log.execute(
+            agent(),
+            Command::ReviseComment {
+                id: CommentId(RecordId(19)),
+                title: Some(title),
+                body: Some(body),
+            },
+            106,
+        )
+        .unwrap();
+        assert_eq!(log.records().len(), before + 1);
+        assert_eq!(
+            log.world().comments[&CommentId(RecordId(19))]
+                .revised
+                .as_ref()
+                .map(|r| r.record),
+            Some(RecordId(before)),
+            "the pointer names the equal-value revision record"
+        );
+        assert_eq!(log.records().len(), RECORD_COUNT + 4);
     }
 
     #[test]
