@@ -140,6 +140,8 @@
           nativeBuildInputs = [
             pkgs.git
             pkgs.direnv
+            # flock guards the native-door tests' scratch holders
+            pkgs.util-linux
           ];
           # the pinned harness this binary's start door launches;
           # SACCADE_PI remains the development override
@@ -147,9 +149,13 @@
           # the embedded workbench assets ride the build interface,
           # never a runtime path
           SACCADE_WEB_ASSETS = webAssets;
-          # the door tests need a host pty and a PATH flock; the nix
-          # sandbox has neither, and the suite runs in the devShell
-          doCheck = false;
+          # the unattended-prose door alone drives a real host pty;
+          # the nix sandbox mounts no /dev/pts and it cannot open the
+          # slave there, while the full suite passes in the devShell
+          checkFlags = [
+            "--skip"
+            "piped_human_prose_passes_and_unattended_refuses"
+          ];
           preCheck = ''
             export HOME=$(mktemp -d)
           '';
