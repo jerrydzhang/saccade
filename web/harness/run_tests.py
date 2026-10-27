@@ -1193,6 +1193,34 @@ def main():
             check(cursor_now() == provision_lost_before + 1 and lost_provision and 'lost-provision' in lost_provision[0]['workspace']['branch'], 'the lost provision really landed upstream exactly once')
             page.unroute('**/api/v1/workspace/create', lose_provision)
 
+            # a reply that lands but names no provisioned record fails the
+            # dependent launch closed: unknown wording, no fabricated facts,
+            # no host contact
+            def misshape_provision(route):
+                response = route.fetch()
+                data = response.json()
+                del data['workspace']['seq']
+                route.fulfill(status=200, content_type='application/json', body=json.dumps(data))
+            misshape_before = cursor_now()
+            host_lines = orca_lines()
+            page.route('**/api/v1/workspace/create', misshape_provision)
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('provision')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            page.fill('#query', 'misshape-provision')
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            leader(page, 'nl')
+            wait_submission(page, 'Provisioning outcome unknown')
+            message = page.locator('#message').text_content()
+            check('record undefined' not in message and 'Submitted' not in message and 'may have provisioned' in message and 'launch was not submitted' in message, f'the misshapen provision fails closed: {message}')
+            check(cursor_now() == misshape_before + 1, 'the misshapen reply really landed its provision upstream')
+            check(orca_lines() == host_lines, 'the misshapen provision reached no host')
+            page.unroute('**/api/v1/workspace/create', misshape_provision)
+
             # a created terminal the door cannot report: submitted, with
             # no handle to name
             (server.fakebin / 'orca-mode').write_text('no-handle')

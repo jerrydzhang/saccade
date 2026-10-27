@@ -839,10 +839,13 @@ async function submitLaunch(staged) {
     if (staged.new) {
       let created = null;
       try {
-        created = await api("/api/v1/workspace/create", { label: staged.new.label, client: "workbench" });
-        if (typeof created?.workspace?.path !== "string" || typeof created?.workspace?.seq !== "number") {
+        const reply = await api("/api/v1/workspace/create", { label: staged.new.label, client: "workbench" });
+        if (typeof reply?.workspace?.path !== "string" || typeof reply?.workspace?.seq !== "number") {
           throw new Error("The reply did not name the provisioned workspace.");
         }
+        // created only ever holds a validated reply: a misshapen one
+        // fails the dependent launch closed, it never launches undefined
+        created = reply;
       } catch (error) {
         finalMessage = provisionOutcomeMessage(error);
       }
