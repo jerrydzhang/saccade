@@ -1591,6 +1591,9 @@ def main():
             repair_text = draft(page)['text']
             layout_before = state(page)['layout']; focus_before = state(page)['focus']
             cursor_before = next(p['position']['head'] for p in state(page)['panes'] if p['id'] == focus_before)
+            # the untouched reader keeps its viewport through the neighboring-pane work itself, before any landing
+            scroll_through_setup = page.evaluate(f'() => {reader}.scrollTop')
+            check(abs(scroll_through_setup - scroll_before) <= 2, f'the untouched reader keeps its scroll through the split, draft, finder, and repair setup itself (before {scroll_before}, after {scroll_through_setup})')
 
             # a record lands while the reader holds selection, scroll, a
             # draft, a repair, and focus: the page absorbs it in place
@@ -1609,6 +1612,20 @@ def main():
                 log = page.evaluate('() => window.__scrollLog.slice(-40)')
                 print('SCROLL-LOG:', json.dumps(log), flush=True)
             check(abs(scroll_after - scroll_before) <= 2, f'the reader scroll stays put through a landing (before {scroll_before}, after {scroll_after})')
+            # time series to a settled bound: converge to the original offset and hold it, separating a bounded transition from a persistent loss
+            try:
+                page.wait_for_function('''(want) => {
+                    const r = document.querySelectorAll(".pane")[0].querySelector(".reading");
+                    window.__settle ??= { at: performance.now(), v: r.scrollTop };
+                    if (Math.abs(r.scrollTop - window.__settle.v) > 2) window.__settle = { at: performance.now(), v: r.scrollTop };
+                    return Math.abs(window.__settle.v - want) <= 2 && performance.now() - window.__settle.at > 300;
+                }''', arg=scroll_before, timeout=2000)
+            except Exception:
+                log = page.evaluate('() => window.__scrollLog.slice(-40)')
+                print('SCROLL-LOG:', json.dumps(log), flush=True)
+                raise
+            settled_value = page.evaluate(f'() => {reader}.scrollTop')
+            check(abs(settled_value - scroll_before) <= 2, f'the reader scroll settles on the original offset and holds it through the landing window (expected {scroll_before}, settled {settled_value})')
             check(len(state(page)['panes']) == 2 and state(page)['layout'] == layout_before and state(page)['focus'] == focus_before, 'the pane layout and focus stay put through a landing')
             repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
             check(repair_now['revisionPending'] is not None and repair_now['text'] == repair_text, 'the pending repair keeps its local text through a landing')
