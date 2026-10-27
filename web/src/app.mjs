@@ -360,6 +360,16 @@ function draftMetaLine(buffer, revising) {
   return `home: ${buffer.home === null ? "not selected" : `t-${buffer.home}  ${task(buffer.home)?.name ?? ""}`}\ntitle: ${buffer.authoredTitle || "not authored"}`;
 }
 
+// rendered panes show the authoring facts; keep them live when a prompt
+// rewrites those facts outside the editor
+function refreshRendered(bufferId) {
+  for (const id of editors.keys()) {
+    const view = bench.views.get(id);
+    if (!view || view.bufferId !== bufferId || !isReading(id)) continue;
+    showPresentation(id);
+  }
+}
+
 function showDraft(viewId, reader, buffer) {
   const signature = draftSignature(buffer);
   if (reader.signature === signature || reader.pendingSignature === signature) return;
@@ -649,12 +659,14 @@ function titleTarget(buffer) {
   if (buffer.revisionPending) {
     if (!["note", "offer"].includes(buffer.source.kind)) return null;
     return {
+      bufferId: buffer.id,
       get: () => buffer.revisionPending.title ?? "",
       set: (value) => { buffer.revisionPending.title = value; },
     };
   }
   if (buffer.kind === "draft" && buffer.eventual?.kind !== "reject") {
     return {
+      bufferId: buffer.id,
       get: () => buffer.authoredTitle ?? "",
       set: (value) => { buffer.authoredTitle = value; },
     };
@@ -678,6 +690,10 @@ function draftSurface(buffer) {
       references: buffer.source.references,
       home: buffer.source.home,
       target: buffer.id,
+      // the diff baseline rides the surface, so a pending discarded or
+      // restarted mid-flight cannot redirect the confirmation
+      originalTitle: pending.originalTitle,
+      originalBody: pending.originalBody,
       get submission() { return buffer.revisionPending?.submission; },
       set submission(value) { if (buffer.revisionPending) buffer.revisionPending.submission = value; },
     };
@@ -767,6 +783,11 @@ async function send(surface, actor) {
 async function submitConfirmed(surface, actor) {
   submitting = true;
   surface.submission = { kind: "unknown", message: "Submission was initiated but no final answer is confirmed. Inspect the task record before another attempt." };
+  // the bytes that went on the wire and the pending they belonged to: the
+  // author may keep working while the answer is outstanding
+  const pending = surface.kind === "revision" ? surface.buffer.revisionPending : null;
+  const sentBody = surface.body;
+  const sentTitle = surface.title;
   let finalMessage = "Submitting once...";
   if (!persist()) {
     submitting = false;
@@ -779,25 +800,57 @@ async function submitConfirmed(surface, actor) {
   try {
     const record = await send(surface, actor);
     let message = `Recorded at birth record ${record.seq}.`;
+    let fresh = true;
     try {
       await reload(false);
       const born = surface.kind === "revision" ? surface.buffer.source : birth(record.seq);
       if (born) message = `Recorded as ${surface.kind === "revision" ? surface.buffer.id : born.id}.`;
-    } catch { message += " Refresh unavailable."; }
-    surface.submission = { kind: "landed", seq: record.seq, message };
-    finalMessage = message;
-    if (surface.kind === "revision") {
-      surface.buffer.revisionPending = null;
-      published(surface.buffer.id);
-      surface.buffer.master = null;
+    } catch { fresh = false; message += " Refresh unavailable."; }
+    if (surface.kind !== "revision") {
+      surface.submission = { kind: "landed", seq: record.seq, message };
+      finalMessage = message;
+    } else {
+      const buffer = surface.buffer;
+      if (buffer.revisionPending !== pending) {
+        // discarded or restarted while outstanding: the record stands and
+        // the buffer's current pending is not this surface's business
+        finalMessage = `${message} The local repair changed while submitting; the record stands.`;
+      } else if (!fresh) {
+        // the landed bytes cannot be seen: nothing is discarded, no retry
+        pending.submission = { kind: "landed", seq: record.seq, message };
+        finalMessage = message;
+      } else if (buffer.text === sentBody && (pending.title ?? null) === (sentTitle ?? null)) {
+        // the sent bytes are still the whole repair: the repair is done
+        pending.submission = { kind: "landed", seq: record.seq, message };
+        finalMessage = message;
+        buffer.revisionPending = null;
+        published(buffer.id);
+        buffer.master = null;
+      } else {
+        // local work arrived while sending: the repair continues, rebased
+        // on the recorded bytes, and publishes the remaining diff anew
+        pending.originalTitle = buffer.source.title ?? null;
+        pending.originalBody = buffer.source.body;
+        pending.savedTitle = pending.originalTitle;
+        pending.savedBody = pending.originalBody;
+        pending.submission = null;
+        finalMessage = `${message} Local work arrived while sending; the repair continues on the recorded bytes.`;
+      }
     }
   } catch (error) {
+    let outcome;
     if (error.refused) {
-      surface.submission = { kind: "refused", message: `Not sent: ${error.detail}. The draft is retained for correction.` };
+      outcome = { kind: "refused", message: `Not sent: ${error.detail}. The draft is retained for correction.` };
     } else {
-      surface.submission = { kind: "unknown", message: `Submission outcome unknown: ${error.message} No retry will be sent; inspect the task record.` };
+      outcome = { kind: "unknown", message: `Submission outcome unknown: ${error.message} No retry will be sent; inspect the task record.` };
     }
-    finalMessage = surface.submission.message;
+    if (surface.kind === "revision" && surface.buffer.revisionPending !== pending) {
+      // the pending changed in flight: the outcome names no live surface
+      finalMessage = outcome.message;
+    } else {
+      surface.submission = outcome;
+      finalMessage = outcome.message;
+    }
   } finally {
     submitting = false;
     status(finalMessage);
@@ -1152,6 +1205,7 @@ function choose(beside) {
     if (kind === "title") {
       titleTarget.set(value);
       persist(); refreshChrome();
+      refreshRendered(titleTarget.bufferId);
       if (after) after(value);
       else status(value ? `Title set: ${value}` : "Title cleared; publication requires one.");
     } else {
@@ -1168,6 +1222,7 @@ function choose(beside) {
   if (kind === "home") {
     const buffer = bench.buffer(bench.view(viewId).bufferId);
     buffer.home = selection.id; persist(); refreshChrome();
+    refreshRendered(buffer.id);
     if (after) after(selection);
     return;
   }

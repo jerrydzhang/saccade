@@ -628,6 +628,92 @@ def main():
             check(draft(page)['revisionPending'] is not None, 'a fresh repair starts after the last landed')
             local(page, 'e')
             check(draft(page)['revisionPending'] is None, 'comma e again discards the pending repair as the status promises')
+
+            # in-flight completion must not discard local work: hold the
+            # answer, keep editing the repair, then let the answer land
+            finder(page, 'insertion bookmark'); page.keyboard.press('Enter')
+            local(page, 'e')
+            page.keyboard.press('i'); page.keyboard.type(' Held-answer base.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.revisionPending && b.text.includes('Held-answer base.'))")
+            sent_body = draft(page)['text']
+            held_revision = []
+            def hold_revision(route):
+                response = route.fetch()
+                held_revision.append((route, response))
+                route.request.frame.evaluate('window.workbenchRevisionHeld = true')
+            page.route('**/workbench/command', hold_revision)
+            page.keyboard.press('Escape')
+            local(page, 'p')
+            page.wait_for_function('window.workbenchRevisionHeld === true')
+            page.keyboard.press('i'); page.keyboard.type(' Unsent while held.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.revisionPending && b.text.includes('Unsent while held.'))")
+            held_revision[0][0].fulfill(response=held_revision[0][1])
+            page.wait_for_function('document.querySelector("#message").textContent.includes("continues on the recorded bytes")')
+            still = draft(page)
+            check(still['revisionPending'] is not None and 'Unsent while held.' in still['text'], 'a landed answer keeps repair work typed while it was outstanding')
+            check(still['revisionPending']['originalBody'] == sent_body and still['revisionPending']['savedBody'] == sent_body, 'the surviving repair rebases on the recorded bytes')
+            check(still['revisionPending']['submission'] is None, 'the rebased repair is a fresh unsent patch')
+            landed_body = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['id'] == 'c-0')['body']
+            check('Held-answer base.' in landed_body and 'Unsent while held.' not in landed_body, 'the record carries exactly the sent bytes')
+            page.unroute('**/workbench/command', hold_revision)
+            page.keyboard.press('Escape')
+            local(page, 'p'); wait_submission(page, 'Recorded as')
+            repaired = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['id'] == 'c-0')['body']
+            check('Unsent while held.' in repaired, 'the rebased repair publishes its remaining diff')
+            check(draft(page)['revisionPending'] is None, 'the fully published repair completes')
+
+            # discarding a repair while its answer is outstanding leaves the
+            # buffer on the recorded bytes and touches no other pending
+            local(page, 'e')
+            page.keyboard.press('i'); page.keyboard.type(' Discard candidate.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.revisionPending && b.text.includes('Discard candidate.'))")
+            held_discard = []
+            def hold_discard(route):
+                response = route.fetch()
+                held_discard.append((route, response))
+                route.request.frame.evaluate('window.workbenchDiscardHeld = true')
+            page.route('**/workbench/command', hold_discard)
+            page.keyboard.press('Escape')
+            local(page, 'p')
+            page.wait_for_function('window.workbenchDiscardHeld === true')
+            local(page, 'e')
+            check(draft(page)['revisionPending'] is None, 'the repair discards while its answer is outstanding')
+            held_discard[0][0].fulfill(response=held_discard[0][1])
+            page.wait_for_function('document.querySelector("#message").textContent.includes("the record stands")')
+            check(draft(page)['revisionPending'] is None, 'the outstanding answer completes without reviving the discarded repair')
+            check('Discard candidate.' in draft(page)['text'], 'the landed record shows through the discarded local repair')
+            page.unroute('**/workbench/command', hold_discard)
+
+            # authoring metadata renders live, without leaving rendered View
+            command(page, 'home')
+            command(page, 'new')
+            page.keyboard.press('i'); page.keyboard.type('Metadata renders as it is authored.')
+            page.keyboard.press('Escape')
+            leader(page, 'uv')
+            page.wait_for_function('document.querySelector(".pane.active .reading").textContent.includes("home: not selected")')
+            local(page, 'h')
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('t-1'); page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            page.wait_for_function('document.querySelector(".pane.active .reading").textContent.includes("home: t-1")')
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.fill('#query', 'The live metadata title'); page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            page.wait_for_function('document.querySelector(".pane.active .reading").textContent.includes("title: The live metadata title")')
+            check('not authored' not in page.locator('.pane.active .reading').inner_text() and 'home: t-1' in page.locator('.pane.active .reading').inner_text(), 'title and home changes render live in the draft View')
+            finder(page, 'insertion bookmark'); page.keyboard.press('Enter')
+            local(page, 'e')
+            leader(page, 'uv')
+            page.wait_for_function('document.querySelector(".pane.active .draft-title") !== null')
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.fill('#query', 'The live repair title'); page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            page.wait_for_function('document.querySelector(".pane.active .draft-title").textContent.includes("The live repair title")')
+            check('The live repair title' in page.locator('.pane.active .reading').inner_text(), 'a repair title prompt refreshes the rendered repair in View')
+            local(page, 'e')
+            check(draft(page)['revisionPending'] is None, 'the probe repair discards cleanly after the render checks')
             context.close()
 
             # the bar names the tracker kind across record kinds and
