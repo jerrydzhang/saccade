@@ -4805,9 +4805,13 @@ use std::os::unix::ffi::OsStrExt;
 
 /// A pty slave as spawnable stdio; the master stays open for the terminal read.
 fn pty_stdio(masters: &mut Vec<i32>) -> std::process::Stdio {
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::io::FromRawFd;
     let (master, slave) = open_pty();
-    let fd = unsafe { libc::open(slave.as_os_str().as_bytes().as_ptr().cast(), libc::O_RDWR) };
+    // libc::open reads until NUL, and Rust bytes carry none: without the
+    // CString the call walks past the allocation into neighboring heap bytes
+    let path = std::ffi::CString::new(slave.as_os_str().as_bytes()).unwrap();
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDWR) };
     assert!(fd >= 0, "open the pty slave");
     masters.push(master);
     std::process::Stdio::from(unsafe { std::fs::File::from_raw_fd(fd) })

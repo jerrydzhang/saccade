@@ -155,6 +155,16 @@ test("draft Unicode remains unchanged around inserted citation markers", () => {
 });
 
 
+test("a landed revision confirms against the surface's own baseline, not a live pending", () => {
+  const surface = revisionSurface();
+  const landed = { kind: "comment_revised", actor: "jerry", tier: "human",
+    payload: { id: 11, body: "the corrected body" } };
+  assert.equal(confirmsLanded(surface, structuredClone(landed)), true);
+  surface.buffer.revisionPending = null;
+  assert.equal(confirmsLanded(surface, structuredClone(landed)), true,
+    "a repair discarded mid-flight still confirms its own sent bytes");
+});
+
 function rejectSurface() {
   const buffer = { id: "draft:grounds", kind: "draft", text: "the edge case still fails",
     eventual: { kind: "reject", offer: "c-2", offerSeq: 7 }, submission: null };
@@ -189,7 +199,8 @@ function revisionSurface() {
     } };
   return { kind: "revision", buffer, title: buffer.revisionPending.title, body: buffer.text,
     references: null, home: 0, target: "c-0",
-    get submission() { return buffer.revisionPending.submission; }, set submission(value) { buffer.revisionPending.submission = value; } };
+    originalTitle: buffer.revisionPending.originalTitle, originalBody: buffer.revisionPending.originalBody,
+    get submission() { return buffer.revisionPending?.submission; }, set submission(value) { if (buffer.revisionPending) buffer.revisionPending.submission = value; } };
 }
 
 test("the revision patch diffs against the original record bytes, not the local savepoint", () => {

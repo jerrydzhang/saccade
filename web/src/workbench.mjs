@@ -187,9 +187,9 @@ export function commandFor(surface, actor) {
   if (surface.kind === "revision") {
     const id = surface.buffer.source.seq;
     const title = ["note", "offer"].includes(surface.buffer.source.kind)
-      ? surface.title !== surface.buffer.revisionPending.originalTitle ? surface.title : null
+      ? surface.title !== surface.originalTitle ? surface.title : null
       : null;
-    const body = surface.body !== surface.buffer.revisionPending.originalBody ? surface.body : null;
+    const body = surface.body !== surface.originalBody ? surface.body : null;
     return { revise_comment: { id, ...(title !== null ? { title } : {}), ...(body !== null ? { body } : {}) } };
   }
   if (surface.kind === "accept") {
@@ -208,12 +208,10 @@ export function confirmsLanded(surface, record) {
   }
   if (surface.kind === "revision") {
     if (record.kind !== "comment_revised" || payload?.id !== surface.buffer.source.seq) return false;
-    const title = surface.title !== surface.buffer.revisionPending.originalTitle ? surface.title : null;
-    const body = surface.body !== surface.buffer.revisionPending.originalBody ? surface.body : null;
-    const sentTitle = title === null ? undefined : title;
-    const sentBody = body === null ? undefined : body;
-    return (sentTitle === undefined ? payload?.title === undefined : payload?.title === sentTitle)
-      && (sentBody === undefined ? payload?.body === undefined : payload?.body === sentBody);
+    const title = surface.title !== surface.originalTitle ? surface.title : undefined;
+    const body = surface.body !== surface.originalBody ? surface.body : undefined;
+    return (title === undefined ? payload?.title === undefined : payload?.title === title)
+      && (body === undefined ? payload?.body === undefined : payload?.body === body);
   }
   if (surface.kind === "accept") {
     return record.kind === "commented" && payload?.kind?.accept?.offer === surface.buffer.source.seq;
