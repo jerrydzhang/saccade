@@ -187,12 +187,14 @@ function threadSelection(viewId = bench.focus) {
 }
 
 // the comment the contextual actions name: the focused contribution
-// buffer, or the focused thread's selected card
+// buffer, or the focused thread's selected card, only when that card
+// lives on the focused thread
 function actionTarget() {
   const buffer = current();
   if (buffer.kind === "comment") return buffer.source ? buffer : null;
   const id = threadSelection();
-  return id ? bench.buffers.get(id) ?? published(id) : null;
+  if (!id || comment(id)?.home !== buffer.home) return null;
+  return bench.buffers.get(id) ?? published(id);
 }
 
 function remember(viewId) {
@@ -247,7 +249,7 @@ function identifierInfo(buffer) {
   if (buffer.kind === "task") {
     const selected = threadSelection();
     const card = selected && comment(selected);
-    if (card) parts.push(`selected ${selected}  ${card.kind}${card.title ? `  ${card.title}` : ""}`);
+    if (card && card.home === buffer.home) parts.push(`selected ${selected}  ${card.kind}${card.title ? `  ${card.title}` : ""}`);
   }
   if (tag) parts.push(tag);
   return parts.join("  ");
@@ -561,9 +563,11 @@ function openBuffer(id, viewId = bench.focus, preferred = "view", selected) {
   // a passed selection assigns exactly - null clears, omitted remembers
   if (selected !== undefined) presentation(viewId).selected = selected;
   renderLayout(); focusPane(viewId);
-  if (selected && bench.buffer(id).kind === "task") {
-    requestAnimationFrame(() => readers.get(viewId)?.querySelector(`[data-comment="${selected}"]`)?.scrollIntoView({ block: "start" }));
-  }
+  if (selected && bench.buffer(id).kind === "task") scrollCardIntoView(viewId, selected);
+}
+
+function scrollCardIntoView(viewId, id) {
+  requestAnimationFrame(() => readers.get(viewId)?.querySelector(`[data-comment="${id}"]`)?.scrollIntoView({ block: "start" }));
 }
 
 function split(axis, id = bench.view().bufferId) {
@@ -1393,11 +1397,16 @@ document.addEventListener("click", (event) => {
   if (url.origin !== location.origin || !/^\/t\/\d+$/.test(url.pathname)) return;
   event.preventDefault();
   const thread = `t-${url.pathname.slice(3)}`;
-  const selected = /^#c-\d+$/.test(url.hash) ? url.hash.slice(1) : null;
+  const named = /^#c-\d+$/.test(url.hash) ? url.hash.slice(1) : null;
+  // the same membership contract as deepLink: the hash selects only a
+  // contribution that lives in the named thread, and clears otherwise
+  const selected = named && comment(named)?.home === Number(url.pathname.slice(3)) ? named : null;
   if (picker) closePicker();
   if (event.shiftKey) {
     split("row", thread);
-    if (selected) { presentation().selected = selected; showPresentation(bench.focus); }
+    presentation().selected = selected;
+    showPresentation(bench.focus);
+    if (selected) scrollCardIntoView(bench.focus, selected);
   } else openBuffer(thread, bench.focus, "view", selected);
 });
 

@@ -893,6 +893,20 @@ def main():
             page.evaluate("location.hash = '#c-2'")
             page.wait_for_timeout(250)
             check(page.locator('.pane.active .thread-card.selected[data-comment="c-2"]').count() == 1, 'a hash change reselects within the open thread')
+            # a wrong-thread selected-comment link: same membership contract
+            # as deepLink, no card selected and no hidden contextual target
+            page.evaluate('''() => {
+                const a = document.createElement("a");
+                a.href = "/t/0#c-5";
+                a.textContent = "wrong thread";
+                document.querySelector(".pane.active .thread-card .rich").append(a);
+            }''')
+            page.locator('.pane.active .thread-card a', has_text='wrong thread').click()
+            page.wait_for_timeout(200)
+            check(draft(page)['id'] == 't-0' and page.locator('.pane.active .thread-card.selected').count() == 0, 'a wrong-thread selected-comment link stays on the named thread and selects no card')
+            check(page.locator('#bar-info').text_content() == '', 'the bar names no selection after a wrong-thread link')
+            local(page, 'e')
+            check(draft(page)['id'] == 't-0', 'comma e after a wrong-thread link leaves no hidden cross-thread repair target')
             page.evaluate("location.hash = '#c-4'")
             page.wait_for_timeout(250)
             check(page.locator('.pane.active .thread-card.selected').count() == 0, 'a hash naming a contribution of another thread selects nothing here')
@@ -954,6 +968,28 @@ def main():
             page.set_viewport_size({'width': 1500, 'height': 980})
             survey_text = page.locator('.pane.active .reading').inner_text()
             check(page.locator('.pane.active .thread-card').count() == 5 and all(word in survey_text for word in ['offer', 'reject', 'accept', 'use']), 'a thread renders every recorded kind as a card')
+            # shift-clicking a valid selected-comment link splits the thread
+            # into a new pane, selects there, and scrolls the card into view
+            tail_card = [c['id'] for c in request(base + '/api/v1/workbench')[1]['comments'] if c['home'] == 0][-1]
+            page.set_viewport_size({'width': 1500, 'height': 420})
+            page.goto(base + '/c/2'); page.wait_for_function('window.workbenchUI !== undefined')
+            page.evaluate(f'''() => {{
+                const a = document.createElement("a");
+                a.href = "/t/0#{tail_card}";
+                a.textContent = "deep tail";
+                document.querySelector(".pane.active .reading").append(a);
+            }}''')
+            page.locator('.pane.active .reading a', has_text='deep tail').click(modifiers=['Shift'])
+            check(len(state(page)['panes']) == 2 and draft(page)['id'] == 't-0', 'a shift-clicked selected-comment link opens the thread beside the source')
+            page.wait_for_function('''() => {
+                const reader = document.querySelector(".pane.active .reading");
+                const card = document.querySelector(".pane.active .thread-card.selected");
+                if (!card) return false;
+                const a = card.getBoundingClientRect(), r = reader.getBoundingClientRect();
+                return reader.scrollTop > 0 && a.top >= r.top - 1 && a.bottom <= r.bottom + 1;
+            }''')
+            check(page.locator(f'.pane.active .thread-card.selected[data-comment="{tail_card}"]').count() == 1, 'the shift-clicked selected card is scrolled into view in its new pane')
+            page.set_viewport_size({'width': 1500, 'height': 980})
             page.keyboard.press('Escape')
             page.keyboard.press(':')
             page.wait_for_function('document.querySelector("#picker").open')
