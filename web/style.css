@@ -325,6 +325,9 @@ dialog footer span { font-size: 11px; color: var(--muted); }
   overflow: auto;
   padding: 18px 24px 100px;
   outline-offset: -3px;
+  /* home surfaces read this box's width, not the window's: a home
+     pane in a split stays narrow however wide the screen is */
+  container-type: inline-size;
 }
 .reading:focus-visible { outline: 2px solid var(--focus); }
 
@@ -356,6 +359,34 @@ dialog footer span { font-size: 11px; color: var(--muted); }
   background: var(--inset);
   box-shadow: inset 3px 0 var(--focus);
 }
+
+/* home: recent activity first; recently active tasks below on a
+   narrow pane, beside it on a wide one. Chronological record facts
+   only - no totals, no badges; the reveal bounds live in the pane. */
+.home-surfaces { display: grid; grid-template-columns: minmax(0, 1fr); }
+.home-tasks { border-top: 1px solid var(--line-soft); margin-top: 22px; padding-top: 4px; }
+@container (min-width: 760px) {
+  .home-surfaces { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 30px; }
+  .home-tasks { border-top: 0; margin: 0; padding: 0 0 0 30px; border-left: 1px solid var(--line-soft); }
+}
+.home-list { display: flex; flex-direction: column; }
+.home-entry {
+  display: flex;
+  justify-content: space-between;
+  gap: 2px 18px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  border-top: 1px solid var(--line-soft);
+  color: inherit;
+  text-decoration: none;
+  font: 12px/1.6 var(--mono);
+}
+.home-list .home-entry:first-child { border-top: 0; }
+.home-entry:hover { background: var(--raise); color: var(--bright); }
+.home-what { color: var(--primary); overflow-wrap: anywhere; }
+.home-entry:hover .home-what { color: var(--bright); }
+.home-when { color: var(--muted); text-align: right; }
+.home-more { align-self: flex-start; margin: 10px 0 4px; font-size: 12px; padding: 3px 10px; }
 
 .rich {
   font: 500 15px/1.68 var(--sans);

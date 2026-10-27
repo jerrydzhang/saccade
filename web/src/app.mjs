@@ -27,6 +27,10 @@ let claimedName = null;    // the name a human typed when no cookie claimed one 
 let submitting = false;
 let nextDraft = 1;
 let messageTimer = 0;
+// first-pass home bounds, provisional by agreement: Show more reveals
+// older entries in the same increments and no totals are shown
+const ACTIVITY_STEP = 20;
+const TASKS_STEP = 10;
 const $ = (selector) => document.querySelector(selector);
 const el = (tag, text, className) => {
   const node = document.createElement(tag);
@@ -173,7 +177,7 @@ function presentation(viewId = bench.focus) {
 
 function isReading(viewId = bench.focus) {
   const pane = bench.views.get(viewId);
-  return !!pane && ["comment", "draft", "task"].includes(bench.buffer(pane.bufferId).kind) && presentation(viewId).mode === "view";
+  return !!pane && ["home", "comment", "draft", "task"].includes(bench.buffer(pane.bufferId).kind) && presentation(viewId).mode === "view";
 }
 
 function threadFocused(viewId = bench.focus) {
@@ -351,6 +355,10 @@ function showPresentation(viewId) {
     showThread(viewId, reader, buffer);
     return;
   }
+  if (buffer.kind === "home") {
+    showHome(viewId, reader, buffer);
+    return;
+  }
   if (buffer.kind === "draft" || buffer.revisionPending) {
     showDraft(viewId, reader, buffer);
     return;
@@ -462,6 +470,84 @@ function showThread(viewId, reader, buffer) {
   requestAnimationFrame(() => { if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop; });
 }
 
+// one recent-activity entry: the record facts it carries, linked the
+// way its kind anchors - contribution records land on their card in
+// the home thread, the rest on the task itself
+function activityNode(entry) {
+  const node = el("a", undefined, "home-entry");
+  node.href = entry.comment !== null ? `/t/${entry.home}#c-${entry.comment}` : `/t/${entry.home}`;
+  const source = entry.comment !== null ? comment(`c-${entry.comment}`) : null;
+  const parts = [];
+  if (entry.event === "task_created") parts.push(`t-${entry.home} created`, task(entry.home)?.name ?? "");
+  else if (entry.event === "task_claimed") parts.push(`t-${entry.home} claimed`);
+  else if (entry.event === "task_cancelled") parts.push(`t-${entry.home} cancelled`);
+  else if (entry.event === "task_reopened") parts.push(`t-${entry.home} reopened`);
+  else if (entry.event === "commented") parts.push(`c-${entry.comment} ${source?.kind ?? ""}`, source?.title ?? "");
+  else if (entry.event === "comment_revised") parts.push(`c-${entry.comment} revised`, source?.title ?? "");
+  else if (entry.event === "comment_withdrawn") parts.push(`c-${entry.comment} withdrawn`);
+  else if (entry.event === "use_bound") parts.push(`c-${entry.comment} use bound`, entry.offer !== null ? `-> c-${entry.offer}` : "");
+  else if (entry.event === "artifact_added") parts.push("artifact", entry.artifact ?? "");
+  node.append(
+    el("span", parts.filter((part) => part !== "").join("  "), "home-what"),
+    el("span", `${entry.actor}/${entry.tier}  ${time(entry.at)}`, "home-when"),
+  );
+  return node;
+}
+
+// one recently active task: its identity, name, and standing facts -
+// ordered by its latest included activity, never by judged relevance
+function recentTaskNode(entry) {
+  const source = task(entry.task);
+  const node = el("a", undefined, "home-entry");
+  node.href = `/t/${entry.task}`;
+  node.append(
+    el("span", `t-${entry.task}  ${source?.name ?? ""}`, "home-what"),
+    el("span", `${source?.state ?? ""}${source?.owner ? `  ${source.owner}` : ""}  ${time(entry.at)}`, "home-when"),
+  );
+  return node;
+}
+
+// the home surfaces: recent activity first; recently active tasks
+// beside it when the pane itself is wide, below when narrow - the
+// stylesheet's container query reads the pane, not the window. The
+// reveal bounds are pane state, never totals.
+function showHome(viewId, reader, buffer) {
+  const pane = presentation(viewId);
+  const activityShown = pane.activityShown ?? ACTIVITY_STEP;
+  const tasksShown = pane.tasksShown ?? TASKS_STEP;
+  const signature = JSON.stringify([buffer.text, snapshot.cursor, activityShown, tasksShown]);
+  if (reader.signature === signature) return;
+  const surfaces = el("div", undefined, "home-surfaces");
+  const activity = el("section", undefined, "home-activity");
+  activity.append(el("h2", "Recent activity"));
+  const activityList = el("div", undefined, "home-list");
+  for (const entry of snapshot.recent_activity.slice(0, activityShown)) activityList.append(activityNode(entry));
+  if (snapshot.recent_activity.length > activityShown) {
+    const more = button("Show more", () => { pane.activityShown = activityShown + ACTIVITY_STEP; showPresentation(viewId); persist(); }, "Reveal older entries");
+    more.className = "home-more";
+    activityList.append(more);
+  }
+  activity.append(activityList);
+  const active = el("section", undefined, "home-tasks");
+  active.append(el("h2", "Recently active tasks"));
+  const taskList = el("div", undefined, "home-list");
+  for (const entry of snapshot.recently_active_tasks.slice(0, tasksShown)) taskList.append(recentTaskNode(entry));
+  if (snapshot.recently_active_tasks.length > tasksShown) {
+    const more = button("Show more", () => { pane.tasksShown = tasksShown + TASKS_STEP; showPresentation(viewId); persist(); }, "Reveal older entries");
+    more.className = "home-more";
+    taskList.append(more);
+  }
+  active.append(taskList);
+  surfaces.append(activity, active);
+  // a Show more click focuses its button and the re-render removes it:
+  // keep focus on the reader or the pane's keys go dead
+  const hadFocus = reader.contains(document.activeElement);
+  reader.replaceChildren(surfaces);
+  if (hadFocus) reader.focus({ preventScroll: true });
+  reader.signature = signature;
+  requestAnimationFrame(() => { if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop; });
+}
+
 function button(text, fn, title) {
   const node = el("button", text);
   node.type = "button";
@@ -545,7 +631,7 @@ function jumpState(viewId) {
 }
 
 function jumpLocation(viewId) {
-  return { bufferId: bench.view(viewId).bufferId, position: bench.position(viewId), presentation: ["comment", "draft", "task"].includes(bench.buffer(bench.view(viewId).bufferId).kind) ? structuredClone(presentation(viewId)) : null };
+  return { bufferId: bench.view(viewId).bufferId, position: bench.position(viewId), presentation: ["home", "comment", "draft", "task"].includes(bench.buffer(bench.view(viewId).bufferId).kind) ? structuredClone(presentation(viewId)) : null };
 }
 
 function pushHistory(viewId) {
@@ -572,7 +658,7 @@ function scrollCardIntoView(viewId, id) {
 
 function split(axis, id = bench.view().bufferId) {
   remember(bench.focus);
-  const same = id === bench.view().bufferId && ["comment", "draft", "task"].includes(current().kind) ? structuredClone(presentation()) : null;
+  const same = id === bench.view().bufferId && ["home", "comment", "draft", "task"].includes(current().kind) ? structuredClone(presentation()) : null;
   bench.split(axis, id);
   if (same) { presentation(); bench.view().presentations[id] = same; }
   renderLayout(); focusPane(bench.focus);
@@ -1089,7 +1175,7 @@ const registry = [
   ...["h", "j", "k", "l"].map((d) => ({ id: `focus-${d}`, binding: `w${d}`, label: `Focus pane ${{ h: "left", j: "below", k: "above", l: "right" }[d]}`, run: () => neighbor(d) })),
   { id: "follow", label: "Follow id or reference under cursor", binding: "gd", when: () => !isReading() && !!currentEditor(), run: follow },
   { id: "backlinks", label: "Show explicit backlinks", binding: "gr", when: () => actionTarget()?.kind === "comment", run: backlinks },
-  { id: "rendering", label: "Toggle View / Source", binding: "uv", when: () => ["comment", "draft", "task"].includes(current().kind), run: togglePresentation },
+  { id: "rendering", label: "Toggle View / Source", binding: "uv", when: () => ["home", "comment", "draft", "task"].includes(current().kind), run: togglePresentation },
   { id: "back", label: "Jump backward", binding: "jb", run: back },
   { id: "forward", label: "Jump forward", run: forward },
   { id: "home", label: "Open home buffer", binding: "hh", run: () => openBuffer("home") },

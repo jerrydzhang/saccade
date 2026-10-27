@@ -1385,6 +1385,30 @@ async fn workbench_snapshot_projects_the_canonical_fold() {
         projection["tasks"][0]["name"].as_str(),
         Some("migrate floop")
     );
+    // home rides the same projection: every task and comment record is
+    // recent activity, newest first, anchored to its public c-N
+    let activity = projection["recent_activity"].as_array().unwrap();
+    let seqs: Vec<i64> = activity
+        .iter()
+        .map(|e| e["seq"].as_i64().unwrap())
+        .collect();
+    assert_eq!(seqs, vec![5, 4, 3, 2, 1, 0]);
+    let withdrawal = &activity[0];
+    assert_eq!(withdrawal["event"].as_str(), Some("comment_withdrawn"));
+    assert_eq!(withdrawal["home"].as_i64(), Some(0));
+    assert_eq!(withdrawal["comment"].as_i64(), Some(1));
+    assert_eq!(withdrawal["actor"].as_str(), Some("jerry"));
+    let created = &activity[5];
+    assert_eq!(created["event"].as_str(), Some("task_created"));
+    assert_eq!(created["home"].as_i64(), Some(0));
+    assert_eq!(created["comment"].as_i64(), None);
+    // recently active tasks: one entry per task, the same records
+    // ordering it - t-0's withdrawal is later than t-1's reply
+    let active = projection["recently_active_tasks"].as_array().unwrap();
+    let order: Vec<i64> = active.iter().map(|e| e["task"].as_i64().unwrap()).collect();
+    assert_eq!(order, vec![0, 1]);
+    assert_eq!(active[0]["seq"].as_i64(), Some(5));
+    assert_eq!(active[1]["seq"].as_i64(), Some(4));
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
