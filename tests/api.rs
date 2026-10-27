@@ -1390,8 +1390,9 @@ async fn workbench_snapshot_projects_the_canonical_fold() {
 
 /// The workbench read is the page's synchronization surface: with a
 /// cursor and a bounded window it parks while the log stands at that
-/// cursor and wakes on the landing - the mailbox read's own pattern -
-/// while a stale cursor or no parameters returns immediately.
+/// cursor, woken early by a landing through the server's own door and
+/// re-checked on bounded slices for writers that fire no wake, while a
+/// stale cursor or no parameters returns immediately.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_workbench_read_parks_wakes_and_catches_up() {
     let db = scratch_db("workbench-follow");

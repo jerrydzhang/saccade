@@ -1126,8 +1126,9 @@ def main():
             check(draft(page)['id'] == 'c-6', 'a hash link navigates the restored session to the standalone contribution')
             context.close()
 
-            # live record updates: the parked read wakes on every landing
-            # and reconciles without reload, navigation, or local damage
+            # live record updates: the page follows the record through
+            # its parked read and reconciles without reload, navigation,
+            # or local damage
             context = browser.new_context(viewport={'width': 1500, 'height': 980})
             page = context.new_page()
             errors = []
@@ -1241,6 +1242,53 @@ def main():
             check(next(b for b in state(page)['buffers'] if b['kind'] == 'draft')['text'] == 'The local draft text that no landing may touch.', 'the local draft survives the reconnect')
             check(page.locator('.pane').nth(0).locator('.thread-card.selected').get_attribute('data-comment') == selected_id, 'the selection survives the reconnect')
             check(abs(page.evaluate(f'() => {reader}.scrollTop') - scroll_before) <= 2, 'the reader scroll survives the reconnect')
+
+            # an unrelated landing leaves an unchanged read-only Source view
+            # exactly where it stands: same scroll, same cursor, same focus
+            tall_body = 'A substantial source paragraph.\n\n' * 120
+            server.cli('comment', f't-{live_id}', '--title', 'The tall contribution', tall_body)
+            tall_id = next(c['id'] for c in request(base + '/api/v1/workbench')[1]['comments'] if c['title'] == 'The tall contribution')
+            page.goto(base + f'/c/{tall_id[2:]}'); page.wait_for_function('window.workbenchUI !== undefined')
+            page.locator('.pane.active .reading').focus()
+            page.keyboard.press('Escape')
+            leader(page, 'uv')
+            page.wait_for_selector('.pane.active .cm-editor:visible')
+            page.keyboard.press('G'); page.wait_for_timeout(200)
+            source_before = page.evaluate('''() => { const el = document.querySelector(".pane.active .cm-scroller"); const st = window.workbenchUI.state(); return { scroll: el.scrollTop, height: el.scrollHeight, head: st.panes[0].position.head, focus: !!document.activeElement.closest(".cm-editor") }; }''')
+            check(source_before['scroll'] > 0, 'the Source view rests scrolled into the document')
+            server.cli('comment', 't-1', '--title', 'The source neighbor', 'A record changes in another task while Source is being read.')
+            source_landed = request(base + '/api/v1/workbench')[1]['cursor']
+            page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=source_landed)
+            page.wait_for_timeout(200)
+            source_after = page.evaluate('''() => { const el = document.querySelector(".pane.active .cm-scroller"); const st = window.workbenchUI.state(); return { scroll: el.scrollTop, height: el.scrollHeight, head: st.panes[0].position.head, focus: !!document.activeElement.closest(".cm-editor") }; }''')
+            check(source_after['height'] == source_before['height'] and source_after['scroll'] == source_before['scroll'], 'an unrelated landing holds the unchanged Source view scroll')
+            check(source_after['head'] == source_before['head'] and source_after['focus'], 'an unrelated landing holds the Source cursor and focus')
+
+            # a delayed older follow response is superseded, never absorbed:
+            # it rolls back neither the rendered fold nor the cursor
+            holder = []
+            def hold_park(route):
+                holder.append(route)
+            page.route('**/api/v1/workbench?*', hold_park)
+            server.cli('comment', f't-{live_id}', '--title', 'The flush landing', 'This landing flows through the park issued before the hold.')
+            flush_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=flush_cursor, timeout=20000)
+            page.wait_for_timeout(200)
+            check(len(holder) >= 1, 'the follow re-park is held while the route stands')
+            server.cli('comment', f't-{live_id}', '--title', 'The newest retention probe', 'This record is only in the newer explicit reload.')
+            newest_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            command(page, 'reload')
+            page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=newest_cursor)
+            older_fold = request(base + f'/api/v1/workbench?cursor={flush_cursor}&wait_ms=0')[1]
+            holder[0].fulfill(status=200, content_type='application/json', body=json.dumps(older_fold))
+            page.wait_for_timeout(300)
+            check(page.evaluate('window.workbenchUI.state().cursor') == newest_cursor, 'a delayed older follow response rolls the cursor back to nothing')
+            check('The newest retention probe' in page.locator('.pane.active .reading').inner_text() or any('The newest retention probe' in (b['text'] or '') for b in state(page)['buffers']), 'a delayed older follow response hides no newer recorded fact')
+            page.unroute('**/api/v1/workbench?*')
+            server.cli('comment', f't-{live_id}', '--title', 'The post-recovery landing', 'The follow still delivers after a superseded response was dropped.')
+            recovery_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=recovery_cursor, timeout=20000)
+
             if errors:
                 print('PAGE-ERRORS:', errors, flush=True)
             check(not errors, 'the live-update flow has no browser exceptions')

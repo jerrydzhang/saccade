@@ -1051,8 +1051,13 @@ function absorb(fresh) {
     for (const [id, view] of editors) {
       if (bench.view(id).bufferId !== buffer.id) continue;
       if (buffer.revisionPending) continue;
+      // a view whose document is already the published text is left
+      // alone: setState on an unchanged document resets its scroll
+      if (buffer.master && buffer.master.doc.toString() === buffer.text) continue;
+      const scroll = view.scrollDOM.scrollTop;
       view.setState(editorState(buffer, bench.position(id)));
       observeMode(view);
+      view.scrollDOM.scrollTop = scroll;
     }
   }
   for (const id of editors.keys()) {
@@ -1061,19 +1066,32 @@ function absorb(fresh) {
   refreshChrome();
 }
 
-async function reload(announce = true) {
-  const fresh = await api("/api/v1/workbench");
+// a delayed response carrying an older fold is superseded by what
+// already stands on screen: absorbing it would roll back both the
+// rendered record and the cursor and hide newer facts. Strictly older
+// cursors are dropped; anything else adopts, including a cursor that
+// shrank, which names a different log state the record still owns.
+function absorbIfCurrent(fresh) {
+  if (typeof syncCursor === "number" && typeof fresh.cursor === "number" && fresh.cursor < syncCursor) return false;
   syncCursor = fresh.cursor;
   absorb(fresh);
+  return true;
+}
+
+async function reload(announce = true) {
+  const fresh = await api("/api/v1/workbench");
+  absorbIfCurrent(fresh);
   if (announce) status("Recorded material refreshed. Draft references were not retargeted.");
 }
 
 // the read-side follow: one parked read at a time, held at most wait_ms
-// and woken by the record's landing through the same door the mailbox
-// read uses - never a timer tick and never a subscription the tracker
-// keeps. A bounded pause after a failed request is reconnect transport;
-// the stale cursor then mismatches and the fresh fold returns whole, so
-// a dropped connection catches up from the record, not from memory.
+// and woken early by the record's landing through the same door the
+// mailbox read uses; the server re-checks its cursor on a bounded slice
+// so records written by other processes surface too. No subscription is
+// kept on the tracker. A bounded pause after a failed request is
+// reconnect transport; the stale cursor then mismatches and the fresh
+// fold returns whole, so a dropped connection catches up from the
+// record, not from memory.
 const followPause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function followRecords() {
   for (;;) {
@@ -1081,8 +1099,7 @@ async function followRecords() {
       const query = syncCursor === null || syncCursor === undefined
         ? "?wait_ms=25000" : `?cursor=${syncCursor}&wait_ms=25000`;
       const fresh = await api(`/api/v1/workbench${query}`);
-      syncCursor = fresh.cursor;
-      absorb(fresh);
+      absorbIfCurrent(fresh);
     } catch {
       await followPause(2000);
     }

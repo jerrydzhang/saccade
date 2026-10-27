@@ -656,13 +656,11 @@ struct WorkbenchQuery {
 /// edges, and the cursor, read straight off the store's own fold. A
 /// degraded fold refuses honestly; nothing writes. With cursor and
 /// wait_ms the read parks while the log stands at the named cursor and
-/// returns once a landing moves past it - the mailbox read's own
-/// armed-before-read, bounded, landing-woken pattern, so recorded
-/// changes reach the page without any clock. The landing wake is the
-/// fast path for writes through this server's own door; the park is
-/// sliced at one second so the cheap cursor check also sees records
-/// other processes wrote to the shared database (the CLI face), which
-/// fire no wake here. No parameters is the immediate read it always was.
+/// returns once the cursor moves past it. The landing wake is the fast
+/// path for writes through this server's own door; the park is sliced
+/// at one second so the cheap cursor check also surfaces records other
+/// processes wrote to the shared database (the CLI face), which fire
+/// no wake here. No parameters is the immediate read it always was.
 async fn workbench(
     State(app): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<WorkbenchQuery>,
