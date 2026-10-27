@@ -113,6 +113,19 @@ pub enum Event {
         incarnation: IncarnationId,
         worktree: WorktreePath,
     },
+    /// A completed workspace cleanup: host closure verified and the Git
+    /// checkout confirmed absent before this lands. It references the
+    /// existing workspace birth identity only - the birth carries the
+    /// immutable branch/path/base, this carries nothing else.
+    WorkspaceCleaned {
+        workspace: RecordRef,
+    },
+    /// A completed workspace restoration: the matching Git checkout
+    /// established or validated before this lands. It references the
+    /// existing workspace birth identity only.
+    WorkspaceRestored {
+        workspace: RecordRef,
+    },
     // Incarnation and message events: registration and submission are
     // machinery verbs, System-authored by role; a message is authored
     // by its sending session's registered identity
@@ -220,6 +233,15 @@ pub enum Command {
     ChangeWorkspace {
         incarnation: IncarnationId,
         worktree: WorktreePath,
+    },
+    // Cleanup and restoration are machinery verbs: System authorship
+    // comes from the role, never input - a door requests the effect,
+    // the serving controller records the completed fact
+    CleanWorkspace {
+        workspace: RecordRef,
+    },
+    RestoreWorkspace {
+        workspace: RecordRef,
     },
     // Registration and submission are machinery verbs: System
     // authorship comes from the role, never input. A message is

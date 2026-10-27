@@ -27,6 +27,38 @@ pub struct CreatedWorkspaceContext {
     pub born_at: u64,
 }
 
+/// A workspace's lifecycle stage, owned by the workspace: Available
+/// stands at birth, Cleaned stands after a completed cleanup, and a
+/// completed restoration returns Available. The latest lifecycle fact
+/// after the birth is the stage; earlier facts stay in the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceStage {
+    Available,
+    Cleaned,
+}
+
+impl WorkspaceStage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorkspaceStage::Available => "available",
+            WorkspaceStage::Cleaned => "cleaned",
+        }
+    }
+}
+
+/// The latest lifecycle fact of one workspace: its stage, the record
+/// that set it, and that record's event time. Births carry Available
+/// without a setting record - the birth itself is the fact.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkspaceLifecycle {
+    pub stage: WorkspaceStage,
+    /// The lifecycle record that set the stage; None at a birth
+    pub record: Option<RecordId>,
+    /// Event time of the birth or of the setting record
+    pub at: u64,
+}
+
 /// The latest confirmed saved-directory change of a native incarnation:
 /// the selected directory, the record that confirmed it, and its event
 /// time. A machinery fact riding the incarnation, never a lifecycle

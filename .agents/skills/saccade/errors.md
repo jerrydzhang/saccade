@@ -52,6 +52,47 @@ finding - name it on the thread before proceeding.
 - `workspace_path_missing` - the target of a workspace change does
   not exist; a change selects an existing directory and creates
   nothing.
+- `workspace_not_recorded` - clean, restore, or reconcile named a path
+  no workspace birth recorded; they select an exact recorded
+  workspace, never a primary checkout or an unrecognized directory.
+- `workspace_ambiguous_path` - several workspace births share the
+  path; resolve their history by hand before any lifecycle act.
+- `workspace_cleaned_mismatch` - the workspace is recorded Cleaned but
+  a checkout or a git registration stands there; a recorded cleanup
+  never authorizes deleting unexpected work.
+- `workspace_work_present` - the checkout holds staged, unstaged, or
+  untracked work; cleanup refuses. Ignored files are git's own
+  answer and may disappear.
+- `workspace_branch_missing` - the recorded branch holds no local
+  tip; destructive cleanup and restoration both refuse, and the
+  branch is never reconstructed from a base or a remote.
+- `workspace_checkout_mismatch` - the path holds bytes git does not
+  register as this repo's worktree, or a worktree on another branch,
+  bare or detached; no forced checkout, reset, or overwrite runs.
+- `workspace_terminals_open` - the host still names live terminals
+  for the workspace after its bound; no checkout removal ran.
+- `workspace_host_unverified` - the host gave no verified terminal or
+  presence answer within its bound; arbitrary host errors are never
+  read as absence or closure. Nothing further ran; retry.
+- `workspace_still_listed` - the host still lists the workspace after
+  the checkout removal; the Cleaned fact lands only on verified
+  visible absence.
+- `workspace_absence_unverified` - the path or the git registration
+  still stands after the removal attempt; inspect and retry.
+- `workspace_restore_absent_undecided` - the workspace stands
+  Available with no checkout at the recorded path; that restoration
+  edge has no ratified semantics yet, so nothing ran and nothing
+  changed. An Available workspace with its matching checkout standing
+  is already restored - a no-op success, no new record.
+- `workspace_cleaned` - the launch, resume, or switch target is a
+  recorded Cleaned workspace; it takes no new sessions until an
+  explicit `sac workspace restore`.
+- `workspace_primary_refused` - the path is the primary checkout;
+  cleanup never touches it.
+- `workspace_host_list_failed` / `workspace_host_close_failed` /
+  `workspace_host_show_failed` - the host's terminal list, terminal
+  close, or worktree show could not be asked or read; the detail
+  carries what answered.
 - `saved_session_missing` - the saved session file a change or resume
   names does not exist; only the exact recorded association resolves.
 - `saved_session_mismatch` - the saved session file carries another

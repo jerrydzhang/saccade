@@ -35,7 +35,8 @@ pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
 pub use objects::message::{Message, MessageContext, MessageId, MessageState};
 pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 pub use objects::workspace::{
-    CreatedWorkspace, CreatedWorkspaceContext, WorkspaceChange, WorkspaceId,
+    CreatedWorkspace, CreatedWorkspaceContext, WorkspaceChange, WorkspaceId, WorkspaceLifecycle,
+    WorkspaceStage,
 };
 pub use store::{Context, Record, RecordId, Scope, Tier, World};
 pub use types::actor::ActorName;
@@ -85,6 +86,10 @@ pub enum Reject {
     WorkspaceMissing,
     #[error("the tip rewinds the recorded checkpoint")]
     CheckpointRewind,
+    #[error("no workspace was born at that record")]
+    InvalidWorkspaceId,
+    #[error("the workspace's stage does not admit this lifecycle fact")]
+    WorkspaceStageMismatch,
     // Misc
     #[error("invalid actor name")]
     InvalidActor,
@@ -114,6 +119,8 @@ impl Reject {
             Reject::WorkspaceAlreadyExists => "workspace_already_exists",
             Reject::WorkspaceMissing => "workspace_missing",
             Reject::CheckpointRewind => "checkpoint_rewind",
+            Reject::InvalidWorkspaceId => "invalid_workspace_id",
+            Reject::WorkspaceStageMismatch => "workspace_stage_mismatch",
             Reject::InvalidActor => "invalid_actor",
             Reject::InvalidStateTransition => "invalid_state_transition",
             Reject::ReasonRequired => "reason_required",
@@ -145,6 +152,8 @@ mod test {
             Reject::WorkspaceAlreadyExists,
             Reject::WorkspaceMissing,
             Reject::CheckpointRewind,
+            Reject::InvalidWorkspaceId,
+            Reject::WorkspaceStageMismatch,
             Reject::InvalidActor,
             Reject::InvalidStateTransition,
             Reject::ReasonRequired,

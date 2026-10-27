@@ -988,6 +988,27 @@ mod test {
             36,
         )
         .unwrap();
+        // the workspace lifecycle rides the same round-trip: the
+        // completed cleanup, then the completed restoration, both
+        // machinery facts referencing the birth identity alone
+        record(
+            &mut conn,
+            &system,
+            Command::CleanWorkspace {
+                workspace: RecordId(39),
+            },
+            36,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::RestoreWorkspace {
+                workspace: RecordId(39),
+            },
+            36,
+        )
+        .unwrap();
         // the write path's world is the one a full reload produces,
         // asserted after the last write of the story
         let (_, returned) = record(
@@ -1006,7 +1027,7 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 43);
+        assert_eq!(loadout.rows.len(), 45);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
@@ -1216,6 +1237,19 @@ mod test {
         );
         assert_eq!(world.provenance[&RecordId(40)], None);
         assert_eq!(world.incarnations.len(), 3, "creation advanced no i-N");
+        // the lifecycle facts: reference-only payloads, machinery
+        // authorship, and the stage the fold carries after both
+        assert_eq!(loadout.rows[42].kind, "workspace_cleaned");
+        assert_eq!(loadout.rows[42].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[42].tier, "system");
+        assert!(loadout.rows[42].payload.contains("\"workspace\":39"));
+        assert_eq!(loadout.rows[43].kind, "workspace_restored");
+        assert_eq!(world.provenance[&RecordId(42)], None);
+        assert_eq!(world.provenance[&RecordId(43)], None);
+        assert_eq!(
+            world.workspace_stage(RecordId(39)),
+            Some(crate::WorkspaceStage::Available)
+        );
         // the registration births a native identity; the message
         // answers by reference and the submission reads submitted
         assert_eq!(

@@ -138,12 +138,15 @@ pub fn wait_matches(
         | Event::TaskWorkspaceCheckpointed { task_id, .. } => *target == Target::Task(*task_id),
         // messages take no thread home; they are never task activity.
         // So are the workspace creation and the confirmed change: the
-        // machinery facts ride no task.
+        // machinery facts ride no task. The workspace's lifecycle facts
+        // name the workspace birth alone - they ride no task either.
         Event::IncarnationRegistered { .. }
         | Event::MessageSent { .. }
         | Event::MessageSubmitted { .. }
         | Event::WorkspaceCreated { .. }
-        | Event::WorkspaceChanged { .. } => false,
+        | Event::WorkspaceChanged { .. }
+        | Event::WorkspaceCleaned { .. }
+        | Event::WorkspaceRestored { .. } => false,
     }
 }
 

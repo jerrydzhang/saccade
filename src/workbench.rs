@@ -175,6 +175,10 @@ pub fn snapshot(
                 "branch": context.workspace.branch.as_str(),
                 "path": context.workspace.worktree.as_path().display().to_string(),
                 "born_at": context.born_at,
+                "stage": world
+                    .workspace_stage(id.0)
+                    .map(|s| s.as_str())
+                    .unwrap_or("available"),
             })
         })
         .collect();
@@ -308,6 +312,8 @@ fn activity_entry(
         | Event::TaskWorkspaceCheckpointed { .. }
         | Event::WorkspaceCreated { .. }
         | Event::WorkspaceChanged { .. }
+        | Event::WorkspaceCleaned { .. }
+        | Event::WorkspaceRestored { .. }
         | Event::IncarnationRegistered { .. }
         | Event::MessageSent { .. }
         | Event::MessageSubmitted { .. } => return Ok(None),

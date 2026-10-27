@@ -73,6 +73,12 @@ enum Action {
     Register {
         draw: u8,
     },
+    CleanWorkspace {
+        draw: u8,
+    },
+    RestoreWorkspace {
+        draw: u8,
+    },
     Send {
         from: u8,
         to: u8,
@@ -99,6 +105,8 @@ impl Action {
             | Action::CreateWorkspace { .. }
             | Action::ChangeWorkspace { .. }
             | Action::Register { .. }
+            | Action::CleanWorkspace { .. }
+            | Action::RestoreWorkspace { .. }
             | Action::Send { .. }
             | Action::Submit { .. } => false,
         }
@@ -388,6 +396,17 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             )
             .unwrap(),
         },
+        // the lifecycle facts name whichever birth the draw resolves
+        // to; unknown draws refuse and the sequence carries on
+        Action::CleanWorkspace { draw } | Action::RestoreWorkspace { draw } => {
+            let birth = record_ref_at(records, *draw);
+            let command = if matches!(action, Action::CleanWorkspace { .. }) {
+                Command::CleanWorkspace { workspace: birth }
+            } else {
+                Command::RestoreWorkspace { workspace: birth }
+            };
+            command
+        }
         Action::Send { from, to, reply } => Command::SendMessage {
             from: native_at(world, *from).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
             to: native_at(world, *to).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
@@ -414,6 +433,8 @@ fn context(action: &Action, world: &World) -> Context {
     | Action::CreateWorkspace { .. }
     | Action::ChangeWorkspace { .. }
     | Action::Register { .. }
+    | Action::CleanWorkspace { .. }
+    | Action::RestoreWorkspace { .. }
     | Action::Submit { .. } = action
     {
         return Context::system();
@@ -524,6 +545,8 @@ fn action_strategy() -> BoxedStrategy<Action> {
             dir,
         }),
         2 => any::<u8>().prop_map(|draw| Action::Register { draw }),
+        2 => any::<u8>().prop_map(|draw| Action::CleanWorkspace { draw }),
+        2 => any::<u8>().prop_map(|draw| Action::RestoreWorkspace { draw }),
         3 => (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(from, to, reply)| Action::Send {
             from,
             to,
@@ -662,6 +685,16 @@ fn generator_reaches_deep_states() {
                                 *milestones.entry("workspace changed").or_default() += 1;
                             }
                         }
+                        Action::CleanWorkspace { .. } => {
+                            if last.kind == "workspace_cleaned" {
+                                *milestones.entry("workspace cleaned").or_default() += 1;
+                            }
+                        }
+                        Action::RestoreWorkspace { .. } => {
+                            if last.kind == "workspace_restored" {
+                                *milestones.entry("workspace restored").or_default() += 1;
+                            }
+                        }
                         Action::Comment { variant, .. } => {
                             // the variant grammar must actually land
                             let name = match variant % 5 {
@@ -728,6 +761,8 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::WorkspaceAlreadyExists => "WorkspaceAlreadyExists",
                         saccade::Reject::WorkspaceMissing => "WorkspaceMissing",
                         saccade::Reject::CheckpointRewind => "CheckpointRewind",
+                        saccade::Reject::InvalidWorkspaceId => "InvalidWorkspaceId",
+                        saccade::Reject::WorkspaceStageMismatch => "WorkspaceStageMismatch",
                         saccade::Reject::InvalidReference => "InvalidReference",
                     };
                     *reject_kinds.entry(kind).or_default() += 1;

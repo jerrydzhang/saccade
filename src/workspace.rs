@@ -4,6 +4,7 @@
 //! never checks the filesystem, and these functions never touch the
 //! record.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -277,6 +278,151 @@ pub fn worktree_home(db_path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("worktrees"))
 }
 
+// -- the workspace lifecycle effects -------------------------------------
+// Checkout inspection and removal under normal Git protections. Every
+// function states what it verified; none touches the record. The
+// retained branch is never deleted by any door here: git worktree
+// remove leaves refs alone, and no other verb runs.
+
+impl WorkspaceFail {
+    pub(crate) fn fs(path: &Path, detail: std::io::Error) -> WorkspaceFail {
+        WorkspaceFail::DirCreate {
+            path: path.to_path_buf(),
+            detail: detail.to_string(),
+        }
+    }
+}
+
+/// The canonical absolute form of a path whose leaf may be absent:
+/// canonicalize the deepest existing ancestor, then append the remainder.
+/// A recorded workspace's path compares equal only in this form.
+pub fn canonical_dir(path: &Path) -> Result<PathBuf, WorkspaceFail> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        let cwd = std::env::current_dir().map_err(|e| WorkspaceFail::fs(path, e))?;
+        cwd.join(path)
+    };
+    let mut remainder = Vec::new();
+    let mut probe = path.as_path();
+    while !probe.exists() {
+        match probe.parent() {
+            Some(parent) => {
+                remainder.push(probe.file_name().ok_or_else(|| {
+                    WorkspaceFail::Git(format!("{} has no final component", path.display()))
+                })?);
+                probe = parent;
+            }
+            None => break,
+        }
+    }
+    let mut out = std::fs::canonicalize(probe)
+        .map_err(|e| WorkspaceFail::Git(format!("cannot canonicalize {}: {e}", path.display())))?;
+    for part in remainder.iter().rev() {
+        out.push(part);
+    }
+    Ok(out)
+}
+
+/// The worktree registrations git holds for this repo: canonical path
+/// to the checked-out branch (None for a bare or detached entry).
+/// These are git's own facts, never the record's claims.
+pub fn registered_worktrees(
+    root: &Path,
+) -> Result<BTreeMap<PathBuf, Option<GitBranch>>, WorkspaceFail> {
+    let out = git(root, &["worktree", "list", "--porcelain"])?;
+    let mut map = BTreeMap::new();
+    let mut current: Option<PathBuf> = None;
+    for line in out.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current = Some(PathBuf::from(path));
+            map.entry(PathBuf::from(path)).or_insert(None);
+        } else if let Some(reference) = line.strip_prefix("branch ")
+            && let Some(path) = &current
+        {
+            let name = reference
+                .strip_prefix("refs/heads/")
+                .unwrap_or(reference)
+                .to_string();
+            map.insert(path.clone(), GitBranch::new(name).ok());
+        }
+    }
+    Ok(map)
+}
+
+/// The local branch's current tip, or None when git holds no such
+/// branch. Quiet verification: a missing branch is a fact, not a
+/// plumbing failure.
+pub fn branch_tip(root: &Path, branch: &GitBranch) -> Result<Option<GitCommit>, WorkspaceFail> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{}", branch.as_str()),
+        ])
+        .output()
+        .map_err(|e| WorkspaceFail::Git(format!("git rev-parse: {e}")))?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    GitCommit::new(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .map(Some)
+        .map_err(|e| WorkspaceFail::Git(format!("git gave no commit: {e:?}")))
+}
+
+/// The checkout's preservation check: staged, unstaged, and untracked
+/// changes all refuse; ignored files are git's own answer and may
+/// disappear. Some detail names what stands in the way.
+pub fn preserved_work(path: &Path) -> Result<Option<String>, WorkspaceFail> {
+    let out = git(path, &["status", "--porcelain"])?;
+    Ok(if out.is_empty() { None } else { Some(out) })
+}
+
+/// Remove the checkout with git's normal protections: no force, no
+/// branch deletion - the branch and every commit on it stand.
+pub fn remove_checkout(root: &Path, path: &Path) -> Result<(), WorkspaceFail> {
+    git(root, &["worktree", "remove", &path.display().to_string()])
+        .map(|_| ())
+        .map_err(|e| match e {
+            WorkspaceFail::Git(detail) => WorkspaceFail::Git(format!(
+                "git worktree remove {} refused: {detail}",
+                path.display()
+            )),
+            other => other,
+        })
+}
+
+/// Establish the checkout at the branch's current local tip with git's
+/// normal protections: no force, no base, no pull - a branch already
+/// checked out elsewhere refuses, as does a missing-but-registered
+/// worktree at the path. The branch's tip is git's, never a reset.
+pub fn add_checkout(root: &Path, path: &Path, branch: &GitBranch) -> Result<(), WorkspaceFail> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| WorkspaceFail::fs(parent, e))?;
+    }
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            &path.display().to_string(),
+            branch.as_str(),
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| match e {
+        WorkspaceFail::Git(detail) => WorkspaceFail::Git(format!(
+            "git worktree add {} {} refused: {detail}",
+            path.display(),
+            branch.as_str()
+        )),
+        other => other,
+    })
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -479,6 +625,109 @@ mod test {
         // a good source reads exactly four bytes into eight hex digits
         let mut four: &[u8] = &[0xde, 0xad, 0xbe, 0xef];
         assert_eq!(token_from_reader(&mut four).unwrap(), "deadbeef");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The lifecycle effects: canonical forms, registration reads,
+    /// quiet branch tips, work preservation, and the normal Git
+    /// protections both doors keep - the branch survives removal and
+    /// nothing forces anywhere.
+    #[test]
+    fn the_lifecycle_effects_keep_gits_own_protections() {
+        let root = scratch_repo("lifecycle");
+        std::fs::write(root.join("f.txt"), "advanced\n").unwrap();
+        git(&root, &["commit", "-qam", "advanced"]).unwrap();
+        let head = git(&root, &["rev-parse", "HEAD"]).unwrap();
+        let home = root.join("worktrees");
+        std::fs::create_dir_all(&home).unwrap();
+
+        // canonical forms: an existing path resolves through symlinks,
+        // an absent leaf keeps its tail on the deepest existing ancestor
+        let temp_base = std::env::temp_dir().canonicalize().unwrap();
+        let absent = temp_base.join("no-such-dir").join("leaf");
+        assert_eq!(
+            canonical_dir(&absent).unwrap(),
+            temp_base.join("no-such-dir").join("leaf")
+        );
+        let relative = canonical_dir(Path::new("f.txt"));
+        assert!(relative.is_err() == false);
+
+        // a registered worktree reads back with its branch; an absent
+        // branch tip reads None quietly, not as a plumbing failure
+        let branch = GitBranch::new("swept-line".into()).unwrap();
+        let path = home.join("swept-line");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                branch.as_str(),
+                &path.display().to_string(),
+                &head,
+            ],
+        )
+        .unwrap();
+        let registrations = registered_worktrees(&root).unwrap();
+        let registered = registrations.get(&path.canonicalize().unwrap());
+        assert_eq!(registered.cloned().flatten().as_ref(), Some(&branch));
+        assert_eq!(
+            branch_tip(&root, &branch).unwrap(),
+            Some(GitCommit::new(head.clone()).unwrap())
+        );
+        let missing = GitBranch::new("never-existed".into()).unwrap();
+        assert_eq!(branch_tip(&root, &missing).unwrap(), None);
+
+        // a clean checkout preserves nothing; an untracked file does
+        assert_eq!(preserved_work(&path).unwrap(), None);
+        std::fs::write(path.join("untracked.txt"), "kept\n").unwrap();
+        let refusal = preserved_work(&path).unwrap();
+        assert!(refusal.is_some(), "untracked work is preservation");
+        std::fs::remove_file(path.join("untracked.txt")).unwrap();
+
+        // removal keeps the branch: the ref and its tip stand after
+        remove_checkout(&root, &path).unwrap();
+        assert!(!path.exists());
+        assert!(!registered_worktrees(&root).unwrap().contains_key(&path));
+        assert_eq!(
+            branch_tip(&root, &branch).unwrap(),
+            Some(GitCommit::new(head).unwrap()),
+            "the branch survives the checkout removal"
+        );
+
+        // re-adding refuses while the branch is checked out elsewhere:
+        // git's own protection, never bypassed
+        let elsewhere = home.join("holder");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                &elsewhere.display().to_string(),
+                "-b",
+                "holder-line",
+                "HEAD",
+            ],
+        )
+        .unwrap();
+        let holder_branch = GitBranch::new("holder-line".into()).unwrap();
+        let refused = add_checkout(&root, &home.join("swept-again"), &holder_branch);
+        assert!(
+            matches!(refused, Err(WorkspaceFail::Git(_))),
+            "a branch checked out elsewhere refuses: {refused:?}"
+        );
+        assert!(!home.join("swept-again").exists());
+
+        // add succeeds where git allows, at the branch's current tip
+        let readded = home.join("swept-again");
+        add_checkout(&root, &readded, &branch).unwrap();
+        assert_eq!(
+            git(&readded, &["rev-parse", "HEAD"]).unwrap(),
+            branch_tip(&root, &branch).unwrap().unwrap().as_str()
+        );
 
         std::fs::remove_dir_all(&root).unwrap();
     }
