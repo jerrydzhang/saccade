@@ -1071,7 +1071,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		name: "saccade_send",
 		label: "Saccade send",
 		description:
-			"Send a durable message to another registered incarnation. Addressing uses public numbers: the recipient i-<n>, an optional reply_to m-<n> naming the message this one answers, and an optional task t-<n> riding as context without publishing to its thread. Nonblocking; pair with saccade_wait when the reply matters now.",
+			"Send a durable message to another registered incarnation. Addressing uses public numbers: the recipient i-<n>, an optional reply_to m-<n> naming the message this one answers, and an optional task t-<n> riding as context without publishing to its thread. The message records first, then the attempt waits briefly for the recipient's queue to accept it - success means accepted, a failure names the recorded m-N and why; pair with saccade_wait when the reply matters now.",
 		parameters: SendParams,
 		execute: async (_id, params: Static<typeof SendParams>, _signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
@@ -1101,7 +1101,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 						(params.reply_to
 							? ` replying to m-${numToken(params.reply_to, "m-")}`
 							: "") +
-						"; it stays pending until their integration submits it",
+						"; accepted into their session's input queue",
 				);
 			} catch (error) {
 				return failed(`not sent: ${errorText(error)}`);

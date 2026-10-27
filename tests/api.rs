@@ -3836,10 +3836,25 @@ async fn the_launch_scrubs_stale_inheritance() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
+#[test]
+fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
+    let bin = env!("CARGO_BIN_EXE_sac");
     let db = scratch_db("native-bridge");
-    let base_url = spawn_server(&db).await;
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    // the confirmation window's test seam rides the serving
+    // subprocess's own environment: the expiry classification below
+    // must not wait the production bound
+    let bin_dir = db.parent().unwrap().join("probe-bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let (base_url, pid) = spawn_serving_subprocess(
+        &db,
+        &root,
+        bin,
+        &bin_dir,
+        None,
+        None,
+        &[("SACCADE_CONFIRM_WAIT_SECS", "1")],
+    );
 
     // two registered peers: the addressee parks a bridge read
     let (status, body) = post_json(
@@ -3949,6 +3964,84 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
         "{body}"
     );
 
+    // a taken delivery whose acknowledgement never lands reports
+    // unacknowledged - never a proven failure - and the record stays
+    // pending evidence
+    let (send_tx2, send_rx2) = std::sync::mpsc::channel();
+    let send_url2 = base_url.clone();
+    std::thread::spawn(move || {
+        let (status, body) = post_json(
+            &send_url2,
+            "/api/v1/messages/send",
+            &json!({
+                "context": {"actor": "pi", "tier": "agent",
+                            "scope": {"task": null, "incarnation": 0, "workspace": null}},
+                "to": 1,
+                "body": "taken but never confirmed",
+            }),
+        );
+        send_tx2.send((status, body)).unwrap();
+    });
+    let (status, body) = get_json(
+        &base_url,
+        "/api/v1/messages/deliver?incarnation=1&wait_ms=5000",
+    );
+    assert_eq!(status, 200, "{body}");
+    let taken = json_of(&body)["deliveries"].as_array().unwrap().clone();
+    assert_eq!(taken.len(), 1, "{body}");
+    let taken_seq = taken[0]["message"]["seq"].as_u64().unwrap();
+    let (status, body) = send_rx2
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the unacknowledged attempt returned inside its bound");
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "submission_unacknowledged",
+        "{body}"
+    );
+    assert_eq!(json_of(&body)["message"]["seq"], taken_seq);
+    let (_, mailbox) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let mail = json_of(&mailbox)["messages"].as_array().unwrap().clone();
+    assert!(
+        mail.iter()
+            .any(|m| m["seq"] == taken_seq && m["state"] == "pending"),
+        "{mailbox}"
+    );
+
+    // a staged delivery no integration ever takes reports the proven
+    // untaken refusal: nothing reached any native queue
+    let (send_tx3, send_rx3) = std::sync::mpsc::channel();
+    let send_url3 = base_url.clone();
+    std::thread::spawn(move || {
+        let (status, body) = post_json(
+            &send_url3,
+            "/api/v1/messages/send",
+            &json!({
+                "context": {"actor": "pi", "tier": "agent",
+                            "scope": {"task": null, "incarnation": 0, "workspace": null}},
+                "to": 1,
+                "body": "staged but never taken",
+            }),
+        );
+        send_tx3.send((status, body)).unwrap();
+    });
+    let (status, body) = send_rx3
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the untaken attempt returned inside its bound");
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "submission_untaken",
+        "{body}"
+    );
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("took no delivery"),
+        "{body}"
+    );
+
     // a compose launch token maps to the incarnation that claimed it
     let (status, body) = post_json(
         &base_url,
@@ -3963,7 +4056,7 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-hex");
     assert_eq!(status, 200, "{body}");
     // the reply names the birth record's seq and the dense public number
-    assert_eq!(json_of(&body)["incarnation"], 4);
+    assert_eq!(json_of(&body)["incarnation"], 6);
     assert_eq!(json_of(&body)["num"], 2);
     let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-unknown");
     assert_eq!(status, 404, "{body}");
@@ -3986,7 +4079,7 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     assert_eq!(status, 404, "{body}");
     let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-hex");
     assert_eq!(status, 200, "{body}");
-    assert_eq!(json_of(&body)["incarnation"], 4);
+    assert_eq!(json_of(&body)["incarnation"], 6);
 
     // a fresh fork under a STALE token births its own incarnation but
     // never retargets the door's mapping: the correlation keeps
@@ -4008,10 +4101,13 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(
         json_of(&body)["incarnation"],
-        4,
+        6,
         "the mapping never retargeted"
     );
 
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status();
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 

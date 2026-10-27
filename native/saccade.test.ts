@@ -1108,13 +1108,19 @@ test("the declared task anchors scope; an explicit task argument is message cont
 	await h.pi.emit("session_start");
 
 	const send = h.tools("saccade_send");
-	await send.execute(
+	const sentResult = await send.execute(
 		"t1",
 		{ to: "i-1", body: "the answer", task: "t-2" },
 		undefined,
 		undefined,
 		{ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
 	);
+	// the success face names the queue's acceptance, never a pending promise
+	assert.ok(
+		resultText(sentResult).includes("accepted into their session's input queue"),
+		resultText(sentResult),
+	);
+	assert.ok(!resultText(sentResult).includes("pending"), resultText(sentResult));
 	const sent = h.tracker.sent[h.tracker.sent.length - 1];
 	// scope.task reads the declared environment alone
 	assert.equal(sent.context.scope.task, 9);

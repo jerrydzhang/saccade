@@ -1703,6 +1703,17 @@ const BRIDGE_ASSOCIATION_SECS: u64 = 300;
 /// transport cycles, not conversation.
 const SUBMISSION_CONFIRM_WAIT_SECS: u64 = 15;
 
+/// The confirmation bound's one test seam: a scratch tracker holds the
+/// window short so the honest classification at expiry is observable
+/// without waiting the production bound. Production never sets it.
+fn confirm_wait_secs() -> u64 {
+    std::env::var("SACCADE_CONFIRM_WAIT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(SUBMISSION_CONFIRM_WAIT_SECS)
+}
+
 /// How long a staged delivery task outlives its send handler: a send
 /// whose process dies leaves at most one late delivery, never a retry
 /// loop.
@@ -1849,8 +1860,8 @@ async fn attempt_submission(
         let token = delivery_token();
         app.bridge.stage_delivery(to.0.0, sent, token.clone());
         app.bridge.wake();
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_secs(SUBMISSION_CONFIRM_WAIT_SECS);
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(confirm_wait_secs());
         loop {
             // armed before the read so a confirmation landing between
             // the read and the park cannot be missed
@@ -1872,11 +1883,28 @@ async fn attempt_submission(
                 return Submission::Submitted;
             }
             if tokio::time::Instant::now() >= deadline {
+                // retire the stage first, then one last fold read: a
+                // confirmation landing inside this gap is still the
+                // attempt's own, never an unacknowledged outcome
+                let still_staged = app.bridge.drop_stage(&token);
+                let submitted = app
+                    .snapshot()
+                    .ok()
+                    .and_then(|s| {
+                        s.world
+                            .messages
+                            .get(&crate::MessageId(RecordId(sent)))
+                            .map(|mctx| mctx.state == crate::MessageState::Submitted)
+                    })
+                    .unwrap_or(false);
+                if submitted {
+                    return Submission::Submitted;
+                }
                 // still staged means their integration took no delivery:
                 // nothing reached the queue, a proven refusal. A taken
                 // stage whose acknowledgement never landed stays
                 // uncertain, never a proven failure.
-                return match app.bridge.drop_stage(&token) {
+                return match still_staged {
                     true => Submission::Refused {
                         code: "submission_untaken",
                         detail: format!(
