@@ -469,7 +469,7 @@ class FakeTracker {
 			this.attachments.set(body.native_id, fresh);
 			return this.reply({ registered: true, ...fresh, guard });
 		}
-		if (path === "/api/v1/messages/pending") {
+		if (path === "/api/v1/messages") {
 			const url = new URL(String(rawUrl));
 			const incarnation = Number(url.searchParams.get("incarnation"));
 			return this.reply({ messages: this.mailboxes.get(incarnation) ?? [] });

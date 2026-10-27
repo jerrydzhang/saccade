@@ -696,7 +696,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/native/launch", get(native_launch))
         .route("/api/v1/messages/send", post(message_send))
         .route("/api/v1/messages/submit", post(message_submit))
-        .route("/api/v1/messages/pending", get(messages_pending))
+        .route("/api/v1/messages", get(messages_history))
+        .route("/api/v1/messages/pending", get(messages_pending_retired))
         .route("/api/v1/messages/deliver", get(messages_deliver))
         .route("/api/v1/version", get(version))
         .route("/api/v1/workbench", get(workbench))
@@ -3156,7 +3157,20 @@ fn mailbox_view(snapshot: &Snapshot, id: crate::IncarnationId) -> Value {
 /// confirmed submission - evidence of its attempt, never a promise of
 /// later delivery - and `submitted` means the recipient's native input
 /// queue accepted it.
-async fn messages_pending(
+async fn messages_pending_retired() -> Response {
+    (
+        StatusCode::GONE,
+        Json(json!({"error": {"code": "retired_messages_pending", "detail": "the pending transport retired: recorded mail is evidence and is never delivered by machinery; history reads use GET /api/v1/messages?incarnation=N, deliveries use GET /api/v1/messages/deliver; upgrade the saccade native integration"}})),
+    )
+        .into_response()
+}
+
+/// The descriptive history read: a reader's own mail, in birth order,
+/// any state, read-only by construction. `pending` is a recorded
+/// message without a confirmed submission - evidence of its attempt,
+/// never a promise of later delivery - and `submitted` means the
+/// recipient's native input queue accepted it.
+async fn messages_history(
     State(app): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<MailboxQuery>,
 ) -> Response {

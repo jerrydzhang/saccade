@@ -560,16 +560,14 @@ pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, Cli
     struct MailboxBody {
         messages: Vec<MailboxMessage>,
     }
-    let mut response = ureq::get(&format!(
-        "{url}/api/v1/messages/pending?incarnation={incarnation}"
-    ))
-    .config()
-    .http_status_as_error(false)
-    .build()
-    .call()
-    .map_err(|_| ClientFail::ServerUnreachable {
-        url: url.to_string(),
-    })?;
+    let mut response = ureq::get(&format!("{url}/api/v1/messages?incarnation={incarnation}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
     let status = response.status().as_u16();
     let text = response
         .body_mut()
