@@ -1591,6 +1591,9 @@ def main():
             repair_text = draft(page)['text']
             layout_before = state(page)['layout']; focus_before = state(page)['focus']
             cursor_before = next(p['position']['head'] for p in state(page)['panes'] if p['id'] == focus_before)
+            # the untouched reader keeps its viewport through the neighboring-pane work itself, before any landing
+            scroll_through_setup = page.evaluate(f'() => {reader}.scrollTop')
+            check(abs(scroll_through_setup - scroll_before) <= 2, f'the untouched reader keeps its scroll through the split, draft, finder, and repair setup itself (before {scroll_before}, after {scroll_through_setup})')
 
             # a record lands while the reader holds selection, scroll, a
             # draft, a repair, and focus: the page absorbs it in place
@@ -1609,12 +1612,53 @@ def main():
                 log = page.evaluate('() => window.__scrollLog.slice(-40)')
                 print('SCROLL-LOG:', json.dumps(log), flush=True)
             check(abs(scroll_after - scroll_before) <= 2, f'the reader scroll stays put through a landing (before {scroll_before}, after {scroll_after})')
+            # time series to a settled bound: converge to the original offset and hold it, separating a bounded transition from a persistent loss
+            try:
+                page.wait_for_function('''(want) => {
+                    const r = document.querySelectorAll(".pane")[0].querySelector(".reading");
+                    window.__settle ??= { at: performance.now(), v: r.scrollTop };
+                    if (Math.abs(r.scrollTop - window.__settle.v) > 2) window.__settle = { at: performance.now(), v: r.scrollTop };
+                    return Math.abs(window.__settle.v - want) <= 2 && performance.now() - window.__settle.at > 300;
+                }''', arg=scroll_before, timeout=2000)
+            except Exception:
+                log = page.evaluate('() => window.__scrollLog.slice(-40)')
+                print('SCROLL-LOG:', json.dumps(log), flush=True)
+                raise
+            settled_value = page.evaluate(f'() => {reader}.scrollTop')
+            check(abs(settled_value - scroll_before) <= 2, f'the reader scroll settles on the original offset and holds it through the landing window (expected {scroll_before}, settled {settled_value})')
             check(len(state(page)['panes']) == 2 and state(page)['layout'] == layout_before and state(page)['focus'] == focus_before, 'the pane layout and focus stay put through a landing')
             repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
             check(repair_now['revisionPending'] is not None and repair_now['text'] == repair_text, 'the pending repair keeps its local text through a landing')
             check(repair_now['revisionPending']['originalBody'] == repair_before['originalBody'] and repair_now['revisionPending']['originalTitle'] == repair_before['originalTitle'], 'the repair baseline is not rebased by a landing')
             check(next(b for b in state(page)['buffers'] if b['kind'] == 'draft')['text'] == 'The local draft text that no landing may touch.', 'the local draft is untouched by a landing')
             check(next(p['position']['head'] for p in state(page)['panes'] if p['id'] == focus_before) == cursor_before, 'the focused editor cursor stays put through a landing')
+
+            # the same viewport law covers an undisturbed Source pane: neighbor work and a landing keep its scroller and cursor
+            leader(page, 'wh'); leader(page, 'uv')
+            page.keyboard.press('g'); page.keyboard.press('g')
+            page.mouse.move(400, 450)
+            for _ in range(6):
+                page.mouse.wheel(0, 200)
+            page.wait_for_timeout(150)
+            source_scroller = 'document.querySelectorAll(".pane")[0].querySelector(".cm-scroller")'
+            source_before = page.evaluate(f'() => {source_scroller}.scrollTop')
+            check(source_before > 0, 'the thread source rests wheel-scrolled in Source')
+            source_pane_before = next(p for p in state(page)['panes'] if p['id'] == 1)
+            leader(page, 'wl')
+            finder(page, 'parked card 3'); page.keyboard.press('Enter')
+            source_through_setup = page.evaluate(f'() => {source_scroller}.scrollTop')
+            check(abs(source_through_setup - source_before) <= 2, f'the source pane keeps its scroll through the neighboring reopen work itself (before {source_before}, after {source_through_setup})')
+            server.cli('comment', f't-{live_id}', '--title', 'The source survivor', 'This card lands while a source pane stands scrolled.')
+            page.wait_for_function(f'(t) => window.workbenchUI.state().buffers.some((b) => b.id === "t-{live_id}" && b.text.includes(t))', arg='The source survivor')
+            page.wait_for_timeout(150)  # the absorb settles
+            source_after = page.evaluate(f'() => {source_scroller}.scrollTop')
+            source_pane_after = next(p for p in state(page)['panes'] if p['id'] == 1)
+            # the editor re-measures line heights when a record lands; the viewport must survive the landing, not reset, and the re-measure scales with the document
+            check(abs(source_after - source_before) <= max(24, round(source_before / 10)), f'the source pane keeps its viewport through a landing (before {source_before}, after {source_after})')
+            check((source_pane_after['position']['anchor'], source_pane_after['position']['head']) == (source_pane_before['position']['anchor'], source_pane_before['position']['head']), 'the source pane cursor stays put through the neighboring work and landing')
+            leader(page, 'wh'); leader(page, 'uv'); leader(page, 'wl')
+            page.wait_for_function('(want) => Math.abs(document.querySelectorAll(".pane")[0].querySelector(".reading").scrollTop - want) <= 2', arg=scroll_before, timeout=2000)
+            check(page.evaluate(f'() => {reader}.scrollTop') <= scroll_before + 2, 'the reader returns from the Source round-trip on its original offset')
 
             # the recorded contribution moves under the open repair: the
             # repair keeps its own text and baseline, no silent rebase
@@ -1628,7 +1672,7 @@ def main():
             page.wait_for_function('document.querySelector("#picker").open')
             page.keyboard.type('fold')
             server.cli('comment', f't-{live_id}', '--title', 'The prompt survivor', 'This card lands while the palette stands open.')
-            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 14')
+            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 15')
             check(page.evaluate('document.querySelector("#picker").open') and page.evaluate('document.querySelector("#query").value') == 'fold', 'an open palette keeps its query through a landing')
             page.keyboard.press('Escape')
 
@@ -1646,7 +1690,7 @@ def main():
             repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
             check(repair_now['revisionPending']['submission']['kind'] == 'unknown', 'the held repair reads submission unconfirmed')
             server.cli('comment', f't-{live_id}', '--title', 'The in-flight neighbor', 'This card lands while a submission answer is outstanding.')
-            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 15')
+            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 16')
             repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
             check(repair_now['revisionPending'] is not None and repair_now['revisionPending']['submission']['kind'] == 'unknown', 'the landing changes neither the pending repair nor its unconfirmed submission')
             held[0][0].fulfill(response=held[0][1])
@@ -1662,7 +1706,7 @@ def main():
             server.sac.terminate()
             server.sac.wait(timeout=15)
             server.cli('comment', f't-{live_id}', '--title', 'The reconnect catch', 'This card lands while the server is down.')
-            check(page.locator('.pane').nth(0).locator('.thread-card').count() == 15, 'a disconnected page shows nothing it cannot read')
+            check(page.locator('.pane').nth(0).locator('.thread-card').count() == 16, 'a disconnected page shows nothing it cannot read')
             server.sac = subprocess.Popen(
                 [server.sac.args[0], '--db', str(server.db), '--repo', str(server.repo),
                  'serve', '--bind', '127.0.0.1', '--port', str(port)],
@@ -1678,7 +1722,7 @@ def main():
                 time.sleep(0.05)
             else:
                 raise AssertionError('the restarted serve never answered')
-            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 16', timeout=20000)
+            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 17', timeout=20000)
             page.wait_for_timeout(150)  # the rAF scroll restore settles
             check(next(b for b in state(page)['buffers'] if b['kind'] == 'draft')['text'] == 'The local draft text that no landing may touch.', 'the local draft survives the reconnect')
             check(page.locator('.pane').nth(0).locator('.thread-card.selected').get_attribute('data-comment') == selected_id, 'the selection survives the reconnect')

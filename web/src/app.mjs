@@ -641,7 +641,31 @@ function renderLayout() {
     node.append(left, divider, right);
     return node;
   }
+  // the rebuild re-parents the cached pane nodes, and a re-parented
+  // element's scroll restarts at 0 (Chrome can also report the reset as
+  // a scroll event, which would capture 0 over the captured position);
+  // record each undisturbed pane's fresh DOM offset just before the move
+  // and write it back in the same task, so neither a frame nor a capture
+  // ever sees the reset. A pane whose reader or editor was replaced or
+  // is mid-rebuild is skipped: its own render path owns the restore
+  const moved = new Map();
+  for (const [id] of panes) {
+    const reader = readers.get(id), view = editors.get(id);
+    if (reader && isReading(id)) {
+      if (!reader.pendingSignature) moved.set(id, { reader, scroll: reader.scrollTop });
+    } else if (view && !view.dom.hidden) {
+      moved.set(id, { view, bufferId: view.bufferId, scroll: view.scrollDOM.scrollTop });
+    }
+  }
   $("#work").replaceChildren(build(bench.layout));
+  for (const [id, move] of moved) {
+    const reader = readers.get(id), view = editors.get(id);
+    if (move.reader) {
+      if (reader === move.reader && isReading(id) && !reader.pendingSignature && reader.scrollTop !== move.scroll) reader.scrollTop = move.scroll;
+    } else if (view === move.view && view.bufferId === move.bufferId && !isReading(id) && view.scrollDOM.scrollTop !== move.scroll) {
+      view.scrollDOM.scrollTop = move.scroll;
+    }
+  }
   refreshChrome();
   persist();
 }
