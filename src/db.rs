@@ -1224,6 +1224,7 @@ mod test {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+                stage: crate::WorkspaceStage::Available,
             }
         );
         assert_eq!(world.provenance[&RecordId(39)], None);
