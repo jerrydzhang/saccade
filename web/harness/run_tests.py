@@ -1015,6 +1015,21 @@ def main():
             server.cli('claim', 't-0')
             for room in range(6):
                 server.cli('create', 'task', f'The wide room {room}')
+            # a rebinding history: two bindings of one use to different
+            # recorded offers, so no row may borrow the other's target
+            server.cli('create', 'task', 'The binding survey')
+            binding_task = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The binding survey')['id']
+            def latest_comment():
+                return request(base + '/api/v1/workbench')[1]['comments'][-1]
+            server.cli('offer', f't-{binding_task}', '--title', 'The first account', 'The first usable source account.')
+            first_offer = latest_comment()['id']
+            server.cli('use', 't-0', '--source', f't-{binding_task}', '--reason', 'Rides the binding survey.')
+            binding_use = latest_comment()['id']
+            server.cli('bind', binding_use, first_offer, '--grounds', 'Select the first account.')
+            server.cli('reject', first_offer, '--grounds', 'Replace the source account.')
+            server.cli('offer', f't-{binding_task}', '--title', 'The second account', 'The replacement usable source account.')
+            second_offer = latest_comment()['id']
+            server.cli('bind', binding_use, second_offer, '--grounds', 'Select the replacement account.')
             context = browser.new_context(viewport={'width': 1500, 'height': 980})
             page = context.new_page(); ready(page, base)
             snap = request(base + '/api/v1/workbench')[1]
@@ -1032,6 +1047,11 @@ def main():
             check(offered['comment'] is not None and offered['home'] == comments_by_seq[offered['seq']]['home'], 'an offer birth anchors its card on its home thread')
             artifact_entry = next(e for e in activity if e['event'] == 'artifact_added')
             check(artifact_entry['artifact'] and artifact_entry['comment'] is None, 'an artifact entry names its pointer, not a card')
+            # each use_bound row carries the offer its own record named
+            bindings = [e for e in activity if e['event'] == 'use_bound']
+            nums = {c['id']: c['num'] for c in snap['comments']}
+            check(len(bindings) == 2 and {e['offer'] for e in bindings} == {nums[first_offer], nums[second_offer]},
+                  'use_bound entries carry their own recorded targets')
             active = snap['recently_active_tasks']
             latest = {}
             for e in reversed(activity):  # oldest first: the newest write wins
@@ -1047,6 +1067,10 @@ def main():
             check(page.locator(pane + '.home-tasks .home-entry').count() == 10, 'first pass renders ten task entries')
             check(page.locator(pane + '.home-activity .home-more').count() == 1 and page.locator(pane + '.home-tasks .home-more').count() == 1, 'both surfaces offer Show more')
             check(page.evaluate('!/\\b\\d+ of \\d+\\b/.test(document.querySelector(".pane.active .reading").innerText)'), 'no totals or badges on home')
+            # rendered rows label the target each binding recorded
+            rows = [text for text in page.locator(pane + '.home-activity .home-entry').all_text_contents() if 'use bound' in text]
+            check(len(rows) == 2 and any(f'-> c-{nums[first_offer]}' in r for r in rows) and any(f'-> c-{nums[second_offer]}' in r for r in rows),
+                  'each binding row labels its own recorded offer')
             # Show more reveals older entries in the same increments, to
             # the full included log, however long it is
             shown = 20
@@ -1084,6 +1108,14 @@ def main():
             check(page.evaluate('window.innerWidth') == 1500, 'the window is still wide inside the split')
             check(page.locator('.pane.active .home-surfaces').bounding_box()['width'] < 760, 'the home pane itself is narrow')
             page.screenshot(path=str(RUN / '32-home-split-narrow.png'))
+            # the Source/View affordance reaches home like every reading kind
+            page.keyboard.press('Escape')
+            page.keyboard.press('Space'); page.keyboard.type('uv')
+            page.wait_for_function('window.workbenchUI.state().presentation === "source"')
+            check('Saccade' in page.locator('.pane.active .cm-content').text_content(), 'home Source shows the key reference')
+            page.keyboard.press('Space'); page.keyboard.type('uv')
+            page.wait_for_function('window.workbenchUI.state().presentation === "view"')
+            check(page.locator(pane + '.home-activity').count() == 1, 'Space uv returns home to its surfaces')
             context.close()
             # navigation: an activity entry lands on its card selected in
             # the thread; an artifact entry opens the thread unselected

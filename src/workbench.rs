@@ -174,7 +174,8 @@ pub fn snapshot(
 
 /// One home activity entry's record facts: what the fold gives an
 /// activity line to name. `comment` is the entry's public c-N when the
-/// record anchors a contribution card; `artifact` the parked name.
+/// record anchors a contribution card; `offer` is the selection a
+/// use_bound record itself names; `artifact` the parked name.
 struct ActivityEntry {
     seq: usize,
     at: u64,
@@ -183,6 +184,7 @@ struct ActivityEntry {
     event: String,
     home: usize,
     comment: Option<usize>,
+    offer: Option<usize>,
     artifact: Option<String>,
 }
 
@@ -191,7 +193,7 @@ impl ActivityEntry {
         json!({
             "seq": self.seq, "at": self.at, "actor": self.actor, "tier": self.tier,
             "event": self.event, "home": self.home,
-            "comment": self.comment, "artifact": self.artifact,
+            "comment": self.comment, "offer": self.offer, "artifact": self.artifact,
         })
     }
 }
@@ -200,14 +202,14 @@ impl ActivityEntry {
 /// comment record is recent activity - newest first - and the same
 /// records order recently active tasks, one entry per task. Session,
 /// workspace, and message-delivery records are bookkeeping, not home
-/// activity; they name no entry here.
+/// activity; they name no entry here. Listing bounds are a client
+/// concern; the wire carries every included entry.
 fn home_facts(
     world: &World,
     rows: &[StoredRecord],
 ) -> Result<(Vec<Value>, Vec<Value>), WorkbenchFail> {
     let mut entries: Vec<ActivityEntry> = Vec::new();
-    // per task, the latest included record: seq order is the log's own
-    // chronology, so the last write wins
+    // seq order is the log's chronology, so the last write is the latest
     let mut latest: BTreeMap<usize, (usize, u64)> = BTreeMap::new();
     for row in rows {
         if let Some(entry) = activity_entry(world, row)? {
@@ -240,34 +242,50 @@ fn activity_entry(
             WorkbenchFail::Degraded(format!("record {} names no home task", row.seq))
         })
     };
-    let (home, comment, artifact) = match event {
+    let resident = |id: CommentId| {
+        world.comments.get(&id).ok_or_else(|| {
+            WorkbenchFail::Degraded(format!("record {} names no resident comment", row.seq))
+        })
+    };
+    let (home, comment, offer, artifact) = match event {
         Event::TaskCreated { .. } => (
             resolved(world.task_born_at(RecordId(row.seq)).map(|t| t.0))?,
+            None,
             None,
             None,
         ),
         Event::TaskClaimed { id, .. }
         | Event::TaskCancelled { id, .. }
-        | Event::TaskReopened { id, .. } => (resolved(Some(id.0))?, None, None),
+        | Event::TaskReopened { id, .. } => (resolved(Some(id.0))?, None, None, None),
         Event::Commented { home, .. } => (
             resolved(Some(home.0))?,
             world.comment_num(CommentId(RecordId(row.seq))),
             None,
+            None,
         ),
-        Event::CommentRevised { id, .. }
-        | Event::CommentWithdrawn { id, .. }
-        | Event::UseBound { id, .. } => {
-            let context = world.comments.get(&id).ok_or_else(|| {
-                WorkbenchFail::Degraded(format!("record {} names no resident comment", row.seq))
-            })?;
+        Event::CommentRevised { id, .. } | Event::CommentWithdrawn { id, .. } => {
+            let context = resident(id)?;
             (
                 resolved(Some(context.comment.home.0))?,
                 world.comment_num(id),
+                None,
+                None,
+            )
+        }
+        Event::UseBound { id, offer, .. } => {
+            let context = resident(id)?;
+            (
+                resolved(Some(context.comment.home.0))?,
+                world.comment_num(id),
+                // the selection this record names; the fold's current
+                // binding is a later fact and never substitutes
+                world.comment_num(offer),
                 None,
             )
         }
         Event::ArtifactAdded { root, artifact } => (
             resolved(Some(root.0))?,
+            None,
             None,
             Some(artifact.name.as_str().to_string()),
         ),
@@ -288,6 +306,7 @@ fn activity_entry(
         event: row.kind.clone(),
         home,
         comment,
+        offer,
         artifact,
     }))
 }
@@ -354,8 +373,7 @@ mod test {
         Prose::new(text.into()).unwrap()
     }
 
-    /// Rows and world fold from one event list, so the fixture cannot
-    /// drift between the log's shape and the fold's.
+    /// Rows and world fold from one event list, so neither shape drifts.
     fn fixture(events: Vec<(Context, Event)>) -> (World, Vec<StoredRecord>) {
         let mut rows = Vec::new();
         let mut records = Vec::new();
@@ -389,8 +407,7 @@ mod test {
             .collect()
     }
 
-    /// The whole inventory in one story: every included kind lands,
-    /// every machinery kind is interleaved and stays out.
+    /// Every included kind and a rebinding history, machinery interleaved.
     fn inventory() -> (World, Vec<StoredRecord>) {
         fixture(vec![
             (
@@ -443,16 +460,6 @@ mod test {
                 },
             ),
             (
-                human("jerry"),
-                Event::Commented {
-                    home: TaskId(1),
-                    kind: CommentKind::Accept {
-                        offer: CommentId(RecordId(5)),
-                    },
-                    references: Vec::new(),
-                },
-            ),
-            (
                 Context::system(),
                 Event::IncarnationRegistered {
                     native_id: NativeSessionId::new("a1b2c3d4-evil".into()).unwrap(),
@@ -463,10 +470,10 @@ mod test {
                 },
             ),
             (
-                scoped_incarnation(7),
+                scoped_incarnation(6),
                 Event::MessageSent {
-                    from: IncarnationId(RecordId(7)),
-                    to: IncarnationId(RecordId(7)),
+                    from: IncarnationId(RecordId(6)),
+                    to: IncarnationId(RecordId(6)),
                     reply_to: None,
                     task: None,
                     body: prose("please look at the failing edge case"),
@@ -505,9 +512,49 @@ mod test {
             (
                 human("jerry"),
                 Event::UseBound {
-                    id: CommentId(RecordId(11)),
+                    id: CommentId(RecordId(10)),
                     offer: CommentId(RecordId(5)),
-                    grounds: prose("the selected account holds"),
+                    grounds: prose("the first selection holds"),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(1),
+                    kind: CommentKind::Reject {
+                        offer: CommentId(RecordId(5)),
+                        grounds: prose("replaced for a corrected account"),
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(1),
+                    kind: CommentKind::Offer {
+                        title: prose("suite green, second account"),
+                        body: prose("the corrected account"),
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::UseBound {
+                    id: CommentId(RecordId(10)),
+                    offer: CommentId(RecordId(13)),
+                    grounds: prose("the replacement holds"),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(1),
+                    kind: CommentKind::Accept {
+                        offer: CommentId(RecordId(13)),
+                    },
+                    references: Vec::new(),
                 },
             ),
             (
@@ -550,15 +597,15 @@ mod test {
             (
                 Context::system(),
                 Event::WorkspaceChanged {
-                    incarnation: IncarnationId(RecordId(7)),
+                    incarnation: IncarnationId(RecordId(6)),
                     worktree: WorktreePath::new("/repo/wt/workspace-deadbeef".into()).unwrap(),
                 },
             ),
             (
-                scoped_incarnation(7),
+                scoped_incarnation(6),
                 Event::MessageSubmitted {
-                    id: MessageId(RecordId(8)),
-                    by: IncarnationId(RecordId(7)),
+                    id: MessageId(RecordId(7)),
+                    by: IncarnationId(RecordId(6)),
                 },
             ),
         ])
@@ -568,11 +615,10 @@ mod test {
     fn recent_activity_carries_the_included_inventory_newest_first() {
         let (world, rows) = inventory();
         let (activity, _) = home_facts(&world, &rows).expect("the home facts project");
-        // seqs 7-9 and 16-19 are session, workspace, and message
-        // bookkeeping; every other record is activity, newest first
+        // seqs 6-8 and 19-22 are machinery bookkeeping; the rest is activity
         assert_eq!(
             seqs_of(&activity),
-            vec![15, 14, 13, 12, 11, 10, 6, 5, 4, 3, 2, 1, 0]
+            vec![18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 5, 4, 3, 2, 1, 0]
         );
     }
 
@@ -606,24 +652,34 @@ mod test {
         let offer = by_seq(5);
         assert_eq!(offer["home"].as_u64(), Some(1));
         assert_eq!(offer["comment"].as_u64(), Some(1));
-        let accept = by_seq(6);
+        let accept = by_seq(15);
         assert_eq!(accept["home"].as_u64(), Some(1));
-        assert_eq!(accept["comment"].as_u64(), Some(2));
-        let artifact = by_seq(10);
+        assert_eq!(accept["comment"].as_u64(), Some(5));
+        let artifact = by_seq(9);
         assert_eq!(artifact["event"].as_str(), Some("artifact_added"));
         assert_eq!(artifact["home"].as_u64(), Some(0));
         assert_eq!(artifact["artifact"].as_str(), Some("sweep figure"));
-        let binding = by_seq(12);
-        assert_eq!(binding["event"].as_str(), Some("use_bound"));
-        assert_eq!(binding["home"].as_u64(), Some(0));
-        assert_eq!(binding["comment"].as_u64(), Some(3));
-        let withdrawal = by_seq(13);
+        let use_birth = by_seq(10);
+        assert_eq!(use_birth["event"].as_str(), Some("commented"));
+        assert_eq!(use_birth["comment"].as_u64(), Some(2));
+        // each binding names the offer its own record selected
+        let first_binding = by_seq(11);
+        assert_eq!(first_binding["event"].as_str(), Some("use_bound"));
+        assert_eq!(first_binding["home"].as_u64(), Some(0));
+        assert_eq!(first_binding["comment"].as_u64(), Some(2));
+        assert_eq!(first_binding["offer"].as_u64(), Some(1));
+        let second_binding = by_seq(14);
+        assert_eq!(second_binding["event"].as_str(), Some("use_bound"));
+        assert_eq!(second_binding["comment"].as_u64(), Some(2));
+        assert_eq!(second_binding["offer"].as_u64(), Some(4));
+        assert_ne!(first_binding["offer"], second_binding["offer"]);
+        let withdrawal = by_seq(16);
         assert_eq!(withdrawal["event"].as_str(), Some("comment_withdrawn"));
         assert_eq!(withdrawal["home"].as_u64(), Some(0));
         assert_eq!(withdrawal["comment"].as_u64(), Some(0));
-        let cancelled = by_seq(14);
+        let cancelled = by_seq(17);
         assert_eq!(cancelled["event"].as_str(), Some("task_cancelled"));
-        let reopened = by_seq(15);
+        let reopened = by_seq(18);
         assert_eq!(reopened["event"].as_str(), Some("task_reopened"));
         assert_eq!(reopened["home"].as_u64(), Some(0));
     }
@@ -632,26 +688,11 @@ mod test {
     fn recently_active_tasks_follow_the_same_included_records() {
         let (world, rows) = inventory();
         let (_, active) = home_facts(&world, &rows).expect("the home facts project");
-        // one entry per task; t-0's latest included record is the
-        // reopening, t-1's the accept - the interleaved machinery
-        // records order nothing
+        // t-0's latest included record is the reopening, t-1's the accept
         let order: Vec<u64> = active.iter().map(|e| e["task"].as_u64().unwrap()).collect();
         assert_eq!(order, vec![0, 1]);
-        assert_eq!(active[0]["seq"].as_u64(), Some(15));
-        assert_eq!(active[1]["seq"].as_u64(), Some(6));
-        assert_eq!(active[1]["at"].as_u64(), Some(1_700_000_000 + 6 * 60));
-    }
-
-    #[test]
-    fn the_workbench_snapshot_carries_both_home_facts() {
-        let (world, rows) = inventory();
-        let dir = std::env::temp_dir().join(format!("sac-workbench-home-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let store = ArtifactStore::at(dir.clone());
-        let value = snapshot(&world, &rows, &store).expect("the snapshot projects");
-        assert_eq!(value["recent_activity"].as_array().unwrap().len(), 13);
-        assert_eq!(value["recently_active_tasks"].as_array().unwrap().len(), 2);
-        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(active[0]["seq"].as_u64(), Some(18));
+        assert_eq!(active[1]["seq"].as_u64(), Some(15));
+        assert_eq!(active[1]["at"].as_u64(), Some(1_700_000_000 + 15 * 60));
     }
 }

@@ -485,7 +485,7 @@ function activityNode(entry) {
   else if (entry.event === "commented") parts.push(`c-${entry.comment} ${source?.kind ?? ""}`, source?.title ?? "");
   else if (entry.event === "comment_revised") parts.push(`c-${entry.comment} revised`, source?.title ?? "");
   else if (entry.event === "comment_withdrawn") parts.push(`c-${entry.comment} withdrawn`);
-  else if (entry.event === "use_bound") parts.push(`c-${entry.comment} use bound`, source?.binding ? `-> c-${source.binding.offer}` : "");
+  else if (entry.event === "use_bound") parts.push(`c-${entry.comment} use bound`, entry.offer !== null ? `-> c-${entry.offer}` : "");
   else if (entry.event === "artifact_added") parts.push("artifact", entry.artifact ?? "");
   node.append(
     el("span", parts.filter((part) => part !== "").join("  "), "home-what"),
@@ -631,7 +631,7 @@ function jumpState(viewId) {
 }
 
 function jumpLocation(viewId) {
-  return { bufferId: bench.view(viewId).bufferId, position: bench.position(viewId), presentation: ["comment", "draft", "task"].includes(bench.buffer(bench.view(viewId).bufferId).kind) ? structuredClone(presentation(viewId)) : null };
+  return { bufferId: bench.view(viewId).bufferId, position: bench.position(viewId), presentation: ["home", "comment", "draft", "task"].includes(bench.buffer(bench.view(viewId).bufferId).kind) ? structuredClone(presentation(viewId)) : null };
 }
 
 function pushHistory(viewId) {
@@ -658,7 +658,7 @@ function scrollCardIntoView(viewId, id) {
 
 function split(axis, id = bench.view().bufferId) {
   remember(bench.focus);
-  const same = id === bench.view().bufferId && ["comment", "draft", "task"].includes(current().kind) ? structuredClone(presentation()) : null;
+  const same = id === bench.view().bufferId && ["home", "comment", "draft", "task"].includes(current().kind) ? structuredClone(presentation()) : null;
   bench.split(axis, id);
   if (same) { presentation(); bench.view().presentations[id] = same; }
   renderLayout(); focusPane(bench.focus);
@@ -1175,7 +1175,7 @@ const registry = [
   ...["h", "j", "k", "l"].map((d) => ({ id: `focus-${d}`, binding: `w${d}`, label: `Focus pane ${{ h: "left", j: "below", k: "above", l: "right" }[d]}`, run: () => neighbor(d) })),
   { id: "follow", label: "Follow id or reference under cursor", binding: "gd", when: () => !isReading() && !!currentEditor(), run: follow },
   { id: "backlinks", label: "Show explicit backlinks", binding: "gr", when: () => actionTarget()?.kind === "comment", run: backlinks },
-  { id: "rendering", label: "Toggle View / Source", binding: "uv", when: () => ["comment", "draft", "task"].includes(current().kind), run: togglePresentation },
+  { id: "rendering", label: "Toggle View / Source", binding: "uv", when: () => ["home", "comment", "draft", "task"].includes(current().kind), run: togglePresentation },
   { id: "back", label: "Jump backward", binding: "jb", run: back },
   { id: "forward", label: "Jump forward", run: forward },
   { id: "home", label: "Open home buffer", binding: "hh", run: () => openBuffer("home") },
