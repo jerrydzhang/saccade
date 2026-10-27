@@ -828,9 +828,19 @@ async function submitConfirmed(surface, actor) {
         buffer.master = null;
       } else {
         // local work arrived while sending: the repair continues, rebased
-        // on the recorded bytes, and publishes the remaining diff anew
-        pending.originalTitle = buffer.source.title ?? null;
-        pending.originalBody = buffer.source.body;
+        // on the recorded bytes. A field the author never touched adopts
+        // the record into both value and baseline - advancing a baseline
+        // alone would manufacture an edit to an untouched field on the
+        // next publish; a touched field keeps the author's value and
+        // advances only its baseline
+        const recorded = buffer.source;
+        if ((pending.title ?? null) === (sentTitle ?? null)) pending.title = recorded.title ?? null;
+        if (buffer.text === sentBody && recorded.body !== buffer.text) {
+          buffer.text = recorded.body;
+          buffer.master = null;
+        }
+        pending.originalTitle = recorded.title ?? null;
+        pending.originalBody = recorded.body;
         pending.savedTitle = pending.originalTitle;
         pending.savedBody = pending.originalBody;
         pending.submission = null;

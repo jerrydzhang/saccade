@@ -631,7 +631,7 @@ def main():
 
             # in-flight completion must not discard local work: hold the
             # answer, keep editing the repair, then let the answer land
-            finder(page, 'insertion bookmark'); page.keyboard.press('Enter')
+            leader(page, 'sg'); choose_id(page, 'c-0')
             local(page, 'e')
             page.keyboard.press('i'); page.keyboard.type(' Held-answer base.')
             page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.revisionPending && b.text.includes('Held-answer base.'))")
@@ -684,6 +684,73 @@ def main():
             check('Discard candidate.' in draft(page)['text'], 'the landed record shows through the discarded local repair')
             page.unroute('**/workbench/command', hold_discard)
 
+            # continuation must not manufacture an edit to an untouched field:
+            # body-only repair, held answer, another actor retitles meanwhile
+            leader(page, 'sg'); choose_id(page, 'c-0')
+            local(page, 'e')
+            page.keyboard.press('G'); page.keyboard.press('A'); page.keyboard.type(' Body-only continuation.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.revisionPending && b.text.includes('Body-only continuation.'))")
+            cont_sent = draft(page)['text']
+            server.cli('revise', 'c-0', '--title', 'The concurrent continuation title')
+            held_cont = []
+            def hold_cont(route):
+                response = route.fetch()
+                held_cont.append((route, response))
+                route.request.frame.evaluate('window.workbenchContHeld = true')
+            page.route('**/workbench/command', hold_cont)
+            page.keyboard.press('Escape')
+            local(page, 'p')
+            page.wait_for_function('window.workbenchContHeld === true')
+            page.keyboard.press('G'); page.keyboard.press('A'); page.keyboard.type(' Continuation tail.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.revisionPending && b.text.includes('Continuation tail.'))")
+            held_cont[0][0].fulfill(response=held_cont[0][1])
+            page.wait_for_function('document.querySelector("#message").textContent.includes("continues on the recorded bytes")')
+            cont = draft(page)
+            check(cont['revisionPending']['title'] == 'The concurrent continuation title', 'an untouched title adopts the concurrent title on continuation')
+            check(cont['revisionPending']['originalBody'] == cont_sent, 'the touched body advances only its baseline to the recorded bytes')
+            check(cont['text'].endswith('Continuation tail.'), 'the authored tail survives continuation')
+            page.unroute('**/workbench/command', hold_cont)
+            page.keyboard.press('Escape')
+            local(page, 'p'); wait_submission(page, 'Recorded as')
+            cont_record = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['id'] == 'c-0')
+            check(cont_record['title'] == 'The concurrent continuation title', 'publishing the tail does not revert the concurrent title')
+            check(cont_record['body'].endswith('Continuation tail.'), 'the continuation publishes the authored tail')
+            check(draft(page)['revisionPending'] is None, 'the continuation repair completes after its tail lands')
+
+            # the symmetric case: a body-only repair in flight, the title
+            # edited while held, another actor revises the body meanwhile -
+            # the untouched body adopts the concurrent revise, the authored
+            # title keeps its intent
+            leader(page, 'sg'); choose_id(page, 'c-0')
+            local(page, 'e')
+            page.keyboard.press('G'); page.keyboard.press('A'); page.keyboard.type(' Symbase.')
+            page.wait_for_function("() => window.workbenchUI.state().buffers.some((b) => b.revisionPending && b.text.includes('Symbase.'))")
+            held_sym = []
+            def hold_sym(route):
+                response = route.fetch()
+                held_sym.append((route, response))
+                route.request.frame.evaluate('window.workbenchSymHeld = true')
+            page.route('**/workbench/command', hold_sym)
+            page.keyboard.press('Escape')
+            local(page, 'p')
+            page.wait_for_function('window.workbenchSymHeld === true')
+            local(page, 't')
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.fill('#query', 'The in-flight retitle'); page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            server.cli('revise', 'c-0', 'Concurrent body stands.')
+            held_sym[0][0].fulfill(response=held_sym[0][1])
+            page.wait_for_function('document.querySelector("#message").textContent.includes("continues on the recorded bytes")')
+            sym = draft(page)
+            check(sym['text'] == 'Concurrent body stands.', 'an untouched body adopts the concurrent body on continuation')
+            check(sym['revisionPending']['title'] == 'The in-flight retitle', 'the authored in-flight title survives continuation')
+            page.unroute('**/workbench/command', hold_sym)
+            local(page, 'p'); wait_submission(page, 'Recorded as')
+            sym_record = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['id'] == 'c-0')
+            check(sym_record['title'] == 'The in-flight retitle', 'the authored title publishes')
+            check(sym_record['body'] == 'Concurrent body stands.', 'publishing the retitle does not revert the concurrent body')
+            check(draft(page)['revisionPending'] is None, 'the symmetric continuation repair completes')
+
             # authoring metadata renders live, without leaving rendered View
             command(page, 'home')
             command(page, 'new')
@@ -702,7 +769,7 @@ def main():
             page.wait_for_function('!document.querySelector("#picker").open')
             page.wait_for_function('document.querySelector(".pane.active .reading").textContent.includes("title: The live metadata title")')
             check('not authored' not in page.locator('.pane.active .reading').inner_text() and 'home: t-1' in page.locator('.pane.active .reading').inner_text(), 'title and home changes render live in the draft View')
-            finder(page, 'insertion bookmark'); page.keyboard.press('Enter')
+            leader(page, 'sg'); choose_id(page, 'c-0')
             local(page, 'e')
             leader(page, 'uv')
             page.wait_for_function('document.querySelector(".pane.active .draft-title") !== null')
@@ -758,11 +825,11 @@ def main():
             deep(reject_id)
             check(bar()[:3] == ['RENDERED', 'Reject', reject_id], 'a landed reject shows its Reject kind')
             page.goto(base); page.wait_for_function('window.workbenchUI !== undefined')
-            finder(page, 'insertion bookmark'); page.keyboard.press('Enter')
+            leader(page, 'sg'); choose_id(page, 'c-0')
             check(bar()[:3] == ['RENDERED', 'Note', 'c-0'], 'a note shows its Note kind')
             local(page, 'e')
             # c-0 carries the concurrent repair title from the repair laws above
-            check(bar() == ['NORMAL', 'Note', 'c-0', 'revising  The concurrently retitled bookmark', ''], 'a repair keeps the record kind and names the title it revises')
+            check(bar() == ['NORMAL', 'Note', 'c-0', 'revising  The in-flight retitle', ''], 'a repair keeps the record kind and names the title it revises')
             local(page, 'e')
             finder(page, 'kind standing offer'); page.keyboard.press('Enter')
             check(draft(page)['id'] == standing_offer_id, 'the standing survey offer opens for the draft-intent tuple')
