@@ -1388,6 +1388,135 @@ async fn workbench_snapshot_projects_the_canonical_fold() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
+/// The workbench read is the page's synchronization surface: with a
+/// cursor and a bounded window it parks while the log stands at that
+/// cursor and wakes on the landing - the mailbox read's own pattern -
+/// while a stale cursor or no parameters returns immediately.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_workbench_read_parks_wakes_and_catches_up() {
+    let db = scratch_db("workbench-follow");
+    let (base, state) = spawn_workbench(&db).await;
+    seed_task(&state, "migrate floop");
+    let (status, body) = get_json(&base, "/api/v1/workbench");
+    assert_eq!(status, 200, "{body}");
+    let cursor = json_of(&body)["cursor"].as_u64().unwrap();
+
+    // a read at the standing cursor parks: it neither returns the same
+    // fold nor wakes without a landing
+    let parked = {
+        let base = base.clone();
+        tokio::task::spawn_blocking(move || {
+            get_json(
+                &base,
+                &format!("/api/v1/workbench?cursor={cursor}&wait_ms=15000"),
+            )
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(
+        !parked.is_finished(),
+        "a read at the standing cursor must park, not return the same fold"
+    );
+
+    // the landing wakes it, and the fold comes back advanced
+    seed_task(&state, "the woken work");
+    let (status, body) = tokio::time::timeout(std::time::Duration::from_secs(10), parked)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status, 200, "{body}");
+    let woke = json_of(&body);
+    assert_eq!(woke["cursor"].as_u64().unwrap(), cursor + 1);
+    assert_eq!(woke["tasks"].as_array().unwrap().len(), 2);
+
+    // a stale cursor returns immediately with the whole fresh fold
+    let started = std::time::Instant::now();
+    let (status, body) = get_json(
+        &base,
+        &format!("/api/v1/workbench?cursor={cursor}&wait_ms=15000"),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(json_of(&body)["cursor"].as_u64().unwrap(), cursor + 1);
+
+    // the bounded window returns on its own when nothing lands
+    let started = std::time::Instant::now();
+    let (status, body) = get_json(
+        &base,
+        &format!("/api/v1/workbench?cursor={}&wait_ms=350", cursor + 1),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["cursor"].as_u64().unwrap(), cursor + 1);
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(350),
+        "the bounded park must hold its window"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "the bounded park must return at its window, not hang"
+    );
+
+    // a record another process wrote to the shared database fires no
+    // wake here: the sliced cursor check must still surface it
+    let parked = {
+        let base = base.clone();
+        tokio::task::spawn_blocking(move || {
+            get_json(
+                &base,
+                &format!("/api/v1/workbench?cursor={}&wait_ms=15000", cursor + 1),
+            )
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let outside = std::process::Command::new(env!("CARGO_BIN_EXE_sac"))
+        .arg("--db")
+        .arg(&db)
+        .env("SACCADE_ACTOR", "outside-author")
+        .env("SACCADE_TASK", "")
+        .env("SACCADE_INCARNATION_SEQ", "")
+        .env("SACCADE_WORKSPACE", "")
+        .args(["create", "task", "the outside writer"])
+        .output()
+        .expect("spawn the outside writer");
+    assert!(
+        outside.status.success(),
+        "the outside writer lands: {}",
+        String::from_utf8_lossy(&outside.stderr)
+    );
+    let started = std::time::Instant::now();
+    let (status, body) = tokio::time::timeout(std::time::Duration::from_secs(10), parked)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "the outside write must surface within the slice bound"
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["cursor"].as_u64().unwrap(), cursor + 2);
+
+    // an empty log parks a waiting read at "nothing seen yet" and wakes
+    // at its first birth, so a fresh page never spins
+    let empty_db = scratch_db("workbench-follow-empty");
+    let (empty_base, empty_state) = spawn_workbench(&empty_db).await;
+    let empty = {
+        let base = empty_base.clone();
+        tokio::task::spawn_blocking(move || get_json(&base, "/api/v1/workbench?wait_ms=15000"))
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(!empty.is_finished(), "an empty log parks a waiting read");
+    seed_task(&empty_state, "the first birth");
+    let (status, body) = tokio::time::timeout(std::time::Duration::from_secs(10), empty)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["cursor"].as_u64().unwrap(), 0);
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(empty_db.parent().unwrap()).unwrap();
+}
+
 /// The preview renders one body against fixed references through the
 /// canonical renderer; unknown references refuse and nothing writes.
 #[tokio::test(flavor = "multi_thread")]

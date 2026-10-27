@@ -1125,6 +1125,128 @@ def main():
             page.wait_for_timeout(250)
             check(draft(page)['id'] == 'c-6', 'a hash link navigates the restored session to the standalone contribution')
             context.close()
+
+            # live record updates: the parked read wakes on every landing
+            # and reconciles without reload, navigation, or local damage
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            server.cli('create', 'task', 'The live update survey')
+            live_id = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The live update survey')['id']
+            for n in range(12):
+                server.cli('comment', f't-{live_id}', '--title', f'The parked card {n}', f'Card {n} stands in the record before the page opens.')
+            page.goto(base + f'/t/{live_id}'); page.wait_for_function('window.workbenchUI !== undefined')
+            page.locator('.pane.active .reading').focus()
+            check(page.locator('.pane.active .thread-card').count() == 12, 'the thread opens with its recorded cards')
+            page.keyboard.press('j')
+            selected_id = page.locator('.pane.active .thread-card.selected').get_attribute('data-comment')
+            check(selected_id, 'the first card selects before any landing')
+            page.keyboard.press('G')
+            page.wait_for_timeout(150)
+            reader = 'document.querySelectorAll(".pane")[0].querySelector(".reading")'
+            scroll_before = page.evaluate(f'() => {reader}.scrollTop')
+            check(scroll_before > 0, 'the reader rests scrolled into the thread')
+            leader(page, 'wv')
+            command(page, 'new')
+            page.keyboard.press('i'); page.keyboard.type('The local draft text that no landing may touch.')
+            check(any(b['kind'] == 'draft' and b['text'].startswith('The local draft text') for b in state(page)['buffers']), 'the local draft holds its typed text')
+            finder(page, 'parked card 3'); page.keyboard.press('Enter')
+            repair_id = draft(page)['id']
+            local(page, 'e')
+            repair_before = draft(page)['revisionPending']
+            check(repair_before is not None and repair_before['originalTitle'] == 'The parked card 3', 'the repair pins its recorded baseline')
+            page.keyboard.press('i'); page.keyboard.type(' Tail typed locally.')
+            repair_text = draft(page)['text']
+            layout_before = state(page)['layout']; focus_before = state(page)['focus']
+            cursor_before = next(p['position']['head'] for p in state(page)['panes'] if p['id'] == focus_before)
+
+            # a record lands while the reader holds selection, scroll, a
+            # draft, a repair, and focus: the page absorbs it in place
+            server.cli('comment', f't-{live_id}', '--title', 'The arriving card', 'This card lands while local work stands open.')
+            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 13')
+            check(page.locator('.pane').nth(0).locator('.thread-card.selected').get_attribute('data-comment') == selected_id, 'the selection stays put through a landing')
+            scroll_after = page.evaluate(f'() => {reader}.scrollTop')
+            check(abs(scroll_after - scroll_before) <= 2, 'the reader scroll stays put through a landing')
+            check(len(state(page)['panes']) == 2 and state(page)['layout'] == layout_before and state(page)['focus'] == focus_before, 'the pane layout and focus stay put through a landing')
+            repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
+            check(repair_now['revisionPending'] is not None and repair_now['text'] == repair_text, 'the pending repair keeps its local text through a landing')
+            check(repair_now['revisionPending']['originalBody'] == repair_before['originalBody'] and repair_now['revisionPending']['originalTitle'] == repair_before['originalTitle'], 'the repair baseline is not rebased by a landing')
+            check(next(b for b in state(page)['buffers'] if b['kind'] == 'draft')['text'] == 'The local draft text that no landing may touch.', 'the local draft is untouched by a landing')
+            check(next(p['position']['head'] for p in state(page)['panes'] if p['id'] == focus_before) == cursor_before, 'the focused editor cursor stays put through a landing')
+
+            # the recorded contribution moves under the open repair: the
+            # repair keeps its own text and baseline, no silent rebase
+            server.cli('revise', repair_id, '--title', 'The retitled parked card')
+            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelector(".reading").textContent.includes("The retitled parked card")')
+            repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
+            check(repair_now['revisionPending']['originalTitle'] == 'The parked card 3' and repair_now['text'] == repair_text, 'a recorded revision beneath the repair changes neither its text nor baseline')
+
+            # an open prompt survives a landing untouched
+            page.keyboard.press('Escape'); page.keyboard.press(':')
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('fold')
+            server.cli('comment', f't-{live_id}', '--title', 'The prompt survivor', 'This card lands while the palette stands open.')
+            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 14')
+            check(page.evaluate('document.querySelector("#picker").open') and page.evaluate('document.querySelector("#query").value') == 'fold', 'an open palette keeps its query through a landing')
+            page.keyboard.press('Escape')
+
+            # an unknown in-flight submission rides through a landing, and
+            # its held answer still completes the repair exactly once
+            held = []
+            def hold_command(route):
+                response = route.fetch()
+                held.append((route, response))
+                route.request.frame.evaluate('window.workbenchCommandHeld = true')
+            page.route('**/api/v1/workbench/command', hold_command)
+            local(page, 'p'); answer_prompt(page, 'jerry')
+            local(page, 'p')
+            page.wait_for_function('window.workbenchCommandHeld === true')
+            repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
+            check(repair_now['revisionPending']['submission']['kind'] == 'unknown', 'the held repair reads submission unconfirmed')
+            server.cli('comment', f't-{live_id}', '--title', 'The in-flight neighbor', 'This card lands while a submission answer is outstanding.')
+            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 15')
+            repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
+            check(repair_now['revisionPending'] is not None and repair_now['revisionPending']['submission']['kind'] == 'unknown', 'the landing changes neither the pending repair nor its unconfirmed submission')
+            held[0][0].fulfill(response=held[0][1])
+            wait_submission(page, 'Recorded')
+            repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
+            check(repair_now['revisionPending'] is None, 'the released answer completes the repair exactly once')
+            check('Tail typed locally.' in page.locator('.pane').nth(0).locator('.reading').inner_text(), 'the landed repair body shows in the thread cards')
+            page.unroute('**/api/v1/workbench/command')
+
+            # reconnect: the server goes away and comes back on the same
+            # address; the page pauses, then catches up from the record
+            port = int(server.url.rsplit(':', 1)[1])
+            server.sac.terminate()
+            server.sac.wait(timeout=15)
+            server.cli('comment', f't-{live_id}', '--title', 'The reconnect catch', 'This card lands while the server is down.')
+            check(page.locator('.pane').nth(0).locator('.thread-card').count() == 15, 'a disconnected page shows nothing it cannot read')
+            server.sac = subprocess.Popen(
+                [server.sac.args[0], '--db', str(server.db), '--repo', str(server.repo),
+                 'serve', '--bind', '127.0.0.1', '--port', str(port)],
+                cwd=str(server.repo), env=server.env,
+                stdin=subprocess.DEVNULL, stdout=server.log, stderr=subprocess.STDOUT)
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    if request(base + '/api/v1/version')[0] == 200:
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.05)
+            else:
+                raise AssertionError('the restarted serve never answered')
+            page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 16', timeout=20000)
+            check(next(b for b in state(page)['buffers'] if b['kind'] == 'draft')['text'] == 'The local draft text that no landing may touch.', 'the local draft survives the reconnect')
+            check(page.locator('.pane').nth(0).locator('.thread-card.selected').get_attribute('data-comment') == selected_id, 'the selection survives the reconnect')
+            check(abs(page.evaluate(f'() => {reader}.scrollTop') - scroll_before) <= 2, 'the reader scroll survives the reconnect')
+            if errors:
+                print('PAGE-ERRORS:', errors, flush=True)
+            check(not errors, 'the live-update flow has no browser exceptions')
+            page.screenshot(path=str(RUN / 'live-updates.png'))
+            context.close()
+
             run_editor_checks(browser, base, check, request, state, draft, leader, command, RUN)
             browser.close(); browser = None
     except Exception as error:
