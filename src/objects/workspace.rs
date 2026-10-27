@@ -11,9 +11,6 @@ pub struct WorkspaceId(pub RecordId);
 /// A workspace born by its own creation record: independent of any task
 /// or incarnation, its identity the birth record's position. The facts
 /// are what the provisioner established, never caller-claimed values.
-/// A workspace born by its own creation record: independent of any task
-/// or incarnation, its identity the birth record's position. The facts
-/// are what the provisioner established, never caller-claimed values.
 /// The stage is the object's own, born Available.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CreatedWorkspace {
@@ -98,11 +95,6 @@ pub struct WorkspaceChange {
     pub at: u64,
 }
 
-/// The task's working environment, born once by the establishment
-/// record: the facts that record established, never a promise that
-/// a directory or process still exists - existence checks live in
-/// effects, not the fold. The birth record's position is the shared
-/// workspace/incarnation identity.
 /// The task's working environment, born once by the establishment
 /// record: the facts that record established, never a promise that
 /// a directory or process still exists - existence checks live in
