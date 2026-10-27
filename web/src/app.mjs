@@ -17,6 +17,7 @@ const panes = new Map();
 const history = new Map();
 const observedModes = new WeakSet();
 let snapshot, identity, storageKey;
+let syncCursor;           // the record cursor the read-side follow last saw
 let picker = null;
 let leader = null;         // " " global prefix pieces, or "," local
 let pendingG = false;
@@ -372,10 +373,16 @@ function showPresentation(viewId) {
     home.href = `/t/${buffer.home}`; home.dataset.recordTarget = `t-${buffer.home}`;
     const body = el("div"); body.innerHTML = buffer.source.html;
     const footer = el("pre", buffer.text.slice(buffer.bodyTo), "reading-meta");
+    // the scroll guard spans the swap and its restore, so the transient
+    // clamped scroll a re-render can fire is never taken for reading
+    reader.pendingSignature = signature;
     reader.replaceChildren(header, home, body, footer);
     reader.signature = signature;
   }
-  requestAnimationFrame(() => { if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop; });
+  requestAnimationFrame(() => {
+    if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop;
+    reader.pendingSignature = null;
+  });
 }
 
 function draftSignature(buffer) {
@@ -467,9 +474,15 @@ function showThread(viewId, reader, buffer) {
     );
     nodes.push(card);
   }
+  // the scroll guard spans the swap and its restore, so the transient
+  // clamped scroll a re-render can fire is never taken for reading
+  reader.pendingSignature = signature;
   reader.replaceChildren(...nodes);
   reader.signature = signature;
-  requestAnimationFrame(() => { if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop; });
+  requestAnimationFrame(() => {
+    if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop;
+    reader.pendingSignature = null;
+  });
 }
 
 // one recent-activity entry: the record facts it carries, linked the
@@ -544,10 +557,16 @@ function showHome(viewId, reader, buffer) {
   // a Show more click focuses its button and the re-render removes it:
   // keep focus on the reader or the pane's keys go dead
   const hadFocus = reader.contains(document.activeElement);
+  // the scroll guard spans the swap and its restore, so the transient
+  // clamped scroll a re-render can fire is never taken for reading
+  reader.pendingSignature = signature;
   reader.replaceChildren(surfaces);
   if (hadFocus) reader.focus({ preventScroll: true });
   reader.signature = signature;
-  requestAnimationFrame(() => { if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop; });
+  requestAnimationFrame(() => {
+    if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop;
+    reader.pendingSignature = null;
+  });
 }
 
 function button(text, fn, title) {
@@ -1254,8 +1273,13 @@ function restore() {
   } catch { bench.views.clear(); bench.layout = null; bench.focus = null; return false; }
 }
 
-async function reload(announce = true) {
-  const fresh = await api("/api/v1/workbench");
+// reconcile one fetched snapshot into the open surfaces, synchronously:
+// recorded buffers refresh from the fold, local drafts keep their text,
+// pending repairs keep their text, title, and original baseline while
+// the recorded source advances beneath them, and selection, cursor,
+// scroll, focus, pane layout, open pickers, and unknown or in-flight
+// submissions are all state this never touches. It never navigates.
+function absorb(fresh) {
   snapshot = fresh;
   for (const buffer of bench.buffers.values()) {
     if (buffer.kind === "draft") continue;
@@ -1269,15 +1293,64 @@ async function reload(announce = true) {
     for (const [id, view] of editors) {
       if (bench.view(id).bufferId !== buffer.id) continue;
       if (buffer.revisionPending) continue;
+      // a view whose own document is already the published text is left
+      // alone: setState on an unchanged document resets its scroll, and
+      // another pane's update advancing the shared master says nothing
+      // about this view
+      if (view.state.doc.toString() === buffer.text) continue;
+      const scroll = view.scrollDOM.scrollTop;
       view.setState(editorState(buffer, bench.position(id)));
       observeMode(view);
+      view.scrollDOM.scrollTop = scroll;
     }
   }
   for (const id of editors.keys()) {
-    if (bench.buffer(bench.view(id).bufferId).kind === "task" && isReading(id)) showPresentation(id);
+    if (["comment", "home", "task"].includes(bench.buffer(bench.view(id).bufferId).kind) && isReading(id)) showPresentation(id);
   }
   refreshChrome();
+}
+
+// a delayed response carrying an older fold is superseded by what
+// already stands on screen: absorbing it would roll back both the
+// rendered record and the cursor and hide newer facts. The cursor
+// orders positions on the one append-only log - an empty fold's null
+// is the position before any record, older than every held position -
+// so anything strictly older is dropped.
+function absorbIfCurrent(fresh) {
+  const standing = typeof syncCursor === "number" ? syncCursor : null;
+  const arriving = typeof fresh.cursor === "number" ? fresh.cursor : null;
+  if (standing !== null && (arriving === null || arriving < standing)) return false;
+  syncCursor = fresh.cursor;
+  absorb(fresh);
+  return true;
+}
+
+async function reload(announce = true) {
+  const fresh = await api("/api/v1/workbench");
+  absorbIfCurrent(fresh);
   if (announce) status("Recorded material refreshed. Draft references were not retargeted.");
+}
+
+// the read-side follow: one parked read at a time, held at most wait_ms
+// and woken early by the record's landing through the same door the
+// mailbox read uses; the server re-checks its cursor on a bounded slice
+// so records written by other processes surface too. No subscription is
+// kept on the tracker. A bounded pause after a failed request is
+// reconnect transport; the stale cursor then mismatches and the fresh
+// fold returns whole, so a dropped connection catches up from the
+// record, not from memory.
+const followPause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function followRecords() {
+  for (;;) {
+    try {
+      const query = syncCursor === null || syncCursor === undefined
+        ? "?wait_ms=25000" : `?cursor=${syncCursor}&wait_ms=25000`;
+      const fresh = await api(`/api/v1/workbench${query}`);
+      absorbIfCurrent(fresh);
+    } catch {
+      await followPause(2000);
+    }
+  }
 }
 
 // -- the command registry ------------------------------------------------------
@@ -1826,6 +1899,8 @@ async function start() {
   storageKey = `saccade-workbench:${version.db}`;
   identity = await api("/api/v1/workbench/identity");
   snapshot = await api("/api/v1/workbench");
+  syncCursor = snapshot.cursor;
+  followRecords();
   if (!restore() && !restoreLegacy()) {
     published("home");
     bench.open("home");

@@ -683,23 +683,72 @@ async fn workbench_identity(State(app): State<AppState>, headers: HeaderMap) -> 
         .into_response()
 }
 
+#[derive(Deserialize)]
+struct WorkbenchQuery {
+    /// The log position the reader last saw: while the log stands at
+    /// it, a waiting read parks instead of returning the same fold
+    cursor: Option<usize>,
+    /// Bounded park in milliseconds, capped like the mailbox read
+    wait_ms: Option<u64>,
+}
+
 /// The folded workbench projection: canonical rendered bodies, citation
 /// edges, and the cursor, read straight off the store's own fold. A
-/// degraded fold refuses honestly; nothing writes.
-async fn workbench(State(app): State<AppState>) -> Response {
-    let snapshot = match app.snapshot() {
-        Ok(s) => s,
-        Err(ReadFail::Degraded(degraded)) => {
-            // the raw rows still travel through the records face; the
-            // workbench projection itself refuses honestly
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"error": {"code": "degraded", "detail": degraded.reason}})),
-            )
-                .into_response();
+/// degraded fold refuses honestly; nothing writes. With cursor and
+/// wait_ms the read parks while the log stands at the named cursor and
+/// returns once the cursor moves past it. The landing wake is the fast
+/// path for writes through this server's own door; the park is sliced
+/// at one second so the cheap cursor check also surfaces records other
+/// processes wrote to the shared database (the CLI face), which fire
+/// no wake here. No parameters is the immediate read it always was.
+async fn workbench(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<WorkbenchQuery>,
+) -> Response {
+    let wait_ms = query.wait_ms.unwrap_or(0).min(30_000);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
+    loop {
+        // armed before the read so a landing between the read and the
+        // park cannot be missed
+        let wake = app.bridge.notify.notified();
+        tokio::pin!(wake);
+        wake.as_mut().enable();
+        let stands_at_cursor = {
+            let guard = app.inner.lock().expect("the writer lock is not poisoned");
+            match &*guard {
+                ServerState::Ready(inner) => {
+                    db::last_seq(&inner.conn).ok().flatten() == query.cursor
+                }
+                ServerState::Degraded(..) => false,
+            }
+        };
+        if !stands_at_cursor || wait_ms == 0 || tokio::time::Instant::now() >= deadline {
+            let snapshot = match app.snapshot() {
+                Ok(s) => s,
+                Err(ReadFail::Degraded(degraded)) => {
+                    // the raw rows still travel through the records face; the
+                    // workbench projection itself refuses honestly
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"error": {"code": "degraded", "detail": degraded.reason}})),
+                    )
+                        .into_response();
+                }
+                Err(ReadFail::Db(reason)) => return api_failure(ApiFail::Db(reason)),
+            };
+            break workbench_projection(&app, snapshot);
         }
-        Err(ReadFail::Db(reason)) => return api_failure(ApiFail::Db(reason)),
-    };
+        // one bounded slice: woken early by a landing, otherwise the
+        // cursor is re-checked when the slice ends
+        let slice_end = std::cmp::min(
+            deadline,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+        );
+        let _ = tokio::time::timeout_at(slice_end, wake).await;
+    }
+}
+
+fn workbench_projection(app: &AppState, snapshot: Snapshot) -> Response {
     let store = match app.artifacts_dir() {
         Some(dir) => crate::web::ArtifactStore::at(dir.to_path_buf()),
         None => crate::web::ArtifactStore::default(),
