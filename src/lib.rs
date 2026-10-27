@@ -7,6 +7,7 @@ pub mod client;
 pub mod db;
 pub mod decide;
 pub mod events;
+pub mod host;
 pub mod markers;
 pub mod migrate;
 pub mod objects;

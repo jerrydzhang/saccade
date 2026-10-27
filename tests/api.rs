@@ -1385,6 +1385,30 @@ async fn workbench_snapshot_projects_the_canonical_fold() {
         projection["tasks"][0]["name"].as_str(),
         Some("migrate floop")
     );
+    // home rides the same projection: every task and comment record is
+    // recent activity, newest first, anchored to its public c-N
+    let activity = projection["recent_activity"].as_array().unwrap();
+    let seqs: Vec<i64> = activity
+        .iter()
+        .map(|e| e["seq"].as_i64().unwrap())
+        .collect();
+    assert_eq!(seqs, vec![5, 4, 3, 2, 1, 0]);
+    let withdrawal = &activity[0];
+    assert_eq!(withdrawal["event"].as_str(), Some("comment_withdrawn"));
+    assert_eq!(withdrawal["home"].as_i64(), Some(0));
+    assert_eq!(withdrawal["comment"].as_i64(), Some(1));
+    assert_eq!(withdrawal["actor"].as_str(), Some("jerry"));
+    let created = &activity[5];
+    assert_eq!(created["event"].as_str(), Some("task_created"));
+    assert_eq!(created["home"].as_i64(), Some(0));
+    assert_eq!(created["comment"].as_i64(), None);
+    // recently active tasks: one entry per task, the same records
+    // ordering it - t-0's withdrawal is later than t-1's reply
+    let active = projection["recently_active_tasks"].as_array().unwrap();
+    let order: Vec<i64> = active.iter().map(|e| e["task"].as_i64().unwrap()).collect();
+    assert_eq!(order, vec![0, 1]);
+    assert_eq!(active[0]["seq"].as_i64(), Some(5));
+    assert_eq!(active[1]["seq"].as_i64(), Some(4));
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
@@ -1676,6 +1700,31 @@ async fn workbench_command_pins_human_attribution_and_binds_submissions() {
     assert_eq!(
         json_of(&r.body_mut().read_to_string().unwrap())["actor"],
         json!("jerry")
+    );
+
+    // a create names what was born, exactly as the command door names
+    // it, so the workbench can open the born thread
+    let (status, body) = post_json(
+        &base,
+        "/api/v1/workbench/command",
+        &json!({"actor": "jerry", "command": {"create_task": {"name": "the browser-born task"}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["records"][0]["kind"], "task_created", "{body}");
+    assert_eq!(reply["records"][0]["tier"], "human", "{body}");
+    let id = reply["id"].as_str().expect("the reply names the born task");
+    let snapshot = json_of(&get_json(&base, "/api/v1/workbench").1);
+    let born = snapshot["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "the browser-born task")
+        .expect("the born task projects");
+    assert_eq!(
+        id,
+        format!("t-{}", born["id"].as_i64().unwrap()),
+        "{snapshot}"
     );
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -3199,6 +3248,10 @@ if [ "$1" = terminal ] && [ "$2" = create ]; then
   if [ -n "${FAKE_ORCA_CREATE_FAILS:-}" ]; then
     printf 'the host refused the create\n' >&2
     exit 1
+  fi
+  if [ -n "${FAKE_ORCA_NO_HANDLE:-}" ]; then
+    printf '{"ok":true,"result":{"terminal":{}}}\n'
+    exit 0
   fi
   printf '{"handle":"%s","worktreePath":"%s","orphaned":false}\n' "$handle" "$path" >> "$FAKE_ORCA_STATE"
   if [ -n "${FAKE_ORCA_SPAWN:-}" ]; then
@@ -6652,4 +6705,443 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     assert_eq!(last, selected_b.display().to_string());
 
     std::fs::remove_dir_all(home).unwrap();
+}
+
+// ---- the workbench launch door: the shared construction through HTTP ----
+
+/// One real `sac serve` subprocess with its own environment: the launch
+/// door's host calls belong to the server process, so its PATH and pins
+/// must be exact. Returns the published URL and the child for reaping.
+fn spawn_serve_subprocess(
+    db: &std::path::Path,
+    repo: &std::path::Path,
+    envs: &[(&str, String)],
+) -> (String, std::process::Child) {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let log_path = db.parent().unwrap().join("serve-subprocess.log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args([
+        "--db",
+        db.to_str().unwrap(),
+        "--repo",
+        repo.to_str().unwrap(),
+        "serve",
+        "--bind",
+        "127.0.0.1",
+        "--port",
+        "0",
+    ])
+    .stdout(log.try_clone().unwrap())
+    .stderr(log);
+    for key in [
+        "SACCADE_REPO",
+        "SACCADE_DB",
+        "SACCADE_SERVER",
+        "SACCADE_ACTOR",
+        "SACCADE_TASK",
+        "SACCADE_INCARNATION_SEQ",
+        "SACCADE_WORKSPACE",
+        "SACCADE_PI",
+        "SACCADE_DIRENV",
+    ] {
+        cmd.env_remove(key);
+    }
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    let mut child = cmd.spawn().expect("the serve subprocess spawns");
+    let hint = std::path::PathBuf::from(format!("{}.addr", db.display()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            panic!(
+                "serve exited at startup: {}",
+                std::fs::read_to_string(log_path).unwrap_or_default()
+            );
+        }
+        if hint.exists() {
+            let url = std::fs::read_to_string(&hint).unwrap().trim().to_string();
+            let (status, body) = get_json(&url, "/api/v1/version");
+            if status == 200 && json_of(&body)["db"] == db.display().to_string() {
+                return (url, child);
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "serve readiness deadline"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// An executable direnv stub beside the fake host: the composition only
+/// resolves it, the fake host never runs the typed command.
+fn fake_direnv(dir: &std::path::Path) -> std::path::PathBuf {
+    let direnv = dir.join("direnv");
+    std::fs::write(&direnv, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&direnv, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    direnv
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_workbench_launch_door_submits_honestly_through_a_fake_host() {
+    let db = scratch_db("workbench-launch");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let host = fake_host(db.parent().unwrap());
+    let bin_dir = host.parent().unwrap().to_path_buf();
+    let direnv = fake_direnv(&bin_dir);
+    let pi = stub_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    let host_state = db.parent().unwrap().join("host-state");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    let (base_url, mut serve) = spawn_serve_subprocess(
+        &db,
+        &root,
+        &[
+            ("PATH", bin_dir.display().to_string()),
+            ("FAKE_ORCA_LOG", host_log.display().to_string()),
+            ("FAKE_ORCA_STATE", host_state.display().to_string()),
+            ("SACCADE_PI", pi.display().to_string()),
+        ],
+    );
+
+    let workspace = db.parent().unwrap().join("chosen-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let records_before = get_json(&base_url, "/api/v1/records").1;
+
+    // the happy path: the host's terminal acceptance is the whole truth
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["submitted"], true, "{body}");
+    assert_eq!(
+        reply["workspace"],
+        workspace.canonicalize().unwrap().display().to_string(),
+        "{body}"
+    );
+    assert!(
+        reply["terminal"]
+            .as_str()
+            .unwrap()
+            .starts_with("term_actual_shape_"),
+        "{body}"
+    );
+    // a launch lands no record: the door is a host submission, nothing else
+    assert_eq!(
+        json_of(&get_json(&base_url, "/api/v1/records").1),
+        json_of(&records_before),
+        "a launch changed the record"
+    );
+    // the typed line is the shared construction: direnv equip, the
+    // scrub, and this server's own URL as the routing the session carries
+    let typed = command_of(&host_log, &format!("path:{}", workspace.display()));
+    let expected_scrub = "env -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ \
+                         -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB";
+    assert!(typed.contains(expected_scrub), "{typed}");
+    assert!(
+        typed.contains(&format!("SACCADE_SERVER='{base_url}'")),
+        "{typed}"
+    );
+    assert!(
+        typed.contains(&format!("SACCADE_REPO={}", root.display())),
+        "{typed}"
+    );
+    assert!(
+        typed.contains(&format!("SACCADE_ACTOR={}", shell_quote_pi_label(&pi))),
+        "{typed}"
+    );
+    assert!(
+        typed.contains(&format!("&& {} exec", direnv.display().to_string())),
+        "{typed}"
+    );
+    // the argv ends at the pi: no prompt rides a workbench launch
+    let pi_word = pi.display().to_string();
+    let quoted = |word: &str| {
+        if word.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'=' | b'/' | b'.' | b'+')
+        }) {
+            word.to_string()
+        } else {
+            format!("'{word}'")
+        }
+    };
+    assert!(typed.ends_with(&quoted(&pi_word)), "{typed}");
+
+    // a missing directory refuses before the host is asked
+    let logged_before = std::fs::read_to_string(&host_log).unwrap();
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": db.parent().unwrap().join("absent").display().to_string()}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "workspace_path_invalid",
+        "{body}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&host_log).unwrap(),
+        logged_before,
+        "the refusal preceded any host contact"
+    );
+
+    // the door's origin law: cross-site posts refuse unexamined
+    let (status, body) = post_json_headers(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}}),
+        &[("Sec-Fetch-Site", "cross-site")],
+    );
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "cross_site_refused",
+        "{body}"
+    );
+
+    // a shape the door cannot read refuses typed
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"resume": "i-1"}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "malformed_request",
+        "{body}"
+    );
+
+    serve.kill().unwrap();
+    serve.wait().unwrap();
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// The launched actor label: the stub pi's own file name.
+fn shell_quote_pi_label(pi: &std::path::Path) -> String {
+    let label = pi
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if label.contains(' ') {
+        format!("'{label}'")
+    } else {
+        label
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_workbench_launch_door_reports_an_honest_host_refusal() {
+    let db = scratch_db("workbench-launch-refused");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let host = fake_host(db.parent().unwrap());
+    let bin_dir = host.parent().unwrap().to_path_buf();
+    let _direnv = fake_direnv(&bin_dir);
+    let pi = stub_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    let host_state = db.parent().unwrap().join("host-state");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    let (base_url, mut serve) = spawn_serve_subprocess(
+        &db,
+        &root,
+        &[
+            ("PATH", bin_dir.display().to_string()),
+            ("FAKE_ORCA_LOG", host_log.display().to_string()),
+            ("FAKE_ORCA_STATE", host_state.display().to_string()),
+            ("FAKE_ORCA_CREATE_FAILS", "1".to_string()),
+            ("SACCADE_PI", pi.display().to_string()),
+        ],
+    );
+
+    let workspace = db.parent().unwrap().join("refused-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let records_before = get_json(&base_url, "/api/v1/records").1;
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}}),
+    );
+    assert_eq!(status, 502, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "launch_host_refused",
+        "{body}"
+    );
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("the host refused the create")),
+        "{body}"
+    );
+    assert_eq!(
+        json_of(&get_json(&base_url, "/api/v1/records").1),
+        json_of(&records_before),
+        "a refused launch changed no record"
+    );
+
+    serve.kill().unwrap();
+    serve.wait().unwrap();
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_launch_door_refuses_an_unequipped_start_before_the_host_is_asked() {
+    let db = scratch_db("workbench-launch-no-direnv");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let host = fake_host(db.parent().unwrap());
+    // the fake host stays reachable; direnv deliberately is not on PATH
+    let bin_dir = host.parent().unwrap().to_path_buf();
+    let pi = stub_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    let host_state = db.parent().unwrap().join("host-state");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    let (base_url, mut serve) = spawn_serve_subprocess(
+        &db,
+        &root,
+        &[
+            ("PATH", bin_dir.display().to_string()),
+            ("FAKE_ORCA_LOG", host_log.display().to_string()),
+            ("FAKE_ORCA_STATE", host_state.display().to_string()),
+            ("SACCADE_PI", pi.display().to_string()),
+        ],
+    );
+
+    let workspace = db.parent().unwrap().join("bare-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}}),
+    );
+    // the pin is a compile fact, not a runtime choice: a packaged build
+    // carries direnv no matter what PATH says and must not pretend to
+    // forget it, while a cargo build has no pin and refuses before the
+    // host is asked. Each build flavor asserts its own honest contract.
+    if option_env!("SACCADE_DIRENV").is_some() {
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(json_of(&body)["submitted"], true, "{body}");
+    } else {
+        assert_eq!(status, 500, "{body}");
+        assert_eq!(
+            json_of(&body)["error"]["code"],
+            "launch_no_direnv",
+            "{body}"
+        );
+        assert!(
+            json_of(&body)["error"]["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("never starts unequipped")),
+            "{body}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&host_log).unwrap(),
+            "",
+            "the unequipped refusal reached the host"
+        );
+    }
+
+    serve.kill().unwrap();
+    serve.wait().unwrap();
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_workbench_projection_names_the_workspaces_the_fold_holds() {
+    let db = scratch_db("workbench-workspaces");
+    let (base, _state) = spawn_workbench(&db).await;
+    // no workspaces yet: the projection carries the empty fold fact
+    let empty = json_of(&get_json(&base, "/api/v1/workbench").1);
+    assert_eq!(
+        empty["workspaces"],
+        json!([]),
+        "{}",
+        get_json(&base, "/api/v1/workbench").1
+    );
+    let (status, body) = post_json(
+        &base,
+        "/api/v1/workspace/create",
+        &json!({"label": "projection-seed", "client": "workbench"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let created = json_of(&body);
+    let workspaces = json_of(&get_json(&base, "/api/v1/workbench").1)["workspaces"].clone();
+    let list = workspaces.as_array().unwrap();
+    assert_eq!(list.len(), 1, "{workspaces}");
+    let ws = &list[0];
+    assert_eq!(ws["seq"], created["workspace"]["seq"], "{workspaces}");
+    assert_eq!(ws["base"], created["workspace"]["base"], "{workspaces}");
+    assert_eq!(ws["path"], created["workspace"]["path"], "{workspaces}");
+    assert!(
+        ws["branch"].as_str().unwrap().contains("projection-seed"),
+        "{workspaces}"
+    );
+    assert!(ws["born_at"].is_u64(), "{workspaces}");
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_launch_door_names_a_created_terminal_it_cannot_report() {
+    let db = scratch_db("workbench-launch-no-handle");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let host = fake_host(db.parent().unwrap());
+    let bin_dir = host.parent().unwrap().to_path_buf();
+    let _direnv = fake_direnv(&bin_dir);
+    let pi = stub_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    let host_state = db.parent().unwrap().join("host-state");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    let (base_url, mut serve) = spawn_serve_subprocess(
+        &db,
+        &root,
+        &[
+            ("PATH", bin_dir.display().to_string()),
+            ("FAKE_ORCA_LOG", host_log.display().to_string()),
+            ("FAKE_ORCA_STATE", host_state.display().to_string()),
+            ("FAKE_ORCA_NO_HANDLE", "1".to_string()),
+            ("SACCADE_PI", pi.display().to_string()),
+        ],
+    );
+
+    let workspace = db.parent().unwrap().join("unreported-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let records_before = get_json(&base_url, "/api/v1/records").1;
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}}),
+    );
+    // the host created the terminal; the door cannot report its handle.
+    // The refusal is a confirmed partial outcome, never a claim of
+    // non-submission.
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "launch_host_no_handle",
+        "{body}"
+    );
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("the terminal was created but the host named no handle")),
+        "{body}"
+    );
+    assert_eq!(
+        json_of(&get_json(&base_url, "/api/v1/records").1),
+        json_of(&records_before),
+        "the unreportable launch changed no record"
+    );
+
+    serve.kill().unwrap();
+    serve.wait().unwrap();
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }

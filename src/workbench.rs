@@ -4,13 +4,18 @@
 //! infers; every html byte comes from the same renderer the record
 //! already claims. Asset bytes are the committed single-binary bundle.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::db::{self, StoredRecord};
+use crate::events::Event;
+use crate::objects::comment::CommentId;
 use crate::store::{RecordId, World};
 use crate::views::{self, RefTarget, comment_line, show_view};
 use crate::web::{self, ArtifactStore};
+use crate::wire;
 
 /// The workbench assets, embedded at compile time from OUT_DIR - the
 /// build script stages them there with parity proven per input, never
@@ -160,7 +165,164 @@ pub fn snapshot(
             "explanation": view.explanation, "offer": view.offer_num,
         }));
     }
-    Ok(json!({"tasks": tasks, "comments": comments, "cursor": rows.last().map(|r| r.seq)}))
+    let workspaces: Vec<Value> = world
+        .workspaces
+        .iter()
+        .map(|(id, context)| {
+            json!({
+                "seq": id.0 .0,
+                "base": context.workspace.base.as_str(),
+                "branch": context.workspace.branch.as_str(),
+                "path": context.workspace.worktree.as_path().display().to_string(),
+                "born_at": context.born_at,
+            })
+        })
+        .collect();
+    let (recent_activity, recently_active_tasks) = home_facts(world, rows)?;
+    Ok(json!({
+        "tasks": tasks, "comments": comments, "workspaces": workspaces,
+        "cursor": rows.last().map(|r| r.seq),
+        "recent_activity": recent_activity, "recently_active_tasks": recently_active_tasks,
+    }))
+}
+
+/// One home activity entry's record facts: what the fold gives an
+/// activity line to name. `comment` is the entry's public c-N when the
+/// record anchors a contribution card; `offer` is the selection a
+/// use_bound record itself names; `artifact` the parked name.
+struct ActivityEntry {
+    seq: usize,
+    at: u64,
+    actor: String,
+    tier: String,
+    event: String,
+    home: usize,
+    comment: Option<usize>,
+    offer: Option<usize>,
+    artifact: Option<String>,
+}
+
+impl ActivityEntry {
+    fn value(self) -> Value {
+        json!({
+            "seq": self.seq, "at": self.at, "actor": self.actor, "tier": self.tier,
+            "event": self.event, "home": self.home,
+            "comment": self.comment, "offer": self.offer, "artifact": self.artifact,
+        })
+    }
+}
+
+/// The home read facts over the ratified boundary: every task and
+/// comment record is recent activity - newest first - and the same
+/// records order recently active tasks, one entry per task. Session,
+/// workspace, and message-delivery records are bookkeeping, not home
+/// activity; they name no entry here. Listing bounds are a client
+/// concern; the wire carries every included entry.
+fn home_facts(
+    world: &World,
+    rows: &[StoredRecord],
+) -> Result<(Vec<Value>, Vec<Value>), WorkbenchFail> {
+    let mut entries: Vec<ActivityEntry> = Vec::new();
+    // seq order is the log's chronology, so the last write is the latest
+    let mut latest: BTreeMap<usize, (usize, u64)> = BTreeMap::new();
+    for row in rows {
+        if let Some(entry) = activity_entry(world, row)? {
+            latest.insert(entry.home, (row.seq, row.event_time));
+            entries.push(entry);
+        }
+    }
+    entries.reverse();
+    let mut order: Vec<(usize, (usize, u64))> = latest.into_iter().collect();
+    order.sort_by_key(|(_, (seq, _))| std::cmp::Reverse(*seq));
+    let activity = entries.into_iter().map(ActivityEntry::value).collect();
+    let active = order
+        .into_iter()
+        .map(|(task, (seq, at))| json!({"task": task, "seq": seq, "at": at}))
+        .collect();
+    Ok((activity, active))
+}
+
+/// The ratified inventory, one arm per included record kind; the kinds
+/// outside it are Ok(None) bookkeeping. A record the fold cannot place
+/// degrades loudly, like every projection in this file.
+fn activity_entry(
+    world: &World,
+    row: &StoredRecord,
+) -> Result<Option<ActivityEntry>, WorkbenchFail> {
+    let event = wire::assemble(&row.kind, &row.payload)
+        .map_err(|_| WorkbenchFail::Degraded(format!("record {} does not assemble", row.seq)))?;
+    let resolved = |home: Option<usize>| {
+        home.ok_or_else(|| {
+            WorkbenchFail::Degraded(format!("record {} names no home task", row.seq))
+        })
+    };
+    let resident = |id: CommentId| {
+        world.comments.get(&id).ok_or_else(|| {
+            WorkbenchFail::Degraded(format!("record {} names no resident comment", row.seq))
+        })
+    };
+    let (home, comment, offer, artifact) = match event {
+        Event::TaskCreated { .. } => (
+            resolved(world.task_born_at(RecordId(row.seq)).map(|t| t.0))?,
+            None,
+            None,
+            None,
+        ),
+        Event::TaskClaimed { id, .. }
+        | Event::TaskCancelled { id, .. }
+        | Event::TaskReopened { id, .. } => (resolved(Some(id.0))?, None, None, None),
+        Event::Commented { home, .. } => (
+            resolved(Some(home.0))?,
+            world.comment_num(CommentId(RecordId(row.seq))),
+            None,
+            None,
+        ),
+        Event::CommentRevised { id, .. } | Event::CommentWithdrawn { id, .. } => {
+            let context = resident(id)?;
+            (
+                resolved(Some(context.comment.home.0))?,
+                world.comment_num(id),
+                None,
+                None,
+            )
+        }
+        Event::UseBound { id, offer, .. } => {
+            let context = resident(id)?;
+            (
+                resolved(Some(context.comment.home.0))?,
+                world.comment_num(id),
+                // the selection this record names; the fold's current
+                // binding is a later fact and never substitutes
+                world.comment_num(offer),
+                None,
+            )
+        }
+        Event::ArtifactAdded { root, artifact } => (
+            resolved(Some(root.0))?,
+            None,
+            None,
+            Some(artifact.name.as_str().to_string()),
+        ),
+        // workspace, incarnation, and message records: excluded
+        Event::WorkspaceEstablished { .. }
+        | Event::TaskWorkspaceCheckpointed { .. }
+        | Event::WorkspaceCreated { .. }
+        | Event::WorkspaceChanged { .. }
+        | Event::IncarnationRegistered { .. }
+        | Event::MessageSent { .. }
+        | Event::MessageSubmitted { .. } => return Ok(None),
+    };
+    Ok(Some(ActivityEntry {
+        seq: row.seq,
+        at: row.event_time,
+        actor: row.actor.clone(),
+        tier: row.tier.clone(),
+        event: row.kind.clone(),
+        home,
+        comment,
+        offer,
+        artifact,
+    }))
 }
 
 /// The stateless draft preview: a pure render of the proposed body
@@ -180,4 +342,371 @@ pub fn preview(
         targets.push(views::ref_target(world, RecordId(*seq)).ok_or("unresolved reference")?);
     }
     Ok(json!({"html": web::prose_html(&request.body, &targets, store)}))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::events::Event;
+    use crate::objects::comment::{CommentId, CommentKind};
+    use crate::objects::incarnation::IncarnationId;
+    use crate::objects::message::MessageId;
+    use crate::objects::task::TaskId;
+    use crate::store::{Context, Record, Scope, Tier};
+    use crate::types::artifact::{Artifact, ContentHash};
+    use crate::types::pointers::{
+        GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath,
+    };
+    use crate::types::prose::Prose;
+
+    fn human(name: &str) -> Context {
+        Context {
+            actor: crate::ActorName::new(name.into()).unwrap(),
+            tier: Tier::Human,
+            scope: None,
+        }
+    }
+
+    fn agent(scope: Option<Scope>) -> Context {
+        Context {
+            actor: crate::ActorName::new("pi".into()).unwrap(),
+            tier: Tier::Agent,
+            scope,
+        }
+    }
+
+    fn scoped_incarnation(n: usize) -> Context {
+        agent(Some(Scope {
+            task: None,
+            incarnation: Some(IncarnationId(RecordId(n))),
+            workspace: None,
+        }))
+    }
+
+    fn prose(text: &str) -> Prose {
+        Prose::new(text.into()).unwrap()
+    }
+
+    /// Rows and world fold from one event list, so neither shape drifts.
+    fn fixture(events: Vec<(Context, Event)>) -> (World, Vec<StoredRecord>) {
+        let mut rows = Vec::new();
+        let mut records = Vec::new();
+        for (n, (context, event)) in events.into_iter().enumerate() {
+            let (kind, payload) = wire::disassemble(&event);
+            records.push(Record {
+                id: RecordId(n),
+                timestamp: 1_700_000_000 + n as u64 * 60,
+                context: context.clone(),
+                event,
+            });
+            rows.push(StoredRecord {
+                seq: n,
+                event_time: 1_700_000_000 + n as u64 * 60,
+                logged_time: 1_700_000_000 + n as u64 * 60,
+                actor: context.actor.as_str().to_string(),
+                tier: format!("{:?}", context.tier).to_lowercase(),
+                kind,
+                payload,
+                scope: None,
+            });
+        }
+        let world = World::replay(records).expect("the fixture folds");
+        (world, rows)
+    }
+
+    fn seqs_of(activity: &[Value]) -> Vec<usize> {
+        activity
+            .iter()
+            .map(|e| e["seq"].as_u64().unwrap() as usize)
+            .collect()
+    }
+
+    /// Every included kind and a rebinding history, machinery interleaved.
+    fn inventory() -> (World, Vec<StoredRecord>) {
+        fixture(vec![
+            (
+                human("jerry"),
+                Event::TaskCreated {
+                    name: prose("migrate floop"),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::TaskCreated {
+                    name: prose("other work"),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(0),
+                    kind: CommentKind::Note {
+                        title: prose("the finding"),
+                        body: prose("parked finding"),
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            (
+                agent(None),
+                Event::TaskClaimed {
+                    id: TaskId(0),
+                    incarnation: None,
+                },
+            ),
+            (
+                human("jerry"),
+                Event::CommentRevised {
+                    id: CommentId(RecordId(2)),
+                    title: None,
+                    body: Some(prose("the finding, reworded")),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(1),
+                    kind: CommentKind::Offer {
+                        title: prose("suite green"),
+                        body: prose("suite green"),
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            (
+                Context::system(),
+                Event::IncarnationRegistered {
+                    native_id: NativeSessionId::new("a1b2c3d4-evil".into()).unwrap(),
+                    saved_session: SessionLocator::new(
+                        "/home/story/.pi/sessions/a1b2c3d4.jsonl".into(),
+                    )
+                    .unwrap(),
+                },
+            ),
+            (
+                scoped_incarnation(6),
+                Event::MessageSent {
+                    from: IncarnationId(RecordId(6)),
+                    to: IncarnationId(RecordId(6)),
+                    reply_to: None,
+                    task: None,
+                    body: prose("please look at the failing edge case"),
+                },
+            ),
+            (
+                Context::system(),
+                Event::WorkspaceCreated {
+                    base: GitCommit::new("abc123".into()).unwrap(),
+                    branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
+                    worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::ArtifactAdded {
+                    root: TaskId(0),
+                    artifact: Artifact {
+                        name: prose("sweep figure"),
+                        hash: ContentHash::of(b"figure bytes"),
+                    },
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(0),
+                    kind: CommentKind::Use {
+                        source: TaskId(1),
+                        reason: prose("builds on the landed account"),
+                        bound: None,
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::UseBound {
+                    id: CommentId(RecordId(10)),
+                    offer: CommentId(RecordId(5)),
+                    grounds: prose("the first selection holds"),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(1),
+                    kind: CommentKind::Reject {
+                        offer: CommentId(RecordId(5)),
+                        grounds: prose("replaced for a corrected account"),
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(1),
+                    kind: CommentKind::Offer {
+                        title: prose("suite green, second account"),
+                        body: prose("the corrected account"),
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::UseBound {
+                    id: CommentId(RecordId(10)),
+                    offer: CommentId(RecordId(13)),
+                    grounds: prose("the replacement holds"),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::Commented {
+                    home: TaskId(1),
+                    kind: CommentKind::Accept {
+                        offer: CommentId(RecordId(13)),
+                    },
+                    references: Vec::new(),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::CommentWithdrawn {
+                    id: CommentId(RecordId(2)),
+                    note: prose("parked in the wrong place"),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::TaskCancelled {
+                    id: TaskId(0),
+                    explanation: prose("superseded by other work"),
+                },
+            ),
+            (
+                human("jerry"),
+                Event::TaskReopened {
+                    id: TaskId(0),
+                    explanation: prose("pursued again"),
+                },
+            ),
+            (
+                Context::system(),
+                Event::WorkspaceEstablished {
+                    task_id: TaskId(0),
+                    base: GitCommit::new("abc123".into()).unwrap(),
+                    branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                    worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+                },
+            ),
+            (
+                Context::system(),
+                Event::TaskWorkspaceCheckpointed {
+                    task_id: TaskId(0),
+                    checkpoint: GitCommit::new("def456".into()).unwrap(),
+                },
+            ),
+            (
+                Context::system(),
+                Event::WorkspaceChanged {
+                    incarnation: IncarnationId(RecordId(6)),
+                    worktree: WorktreePath::new("/repo/wt/workspace-deadbeef".into()).unwrap(),
+                },
+            ),
+            (
+                scoped_incarnation(6),
+                Event::MessageSubmitted {
+                    id: MessageId(RecordId(7)),
+                    by: IncarnationId(RecordId(6)),
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn recent_activity_carries_the_included_inventory_newest_first() {
+        let (world, rows) = inventory();
+        let (activity, _) = home_facts(&world, &rows).expect("the home facts project");
+        // seqs 6-8 and 19-22 are machinery bookkeeping; the rest is activity
+        assert_eq!(
+            seqs_of(&activity),
+            vec![18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 5, 4, 3, 2, 1, 0]
+        );
+    }
+
+    #[test]
+    fn activity_entries_name_their_home_and_anchor() {
+        let (world, rows) = inventory();
+        let (activity, _) = home_facts(&world, &rows).expect("the home facts project");
+        let by_seq = |seq: usize| {
+            activity
+                .iter()
+                .find(|e| e["seq"].as_u64() == Some(seq as u64))
+                .expect("the entry exists")
+        };
+        let created = by_seq(0);
+        assert_eq!(created["event"].as_str(), Some("task_created"));
+        assert_eq!(created["home"].as_u64(), Some(0));
+        assert_eq!(created["comment"].as_u64(), None);
+        let claimed = by_seq(3);
+        assert_eq!(claimed["event"].as_str(), Some("task_claimed"));
+        assert_eq!(claimed["home"].as_u64(), Some(0));
+        let note = by_seq(2);
+        assert_eq!(note["event"].as_str(), Some("commented"));
+        assert_eq!(note["home"].as_u64(), Some(0));
+        assert_eq!(note["comment"].as_u64(), Some(0));
+        assert_eq!(note["actor"].as_str(), Some("jerry"));
+        assert_eq!(note["tier"].as_str(), Some("human"));
+        let revised = by_seq(4);
+        assert_eq!(revised["event"].as_str(), Some("comment_revised"));
+        assert_eq!(revised["home"].as_u64(), Some(0));
+        assert_eq!(revised["comment"].as_u64(), Some(0));
+        let offer = by_seq(5);
+        assert_eq!(offer["home"].as_u64(), Some(1));
+        assert_eq!(offer["comment"].as_u64(), Some(1));
+        let accept = by_seq(15);
+        assert_eq!(accept["home"].as_u64(), Some(1));
+        assert_eq!(accept["comment"].as_u64(), Some(5));
+        let artifact = by_seq(9);
+        assert_eq!(artifact["event"].as_str(), Some("artifact_added"));
+        assert_eq!(artifact["home"].as_u64(), Some(0));
+        assert_eq!(artifact["artifact"].as_str(), Some("sweep figure"));
+        let use_birth = by_seq(10);
+        assert_eq!(use_birth["event"].as_str(), Some("commented"));
+        assert_eq!(use_birth["comment"].as_u64(), Some(2));
+        // each binding names the offer its own record selected
+        let first_binding = by_seq(11);
+        assert_eq!(first_binding["event"].as_str(), Some("use_bound"));
+        assert_eq!(first_binding["home"].as_u64(), Some(0));
+        assert_eq!(first_binding["comment"].as_u64(), Some(2));
+        assert_eq!(first_binding["offer"].as_u64(), Some(1));
+        let second_binding = by_seq(14);
+        assert_eq!(second_binding["event"].as_str(), Some("use_bound"));
+        assert_eq!(second_binding["comment"].as_u64(), Some(2));
+        assert_eq!(second_binding["offer"].as_u64(), Some(4));
+        assert_ne!(first_binding["offer"], second_binding["offer"]);
+        let withdrawal = by_seq(16);
+        assert_eq!(withdrawal["event"].as_str(), Some("comment_withdrawn"));
+        assert_eq!(withdrawal["home"].as_u64(), Some(0));
+        assert_eq!(withdrawal["comment"].as_u64(), Some(0));
+        let cancelled = by_seq(17);
+        assert_eq!(cancelled["event"].as_str(), Some("task_cancelled"));
+        let reopened = by_seq(18);
+        assert_eq!(reopened["event"].as_str(), Some("task_reopened"));
+        assert_eq!(reopened["home"].as_u64(), Some(0));
+    }
+
+    #[test]
+    fn recently_active_tasks_follow_the_same_included_records() {
+        let (world, rows) = inventory();
+        let (_, active) = home_facts(&world, &rows).expect("the home facts project");
+        // t-0's latest included record is the reopening, t-1's the accept
+        let order: Vec<u64> = active.iter().map(|e| e["task"].as_u64().unwrap()).collect();
+        assert_eq!(order, vec![0, 1]);
+        assert_eq!(active[0]["seq"].as_u64(), Some(18));
+        assert_eq!(active[1]["seq"].as_u64(), Some(15));
+        assert_eq!(active[1]["at"].as_u64(), Some(1_700_000_000 + 15 * 60));
+    }
 }

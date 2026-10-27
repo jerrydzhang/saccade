@@ -20,6 +20,7 @@ use crate::ActorName;
 use crate::attempts::{AsReceived, Attempts, Outcome};
 use crate::db::{self, ExecuteFail, StoredRecord};
 use crate::events::Event;
+use crate::host::HostFail;
 use crate::store::{Context, RecordId, Scope, Tier, World};
 use crate::types::pointers::WorktreePath;
 use crate::workspace::{self, WorkspaceFail};
@@ -181,6 +182,9 @@ pub struct AppState {
     artifacts: Option<std::path::PathBuf>,
     /// The serving repo's root, when boot resolved one.
     repo_root: Option<std::path::PathBuf>,
+    /// This server's own URL, published at bind: the routing a launched
+    /// session needs to reach the tracker it was started from.
+    server_url: Option<String>,
 }
 
 pub struct Snapshot {
@@ -248,6 +252,7 @@ impl AppState {
             bridge: BridgeCache::default(),
             artifacts: None,
             repo_root: None,
+            server_url: None,
         })
     }
 
@@ -265,6 +270,17 @@ impl AppState {
     pub fn with_repo_root(mut self, root: std::path::PathBuf) -> Self {
         self.repo_root = Some(root);
         self
+    }
+
+    /// Name this server's own published URL.
+    pub fn with_server_url(mut self, url: String) -> Self {
+        self.server_url = Some(url);
+        self
+    }
+
+    /// This server's own published URL, when bound.
+    pub fn server_url(&self) -> Option<&str> {
+        self.server_url.as_deref()
     }
 
     /// The serving repo's root, when boot resolved one.
@@ -404,6 +420,9 @@ enum ApiFail {
     Workspace(WorkspaceFail),
     /// The serving edge has no repo to run effects against
     NoRepo,
+    /// A launch construction or host-submission refusal: the shared
+    /// host mechanics name the stage, the door names its code
+    Host(HostFail),
     /// A controller refusal with its own status and code: quiescence,
     /// association, or a partial outcome the caller must see
     Refused(StatusCode, &'static str, String),
@@ -465,6 +484,26 @@ impl ApiFail {
                         .into(),
                 ),
             ),
+            ApiFail::Host(fail) => {
+                // the workspace named is the caller's selection; every
+                // other stage is the host environment's, never the
+                // caller's bad input
+                let status = match fail {
+                    HostFail::Workspace(_) => StatusCode::BAD_REQUEST,
+                    HostFail::NoPi
+                    | HostFail::NoDirenv
+                    | HostFail::WorktreeShow(_)
+                    | HostFail::CreateSpawn(_)
+                    | HostFail::NoHandle => StatusCode::INTERNAL_SERVER_ERROR,
+                    HostFail::Undiscovered(_) => StatusCode::GATEWAY_TIMEOUT,
+                    HostFail::CreateRefused(_) => StatusCode::BAD_GATEWAY,
+                };
+                (
+                    status,
+                    fail.wire_code().into(),
+                    Value::String(fail.to_string()),
+                )
+            }
             ApiFail::Refused(status, code, detail) => {
                 (status, code.to_string(), Value::String(detail))
             }
@@ -594,6 +633,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/workbench/preview", post(workbench_preview))
         .route("/api/v1/workbench/identity", get(workbench_identity))
         .route("/api/v1/workbench/command", post(workbench_command))
+        .route("/api/v1/workbench/launch", post(workbench_launch))
 }
 
 // -- the workbench read and act faces --------------------------------------
@@ -835,7 +875,23 @@ async fn workbench_command(
     let first_claim = cookie_actor(&headers).is_none();
     match app.execute(&context, command.clone(), None, received) {
         Ok(stored) => {
-            let mut response = (StatusCode::OK, Json(json!({"records": &stored}))).into_response();
+            let mut reply = json!({"records": &stored});
+            // a create reply names what was born, exactly as the command
+            // door names it, so the workbench can open the born thread
+            if matches!(command, Command::CreateTask { .. }) {
+                let birth = stored
+                    .iter()
+                    .find(|r| r.kind == "task_created")
+                    .expect("a create lands its birth record");
+                let born = app
+                    .snapshot()
+                    .expect("a landed write leaves a foldable world")
+                    .world
+                    .task_born_at(RecordId(birth.seq))
+                    .expect("the birth record folds into its task");
+                reply["id"] = json!(format!("t-{}", born.0));
+            }
+            let mut response = (StatusCode::OK, Json(reply)).into_response();
             if first_claim {
                 response
                     .headers_mut()
@@ -861,6 +917,140 @@ async fn workbench_command(
                 .into_response()
         }
     }
+}
+
+// -- the workbench host launch door ---------------------------------------
+
+#[derive(Deserialize)]
+struct WorkbenchLaunchRequest {
+    /// The explicit existing workspace directory the session starts in;
+    /// the door selects, it never creates
+    workspace: WorkbenchLaunchWorkspace,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WorkbenchLaunchWorkspace {
+    /// An existing directory, exactly as the CLI door demands
+    Existing(String),
+}
+
+/// What a submission did: the host's terminal acceptance and the
+/// workspace it names - never a claim that a session runs.
+#[derive(Serialize)]
+pub struct LaunchReply {
+    pub submitted: bool,
+    pub workspace: String,
+    pub terminal: String,
+}
+
+/// The workbench's host launch: the same shared construction the CLI
+/// doors use, submitted through this server's own published URL so the
+/// session reaches the tracker it was started from. No record lands and
+/// no task, claim, or binding rides it; the cross-site guard is the
+/// door's whole human-facing law, because a launch's only authority is
+/// the host itself.
+async fn workbench_launch(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if cross_site(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": {"code": "cross_site_refused", "detail": "cross-site POST refused"}})),
+        )
+            .into_response();
+    }
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: WorkbenchLaunchRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            let cursor = app
+                .snapshot()
+                .ok()
+                .and_then(|s| s.rows.last().map(|r| r.seq));
+            app.attempts.append(
+                None,
+                None,
+                0,
+                Outcome::Refused {
+                    code: "malformed_request",
+                    cursor,
+                    request: &raw,
+                },
+            );
+            return api_failure(ApiFail::Malformed(e.to_string()));
+        }
+    };
+    let received = AsReceived {
+        client: Some("workbench-launch".into()),
+        raw,
+    };
+    let started = Instant::now();
+    // the host ask can wait on its bounded discovery: it runs off the
+    // runtime, and the attempts line waits for the whole answer
+    let blocking_app = app.clone();
+    let outcome =
+        tokio::task::spawn_blocking(move || launch_operation(&blocking_app, &request.workspace))
+            .await
+            .expect("the launch operation does not panic");
+    let guard = app.inner.lock().expect("the writer lock is not poisoned");
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+/// One workbench launch: the server's own published URL for the
+/// routing, the shared pinned-pi and direnv construction, the host
+/// submission. The stages and their order are the CLI door's.
+fn launch_operation(
+    app: &AppState,
+    workspace: &WorkbenchLaunchWorkspace,
+) -> Result<LaunchReply, ApiFail> {
+    let WorkbenchLaunchWorkspace::Existing(path) = workspace;
+    let Some(url) = app.server_url().map(str::to_string) else {
+        return Err(ApiFail::Refused(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "launch_no_server_url",
+            "the serving edge cannot name its own address; a launch cannot route the session it starts"
+                .into(),
+        ));
+    };
+    let pi = crate::host::pinned_pi().map_err(ApiFail::Host)?;
+    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
+        return Err(ApiFail::NoRepo);
+    };
+    let label = crate::host::command_label(&pi.display().to_string());
+    let mut routing = format!(
+        "SACCADE_ACTOR={} SACCADE_SERVER={} SACCADE_REPO={}",
+        crate::host::shell_quote(&label),
+        crate::host::shell_quote(&url),
+        crate::host::shell_quote(&repo_root.display().to_string()),
+    );
+    if let Ok(exe) = std::env::current_exe() {
+        routing.push_str(&format!(
+            " SACCADE_CLI={}",
+            crate::host::shell_quote(&exe.display().to_string())
+        ));
+    }
+    let (dir_str, command) =
+        crate::host::launch_command(Path::new(path), &routing, &[pi.display().to_string()])
+            .map_err(ApiFail::Host)?;
+    let terminal =
+        crate::host::submit_terminal(&dir_str, "sac launch", &command).map_err(ApiFail::Host)?;
+    Ok(LaunchReply {
+        submitted: true,
+        workspace: dir_str,
+        terminal,
+    })
 }
 
 // -- the task-free workspace controller ----------------------------------
@@ -1233,6 +1423,7 @@ fn integration_outcome<T>(
                 ApiFail::Malformed(_) => "malformed_request",
                 ApiFail::Workspace(effect) => effect.code(),
                 ApiFail::NoRepo => "workspace_no_repo",
+                ApiFail::Host(host) => host.wire_code(),
                 ApiFail::Refused(_, code, _) => code,
             };
             let cursor = match guard {

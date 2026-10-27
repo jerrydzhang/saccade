@@ -135,7 +135,10 @@ def main():
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             ready(page, base)
-            check(len(state(page)['panes']) == 1 and state(page)['mode'] == 'Normal', 'one text-first home pane opens in Normal mode')
+            check(len(state(page)['panes']) == 1 and state(page)['mode'] == 'View', 'one home pane opens in rendered View')
+            check(page.locator('.pane.active .home-activity .home-entry').count() > 0
+                  and page.locator('.pane.active .home-tasks .home-entry').count() > 0,
+                  'home renders recent activity and recently active tasks')
             page.screenshot(path=str(RUN / '01-home.png'))
             for axis, binding in [('beside', 'wv'), ('below', 'ws')]:
                 for close_index in (0, 1):
@@ -809,7 +812,7 @@ def main():
             page = context.new_page(); ready(page, base)
             # textContent, not inner_text: the renderer collapses the bar's spacing runs
             bar = lambda: [page.locator('#bar-mode').text_content(), page.locator('#bar-kind').text_content(), page.locator('#bar-ident').text_content(), page.locator('#bar-info').text_content(), page.locator('#bar-flags').text_content()]
-            check(bar() == ['NORMAL', 'Home', 'home', '', '[-]'], 'home opens with the exact mode-kind-ident-info-flags bar tuple')
+            check(bar() == ['RENDERED', 'Home', 'home', '', '[-]'], 'home opens with the exact mode-kind-ident-info-flags bar tuple')
             page.goto(base + f'/t/{survey_id}'); page.wait_for_function('window.workbenchUI !== undefined')
             check(bar()[:3] == ['RENDERED', 'Task', f't-{survey_id}'], 'a task deep link opens its thread as rendered Task cards')
             def deep(comment_id):
@@ -1006,6 +1009,137 @@ def main():
             wait_submission(page, 'no contributions')
             context.close()
 
+            # home: the ratified activity surfaces - inclusion, ordering,
+            # first-pass bounds with Show more, selected-card navigation,
+            # and layout that reads the pane's own space
+            server.cli('claim', 't-0')
+            for room in range(6):
+                server.cli('create', 'task', f'The wide room {room}')
+            # a rebinding history: two bindings of one use to different
+            # recorded offers, so no row may borrow the other's target
+            server.cli('create', 'task', 'The binding survey')
+            binding_task = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The binding survey')['id']
+            def latest_comment():
+                return request(base + '/api/v1/workbench')[1]['comments'][-1]
+            server.cli('offer', f't-{binding_task}', '--title', 'The first account', 'The first usable source account.')
+            first_offer = latest_comment()['id']
+            server.cli('use', 't-0', '--source', f't-{binding_task}', '--reason', 'Rides the binding survey.')
+            binding_use = latest_comment()['id']
+            server.cli('bind', binding_use, first_offer, '--grounds', 'Select the first account.')
+            server.cli('reject', first_offer, '--grounds', 'Replace the source account.')
+            server.cli('offer', f't-{binding_task}', '--title', 'The second account', 'The replacement usable source account.')
+            second_offer = latest_comment()['id']
+            server.cli('bind', binding_use, second_offer, '--grounds', 'Select the replacement account.')
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            snap = request(base + '/api/v1/workbench')[1]
+            activity = snap['recent_activity']
+            machinery = {'workspace_established', 'task_workspace_checkpointed', 'workspace_created',
+                         'workspace_changed', 'incarnation_registered', 'message_sent', 'message_submitted'}
+            included = [r['seq'] for r in request(base + '/api/v1/records')[1]['records'] if r['kind'] not in machinery]
+            seqs = [e['seq'] for e in activity]
+            check(seqs == list(reversed(included)), 'recent activity is exactly the included records, newest first')
+            check(all(e['event'] not in machinery for e in activity), 'no session, workspace, or message bookkeeping is home activity')
+            comments_by_seq = {c['seq']: c for c in snap['comments']}
+            claimed = next(e for e in activity if e['event'] == 'task_claimed')
+            check(claimed['home'] == 0 and claimed['comment'] is None, 'a claim is activity on its task with no card anchor')
+            offered = next(e for e in activity if e['event'] == 'commented' and comments_by_seq[e['seq']]['kind'] == 'offer')
+            check(offered['comment'] is not None and offered['home'] == comments_by_seq[offered['seq']]['home'], 'an offer birth anchors its card on its home thread')
+            artifact_entry = next(e for e in activity if e['event'] == 'artifact_added')
+            check(artifact_entry['artifact'] and artifact_entry['comment'] is None, 'an artifact entry names its pointer, not a card')
+            # each use_bound row carries the offer its own record named
+            bindings = [e for e in activity if e['event'] == 'use_bound']
+            nums = {c['id']: c['num'] for c in snap['comments']}
+            check(len(bindings) == 2 and {e['offer'] for e in bindings} == {nums[first_offer], nums[second_offer]},
+                  'use_bound entries carry their own recorded targets')
+            active = snap['recently_active_tasks']
+            latest = {}
+            for e in reversed(activity):  # oldest first: the newest write wins
+                latest[e['home']] = e['seq']
+            check([t['task'] for t in active] == sorted(latest, key=lambda t: -latest[t])
+                  and [t['seq'] for t in active] == [latest[t['task']] for t in active],
+                  'recently active tasks order by latest included activity')
+            check(len(active) == len(snap['tasks']), 'every task appears exactly once')
+            # the rendered first-pass bounds: 20 entries, 10 tasks, Show
+            # more in the same increments, no totals anywhere
+            pane = '.pane.active '
+            check(page.locator(pane + '.home-activity .home-entry').count() == 20, 'first pass renders twenty activity entries')
+            check(page.locator(pane + '.home-tasks .home-entry').count() == 10, 'first pass renders ten task entries')
+            check(page.locator(pane + '.home-activity .home-more').count() == 1 and page.locator(pane + '.home-tasks .home-more').count() == 1, 'both surfaces offer Show more')
+            check(page.evaluate('!/\\b\\d+ of \\d+\\b/.test(document.querySelector(".pane.active .reading").innerText)'), 'no totals or badges on home')
+            # rendered rows label the target each binding recorded
+            rows = [text for text in page.locator(pane + '.home-activity .home-entry').all_text_contents() if 'use bound' in text]
+            check(len(rows) == 2 and any(f'-> c-{nums[first_offer]}' in r for r in rows) and any(f'-> c-{nums[second_offer]}' in r for r in rows),
+                  'each binding row labels its own recorded offer')
+            # Show more reveals older entries in the same increments, to
+            # the full included log, however long it is
+            shown = 20
+            while page.locator(pane + '.home-activity .home-more').count() == 1:
+                page.locator(pane + '.home-activity .home-more').click()
+                shown += 20
+                page.wait_for_function(f'document.querySelectorAll(".pane.active .home-activity .home-entry").length === {min(shown, len(activity))}')
+            check(page.locator(pane + '.home-activity .home-entry').count() == len(activity), 'activity Show more reveals older entries in twenty-entry increments to the full log')
+            check(page.locator(pane + '.home-tasks .home-entry').count() == 10, 'Show more on one surface leaves the other bounded')
+            shown = 10
+            while page.locator(pane + '.home-tasks .home-more').count() == 1:
+                page.locator(pane + '.home-tasks .home-more').click()
+                shown += 10
+                page.wait_for_function(f'document.querySelectorAll(".pane.active .home-tasks .home-entry").length === {min(shown, len(active))}')
+            check(page.locator(pane + '.home-tasks .home-entry').count() == len(active), 'task Show more reveals older entries in ten-entry increments to the full board')
+            check(page.locator(pane + '.home-more').count() == 0, 'no Show more remains once both surfaces are exhausted')
+            page.screenshot(path=str(RUN / '30-home-wide.png'))
+            # wide pane: tasks sit beside activity
+            columns = page.locator(pane + '.home-surfaces').evaluate('node => getComputedStyle(node).gridTemplateColumns.split(" ").length')
+            act_rect = page.locator(pane + '.home-activity').bounding_box()
+            task_rect = page.locator(pane + '.home-tasks').bounding_box()
+            check(columns == 2 and act_rect['x'] < task_rect['x'], 'a wide pane puts tasks beside activity')
+            # narrow window: the surfaces stack - the pane decides
+            page.set_viewport_size({'width': 620, 'height': 980})
+            page.wait_for_function('getComputedStyle(document.querySelector(".pane.active .home-surfaces")).gridTemplateColumns.split(" ").length === 1')
+            act_rect = page.locator(pane + '.home-activity').bounding_box()
+            task_rect = page.locator(pane + '.home-tasks').bounding_box()
+            check(task_rect['y'] > act_rect['y'] + act_rect['height'] - 2 and task_rect['x'] == act_rect['x'], 'a narrow pane stacks tasks below activity')
+            page.screenshot(path=str(RUN / '31-home-narrow.png'))
+            page.set_viewport_size({'width': 1500, 'height': 980})
+            # a split keeps home narrow while the window stays wide: same
+            # stacking, because the container query reads the pane
+            leader(page, 'wv')
+            page.wait_for_function('getComputedStyle(document.querySelector(".pane.active .home-surfaces")).gridTemplateColumns.split(" ").length === 1')
+            check(page.evaluate('window.innerWidth') == 1500, 'the window is still wide inside the split')
+            check(page.locator('.pane.active .home-surfaces').bounding_box()['width'] < 760, 'the home pane itself is narrow')
+            page.screenshot(path=str(RUN / '32-home-split-narrow.png'))
+            # the Source/View affordance reaches home like every reading kind
+            page.keyboard.press('Escape')
+            page.keyboard.press('Space'); page.keyboard.type('uv')
+            page.wait_for_function('window.workbenchUI.state().presentation === "source"')
+            check('Saccade' in page.locator('.pane.active .cm-content').text_content(), 'home Source shows the key reference')
+            page.keyboard.press('Space'); page.keyboard.type('uv')
+            page.wait_for_function('window.workbenchUI.state().presentation === "view"')
+            check(page.locator(pane + '.home-activity').count() == 1, 'Space uv returns home to its surfaces')
+            context.close()
+            # navigation: an activity entry lands on its card selected in
+            # the thread; an artifact entry opens the thread unselected
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            while page.locator('.pane.active .home-activity .home-more').count() == 1:
+                page.locator('.pane.active .home-activity .home-more').click()
+                page.wait_for_timeout(120)
+            card_entry = next(e for e in snap['recent_activity'] if e['comment'] is not None)
+            card_href = f"/t/{card_entry['home']}#c-{card_entry['comment']}"
+            check(page.locator(f'.home-activity a[href="{card_href}"]').count() >= 1, 'a contribution birth links its card in the home thread')
+            page.locator(f'.home-activity a[href="{card_href}"]').first.click()
+            page.wait_for_function('document.querySelector(".pane.active .thread-card.selected") !== null')
+            check(page.locator(f'.pane.active .thread-card.selected[data-comment="c-{card_entry["comment"]}"]').count() == 1, 'an activity link lands on its card selected in the thread')
+            check(page.locator('#bar-info').text_content().startswith(f'selected c-{card_entry["comment"]}'), 'the bar names the arrived selection')
+            check(page.locator('.pane.active .thread-card').count() > 1, 'the thread keeps its context around the selected card')
+            command(page, 'home')
+            task_href = f"/t/{artifact_entry['home']}"
+            page.locator(f'.home-activity a[href="{task_href}"]').first.click()
+            page.wait_for_function('document.querySelector(".pane.active .thread-card") !== null')
+            check(page.locator('.pane.active .thread-card.selected').count() == 0, 'an artifact entry opens the thread with no card selected')
+            check(page.locator('.pane.active .reading .thread-meta').first.inner_text().startswith('t-'), 'standalone thread reading is unchanged beside it')
+            context.close()
+
             # registry parity: folds, reader scroll, and pane focus are
             # palette commands, and the keys dispatch through them
             server.cli('comment', 't-1', '--title', 'The foldable report',
@@ -1057,6 +1191,294 @@ def main():
             page.wait_for_function('document.querySelector("#picker").open')
             page.keyboard.press('Escape')
             check(order[0], 'the status line renders directly above the single bottom bar')
+            context.close()
+
+            # task creation and incarnation launch: separate explicit
+            # workbench commands on the shared prompt surface; a picker or
+            # prompt Enter only stages, the command re-run acts, and the
+            # launch goes through the fake host, never the production one
+            code, body = request(base + '/api/v1/workspace/create', {'label': 'harness-seeded', 'client': 'workbench'})
+            check(code == 200 and 'harness-seeded' in body['workspace']['branch'], 'the seeded workspace provisions through the unchanged create door')
+            seeded = next(w for w in request(base + '/api/v1/workbench')[1]['workspaces'] if 'harness-seeded' in w['branch'])
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); page.on('pageerror', lambda error: errors.append(str(error)))
+            ready(page, base)
+            orca_log = server.fakebin / 'orca.log'
+            orca_lines = lambda: len(orca_log.read_text().splitlines()) if orca_log.exists() else 0
+            cursor_now = lambda: request(base + '/api/v1/workbench')[1]['cursor']
+
+            # staging safety: the workspace picker writes nothing and asks
+            # the host for nothing
+            launch_before = cursor_now()
+            host_lines = orca_lines()
+            leader(page, 'nl')
+            prompt_ready(page)
+            check('Launch: choose the workspace' in page.locator('#picker-title').text_content(), 'the launch picker names its choice')
+            check(page.locator('#results button').first.inner_text().startswith('Provision a new workspace'), 'the new-workspace choice stands first')
+            page.keyboard.type('harness-seeded')
+            page.wait_for_timeout(120)
+            check(seeded['path'] in page.locator('#results button').first.inner_text(), 'the recorded workspace lists by its path')
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged'] == {'task': None, 'launch': {'existing': seeded['path']}}, 'the picker Enter stages exactly the chosen workspace')
+            check('Run Launch again' in page.locator('#message').text_content(), 'the staged choice says what completes it')
+            check(cursor_now() == launch_before and orca_lines() == host_lines, 'staging wrote no record and never contacted the host')
+
+            # the explicit re-run acts on the staged choice: honest
+            # feedback, no record
+            leader(page, 'nl')
+            wait_submission(page, 'Submitted to the host')
+            message = page.locator('#message').text_content()
+            check('terminal term_fake_1' in message and seeded['path'] in message and 'registers itself' in message, f'the submission names the terminal and the workspace: {message}')
+            check(cursor_now() == launch_before, 'a launch lands no record')
+            check(state(page)['staged']['launch'] is None, 'the consumed choice clears')
+            host_lines = orca_lines()
+            check(host_lines > 0, 'the fake host saw the terminal create')
+            typed = orca_log.read_text().splitlines()
+            create_line = next(l for l in typed if '--command' in l)
+            check(f'path:{seeded["path"]}' in create_line and '--title sac launch' in create_line, 'the submission went to the staged workspace')
+
+            # the explicit existing-directory choice: the CLI contract on
+            # the shared prompt foundation, with the recorded list as
+            # suggestions only
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('directory')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            check('existing directory' in page.locator('#picker-title').text_content().lower(), 'the directory action opens the naming prompt')
+            page.keyboard.press('Escape')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged'] == {'task': None, 'launch': None}, 'an escaped directory prompt stages nothing')
+            check(cursor_now() == launch_before, 'an escaped directory prompt writes nothing')
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('directory')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            wait_submission(page, 'No directory named')
+            check(state(page)['staged'] == {'task': None, 'launch': None} and cursor_now() == launch_before, 'an empty directory stages nothing')
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('directory')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            page.fill('#query', str(server.repo))
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged'] == {'task': None, 'launch': {'existing': str(server.repo)}}, 'a named existing directory stages exactly its path')
+            check(cursor_now() == launch_before and orca_lines() == host_lines, 'staging a named directory writes nothing and contacts no host')
+            leader(page, 'nl')
+            wait_submission(page, 'Submitted to the host')
+            check(str(server.repo) in page.locator('#message').text_content(), 'the named directory reached the launch door')
+            check(any(f'path:{server.repo}' in line for line in orca_log.read_text().splitlines()), 'the fake host saw the named directory')
+            check(cursor_now() == launch_before, 'the named-directory launch lands no record')
+            host_lines = orca_lines()
+
+            # a lost launch reply is an unknown outcome: the host may have
+            # accepted, so the wording never claims non-submission
+            lost_launch = []
+            def lose_launch(route):
+                lost_launch.append(route.fetch().json())
+                route.abort('failed')
+            page.route('**/api/v1/workbench/launch', lose_launch)
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('harness-seeded')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            leader(page, 'nl')
+            wait_submission(page, 'Launch outcome unknown')
+            message = page.locator('#message').text_content()
+            check('may have accepted' in message and 'inspect the host' in message, f'the lost reply says outcome unknown: {message}')
+            check('not submitted' not in message, 'the lost reply never claims non-submission')
+            check(len(lost_launch) == 1 and lost_launch[0]['submitted'] is True, 'the lost reply really carried an accepted submission')
+            check(orca_lines() > host_lines and cursor_now() == launch_before, 'the unknown outcome still landed no record')
+            page.unroute('**/api/v1/workbench/launch', lose_launch)
+            host_lines = orca_lines()
+
+            # the same honesty for provisioning: a lost create reply is
+            # unknown, the launch provably never started
+            lost_provision = []
+            def lose_provision(route):
+                lost_provision.append(route.fetch().json())
+                route.abort('failed')
+            page.route('**/api/v1/workspace/create', lose_provision)
+            provision_lost_before = cursor_now()
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('provision')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            page.fill('#query', 'lost-provision')
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            leader(page, 'nl')
+            wait_submission(page, 'Provisioning outcome unknown')
+            message = page.locator('#message').text_content()
+            check('may have provisioned' in message and 'launch was not submitted' in message, f'the lost provision names both facts: {message}')
+            check(cursor_now() == provision_lost_before + 1 and lost_provision and 'lost-provision' in lost_provision[0]['workspace']['branch'], 'the lost provision really landed upstream exactly once')
+            page.unroute('**/api/v1/workspace/create', lose_provision)
+
+            # a reply that lands but names no provisioned record fails the
+            # dependent launch closed: unknown wording, no fabricated facts,
+            # no host contact
+            def misshape_provision(route):
+                response = route.fetch()
+                data = response.json()
+                del data['workspace']['seq']
+                route.fulfill(status=200, content_type='application/json', body=json.dumps(data))
+            misshape_before = cursor_now()
+            host_lines = orca_lines()
+            page.route('**/api/v1/workspace/create', misshape_provision)
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('provision')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            page.fill('#query', 'misshape-provision')
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            leader(page, 'nl')
+            wait_submission(page, 'Provisioning outcome unknown')
+            message = page.locator('#message').text_content()
+            check('record undefined' not in message and 'Submitted' not in message and 'may have provisioned' in message and 'launch was not submitted' in message, f'the misshapen provision fails closed: {message}')
+            check(cursor_now() == misshape_before + 1, 'the misshapen reply really landed its provision upstream')
+            check(orca_lines() == host_lines, 'the misshapen provision reached no host')
+            page.unroute('**/api/v1/workspace/create', misshape_provision)
+
+            # a created terminal the door cannot report: submitted, with
+            # no handle to name
+            (server.fakebin / 'orca-mode').write_text('no-handle')
+            host_lines = orca_lines()
+            nohandle_before = cursor_now()
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('harness-seeded')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            leader(page, 'nl')
+            wait_submission(page, 'created a terminal but named no handle')
+            message = page.locator('#message').text_content()
+            check('went through' in message and 'not submitted' not in message, f'the unreportable terminal is a submission: {message}')
+            check(orca_lines() > host_lines and cursor_now() == nohandle_before, 'the no-handle submission wrote no record')
+            (server.fakebin / 'orca-mode').unlink()
+            refuse_baseline = cursor_now()
+
+            # an honest host refusal: the fake host fails the create
+            (server.fakebin / 'orca-mode').write_text('fail')
+            leader(page, 'nl')
+            page.keyboard.type('harness-seeded')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            leader(page, 'nl')
+            wait_submission(page, 'Launch not submitted')
+            message = page.locator('#message').text_content()
+            check('the host refused the create' in message, f'the host refusal is named: {message}')
+            check(cursor_now() == refuse_baseline, 'a refused launch wrote no record')
+            (server.fakebin / 'orca-mode').unlink()
+
+            # a vanished directory refuses before the host is asked
+            moved = seeded['path'] + '.moved'
+            os.rename(seeded['path'], moved)
+            host_lines = orca_lines()
+            leader(page, 'nl')
+            page.keyboard.type('harness-seeded')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            leader(page, 'nl')
+            wait_submission(page, 'Launch not submitted')
+            check(cursor_now() == refuse_baseline and orca_lines() == host_lines, 'a missing workspace refuses without host contact')
+            os.rename(moved, seeded['path'])
+
+            # with nothing staged the command re-opens the picker; the new
+            # choice walks through the label prompt, and Escape there
+            # stages nothing at all
+            leader(page, 'nl')
+            prompt_ready(page)
+            page.keyboard.type('provision')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            check('label' in page.locator('#picker-title').text_content().lower(), 'the new choice prompts for its optional label')
+            page.keyboard.press('Escape')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged'] == {'task': None, 'launch': None} and cursor_now() == refuse_baseline, 'an escaped label prompt stages nothing and writes nothing')
+
+            # the door's origin law, through the wire face
+            code, body = request(base + '/api/v1/workbench/launch', {'workspace': {'existing': seeded['path']}}, headers={'Sec-Fetch-Site': 'cross-site'})
+            check(code == 403 and body['error']['code'] == 'cross_site_refused', 'a cross-site launch POST refuses')
+
+            # task creation: the claimed name prompts first, then the
+            # staged name, then the explicit re-run creates one record
+            task_before = cursor_now()
+            leader(page, 'nt')
+            prompt_ready(page)
+            check('name' in page.locator('#picker-title').text_content().lower(), 'a task creation from a fresh browser prompts for the claimed name first')
+            answer_prompt(page, 'jerry')
+            check(cursor_now() == task_before, 'the name prompt wrote nothing')
+            leader(page, 'nt')
+            prompt_ready(page)
+            check('task name' in page.locator('#picker-title').text_content().lower(), 'the task prompt asks for the name')
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            wait_submission(page, 'No name given')
+            check(state(page)['staged']['task'] is None and cursor_now() == task_before, 'an empty name stages nothing')
+            leader(page, 'nt')
+            prompt_ready(page)
+            page.fill('#query', 'The browser-authored task')
+            page.keyboard.press('Escape')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged']['task'] is None and cursor_now() == task_before, 'an escaped name stages nothing')
+            leader(page, 'nt')
+            prompt_ready(page)
+            page.fill('#query', 'The browser-authored task')
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged']['task'] == 'The browser-authored task', 'the confirmed name is staged')
+            check(cursor_now() == task_before, 'staging a name wrote no record')
+            leader(page, 'nt')
+            wait_submission(page, 'Created t-')
+            created = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The browser-authored task')
+            check(draft(page)['id'] == f"t-{created['id']}" and state(page)['staged']['task'] is None, 'the born thread opens and the stage clears')
+            check(page.locator('#bar-kind').text_content() == 'Task', 'the bar names the created task thread')
+            check(cursor_now() == task_before + 1, 'the create landed exactly one record')
+            records = request(base + '/api/v1/records')[1]['records']
+            born = next(r for r in records if r['kind'] == 'task_created' and r['payload']['name'] == 'The browser-authored task')
+            check(born['actor'] == 'jerry' and born['tier'] == 'human', 'the create attributes the claimed name at human tier')
+
+            # the new-workspace choice: provision through the unchanged
+            # create door, then the launch, in one honest status
+            provision_before = cursor_now()
+            leader(page, 'nl')
+            page.keyboard.type('provision')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            page.fill('#query', 'browser-made')
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged']['launch'] == {'new': {'label': 'browser-made'}}, 'the label stages the new-workspace choice')
+            check(cursor_now() == provision_before, 'staging the label wrote no record')
+            leader(page, 'nl')
+            wait_submission(page, 'Submitted to the host')
+            message = page.locator('#message').text_content()
+            check('Workspace provisioned - record' in message and 'browser-made' in message and 'terminal term_fake_1' in message, f'provision and launch report together: {message}')
+            provisioned = next(w for w in request(base + '/api/v1/workbench')[1]['workspaces'] if 'browser-made' in w['branch'])
+            check(cursor_now() == provision_before + 1, 'the provision landed exactly one workspace birth')
+            check(Path(provisioned['path']).is_dir(), 'the provisioned worktree exists on disk')
+            check(not errors, 'the create and launch flows raise no browser exceptions')
             context.close()
 
             # legacy prototype storage migrates by the exact db-bound key,
