@@ -91,17 +91,19 @@ test("the envelope carries the machine-supplied origin in ASCII", () => {
 	assert.ok(envelopeText(unicode).endsWith("r\u00e9sum\u00e9 \u2014 \u2713"));
 });
 
-test("delivery filters on the addressee, self-addressed included", () => {
+test("arrival filters on the addressee and the confirmed submission, self-addressed included", () => {
 	const incoming = [
-		mail({ seq: 1, state: "pending", to: { seq: 0, num: 0 } }),
-		// outgoing archive: mine as sender, not mine to deliver
-		mail({ seq: 2, state: "pending", from: { seq: 0, num: 0, actor: "me" }, to: { seq: 1, num: 1 } }),
-		// submitted: already handed over
-		mail({ seq: 3, state: "submitted", to: { seq: 0, num: 0 } }),
+		// a confirmed arrival to me
+		mail({ seq: 1, state: "submitted", to: { seq: 0, num: 0 } }),
+		// outgoing archive: mine as sender, not mine to receive
+		mail({ seq: 2, state: "submitted", from: { seq: 0, num: 0, actor: "me" }, to: { seq: 1, num: 1 } }),
+		// recorded without a confirmed submission: evidence, never an
+		// arrival
+		mail({ seq: 3, state: "pending", to: { seq: 0, num: 0 } }),
 		// another incarnation's mail entirely
-		mail({ seq: 4, state: "pending", to: { seq: 2, num: 2 } }),
+		mail({ seq: 4, state: "submitted", to: { seq: 2, num: 2 } }),
 		// self-addressed: from me and to me is still incoming mail
-		mail({ seq: 5, state: "pending", from: { seq: 0, num: 0, actor: "me" }, to: { seq: 0, num: 0 } }),
+		mail({ seq: 5, state: "submitted", from: { seq: 0, num: 0, actor: "me" }, to: { seq: 0, num: 0 } }),
 	];
 	const mine = incomingFor(0, incoming);
 	assert.deepEqual(
@@ -155,8 +157,13 @@ class FakePi implements ExtensionAPI {
 	session: FakeSession;
 	// the next sendUserMessage is refused before queue or history
 	failNextSend = 0;
-	idle = false;
+	// the honest resting state: a session nobody is running
+	idle = true;
 	pendingNative = false;
+	// when set, an accepted input stays unobservable: the queue holds
+	// nothing the acceptance probes can see, so the confirmation waits
+	// for the later boundaries - the held-path seam
+	silentAccept = false;
 
 	hasUI = true;
 	constructor(nativeId: string, file: string | undefined) {
@@ -190,6 +197,12 @@ class FakePi implements ExtensionAPI {
 		}
 		this.steers.push(content);
 		this.modes.push(opts?.deliverAs);
+		// the runtime's own truth: an accepted input is either pending
+		// natively or already consuming a run
+		if (!this.silentAccept) {
+			this.pendingNative = true;
+			this.idle = false;
+		}
 	}
 	appendEntries: Array<{ type: string; data: unknown }> = [];
 	// when set, appendEntry throws for this custom type: the persistence
@@ -346,6 +359,8 @@ class FakePi implements ExtensionAPI {
 	// the queue drains after the tool call returned, events before the append
 	async runQueue() {
 		const queued = this.steers.splice(0);
+		this.pendingNative = false;
+		this.idle = true;
 		for (const text of queued) {
 			const message = { role: "user", content: text };
 			await this.emit("message_start", { message });
@@ -360,6 +375,9 @@ class FakePi implements ExtensionAPI {
 class FakeTracker {
 	attachments = new Map<string, { incarnation: number; num: number }>();
 	mailboxes = new Map<number, any[]>();
+	// the sender attempts' staged tasks, handed exactly once by the
+	// transport read - the wire's stage registry, mirrored
+	stages = new Map<number, any[]>();
 	submissions: Array<{ incarnation: number; message: number }> = [];
 	sent: any[] = [];
 	attachBodies: any[] = [];
@@ -400,16 +418,25 @@ class FakeTracker {
 		return { status, json: async () => body };
 	}
 
-	// wake parked reads without landing anything
+	// wake parked transport reads without staging anything
 	wake() {
 		for (const resolve of this.parked.splice(0)) resolve();
 	}
 
-	// a landed record wakes every parked read, like the server's notify
+	// a landed record joins the mailbox: a descriptive read only, and
+	// no machinery delivers it - arrivals release waits, nothing more
 	land(incarnation: number, message: any) {
 		const box = this.mailboxes.get(incarnation) ?? [];
 		box.push(message);
 		this.mailboxes.set(incarnation, box);
+	}
+
+	// one sender attempt's staged task, woken immediately: the transport
+	// half of record-then-attempt
+	stage(incarnation: number, message: any) {
+		const box = this.stages.get(incarnation) ?? [];
+		box.push({ token: `tok-${message.seq}-${box.length}`, message });
+		this.stages.set(incarnation, box);
 		for (const wake of this.parked.splice(0)) wake();
 	}
 
@@ -438,15 +465,28 @@ class FakeTracker {
 		if (path === "/api/v1/messages/pending") {
 			const url = new URL(String(rawUrl));
 			const incarnation = Number(url.searchParams.get("incarnation"));
-			const mine = (this.mailboxes.get(incarnation) ?? []).filter(
-				(m: any) => m.state === "pending" && m.to.seq === incarnation,
-			);
-			const waitMs = Number(url.searchParams.get("wait_ms") ?? 0);
-			if (waitMs > 0 && mine.length === 0) {
-				// the parked read: held until a record lands
-				await new Promise<void>((resolve) => this.parked.push(resolve));
-			}
 			return this.reply({ messages: this.mailboxes.get(incarnation) ?? [] });
+		}
+		if (path === "/api/v1/messages/deliver") {
+			const url = new URL(String(rawUrl));
+			const incarnation = Number(url.searchParams.get("incarnation"));
+			const waitMs = Number(url.searchParams.get("wait_ms") ?? 0);
+			const taken = (this.stages.get(incarnation) ?? []).splice(0);
+			this.stages.set(incarnation, []);
+			if (taken.length === 0 && waitMs > 0) {
+				// the parked transport read: held until a task is staged
+				await new Promise<void>((resolve) => this.parked.push(resolve));
+				// a woken read can still fail mid-cycle, like any
+				// transport: the stage survives for the reconnected read
+				if (this.failNext > 0) {
+					this.failNext -= 1;
+					throw new Error("tracker unreachable");
+				}
+				const again = (this.stages.get(incarnation) ?? []).splice(0);
+				this.stages.set(incarnation, []);
+				return this.reply({ deliveries: again });
+			}
+			return this.reply({ deliveries: taken });
 		}
 		if (path === "/api/v1/messages/send") {
 			this.sent.push(body);
@@ -666,62 +706,81 @@ async function stop(h: Harness): Promise<void> {
 	await h.pi.emit("session_shutdown");
 }
 
-test("queued input rides the steer queue, so it lands at the next turn boundary", async () => {
+test("a start or resume drains nothing: recorded pending is evidence, never backlog", async () => {
+	const h = harness("sac-test-25", "/sessions/aaaa1111.jsonl");
+	const me = { incarnation: 0, num: 0 };
+	h.tracker.attachments.set("sac-test-25", me);
+	// recorded mail without a confirmed submission sits in the mailbox
+	h.tracker.land(0, mail({ seq: 80, num: 9, state: "pending", to: { seq: 0, num: 0 } }));
+	h.tracker.land(0, mail({ seq: 81, num: 10, state: "pending", to: { seq: 0, num: 0 } }));
+	await h.pi.emit("session_start");
+	await tick();
+	await tick();
+	// the start queued nothing and confirmed nothing: no machinery
+	// carries a recorded-but-unsubmitted message, on resume or ever
+	assert.equal(h.pi.steers.length, 0);
+	assert.equal(h.tracker.submissions.length, 0);
+	// and a later boundary never revisits it
+	await h.pi.emit("agent_settled");
+	await tick();
+	assert.equal(h.pi.steers.length, 0);
+	assert.equal(h.tracker.submissions.length, 0);
+	await stop(h);
+});
+
+test("a staged delivery rides the steer queue, so it lands at the next turn boundary", async () => {
 	const h = harness("sac-test-24", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
 	h.tracker.attachments.set("sac-test-24", me);
-	h.tracker.mailboxes.set(0, [mail({ seq: 60, to: { seq: 0, num: 0 } })]);
 	await h.pi.emit("session_start");
+	// the sender's attempt stages its task; the transport hands it once
+	h.tracker.stage(0, mail({ seq: 60, to: { seq: 0, num: 0 } }));
+	await tick();
 	// the assertion pins the delivery mode: steer at the next turn boundary, never the run-end followUp
 	assert.deepEqual(h.pi.modes, ["steer"]);
+	// the queue's acceptance confirmed the sender's attempt
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 60 }]);
 	await stop(h);
 });
 
-test("a released wait queues and returns; the submission confirms from saved history", async () => {
+test("a released wait reports confirmed arrivals and queues nothing", async () => {
 	const h = harness("sac-test-01", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
 	h.tracker.attachments.set("sac-test-01", me);
-	h.tracker.mailboxes.set(0, [mail({ seq: 50, to: { seq: 0, num: 0 } })]);
-	// the start drain queues the mail natively; nothing submitted yet
 	await h.pi.emit("session_start");
-	assert.equal(h.pi.steers.length, 1);
+	// the arrival already rode its sender's submission into the queue:
+	// a submitted record the mailbox carries
+	h.tracker.land(0, mail({ seq: 50, state: "submitted", to: { seq: 0, num: 0 } }));
+	const wait = h.tools("saccade_wait");
+	const result = await boundary(
+		wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) }),
+		8000,
+		"saccade_wait",
+	);
+	assert.ok(resultText(result).includes("received m-3"), resultText(result));
+	// the wait only reports: the sender's attempt did the queueing
+	assert.equal(h.pi.steers.length, 0);
 	assert.equal(h.tracker.submissions.length, 0);
-
-	// events before the append submit nothing
-	const envelope = h.pi.steers[0];
-	const message = { role: "user", content: envelope };
-	await h.pi.emit("message_start", { message });
-	await h.pi.emit("message_end", { message });
+	// and a pending record never releases a wait: it is evidence
+	h.tracker.land(0, mail({ seq: 51, num: 4, state: "pending", to: { seq: 0, num: 0 } }));
 	await tick();
-	assert.equal(h.tracker.submissions.length, 0, "events precede insertion");
-
-	// the entry lands, and a later boundary confirms against it
-	h.pi.session.entries.push({ type: "message", message });
-	await h.pi.emit("agent_settled");
-	await tick();
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 50 }]);
+	assert.equal(h.pi.steers.length, 0);
 	await stop(h);
 });
 
-test("the wait tool returns while the queue is still undrained", async () => {
+test("the attempt confirms at queue acceptance, before any turn boundary", async () => {
 	const h = harness("sac-test-02", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
 	h.tracker.attachments.set("sac-test-02", me);
 	await h.pi.emit("session_start");
-	h.tracker.mailboxes.set(0, [mail({ seq: 51, num: 9, to: { seq: 0, num: 0 } })]);
-
-	const wait = h.tools("saccade_wait");
-	const controller = new AbortController();
-	const result = await boundary(
-		wait.execute("t1", {}, controller.signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) }),
-		8000,
-		"saccade_wait",
-	);
-	// the tool returned before any queue processing
-	assert.ok(resultText(result).includes("received m-9"));
+	h.tracker.stage(0, mail({ seq: 51, num: 9, to: { seq: 0, num: 0 } }));
+	await tick();
+	// the queue accepted the input: the submission is already recorded,
+	// with no boundary fired and nothing inserted into history
 	assert.equal(h.pi.steers.length, 1);
-	assert.equal(h.tracker.submissions.length, 0);
-	// and the queued delivery still confirms after the run
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 51 }]);
+	assert.equal(h.pi.session.entries.length, 0, "no saved history yet");
+	// the later run confirms nothing twice
 	await h.pi.runQueue();
 	await tick();
 	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 51 }]);
@@ -755,15 +814,20 @@ test("the wait finishes cancelled when the call aborts, queueing nothing", async
 	await stop(h);
 });
 
-test("reassociation cancels a queued delivery: no stale recipient submits", async () => {
+test("reassociation cancels a held delivery: no stale recipient submits", async () => {
 	const h = harness("sac-test-04", "/sessions/aaaa1111.jsonl");
 	const me = { incarnation: 0, num: 0 };
 	h.tracker.attachments.set("sac-test-04", me);
-	h.tracker.mailboxes.set(0, [mail({ seq: 52, to: { seq: 0, num: 0 } })]);
 	await h.pi.emit("session_start");
+	// the queue holds the input, but no acceptance evidence is
+	// observable: the confirmation stays held
+	h.pi.silentAccept = true;
+	h.tracker.stage(0, mail({ seq: 52, to: { seq: 0, num: 0 } }));
+	await tick();
 	assert.equal(h.pi.steers.length, 1);
+	assert.equal(h.tracker.submissions.length, 0);
 
-	// a new native session cancels the old association's queued delivery
+	// a new native session cancels the old association's held delivery
 	h.pi.session = new FakeSession("bbbb2222", "/sessions/bbbb2222.jsonl");
 	await h.pi.emit("session_start");
 	assert.equal(h.tracker.attachments.size, 2);
@@ -805,27 +869,29 @@ test("a running registered peer receives without any wait tool", async () => {
 	const h = harness("sac-test-06", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	assert.equal(h.pi.steers.length, 0);
-	// the bridge holds a parked read; the record's landing wakes it
-	h.tracker.land(0, mail({ seq: 60, num: 5, to: { seq: 0, num: 0 } }));
+	// the bridge holds a parked transport read; the sender's staged
+	// task wakes it
+	h.tracker.stage(0, mail({ seq: 60, num: 5, to: { seq: 0, num: 0 } }));
 	await tick();
 	assert.equal(h.pi.steers.length, 1);
 	assert.ok(h.pi.steers[0].includes("[saccade message m-5"));
-	assert.equal(h.tracker.submissions.length, 0);
-	// the queued envelope still confirms from saved history
+	// the queue's acceptance confirmed the attempt with no boundary
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 60 }]);
 	await h.pi.runQueue();
 	await tick();
 	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 60 }]);
 	await stop(h);
 });
 
-test("background arrival and the wait tool queue a message once", async () => {
+test("a staged delivery queues once and the wait never queues a copy", async () => {
 	const h = harness("sac-test-07", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
-	h.tracker.land(0, mail({ seq: 61, num: 6, to: { seq: 0, num: 0 } }));
+	h.tracker.stage(0, mail({ seq: 61, num: 6, to: { seq: 0, num: 0 } }));
 	await tick();
 	assert.equal(h.pi.steers.length, 1);
-	// the wait tool sees the same pending message and releases, but
-	// its own queueing is a no-op: one envelope, one path
+	// the confirmed arrival releases the wait, whose report queues
+	// nothing: one envelope, one path
+	h.tracker.land(0, mail({ seq: 61, num: 6, state: "submitted", to: { seq: 0, num: 0 } }));
 	const wait = h.tools("saccade_wait");
 	const result = await boundary(
 		wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) }),
@@ -837,32 +903,45 @@ test("background arrival and the wait tool queue a message once", async () => {
 	await stop(h);
 });
 
-test("a failed bridge read reconnects and keeps delivering", async () => {
+test("a failed transport read reconnects and the stage still delivers", async () => {
 	const h = harness("sac-test-08", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
-	// the read after the parked one fails, then transport recovers
-	h.tracker.failNext = 1;
-	h.tracker.land(0, mail({ seq: 62, num: 7, to: { seq: 0, num: 0 } }));
+	// two deliveries ride woken parked reads
+	h.tracker.stage(0, mail({ seq: 62, num: 7, to: { seq: 0, num: 0 } }));
 	await tick();
-	assert.equal(h.pi.steers.length, 1, "the landing delivered before the failure");
-	// mail landing while the bridge is in its backoff still arrives
-	const later = mail({ seq: 63, num: 8, to: { seq: 0, num: 0 } });
-	const before = h.pi.steers.length;
+	h.tracker.stage(0, mail({ seq: 63, num: 8, to: { seq: 0, num: 0 } }));
+	await tick();
+	await tick();
+	assert.equal(h.pi.steers.length, 2);
+	assert.deepEqual(h.tracker.submissions, [
+		{ incarnation: 0, message: 62 },
+		{ incarnation: 0, message: 63 },
+	]);
+	// the loop's next read fails at entry, then the backoff runs: the
+	// attempt staged mid-failure still delivers on the reconnected read
+	h.tracker.failNext = 1;
+	await tick();
+	h.tracker.stage(0, mail({ seq: 64, num: 9, to: { seq: 0, num: 0 } }));
 	const deadline = Date.now() + 8000;
-	while (h.pi.steers.length === before && Date.now() < deadline) {
-		h.tracker.land(0, later);
-		await new Promise((resolve) => setTimeout(resolve, 150));
+	while (h.pi.steers.length < 3 && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
-	assert.ok(h.pi.steers.length > before, "the reconnected bridge delivered");
+	assert.equal(h.pi.steers.length, 3, "the reconnected transport delivered");
+	await tick();
+	await tick();
+	assert.deepEqual(h.tracker.submissions, [
+		{ incarnation: 0, message: 62 },
+		{ incarnation: 0, message: 63 },
+		{ incarnation: 0, message: 64 },
+	]);
 	await stop(h);
 });
-
 test("session shutdown stops the bridge: nothing delivers after it", async () => {
 	const h = harness("sac-test-09", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	await h.pi.emit("session_shutdown");
 	assert.equal(h.pi.steers.length, 0);
-	h.tracker.land(0, mail({ seq: 64, num: 9, to: { seq: 0, num: 0 } }));
+	h.tracker.stage(0, mail({ seq: 64, num: 9, to: { seq: 0, num: 0 } }));
 	await tick();
 	assert.equal(h.pi.steers.length, 0);
 	assert.equal(h.tracker.submissions.length, 0);
@@ -875,13 +954,13 @@ test("reassociation strands the old bridge: no stale delivery, no stale submit",
 	h.pi.session = new FakeSession("bbbb2222", "/sessions/bbbb2222.jsonl");
 	await h.pi.emit("session_start");
 	assert.equal(h.tracker.attachments.size, 2);
-	// mail for the OLD incarnation lands and wakes every parked read
-	h.tracker.land(0, mail({ seq: 65, num: 1, to: { seq: 0, num: 0 } }));
+	// a staged task for the OLD incarnation finds no old bridge
+	h.tracker.stage(0, mail({ seq: 65, num: 1, to: { seq: 0, num: 0 } }));
 	await tick();
 	assert.equal(h.pi.steers.length, 0, "the old bridge delivered nothing");
 	assert.equal(h.tracker.submissions.length, 0);
 	// and the new association still delivers its own
-	h.tracker.land(1, mail({ seq: 66, num: 2, to: { seq: 1, num: 1 } }));
+	h.tracker.stage(1, mail({ seq: 66, num: 2, to: { seq: 1, num: 1 } }));
 	await tick();
 	assert.equal(h.pi.steers.length, 1);
 	await stop(h);
@@ -892,11 +971,14 @@ test("an extension-source input releases the wait as the message, not as human i
 	await h.pi.emit("session_start");
 	const wait = h.tools("saccade_wait");
 	const running = wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
-	h.tracker.land(0, mail({ seq: 70, num: 4, to: { seq: 0, num: 0 } }));
-	await tick();
+	h.tracker.stage(0, mail({ seq: 70, num: 4, to: { seq: 0, num: 0 } }));
+	const queued = Date.now() + 8000;
+	while (h.pi.steers.length === 0 && Date.now() < queued) {
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
 	// the queued envelope enters the session as an extension-source input
 	const envelope = h.pi.steers[0];
-	assert.ok(envelope, "the bridge queued the delivery");
+	assert.ok(envelope, "the transport queued the delivery");
 	await h.pi.emit("input", { source: "extension", text: envelope });
 	const result = await boundary(running, 8000, "saccade_wait");
 	const text = resultText(result);
@@ -919,99 +1001,70 @@ test("interactive input keeps the human wording and no correlation", async () =>
 	await stop(h);
 });
 
-test("a refused native send recovers at the human-input boundary", async () => {
+test("a refused send drops at a boundary: no confirmation, no redelivery", async () => {
 	const h = harness("sac-test-13", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
 	h.pi.failNextSend = 1;
-	h.tracker.land(0, mail({ seq: 71, num: 5, to: { seq: 0, num: 0 } }));
+	h.tracker.stage(0, mail({ seq: 71, num: 5, to: { seq: 0, num: 0 } }));
 	await tick();
 	await tick();
 	// the refusal is invisible to the extension (void + error sink):
 	// nothing queued, and no promise ever resolved or rejected here
 	assert.equal(h.pi.steers.length, 0, "the refused send queued nothing");
 	assert.ok(h.pi.errors.length > 0, "the runtime saw the failure");
-	// wakes alone cannot deliver: the guard honestly holds, because
-	// no supported observation says the delivery was lost
-	h.tracker.wake();
-	await tick();
-	await tick();
-	assert.equal(h.pi.steers.length, 0);
-	// the human correction is the recovery boundary: the session is
-	// idle with nothing natively pending, the input event reconciles,
-	// and the boundary's own read delivers again
-	h.pi.idle = true;
-	h.pi.pendingNative = false;
+	assert.equal(h.tracker.submissions.length, 0, "no evidence, no confirmation");
+	// the session is idle with nothing natively pending: the boundary
+	// settles the held delivery as refused, and nothing redelivers it
 	await h.pi.emit("input", { source: "interactive", text: "fixed the auth" });
-	const deadline = Date.now() + 8000;
-	while (h.pi.steers.length === 0 && Date.now() < deadline) {
-		h.tracker.wake();
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	assert.equal(h.pi.steers.length, 1, "the reconciled guard re-delivered");
+	await tick();
+	await tick();
+	assert.equal(h.pi.steers.length, 0, "a refused delivery never requeues");
 	assert.equal(h.tracker.submissions.length, 0);
 	await stop(h);
 });
 
-test("a discarded queued delivery reconciles at an idle settle and redelivers", async () => {
+test("a confirmed delivery stays submitted when the runtime later discards it", async () => {
 	const h = harness("sac-test-14", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
-	h.tracker.land(0, mail({ seq: 72, num: 6, to: { seq: 0, num: 0 } }));
+	h.tracker.stage(0, mail({ seq: 72, num: 6, to: { seq: 0, num: 0 } }));
 	await tick();
 	assert.equal(h.pi.steers.length, 1);
-	// user interruption discarded the queued input: idle, nothing
-	// natively pending, and the envelope never reached saved history
+	// the queue's acceptance already confirmed the attempt
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 72 }]);
+	// the runtime discards the input before any run: idle, nothing
+	// pending, and the envelope never reaches saved history
+	h.pi.steers = [];
 	h.pi.idle = true;
 	h.pi.pendingNative = false;
 	await h.pi.emit("agent_settled");
 	await tick();
-	assert.equal(h.tracker.submissions.length, 0);
-	// the released guard lets the next read deliver again, after the
-	// settle cadence
-	h.tracker.wake();
-	const redeliver = Date.now() + 8000;
-	while (h.pi.steers.length < 2 && Date.now() < redeliver) {
-		h.tracker.wake();
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	assert.equal(h.pi.steers.length, 2);
-	// and the redelivered envelope still confirms from saved history
-	h.pi.session.entries.push({
-		type: "message",
-		message: { role: "user", content: h.pi.steers[1] },
-	});
-	await h.pi.emit("agent_settled");
-	await tick();
+	// the record stands - the recipient reads it from the mailbox -
+	// and nothing redelivers or retracts
 	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 72 }]);
+	assert.equal(h.pi.steers.length, 0);
 	await stop(h);
 });
 
-test("missing-auth failure with no settle recovers at an explicit wait", async () => {
+test("unobservable acceptance holds the confirmation; saved evidence confirms later", async () => {
 	const h = harness("sac-test-15", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
-	h.pi.failNextSend = 1;
-	h.tracker.land(0, mail({ seq: 73, num: 7, to: { seq: 0, num: 0 } }));
+	// the queue took the input, but no acceptance evidence is
+	// observable: the attempt is never optimistically confirmed
+	h.pi.silentAccept = true;
+	h.tracker.stage(0, mail({ seq: 73, num: 7, to: { seq: 0, num: 0 } }));
 	await tick();
 	await tick();
-	// no agent_settled ever fires - the send failed before any run.
-	// The explicit wait is the recovery boundary: it reconciles, then
-	// its own first read delivers
-	const wait = h.tools("saccade_wait");
-	h.pi.idle = true;
-	h.pi.pendingNative = false;
-	const running = wait.execute("t1", {}, new AbortController().signal, undefined, {
-		...h.ctx(),
-		tools: [],
-		executeTool: () => Promise.resolve({} as never),
+	assert.equal(h.pi.steers.length, 1);
+	assert.equal(h.tracker.submissions.length, 0, "no evidence, no optimistic submit");
+	// the envelope lands in saved history, which only an accepted
+	// input reaches: the later boundary confirms from that evidence
+	h.pi.session.entries.push({
+		type: "message",
+		message: { role: "user", content: h.pi.steers[0] },
 	});
-	h.tracker.wake();
-	const deadline = Date.now() + 8000;
-	while (h.pi.steers.length === 0 && Date.now() < deadline) {
-		h.tracker.wake();
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	assert.equal(h.pi.steers.length, 1, "the explicit wait re-delivered");
-	const result = await boundary(running, 8000, "saccade_wait");
-	assert.ok(resultText(result).includes("received m-7"));
+	await h.pi.emit("agent_settled");
+	await tick();
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 73 }]);
 	await stop(h);
 });
 

@@ -161,8 +161,8 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac create task "name"` | any tier | the reply names what was born |
 | `sac claim t-N` | any tier | ownership transfer; never a state change |
 | `sac comment t-N --title "..." "..."` / `sac comment c-<n> --title "..." "..."` (`--ref` repeatable) | any tier | a note with its authored title, parked or replied; each `--ref` earns a `[^k]` citation marker |
-| `sac send --to i-<n> [--reply m-<n>] [--task t-<n>] "body"` (`--stdin`) | a registered incarnation | durable addressed communication: the sender rides the environment, delivery is the recipient's integration's act; never a comment, never a thread entry |
-| `sac messages [i-<n>]` | anonymous | the messages an incarnation participates in, in record order, with their delivery state (pending/submitted - bookkeeping, never a reading or agreement claim); the mailbox defaults to the declared scope |
+| `sac send --to i-<n> [--reply m-<n>] [--task t-<n>] "body"` (`--stdin`) | a registered incarnation | durable addressed communication: the sender rides the environment; the message records first, then the attempt submits it to the recipient's native input queue - success only on confirmed submission, a refusal discloses the record's m-N; never a comment, never a thread entry |
+| `sac messages [i-<n>]` | anonymous | the messages an incarnation participates in, in record order, with their delivery state (submitted = accepted into the recipient's input queue; pending = recorded without a confirmed submission - evidence, never a delivery promise); the mailbox defaults to the declared scope |
 | `sac offer t-N --title "..." "..."` | any tier | the whole-task closing account with its authored title |
 | `sac accept c-<offer>` | any tier | conclude through the standing offer |
 | `sac reject c-<offer> --grounds "..."` | any tier | reconsideration with grounds; reopens the task |
@@ -259,21 +259,24 @@ snapshot inspected through, for the next wait. A wait records nothing
 and holds nothing: it is a read the caller owns, not a registration
 the tracker keeps; ordinary interruption ends it.
 
-Delivery facts for messages are small and ordinary: a message reads
-`pending` until the recipient's integration hands it to its native
-session, then `submitted` - never a claim of reading, agreement,
-completion, or task acceptance. A sent message activates its recipient
-at supported boundaries: a running peer's delivery bridge parks on the
-tracker and delivers into the live queue, or starts a turn when the
-session is idle; while it waits, the wait releases; a peer that is not
-running has its exact saved session's resume launched by the next
-send from any face (submission, not reattachment - the mail stays
-pending until the resumed session registers and drains), and every
-doubt about liveness leaves the mail pending - a transient disconnect
-never spawns a duplicate into a running session, and simultaneous
-senders serialize per native session. Submission confirms
-from the saved session history at later boundaries. The mailbox read is
-`sac messages`.
+Delivery facts for messages are small and ordinary: a message records
+first, then its send attempts native submission through the
+recipient's integration. `submitted` means the recipient's native
+input queue accepted the delivery - never a claim of reading,
+agreement, completion, or task acceptance; `pending` is a recorded
+message without a confirmed submission, evidence of its attempt and
+never a promise of later delivery - nothing retries it, no backlog is
+drained, and a manual resume delivers nothing old. A send succeeds
+only on confirmed submission; a refusal or a lost acknowledgement
+discloses the record's m-N and says which, and the known refusal
+reasons name the runtime evidence: a held guard is a running session
+whose integration holds no connection, a free guard a confirmed-
+stopped one, an unprobeable guard an unknown - no send ever launches
+or restarts a session, and a transient disconnect never spawns a
+duplicate into a running session. The confirmation bar is queue
+acceptance itself, never the recipient's turn or saved history; a
+steer the runtime later discards leaves its submitted record as the
+recoverable evidence. The mailbox read is `sac messages`.
 
 ## Hygiene
 

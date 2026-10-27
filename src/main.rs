@@ -90,8 +90,10 @@ enum Cmd {
         refs: Vec<String>,
     },
     /// Send a durable addressed message from this session's registered
-    /// incarnation: the sender rides the environment (never authored),
-    /// delivery is the recipient's integration's act
+    /// incarnation: the sender rides the environment (never authored);
+    /// the message records first, then the attempt submits it to the
+    /// recipient's native input queue - success only on confirmed
+    /// submission, a refusal discloses the record's reference
     Send {
         /// The recipient (i-<n>)
         #[arg(long)]
@@ -1586,8 +1588,9 @@ fn resolve_incarnation(world: &World, token: &str) -> Result<IncarnationId, Fail
 }
 
 /// The send door: a durable addressed message from this session's
-/// registered incarnation. Nonblocking by law - the sender chooses
-/// its own waiting, never this verb.
+/// registered incarnation. The record lands first; the submission
+/// attempt is bounded and never waits on the recipient's work - the
+/// sender chooses its own further waiting, never this verb.
 fn send_door(
     cli: &Cli,
     destination: &Destination,
@@ -1628,7 +1631,7 @@ fn send_door(
         .expect("plain data"));
     }
     Ok(format!(
-        "sent m-{} to i-{to_num} - pending until the recipient's integration submits it",
+        "sent m-{} to i-{to_num} - accepted into their session's input queue",
         sent.message
             .num
             .map(|n| n.to_string())
@@ -1678,6 +1681,9 @@ fn messages_door(
         Some(n) => format!("i-{n} (birth seq {}) mailbox", id.0.0),
         None => format!("incarnation birth seq {} mailbox", id.0.0),
     }];
+    out.push(
+        "  submitted = accepted into the recipient's input queue; pending = recorded without a confirmed submission (evidence, never a delivery promise)".into(),
+    );
     if lines.is_empty() {
         out.push("  no messages".into());
     }
@@ -1901,7 +1907,7 @@ fn launch_native(
                 }
                 _ => {
                     return Err(Fail::Usage(
-                        "the resumed session's guard was not taken within its bound; the launch stays unobserved and the mail pending".into(),
+                        "the resumed session's guard was not taken within its bound; the launch stays unobserved".into(),
                     ));
                 }
             }
@@ -1942,15 +1948,22 @@ fn launch_token() -> String {
     token
 }
 
-/// What an ask launch did: the newborn's address and the question's.
+/// What an ask launch did: the newborn's address and the question's,
+/// with the submission attempt's truth - a refused or unacknowledged
+/// submission leaves the question recorded but undisclosed to the
+/// newborn, and the reply says so.
 struct AskOutcome {
     workspace: String,
     terminal: String,
     birth: usize,
     num: usize,
-    message_seq: usize,
+    /// the question's birth position when its record landed; a send
+    /// whose transport refused carries the reference in the disclosure
+    message_seq: Option<usize>,
     message_num: Option<usize>,
     creator: String,
+    /// None means the queue confirmed the question's acceptance
+    submission: Option<String>,
 }
 
 /// The ask door: cheap peer creation with an initial question. The
@@ -2020,16 +2033,51 @@ fn ask_run(
             None => std::thread::sleep(std::time::Duration::from_millis(400)),
         }
     };
-    let sent = client::send_message(&url, &context, num, None, scope.task.map(|t| t.0), &body)
-        .map_err(Fail::Client)?;
+    // the question records first, then rides the same attempt as any
+    // send: a refused or unacknowledged submission is disclosed here,
+    // never retried behind the door
+    let (sent_message_seq, sent_message_num, submission) = match client::send_message(
+        &url,
+        &context,
+        num,
+        None,
+        scope.task.map(|t| t.0),
+        &body,
+    ) {
+        Ok(sent) => {
+            let state = sent.submission.as_ref().map(|s| s.state.as_str());
+            let disclosure = match state {
+                Some("submitted") | None => None,
+                Some(other) => Some(format!(
+                    "its submission reads {other}: the newborn may not have received it - read the record with sac messages or send again"
+                )),
+            };
+            (Some(sent.message.seq), sent.message.num, disclosure)
+        }
+        Err(client::ClientFail::Refused {
+            code,
+            detail,
+            message,
+        }) => {
+            // the record landed and the refusal names it: the ask
+            // face keeps the reference beside the disclosure
+            (
+                message.as_ref().map(|m| m.seq),
+                message.as_ref().and_then(|m| m.num),
+                Some(format!("its submission was refused ({code}): {detail}")),
+            )
+        }
+        Err(other) => return Err(Fail::Client(other)),
+    };
     Ok(AskOutcome {
         workspace: dir_str,
         terminal,
         birth,
         num,
-        message_seq: sent.message.seq,
-        message_num: sent.message.num,
+        message_seq: sent_message_seq,
+        message_num: sent_message_num,
         creator: creator_num,
+        submission,
     })
 }
 
@@ -2046,15 +2094,23 @@ fn ask_door(
             "terminal": outcome.terminal,
             "incarnation": {"seq": outcome.birth, "num": outcome.num},
             "question": {"num": outcome.message_num, "seq": outcome.message_seq},
+            "submission": outcome.submission,
         }))
         .expect("plain data"));
     }
     let answer = outcome
         .message_num
         .map(|n| format!("m-{n}"))
-        .unwrap_or_else(|| format!("seq {}", outcome.message_seq));
+        .unwrap_or_else(|| match outcome.message_seq {
+            Some(seq) => format!("seq {seq}"),
+            None => "(its record reference rides the submission disclosure)".into(),
+        });
+    let disclosure = outcome
+        .submission
+        .map(|line| format!("; {line}"))
+        .unwrap_or_default();
     Ok(format!(
-        "i-{num} registered at {workspace} (terminal {terminal}); your question went as {answer} from {creator}; they receive it natively",
+        "i-{num} registered at {workspace} (terminal {terminal}); your question went as {answer} from {creator}; they receive it through their session's input queue{disclosure}",
         num = outcome.num,
         workspace = outcome.workspace,
         terminal = outcome.terminal,
