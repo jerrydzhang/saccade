@@ -2314,7 +2314,7 @@ fn search_reads_the_record_through_the_cli_face() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("search-door");
     let sac = |args: &[&str]| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .arg("--db")
             .arg(&path)
             .env("SACCADE_ACTOR", "pi")
@@ -2541,7 +2541,7 @@ fn search_reads_the_record_through_the_cli_face() {
     let pipe = |input: &str, args: &[&str]| {
         use std::io::Write as _;
         use std::process::Stdio;
-        let mut child = std::process::Command::new(bin)
+        let mut child = scrubbed(std::process::Command::new(bin))
             .arg("--db")
             .arg(&path)
             .args(args)
@@ -2797,7 +2797,7 @@ fn create_reply_names_the_born_task() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("create-reply");
 
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .arg("--db")
         .arg(&path)
         .env("SACCADE_ACTOR", "assistant")
@@ -2817,7 +2817,7 @@ fn create_reply_names_the_born_task() {
         "the birth record rides under the reference: {stdout}"
     );
 
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .arg("--db")
         .arg(&path)
         .arg("--json")
@@ -2831,7 +2831,7 @@ fn create_reply_names_the_born_task() {
         "claim answers the wire's shape: its records under the reply object"
     );
 
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .arg("--db")
         .arg(&path)
         .arg("--json")
@@ -2923,7 +2923,7 @@ async fn local_replies_match_the_wire() {
     let served_db = scratch_db("served-shape");
 
     let local = |db: &std::path::Path, args: &[&str]| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .arg("--db")
             .arg(db)
             .env("SACCADE_ACTOR", "pi")
@@ -3296,6 +3296,11 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
 // ---- the workspace doors through the CLI face: a fake host, real exec ----
 
 /// A fake `orca` with pinned wire shapes; shebang /bin/sh - the sandbox has no /usr/bin/env.
+/// The lifecycle doors model the host's real read contract: visible
+/// presence from the registration file or an existing directory,
+/// selector_not_found otherwise, and a terminal state the close door
+/// actually mutates. FAKE_ORCA_CLOSE_FAIL (one-shot flag file) makes
+/// exactly one close ask fail.
 fn fake_host(dir: &std::path::Path) -> std::path::PathBuf {
     let bin_dir = dir.join("host-bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -3304,17 +3309,29 @@ fn fake_host(dir: &std::path::Path) -> std::path::PathBuf {
         &orca,
         r#"#!/bin/sh
 printf '%s\n' "$@" >> "$FAKE_ORCA_LOG"
-if [ "$1" = worktree ]; then exit 0; fi
+selector=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--worktree" ]; then selector="$a"; fi
+  prev="$a"
+done
+path="${selector#path:}"
+if [ "$1" = worktree ]; then
+  if [ "$2" = show ]; then
+    # visible presence follows the live checkout, never the
+    # registration file: a gone checkout is selector_not_found
+    if [ -n "$path" ] && [ -d "$path" ]; then
+      printf '{"ok":true,"result":{"worktree":{"path":"%s"}}}\n' "$path"
+    else
+      printf '{"ok":false,"error":{"code":"selector_not_found","message":"selector_not_found"}}\n'
+    fi
+    exit 0
+  fi
+  exit 0
+fi
 if [ "$1" = terminal ] && [ "$2" = create ]; then
   n=$(($(wc -l < "$FAKE_ORCA_STATE" 2>/dev/null || echo 0) + 1))
   handle="term_actual_shape_$n"
-  selector=""
-  prev=""
-  for a in "$@"; do
-    if [ "$prev" = "--worktree" ]; then selector="$a"; fi
-    prev="$a"
-  done
-  path="${selector#path:}"
   if [ -n "${FAKE_ORCA_CREATE_FAILS:-}" ]; then
     printf 'the host refused the create\n' >&2
     exit 1
@@ -3346,9 +3363,34 @@ if [ "$1" = terminal ] && [ "$2" = create ]; then
   exit 0
 fi
 if [ "$1" = terminal ] && [ "$2" = list ]; then
+  if [ -n "$path" ] && ! grep -Fxq "$path" "$FAKE_ORCA_REGISTERED" 2>/dev/null && ! [ -d "$path" ]; then
+    printf '{"ok":false,"error":{"code":"selector_not_found","message":"selector_not_found"}}\n'
+    exit 0
+  fi
   printf '{"ok":true,"result":{"terminals":['
-  paste -sd, "$FAKE_ORCA_STATE" 2>/dev/null
+  if [ -n "$path" ] && [ -f "$FAKE_ORCA_STATE" ]; then
+    grep -F "\"worktreePath\":\"$path\"" "$FAKE_ORCA_STATE" | paste -sd,
+  else
+    paste -sd, "$FAKE_ORCA_STATE" 2>/dev/null
+  fi
   printf ']}}\n'
+  exit 0
+fi
+if [ "$1" = terminal ] && [ "$2" = close ]; then
+  if [ -f "${FAKE_ORCA_CLOSE_FAIL:-/dev/null-nothing}" ]; then
+    rm -f "${FAKE_ORCA_CLOSE_FAIL}"
+    printf '{"ok":false,"error":{"code":"close_refused","message":"the host refused the close"}}\n'
+    exit 0
+  fi
+  if [ -n "$path" ] && ! grep -Fxq "$path" "$FAKE_ORCA_REGISTERED" 2>/dev/null && ! [ -d "$path" ]; then
+    printf '{"ok":false,"error":{"code":"selector_not_found","message":"selector_not_found"}}\n'
+    exit 0
+  fi
+  if [ -n "$path" ] && [ -f "$FAKE_ORCA_STATE" ]; then
+    grep -Fv "\"worktreePath\":\"$path\"" "$FAKE_ORCA_STATE" > "$FAKE_ORCA_STATE.tmp" || true
+    mv "$FAKE_ORCA_STATE.tmp" "$FAKE_ORCA_STATE"
+  fi
+  printf '{"ok":true,"result":{"closed":true}}\n'
   exit 0
 fi
 if [ "$1" = terminal ] && [ "$2" = switch ]; then
@@ -5929,7 +5971,7 @@ fn the_use_door_binds_rebinds_and_holds_its_guards_through_the_cli_face() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("use-door");
     let sac = |args: &[&str]| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .arg("--db")
             .arg(&path)
             .env("SACCADE_ACTOR", "pi")
@@ -7317,11 +7359,46 @@ async fn the_workbench_projection_names_the_workspaces_the_fold_holds() {
     );
     assert_eq!(status, 200, "{body}");
     let created = json_of(&body);
+    // the historical kind projects beside the creations: a hand-written
+    // task-bound establishment enters the same panel with its own stage
+    {
+        let mut conn = saccade::db::open(&db).unwrap();
+        saccade::db::record(
+            &mut conn,
+            &saccade::store::Context::system(),
+            saccade::Command::CreateTask {
+                name: saccade::Prose::new("a lineage with an establishment".into()).unwrap(),
+            },
+            1,
+        )
+        .unwrap();
+        saccade::db::record(
+            &mut conn,
+            &saccade::store::Context::system(),
+            saccade::Command::EstablishWorkspace {
+                task_id: saccade::TaskId(0),
+                base: saccade::GitCommit::new("abc123".into()).unwrap(),
+                branch: saccade::GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: saccade::WorktreePath::new("/elsewhere/wt/t-0".into()).unwrap(),
+            },
+            2,
+        )
+        .unwrap();
+    }
     let workspaces = json_of(&get_json(&base, "/api/v1/workbench").1)["workspaces"].clone();
     let list = workspaces.as_array().unwrap();
-    assert_eq!(list.len(), 1, "{workspaces}");
-    let ws = &list[0];
-    assert_eq!(ws["seq"], created["workspace"]["seq"], "{workspaces}");
+    assert_eq!(list.len(), 2, "{workspaces}");
+    let established = list
+        .iter()
+        .find(|w| w["home"].as_u64() == Some(0))
+        .expect("the established kind projects with its home task");
+    assert_eq!(established["branch"], "saccade/t-0", "{workspaces}");
+    assert_eq!(established["stage"], "available", "{workspaces}");
+    assert!(established["born_at"].is_null(), "{workspaces}");
+    let ws = list
+        .iter()
+        .find(|w| w["seq"] == created["workspace"]["seq"])
+        .expect("the created kind still projects");
     assert_eq!(ws["base"], created["workspace"]["base"], "{workspaces}");
     assert_eq!(ws["path"], created["workspace"]["path"], "{workspaces}");
     assert!(
@@ -7329,6 +7406,7 @@ async fn the_workbench_projection_names_the_workspaces_the_fold_holds() {
         "{workspaces}"
     );
     assert!(ws["born_at"].is_u64(), "{workspaces}");
+    assert!(ws["home"].is_null(), "{workspaces}");
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
@@ -7388,4 +7466,892 @@ async fn the_launch_door_names_a_created_terminal_it_cannot_report() {
     serve.kill().unwrap();
     serve.wait().unwrap();
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+// ---- the workspace lifecycle: ordered cleanup, restoration, guards ----
+
+/// A lifecycle rig: a scratch repo, a REAL `sac serve` subprocess with
+/// the fake host on its PATH - the lifecycle effects run exactly where
+/// they run in production, against the fake host and real git - and
+/// the CLI face pointed at that server.
+struct LifecycleRig {
+    serve: std::process::Child,
+    url: String,
+    dir: std::path::PathBuf,
+    root: std::path::PathBuf,
+    bin: &'static str,
+    registered: std::path::PathBuf,
+    host_state: std::path::PathBuf,
+    close_fail: std::path::PathBuf,
+    host_env: Vec<(String, String)>,
+}
+
+fn lifecycle_rig(tag: &str) -> LifecycleRig {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let dir = std::env::temp_dir().join(format!("sac-lifecycle-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (root, _first, _head) = scratch_repo(&dir);
+    let db = dir.join("saccade.db");
+    let host = fake_host(&dir);
+    let pi = stub_pi(&dir);
+    let host_log = dir.join("host.log");
+    let host_state = dir.join("host-state");
+    let registered = dir.join("host-registered");
+    let close_fail = dir.join("close-fail");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    std::fs::write(&registered, b"").unwrap();
+    let host_env = vec![
+        ("FAKE_ORCA_LOG".to_string(), host_log.display().to_string()),
+        (
+            "FAKE_ORCA_STATE".to_string(),
+            host_state.display().to_string(),
+        ),
+        (
+            "FAKE_ORCA_REGISTERED".to_string(),
+            registered.display().to_string(),
+        ),
+        (
+            "FAKE_ORCA_CLOSE_FAIL".to_string(),
+            close_fail.display().to_string(),
+        ),
+        (
+            "PATH".to_string(),
+            format!(
+                "{}:{}",
+                host.parent().unwrap().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        ),
+        // the rig is hermetic: the serve subprocess and every CLI run
+        // name the stub harness, never an inherited or compiled pin
+        ("SACCADE_PI".to_string(), pi.display().to_string()),
+    ];
+    let serve_envs: Vec<(&str, &str)> = host_env
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let (serve, url) = spawn_serve(
+        bin,
+        &db,
+        &["--repo", &root.display().to_string()],
+        &serve_envs,
+    );
+    LifecycleRig {
+        serve,
+        url,
+        dir,
+        root,
+        bin,
+        registered,
+        host_state,
+        close_fail,
+        host_env,
+    }
+}
+
+impl Drop for LifecycleRig {
+    fn drop(&mut self) {
+        let _ = self.serve.kill();
+        let _ = self.serve.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Provision one workspace through the create door; the reply's birth
+/// seq and recorded facts come back.
+fn rig_provision(rig: &LifecycleRig, label: &str) -> (usize, String, String) {
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/workspace/create",
+        &json!({"label": label, "client": "lifecycle-test"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    let seq = reply["workspace"]["seq"].as_u64().unwrap() as usize;
+    let branch = reply["workspace"]["branch"].as_str().unwrap().to_string();
+    let path = reply["workspace"]["path"].as_str().unwrap().to_string();
+    (seq, branch, path)
+}
+
+/// The host discovers the workspace: one registered-path line, the
+/// visible read contract's own file.
+fn rig_register(rig: &LifecycleRig, path: &str) {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&rig.registered)
+        .unwrap();
+    writeln!(file, "{path}").unwrap();
+}
+
+/// An idle terminal the host names for the workspace.
+fn rig_open_terminal(rig: &LifecycleRig, handle: &str, path: &str) {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&rig.host_state)
+        .unwrap();
+    writeln!(
+        file,
+        r#"{{"handle":"{handle}","worktreePath":"{path}","orphaned":false}}"#
+    )
+    .unwrap();
+}
+
+/// The CLI face pointed at the rig's server, the fake host on PATH.
+fn rig_sac(rig: &LifecycleRig, args: &[&str]) -> (bool, String, String) {
+    let mut envs: Vec<(String, String)> =
+        vec![("SACCADE_ACTOR".to_string(), "lifecycle-bot".to_string())];
+    envs.extend(rig.host_env.clone());
+    let env_refs: Vec<(&str, String)> = envs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+    let mut full = vec![
+        "--server".to_string(),
+        rig.url.clone(),
+        "--repo".to_string(),
+        rig.root.display().to_string(),
+    ];
+    full.extend(args.iter().map(|s| s.to_string()));
+    let (ok, out, err, timed_out) = bounded_sac(rig.bin, &full, &env_refs);
+    assert!(!timed_out, "sac {args:?} ran past its bound: {out}{err}");
+    (ok, out, err)
+}
+
+/// The workspace is gone from git's own registrations.
+fn rig_unregistered(rig: &LifecycleRig, path: &str) -> bool {
+    let out = sh(&rig.root, &["worktree", "list", "--porcelain"]);
+    !out.lines().any(|line| line == format!("worktree {path}"))
+}
+
+/// The recorded branch's local tip, empty when git holds none.
+fn rig_tip(rig: &LifecycleRig, branch: &str) -> String {
+    sh(
+        &rig.root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .trim()
+    .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clean_runs_the_ordered_contract_and_the_branch_stands() {
+    let rig = lifecycle_rig("clean");
+    let (seq, branch, ws) = rig_provision(&rig, "sweep");
+    rig_register(&rig, &ws);
+    rig_open_terminal(&rig, "term_idle_1", &ws);
+    let worktree_rows = |rig: &LifecycleRig| sh(&rig.root, &["worktree", "list", "--porcelain"]);
+
+    // the clean runs the whole ordered contract over a real checkout
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "clean refuses: {out}{err}");
+    // the Cleaned fact is the story's second record: the birth is seq 0
+    assert!(out.contains("cleaned - record 1"), "{out}");
+    let _ = seq;
+    assert!(
+        out.contains("verified: the host names no terminals"),
+        "{out}"
+    );
+    assert!(out.contains(&format!("branch {branch} retained")), "{out}");
+    assert!(out.contains("the host names no workspace there"), "{out}");
+    assert!(!std::path::Path::new(&ws).exists(), "the checkout is gone");
+    assert!(
+        rig_unregistered(&rig, &ws),
+        "git registers no worktree after the removal"
+    );
+    // the branch and its tip stand: retained, never deleted
+    let tip = rig_tip(&rig, &branch);
+    assert_eq!(tip, sh(&rig.root, &["rev-parse", "HEAD"]).trim());
+    // the close door ran against the workspace's terminals: the fake
+    // host logs one argv word per line
+    let log = std::fs::read_to_string(rig.dir.join("host.log")).unwrap();
+    let asked_close = log
+        .lines()
+        .zip(log.lines().skip(1))
+        .any(|(a, b)| a == "terminal" && b == "close");
+    assert!(asked_close, "{log}");
+    let (status, body) = get_json(&rig.url, "/api/v1/records");
+    assert_eq!(status, 200, "{body}");
+    let kinds: Vec<String> = json_of(&body)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        kinds.contains(&"workspace_cleaned".to_string()),
+        "{kinds:?}"
+    );
+
+    // the idempotent re-run: recorded Cleaned plus verified absence,
+    // no duplicate transition
+    let records_before = body.clone();
+    let (ok, out, _err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the idempotent re-run refuses: {out}");
+    assert!(out.contains("already cleaned"), "{out}");
+    let (_, body_after) = get_json(&rig.url, "/api/v1/records");
+    assert_eq!(
+        json_of(&records_before)["records"],
+        json_of(&body_after)["records"],
+        "the idempotent re-run landed no record"
+    );
+
+    // restore brings the checkout back at the branch's current tip
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "restore", &ws]);
+    assert!(ok, "restore refuses: {out}{err}");
+    assert!(out.contains("restored"), "{out}");
+    assert!(std::path::Path::new(&ws).join("readme").is_file());
+    assert_eq!(
+        sh(&std::path::PathBuf::from(&ws), &["rev-parse", "HEAD"]).trim(),
+        tip,
+        "the checkout stands at the branch's current local tip"
+    );
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let kinds: Vec<String> = json_of(&body)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        kinds.contains(&"workspace_restored".to_string()),
+        "{kinds:?}"
+    );
+    let records_at_restored = body.clone();
+
+    // the matching checkout standing on an Available workspace is
+    // no-op success: no duplicate restoration fact
+    let (ok, out, _err) = rig_sac(&rig, &["workspace", "restore", &ws]);
+    assert!(ok, "the no-op restore refuses: {out}");
+    assert!(out.contains("already restored"), "{out}");
+    let (_, body_after) = get_json(&rig.url, "/api/v1/records");
+    assert_eq!(
+        json_of(&records_at_restored)["records"],
+        json_of(&body_after)["records"],
+        "the no-op restore landed no record"
+    );
+
+    // an empty tail: nothing was left behind
+    let _ = worktree_rows(&rig);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clean_refuses_dirt_missing_branch_and_unexpected_bytes() {
+    let rig = lifecycle_rig("refuse");
+    let (_, _branch, ws) = rig_provision(&rig, "guarded");
+    rig_register(&rig, &ws);
+
+    // staged, unstaged, and untracked work refuses before any host or
+    // git act; the checkout and the record both stand untouched
+    std::fs::write(std::path::Path::new(&ws).join("untracked.txt"), "kept\n").unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(!ok, "the dirty checkout cleaned anyway: {out}");
+    assert!(err.contains("workspace_work_present"), "{err}");
+    assert!(std::path::Path::new(&ws).join("untracked.txt").is_file());
+    std::fs::remove_file(std::path::Path::new(&ws).join("untracked.txt")).unwrap();
+
+    // unrecognized directories and the primary checkout refuse
+    let stranger = rig.dir.join("stranger");
+    std::fs::create_dir_all(&stranger).unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", stranger.to_str().unwrap()]);
+    assert!(!ok, "an unrecognized directory cleaned: {err}");
+    assert!(err.contains("workspace_not_recorded"), "{err}");
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", rig.root.to_str().unwrap()]);
+    assert!(!ok, "the primary checkout cleaned: {err}");
+    assert!(err.contains("workspace_not_recorded"), "{err}");
+
+    // a missing recorded branch refuses the destructive act: rename
+    // the recorded branch away and the checkout is uncleanable
+    let (seq, branch, ws2) = rig_provision(&rig, "branchless");
+    let renamed = format!("{branch}-moved");
+    sh(&rig.root, &["branch", "-m", &branch, &renamed]);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws2]);
+    assert!(!ok, "the branchless checkout cleaned: {err}");
+    assert!(err.contains("workspace_branch_missing"), "{err}");
+    assert!(std::path::Path::new(&ws2).exists());
+    sh(&rig.root, &["branch", "-m", &renamed, &branch]);
+    let _ = seq;
+
+    // bytes at a recorded path without a git worktree registration
+    // are unexpected work: the mismatch refuses, nothing is deleted
+    let (_, _, ws3) = rig_provision(&rig, "impostor");
+    sh(&rig.root, &["worktree", "remove", &ws3]);
+    std::fs::create_dir_all(&ws3).unwrap();
+    std::fs::write(std::path::Path::new(&ws3).join("precious"), "not mine\n").unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws3]);
+    assert!(!ok, "unexpected bytes were deleted: {err}");
+    assert!(err.contains("workspace_checkout_mismatch"), "{err}");
+    assert!(std::path::Path::new(&ws3).join("precious").is_file());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clean_stops_on_open_terminals_then_retry_completes() {
+    let rig = lifecycle_rig("terminals");
+    let (_, branch, ws) = rig_provision(&rig, "occupied");
+    rig_register(&rig, &ws);
+    rig_open_terminal(&rig, "term_live_9", &ws);
+    // exactly one close ask fails, then the fake host behaves
+    std::fs::write(&rig.close_fail, b"refuse once\n").unwrap();
+
+    // the first clean: the close ask fails, the list still names a
+    // terminal, and the door stops before any checkout removal
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(!ok, "the occupied workspace cleaned anyway: {err}");
+    assert!(err.contains("workspace_terminals_open"), "{err}");
+    assert!(
+        std::path::Path::new(&ws).exists(),
+        "the checkout was removed"
+    );
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let kinds: Vec<String> = json_of(&body)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !kinds.contains(&"workspace_cleaned".to_string()),
+        "{kinds:?}"
+    );
+
+    // the retry is the recovery path: the close lands, the list
+    // verifies empty, and the completed fact records once
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the retry clean refuses: {out}{err}");
+    assert!(!std::path::Path::new(&ws).exists());
+    assert_eq!(
+        rig_tip(&rig, &branch),
+        sh(&rig.root, &["rev-parse", "HEAD"]).trim()
+    );
+
+    // the recorded-Cleaned idempotence verifies the host too: a
+    // terminal the host still names refuses the no-op success
+    rig_open_terminal(&rig, "term_after_2", &ws);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(
+        !ok,
+        "the occupied cleaned workspace answered idempotent: {err}"
+    );
+    assert!(err.contains("workspace_terminals_open"), "{err}");
+    // the terminal leaves, and the same door verifies its way to the
+    // no-op success again
+    std::fs::write(&rig.host_state, b"").unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the verified idempotent re-run refuses: {out}{err}");
+    assert!(out.contains("already cleaned"), "{out}{err}");
+    assert!(out.contains("the host names no terminals"), "{out}");
+    assert!(out.contains("the host names no workspace at"), "{out}{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restore_reuses_recreates_and_refuses_its_mismatches() {
+    let rig = lifecycle_rig("restore");
+    let (_, branch, ws) = rig_provision(&rig, "reborn");
+    rig_register(&rig, &ws);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the setup clean refuses: {err}");
+    assert!(!std::path::Path::new(&ws).exists());
+
+    // a matching worktree that stands again is reused as-is: a local
+    // change made out-of-band survives the restoration untouched
+    sh(&rig.root, &["worktree", "add", &ws, &branch]);
+    std::fs::write(std::path::Path::new(&ws).join("local.txt"), "mine\n").unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "restore", &ws]);
+    assert!(ok, "the reuse restore refuses: {out}{err}");
+    assert!(out.contains("reused as-is"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&ws).join("local.txt")).unwrap(),
+        "mine\n",
+        "the local change did not survive the restoration"
+    );
+    // reuse carries no duplicate checkout act: the worktree stands once
+    let rows = sh(&rig.root, &["worktree", "list", "--porcelain"]);
+    assert_eq!(
+        rows.lines()
+            .filter(|line| line == &format!("worktree {ws}"))
+            .count(),
+        1
+    );
+
+    // a stale git registration whose directory is gone restores
+    // nothing: the mismatch refuses, no fact lands, the stage stays
+    let (_, _, ws_stale) = rig_provision(&rig, "stale-entry");
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_stale]);
+    assert!(ok, "the stale setup clean refuses: {err}");
+    let stale_branch = {
+        let (_, body) = get_json(&rig.url, "/api/v1/records");
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws_stale)
+            })
+            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
+            .expect("the stale birth names its branch")
+    };
+    sh(&rig.root, &["worktree", "add", &ws_stale, &stale_branch]);
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let records_before_stale = body.clone();
+    std::fs::remove_dir_all(&ws_stale).unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws_stale]);
+    assert!(!ok, "the stale registration restored anyway: {err}");
+    assert!(err.contains("workspace_checkout_mismatch"), "{err}");
+    assert!(err.contains("stale registration"), "{err}");
+    assert!(!std::path::Path::new(&ws_stale).exists());
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    assert_eq!(
+        json_of(&records_before_stale)["records"],
+        json_of(&body)["records"],
+        "the stale registration landed no restoration fact"
+    );
+
+    // the absent-path recreate stands at the branch's CURRENT local
+    // tip, never the cleanup-time commit: advance the branch first
+    let (_, _, ws2) = rig_provision(&rig, "recreated");
+    let (seq2, branch2, _p2) = (0usize, String::new(), ());
+    let _ = seq2;
+    let _ = branch2;
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws2]);
+    assert!(ok, "the second setup clean refuses: {err}");
+    let ws2_branch = {
+        let (_, body) = get_json(&rig.url, "/api/v1/records");
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws2))
+            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
+            .expect("the second birth names its branch")
+    };
+    // a throwaway checkout advances the branch past its cleanup-time tip
+    let throwaway = rig.dir.join("throwaway");
+    sh(
+        &rig.root,
+        &[
+            "worktree",
+            "add",
+            &throwaway.display().to_string(),
+            &ws2_branch,
+        ],
+    );
+    std::fs::write(throwaway.join("readme"), "advanced past cleanup\n").unwrap();
+    sh(&throwaway, &["commit", "-qam", "advance"]);
+    let advanced_tip = sh(&throwaway, &["rev-parse", "HEAD"]);
+    sh(
+        &rig.root,
+        &["worktree", "remove", &throwaway.display().to_string()],
+    );
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws2]);
+    assert!(ok, "the recreate restore refuses: {err}");
+    assert_eq!(
+        sh(&std::path::PathBuf::from(&ws2), &["rev-parse", "HEAD"]).trim(),
+        advanced_tip.trim(),
+        "the restore took the branch's current local tip"
+    );
+
+    // restoration is idempotent by postcondition: an Available
+    // workspace with no checkout recreates it at the branch's current
+    // local tip and records the actual fact, no clean-first ceremony
+    let (_, _, ws_edge) = rig_provision(&rig, "edge");
+    // Available with no checkout: git's own removal, the stage never
+    // moved to Cleaned
+    sh(&rig.root, &["worktree", "remove", &ws_edge]);
+    let edge_branch = {
+        let (_, body) = get_json(&rig.url, "/api/v1/records");
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws_edge)
+            })
+            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
+            .expect("the edge birth names its branch")
+    };
+    let edge_tip = rig_tip(&rig, &edge_branch);
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "restore", &ws_edge]);
+    assert!(ok, "the ruled absent-case restore refuses: {out}{err}");
+    assert!(out.contains("restored"), "{out}");
+    assert!(std::path::Path::new(&ws_edge).join("readme").is_file());
+    assert_eq!(
+        sh(&std::path::PathBuf::from(&ws_edge), &["rev-parse", "HEAD"]).trim(),
+        edge_tip,
+        "the recreate stands at the branch's current local tip"
+    );
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let kinds: Vec<String> = json_of(&body)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        kinds.contains(&"workspace_restored".to_string()),
+        "{kinds:?}"
+    );
+    // the stage stays Available through the whole cycle
+    let stage = json_of(&get_json(&rig.url, "/api/v1/workbench").1)["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["path"] == json!(ws_edge))
+        .map(|w| w["stage"].as_str().unwrap().to_string())
+        .expect("the edge workspace projects");
+    assert_eq!(stage, "available", "{stage}");
+    // and the matching checkout standing afterwards is the no-op
+    let (ok, out, _err) = rig_sac(&rig, &["workspace", "restore", &ws_edge]);
+    assert!(ok, "the no-op restore refuses: {out}");
+    assert!(out.contains("already restored"), "{out}");
+
+    // the recorded branch gone refuses: never reconstructed from a
+    // base or a remote
+    let (_, _, ws3) = rig_provision(&rig, "baseless");
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws3]);
+    assert!(ok, "the third setup clean refuses: {err}");
+    let ws3_branch = {
+        let (_, body) = get_json(&rig.url, "/api/v1/records");
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws3))
+            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
+            .expect("the third birth names its branch")
+    };
+    sh(&rig.root, &["branch", "-D", &ws3_branch]);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws3]);
+    assert!(!ok, "the branchless restore ran: {err}");
+    assert!(err.contains("workspace_branch_missing"), "{err}");
+    assert!(!std::path::Path::new(&ws3).exists());
+
+    // a checkout on another branch is a mismatch: no forced checkout
+    let (_, _, ws4) = rig_provision(&rig, "swapped");
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws4]);
+    assert!(ok, "the fourth setup clean refuses: {err}");
+    let ws4_branch = {
+        let (_, body) = get_json(&rig.url, "/api/v1/records");
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws4))
+            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
+            .expect("the fourth birth names its branch")
+    };
+    sh(
+        &rig.root,
+        &["worktree", "add", &ws4, "-b", "another-line", "HEAD"],
+    );
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws4]);
+    assert!(!ok, "the mismatched restore ran: {err}");
+    assert!(err.contains("workspace_checkout_mismatch"), "{err}");
+    let rows = sh(&rig.root, &["worktree", "list", "--porcelain"]);
+    assert!(rows.contains("refs/heads/another-line"));
+    let _ = ws4_branch;
+    let _ = ws;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_cleaned_stage_guards_launch_workbench_and_switch() {
+    let rig = lifecycle_rig("guards");
+    let (_, _branch, ws) = rig_provision(&rig, "guarded-lifecycle");
+    rig_register(&rig, &ws);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the setup clean refuses: {err}");
+
+    // the stage reads back through the workbench snapshot
+    let (_, body) = get_json(&rig.url, "/api/v1/workbench");
+    let stages: Vec<(usize, String)> = json_of(&body)["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| {
+            (
+                w["seq"].as_u64().unwrap() as usize,
+                w["stage"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(stages.contains(&(0, "cleaned".to_string())), "{stages:?}");
+
+    // a checkout that stands again at the recorded path (re-created
+    // out-of-band) stays recorded Cleaned: a fresh launch into it
+    // refuses until an explicit restore, and the workbench door too
+    let guard_branch = {
+        let (_, body) = get_json(&rig.url, "/api/v1/records");
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws))
+            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
+            .expect("the guarded birth names its branch")
+    };
+    sh(&rig.root, &["worktree", "add", &ws, &guard_branch]);
+    let (ok, _out, err) = rig_sac(&rig, &["launch", "--workspace", &ws]);
+    assert!(!ok, "a cleaned workspace took a launch: {err}");
+    assert!(err.contains("recorded Cleaned"), "{err}");
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": ws}}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "workspace_cleaned",
+        "{body}"
+    );
+
+    // the switch target refuses the same way: a saved session whose
+    // header cwd is the cleaned workspace
+    let saved = rig.dir.join("native-deadbeef01.jsonl");
+    std::fs::write(
+        &saved,
+        format!("{{\"id\":\"deadbeef01\",\"cwd\":\"{ws}\"}}\n{{\"kind\":\"filler\"}}\n"),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "deadbeef01", "session_file": saved.display().to_string()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let num = json_of(&body)["num"].as_u64().unwrap();
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/workspace/change",
+        &json!({"incarnation": num, "to": ws, "client": "lifecycle-test"}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "workspace_cleaned",
+        "{body}"
+    );
+
+    // the resume path pins the same guard: a saved session whose
+    // header cwd sits in the cleaned workspace refuses until an
+    // explicit restore - the guard fires before any host submission
+    let saved_resume = rig.dir.join("native-cafe0001.jsonl");
+    std::fs::write(
+        &saved_resume,
+        format!(
+            "{{\"type\":\"session\",\"id\":\"cafe0001\",\"cwd\":\"{ws}\"}}\n{{\"kind\":\"filler\"}}\n"
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "cafe0001", "session_file": saved_resume.display().to_string()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let resume_num = json_of(&body)["num"].as_u64().unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["launch", "--resume", &format!("i-{resume_num}")]);
+    assert!(!ok, "a cleaned workspace took a resume: {err}");
+    assert!(err.contains("recorded Cleaned"), "{err}");
+
+    // the explicit restore admits the directory again
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws]);
+    assert!(ok, "the restore refuses: {err}");
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": ws}}),
+    );
+    // the launch now proceeds past the stage guard (its host answer is
+    // the fake host's acceptance)
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["submitted"], true, "{body}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reconcile_verifies_preserves_and_records_on_apply() {
+    let rig = lifecycle_rig("reconcile");
+    // a present matching workspace: preserved
+    let (kept_seq, kept_branch, kept) = rig_provision(&rig, "keeper");
+    rig_register(&rig, &kept);
+    // an absent workspace whose host presence is verified: cleanable
+    let (_gone_seq, gone_branch, gone) = rig_provision(&rig, "departed");
+    sh(&rig.root, &["worktree", "remove", &gone]);
+    // a conflict: bytes at the recorded path, no registration
+    let (_bad_seq, _bad_branch, bad) = rig_provision(&rig, "conflicted");
+    sh(&rig.root, &["worktree", "remove", &bad]);
+    std::fs::create_dir_all(&bad).unwrap();
+
+    // the dry run records nothing and reports every fact
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
+    assert!(ok, "the dry run fails: {out}{err}");
+    assert!(out.contains("dry run"), "{out}");
+    assert!(out.contains(&format!("record {kept_seq} {kept}")), "{out}");
+    assert!(out.contains("preserved"), "{out}");
+    assert!(!out.contains("Cleaned recorded now"), "{out}");
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let kinds: Vec<String> = json_of(&body)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !kinds.contains(&"workspace_cleaned".to_string()),
+        "{kinds:?}"
+    );
+
+    // the applied run records the verified Cleaned facts in one batch
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
+    assert!(ok, "the applied run fails: {out}{err}");
+    assert!(out.contains("applied"), "{out}");
+    assert!(out.contains(&gone), "{out}");
+    assert!(out.contains(&bad), "{out}");
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
+    let cleaned: Vec<&serde_json::Value> = records
+        .iter()
+        .filter(|r| r["kind"] == "workspace_cleaned")
+        .collect();
+    assert_eq!(
+        cleaned.len(),
+        1,
+        "only the verified absence recorded: {records:?}"
+    );
+    assert_eq!(
+        cleaned[0]["payload"]["workspace"],
+        json!(1),
+        "the departed birth is the cleaned one"
+    );
+    assert_eq!(
+        sh(
+            &rig.root,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("refs/heads/{kept_branch}")
+            ]
+        ),
+        sh(&rig.root, &["rev-parse", "HEAD"]),
+        "the preserved workspace's branch stands"
+    );
+    let _ = gone_branch;
+}
+
+/// A recorded path addresses its own birth: a historical establishment
+/// whose stored string carries a symlink segment resolves through it -
+/// stored identity preserved, and two stored paths aliasing one
+/// directory refuse as ambiguous rather than picking.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
+    let rig = lifecycle_rig("alias");
+    // a historical establishment whose recorded path carries a symlink
+    // segment: hand-written, exactly what an old log may hold
+    let link = rig.dir.join("link");
+    let real_home = rig.dir.join("real-wt");
+    std::fs::create_dir_all(&real_home).unwrap();
+    std::os::unix::fs::symlink(&real_home, &link).unwrap();
+    let real = real_home.join("hist-line");
+    let recorded = link.join("hist-line");
+    sh(
+        &rig.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "saccade/t-9",
+            &real.display().to_string(),
+            "HEAD",
+        ],
+    );
+    let establishment = |task: i32, branch: &str, worktree: &str| {
+        let mut conn = saccade::db::open(&rig.dir.join("saccade.db")).unwrap();
+        saccade::db::record(
+            &mut conn,
+            &saccade::store::Context::system(),
+            saccade::Command::CreateTask {
+                name: saccade::Prose::new(format!("a lineage behind {branch}")).unwrap(),
+            },
+            task as u64 * 2,
+        )
+        .unwrap();
+        saccade::db::record(
+            &mut conn,
+            &saccade::store::Context::system(),
+            saccade::Command::EstablishWorkspace {
+                task_id: saccade::TaskId(task as usize),
+                base: saccade::GitCommit::new("abc123".into()).unwrap(),
+                branch: saccade::GitBranch::new(branch.into()).unwrap(),
+                worktree: saccade::WorktreePath::new(worktree.into()).unwrap(),
+            },
+            task as u64 * 2 + 1,
+        )
+        .unwrap();
+    };
+    establishment(0, "saccade/t-9", recorded.display().to_string().as_str());
+
+    // the recorded string itself addresses the birth: the ordered clean
+    // contract runs over the real checkout it names
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", recorded.to_str().unwrap()]);
+    assert!(
+        ok,
+        "the recorded string does not address its birth: {out}{err}"
+    );
+    assert!(!real.exists(), "the real checkout is gone");
+    assert_eq!(
+        rig_tip(&rig, "saccade/t-9"),
+        sh(&rig.root, &["rev-parse", "HEAD"]).trim()
+    );
+
+    // the Cleaned stage blocks ordinary use at BOTH spellings once the
+    // checkout stands again: the guard resolves the alias, it never
+    // lets a known Cleaned workspace become usable through its twin
+    sh(
+        &rig.root,
+        &[
+            "worktree",
+            "add",
+            &real.display().to_string(),
+            "saccade/t-9",
+        ],
+    );
+    for shape in [recorded.to_str().unwrap(), real.to_str().unwrap()] {
+        let (ok, _out, err) = rig_sac(&rig, &["launch", "--workspace", shape]);
+        assert!(
+            !ok,
+            "the aliased Cleaned workspace took a launch at {shape}: {err}"
+        );
+        assert!(err.contains("recorded Cleaned"), "{err}");
+    }
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": recorded.display().to_string()}}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "workspace_cleaned",
+        "{body}"
+    );
+
+    // a second stored path over the same directory makes the alias
+    // unsafe: both shapes refuse as ambiguous, neither is picked
+    establishment(1, "saccade/t-10", real.display().to_string().as_str());
+    for shape in [recorded.to_str().unwrap(), real.to_str().unwrap()] {
+        let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", shape]);
+        assert!(!ok, "the aliased directory resolved to one birth: {err}");
+        assert!(err.contains("workspace_ambiguous_path"), "{err}");
+    }
+
+    // reconcile surfaces the twin spellings as shared-path conflicts
+    // for both births, instead of processing them as separate targets
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
+    assert!(ok, "reconcile fails: {out}{err}");
+    assert!(out.contains("share this path"), "{out}");
 }

@@ -375,6 +375,34 @@ enum WorkspaceVerb {
         #[arg(last = true)]
         prompt: Vec<String>,
     },
+    /// Clean an exact recorded workspace: terminal close, terminal
+    /// closure verified, git worktree removal with the branch
+    /// retained, checkout and host visible absence verified, then the
+    /// Cleaned record. Staged, unstaged, and untracked work refuses;
+    /// a recorded-cleaned workspace with resources present is a
+    /// mismatch, never an automatic deletion.
+    Clean {
+        /// The workspace's exact recorded path
+        path: PathBuf,
+    },
+    /// Restore an exact recorded cleaned workspace: establish or
+    /// validate the matching git checkout at the branch's current
+    /// local tip, then record Restored. No session is launched, no
+    /// terminal is created - execution stays an explicit launch.
+    Restore {
+        /// The workspace's exact recorded path
+        path: PathBuf,
+    },
+    /// The one-time cutover verification over every recorded
+    /// workspace: absent resources verified against git and the host,
+    /// matching present ones preserved, conflicts surfaced. Dry run
+    /// unless --apply records the verified Cleaned facts.
+    Reconcile {
+        /// Record the verified Cleaned facts; without this the door
+        /// only verifies and reports
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Clone, Copy, Subcommand)]
@@ -1777,6 +1805,9 @@ fn launch_native(
                     dir.display()
                 )));
             }
+            // a recorded Cleaned workspace blocks ordinary use until an
+            // explicit restore; unrelated directories pass untouched
+            cleaned_guard(destination, &dir)?;
             let mut argv = vec![pi.display().to_string()];
             if !prompt_text.is_empty() {
                 argv.push(prompt_text);
@@ -1827,6 +1858,9 @@ fn launch_native(
                     dir.display()
                 )));
             }
+            // the same cleaned guard: a saved session whose workspace
+            // was cleaned resumes only after an explicit restore there
+            cleaned_guard(destination, &dir)?;
             let locator = saved_session
                 .as_path()
                 .parent()
@@ -1911,6 +1945,45 @@ fn launch_native(
         }
     }
     Ok((dir_str, terminal))
+}
+
+/// The cleaned-workspace launch guard: a recorded workspace whose
+/// stage is Cleaned refuses ordinary use until an explicit restore,
+/// addressed by the one shared resolver - its own stored string or
+/// the canonical form it resolves to. Unrecognized directories and
+/// primary checkouts are not workspaces and pass untouched; aliased
+/// identities refuse rather than being picked.
+fn cleaned_guard(destination: &Destination, dir: &Path) -> Result<(), Fail> {
+    let loadout = loadout_of(destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "the launch guard needs the world; the log will not fold".into(),
+        ));
+    };
+    let canonical = saccade::workspace::canonical_dir(dir).map_err(|e| Fail::Usage(e.detail()))?;
+    match saccade::workspace::resolve_workspace_address(&world, dir)
+        .map_err(|e| Fail::Usage(e.detail()))?
+    {
+        saccade::workspace::LifecycleAddress::Single(birth) => {
+            if world.workspace_stage(birth) == Some(saccade::WorkspaceStage::Cleaned) {
+                return Err(Fail::Usage(format!(
+                    "{} is recorded Cleaned (record {}); ordinary use waits for an explicit restore: sac workspace restore {}",
+                    canonical.display(),
+                    birth.0,
+                    canonical.display()
+                )));
+            }
+        }
+        saccade::workspace::LifecycleAddress::Ambiguous(births) => {
+            return Err(Fail::Usage(format!(
+                "{} is the recorded path of {} workspace births; resolve their history by hand before launching there",
+                canonical.display(),
+                births.len()
+            )));
+        }
+        saccade::workspace::LifecycleAddress::Unrecorded => {}
+    }
+    Ok(())
 }
 
 /// A fresh random launch token: correlation only - it names the
@@ -2247,7 +2320,144 @@ fn workspace_door(
             resume,
             prompt,
         } => workspace_switch_door(cli, destination, incarnation, to, *resume, prompt),
+        WorkspaceVerb::Clean { path } => workspace_clean_door(cli, destination, path),
+        WorkspaceVerb::Restore { path } => workspace_restore_door(cli, destination, path),
+        WorkspaceVerb::Reconcile { apply } => workspace_reconcile_door(cli, destination, *apply),
     }
+}
+
+/// `sac workspace clean`: the ordered cleanup through the server's
+/// effects. The reply names every verified step; a failure names the
+/// step that stopped, and retry is the recovery path.
+fn workspace_clean_door(cli: &Cli, destination: &Destination, path: &Path) -> Result<String, Fail> {
+    let url = server_url(destination, "workspace clean")?;
+    client::handshake(&url);
+    let reply = client::clean_workspace(&url, path).map_err(Fail::Client)?;
+    let record = reply.records.first().map(|r| r.seq);
+    let fact = if reply.cleaned {
+        format!(
+            "cleaned - record {}",
+            record.map(|r| r.to_string()).unwrap_or_default()
+        )
+    } else if reply.already_cleaned {
+        "already cleaned - every resource verified absent, no new record".to_string()
+    } else {
+        "completed".to_string()
+    };
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "cleaned": reply.cleaned,
+            "already_cleaned": reply.already_cleaned,
+            "workspace": reply.workspace,
+            "verified": reply.verified,
+            "records": reply.records,
+        }))
+        .expect("plain data"));
+    }
+    Ok(format!(
+        "workspace {} ({}, branch {})\n  {}\n{}",
+        reply.workspace.path,
+        reply.workspace.seq,
+        reply.workspace.branch,
+        fact,
+        reply
+            .verified
+            .iter()
+            .map(|step| format!("  - {step}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
+}
+
+/// `sac workspace restore`: checkout-only restoration; execution stays
+/// a separate explicit launch or manual resume.
+fn workspace_restore_door(
+    cli: &Cli,
+    destination: &Destination,
+    path: &Path,
+) -> Result<String, Fail> {
+    let url = server_url(destination, "workspace restore")?;
+    client::handshake(&url);
+    let reply = client::restore_workspace(&url, path).map_err(Fail::Client)?;
+    let record = reply.records.first().map(|r| r.seq);
+    let fact = if reply.already_restored {
+        "already restored - the matching worktree stands Available, no new record".to_string()
+    } else if reply.reused {
+        "restored - the matching worktree stood and was reused as-is, local changes preserved"
+            .to_string()
+    } else {
+        format!(
+            "restored - checkout established at branch {}'s current local tip - record {}",
+            reply.workspace.branch,
+            record.map(|r| r.to_string()).unwrap_or_default()
+        )
+    };
+    let tip = reply
+        .tip
+        .as_deref()
+        .map(|t| format!("\n  branch tip {t}"))
+        .unwrap_or_default();
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "restored": reply.restored,
+            "already_restored": reply.already_restored,
+            "reused": reply.reused,
+            "tip": reply.tip,
+            "workspace": reply.workspace,
+            "records": reply.records,
+        }))
+        .expect("plain data"));
+    }
+    Ok(format!(
+        "workspace {} ({}, branch {})\n  {}{}",
+        reply.workspace.path, reply.workspace.seq, reply.workspace.branch, fact, tip
+    ))
+}
+
+/// `sac workspace reconcile`: the one-time cutover verification.
+/// Dry run by default; --apply records the verified Cleaned facts.
+fn workspace_reconcile_door(
+    cli: &Cli,
+    destination: &Destination,
+    apply: bool,
+) -> Result<String, Fail> {
+    let url = server_url(destination, "workspace reconcile")?;
+    client::handshake(&url);
+    let reply = client::reconcile_workspaces(&url, apply).map_err(Fail::Client)?;
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "applied": reply.applied,
+            "cleaned": reply.cleaned,
+            "preserved": reply.preserved,
+            "conflicts": reply.conflicts,
+            "records": reply.records,
+        }))
+        .expect("plain data"));
+    }
+    let mode = if apply {
+        "applied - verified Cleaned facts recorded"
+    } else {
+        "dry run - nothing recorded (pass --apply to record)"
+    };
+    let section = |name: &str, rows: &[client::ReconcileEntry]| -> String {
+        if rows.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\n{}:\n{}",
+            name,
+            rows.iter()
+                .map(|r| format!("  - record {} {} ({})", r.seq, r.path, r.reason))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    Ok(format!(
+        "workspace reconciliation over every recorded birth\n  {mode}{}{}{}",
+        section("cleaned (verified absent)", &reply.cleaned),
+        section("preserved", &reply.preserved),
+        section("conflicts (surfaced, never classified)", &reply.conflicts),
+    ))
 }
 
 fn launch_failed(standing: &str, error: Fail) -> Fail {

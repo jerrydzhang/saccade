@@ -28,6 +28,15 @@ pub enum HostFail {
     CreateRefused(String),
     /// The host created a terminal but named no handle.
     NoHandle,
+    /// The host's terminal list could not be asked or its answer could
+    /// not be read: terminal closure is unverified, never absent.
+    TerminalList(String),
+    /// The host's terminal close could not be asked. Best-effort only:
+    /// the verification list is the gate, this names the failed ask.
+    TerminalClose(String),
+    /// The host's visible workspace answer could not be read: visible
+    /// absence is unverified, never assumed.
+    WorkspaceShow(String),
 }
 
 impl HostFail {
@@ -41,6 +50,9 @@ impl HostFail {
             HostFail::Undiscovered(_) => "launch_host_undiscovered",
             HostFail::CreateRefused(_) => "launch_host_refused",
             HostFail::NoHandle => "launch_host_no_handle",
+            HostFail::TerminalList(_) => "workspace_host_list_failed",
+            HostFail::TerminalClose(_) => "workspace_host_close_failed",
+            HostFail::WorkspaceShow(_) => "workspace_host_show_failed",
         }
     }
 }
@@ -69,6 +81,9 @@ impl std::fmt::Display for HostFail {
             HostFail::NoHandle => {
                 write!(f, "the terminal was created but the host named no handle")
             }
+            HostFail::TerminalList(detail) => write!(f, "orca terminal list failed: {detail}"),
+            HostFail::TerminalClose(detail) => write!(f, "orca terminal close failed: {detail}"),
+            HostFail::WorkspaceShow(detail) => write!(f, "orca worktree show failed: {detail}"),
         }
     }
 }
@@ -272,6 +287,128 @@ pub fn submit_terminal(dir: &str, title: &str, command: &str) -> Result<String, 
         ));
     }
     terminal_handle(&String::from_utf8_lossy(&out.stdout))
+}
+
+// -- the workspace lifecycle's host contract -----------------------------
+// Closure and visible absence for one exact workspace. The host's
+// parsed answers are the only facts here: an empty terminal list means
+// no terminals, selector_not_found means the workspace names nothing
+// in the host's visible surfaces - arbitrary host errors are never
+// read as absence or closure. Registration removal, branch deletion,
+// and metadata erasure are not ours: git's own checkout removal is,
+// and the visible read contract rides it.
+
+/// The host's terminal handles for one exact workspace, from its own
+/// list door. selector_not_found is the host naming zero terminals;
+/// any other failure is unverified, never empty.
+pub fn workspace_terminals(dir: &str) -> Result<Vec<String>, HostFail> {
+    let out = orca(&[
+        "terminal",
+        "list",
+        "--worktree",
+        &format!("path:{dir}"),
+        "--json",
+    ])
+    .map_err(|e| HostFail::TerminalList(e.to_string()))?;
+    let body = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value = serde_json::from_str(body.trim())
+        .map_err(|e| HostFail::TerminalList(format!("unreadable answer: {e}")))?;
+    match value.get("ok").and_then(|ok| ok.as_bool()) {
+        Some(true) => {
+            let handles = value
+                .pointer("/result/terminals")
+                .and_then(|t| t.as_array())
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| {
+                            row.get("handle")
+                                .and_then(|h| h.as_str())
+                                .map(str::to_string)
+                        })
+                        .collect()
+                })
+                .ok_or_else(|| {
+                    HostFail::TerminalList("the answer names no terminal rows".into())
+                })?;
+            Ok(handles)
+        }
+        // the host answers for the workspace by name: no such workspace
+        // names no terminals, through its own read contract
+        Some(false)
+            if value.pointer("/error/code").and_then(|c| c.as_str())
+                == Some("selector_not_found") =>
+        {
+            Ok(Vec::new())
+        }
+        _ => Err(HostFail::TerminalList(format!(
+            "the host refused the list: {body}"
+        ))),
+    }
+}
+
+/// Ask the host to close every terminal of one exact workspace. The
+/// reply is acceptance of the ask, never confirmed closure - the
+/// verification list is the gate.
+pub fn close_workspace_terminals(dir: &str) -> Result<(), HostFail> {
+    let out = orca(&[
+        "terminal",
+        "close",
+        "--worktree",
+        &format!("path:{dir}"),
+        "--all",
+        "--json",
+    ])
+    .map_err(|e| HostFail::TerminalClose(e.to_string()))?;
+    let body = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value = serde_json::from_str(body.trim())
+        .map_err(|e| HostFail::TerminalClose(format!("unreadable answer: {e}")))?;
+    if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
+        return Ok(());
+    }
+    // a host that already names no such workspace has nothing to close:
+    // its own selector_not_found is the accepted ask
+    if value.pointer("/error/code").and_then(|c| c.as_str()) == Some("selector_not_found") {
+        return Ok(());
+    }
+    Err(HostFail::TerminalClose(format!(
+        "the host refused the close: {body}"
+    )))
+}
+
+/// The workspace's visible presence in the host's own surfaces.
+/// Listed stands when the host names it; VisiblyAbsent stands only on
+/// selector_not_found - the host declaring it names nothing. Any other
+/// answer is uncertainty and refuses.
+#[derive(Debug, PartialEq)]
+pub enum HostPresence {
+    Listed,
+    VisiblyAbsent,
+}
+
+pub fn workspace_visible_presence(dir: &str) -> Result<HostPresence, HostFail> {
+    let out = orca(&[
+        "worktree",
+        "show",
+        "--worktree",
+        &format!("path:{dir}"),
+        "--json",
+    ])
+    .map_err(|e| HostFail::WorkspaceShow(e.to_string()))?;
+    let body = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value = serde_json::from_str(body.trim())
+        .map_err(|e| HostFail::WorkspaceShow(format!("unreadable answer: {e}")))?;
+    match value.get("ok").and_then(|ok| ok.as_bool()) {
+        Some(true) => Ok(HostPresence::Listed),
+        Some(false)
+            if value.pointer("/error/code").and_then(|c| c.as_str())
+                == Some("selector_not_found") =>
+        {
+            Ok(HostPresence::VisiblyAbsent)
+        }
+        _ => Err(HostFail::WorkspaceShow(format!(
+            "the host gave no usable presence answer: {body}"
+        ))),
+    }
 }
 
 #[cfg(test)]

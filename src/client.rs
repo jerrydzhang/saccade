@@ -654,6 +654,79 @@ pub fn change_workspace(
     )
 }
 
+/// The lifecycle controller's client half: clean and restore name the
+/// exact recorded workspace path; the server runs the ordered effects
+/// and lands the completed facts itself.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CleanReply {
+    pub cleaned: bool,
+    pub already_cleaned: bool,
+    pub workspace: WorkspaceBirth,
+    pub verified: Vec<String>,
+    pub records: Vec<StoredRecord>,
+}
+
+pub fn clean_workspace(url: &str, path: &std::path::Path) -> Result<CleanReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/workspace/clean",
+        serde_json::json!({
+            "path": path.display().to_string(),
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RestoreReply {
+    pub restored: bool,
+    pub already_restored: bool,
+    pub reused: bool,
+    pub tip: Option<String>,
+    pub workspace: WorkspaceBirth,
+    pub records: Vec<StoredRecord>,
+}
+
+pub fn restore_workspace(url: &str, path: &std::path::Path) -> Result<RestoreReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/workspace/restore",
+        serde_json::json!({
+            "path": path.display().to_string(),
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ReconcileEntry {
+    pub seq: usize,
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ReconcileReply {
+    pub applied: bool,
+    pub cleaned: Vec<ReconcileEntry>,
+    pub preserved: Vec<ReconcileEntry>,
+    pub conflicts: Vec<ReconcileEntry>,
+    pub records: Vec<StoredRecord>,
+}
+
+/// The one-time cutover verification: dry run by default, recording
+/// only under `--apply`.
+pub fn reconcile_workspaces(url: &str, apply: bool) -> Result<ReconcileReply, ClientFail> {
+    post_json(
+        url,
+        "/api/v1/workspace/reconcile",
+        serde_json::json!({
+            "apply": apply,
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
+}
+
 /// Which incarnations hold a live delivery connection right now: the
 /// activation decision's operational input, never a liveness proof -
 /// absence is not proof a native process exited.

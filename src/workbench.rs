@@ -165,17 +165,29 @@ pub fn snapshot(
             "explanation": view.explanation, "offer": view.offer_num,
         }));
     }
+    // every recorded workspace projects: independent creations and
+    // historical task-bound establishments alike, each with its own
+    // stage - the human-facing list never splits by birth kind
     let workspaces: Vec<Value> = world
-        .workspaces
+        .workspace_births()
         .iter()
-        .map(|(id, context)| {
-            json!({
-                "seq": id.0 .0,
-                "base": context.workspace.base.as_str(),
-                "branch": context.workspace.branch.as_str(),
-                "path": context.workspace.worktree.as_path().display().to_string(),
-                "born_at": context.born_at,
-            })
+        .filter_map(|birth| {
+            let context = world.workspace_facts(*birth)?;
+            Some(json!({
+                "seq": context.birth.0,
+                "base": context.base.as_str(),
+                "branch": context.branch.as_str(),
+                "path": context.worktree.as_path().display().to_string(),
+                "born_at": world
+                    .workspaces
+                    .get(&crate::WorkspaceId(*birth))
+                    .map(|created| created.born_at),
+                "stage": world
+                    .workspace_stage(*birth)
+                    .map(|s| s.as_str())
+                    .unwrap_or("available"),
+                "home": context.home.map(|t| t.0),
+            }))
         })
         .collect();
     let (recent_activity, recently_active_tasks) = home_facts(world, rows)?;
@@ -308,6 +320,8 @@ fn activity_entry(
         | Event::TaskWorkspaceCheckpointed { .. }
         | Event::WorkspaceCreated { .. }
         | Event::WorkspaceChanged { .. }
+        | Event::WorkspaceCleaned { .. }
+        | Event::WorkspaceRestored { .. }
         | Event::IncarnationRegistered { .. }
         | Event::MessageSent { .. }
         | Event::MessageSubmitted { .. } => return Ok(None),

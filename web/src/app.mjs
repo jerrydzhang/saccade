@@ -1556,7 +1556,7 @@ function candidateLabel(item) {
       ? "Provision a new workspace\nThe server cuts a fresh worktree and branch, then the launch is submitted there"
       : item.finderType === "workspace-path"
         ? "Name an existing directory\nType an existing directory on the host; the launch validates it"
-        : `Workspace record ${item.seq}  ${item.branch}\n${item.path}`;
+        : `Workspace record ${item.seq}  ${item.branch}${item.stage === "cleaned" ? "  [cleaned]" : ""}\n${item.path}`;
   }
   if (["tasks", "home"].includes(picker.kind)) {
     if (item.finderType === "task") return `Task t-${item.id}  ${item.name}`;
@@ -1617,7 +1617,7 @@ function highlightPicker() {
       ? "Provision a new workspace\nThe server cuts a fresh worktree and branch (workspace-<token> without a label),\nthen the launch is submitted there. Nothing is claimed, owned, or bound."
       : item.finderType === "workspace-path"
         ? "Name an existing directory\nAn existing directory on the host, typed as an absolute path - the same\nselection the launch door has always taken. The server validates it;\nnothing is created, claimed, owned, or bound."
-        : `record ${item.seq}\nbranch ${item.branch}\nbase ${item.base}\npath ${item.path}`));
+        : `record ${item.seq}\nbranch ${item.branch}\nbase ${item.base}\npath ${item.path}\nstage ${item.stage ?? "available"}`));
   } else host.append(el("pre", item.text ?? item.label));
 }
 

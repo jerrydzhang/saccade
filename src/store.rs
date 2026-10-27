@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -13,10 +14,10 @@ use crate::objects::message::{Message, MessageContext, MessageId, MessageState};
 use crate::objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 use crate::objects::workspace::{
     CreatedWorkspace, CreatedWorkspaceContext, Workspace, WorkspaceChange, WorkspaceContext,
-    WorkspaceId,
+    WorkspaceId, WorkspaceStage, WorkspaceStageFact,
 };
 use crate::types::actor::ActorName;
-use crate::types::pointers::WorktreePath;
+use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
 #[derive(Debug)]
 pub struct FoldError {
@@ -65,6 +66,13 @@ pub enum Reason {
     /// An agent- or human-tier checkpoint names a head the workspace
     /// already left; the explicit door never rewinds.
     CheckpointRewind,
+    /// A lifecycle fact names a record that is no workspace's birth:
+    /// neither an independent creation nor a task-bound establishment.
+    InvalidWorkspaceId,
+    /// A cleanup names a workspace that is already Cleaned, or a
+    /// restoration names one that is Available: the stage is not there
+    /// to move, and no duplicate lifecycle fact lands.
+    WorkspaceStageMismatch,
 }
 
 /// Command-path translation of fold failures into refusals; total over Reason
@@ -87,6 +95,8 @@ impl From<Reason> for Reject {
             Reason::WorkspaceAlreadyExists => Reject::WorkspaceAlreadyExists,
             Reason::WorkspaceMissing => Reject::WorkspaceMissing,
             Reason::CheckpointRewind => Reject::CheckpointRewind,
+            Reason::InvalidWorkspaceId => Reject::InvalidWorkspaceId,
+            Reason::WorkspaceStageMismatch => Reject::WorkspaceStageMismatch,
         }
     }
 }
@@ -132,6 +142,25 @@ impl Context {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RecordId(pub usize);
+
+/// A workspace birth's recorded facts, whichever way it was born: an
+/// independent creation or a historical task-bound establishment. The
+/// birth record's position is the identity; the task home is the
+/// establishment's provenance, never a revival of task binding.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkspaceFacts {
+    pub birth: RecordId,
+    /// The immutable commit the workspace was cut from
+    pub base: GitCommit,
+    /// The branch preserving the work
+    pub branch: GitBranch,
+    /// The workspace's absolute address
+    pub worktree: WorktreePath,
+    /// The establishment's home task; None for an independent creation
+    pub home: Option<TaskId>,
+    /// The stage the workspace object itself carries
+    pub stage: WorkspaceStage,
+}
 
 #[derive(Clone, Debug)]
 pub struct Record {
@@ -237,6 +266,87 @@ impl World {
     /// The message holding this public number, resolved from the fold.
     pub fn message_at_num(&self, n: usize) -> Option<MessageId> {
         self.messages.keys().nth(n).copied()
+    }
+
+    /// A workspace birth's recorded facts, whichever way it was born:
+    /// an independent creation or a historical task-bound
+    /// establishment. The birth record's position is the identity;
+    /// the task home is the establishment's provenance, never a
+    /// revival of task binding.
+    pub fn workspace_facts(&self, birth: RecordId) -> Option<WorkspaceFacts> {
+        if let Some(context) = self.workspaces.get(&WorkspaceId(birth)) {
+            return Some(WorkspaceFacts {
+                birth,
+                base: context.workspace.base.clone(),
+                branch: context.workspace.branch.clone(),
+                worktree: context.workspace.worktree.clone(),
+                home: None,
+                stage: context.workspace.stage,
+            });
+        }
+        self.tasks.iter().enumerate().find_map(|(position, ctx)| {
+            let established = ctx.workspace.as_ref()?;
+            if established.birth != birth {
+                return None;
+            }
+            Some(WorkspaceFacts {
+                birth,
+                base: established.workspace.base.clone(),
+                branch: established.workspace.branch.clone(),
+                worktree: established.workspace.worktree.clone(),
+                home: Some(TaskId(position)),
+                stage: established.workspace.stage,
+            })
+        })
+    }
+
+    /// Every workspace birth recorded at this exact path, in birth
+    /// order. The caller compares canonical forms; two births on one
+    /// path are the caller's ambiguity to refuse.
+    pub fn workspace_births_at(&self, path: &Path) -> Vec<RecordId> {
+        let mut births: Vec<RecordId> = self
+            .workspaces
+            .iter()
+            .filter(|(_, ctx)| ctx.workspace.worktree.as_path() == path)
+            .map(|(id, _)| id.0)
+            .collect();
+        for ctx in &self.tasks {
+            if let Some(established) = &ctx.workspace
+                && established.workspace.worktree.as_path() == path
+            {
+                births.push(established.birth);
+            }
+        }
+        births.sort();
+        births
+    }
+
+    /// Every workspace birth in birth order, both kinds - the
+    /// reconciliation and resolution walks' enumeration.
+    pub fn workspace_births(&self) -> Vec<RecordId> {
+        let mut births: Vec<RecordId> = self.workspaces.keys().map(|id| id.0).collect();
+        for ctx in &self.tasks {
+            if let Some(established) = &ctx.workspace {
+                births.push(established.birth);
+            }
+        }
+        births.sort();
+        births
+    }
+
+    /// The workspace birth's current lifecycle stage, owned by the
+    /// workspace object; None when the record names no workspace birth.
+    pub fn workspace_stage(&self, birth: RecordId) -> Option<WorkspaceStage> {
+        self.workspace_facts(birth).map(|facts| facts.stage)
+    }
+
+    /// The recorded workspace at this exact path whose stage is
+    /// Cleaned, when one stands: the ordinary-use guard's whole
+    /// question. Unrecognized directories name nothing.
+    pub fn cleaned_workspace_at(&self, path: &Path) -> Option<RecordId> {
+        self.workspace_births_at(path)
+            .into_iter()
+            .find(|birth| self.workspace_stage(*birth) == Some(WorkspaceStage::Cleaned))
     }
 
     /// Only valid path for world mutation
@@ -591,15 +701,19 @@ impl World {
                 if task_ctx.workspace.is_some() {
                     return Err(Reason::WorkspaceAlreadyExists);
                 }
+                // the object carries its own stage, born Available; the
+                // birth itself is the fact, so the context names none
                 task_ctx.workspace = Some(WorkspaceContext {
                     workspace: Workspace {
                         base: base.clone(),
                         branch: branch.clone(),
                         checkpoint: base.clone(),
                         worktree: worktree.clone(),
+                        stage: WorkspaceStage::Available,
                     },
                     birth: record.id,
                     heads: vec![base.clone()],
+                    stage_fact: None,
                 });
                 // the same birth is the historical attribution identity:
                 // one record position, both names. It carries no native
@@ -657,8 +771,10 @@ impl World {
                             base: base.clone(),
                             branch: branch.clone(),
                             worktree: worktree.clone(),
+                            stage: WorkspaceStage::Available,
                         },
                         born_at: record.timestamp,
+                        stage_fact: None,
                     },
                 );
             }
@@ -686,6 +802,42 @@ impl World {
                         at: record.timestamp,
                     },
                 );
+            }
+            Event::WorkspaceCleaned { workspace } | Event::WorkspaceRestored { workspace } => {
+                // the fact references an existing workspace birth of
+                // either kind: the store keeps only the existence guard
+                // and the provenance landing - the stage's transition
+                // is the object's own pure table, and the setting
+                // fact's record and time live on the context
+                if let Some(context) = self.workspaces.get_mut(&WorkspaceId(workspace)) {
+                    context.workspace.stage = context
+                        .workspace
+                        .stage
+                        .transition(&record.event)
+                        .ok_or(Reason::WorkspaceStageMismatch)?;
+                    context.stage_fact = Some(WorkspaceStageFact {
+                        record: record.id,
+                        at: record.timestamp,
+                    });
+                } else {
+                    let established = self
+                        .tasks
+                        .iter_mut()
+                        .find_map(|ctx| ctx.workspace.as_mut().filter(|w| w.birth == workspace))
+                        .ok_or(Reason::InvalidWorkspaceId)?;
+                    established.workspace.stage = established
+                        .workspace
+                        .stage
+                        .transition(&record.event)
+                        .ok_or(Reason::WorkspaceStageMismatch)?;
+                    established.stage_fact = Some(WorkspaceStageFact {
+                        record: record.id,
+                        at: record.timestamp,
+                    });
+                }
+                // the fact rides no task home, like every machinery
+                // workspace fact
+                self.provenance.insert(record.id, None);
             }
             // Incarnation and message events
             Event::IncarnationRegistered {
@@ -2634,6 +2786,7 @@ mod test {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
+                stage: crate::WorkspaceStage::Available,
             }
         );
         // several sessions may select one workspace: a second creation
@@ -2648,6 +2801,231 @@ mod test {
             assert!(matches!(refused, Err(Reject::HumanOnly)));
         }
         assert_eq!(log.records().len(), 3);
+    }
+
+    /// The lifecycle stage rides the workspace birth, both birth kinds
+    /// alike: Available at birth, Cleaned on the completed fact,
+    /// Available again on restoration, and every cycle's fact kept.
+    /// Historical attribution stands beside the stage, untouched.
+    #[test]
+    fn the_lifecycle_rides_the_workspace_birth_across_both_kinds() {
+        let mut log = Log::new();
+        log.execute_system(created("feature-abc123ab", "/repo/wt/feature-abc123ab"), 1)
+            .unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("establish a lineage"),
+            },
+            2,
+        )
+        .unwrap();
+        log.execute_system(
+            Command::EstablishWorkspace {
+                task_id: TaskId(0),
+                base: GitCommit::new("abc123".into()).unwrap(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            3,
+        )
+        .unwrap();
+
+        let world = log.world();
+        let created_birth = RecordId(0);
+        let established_birth = RecordId(2);
+        assert_eq!(
+            world.workspace_stage(created_birth),
+            Some(crate::WorkspaceStage::Available)
+        );
+        assert_eq!(
+            world.workspace_stage(established_birth),
+            Some(crate::WorkspaceStage::Available)
+        );
+        assert_eq!(
+            world.workspace_births_at(Path::new("/repo/wt/feature-abc123ab")),
+            vec![created_birth]
+        );
+        assert_eq!(
+            world.workspace_births_at(Path::new("/repo/wt/t-0")),
+            vec![established_birth]
+        );
+        let facts = world.workspace_facts(created_birth).unwrap();
+        assert_eq!(facts.home, None);
+        let facts = world.workspace_facts(established_birth).unwrap();
+        assert_eq!(facts.home, Some(TaskId(0)));
+        assert_eq!(facts.branch.as_str(), "saccade/t-0");
+        // the historical attribution identity stands beside the stage
+        assert!(
+            world
+                .incarnations
+                .contains_key(&IncarnationId(established_birth))
+        );
+        assert_eq!(
+            world.tasks[0].workspace.as_ref().unwrap().birth,
+            established_birth
+        );
+
+        // the created one cycles: clean, restore, clean again
+        log.execute_system(
+            Command::CleanWorkspace {
+                workspace: created_birth,
+            },
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().workspace_stage(created_birth),
+            Some(crate::WorkspaceStage::Cleaned)
+        );
+        // the lifecycle fact rides no task home, like every machinery
+        // workspace fact
+        assert_eq!(log.world().provenance[&RecordId(3)], None);
+        assert_eq!(
+            log.world()
+                .cleaned_workspace_at(Path::new("/repo/wt/feature-abc123ab")),
+            Some(created_birth)
+        );
+        log.execute_system(
+            Command::RestoreWorkspace {
+                workspace: created_birth,
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().workspace_stage(created_birth),
+            Some(crate::WorkspaceStage::Available)
+        );
+        assert_eq!(
+            log.world()
+                .cleaned_workspace_at(Path::new("/repo/wt/feature-abc123ab")),
+            None
+        );
+        log.execute_system(
+            Command::CleanWorkspace {
+                workspace: created_birth,
+            },
+            6,
+        )
+        .unwrap();
+        // earlier facts stay in the log; the stage is the latest's
+        assert_eq!(log.records().len(), 6);
+
+        // the established one cycles through the same door
+        log.execute_system(
+            Command::CleanWorkspace {
+                workspace: established_birth,
+            },
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().workspace_stage(established_birth),
+            Some(crate::WorkspaceStage::Cleaned)
+        );
+        // the task's workspace lineage is untouched by the cleanup
+        assert_eq!(
+            log.world().tasks[0].workspace.as_ref().unwrap().birth,
+            established_birth
+        );
+        log.execute_system(
+            Command::RestoreWorkspace {
+                workspace: established_birth,
+            },
+            8,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().workspace_stage(established_birth),
+            Some(crate::WorkspaceStage::Available)
+        );
+    }
+
+    /// The lifecycle gates know what they move: an unknown birth
+    /// refuses, a duplicate cleanup refuses, restoring an Available
+    /// workspace is the held seam, and the door is machinery-only.
+    #[test]
+    fn the_lifecycle_gates_know_what_they_move() {
+        let mut log = Log::new();
+        log.execute_system(created("feature-abc123ab", "/repo/wt/feature-abc123ab"), 1)
+            .unwrap();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("carry a merge through the worktree"),
+            },
+            2,
+        )
+        .unwrap();
+        let birth = RecordId(0);
+        let task_birth = RecordId(1);
+
+        // a record that is no workspace's birth - a task birth - refuses
+        let refused = log.execute_system(
+            Command::CleanWorkspace {
+                workspace: task_birth,
+            },
+            3,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidWorkspaceId)));
+        let refused = log.execute_system(
+            Command::CleanWorkspace {
+                workspace: RecordId(99),
+            },
+            3,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidWorkspaceId)));
+
+        // the cleanup lands once; the duplicate stage move refuses
+        log.execute_system(Command::CleanWorkspace { workspace: birth }, 4)
+            .unwrap();
+        let refused = log.execute_system(Command::CleanWorkspace { workspace: birth }, 5);
+        assert!(matches!(refused, Err(Reject::WorkspaceStageMismatch)));
+
+        // a fresh workspace stands Available: restoration is idempotent
+        // by postcondition - the fact lands and the stage stays what it
+        // already gives, with the latest fact named on the lifecycle
+        log.execute_system(
+            created("workspace-deadbeef", "/repo/wt/workspace-deadbeef"),
+            6,
+        )
+        .unwrap();
+        log.execute_system(
+            Command::RestoreWorkspace {
+                workspace: RecordId(3),
+            },
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().workspace_stage(RecordId(3)),
+            Some(crate::WorkspaceStage::Available)
+        );
+        // the latest fact's provenance lives on the context
+        assert_eq!(
+            log.world().workspaces[&crate::WorkspaceId(RecordId(3))]
+                .stage_fact
+                .as_ref()
+                .map(|fact| fact.record),
+            Some(RecordId(4))
+        );
+
+        // judgment tiers refuse the door: the completed facts are the
+        // machinery's, never caller-authored
+        for ctx in [human(), agent()] {
+            let refused = log.execute(
+                ctx.clone(),
+                Command::CleanWorkspace {
+                    workspace: RecordId(3),
+                },
+                8,
+            );
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
+            let refused = log.execute(ctx, Command::RestoreWorkspace { workspace: birth }, 8);
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
+        }
+        assert_eq!(log.records().len(), 5);
     }
 
     /// The confirmed change names a native incarnation and lands as a

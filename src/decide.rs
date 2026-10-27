@@ -26,9 +26,13 @@ fn required_tier(event: &Event) -> Authority {
         // creation, the native registration, and the recipient's
         // delivery record. The confirmed change is machinery's act too:
         // it lands after the physical retarget, never from a caller.
+        // Cleanup and restoration land only after their effects verified:
+        // the same effect-only authority, never caller-authored facts.
         Event::WorkspaceEstablished { .. }
         | Event::WorkspaceCreated { .. }
         | Event::WorkspaceChanged { .. }
+        | Event::WorkspaceCleaned { .. }
+        | Event::WorkspaceRestored { .. }
         | Event::IncarnationRegistered { .. }
         | Event::MessageSubmitted { .. } => Authority::Require(Tier::System),
     }
@@ -102,6 +106,12 @@ pub fn decide(command: Command) -> Vec<Event> {
             incarnation,
             worktree,
         }],
+        Command::CleanWorkspace { workspace } => {
+            vec![Event::WorkspaceCleaned { workspace }]
+        }
+        Command::RestoreWorkspace { workspace } => {
+            vec![Event::WorkspaceRestored { workspace }]
+        }
         Command::RegisterIncarnation {
             native_id,
             saved_session,
@@ -165,7 +175,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 20] = [
+        let events: [(Event, Authority); 22] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -307,6 +317,20 @@ mod test {
                 Event::WorkspaceChanged {
                     incarnation: IncarnationId(RecordId(0)),
                     worktree: WorktreePath::new("/wt".into()).unwrap(),
+                },
+                Require(Tier::System),
+            ),
+            // Cleanup and restoration land only after their effects
+            // verified: the machinery's own completed facts.
+            (
+                Event::WorkspaceCleaned {
+                    workspace: RecordId(0),
+                },
+                Require(Tier::System),
+            ),
+            (
+                Event::WorkspaceRestored {
+                    workspace: RecordId(0),
                 },
                 Require(Tier::System),
             ),

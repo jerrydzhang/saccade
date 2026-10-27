@@ -542,6 +542,11 @@ impl ApiFail {
                     | HostFail::NoHandle => StatusCode::INTERNAL_SERVER_ERROR,
                     HostFail::Undiscovered(_) => StatusCode::GATEWAY_TIMEOUT,
                     HostFail::CreateRefused(_) => StatusCode::BAD_GATEWAY,
+                    // lifecycle host answers the server could not read:
+                    // the environment's break, never the caller's input
+                    HostFail::TerminalList(_)
+                    | HostFail::TerminalClose(_)
+                    | HostFail::WorkspaceShow(_) => StatusCode::BAD_GATEWAY,
                 };
                 (
                     status,
@@ -683,6 +688,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/records", get(records))
         .route("/api/v1/workspace/create", post(workspace_create))
         .route("/api/v1/workspace/change", post(workspace_change))
+        .route("/api/v1/workspace/clean", post(workspace_clean))
+        .route("/api/v1/workspace/restore", post(workspace_restore))
+        .route("/api/v1/workspace/reconcile", post(workspace_reconcile))
         .route("/api/v1/native/attach", post(native_attach))
         .route("/api/v1/native/bridge", get(native_bridge))
         .route("/api/v1/native/launch", get(native_launch))
@@ -1090,6 +1098,52 @@ fn launch_operation(
     let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
         return Err(ApiFail::NoRepo);
     };
+    // a recorded Cleaned workspace takes no new sessions until an
+    // explicit restore; unrelated directories and primary stay valid
+    {
+        let conn = db::open_read(app.db_path()).map_err(|e| ApiFail::Db(e.to_string()))?;
+        let world = match db::load(&conn)
+            .map_err(|e| ApiFail::Db(e.to_string()))?
+            .state
+        {
+            db::LoadState::Full(world) => world,
+            db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
+        };
+        let canonical =
+            crate::workspace::canonical_dir(Path::new(path)).map_err(ApiFail::Workspace)?;
+        match crate::workspace::resolve_workspace_address(&world, Path::new(path))
+            .map_err(ApiFail::Workspace)?
+        {
+            crate::workspace::LifecycleAddress::Single(birth) => {
+                if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Cleaned) {
+                    return Err(ApiFail::Refused(
+                        StatusCode::CONFLICT,
+                        "workspace_cleaned",
+                        format!(
+                            "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
+                            canonical.display(),
+                            birth.0,
+                            canonical.display()
+                        ),
+                    ));
+                }
+            }
+            // several stored paths over one directory: the ordinary-use
+            // guard refuses rather than picking an identity
+            crate::workspace::LifecycleAddress::Ambiguous(births) => {
+                return Err(ApiFail::Refused(
+                    StatusCode::CONFLICT,
+                    "workspace_ambiguous_path",
+                    format!(
+                        "{} is the recorded path of {} workspace births; resolve their history by hand before launching there",
+                        canonical.display(),
+                        births.len()
+                    ),
+                ));
+            }
+            crate::workspace::LifecycleAddress::Unrecorded => {}
+        }
+    }
     let label = crate::host::command_label(&pi.display().to_string());
     let mut routing = format!(
         "SACCADE_ACTOR={} SACCADE_SERVER={} SACCADE_REPO={}",
@@ -1325,6 +1379,40 @@ fn change_operation(
             ),
         ));
     }
+    // a recorded Cleaned workspace blocks ordinary use as a switch
+    // target until an explicit restore; unrelated directories pass
+    let target_canonical =
+        crate::workspace::canonical_dir(target.as_path()).map_err(ApiFail::Workspace)?;
+    match crate::workspace::resolve_workspace_address(&world, target.as_path())
+        .map_err(ApiFail::Workspace)?
+    {
+        crate::workspace::LifecycleAddress::Single(birth) => {
+            if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Cleaned) {
+                return Err(ApiFail::Refused(
+                    StatusCode::CONFLICT,
+                    "workspace_cleaned",
+                    format!(
+                        "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
+                        target_canonical.display(),
+                        birth.0,
+                        target_canonical.display()
+                    ),
+                ));
+            }
+        }
+        crate::workspace::LifecycleAddress::Ambiguous(births) => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_ambiguous_path",
+                format!(
+                    "{} is the recorded path of {} workspace births; resolve their history by hand before switching there",
+                    target_canonical.display(),
+                    births.len()
+                ),
+            ));
+        }
+        crate::workspace::LifecycleAddress::Unrecorded => {}
+    }
 
     // the session's activation lock: automatic mail activation and
     // this change serialize on the very same file, so neither can
@@ -1437,6 +1525,927 @@ async fn workspace_change(State(app): State<AppState>, body: Bytes) -> Response 
     let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = change_operation(&app, &mut guard, request.incarnation, &request.to);
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+// -- the workspace lifecycle controller ---------------------------------
+// Clean and restore: the ratified reversible lifecycle. The ordered
+// clean contract runs can-clean checks, terminal close, terminal
+// verification, git worktree remove (branch retained), checkout and
+// worktree absence verification, and the host's visible absence,
+// and only then lands the Cleaned fact. Restore establishes or
+// validates the matching checkout and lands Restored; it launches no
+// session and creates no terminal. Reconciliation is the one-time
+// cutover verification: absent resources record Cleaned now, present
+// ones stand preserved, conflicts surface - never a classification.
+
+/// The recorded facts of the lifecycle's target: the birth identity
+/// and what the birth carried.
+#[derive(Serialize)]
+pub struct LifecycleWorkspace {
+    seq: usize,
+    base: String,
+    branch: String,
+    path: String,
+    /// The establishment's home task, when the birth was task-bound
+    home: Option<usize>,
+}
+
+impl LifecycleWorkspace {
+    fn of(facts: crate::store::WorkspaceFacts) -> Self {
+        LifecycleWorkspace {
+            seq: facts.birth.0,
+            base: facts.base.as_str().to_string(),
+            branch: facts.branch.as_str().to_string(),
+            path: facts.worktree.as_path().display().to_string(),
+            home: facts.home.map(|t| t.0),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct CleanReply {
+    /// A Cleaned fact landed with this call
+    pub cleaned: bool,
+    /// Recorded cleaned and every verified resource already absent:
+    /// idempotent success, no duplicate transition
+    pub already_cleaned: bool,
+    pub workspace: LifecycleWorkspace,
+    /// The honest step list: what the door asked, what it verified,
+    /// and any host ask that failed before the list confirmed closure
+    pub verified: Vec<String>,
+    pub records: Vec<StoredRecord>,
+}
+
+#[derive(Deserialize)]
+struct CleanRequest {
+    /// The exact recorded workspace path; never inferred from a task
+    /// or incarnation
+    path: String,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RestoreReply {
+    pub restored: bool,
+    /// Recorded Available with the matching registered checkout
+    /// already standing: no-op success, no duplicate restoration fact
+    pub already_restored: bool,
+    /// The matching registered worktree stood and was reused as-is,
+    /// local changes preserved; nothing was checked out
+    pub reused: bool,
+    /// The branch's current local tip after restoration, when git
+    /// named one; never a reset target, always a report
+    pub tip: Option<String>,
+    pub workspace: LifecycleWorkspace,
+    pub records: Vec<StoredRecord>,
+}
+
+#[derive(Deserialize)]
+struct RestoreRequest {
+    path: String,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ReconcileEntry {
+    pub seq: usize,
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Serialize)]
+pub struct ReconcileReply {
+    /// Whether the verified Cleaned facts were recorded (or a dry run)
+    pub applied: bool,
+    pub cleaned: Vec<ReconcileEntry>,
+    pub preserved: Vec<ReconcileEntry>,
+    pub conflicts: Vec<ReconcileEntry>,
+    pub records: Vec<StoredRecord>,
+}
+
+#[derive(Deserialize)]
+struct ReconcileRequest {
+    /// Record the verified Cleaned facts; without this the door only
+    /// verifies and reports
+    #[serde(default)]
+    apply: bool,
+    #[serde(default)]
+    client: Option<String>,
+}
+
+/// The world fold plus the canonical target resolution every lifecycle
+/// door shares: exact recorded workspace births at this path, primary
+/// and unrecognized directories refused.
+fn lifecycle_target(
+    inner: &Inner,
+    path_str: &str,
+) -> Result<(crate::store::World, crate::store::WorkspaceFacts), ApiFail> {
+    let world = match db::load(&inner.conn)
+        .map_err(|e| ApiFail::Db(e.to_string()))?
+        .state
+    {
+        db::LoadState::Full(world) => world,
+        db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
+    };
+    // the canonical form names the directory in refusal messages; the
+    // resolver owns the addressing decision
+    let canonical = workspace::canonical_dir(Path::new(path_str)).map_err(ApiFail::Workspace)?;
+    let facts = match workspace::resolve_workspace_address(&world, Path::new(path_str))
+        .map_err(ApiFail::Workspace)?
+    {
+        workspace::LifecycleAddress::Single(birth) => world
+            .workspace_facts(birth)
+            .expect("the resolver named a recorded birth"),
+        workspace::LifecycleAddress::Ambiguous(births) => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_ambiguous_path",
+                format!(
+                    "{} is the recorded path of {} workspace births ({}); resolve their history by hand before any lifecycle act",
+                    canonical.display(),
+                    births.len(),
+                    births
+                        .iter()
+                        .map(|b| b.0.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+        workspace::LifecycleAddress::Unrecorded => {
+            return Err(ApiFail::Refused(
+                StatusCode::BAD_REQUEST,
+                "workspace_not_recorded",
+                format!(
+                    "{} names no recorded workspace birth; clean and restore select an exact recorded workspace, never a primary checkout or an unrecognized directory",
+                    canonical.display()
+                ),
+            ));
+        }
+    };
+    Ok((world, facts))
+}
+
+/// The bounded wait for one verified host answer: a poll with a
+/// deadline. Uncertainty at the bound refuses - arbitrary host errors
+/// are never read as absence or closure.
+fn verified_within<H, T>(mut probe: H, detail: &str) -> Result<T, ApiFail>
+where
+    H: FnMut() -> Result<T, crate::host::HostFail>,
+    T: PartialEq,
+{
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match probe() {
+            Ok(value) => return Ok(value),
+            Err(_) if std::time::Instant::now() >= deadline => {
+                return Err(ApiFail::Refused(
+                    StatusCode::BAD_GATEWAY,
+                    "workspace_host_unverified",
+                    format!(
+                        "the host gave no verified answer for {detail} within its bound; nothing further was done"
+                    ),
+                ));
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(500)),
+        }
+    }
+}
+
+/// One completed cleanup: the ordered contract, every step honest.
+#[allow(clippy::too_many_lines)]
+fn clean_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    path_str: &str,
+) -> Result<CleanReply, ApiFail> {
+    let ServerState::Ready(inner) = guard else {
+        let ServerState::Degraded(reason, _) = guard else {
+            unreachable!("the state is one of the two")
+        };
+        return Err(ApiFail::Degraded(reason.clone()));
+    };
+    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
+        return Err(ApiFail::NoRepo);
+    };
+    let (world, facts) = lifecycle_target(inner, path_str)?;
+    let birth = facts.birth;
+    let canonical =
+        workspace::canonical_dir(facts.worktree.as_path()).map_err(ApiFail::Workspace)?;
+    let dir_str = canonical.display().to_string();
+    if canonical == repo_root {
+        return Err(ApiFail::Refused(
+            StatusCode::BAD_REQUEST,
+            "workspace_primary_refused",
+            format!(
+                "{} is the primary checkout; cleanup never touches it",
+                canonical.display()
+            ),
+        ));
+    }
+    let stage = world
+        .workspace_stage(birth)
+        .expect("a recorded birth holds a stage");
+    let mut registrations =
+        workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
+    let registered = registrations.get(&canonical).cloned();
+    let present = canonical.is_dir();
+
+    let mut verified: Vec<String> = Vec::new();
+    // recorded cleaned and every resource absent is idempotent success:
+    // no duplicate transition, verified through the same doors the
+    // cleanup itself ran - terminal list and visible absence alike
+    if stage == crate::WorkspaceStage::Cleaned {
+        if present || registered.is_some() {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_cleaned_mismatch",
+                format!(
+                    "{} is recorded Cleaned but {} stands; a recorded cleanup never authorizes deleting unexpected work - inspect it by hand",
+                    dir_str,
+                    if present {
+                        "a directory"
+                    } else {
+                        "a git worktree registration"
+                    }
+                ),
+            ));
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match crate::host::workspace_terminals(&dir_str) {
+                Ok(terminals) if terminals.is_empty() => {
+                    verified.push("verified: the host names no terminals for the workspace".into());
+                    break;
+                }
+                Ok(terminals) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(ApiFail::Refused(
+                            StatusCode::CONFLICT,
+                            "workspace_terminals_open",
+                            format!(
+                                "the host names {} live terminal(s) at a workspace recorded Cleaned; the recorded closure does not hold - inspect and retry",
+                                terminals.len()
+                            ),
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                Err(e) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(ApiFail::Refused(
+                            StatusCode::BAD_GATEWAY,
+                            "workspace_host_unverified",
+                            format!(
+                                "terminal state unverified at a workspace recorded Cleaned: {e}; the idempotence answer names only what verified - retry when the host answers"
+                            ),
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        }
+        match verified_within(
+            || crate::host::workspace_visible_presence(&dir_str),
+            &format!("visible absence of {dir_str}"),
+        )? {
+            crate::host::HostPresence::VisiblyAbsent => {
+                verified.push(format!(
+                    "verified: the host names no workspace at {dir_str}"
+                ));
+            }
+            crate::host::HostPresence::Listed => {
+                return Err(ApiFail::Refused(
+                    StatusCode::CONFLICT,
+                    "workspace_still_listed",
+                    format!(
+                        "{} is recorded Cleaned but the host still lists a workspace there; the recorded closure does not hold - inspect and retry",
+                        dir_str
+                    ),
+                ));
+            }
+        }
+        return Ok(CleanReply {
+            cleaned: false,
+            already_cleaned: true,
+            workspace: LifecycleWorkspace::of(facts),
+            verified,
+            records: Vec::new(),
+        });
+    }
+
+    let destructive = registered.is_some();
+    // a stale git registration at a recorded path is named, never
+    // pruned by a door: git's own repair stays a human act
+    if registered.is_some() && !canonical.is_dir() {
+        return Err(ApiFail::Refused(
+            StatusCode::CONFLICT,
+            "workspace_checkout_mismatch",
+            format!(
+                "git still registers a worktree at {} whose directory is gone; cleanup refuses the stale registration and never prunes it - inspect it and run git worktree prune by hand",
+                dir_str
+            ),
+        ));
+    }
+    if destructive {
+        // the retained branch is the restore contract's foundation: a
+        // missing branch refuses the destructive act before anything runs
+        if workspace::branch_tip(&repo_root, &facts.branch)
+            .map_err(ApiFail::Workspace)?
+            .is_none()
+        {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_branch_missing",
+                format!(
+                    "the recorded branch {} holds no local tip; a cleanup that would remove its checkout refuses, and restore would refuse too",
+                    facts.branch.as_str()
+                ),
+            ));
+        }
+        // work preservation: staged, unstaged, and untracked changes
+        // refuse the whole door before any host or git act
+        if let Some(detail) = workspace::preserved_work(&canonical).map_err(ApiFail::Workspace)? {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_work_present",
+                format!(
+                    "{} holds staged, unstaged, or untracked work that cleanup refuses to remove:\n{}",
+                    dir_str, detail
+                ),
+            ));
+        }
+        verified.push(
+            "can-clean: recorded Available, branch present, no staged, unstaged, or untracked work"
+                .into(),
+        );
+    } else if present {
+        // bytes at the recorded path are not the checkout: a probe
+        // finding them neither restores the identity nor deletes them
+        return Err(ApiFail::Refused(
+            StatusCode::CONFLICT,
+            "workspace_checkout_mismatch",
+            format!(
+                "{} holds a directory git does not register as this repo's worktree; cleanup deletes no unexpected work - inspect it by hand",
+                dir_str
+            ),
+        ));
+    } else {
+        verified.push("can-clean: recorded Available, checkout already absent".into());
+    }
+
+    // the host stage: ask for closure, then verify the list - accepted
+    // host input is never treated as confirmed closure
+    if let Err(e) = crate::host::close_workspace_terminals(&dir_str) {
+        verified.push(format!(
+            "terminal close ask failed ({}); the verification list decides",
+            e
+        ));
+    } else {
+        verified.push("asked the host to close the workspace's terminals".into());
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match crate::host::workspace_terminals(&dir_str) {
+            Ok(terminals) if terminals.is_empty() => {
+                verified.push("verified: the host names no terminals for the workspace".into());
+                break;
+            }
+            Ok(terminals) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ApiFail::Refused(
+                        StatusCode::CONFLICT,
+                        "workspace_terminals_open",
+                        format!(
+                            "the host still names {} live terminal(s) for {}; no checkout removal ran",
+                            terminals.len(),
+                            dir_str
+                        ),
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ApiFail::Refused(
+                        StatusCode::BAD_GATEWAY,
+                        "workspace_host_unverified",
+                        format!(
+                            "terminal closure is unverified: {e}; no checkout removal ran - retry clean when the host answers"
+                        ),
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+
+    // the checkout removal: git's normal protections, the branch and
+    // every commit on it retained; an already-absent checkout satisfies
+    if destructive {
+        workspace::remove_checkout(&repo_root, &canonical).map_err(ApiFail::Workspace)?;
+        verified.push(format!(
+            "removed the checkout with git worktree remove; branch {} retained",
+            facts.branch.as_str()
+        ));
+    }
+
+    // absence: the path is gone and git no longer registers it
+    if canonical.exists() {
+        return Err(ApiFail::Refused(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "workspace_absence_unverified",
+            format!(
+                "{} still exists after the removal attempt; the record lands only on verified absence - inspect and retry",
+                dir_str
+            ),
+        ));
+    }
+    registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
+    if registrations.contains_key(&canonical) {
+        return Err(ApiFail::Refused(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "workspace_absence_unverified",
+            format!(
+                "git still registers a worktree at {} after the removal attempt; the record lands only on verified absence - inspect and retry",
+                dir_str
+            ),
+        ));
+    }
+    verified.push("verified: the checkout is gone and git registers no worktree there".into());
+
+    // the host's visible absence, after the git removal: the host's
+    // own read contract, never assumed from an earlier step
+    match verified_within(
+        || crate::host::workspace_visible_presence(&dir_str),
+        &format!("visible absence of {dir_str}"),
+    )? {
+        crate::host::HostPresence::VisiblyAbsent => {
+            verified.push("verified: the host names no workspace there".into());
+        }
+        crate::host::HostPresence::Listed => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_still_listed",
+                format!(
+                    "the host still lists a workspace at {} after the checkout removal; the record lands only on visible absence - inspect and retry",
+                    dir_str
+                ),
+            ));
+        }
+    }
+
+    // every step verified: the completed fact lands, machinery-authored
+    let drafts = vec![db::RecordDraft {
+        context: Context::system(),
+        event: Event::WorkspaceCleaned { workspace: birth },
+    }];
+    match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
+        Ok(records) => Ok(CleanReply {
+            cleaned: true,
+            already_cleaned: false,
+            workspace: LifecycleWorkspace::of(facts),
+            verified,
+            records,
+        }),
+        Err(ExecuteFail::Reject(crate::Reject::WorkspaceStageMismatch)) => {
+            // a concurrent door recorded the same completion: the
+            // resources are verified absent either way - idempotent
+            Ok(CleanReply {
+                cleaned: false,
+                already_cleaned: true,
+                workspace: LifecycleWorkspace::of(facts),
+                verified,
+                records: Vec::new(),
+            })
+        }
+        Err(e) => Err(ApiFail::Refused(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage",
+            format!(
+                "every cleanup step verified but the Cleaned fact could not land: {e}; the resources stand absent - retry clean to record"
+            ),
+        )),
+    }
+}
+
+/// One completed restoration: establish or validate the matching
+/// checkout, then record. No terminal, no session, no incarnation.
+fn restore_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    path_str: &str,
+) -> Result<RestoreReply, ApiFail> {
+    let ServerState::Ready(inner) = guard else {
+        let ServerState::Degraded(reason, _) = guard else {
+            unreachable!("the state is one of the two")
+        };
+        return Err(ApiFail::Degraded(reason.clone()));
+    };
+    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
+        return Err(ApiFail::NoRepo);
+    };
+    let (world, facts) = lifecycle_target(inner, path_str)?;
+    let birth = facts.birth;
+    let canonical =
+        workspace::canonical_dir(facts.worktree.as_path()).map_err(ApiFail::Workspace)?;
+    let dir_str = canonical.display().to_string();
+    let registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
+    let registered = registrations.get(&canonical).cloned();
+    // a git registration whose directory is gone restores and reuses
+    // nothing, at either stage: a stale admin entry is named as the
+    // mismatch it is, and git's own repair stays a human act - nothing
+    // counts as a matching checkout without the directory standing
+    if registered.is_some() && !canonical.is_dir() {
+        return Err(ApiFail::Refused(
+            StatusCode::CONFLICT,
+            "workspace_checkout_mismatch",
+            format!(
+                "git still registers a worktree at {} whose directory is gone; a stale registration neither restores nor reuses - inspect it and run git worktree prune by hand",
+                dir_str
+            ),
+        ));
+    }
+
+    // the matching registered checkout standing on an Available
+    // workspace is no-op success: no duplicate restoration fact lands,
+    // and the local changes it holds stand untouched. The absent case
+    // is not special: restoration is idempotent by postcondition, so
+    // an Available workspace with no checkout recreates it below under
+    // the same safety checks and records the actual fact. The safety
+    // checks hold at both stages - the other shapes are mismatches.
+    if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Available)
+        && matches!(&registered, Some(Some(b)) if b.as_str() == facts.branch.as_str())
+        && canonical.is_dir()
+    {
+        let tip = workspace::branch_tip(&repo_root, &facts.branch)
+            .map_err(ApiFail::Workspace)?
+            .map(|c| c.as_str().to_string());
+        return Ok(RestoreReply {
+            restored: false,
+            already_restored: true,
+            reused: true,
+            tip,
+            workspace: LifecycleWorkspace::of(facts),
+            records: Vec::new(),
+        });
+    }
+    if workspace::branch_tip(&repo_root, &facts.branch)
+        .map_err(ApiFail::Workspace)?
+        .is_none()
+    {
+        return Err(ApiFail::Refused(
+            StatusCode::CONFLICT,
+            "workspace_branch_missing",
+            format!(
+                "the recorded branch {} holds no local tip; restoration refuses - the branch is never reconstructed from a base or a remote",
+                facts.branch.as_str()
+            ),
+        ));
+    }
+    let (reused, tip) = match registered {
+        Some(Some(checked_out)) if checked_out == facts.branch => {
+            // the matching worktree stands: reuse as-is, local changes
+            // preserved, no checkout, no reset - the tip is git's own
+            let tip = workspace::branch_tip(&repo_root, &facts.branch)
+                .map_err(ApiFail::Workspace)?
+                .map(|c| c.as_str().to_string());
+            (true, tip)
+        }
+        Some(Some(checked_out)) => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_checkout_mismatch",
+                format!(
+                    "{} is registered on branch {}, not the recorded {}; no forced checkout, reset, or overwrite runs",
+                    dir_str,
+                    checked_out.as_str(),
+                    facts.branch.as_str()
+                ),
+            ));
+        }
+        Some(None) => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_checkout_mismatch",
+                format!(
+                    "{} is registered without a branch (bare or detached); restoration matches a named branch and runs nothing",
+                    dir_str
+                ),
+            ));
+        }
+        None if canonical.exists() => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_checkout_mismatch",
+                format!(
+                    "{} holds a directory git does not register as this repo's worktree; restoration overwrites nothing - inspect it by hand",
+                    dir_str
+                ),
+            ));
+        }
+        None => {
+            // absent path: recreate at the branch's current local tip
+            // under git's normal protections - a branch already checked
+            // out elsewhere refuses, as does a missing-but-registered
+            // worktree at the path
+            workspace::add_checkout(&repo_root, &canonical, &facts.branch)
+                .map_err(ApiFail::Workspace)?;
+            let tip = workspace::branch_tip(&repo_root, &facts.branch)
+                .map_err(ApiFail::Workspace)?
+                .map(|c| c.as_str().to_string());
+            (false, tip)
+        }
+    };
+    let drafts = vec![db::RecordDraft {
+        context: Context::system(),
+        event: Event::WorkspaceRestored { workspace: birth },
+    }];
+    match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
+        Ok(records) => Ok(RestoreReply {
+            restored: true,
+            already_restored: false,
+            reused,
+            tip,
+            workspace: LifecycleWorkspace::of(facts),
+            records,
+        }),
+        Err(e) => Err(ApiFail::Refused(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "storage",
+            format!(
+                "the checkout at {} stands restored but the Restored fact could not land: {e}; the checkout is real - retry restore to record",
+                dir_str
+            ),
+        )),
+    }
+}
+
+/// The one-time cutover verification over every recorded workspace:
+/// absent resources record Cleaned now, matching present ones stand
+/// preserved, everything uncertain or conflicting surfaces. Never a
+/// deletion, never a terminal close, never an age classification.
+fn reconcile_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    apply: bool,
+) -> Result<ReconcileReply, ApiFail> {
+    let ServerState::Ready(inner) = guard else {
+        let ServerState::Degraded(reason, _) = guard else {
+            unreachable!("the state is one of the two")
+        };
+        return Err(ApiFail::Degraded(reason.clone()));
+    };
+    let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
+        return Err(ApiFail::NoRepo);
+    };
+    let world = match db::load(&inner.conn)
+        .map_err(|e| ApiFail::Db(e.to_string()))?
+        .state
+    {
+        db::LoadState::Full(world) => world,
+        db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
+    };
+    let registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
+    // every workspace birth in birth order, created and established
+    let births = world.workspace_births();
+    // paths shared by several births are a conflict before any act:
+    // sharing keys on the canonical form, so twin spellings of one
+    // directory count as the same unsafe address
+    let mut shared: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut entries: Vec<(RecordId, crate::store::WorkspaceFacts)> = Vec::new();
+    for birth in births {
+        if let Some(facts) = world.workspace_facts(birth) {
+            if let Ok(canonical) = workspace::canonical_dir(facts.worktree.as_path()) {
+                *shared.entry(canonical.display().to_string()).or_default() += 1;
+            }
+            entries.push((birth, facts));
+        }
+    }
+    let mut cleaned = Vec::new();
+    let mut preserved = Vec::new();
+    let mut conflicts = Vec::new();
+    let mut to_record: Vec<Event> = Vec::new();
+    for (birth, facts) in entries {
+        let path_string = facts.worktree.as_path().display().to_string();
+        let entry = |reason: String| ReconcileEntry {
+            seq: birth.0,
+            path: path_string.clone(),
+            reason,
+        };
+        let shares = workspace::canonical_dir(facts.worktree.as_path())
+            .map(|canonical| shared.get(&canonical.display().to_string()).copied())
+            .unwrap_or(None)
+            .unwrap_or(0);
+        if shares > 1 {
+            conflicts.push(entry("several workspace births share this path".into()));
+            continue;
+        }
+        let canonical = match workspace::canonical_dir(facts.worktree.as_path()) {
+            Ok(canonical) => canonical,
+            Err(e) => {
+                conflicts.push(entry(format!(
+                    "the recorded path cannot canonicalize: {}",
+                    e.detail()
+                )));
+                continue;
+            }
+        };
+        let registered = registrations.get(&canonical).cloned();
+        let present = canonical.is_dir();
+        let stage = world.workspace_stage(birth);
+        match (stage, registered, present) {
+            (Some(crate::WorkspaceStage::Cleaned), None, false) => {
+                preserved.push(entry(
+                    "recorded Cleaned; checkout and worktree registration absent".into(),
+                ));
+            }
+            (Some(crate::WorkspaceStage::Cleaned), _, true) => {
+                conflicts.push(entry(
+                    "recorded Cleaned but a directory stands there".into(),
+                ));
+            }
+            (Some(crate::WorkspaceStage::Cleaned), Some(_), false) => {
+                conflicts.push(entry(
+                    "recorded Cleaned but git still registers a worktree there".into(),
+                ));
+            }
+            (Some(crate::WorkspaceStage::Available), Some(Some(branch)), true)
+                if branch.as_str() == facts.branch.as_str() =>
+            {
+                match workspace::preserved_work(&canonical) {
+                    Ok(None) => preserved.push(entry(
+                        "matching registered worktree, no staged, unstaged, or untracked work"
+                            .into(),
+                    )),
+                    Ok(Some(_)) => conflicts.push(entry(
+                        "matching worktree holds staged, unstaged, or untracked work".into(),
+                    )),
+                    Err(e) => {
+                        conflicts.push(entry(format!("worktree state unreadable: {}", e.detail())))
+                    }
+                }
+            }
+            (Some(crate::WorkspaceStage::Available), Some(_), _) => {
+                conflicts.push(entry(
+                    "git registers the path on another branch, without a branch, or over gone bytes".into(),
+                ));
+            }
+            (Some(crate::WorkspaceStage::Available), None, true) => {
+                conflicts.push(entry(
+                    "a directory stands at the recorded path but git registers no worktree".into(),
+                ));
+            }
+            (Some(crate::WorkspaceStage::Available), None, false) => {
+                // absent checkout: the host's visible and terminal
+                // answers decide; uncertainty and live terminals surface
+                let dir_str = canonical.display().to_string();
+                let terminals = crate::host::workspace_terminals(&dir_str);
+                match terminals {
+                    Ok(t) if !t.is_empty() => {
+                        conflicts.push(entry(format!(
+                            "the host still names {} live terminal(s) there",
+                            t.len()
+                        )));
+                        continue;
+                    }
+                    Err(e) => {
+                        conflicts.push(entry(format!("terminal state unreadable: {e}")));
+                        continue;
+                    }
+                    _ => {}
+                }
+                match crate::host::workspace_visible_presence(&dir_str) {
+                    Ok(crate::host::HostPresence::VisiblyAbsent) => {
+                        if apply {
+                            to_record.push(Event::WorkspaceCleaned { workspace: birth });
+                        }
+                        cleaned.push(entry(format!(
+                            "checkout absent and the host names no workspace{}",
+                            if apply {
+                                "; Cleaned recorded now"
+                            } else {
+                                "; dry run"
+                            }
+                        )));
+                    }
+                    Ok(crate::host::HostPresence::Listed) => {
+                        conflicts.push(entry("the host still lists a workspace there".into()));
+                    }
+                    Err(e) => conflicts.push(entry(format!("host presence unreadable: {e}"))),
+                }
+            }
+            (None, _, _) => {
+                conflicts.push(entry("the fold holds no stage for this birth".into()));
+            }
+        }
+    }
+    let mut records = Vec::new();
+    if apply && !to_record.is_empty() {
+        let drafts = to_record
+            .into_iter()
+            .map(|event| db::RecordDraft {
+                context: Context::system(),
+                event,
+            })
+            .collect();
+        match db::execute_batch(&mut inner.conn, db::AtomicBatch { drafts }, db::now_epoch()) {
+            Ok(landed) => records = landed,
+            Err(e) => {
+                return Err(ApiFail::Refused(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "storage",
+                    format!(
+                        "the verification ran but the Cleaned facts could not land: {e}; nothing is recorded - retry reconcile"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(ReconcileReply {
+        applied: apply,
+        cleaned,
+        preserved,
+        conflicts,
+        records,
+    })
+}
+
+async fn workspace_clean(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: CleanRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
+    let started = Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = clean_operation(&app, &mut guard, &request.path);
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+async fn workspace_restore(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: RestoreRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
+    let started = Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = restore_operation(&app, &mut guard, &request.path);
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+async fn workspace_reconcile(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: ReconcileRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.client,
+        raw,
+    };
+    let started = Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = reconcile_operation(&app, &mut guard, request.apply);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
     drop(guard);
     match outcome {

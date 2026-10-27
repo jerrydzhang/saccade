@@ -332,6 +332,51 @@ after the header actually moved. The fact stays true if a later launch
 fails; nothing is inferred, nothing is stopped, and no process list is
 consulted.
 
+Every recorded workspace carries a lifecycle stage owned by the
+workspace itself: **Available** at birth, **Cleaned** after a completed
+cleanup, Available again after a completed restoration. The stage
+blocks ordinary use - launch, resume, and switch refuse a Cleaned
+workspace until an explicit restore - and the workbench names it in
+the workspace list. The stage is record-derived, never a probe: it
+says nothing about whether a directory or process exists now.
+
+`sac workspace clean <path>` closes a recorded workspace deliberately:
+exact recorded target only (primary and unrecognized directories
+refuse), work preserved - staged, unstaged, and untracked changes
+refuse while ignored files may disappear - then the ordered contract:
+terminal close, terminal closure verified through the host's own list,
+git worktree removal with the branch and every commit retained,
+checkout and worktree absence verified in git, visible absence
+verified through the host's own read surfaces, and only then the
+Cleaned record. Accepted host input is never treated as confirmed
+closure, arbitrary host errors are never read as absence, and no
+directory-wide or OS-wide process sweep ever runs. Re-running clean
+is the recovery path: already-closed host and already-absent checkout
+satisfy their steps, recorded Cleaned with resources absent is
+idempotent success without a duplicate record, and recorded Cleaned
+with resources present is a mismatch that never authorizes deletion.
+
+`sac workspace restore <path>` brings a workspace back as a matching
+git checkout, nothing more - and it is idempotent by postcondition:
+the checkout the postcondition describes is what stands when the door
+returns. A cleaned workspace's checkout is recreated at the retained
+branch's current LOCAL tip (never the cleanup-time commit, the base,
+or a remote) and the Restored fact records; an Available workspace's
+matching checkout standing is already restored - a no-op success, and
+one with no checkout recreates the same way and records the actual
+fact. An already-registered matching same-repo/path/branch worktree is
+reused as-is with local changes preserved. Missing branches refuse,
+mismatches refuse, and no launch, terminal, session, or incarnation
+follows: execution stays an explicit `sac launch` or manual resume.
+Restore creates no host terminal.
+
+`sac workspace reconcile [--apply]` is the one-time cutover
+verification over every recorded birth: absent resources verified
+against git and the host record Cleaned now (never at an invented
+historical time), matching present workspaces stand preserved, and
+conflicts surface - never classified by age, never silently deleted.
+Dry run by default; nothing is deleted and no terminal is closed.
+
 ## Errors and degraded mode
 
 Failures exit 1 with a named variant on stderr (`--json` emits
