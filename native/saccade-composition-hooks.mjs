@@ -1,17 +1,11 @@
-// The load hook half of the composition preload. The receipt forward
-// applies ONLY to the exact pinned module URLs baked into
-// receipt-sources.json beside this file at composition build time;
-// every other module passes through untouched - a foreign module
-// carrying the same anchor, a child process's copy of the SDK,
-// anything else. The registration itself is argument-scoped: it exists
-// only in the process the saccade-pi wrapper launches, so unrelated
-// processes never run this hook at all.
-//
-// When an intended target is loaded it must carry exactly one forward
-// anchor: zero means the pinned runtime moved and the receipt cannot
-// apply - the load fails visibly rather than leaving sends stuck
-// unacknowledged; more than one means the pinned source is corrupted
-// in a way no forward can be safe against. Both failures are loud.
+// The load hook half of the composition preload: the receipt forward
+// applies ONLY to the exact pinned module URLs baked into the
+// receiptSources list at build time; every other module - foreign
+// same-anchor code, child SDK copies - passes through untouched. The
+// registration is argument-scoped, so unrelated processes never run
+// this hook at all. An intended target carrying anything but exactly
+// one anchor fails its load visibly: silence would leave sends stuck
+// unacknowledged.
 import { readFileSync } from "node:fs";
 
 const receiptSources = JSON.parse(

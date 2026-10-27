@@ -19,20 +19,45 @@ dev="${SACCADE_PI:-}"
 dev=$(readlink -f "$dev")
 current_file="$dev"
 node_modules=""
-for _ in 1 2 3 4; do
-	refs=$(grep -ohE '/nix/store/[^ "]+/bin/(saccade-pi|wrapped-pi|pi)' "$current_file" 2>/dev/null | sort -u || true)
-	[ -n "$refs" ] || { echo "typecheck: no store reference in $current_file" >&2; exit 2; }
+for _ in 1 2 3 4 5 6; do
+	# store paths on the script's own exec line are chain hops: the
+	# wrapper bin it execs, or the pinned cli bundle naming the pinned
+	# dist directly - the -e extension arguments are dead ends and
+	# never followed
+	exec_line=$(grep '^exec ' "$current_file" 2>/dev/null | tail -1)
+	all_refs=$(grep -ohE '/nix/store/[^ "[:space:]]+' <<< "$exec_line" 2>/dev/null | sort -u || true)
+	[ -n "$all_refs" ] || { echo "typecheck: no store reference in $current_file" >&2; exit 2; }
+	# the exec target is the chain continuation by construction; the
+	# remaining store refs are ride-along arguments, checked for the
+	# SDK but never followed as the chain
+	primary=$(grep -ohE '/nix/store/[^ "[:space:]]+' <<< "$exec_line" | head -1)
 	next_file=""
-	for ref in $refs; do
-		pkg=$(dirname "$(dirname "$ref")")
-		if [ -d "$pkg/lib/pi/node_modules/@earendil-works" ]; then
+	for ref in $all_refs; do
+		pkg="${ref%/bin/*}"
+		if [ "$pkg" != "$ref" ] && [ -d "$pkg/lib/pi/node_modules/@earendil-works" ]; then
 			node_modules="$pkg/lib/pi/node_modules"
 			break
 		fi
-		# the referenced binary is the next wrapper script in the chain
-		next_file="$ref"
+		# a store path pointing at the pinned dist names the SDK types
+		# directly (the generated launch chain execs the cli bundle)
+		case $ref in
+			*/dist/bundle/cli.js)
+				if [ -f "$(dirname "$ref")/../index.d.ts" ]; then
+					node_modules="$(cd "$(dirname "$ref")/../../../.." && pwd)"
+					break
+				fi
+				;;
+		esac
 	done
-	if [ -n "$node_modules" ] || [ ! -f "$next_file" ]; then
+	if [ -n "$node_modules" ]; then
+		break
+	fi
+	# no SDK in this hop: the exec target continues the chain when it
+	# is a readable script; store binaries are skipped, never followed
+	if [ -f "$primary" ] && grep -qI . "$primary" 2>/dev/null; then
+		next_file="$primary"
+	fi
+	if [ -n "$node_modules" ] || [ -z "$next_file" ]; then
 		break
 	fi
 	current_file="$next_file"

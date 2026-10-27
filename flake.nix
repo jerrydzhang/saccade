@@ -33,8 +33,7 @@
     overlays = [rust-overlay.overlays.default];
     # the native integration the composed harness loads
     saccadePiExtensions = ["native/saccade.ts"];
-    # the composition's own receipt preload, copied into the store as a
-    # pair so the registration path is a space-free store path
+    # the receipt preload pair the generated wrapper registers
     saccadeCompositionPreloadFiles = ["native/saccade-composition-shim.mjs" "native/saccade-composition-hooks.mjs"];
     mkCompositionLaunchAdapter = {
       pkgs,
