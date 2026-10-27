@@ -1339,7 +1339,10 @@ fn shell_quote(word: &str) -> String {
     out
 }
 
-/// First executable direnv under these directories, if any.
+/// First executable direnv under these directories, if any, returned
+/// canonical absolute: the typed command changes cwd before exec, so a
+/// relative PATH entry resolved against the launch workspace would eat
+/// the name.
 fn direnv_from_paths<I>(dirs: I) -> Option<PathBuf>
 where
     I: IntoIterator<Item = PathBuf>,
@@ -1350,9 +1353,13 @@ where
             continue;
         };
         let executable = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0;
-        if meta.is_file() && executable {
-            return Some(candidate);
+        if !(meta.is_file() && executable) {
+            continue;
         }
+        let Ok(absolute) = std::fs::canonicalize(&candidate) else {
+            continue;
+        };
+        return Some(absolute);
     }
     None
 }
@@ -3247,7 +3254,7 @@ mod test {
     }
 
     #[test]
-    fn direnv_resolution_demands_an_executable_file_on_the_path() {
+    fn direnv_resolution_demands_an_executable_file_and_lands_absolute() {
         let root =
             std::env::temp_dir().join(format!("sac-direnv-{}-{}", std::process::id(), line!()));
         let _ = std::fs::remove_dir_all(&root);
@@ -3265,7 +3272,15 @@ mod test {
             std::os::unix::fs::PermissionsExt::from_mode(0o755),
         )
         .unwrap();
-        assert_eq!(direnv_from_paths([bin.clone()]), Some(bin.join("direnv")));
+        let expected = std::fs::canonicalize(bin.join("direnv")).unwrap();
+        // redundant and symlinked entries land on the same canonical
+        // absolute, never a relative candidate the workspace would eat
+        let windy = bin.join("..").join("bin");
+        assert_eq!(direnv_from_paths([windy]), Some(expected.clone()));
+        assert!(expected.is_absolute());
+        let linked = root.join("link");
+        std::os::unix::fs::symlink(&bin, &linked).unwrap();
+        assert_eq!(direnv_from_paths([linked]), Some(expected));
         let _ = std::fs::remove_dir_all(&root);
     }
 

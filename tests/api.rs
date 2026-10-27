@@ -3393,7 +3393,7 @@ async fn identity_reads_the_scope_and_the_retired_words_refuse_at_the_parser() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_launch_without_direnv_refuses_before_the_host_is_asked() {
+async fn launch_with_direnv_stripped_from_the_path() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let db = scratch_db("launch-no-direnv");
     let (root, _first, _head) = scratch_repo(db.parent().unwrap());
@@ -3425,17 +3425,35 @@ async fn a_launch_without_direnv_refuses_before_the_host_is_asked() {
         .env("SACCADE_PI", &pi)
         .output()
         .expect("spawn sac");
-    assert!(
-        !out.status.success(),
-        "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let err = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(err.contains("direnv"), "{err}");
-    assert!(err.contains("never starts unequipped"), "{err}");
-    // the refusal precedes any host contact: the fake host saw nothing
-    assert_eq!(std::fs::read_to_string(&host_log).unwrap(), "");
+    // the pin is a compile fact, not a runtime choice: a packaged build
+    // carries direnv no matter what PATH says and must not pretend to
+    // forget it, while a cargo build has no pin and refuses before the
+    // host is asked. Each build flavor asserts its own honest contract.
+    if option_env!("SACCADE_DIRENV").is_some() {
+        assert!(
+            out.status.success(),
+            "the baked pin governs over a stripped PATH: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let logged = std::fs::read_to_string(&host_log).unwrap();
+        assert!(
+            logged.contains("terminal"),
+            "the create reached the host: {logged}"
+        );
+    } else {
+        assert!(
+            !out.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(err.contains("direnv"), "{err}");
+        assert!(err.contains("never starts unequipped"), "{err}");
+        // the refusal precedes any host contact: the fake host saw nothing
+        assert_eq!(std::fs::read_to_string(&host_log).unwrap(), "");
+    }
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
