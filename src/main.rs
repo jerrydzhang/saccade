@@ -1339,6 +1339,83 @@ fn shell_quote(word: &str) -> String {
     out
 }
 
+/// First executable direnv under these directories, if any, returned
+/// canonical absolute: the typed command changes cwd before exec, so a
+/// relative PATH entry resolved against the launch workspace would eat
+/// the name.
+fn direnv_from_paths<I>(dirs: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    for dir in dirs {
+        let candidate = dir.join("direnv");
+        let Ok(meta) = std::fs::metadata(&candidate) else {
+            continue;
+        };
+        let executable = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0;
+        if !(meta.is_file() && executable) {
+            continue;
+        }
+        let Ok(absolute) = std::fs::canonicalize(&candidate) else {
+            continue;
+        };
+        return Some(absolute);
+    }
+    None
+}
+
+/// The launch doors equip the workspace through direnv: the committed
+/// .envrc governs every launched session exactly as it governs the
+/// human's own terminal, and direnv's own trust checks decide - nothing
+/// here approves anything. Resolution is the build pin or the PATH,
+/// never a runtime override; an unresolvable direnv refuses before any
+/// terminal exists, so the door never starts a session it cannot equip.
+fn direnv_binary() -> Result<PathBuf, Fail> {
+    if let Some(path) = option_env!("SACCADE_DIRENV") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    let found = std::env::var_os("PATH")
+        .map(|paths| direnv_from_paths(std::env::split_paths(&paths)))
+        .unwrap_or(None);
+    found.ok_or_else(|| {
+        Fail::Usage(
+            "no direnv: the launch doors equip the workspace through direnv \
+             (build pin SACCADE_DIRENV or PATH), and a launch never starts unequipped"
+                .into(),
+        )
+    })
+}
+
+/// The line the host terminal types: the workspace becomes the cwd,
+/// then direnv evaluates the first .envrc up from the workspace -
+/// passthrough where none exists, direnv's refusal where trust is
+/// missing - and the scrub and routing ride its environment. They ride
+/// the env program because direnv exec takes a program, never VAR=
+/// prefixes.
+fn workspace_launch_command(
+    direnv: &std::path::Path,
+    dir: &str,
+    routing: &str,
+    argv: &[String],
+) -> String {
+    let dir_quoted = shell_quote(dir);
+    format!(
+        "cd {dir_quoted} && {direnv_word} exec {dir_quoted} env -u SACCADE_INCARNATION \
+         -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB \
+         -u SACCADE_LAUNCH_TOKEN -u SACCADE_CLI {routing} {argv_list}",
+        direnv_word = shell_quote(&direnv.display().to_string()),
+        routing = routing,
+        argv_list = argv
+            .iter()
+            .map(|w| shell_quote(w))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
 fn orca(args: &[&str]) -> Result<std::process::Output, std::io::Error> {
     std::process::Command::new("orca").args(args).output()
 }
@@ -1958,15 +2035,10 @@ fn launch_native(
     // scrubs stale inherited identity, task, workspace, and database
     // routing the child never selected; the routing it does select
     // rides the line explicitly.
-    let command = format!(
-        "cd {} && env -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB -u SACCADE_LAUNCH_TOKEN -u SACCADE_CLI {} {}",
-        shell_quote(&dir_str),
-        routing,
-        argv.iter()
-            .map(|w| shell_quote(w))
-            .collect::<Vec<_>>()
-            .join(" "),
-    );
+    // direnv resolves before anything is submitted: the door never
+    // asks the host for a terminal it cannot equip.
+    let direnv = direnv_binary()?;
+    let command = workspace_launch_command(&direnv, &dir_str, &routing, &argv);
     orca_await_worktree(&dir_str).map_err(Fail::Usage)?;
     let out = orca(&[
         "terminal",
@@ -3159,6 +3231,58 @@ fn glimpse(line: &str, budget: usize) -> String {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn the_launch_command_routes_through_direnv_and_keeps_the_scrub() {
+        let command = workspace_launch_command(
+            std::path::Path::new("/tools/direnv"),
+            "/some work space",
+            "SACCADE_ACTOR=pi SACCADE_SERVER=http://srv",
+            &[
+                "/pi/bin".to_string(),
+                "--session".to_string(),
+                "abc".to_string(),
+            ],
+        );
+        assert_eq!(
+            command,
+            "cd '/some work space' && /tools/direnv exec '/some work space' env \
+             -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK \
+             -u SACCADE_WORKSPACE -u SACCADE_DB -u SACCADE_LAUNCH_TOKEN \
+             -u SACCADE_CLI SACCADE_ACTOR=pi SACCADE_SERVER=http://srv /pi/bin --session abc"
+        );
+    }
+
+    #[test]
+    fn direnv_resolution_demands_an_executable_file_and_lands_absolute() {
+        let root =
+            std::env::temp_dir().join(format!("sac-direnv-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        assert_eq!(direnv_from_paths([bin.clone()]), None);
+        std::fs::write(bin.join("direnv"), b"#!").unwrap();
+        assert_eq!(
+            direnv_from_paths([bin.clone()]),
+            None,
+            "a non-executable direnv is not a direnv"
+        );
+        std::fs::set_permissions(
+            bin.join("direnv"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let expected = std::fs::canonicalize(bin.join("direnv")).unwrap();
+        // redundant and symlinked entries land on the same canonical
+        // absolute, never a relative candidate the workspace would eat
+        let windy = bin.join("..").join("bin");
+        assert_eq!(direnv_from_paths([windy]), Some(expected.clone()));
+        assert!(expected.is_absolute());
+        let linked = root.join("link");
+        std::os::unix::fs::symlink(&bin, &linked).unwrap();
+        assert_eq!(direnv_from_paths([linked]), Some(expected));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// Possession, --actor, and the declared scope, one test owning every env mutation.
     #[test]
