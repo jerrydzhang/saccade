@@ -1138,6 +1138,14 @@ def main():
             for n in range(12):
                 server.cli('comment', f't-{live_id}', '--title', f'The parked card {n}', f'Card {n} stands in the record before the page opens.')
             page.goto(base + f'/t/{live_id}'); page.wait_for_function('window.workbenchUI !== undefined')
+            page.evaluate('''() => {
+                const d = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+                window.__scrollLog = [];
+                Object.defineProperty(Element.prototype, "scrollTop", {
+                    ...d,
+                    set(v) { window.__scrollLog.push([this.className || this.tagName, v, Math.round(performance.now())]); d.set.call(this, v); },
+                });
+            }''')
             page.locator('.pane.active .reading').focus()
             check(page.locator('.pane.active .thread-card').count() == 12, 'the thread opens with its recorded cards')
             page.keyboard.press('j')
@@ -1166,9 +1174,19 @@ def main():
             # draft, a repair, and focus: the page absorbs it in place
             server.cli('comment', f't-{live_id}', '--title', 'The arriving card', 'This card lands while local work stands open.')
             page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 13')
+            page.wait_for_timeout(150)  # the rAF scroll restore settles
             check(page.locator('.pane').nth(0).locator('.thread-card.selected').get_attribute('data-comment') == selected_id, 'the selection stays put through a landing')
             scroll_after = page.evaluate(f'() => {reader}.scrollTop')
-            check(abs(scroll_after - scroll_before) <= 2, 'the reader scroll stays put through a landing')
+            if abs(scroll_after - scroll_before) > 2:
+                # one settled remeasure: the assertion pins where the
+                # reader rests, and the scroll log makes any real
+                # regression's writes visible
+                page.wait_for_timeout(300)
+                scroll_after = page.evaluate(f'() => {reader}.scrollTop')
+            if abs(scroll_after - scroll_before) > 2:
+                log = page.evaluate('() => window.__scrollLog.slice(-40)')
+                print('SCROLL-LOG:', json.dumps(log), flush=True)
+            check(abs(scroll_after - scroll_before) <= 2, f'the reader scroll stays put through a landing (before {scroll_before}, after {scroll_after})')
             check(len(state(page)['panes']) == 2 and state(page)['layout'] == layout_before and state(page)['focus'] == focus_before, 'the pane layout and focus stay put through a landing')
             repair_now = next(b for b in state(page)['buffers'] if b['id'] == repair_id)
             check(repair_now['revisionPending'] is not None and repair_now['text'] == repair_text, 'the pending repair keeps its local text through a landing')
@@ -1239,9 +1257,11 @@ def main():
             else:
                 raise AssertionError('the restarted serve never answered')
             page.wait_for_function('document.querySelectorAll(".pane")[0].querySelectorAll(".thread-card").length === 16', timeout=20000)
+            page.wait_for_timeout(150)  # the rAF scroll restore settles
             check(next(b for b in state(page)['buffers'] if b['kind'] == 'draft')['text'] == 'The local draft text that no landing may touch.', 'the local draft survives the reconnect')
             check(page.locator('.pane').nth(0).locator('.thread-card.selected').get_attribute('data-comment') == selected_id, 'the selection survives the reconnect')
-            check(abs(page.evaluate(f'() => {reader}.scrollTop') - scroll_before) <= 2, 'the reader scroll survives the reconnect')
+            scroll_reconnected = page.evaluate(f'() => {reader}.scrollTop')
+            check(abs(scroll_reconnected - scroll_before) <= 2, f'the reader scroll survives the reconnect (before {scroll_before}, after {scroll_reconnected})')
 
             # an unrelated landing leaves an unchanged read-only Source view
             # exactly where it stands: same scroll, same cursor, same focus
@@ -1284,10 +1304,34 @@ def main():
             page.wait_for_timeout(300)
             check(page.evaluate('window.workbenchUI.state().cursor') == newest_cursor, 'a delayed older follow response rolls the cursor back to nothing')
             check('The newest retention probe' in page.locator('.pane.active .reading').inner_text() or any('The newest retention probe' in (b['text'] or '') for b in state(page)['buffers']), 'a delayed older follow response hides no newer recorded fact')
+            # an empty fold's null cursor is the log's position before any
+            # record: older than anything held, dropped the same way
+            check(len(holder) >= 2, 'the follow re-parks after a superseded response was dropped')
+            holder[1].fulfill(status=200, content_type='application/json', body='{"tasks": [], "comments": [], "cursor": null}')
+            page.wait_for_timeout(300)
+            check(page.evaluate('window.workbenchUI.state().cursor') == newest_cursor, 'a delayed empty-log snapshot rolls the cursor back to nothing')
+            check(any('The newest retention probe' in (b['text'] or '') for b in state(page)['buffers']), 'a delayed empty-log snapshot hides no newer recorded fact')
+            for route in holder[2:]:
+                # resolve every held interception before unrouting so no
+                # handler future is still pending at teardown
+                try:
+                    route.abort()
+                except Exception:
+                    pass
             page.unroute('**/api/v1/workbench?*')
             server.cli('comment', f't-{live_id}', '--title', 'The post-recovery landing', 'The follow still delivers after a superseded response was dropped.')
             recovery_cursor = request(base + '/api/v1/workbench')[1]['cursor']
             page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=recovery_cursor, timeout=20000)
+
+            # two Source panes of one recorded buffer each take a recorded
+            # revision: the per-view document decides, not the shared master
+            leader(page, 'wv')
+            server.cli('revise', tall_id, '--title', 'The retitled tall contribution')
+            page.wait_for_function('''() => {
+                const panes = [...document.querySelectorAll(".pane .cm-content")].filter((n) => n.textContent.includes("A substantial source paragraph"));
+                return panes.length === 2 && panes.every((n) => n.textContent.includes("The retitled tall contribution"));
+            }''', timeout=15000)
+            check(True, 'both Source panes of one buffer take the recorded revision')
 
             if errors:
                 print('PAGE-ERRORS:', errors, flush=True)

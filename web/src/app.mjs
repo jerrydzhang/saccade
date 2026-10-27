@@ -1051,9 +1051,11 @@ function absorb(fresh) {
     for (const [id, view] of editors) {
       if (bench.view(id).bufferId !== buffer.id) continue;
       if (buffer.revisionPending) continue;
-      // a view whose document is already the published text is left
-      // alone: setState on an unchanged document resets its scroll
-      if (buffer.master && buffer.master.doc.toString() === buffer.text) continue;
+      // a view whose own document is already the published text is left
+      // alone: setState on an unchanged document resets its scroll, and
+      // another pane's update advancing the shared master says nothing
+      // about this view
+      if (view.state.doc.toString() === buffer.text) continue;
       const scroll = view.scrollDOM.scrollTop;
       view.setState(editorState(buffer, bench.position(id)));
       observeMode(view);
@@ -1068,11 +1070,14 @@ function absorb(fresh) {
 
 // a delayed response carrying an older fold is superseded by what
 // already stands on screen: absorbing it would roll back both the
-// rendered record and the cursor and hide newer facts. Strictly older
-// cursors are dropped; anything else adopts, including a cursor that
-// shrank, which names a different log state the record still owns.
+// rendered record and the cursor and hide newer facts. The cursor
+// orders positions on the one append-only log - an empty fold's null
+// is the position before any record, older than every held position -
+// so anything strictly older is dropped.
 function absorbIfCurrent(fresh) {
-  if (typeof syncCursor === "number" && typeof fresh.cursor === "number" && fresh.cursor < syncCursor) return false;
+  const standing = typeof syncCursor === "number" ? syncCursor : null;
+  const arriving = typeof fresh.cursor === "number" ? fresh.cursor : null;
+  if (standing !== null && (arriving === null || arriving < standing)) return false;
   syncCursor = fresh.cursor;
   absorb(fresh);
   return true;
