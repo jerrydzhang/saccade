@@ -31,7 +31,9 @@ pub async fn run(
         .await
         .map_err(|e| format!("cannot bind {addr}: {e}"))?;
     let bound = listener.local_addr().map_err(|e| e.to_string())?;
-    publish_address(db_path, &bound)?;
+    let url = published_url(&bound);
+    state = state.with_server_url(url.clone());
+    publish_address(db_path, &url)?;
     if !matches!(bind, "127.0.0.1" | "localhost" | "::1" | "[::1]") {
         eprintln!(
             "bound {bind}: any device that can reach port {port} can write events (human tier)"
@@ -47,7 +49,14 @@ pub async fn run(
 
 /// Published only after a successful bind; a wildcard bind publishes
 /// the local loopback, never a connect target of all zeros.
-fn publish_address(db_path: &std::path::Path, bound: &std::net::SocketAddr) -> Result<(), String> {
+fn publish_address(db_path: &std::path::Path, url: &str) -> Result<(), String> {
+    std::fs::write(crate::paths::address_at(db_path), format!("{url}\n"))
+        .map_err(|e| format!("cannot write the address hint: {e}"))
+}
+
+/// The connect URL this server publishes: the loopback for a wildcard
+/// bind, the bound address otherwise.
+fn published_url(bound: &std::net::SocketAddr) -> String {
     let ip = if bound.ip().is_unspecified() {
         std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST)
     } else {
@@ -57,9 +66,7 @@ fn publish_address(db_path: &std::path::Path, bound: &std::net::SocketAddr) -> R
         std::net::IpAddr::V4(v4) => v4.to_string(),
         v6 => format!("[{v6}]"),
     };
-    let url = format!("http://{host}:{}\n", bound.port());
-    std::fs::write(crate::paths::address_at(db_path), url)
-        .map_err(|e| format!("cannot write the address hint: {e}"))
+    format!("http://{host}:{}", bound.port())
 }
 
 /// The whole HTTP surface: the versioned API plus the workbench page.

@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use saccade::World;
 use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
+use saccade::host;
 use saccade::objects::task::TaskId;
 use saccade::views::{
     ArtifactLine, CommentLine, MessageLine, SearchGroup, SearchQuery, TaskView, Term, ThreadItem,
@@ -1193,15 +1194,6 @@ fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fail> {
     }
 }
 
-/// A launched command's attribution label: its own file name.
-fn command_label(program: &str) -> String {
-    std::path::Path::new(program)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "saccade".into())
-}
-
 /// The identity door: the environment's declaration plus routing,
 /// read-only; disclosure, never a liveness claim.
 fn identity_door(cli: &Cli) -> Result<String, Fail> {
@@ -1301,157 +1293,6 @@ fn body_source(body: Option<String>, stdin: bool) -> Result<String, Fail> {
             .map_err(|e| Fail::Usage(format!("stdin: {e}")));
     }
     body.ok_or_else(|| Fail::Usage("the body comes quoted or through --stdin".into()))
-}
-
-/// The pinned native Pi: the development override first, then the
-/// flake pin this binary was built with. Never an arbitrary PATH pi.
-fn pinned_pi() -> Result<PathBuf, Fail> {
-    if let Some(path) = std::env::var_os("SACCADE_PI").filter(|p| !p.is_empty()) {
-        return Ok(PathBuf::from(path));
-    }
-    if let Some(path) = option_env!("SACCADE_PI") {
-        return Ok(PathBuf::from(path));
-    }
-    Err(Fail::Usage(
-        "no pinned pi: this binary carries no flake pin; export SACCADE_PI=<pi> to name one".into(),
-    ))
-}
-
-/// One POSIX word, quoted so any bytes survive the shell that types it.
-fn shell_quote(word: &str) -> String {
-    if !word.is_empty()
-        && word.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'=' | b'/' | b'.' | b'+')
-        })
-    {
-        return word.to_string();
-    }
-    let mut out = String::with_capacity(word.len() + 2);
-    out.push('\'');
-    for c in word.chars() {
-        if c == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('\'');
-    out
-}
-
-/// First executable direnv under these directories, if any, returned
-/// canonical absolute: the typed command changes cwd before exec, so a
-/// relative PATH entry resolved against the launch workspace would eat
-/// the name.
-fn direnv_from_paths<I>(dirs: I) -> Option<PathBuf>
-where
-    I: IntoIterator<Item = PathBuf>,
-{
-    for dir in dirs {
-        let candidate = dir.join("direnv");
-        let Ok(meta) = std::fs::metadata(&candidate) else {
-            continue;
-        };
-        let executable = std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0;
-        if !(meta.is_file() && executable) {
-            continue;
-        }
-        let Ok(absolute) = std::fs::canonicalize(&candidate) else {
-            continue;
-        };
-        return Some(absolute);
-    }
-    None
-}
-
-/// The launch doors equip the workspace through direnv: the committed
-/// .envrc governs every launched session exactly as it governs the
-/// human's own terminal, and direnv's own trust checks decide - nothing
-/// here approves anything. Resolution is the build pin or the PATH,
-/// never a runtime override; an unresolvable direnv refuses before any
-/// terminal exists, so the door never starts a session it cannot equip.
-fn direnv_binary() -> Result<PathBuf, Fail> {
-    if let Some(path) = option_env!("SACCADE_DIRENV") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-    let found = std::env::var_os("PATH")
-        .map(|paths| direnv_from_paths(std::env::split_paths(&paths)))
-        .unwrap_or(None);
-    found.ok_or_else(|| {
-        Fail::Usage(
-            "no direnv: the launch doors equip the workspace through direnv \
-             (build pin SACCADE_DIRENV or PATH), and a launch never starts unequipped"
-                .into(),
-        )
-    })
-}
-
-/// The line the host terminal types: the workspace becomes the cwd,
-/// then direnv evaluates the first .envrc up from the workspace -
-/// passthrough where none exists, direnv's refusal where trust is
-/// missing - and the scrub and routing ride its environment. They ride
-/// the env program because direnv exec takes a program, never VAR=
-/// prefixes.
-fn workspace_launch_command(
-    direnv: &std::path::Path,
-    dir: &str,
-    routing: &str,
-    argv: &[String],
-) -> String {
-    let dir_quoted = shell_quote(dir);
-    format!(
-        "cd {dir_quoted} && {direnv_word} exec {dir_quoted} env -u SACCADE_INCARNATION \
-         -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB \
-         -u SACCADE_LAUNCH_TOKEN -u SACCADE_CLI {routing} {argv_list}",
-        direnv_word = shell_quote(&direnv.display().to_string()),
-        routing = routing,
-        argv_list = argv
-            .iter()
-            .map(|w| shell_quote(w))
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
-}
-
-fn orca(args: &[&str]) -> Result<std::process::Output, std::io::Error> {
-    std::process::Command::new("orca").args(args).output()
-}
-
-/// Wait for the host's cached discovery to see the worktree: bounded,
-/// exact-path, never a second checkout.
-fn orca_await_worktree(path: &str) -> Result<(), String> {
-    let selector = format!("path:{path}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    loop {
-        let out = orca(&["worktree", "show", "--worktree", &selector])
-            .map_err(|e| format!("orca worktree show: {e}"))?;
-        if out.status.success() {
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(format!(
-                "orca has not discovered {path} yet (bounded at 90s)"
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-    }
-}
-
-/// The created terminal's handle from the host's pinned response shape.
-fn terminal_handle(stdout: &str) -> Result<String, String> {
-    serde_json::from_str::<serde_json::Value>(stdout)
-        .ok()
-        .and_then(|v| {
-            v.get("result")
-                .and_then(|r| r.get("terminal"))
-                .and_then(|t| t.get("handle"))
-                .and_then(|h| h.as_str())
-                .map(str::to_string)
-        })
-        .ok_or_else(|| "the terminal was created but the host named no handle".into())
 }
 
 /// The migration door: one schema-3 source into a fresh schema-4
@@ -1896,27 +1737,30 @@ fn launch_native(
     launch_token: Option<&str>,
 ) -> Result<(String, String), Fail> {
     let url = server_url(destination, "launch")?;
-    let pi = pinned_pi()?;
+    let pi = host::pinned_pi().map_err(|e| Fail::Usage(e.to_string()))?;
     let repo = resolve_repo(cli)?;
-    let label = command_label(&pi.display().to_string());
+    let label = host::command_label(&pi.display().to_string());
     // routing rides the launch line: the integration reaches the
     // tracker's server directly, the repo names the tracker besides,
     // and the CLI path lets the session's own handoff helper call the
     // controller door by name instead of guessing at a PATH
     let mut routing = format!(
         "SACCADE_ACTOR={} SACCADE_SERVER={} SACCADE_REPO={}",
-        shell_quote(&label),
-        shell_quote(&url),
-        shell_quote(&repo.display().to_string()),
+        host::shell_quote(&label),
+        host::shell_quote(&url),
+        host::shell_quote(&repo.display().to_string()),
     );
     if let Ok(exe) = std::env::current_exe() {
         routing.push_str(&format!(
             " SACCADE_CLI={}",
-            shell_quote(&exe.display().to_string())
+            host::shell_quote(&exe.display().to_string())
         ));
     }
     if let Some(token) = launch_token {
-        routing.push_str(&format!(" SACCADE_LAUNCH_TOKEN={}", shell_quote(token)));
+        routing.push_str(&format!(
+            " SACCADE_LAUNCH_TOKEN={}",
+            host::shell_quote(token)
+        ));
     }
     let prompt_text = prompt.join(" ");
     let (dir, argv, title, handoff) = match (workspace, resume) {
@@ -2030,35 +1874,15 @@ fn launch_native(
         }
     };
     let dir_str = dir.display().to_string();
-    // the terminal starts at the chosen workspace; the session header
-    // records that cwd, and a resume validates against it. The launch
-    // scrubs stale inherited identity, task, workspace, and database
-    // routing the child never selected; the routing it does select
-    // rides the line explicitly.
-    // direnv resolves before anything is submitted: the door never
-    // asks the host for a terminal it cannot equip.
-    let direnv = direnv_binary()?;
-    let command = workspace_launch_command(&direnv, &dir_str, &routing, &argv);
-    orca_await_worktree(&dir_str).map_err(Fail::Usage)?;
-    let out = orca(&[
-        "terminal",
-        "create",
-        "--worktree",
-        &format!("path:{dir_str}"),
-        "--title",
-        &title,
-        "--command",
-        &command,
-        "--json",
-    ])
-    .map_err(|e| Fail::Usage(format!("orca terminal create: {e}")))?;
-    if !out.status.success() {
-        return Err(Fail::Usage(format!(
-            "orca terminal create failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
-    }
-    let terminal = terminal_handle(&String::from_utf8_lossy(&out.stdout)).map_err(Fail::Usage)?;
+    // the shared construction: the directory is re-validated (a launch
+    // selects, it never creates), direnv resolves before anything is
+    // submitted, and the host is asked only for a terminal the door can
+    // equip. The reply is the host's acceptance of a submission -
+    // attach and execution belong to the session itself.
+    let (dir_str, command) = host::launch_command(Path::new(&dir_str), &routing, &argv)
+        .map_err(|e| Fail::Usage(e.to_string()))?;
+    let terminal = host::submit_terminal(&dir_str, &title, &command)
+        .map_err(|e| Fail::Usage(e.to_string()))?;
     // the rigorous handoff, after the submission: this door's success
     // is the launched session's guard being held - observed, bounded,
     // never assumed, and terminal-create success alone proves neither
@@ -3232,58 +3056,6 @@ fn glimpse(line: &str, budget: usize) -> String {
 mod test {
     use super::*;
 
-    #[test]
-    fn the_launch_command_routes_through_direnv_and_keeps_the_scrub() {
-        let command = workspace_launch_command(
-            std::path::Path::new("/tools/direnv"),
-            "/some work space",
-            "SACCADE_ACTOR=pi SACCADE_SERVER=http://srv",
-            &[
-                "/pi/bin".to_string(),
-                "--session".to_string(),
-                "abc".to_string(),
-            ],
-        );
-        assert_eq!(
-            command,
-            "cd '/some work space' && /tools/direnv exec '/some work space' env \
-             -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK \
-             -u SACCADE_WORKSPACE -u SACCADE_DB -u SACCADE_LAUNCH_TOKEN \
-             -u SACCADE_CLI SACCADE_ACTOR=pi SACCADE_SERVER=http://srv /pi/bin --session abc"
-        );
-    }
-
-    #[test]
-    fn direnv_resolution_demands_an_executable_file_and_lands_absolute() {
-        let root =
-            std::env::temp_dir().join(format!("sac-direnv-{}-{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&root);
-        let bin = root.join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        assert_eq!(direnv_from_paths([bin.clone()]), None);
-        std::fs::write(bin.join("direnv"), b"#!").unwrap();
-        assert_eq!(
-            direnv_from_paths([bin.clone()]),
-            None,
-            "a non-executable direnv is not a direnv"
-        );
-        std::fs::set_permissions(
-            bin.join("direnv"),
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-        let expected = std::fs::canonicalize(bin.join("direnv")).unwrap();
-        // redundant and symlinked entries land on the same canonical
-        // absolute, never a relative candidate the workspace would eat
-        let windy = bin.join("..").join("bin");
-        assert_eq!(direnv_from_paths([windy]), Some(expected.clone()));
-        assert!(expected.is_absolute());
-        let linked = root.join("link");
-        std::os::unix::fs::symlink(&bin, &linked).unwrap();
-        assert_eq!(direnv_from_paths([linked]), Some(expected));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
     /// Possession, --actor, and the declared scope, one test owning every env mutation.
     #[test]
     fn possession_fixes_the_tier_and_the_scope_reads_the_environment() {
@@ -3420,25 +3192,6 @@ mod test {
             "note: this write records jerry/human from the identity fallback \
              (no SACCADE_ACTOR, no --actor); agents export SACCADE_ACTOR=<name>"
         );
-    }
-
-    /// The quoting keeps argument boundaries across arbitrary prose.
-    #[test]
-    fn shell_quoting_keeps_word_boundaries() {
-        assert_eq!(shell_quote("sac"), "sac");
-        assert_eq!(shell_quote("/nix/store/x-bin/pi"), "/nix/store/x-bin/pi");
-        assert_eq!(
-            shell_quote("it's a 'quoted' $WORD"),
-            "'it'\\''s a '\\''quoted'\\'' $WORD'"
-        );
-        assert_eq!(shell_quote(""), "''");
-        let words = ["fix the 'flake' and $PATH", "--flag", ""];
-        let line = words
-            .iter()
-            .map(|w| shell_quote(w))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert_eq!(line, "'fix the '\\''flake'\\'' and $PATH' --flag ''");
     }
 
     #[test]

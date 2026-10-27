@@ -165,9 +165,23 @@ pub fn snapshot(
             "explanation": view.explanation, "offer": view.offer_num,
         }));
     }
+    let workspaces: Vec<Value> = world
+        .workspaces
+        .iter()
+        .map(|(id, context)| {
+            json!({
+                "seq": id.0 .0,
+                "base": context.workspace.base.as_str(),
+                "branch": context.workspace.branch.as_str(),
+                "path": context.workspace.worktree.as_path().display().to_string(),
+                "born_at": context.born_at,
+            })
+        })
+        .collect();
     let (recent_activity, recently_active_tasks) = home_facts(world, rows)?;
     Ok(json!({
-        "tasks": tasks, "comments": comments, "cursor": rows.last().map(|r| r.seq),
+        "tasks": tasks, "comments": comments, "workspaces": workspaces,
+        "cursor": rows.last().map(|r| r.seq),
         "recent_activity": recent_activity, "recently_active_tasks": recently_active_tasks,
     }))
 }

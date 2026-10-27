@@ -12,6 +12,33 @@ SAC = Path(os.environ.get('SACCADE_WORKBENCH_BINARY', ROOT / 'target/debug/sac')
 RUNS = ROOT / 'runs'
 
 
+# The launch fixture: a fake host and a fake direnv shadow the real ones
+# for the server subprocess, so the browser suite exercises the launch
+# door without ever touching the production host.
+FAKE_ORCA = '''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+log = os.environ.get('FAKE_ORCA_LOG')
+if log:
+    with open(log, 'a') as handle:
+        handle.write(' '.join(args) + chr(10))
+if args[:2] == ['worktree', 'show']:
+    sys.exit(0)
+if args[:2] == ['terminal', 'create']:
+    mode_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orca-mode')
+    mode = ''
+    if mode_path and os.path.exists(mode_path):
+        mode = open(mode_path).read().strip()
+    if mode == 'fail':
+        print('the host refused the create', file=sys.stderr)
+        sys.exit(1)
+    terminal = {} if mode == 'no-handle' else {'handle': 'term_fake_1'}
+    print(json.dumps({'ok': True, 'result': {'terminal': terminal}}))
+    sys.exit(0)
+sys.exit(1)
+'''
+
+
 def fnv(text):
     value = 0x811c9dc5
     for byte in str(text).encode():
@@ -30,9 +57,20 @@ class Server:
             (self.run / name).mkdir()
         self.db = self.run / 'workbench.db'
         self.repo = self.run / 'repo'
+        self.fakebin = self.run / 'fakebin'
+        self.fakebin.mkdir()
+        orca = self.fakebin / 'orca'
+        orca.write_text(FAKE_ORCA)
+        orca.chmod(0o755)
+        for name in ('direnv', 'pi-fixture'):
+            stub = self.fakebin / name
+            stub.write_text('#!/usr/bin/env sh\nexit 0\n')
+            stub.chmod(0o755)
         self.env = {
-            'PATH': os.environ['PATH'] + ':/etc/profiles/per-user/jerry/bin:/run/current-system/sw/bin', 'HOME': str(self.run / 'home'),
+            'PATH': str(self.fakebin) + ':' + os.environ['PATH'] + ':/etc/profiles/per-user/jerry/bin:/run/current-system/sw/bin', 'HOME': str(self.run / 'home'),
             'TMPDIR': str(self.run / 'tmp'), 'SACCADE_ACTOR': 'fixture-author',
+            'SACCADE_PI': str(self.fakebin / 'pi-fixture'),
+            'FAKE_ORCA_LOG': str(self.fakebin / 'orca.log'),
         }
         git = {'PATH': self.env['PATH'],
                'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t',

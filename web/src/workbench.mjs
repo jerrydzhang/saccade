@@ -219,3 +219,32 @@ export function confirmsLanded(surface, record) {
   return record.kind === "commented" && payload?.kind?.reject?.offer === surface.buffer.eventual.offerSeq
     && payload?.kind?.reject?.grounds === surface.body;
 }
+
+// the task-creation wire translation and its landed-check: pure over a
+// staged name and the folded record, so the model pins them where the
+// controller uses them
+export function createTaskCommand(name) {
+  return { create_task: { name } };
+}
+
+export function confirmsTaskCreated(record, name) {
+  const payload = typeof record.payload === "string" ? JSON.parse(record.payload) : record.payload;
+  return record.kind === "task_created" && payload?.name === name;
+}
+
+// the launch door names one explicit existing workspace; the door
+// selects, it never creates
+export function launchRequest(workspacePath) {
+  return { workspace: { existing: workspacePath } };
+}
+
+// the honest launch outcome split: a server answer is a confirmed fact
+// with its own code and detail; a lost or unreadable reply is unknown -
+// the host may have accepted, so no face may call it "not submitted"
+export function launchOutcome(error) {
+  const wire = error?.data?.error;
+  if (wire && typeof wire === "object") {
+    return { kind: "answered", code: wire.code, detail: typeof wire.detail === "string" ? wire.detail : JSON.stringify(wire.detail) };
+  }
+  return { kind: "unknown", detail: error.message };
+}
