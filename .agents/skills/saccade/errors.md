@@ -79,11 +79,6 @@ finding - name it on the thread before proceeding.
   visible absence.
 - `workspace_absence_unverified` - the path or the git registration
   still stands after the removal attempt; inspect and retry.
-- `workspace_restore_absent_undecided` - the workspace stands
-  Available with no checkout at the recorded path; that restoration
-  edge has no ratified semantics yet, so nothing ran and nothing
-  changed. An Available workspace with its matching checkout standing
-  is already restored - a no-op success, no new record.
 - `workspace_cleaned` - the launch, resume, or switch target is a
   recorded Cleaned workspace; it takes no new sessions until an
   explicit `sac workspace restore`.

@@ -832,9 +832,13 @@ impl World {
                 let moves = match (cleaned, lifecycle.stage) {
                     (true, WorkspaceStage::Available) => Some(WorkspaceStage::Cleaned),
                     // no duplicate cleanup lands: the stage is already there
-                    (true, WorkspaceStage::Cleaned) | (false, WorkspaceStage::Available) => {
+                    (true, WorkspaceStage::Cleaned) => {
                         return Err(Reason::WorkspaceStageMismatch);
                     }
+                    // restoration is idempotent by postcondition: over an
+                    // Available workspace the fact lands and the stage
+                    // stays what the postcondition already gives
+                    (false, WorkspaceStage::Available) => Some(WorkspaceStage::Available),
                     (false, WorkspaceStage::Cleaned) => Some(WorkspaceStage::Available),
                 };
                 self.provenance.insert(record.id, None);
@@ -2985,20 +2989,29 @@ mod test {
         let refused = log.execute_system(Command::CleanWorkspace { workspace: birth }, 5);
         assert!(matches!(refused, Err(Reject::WorkspaceStageMismatch)));
 
-        // a fresh workspace stands Available: restoring it is the held
-        // seam, refused until its semantics are ratified
+        // a fresh workspace stands Available: restoration is idempotent
+        // by postcondition - the fact lands and the stage stays what it
+        // already gives, with the latest fact named on the lifecycle
         log.execute_system(
             created("workspace-deadbeef", "/repo/wt/workspace-deadbeef"),
             6,
         )
         .unwrap();
-        let refused = log.execute_system(
+        log.execute_system(
             Command::RestoreWorkspace {
                 workspace: RecordId(3),
             },
             7,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().workspace_stage(RecordId(3)),
+            Some(crate::WorkspaceStage::Available)
         );
-        assert!(matches!(refused, Err(Reject::WorkspaceStageMismatch)));
+        assert_eq!(
+            log.world().workspace_lifecycle[&RecordId(3)].record,
+            Some(RecordId(4))
+        );
 
         // judgment tiers refuse the door: the completed facts are the
         // machinery's, never caller-authored
@@ -3014,7 +3027,7 @@ mod test {
             let refused = log.execute(ctx, Command::RestoreWorkspace { workspace: birth }, 8);
             assert!(matches!(refused, Err(Reject::HumanOnly)));
         }
-        assert_eq!(log.records().len(), 4);
+        assert_eq!(log.records().len(), 5);
     }
 
     /// The confirmed change names a native incarnation and lands as a

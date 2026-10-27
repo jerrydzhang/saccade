@@ -7715,8 +7715,9 @@ async fn restore_reuses_recreates_and_refuses_its_mismatches() {
         "the restore took the branch's current local tip"
     );
 
-    // the Available-but-absent checkout is the undecided edge: the
-    // door refuses without a ratified refusal reason or any mutation
+    // restoration is idempotent by postcondition: an Available
+    // workspace with no checkout recreates it at the branch's current
+    // local tip and records the actual fact, no clean-first ceremony
     let (_, _, ws_edge) = rig_provision(&rig, "edge");
     // Available with no checkout: git's own removal, the stage never
     // moved to Cleaned
@@ -7733,12 +7734,40 @@ async fn restore_reuses_recreates_and_refuses_its_mismatches() {
             .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
             .expect("the edge birth names its branch")
     };
-    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws_edge]);
-    assert!(!ok, "the undecided edge restored anyway: {err}");
-    assert!(err.contains("workspace_restore_absent_undecided"), "{err}");
-    assert!(!std::path::Path::new(&ws_edge).exists(), "the edge mutated");
-    // the branch the ruling protects stands untouched
-    assert!(!rig_tip(&rig, &edge_branch).is_empty());
+    let edge_tip = rig_tip(&rig, &edge_branch);
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "restore", &ws_edge]);
+    assert!(ok, "the ruled absent-case restore refuses: {out}{err}");
+    assert!(out.contains("restored"), "{out}");
+    assert!(std::path::Path::new(&ws_edge).join("readme").is_file());
+    assert_eq!(
+        sh(&std::path::PathBuf::from(&ws_edge), &["rev-parse", "HEAD"]).trim(),
+        edge_tip,
+        "the recreate stands at the branch's current local tip"
+    );
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let kinds: Vec<String> = json_of(&body)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        kinds.contains(&"workspace_restored".to_string()),
+        "{kinds:?}"
+    );
+    // the stage stays Available through the whole cycle
+    let stage = json_of(&get_json(&rig.url, "/api/v1/workbench").1)["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["path"] == json!(ws_edge))
+        .map(|w| w["stage"].as_str().unwrap().to_string())
+        .expect("the edge workspace projects");
+    assert_eq!(stage, "available", "{stage}");
+    // and the matching checkout standing afterwards is the no-op
+    let (ok, out, _err) = rig_sac(&rig, &["workspace", "restore", &ws_edge]);
+    assert!(ok, "the no-op restore refuses: {out}");
+    assert!(out.contains("already restored"), "{out}");
 
     // the recorded branch gone refuses: never reconstructed from a
     // base or a remote

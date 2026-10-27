@@ -353,15 +353,19 @@ satisfy their steps, recorded Cleaned with resources absent is
 idempotent success without a duplicate record, and recorded Cleaned
 with resources present is a mismatch that never authorizes deletion.
 
-`sac workspace restore <path>` brings a cleaned workspace back as a
-matching git checkout, nothing more: the retained branch's current
-LOCAL tip (never the cleanup-time commit, the base, or a remote), an
-already-registered matching same-repo/path/branch worktree reused
-as-is with local changes preserved, and an Available workspace with
-its matching checkout standing already restored - a no-op success.
-Missing branches refuse, mismatches refuse, and no launch, terminal,
-session, or incarnation follows: execution stays an explicit `sac
-launch` or manual resume. Restore creates no host terminal.
+`sac workspace restore <path>` brings a workspace back as a matching
+git checkout, nothing more - and it is idempotent by postcondition:
+the checkout the postcondition describes is what stands when the door
+returns. A cleaned workspace's checkout is recreated at the retained
+branch's current LOCAL tip (never the cleanup-time commit, the base,
+or a remote) and the Restored fact records; an Available workspace's
+matching checkout standing is already restored - a no-op success, and
+one with no checkout recreates the same way and records the actual
+fact. An already-registered matching same-repo/path/branch worktree is
+reused as-is with local changes preserved. Missing branches refuse,
+mismatches refuse, and no launch, terminal, session, or incarnation
+follows: execution stays an explicit `sac launch` or manual resume.
+Restore creates no host terminal.
 
 `sac workspace reconcile [--apply]` is the one-time cutover
 verification over every recorded birth: absent resources verified

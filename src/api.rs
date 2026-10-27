@@ -2019,60 +2019,26 @@ fn restore_operation(
 
     // the matching registered checkout standing on an Available
     // workspace is no-op success: no duplicate restoration fact lands,
-    // and the local changes it holds stand untouched. The safety
-    // checks hold on Available too - the other shapes are mismatches,
-    // and the Available-but-absent checkout is the undecided edge:
-    // no ratified semantics, no inferred refusal reason, no mutation.
-    if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Available) {
-        return match registered {
-            Some(Some(checked_out)) if checked_out == facts.branch && canonical.is_dir() => {
-                let tip = workspace::branch_tip(&repo_root, &facts.branch)
-                    .map_err(ApiFail::Workspace)?
-                    .map(|c| c.as_str().to_string());
-                Ok(RestoreReply {
-                    restored: false,
-                    already_restored: true,
-                    reused: true,
-                    tip,
-                    workspace: LifecycleWorkspace::of(facts),
-                    records: Vec::new(),
-                })
-            }
-            Some(Some(checked_out)) => Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} is registered on branch {}, not the recorded {}; no forced checkout, reset, or overwrite runs",
-                    dir_str,
-                    checked_out.as_str(),
-                    facts.branch.as_str()
-                ),
-            )),
-            Some(None) => Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} is registered without a branch (bare or detached); restoration matches a named branch and runs nothing",
-                    dir_str
-                ),
-            )),
-            None if canonical.is_dir() => Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_checkout_mismatch",
-                format!(
-                    "{} holds a directory git does not register as this repo's worktree; restoration overwrites nothing - inspect it by hand",
-                    dir_str
-                ),
-            )),
-            None => Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_restore_absent_undecided",
-                format!(
-                    "{} stands Available with no checkout at the recorded path; restoration of an Available workspace without a checkout has no ratified semantics yet - nothing ran, nothing changed",
-                    dir_str
-                ),
-            )),
-        };
+    // and the local changes it holds stand untouched. The absent case
+    // is not special: restoration is idempotent by postcondition, so
+    // an Available workspace with no checkout recreates it below under
+    // the same safety checks and records the actual fact. The safety
+    // checks hold at both stages - the other shapes are mismatches.
+    if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Available)
+        && matches!(&registered, Some(Some(b)) if b.as_str() == facts.branch.as_str())
+        && canonical.is_dir()
+    {
+        let tip = workspace::branch_tip(&repo_root, &facts.branch)
+            .map_err(ApiFail::Workspace)?
+            .map(|c| c.as_str().to_string());
+        return Ok(RestoreReply {
+            restored: false,
+            already_restored: true,
+            reused: true,
+            tip,
+            workspace: LifecycleWorkspace::of(facts),
+            records: Vec::new(),
+        });
     }
     if workspace::branch_tip(&repo_root, &facts.branch)
         .map_err(ApiFail::Workspace)?
