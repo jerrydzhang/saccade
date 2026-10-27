@@ -1945,9 +1945,11 @@ fn launch_native(
 }
 
 /// The cleaned-workspace launch guard: a recorded workspace whose
-/// stage is Cleaned refuses ordinary use until an explicit restore.
-/// Unrecognized directories and primary checkouts are not workspaces
-/// and pass untouched.
+/// stage is Cleaned refuses ordinary use until an explicit restore,
+/// addressed by the one shared resolver - its own stored string or
+/// the canonical form it resolves to. Unrecognized directories and
+/// primary checkouts are not workspaces and pass untouched; aliased
+/// identities refuse rather than being picked.
 fn cleaned_guard(destination: &Destination, dir: &Path) -> Result<(), Fail> {
     let loadout = loadout_of(destination)?;
     let LoadState::Full(world) = loadout.state else {
@@ -1956,13 +1958,27 @@ fn cleaned_guard(destination: &Destination, dir: &Path) -> Result<(), Fail> {
         ));
     };
     let canonical = saccade::workspace::canonical_dir(dir).map_err(|e| Fail::Usage(e.detail()))?;
-    if let Some(birth) = world.cleaned_workspace_at(&canonical) {
-        return Err(Fail::Usage(format!(
-            "{} is recorded Cleaned (record {}); ordinary use waits for an explicit restore: sac workspace restore {}",
-            canonical.display(),
-            birth.0,
-            canonical.display()
-        )));
+    match saccade::workspace::resolve_workspace_address(&world, dir)
+        .map_err(|e| Fail::Usage(e.detail()))?
+    {
+        saccade::workspace::LifecycleAddress::Single(birth) => {
+            if world.workspace_stage(birth) == Some(saccade::WorkspaceStage::Cleaned) {
+                return Err(Fail::Usage(format!(
+                    "{} is recorded Cleaned (record {}); ordinary use waits for an explicit restore: sac workspace restore {}",
+                    canonical.display(),
+                    birth.0,
+                    canonical.display()
+                )));
+            }
+        }
+        saccade::workspace::LifecycleAddress::Ambiguous(births) => {
+            return Err(Fail::Usage(format!(
+                "{} is the recorded path of {} workspace births; resolve their history by hand before launching there",
+                canonical.display(),
+                births.len()
+            )));
+        }
+        saccade::workspace::LifecycleAddress::Unrecorded => {}
     }
     Ok(())
 }

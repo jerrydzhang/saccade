@@ -278,6 +278,57 @@ pub fn worktree_home(db_path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("worktrees"))
 }
 
+// -- the one lifecycle address resolver ----------------------------------
+// Every door that names a recorded workspace resolves its address
+// through this resolver: a birth is addressed by its own stored
+// string or by the canonical form it resolves to, stored identities
+// are never rewritten, and several stored paths over one directory
+// refuse as ambiguous rather than being picked between. Filesystem
+// resolution happens here in the effect/adapter boundary - the fold
+// never reads the filesystem.
+
+/// The address resolution over the recorded births.
+#[derive(Debug, PartialEq)]
+pub enum LifecycleAddress {
+    /// Exactly one birth stands at this address
+    Single(RecordId),
+    /// Several stored paths resolve here: unsafe ambiguity, refused
+    Ambiguous(Vec<RecordId>),
+    /// No recorded birth addresses this path
+    Unrecorded,
+}
+
+use crate::store::{RecordId, World};
+
+/// Resolve one caller path to its recorded workspace birth, for every
+/// door that names one - clean, restore, reconcile, and the
+/// ordinary-use guards alike, so no door can drift apart again.
+pub fn resolve_workspace_address(
+    world: &World,
+    path: &Path,
+) -> Result<LifecycleAddress, WorkspaceFail> {
+    let canonical = canonical_dir(path)?;
+    let mut births = world.workspace_births_at(&canonical);
+    for birth in world.workspace_births() {
+        if births.contains(&birth) {
+            continue;
+        }
+        let stored = world.workspace_facts(birth).map(|f| f.worktree);
+        let aliases = stored
+            .map(|p| canonical_dir(p.as_path()).map(|c| c == canonical))
+            .unwrap_or(Ok(false));
+        if aliases.unwrap_or(false) {
+            births.push(birth);
+        }
+    }
+    births.sort();
+    Ok(match births.as_slice() {
+        [] => LifecycleAddress::Unrecorded,
+        [one] => LifecycleAddress::Single(*one),
+        many => LifecycleAddress::Ambiguous(many.to_vec()),
+    })
+}
+
 // -- the workspace lifecycle effects -------------------------------------
 // Checkout inspection and removal under normal Git protections. Every
 // function states what it verified; none touches the record. The

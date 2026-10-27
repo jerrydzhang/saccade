@@ -8039,6 +8039,38 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
         sh(&rig.root, &["rev-parse", "HEAD"]).trim()
     );
 
+    // the Cleaned stage blocks ordinary use at BOTH spellings once the
+    // checkout stands again: the guard resolves the alias, it never
+    // lets a known Cleaned workspace become usable through its twin
+    sh(
+        &rig.root,
+        &[
+            "worktree",
+            "add",
+            &real.display().to_string(),
+            "saccade/t-9",
+        ],
+    );
+    for shape in [recorded.to_str().unwrap(), real.to_str().unwrap()] {
+        let (ok, _out, err) = rig_sac(&rig, &["launch", "--workspace", shape]);
+        assert!(
+            !ok,
+            "the aliased Cleaned workspace took a launch at {shape}: {err}"
+        );
+        assert!(err.contains("recorded Cleaned"), "{err}");
+    }
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": recorded.display().to_string()}}),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "workspace_cleaned",
+        "{body}"
+    );
+
     // a second stored path over the same directory makes the alias
     // unsafe: both shapes refuse as ambiguous, neither is picked
     establishment(1, "saccade/t-10", real.display().to_string().as_str());
@@ -8047,4 +8079,10 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
         assert!(!ok, "the aliased directory resolved to one birth: {err}");
         assert!(err.contains("workspace_ambiguous_path"), "{err}");
     }
+
+    // reconcile surfaces the twin spellings as shared-path conflicts
+    // for both births, instead of processing them as separate targets
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
+    assert!(ok, "reconcile fails: {out}{err}");
+    assert!(out.contains("share this path"), "{out}");
 }

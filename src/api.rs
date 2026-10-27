@@ -1049,17 +1049,37 @@ fn launch_operation(
         };
         let canonical =
             crate::workspace::canonical_dir(Path::new(path)).map_err(ApiFail::Workspace)?;
-        if let Some(birth) = world.cleaned_workspace_at(&canonical) {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_cleaned",
-                format!(
-                    "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
-                    canonical.display(),
-                    birth.0,
-                    canonical.display()
-                ),
-            ));
+        match crate::workspace::resolve_workspace_address(&world, Path::new(path))
+            .map_err(ApiFail::Workspace)?
+        {
+            crate::workspace::LifecycleAddress::Single(birth) => {
+                if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Cleaned) {
+                    return Err(ApiFail::Refused(
+                        StatusCode::CONFLICT,
+                        "workspace_cleaned",
+                        format!(
+                            "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
+                            canonical.display(),
+                            birth.0,
+                            canonical.display()
+                        ),
+                    ));
+                }
+            }
+            // several stored paths over one directory: the ordinary-use
+            // guard refuses rather than picking an identity
+            crate::workspace::LifecycleAddress::Ambiguous(births) => {
+                return Err(ApiFail::Refused(
+                    StatusCode::CONFLICT,
+                    "workspace_ambiguous_path",
+                    format!(
+                        "{} is the recorded path of {} workspace births; resolve their history by hand before launching there",
+                        canonical.display(),
+                        births.len()
+                    ),
+                ));
+            }
+            crate::workspace::LifecycleAddress::Unrecorded => {}
         }
     }
     let label = crate::host::command_label(&pi.display().to_string());
@@ -1301,17 +1321,35 @@ fn change_operation(
     // target until an explicit restore; unrelated directories pass
     let target_canonical =
         crate::workspace::canonical_dir(target.as_path()).map_err(ApiFail::Workspace)?;
-    if let Some(birth) = world.cleaned_workspace_at(&target_canonical) {
-        return Err(ApiFail::Refused(
-            StatusCode::CONFLICT,
-            "workspace_cleaned",
-            format!(
-                "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
-                target_canonical.display(),
-                birth.0,
-                target_canonical.display()
-            ),
-        ));
+    match crate::workspace::resolve_workspace_address(&world, target.as_path())
+        .map_err(ApiFail::Workspace)?
+    {
+        crate::workspace::LifecycleAddress::Single(birth) => {
+            if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Cleaned) {
+                return Err(ApiFail::Refused(
+                    StatusCode::CONFLICT,
+                    "workspace_cleaned",
+                    format!(
+                        "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
+                        target_canonical.display(),
+                        birth.0,
+                        target_canonical.display()
+                    ),
+                ));
+            }
+        }
+        crate::workspace::LifecycleAddress::Ambiguous(births) => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_ambiguous_path",
+                format!(
+                    "{} is the recorded path of {} workspace births; resolve their history by hand before switching there",
+                    target_canonical.display(),
+                    births.len()
+                ),
+            ));
+        }
+        crate::workspace::LifecycleAddress::Unrecorded => {}
     }
 
     // the session's activation lock: automatic mail activation and
@@ -1559,27 +1597,32 @@ fn lifecycle_target(
         db::LoadState::Full(world) => world,
         db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
     };
+    // the canonical form names the directory in refusal messages; the
+    // resolver owns the addressing decision
     let canonical = workspace::canonical_dir(Path::new(path_str)).map_err(ApiFail::Workspace)?;
-    // the exact recorded target: a birth addresses by its own stored
-    // string or by the canonical form it resolves to - a historical
-    // recorded path with a symlink segment stays addressable - while
-    // two stored paths resolving to one directory refuse as ambiguous
-    let mut births = world.workspace_births_at(&canonical);
-    for birth in world.workspace_births() {
-        if births.contains(&birth) {
-            continue;
+    let facts = match workspace::resolve_workspace_address(&world, Path::new(path_str))
+        .map_err(ApiFail::Workspace)?
+    {
+        workspace::LifecycleAddress::Single(birth) => world
+            .workspace_facts(birth)
+            .expect("the resolver named a recorded birth"),
+        workspace::LifecycleAddress::Ambiguous(births) => {
+            return Err(ApiFail::Refused(
+                StatusCode::CONFLICT,
+                "workspace_ambiguous_path",
+                format!(
+                    "{} is the recorded path of {} workspace births ({}); resolve their history by hand before any lifecycle act",
+                    canonical.display(),
+                    births.len(),
+                    births
+                        .iter()
+                        .map(|b| b.0.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
         }
-        let stored = world.workspace_facts(birth).map(|f| f.worktree);
-        let aliases = stored
-            .map(|p| workspace::canonical_dir(p.as_path()).map(|c| c == canonical))
-            .unwrap_or(Ok(false));
-        if aliases.unwrap_or(false) {
-            births.push(birth);
-        }
-    }
-    births.sort();
-    match births.len() {
-        0 => {
+        workspace::LifecycleAddress::Unrecorded => {
             return Err(ApiFail::Refused(
                 StatusCode::BAD_REQUEST,
                 "workspace_not_recorded",
@@ -1589,26 +1632,7 @@ fn lifecycle_target(
                 ),
             ));
         }
-        1 => {}
-        n => {
-            return Err(ApiFail::Refused(
-                StatusCode::CONFLICT,
-                "workspace_ambiguous_path",
-                format!(
-                    "{} is the recorded path of {n} workspace births ({}); resolve their history by hand before any lifecycle act",
-                    canonical.display(),
-                    births
-                        .iter()
-                        .map(|b| b.0.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            ));
-        }
-    }
-    let facts = world
-        .workspace_facts(births[0])
-        .expect("the fold just resolved this birth");
+    };
     Ok((world, facts))
 }
 
@@ -2169,14 +2193,16 @@ fn reconcile_operation(
     let registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
     // every workspace birth in birth order, created and established
     let births = world.workspace_births();
-    // paths shared by several births are a conflict before any act
+    // paths shared by several births are a conflict before any act:
+    // sharing keys on the canonical form, so twin spellings of one
+    // directory count as the same unsafe address
     let mut shared: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let mut entries: Vec<(RecordId, crate::store::WorkspaceFacts)> = Vec::new();
     for birth in births {
         if let Some(facts) = world.workspace_facts(birth) {
-            *shared
-                .entry(facts.worktree.as_path().display().to_string())
-                .or_default() += 1;
+            if let Ok(canonical) = workspace::canonical_dir(facts.worktree.as_path()) {
+                *shared.entry(canonical.display().to_string()).or_default() += 1;
+            }
             entries.push((birth, facts));
         }
     }
@@ -2191,7 +2217,11 @@ fn reconcile_operation(
             path: path_string.clone(),
             reason,
         };
-        if shared.get(&path_string).copied().unwrap_or(0) > 1 {
+        let shares = workspace::canonical_dir(facts.worktree.as_path())
+            .map(|canonical| shared.get(&canonical.display().to_string()).copied())
+            .unwrap_or(None)
+            .unwrap_or(0);
+        if shares > 1 {
             conflicts.push(entry("several workspace births share this path".into()));
             continue;
         }
