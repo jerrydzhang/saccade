@@ -1,16 +1,23 @@
-// The load hook half of the composition preload: transforms exactly one
-// anchored property forward in the pinned runtime's sendUserMessage, so
-// a delivery that passes preflightResult receives its own per-call
-// acceptance outcome (queued at steer insertion, started at run start,
-// handled on interception). The pinned runtime ships the same forward
-// in two forms - the readable package module and the minified cli
-// bundle - so both anchors are carried, each independently asserted to
-// appear exactly once before it is rewritten. Any source without an
-// exact anchor passes through untouched, which is the confinement
-// proof: arbitrary processes that inherit the registration never
-// contain an anchor and are never modified, and a pinned-runtime change
-// that moves an anchor fails the session loudly instead of silently
-// no-oping.
+// The load hook half of the composition preload. The receipt forward
+// applies ONLY to the exact pinned module URLs baked into
+// receipt-sources.json beside this file at composition build time;
+// every other module passes through untouched - a foreign module
+// carrying the same anchor, a child process's copy of the SDK,
+// anything else. The registration itself is argument-scoped: it exists
+// only in the process the saccade-pi wrapper launches, so unrelated
+// processes never run this hook at all.
+//
+// When an intended target is loaded it must carry exactly one forward
+// anchor: zero means the pinned runtime moved and the receipt cannot
+// apply - the load fails visibly rather than leaving sends stuck
+// unacknowledged; more than one means the pinned source is corrupted
+// in a way no forward can be safe against. Both failures are loud.
+import { readFileSync } from "node:fs";
+
+const receiptSources = JSON.parse(
+	readFileSync(new URL("receipt-sources.json", import.meta.url), "utf8"),
+);
+const intended = new Set(receiptSources);
 
 // The readable form shipped in dist/core/agent-session.js.
 const READABLE_ANCHOR = `        await this.prompt(text, {
@@ -33,38 +40,37 @@ const MINIFIED_ANCHOR =
 const MINIFIED_FORWARDED =
 	'await this.prompt(text,{expandPromptTemplates:options?.expandPromptTemplates??!1,streamingBehavior:options?.deliverAs,images,source:"extension",preflightResult:options?.preflightResult})';
 
-const FORMS = [
-	[READABLE_ANCHOR, READABLE_FORWARDED],
-	[MINIFIED_ANCHOR, MINIFIED_FORWARDED],
-];
+// The intended target's shipped form follows its path: the readable
+// module carries the spaced anchor, the minified bundle chunk carries
+// the condensed one.
+function anchorFor(url) {
+	if (url.endsWith("/dist/core/agent-session.js")) return READABLE_ANCHOR;
+	if (url.includes("/dist/bundle/chunks/")) return MINIFIED_ANCHOR;
+	return undefined;
+}
 
 const decoder = new TextDecoder();
 
-function transform(source, url) {
-	for (const [anchor, forwarded] of FORMS) {
-		const hits = source.split(anchor).length - 1;
-		if (hits === 0) continue;
-		if (hits !== 1) {
-			throw new Error(
-				`saccade composition shim: the sendUserMessage forward anchor appears ${hits} times in ${url}; the pinned runtime moved and the receipt forward cannot be applied safely`,
-			);
-		}
-		return source.replace(anchor, forwarded);
-	}
-	return source;
-}
-
 export async function load(url, context, nextLoad) {
+	if (!intended.has(url)) {
+		return nextLoad(url, context);
+	}
+	const anchor = anchorFor(url);
 	const result = await nextLoad(url, context);
 	// newer runtimes hand the default load's source over as a typed
 	// array, older ones as a string; both decode to the same text
 	if (result.source === null || result.source === undefined) {
-		return result;
+		throw new Error(
+			`saccade composition preload: the intended target ${url} surfaced no source to transform`,
+		);
 	}
 	const text = typeof result.source === "string" ? result.source : decoder.decode(result.source);
-	const transformed = transform(text, url);
-	if (transformed === text) {
-		return result;
+	const hits = text.split(anchor).length - 1;
+	if (hits !== 1) {
+		throw new Error(
+			`saccade composition preload: the pinned sendUserMessage forward anchor appears ${hits} times in the intended target ${url}; the receipt forward cannot apply - failing visibly instead of leaving sends stuck unacknowledged`,
+		);
 	}
-	return { ...result, source: transformed };
+	const forwarded = anchor === READABLE_ANCHOR ? READABLE_FORWARDED : MINIFIED_FORWARDED;
+	return {...result, source: text.replace(anchor, forwarded)};
 }

@@ -17,9 +17,11 @@ import {
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface SessionHarness {
 	session: any;
@@ -164,6 +166,46 @@ test("a compaction-window rejection never fires the receipt", { timeout: 30000 }
 		);
 		session.abortCompaction();
 		await settling;
+	} finally {
+		dispose();
+	}
+});
+
+test("the adaptation never leaks into child Node programs importing the same SDK", { timeout: 30000 }, async () => {
+	const { session, dispose } = await harness([]);
+	try {
+		// the parent process carries the composition's --import: its
+		// sendUserMessage is the adapted one
+		const outcome = await receipt(session, "saccade smoke: parent carries the preload");
+		assert.equal(outcome, "started");
+		// a child Node program importing the SAME pinned SDK runs with
+		// a clean environment - the preload is argument-scoped, so the
+		// child's own module copy is untransformed
+		const probe = "import(\"@earendil-works/pi-coding-agent\").then((m) => { const s = m.AgentSession.prototype.sendUserMessage.toString(); process.stdout.write(String(s.includes(\"preflightResult: options?.preflightResult\"))); });";
+		const childOptions = {
+			cwd: dirname(fileURLToPath(import.meta.url)),
+			env: { ...process.env, NODE_OPTIONS: "" },
+			// the pinned SDK's ambient node:child_process shim types the
+			// spawn minimally; this smoke needs the pipes
+			stdio: ["pipe", "pipe", "pipe"],
+		};
+		const child: any = spawn(process.execPath, ["--input-type=module", "--eval", probe], childOptions);
+		let out = "";
+		let errOut = "";
+		child.stdout.on("data", (chunk: unknown) => {
+			out += String(chunk);
+		});
+		child.stderr.on("data", (chunk: unknown) => {
+			errOut += String(chunk);
+		});
+		await new Promise<void>((resolve, reject) => {
+			child.on("exit", (code: number) =>
+				code === 0
+					? resolve()
+					: reject(new Error(`child exited ${code}: ${errOut.slice(0, 300)}`)),
+			);
+		});
+		assert.equal(out, "false", "the child's SDK copy must be untransformed");
 	} finally {
 		dispose();
 	}

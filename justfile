@@ -13,7 +13,7 @@ typecheck:
 
 native-test: typecheck
     node --experimental-strip-types --test native/saccade.test.ts
-    node --import ./native/saccade-composition-shim.mjs --experimental-strip-types --test native/runtime-acceptance.test.ts
+    node --import "$SACCADE_COMPOSITION_PRELOAD/saccade-composition-shim.mjs" --experimental-strip-types --test native/runtime-acceptance.test.ts
 
 web-build:
     cd web && npm run build
