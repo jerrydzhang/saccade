@@ -135,7 +135,10 @@ def main():
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             ready(page, base)
-            check(len(state(page)['panes']) == 1 and state(page)['mode'] == 'Normal', 'one text-first home pane opens in Normal mode')
+            check(len(state(page)['panes']) == 1 and state(page)['mode'] == 'View', 'one home pane opens in rendered View')
+            check(page.locator('.pane.active .home-activity .home-entry').count() > 0
+                  and page.locator('.pane.active .home-tasks .home-entry').count() > 0,
+                  'home renders recent activity and recently active tasks')
             page.screenshot(path=str(RUN / '01-home.png'))
             for axis, binding in [('beside', 'wv'), ('below', 'ws')]:
                 for close_index in (0, 1):
@@ -809,7 +812,7 @@ def main():
             page = context.new_page(); ready(page, base)
             # textContent, not inner_text: the renderer collapses the bar's spacing runs
             bar = lambda: [page.locator('#bar-mode').text_content(), page.locator('#bar-kind').text_content(), page.locator('#bar-ident').text_content(), page.locator('#bar-info').text_content(), page.locator('#bar-flags').text_content()]
-            check(bar() == ['NORMAL', 'Home', 'home', '', '[-]'], 'home opens with the exact mode-kind-ident-info-flags bar tuple')
+            check(bar() == ['RENDERED', 'Home', 'home', '', '[-]'], 'home opens with the exact mode-kind-ident-info-flags bar tuple')
             page.goto(base + f'/t/{survey_id}'); page.wait_for_function('window.workbenchUI !== undefined')
             check(bar()[:3] == ['RENDERED', 'Task', f't-{survey_id}'], 'a task deep link opens its thread as rendered Task cards')
             def deep(comment_id):
@@ -1004,6 +1007,105 @@ def main():
             page.locator('.pane.active .reading').focus()
             page.keyboard.press('j')
             wait_submission(page, 'no contributions')
+            context.close()
+
+            # home: the ratified activity surfaces - inclusion, ordering,
+            # first-pass bounds with Show more, selected-card navigation,
+            # and layout that reads the pane's own space
+            server.cli('claim', 't-0')
+            for room in range(6):
+                server.cli('create', 'task', f'The wide room {room}')
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            snap = request(base + '/api/v1/workbench')[1]
+            activity = snap['recent_activity']
+            machinery = {'workspace_established', 'task_workspace_checkpointed', 'workspace_created',
+                         'workspace_changed', 'incarnation_registered', 'message_sent', 'message_submitted'}
+            included = [r['seq'] for r in request(base + '/api/v1/records')[1]['records'] if r['kind'] not in machinery]
+            seqs = [e['seq'] for e in activity]
+            check(seqs == list(reversed(included)), 'recent activity is exactly the included records, newest first')
+            check(all(e['event'] not in machinery for e in activity), 'no session, workspace, or message bookkeeping is home activity')
+            comments_by_seq = {c['seq']: c for c in snap['comments']}
+            claimed = next(e for e in activity if e['event'] == 'task_claimed')
+            check(claimed['home'] == 0 and claimed['comment'] is None, 'a claim is activity on its task with no card anchor')
+            offered = next(e for e in activity if e['event'] == 'commented' and comments_by_seq[e['seq']]['kind'] == 'offer')
+            check(offered['comment'] is not None and offered['home'] == comments_by_seq[offered['seq']]['home'], 'an offer birth anchors its card on its home thread')
+            artifact_entry = next(e for e in activity if e['event'] == 'artifact_added')
+            check(artifact_entry['artifact'] and artifact_entry['comment'] is None, 'an artifact entry names its pointer, not a card')
+            active = snap['recently_active_tasks']
+            latest = {}
+            for e in reversed(activity):  # oldest first: the newest write wins
+                latest[e['home']] = e['seq']
+            check([t['task'] for t in active] == sorted(latest, key=lambda t: -latest[t])
+                  and [t['seq'] for t in active] == [latest[t['task']] for t in active],
+                  'recently active tasks order by latest included activity')
+            check(len(active) == len(snap['tasks']), 'every task appears exactly once')
+            # the rendered first-pass bounds: 20 entries, 10 tasks, Show
+            # more in the same increments, no totals anywhere
+            pane = '.pane.active '
+            check(page.locator(pane + '.home-activity .home-entry').count() == 20, 'first pass renders twenty activity entries')
+            check(page.locator(pane + '.home-tasks .home-entry').count() == 10, 'first pass renders ten task entries')
+            check(page.locator(pane + '.home-activity .home-more').count() == 1 and page.locator(pane + '.home-tasks .home-more').count() == 1, 'both surfaces offer Show more')
+            check(page.evaluate('!/\\b\\d+ of \\d+\\b/.test(document.querySelector(".pane.active .reading").innerText)'), 'no totals or badges on home')
+            # Show more reveals older entries in the same increments, to
+            # the full included log, however long it is
+            shown = 20
+            while page.locator(pane + '.home-activity .home-more').count() == 1:
+                page.locator(pane + '.home-activity .home-more').click()
+                shown += 20
+                page.wait_for_function(f'document.querySelectorAll(".pane.active .home-activity .home-entry").length === {min(shown, len(activity))}')
+            check(page.locator(pane + '.home-activity .home-entry').count() == len(activity), 'activity Show more reveals older entries in twenty-entry increments to the full log')
+            check(page.locator(pane + '.home-tasks .home-entry').count() == 10, 'Show more on one surface leaves the other bounded')
+            shown = 10
+            while page.locator(pane + '.home-tasks .home-more').count() == 1:
+                page.locator(pane + '.home-tasks .home-more').click()
+                shown += 10
+                page.wait_for_function(f'document.querySelectorAll(".pane.active .home-tasks .home-entry").length === {min(shown, len(active))}')
+            check(page.locator(pane + '.home-tasks .home-entry').count() == len(active), 'task Show more reveals older entries in ten-entry increments to the full board')
+            check(page.locator(pane + '.home-more').count() == 0, 'no Show more remains once both surfaces are exhausted')
+            page.screenshot(path=str(RUN / '30-home-wide.png'))
+            # wide pane: tasks sit beside activity
+            columns = page.locator(pane + '.home-surfaces').evaluate('node => getComputedStyle(node).gridTemplateColumns.split(" ").length')
+            act_rect = page.locator(pane + '.home-activity').bounding_box()
+            task_rect = page.locator(pane + '.home-tasks').bounding_box()
+            check(columns == 2 and act_rect['x'] < task_rect['x'], 'a wide pane puts tasks beside activity')
+            # narrow window: the surfaces stack - the pane decides
+            page.set_viewport_size({'width': 620, 'height': 980})
+            page.wait_for_function('getComputedStyle(document.querySelector(".pane.active .home-surfaces")).gridTemplateColumns.split(" ").length === 1')
+            act_rect = page.locator(pane + '.home-activity').bounding_box()
+            task_rect = page.locator(pane + '.home-tasks').bounding_box()
+            check(task_rect['y'] > act_rect['y'] + act_rect['height'] - 2 and task_rect['x'] == act_rect['x'], 'a narrow pane stacks tasks below activity')
+            page.screenshot(path=str(RUN / '31-home-narrow.png'))
+            page.set_viewport_size({'width': 1500, 'height': 980})
+            # a split keeps home narrow while the window stays wide: same
+            # stacking, because the container query reads the pane
+            leader(page, 'wv')
+            page.wait_for_function('getComputedStyle(document.querySelector(".pane.active .home-surfaces")).gridTemplateColumns.split(" ").length === 1')
+            check(page.evaluate('window.innerWidth') == 1500, 'the window is still wide inside the split')
+            check(page.locator('.pane.active .home-surfaces').bounding_box()['width'] < 760, 'the home pane itself is narrow')
+            page.screenshot(path=str(RUN / '32-home-split-narrow.png'))
+            context.close()
+            # navigation: an activity entry lands on its card selected in
+            # the thread; an artifact entry opens the thread unselected
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            while page.locator('.pane.active .home-activity .home-more').count() == 1:
+                page.locator('.pane.active .home-activity .home-more').click()
+                page.wait_for_timeout(120)
+            card_entry = next(e for e in snap['recent_activity'] if e['comment'] is not None)
+            card_href = f"/t/{card_entry['home']}#c-{card_entry['comment']}"
+            check(page.locator(f'.home-activity a[href="{card_href}"]').count() >= 1, 'a contribution birth links its card in the home thread')
+            page.locator(f'.home-activity a[href="{card_href}"]').first.click()
+            page.wait_for_function('document.querySelector(".pane.active .thread-card.selected") !== null')
+            check(page.locator(f'.pane.active .thread-card.selected[data-comment="c-{card_entry["comment"]}"]').count() == 1, 'an activity link lands on its card selected in the thread')
+            check(page.locator('#bar-info').text_content().startswith(f'selected c-{card_entry["comment"]}'), 'the bar names the arrived selection')
+            check(page.locator('.pane.active .thread-card').count() > 1, 'the thread keeps its context around the selected card')
+            command(page, 'home')
+            task_href = f"/t/{artifact_entry['home']}"
+            page.locator(f'.home-activity a[href="{task_href}"]').first.click()
+            page.wait_for_function('document.querySelector(".pane.active .thread-card") !== null')
+            check(page.locator('.pane.active .thread-card.selected').count() == 0, 'an artifact entry opens the thread with no card selected')
+            check(page.locator('.pane.active .reading .thread-meta').first.inner_text().startswith('t-'), 'standalone thread reading is unchanged beside it')
             context.close()
 
             # registry parity: folds, reader scroll, and pane focus are
