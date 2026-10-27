@@ -1717,11 +1717,16 @@ def main():
             page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=flush_cursor, timeout=20000)
             page.wait_for_timeout(200)
             check(len(holder) >= 1, 'the follow re-park is held while the route stands')
+            # the oracle: capture the fold while the log still stands at
+            # the flush cursor, so the fulfilled response is genuinely
+            # older than anything the explicit reload will reach
+            older_fold = request(base + f'/api/v1/workbench?cursor={flush_cursor}&wait_ms=0')[1]
+            check(older_fold['cursor'] == flush_cursor, 'the held response carries the earlier fold')
             server.cli('comment', f't-{live_id}', '--title', 'The newest retention probe', 'This record is only in the newer explicit reload.')
             newest_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            check(newest_cursor > flush_cursor, 'the newest record moved the log past the held fold')
             command(page, 'reload')
             page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=newest_cursor)
-            older_fold = request(base + f'/api/v1/workbench?cursor={flush_cursor}&wait_ms=0')[1]
             holder[0].fulfill(status=200, content_type='application/json', body=json.dumps(older_fold))
             page.wait_for_timeout(300)
             check(page.evaluate('window.workbenchUI.state().cursor') == newest_cursor, 'a delayed older follow response rolls the cursor back to nothing')
@@ -1770,6 +1775,22 @@ def main():
             leader(page, 'nt'); wait_submission(page, 'Created')
             check(next(t['name'] for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The staged survivor') == 'The staged survivor', 'the staged create still publishes after the landing')
             check(state(page)['staged']['task'] is None, 'the stage clears only when its own create lands')
+            leader(page, 'nl'); prompt_ready(page)
+            page.keyboard.type('directory')
+            page.wait_for_timeout(120)
+            page.keyboard.press('Enter')
+            prompt_ready(page)
+            page.fill('#query', str(server.repo))
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged']['launch'] == {'existing': str(server.repo)}, 'the launch choice is staged')
+            server.cli('comment', f't-{live_id}', '--title', 'The launch staging neighbor', 'A record lands while a launch is staged.')
+            launch_stage_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=launch_stage_cursor)
+            check(state(page)['staged']['launch'] == {'existing': str(server.repo)}, 'a landing leaves the staged launch standing')
+            leader(page, 'nl'); wait_submission(page, 'Submitted to the host')
+            check(str(server.repo) in page.locator('#message').text_content(), 'the staged launch still submits to the fake host after the landing')
+            check(state(page)['staged']['launch'] is None, 'the launch stage clears only when its own launch lands')
 
             leader(page, 'hh')
             page.wait_for_selector('.pane.active .home-activity .home-entry')
