@@ -203,7 +203,7 @@ summary:focus-visible {
 #bar-mode { color: var(--steel); min-width: 5.5ch; }
 #bar-kind { color: var(--bright); }
 #bar-ident { color: var(--primary); }
-#bar-info { color: var(--muted); }
+#bar-info { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #bar-flags { color: var(--gold); }
 #open-commands {
   margin-left: auto; min-width: 44px; padding: 2px 10px;
@@ -212,9 +212,7 @@ summary:focus-visible {
 }
 #open-commands:hover { color: var(--bright); border-color: var(--steel); }
 .draft-title { color: var(--bright); font-size: 17px; margin: 0 0 6px; }
-#title-dialog { width: 560px; }
-#title-dialog input { width: 100%; padding: 8px; background: var(--deep); color: var(--primary); border: 1px solid var(--line); }
-#title-dialog footer, #publication footer, #picker footer { display: flex; gap: 8px; justify-content: flex-end; padding-top: 10px; }
+#picker footer { display: flex; gap: 8px; justify-content: flex-end; padding-top: 10px; }
 #leader {
   background: var(--inset);
   color: var(--primary);
@@ -247,6 +245,8 @@ dialog footer { padding-top: 12px; flex-wrap: wrap; }
 dialog footer span { font-size: 11px; color: var(--muted); }
 
 #picker { width: 1120px; height: 76dvh; }
+#picker.prompt { width: 560px; height: auto; }
+#picker.prompt .picker-body { display: none; }
 
 .query-label {
   display: flex;
@@ -319,33 +319,6 @@ dialog footer span { font-size: 11px; color: var(--muted); }
 #picker.commands { width: 560px; height: min(560px, 75dvh); }
 #picker.commands .picker-body { display: block; }
 #picker.commands #results { height: 100%; border-right: 0; }
-
-#publication { width: 850px; }
-
-.review-fields {
-  display: flex;
-  gap: 18px;
-  flex-wrap: wrap;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line-soft);
-}
-.review-fields select { max-width: 100%; padding: 6px; background: var(--deep); }
-.review-fields span { color: var(--muted); }
-
-#review-references {
-  font: 13px/1.7 var(--mono);
-  overflow-wrap: anywhere;
-}
-#review-references li { margin: 3px 0; }
-
-#publication-status {
-  font: 13px/1.6 var(--mono);
-  color: var(--muted);
-  border-top: 1px solid var(--line-soft);
-  padding-top: 12px;
-}
-
-#publish { border-color: var(--steel); }
 
 .reading {
   height: 100%;

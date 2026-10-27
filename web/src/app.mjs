@@ -23,8 +23,7 @@ let pendingG = false;
 let pendingZ = false;
 let pendingWindow = false;
 let pickerPreviewGeneration = 0;
-let reviewBufferId = null;
-let reviewConfirmation = null;
+let claimedName = null;    // the name a human typed when no cookie claimed one yet
 let submitting = false;
 let nextDraft = 1;
 let messageTimer = 0;
@@ -115,7 +114,7 @@ function commentText(source) {
 function published(id) {
   let data;
   if (id === "home") {
-    data = { id, kind: "home", title: "Home", text: "Saccade\n\nFind work, inspect contributions, and write with sources beside you.\n\n: opens commands\nSpace Space  find task, contribution, or local draft\nSpace sg  search recorded content\n, e  revise the focused contribution\n, a / , x  accept / reject the standing offer\n, t  title the focused draft\ngd  follow id or citation\ngr  show backlinks\nCtrl+O / Ctrl+I  jump backward / forward\nSpace nn  new note\n\nOpen only the buffers and panes you want." };
+    data = { id, kind: "home", title: "Home", text: "Saccade\n\nFind work, inspect contributions, and write with sources beside you.\n\n: opens commands\nSpace Space  find task, contribution, or local draft\nSpace sg  search recorded content\n, e  revise the focused contribution\n, a / , x  accept / reject the standing offer\n, t  title the focused draft\n, p  publish the focused draft\ngd  follow id or citation\ngr  show backlinks\nCtrl+O / Ctrl+I  jump backward / forward\nSpace nn  new note\n\nOpen only the buffers and panes you want." };
   } else if (id.startsWith("t-")) {
     const source = task(Number(id.slice(2)));
     if (!source) throw new Error("task is unavailable");
@@ -215,12 +214,19 @@ function identifier(buffer) {
 }
 
 function identifierInfo(buffer) {
-  if (buffer.revisionPending) return "revising";
-  if (buffer.kind === "draft") {
-    if (buffer.eventual?.kind === "reject") return `rejecting c-${buffer.eventual.offer}`;
-    return "";
+  const store = buffer.revisionPending ? buffer.revisionPending.submission
+    : buffer.kind === "draft" ? buffer.submission : buffer.decision;
+  const tag = { landed: "recorded", unknown: "submission unconfirmed" }[store?.kind];
+  const parts = [];
+  if (buffer.revisionPending) {
+    const titled = ["note", "offer"].includes(buffer.source.kind);
+    parts.push(`revising${titled ? `  ${buffer.revisionPending.title || "no title"}` : ""}`);
+  } else if (buffer.kind === "draft") {
+    if (buffer.eventual?.kind === "reject") parts.push(`rejecting c-${buffer.eventual.offer}`);
+    else parts.push(buffer.home === null ? "no home" : `t-${buffer.home}`, buffer.authoredTitle || "no title");
   }
-  return "";
+  if (tag) parts.push(tag);
+  return parts.join("  ");
 }
 
 function refreshChrome() {
@@ -271,7 +277,6 @@ function dispatch(viewId, transactions, view) {
   for (const id of editors.keys()) {
     if (bench.view(id).bufferId === buffer.id && isReading(id)) showPresentation(id);
   }
-  if (reviewBufferId) setPublishEnabled();
   persist();
   refreshChrome();
 }
@@ -337,7 +342,22 @@ function draftSignature(buffer) {
   if (buffer.revisionPending) {
     return JSON.stringify([buffer.revision, buffer.text, buffer.source.references, buffer.revisionPending.title]);
   }
-  return JSON.stringify([buffer.revision, buffer.text, buffer.references]);
+  return JSON.stringify([buffer.revision, buffer.text, buffer.references, buffer.home, buffer.authoredTitle]);
+}
+
+// the authoring facts the ratified design keeps visible: home task and
+// authored title, named as missing while they are missing
+function draftMetaLine(buffer, revising) {
+  if (revising) {
+    const home = `home: t-${buffer.source.home}  ${task(buffer.source.home)?.name ?? ""}`;
+    const titled = ["note", "offer"].includes(buffer.source.kind);
+    return `${home}${titled ? `\ntitle: ${buffer.revisionPending.title || "not authored"}` : ""}`;
+  }
+  if (buffer.eventual?.kind === "reject") {
+    const home = buffer.eventual.offerSeq === undefined ? buffer.home : comment(buffer.eventual.offer)?.home;
+    return `rejecting c-${buffer.eventual.offer}\nhome: ${home === undefined || home === null ? "unresolved" : `t-${home}  ${task(home)?.name ?? ""}`}`;
+  }
+  return `home: ${buffer.home === null ? "not selected" : `t-${buffer.home}  ${task(buffer.home)?.name ?? ""}`}\ntitle: ${buffer.authoredTitle || "not authored"}`;
 }
 
 function showDraft(viewId, reader, buffer) {
@@ -345,14 +365,11 @@ function showDraft(viewId, reader, buffer) {
   if (reader.signature === signature || reader.pendingSignature === signature) return;
   const token = {};
   reader.previewToken = token; reader.pendingSignature = signature;
-  let body = reader.querySelector(".draft-body");
   const revising = !!buffer.revisionPending;
-  if (!body) {
-    body = el("div", "Rendering draft...", "draft-body");
-    reader.replaceChildren(el("p", revising ? "Proposed repair preview. Viewing does not publish." : "Local draft preview. Viewing does not publish.", "reading-meta"), body);
-  } else if (reader.signature === null) {
-    reader.replaceChildren(el("p", revising ? "Proposed repair preview. Viewing does not publish." : "Local draft preview. Viewing does not publish.", "reading-meta"), body);
-  }
+  const meta = el("p", `${revising ? "Proposed repair preview. Viewing does not publish." : "Local draft preview. Viewing does not publish."}\n${draftMetaLine(buffer, revising)}`, "reading-meta");
+  let body = reader.querySelector(".draft-body");
+  if (!body) body = el("div", "Rendering draft...", "draft-body");
+  reader.replaceChildren(meta, body);
   if (revising && buffer.revisionPending.title) {
     const title = el("h2", buffer.revisionPending.title, "draft-title");
     reader.prepend(title);
@@ -586,7 +603,7 @@ function startRevision() {
   buffer.master = null;
   presentation().mode = "source";
   renderLayout(); focusPane(bench.focus);
-  status(`Revising ${buffer.id}: edit Source, View previews the proposed repair, , r reviews it. , e again discards.`);
+  status(`Revising ${buffer.id}: edit Source, View previews the proposed repair, , p publishes it. , e again discards.`);
 }
 
 function discardRevision() {
@@ -611,7 +628,7 @@ function startAccept() {
   const buffer = current();
   const offer = standingOffer(buffer);
   if (!offer) return status("Accept applies to the standing offer of an offered task.");
-  openReview();
+  submitSurface(acceptSurface(buffer));
 }
 
 function startReject() {
@@ -623,35 +640,32 @@ function startReject() {
   const id = nextDraftId();
   bench.register({ id, kind: "draft", title: `Grounds ${id.slice(6)}`, text: "", home: offer.home, references: [], submission: null, authoredTitle: "", eventual: { kind: "reject", offer: offer.id, offerSeq: offer.seq }, savedText: "" });
   openBuffer(id, bench.focus, "source");
-  status(`Grounds for rejecting ${offer.id}: , r reviews the decision. Home and target are fixed.`);
+  status(`Grounds for rejecting ${offer.id}: , p publishes the decision. Home and target are fixed.`);
 }
 
-function editTitle() {
-  const buffer = current();
-  let target;
+// the title target behind a prompt: note drafts author their own title,
+// note and offer repairs revise the recorded one, everything else has none
+function titleTarget(buffer) {
   if (buffer.revisionPending) {
-    if (!["note", "offer"].includes(buffer.source.kind)) return status("Only notes and offers carry a title.");
-    target = {
+    if (!["note", "offer"].includes(buffer.source.kind)) return null;
+    return {
       get: () => buffer.revisionPending.title ?? "",
       set: (value) => { buffer.revisionPending.title = value; },
     };
-  } else if (buffer.kind === "draft" && buffer.eventual?.kind !== "reject") {
-    target = {
+  }
+  if (buffer.kind === "draft" && buffer.eventual?.kind !== "reject") {
+    return {
       get: () => buffer.authoredTitle ?? "",
       set: (value) => { buffer.authoredTitle = value; },
     };
-  } else return status("Titles belong to note drafts and note or offer repairs.");
-  $("#title-input").value = target.get();
-  $("#title-dialog").showModal();
-  $("#title-input").focus();
-  $("#title-apply").onclick = () => {
-    const value = $("#title-input").value.trim();
-    target.set(value);
-    persist(); refreshChrome();
-    $("#title-dialog").close();
-    if (reviewBufferId === buffer.id) openReview();
-    status(value ? `Title set: ${value}` : "Title cleared; publication requires one.");
-  };
+  }
+  return null;
+}
+
+function editTitle() {
+  const target = titleTarget(current());
+  if (!target) return status("Titles belong to note drafts and note or offer repairs.");
+  openPicker("title", { target });
 }
 
 function draftSurface(buffer) {
@@ -701,70 +715,36 @@ function acceptSurface(buffer) {
   };
 }
 
-function confirmation(surface, actor) {
-  return { id: surface.buffer.id, revision: surface.buffer.revision, kind: surface.kind,
-    body: surface.body, home: surface.home, references: surface.references ? [...surface.references] : null,
-    title: surface.title, actor };
+// -- submission: one explicit door, missing fields prompt and return ------
+
+function publishDraft() {
+  const surface = draftSurface(current());
+  if (!surface) return status("Nothing publishable is focused: open a draft or repair.");
+  submitSurface(surface);
 }
 
-function openReview() {
-  const buffer = current();
-  let surface = draftSurface(buffer) ?? acceptSurface(buffer);
-  if (!surface || (surface.kind === "note" && buffer.kind !== "draft")) surface = null;
-  if (!surface) return status("Nothing reviewable is focused: open a draft, a repair, or the standing offer.");
-  remember(bench.focus);
-  reviewBufferId = buffer.id;
-  const actor = identity.actor ?? $("#review-actor-name").value.trim();
-  reviewConfirmation = confirmation(surface, actor || null);
-  $("#review-kind").textContent = { note: "Note", revision: `Revise ${buffer.source?.kind ?? ""} ${buffer.id}`, accept: `Accept ${buffer.id}`, reject: `Reject ${surface.target}` }[surface.kind];
-  if (surface.kind === "note") {
-    $("#review-home").replaceChildren(new Option("Choose home task", ""), ...snapshot.tasks.map((item) => new Option(`t-${item.id} ${item.name}`, String(item.id))));
-    $("#review-home").value = buffer.home === null ? "" : String(buffer.home);
-    $("#review-home").hidden = false;
-    $("#review-home-label").hidden = false;
-  } else {
-    $("#review-home").replaceChildren();
-    $("#review-home").hidden = true;
-    $("#review-home-label").hidden = true;
-    $("#review-fixed-home").textContent = `Home t-${surface.home} ${task(surface.home)?.name ?? ""} (fixed)`;
+// missing information prompts for itself and returns to the origin pane;
+// the explicit command, run again, is the only thing that ever submits
+function submitSurface(surface) {
+  if (submitting) return status("A submission is already in flight.");
+  const state = surface.submission?.kind;
+  if (state === "landed" || state === "unknown") return status(surface.submission.message);
+  if (!identity.actor && !claimedName) {
+    openPicker("name", { after: () => status(`Name recorded: ${claimedName}. Run the command again to submit.`) });
+    return;
   }
-  $("#review-fixed-home").hidden = surface.kind === "note";
-  $("#review-title").textContent = surface.kind === "note"
-    ? (surface.title || "(unset - press , t)")
-    : surface.title === null ? "" : surface.title;
-  $("#review-title-row").hidden = surface.title === null && surface.kind !== "note";
-  if (identity.actor) {
-    $("#review-actor-name").value = identity.actor;
-    $("#review-actor-name").hidden = true;
-    $("#review-by").textContent = `${identity.actor}/human`;
-  } else {
-    $("#review-actor-name").hidden = false;
-    $("#review-by").textContent = "human (name required below)";
+  if (surface.kind === "note" && surface.home === null) {
+    openPicker("home", { after: () => status(`Home task set: t-${surface.buffer.home}. Publish again to submit.`) });
+    return;
   }
-  const refs = $("#review-references");
-  refs.replaceChildren();
-  if (surface.references === null) {
-    refs.append(el("li", "none - acceptance is the reference"));
-  } else if (surface.references.length === 0) {
-    refs.append(el("li", "none"));
-  } else {
-    for (const [index, seq] of surface.references.entries()) refs.append(el("li", `[^${index + 1}] ${referenceLabel(seq)}`));
+  if (surface.kind === "note" && !surface.title) {
+    openPicker("title", { target: titleTarget(surface.buffer), after: () => status("Title authored. Publish again to submit.") });
+    return;
   }
-  $("#publication-status").textContent = surface.submission?.message ?? "Nothing sent.";
-  $("#publish").textContent = { note: "Publish note once", revision: "Confirm revision once", accept: "Confirm accept once", reject: "Publish rejection once" }[surface.kind];
-  $("#publication").showModal();
-  setPublishEnabled();
-}
-
-function setPublishEnabled() {
-  const buffer = reviewBufferId && bench.buffers.get(reviewBufferId);
-  const surface = buffer && (draftSurface(buffer) ?? acceptSurface(buffer));
-  const actor = identity.actor ?? $("#review-actor-name").value.trim();
-  const currentConfirmation = surface && actor && JSON.stringify(reviewConfirmation) === JSON.stringify(confirmation(surface, actor));
-  const valid = surface && (surface.kind !== "note" || (surface.home !== null && surface.title));
-  $("#publish").disabled = !surface || !currentConfirmation || !valid || !actor || submitting
-    || ["unknown", "landed"].includes(surface.submission?.kind);
-  if (buffer && !currentConfirmation && surface && !surface.submission && $("#publication").open) $("#publication-status").textContent = "Draft changed. Return and review the current surface before sending.";
+  if (surface.kind === "reject" && !surface.body.trim()) {
+    return status("Grounds are required: write them in the focused draft, then publish again.");
+  }
+  submitConfirmed(surface, identity.actor ?? claimedName);
 }
 
 async function send(surface, actor) {
@@ -784,36 +764,32 @@ async function send(surface, actor) {
   return records[0];
 }
 
-async function publish() {
-  const buffer = bench.buffers.get(reviewBufferId);
-  const surface = buffer && (draftSurface(buffer) ?? acceptSurface(buffer));
-  setPublishEnabled();
-  if ($("#publish").disabled || !surface) return;
-  const actor = identity.actor ?? $("#review-actor-name").value.trim();
-  submitting = true; setPublishEnabled();
+async function submitConfirmed(surface, actor) {
+  submitting = true;
   surface.submission = { kind: "unknown", message: "Submission was initiated but no final answer is confirmed. Inspect the task record before another attempt." };
+  let finalMessage = "Submitting once...";
   if (!persist()) {
     submitting = false;
     surface.submission = { kind: "blocked", message: "Submission not attempted: local submission state could not be saved." };
-    $("#publication-status").textContent = surface.submission.message;
-    setPublishEnabled();
+    status(surface.submission.message);
+    refreshChrome();
     return;
   }
-  $("#publication-status").textContent = "Submitting once...";
+  status(finalMessage);
   try {
     const record = await send(surface, actor);
     let message = `Recorded at birth record ${record.seq}.`;
     try {
       await reload(false);
-      const born = surface.kind === "revision" ? buffer.source : birth(record.seq);
-      if (born) message = `Recorded as ${surface.kind === "revision" ? buffer.id : born.id}.`;
+      const born = surface.kind === "revision" ? surface.buffer.source : birth(record.seq);
+      if (born) message = `Recorded as ${surface.kind === "revision" ? surface.buffer.id : born.id}.`;
     } catch { message += " Refresh unavailable."; }
     surface.submission = { kind: "landed", seq: record.seq, message };
-    $("#publication-status").textContent = message;
+    finalMessage = message;
     if (surface.kind === "revision") {
-      buffer.revisionPending = null;
-      published(buffer.id);
-      buffer.master = null;
+      surface.buffer.revisionPending = null;
+      published(surface.buffer.id);
+      surface.buffer.master = null;
     }
   } catch (error) {
     if (error.refused) {
@@ -821,17 +797,12 @@ async function publish() {
     } else {
       surface.submission = { kind: "unknown", message: `Submission outcome unknown: ${error.message} No retry will be sent; inspect the task record.` };
     }
+    finalMessage = surface.submission.message;
   } finally {
     submitting = false;
-    if (surface.submission?.message) $("#publication-status").textContent = surface.submission.message;
-    persist(); setPublishEnabled(); refreshChrome();
+    status(finalMessage);
+    persist(); renderLayout(); focusPane(bench.focus);
   }
-}
-
-function closeReview() {
-  if (submitting) return;
-  reviewConfirmation = null;
-  reviewBufferId = null; $("#publication").close(); focusPane(bench.focus);
 }
 
 function persist() {
@@ -950,7 +921,7 @@ const registry = [
   { id: "new", label: "New note", binding: "nn", run: newNote },
   { id: "cite", label: "Insert citation", binding: "ci", local: "i", when: () => current().kind === "draft" && current().eventual?.kind !== "reject" && !isReading(), run: () => openPicker("cite") },
   { id: "home-task", label: "Set draft home task", binding: "nh", local: "h", when: () => current().kind === "draft" && current().eventual?.kind !== "reject", run: () => openPicker("home") },
-  { id: "review", label: "Review for submission", binding: "nr", local: "r", when: () => { const b = current(); return b.kind === "draft" || !!b.revisionPending || !!standingOffer(b); }, run: openReview },
+  { id: "publish", label: "Publish the focused draft or repair", local: "p", when: () => current().kind === "draft" || !!current().revisionPending, run: publishDraft },
   { id: "revise", label: "Revise this contribution", local: "e", when: () => revisableContext() && !current().revisionPending, run: startRevision },
   { id: "discard-revision", label: "Discard pending repair", local: "e", when: () => !!current().revisionPending, run: discardRevision },
   { id: "accept", label: "Accept the standing offer", local: "a", when: () => !!standingOffer(current()), run: startAccept },
@@ -1050,6 +1021,8 @@ function candidates() {
     const exact = list.find((item) => item.id === query || item.aliases?.includes(query));
     if (exact) return [exact];
     selector = (item) => `${item.label} ${item.id}`;
+  } else if (picker.kind === "title" || picker.kind === "name") {
+    return [];
   } else if (["tasks", "home"].includes(picker.kind)) {
     list = snapshot.tasks;
     if (/^t-\d+$/.test(query.trim())) return list.filter((item) => `t-${item.id}` === query.trim()).map((item) => ({ ...item, finderType: "task" }));
@@ -1145,34 +1118,58 @@ function closePicker() {
   if (origin && bench.views.has(origin)) focusPane(origin);
 }
 
-function openPicker(kind) {
+function openPicker(kind, options = {}) {
   cancelLeader(); pendingZ = false; pendingWindow = false;
+  const prompt = kind === "title" || kind === "name";
   $("#picker").classList.toggle("commands", kind === "commands");
-  $("#picker-preview").hidden = kind === "commands";
-  $("#choose").textContent = kind === "commands" ? "Run command" : "Open / select";
-  $("#picker-hint").textContent = kind === "commands" ? "Up/Down choose | Enter run | Escape cancel" : "Up/Down preview | Enter select | Shift+Enter beside | Escape cancel";
+  $("#picker").classList.toggle("prompt", prompt);
+  $("#picker-preview").hidden = kind === "commands" || prompt;
+  $("#choose").textContent = kind === "commands" ? "Run command"
+    : kind === "title" ? "Set title" : kind === "name" ? "Record name" : "Open / select";
+  $("#query-label-text").textContent = kind === "title" ? "Title" : kind === "name" ? "Your name" : "Search";
+  $("#picker-hint").textContent = prompt ? "Enter confirm | Escape cancel"
+    : kind === "commands" ? "Up/Down choose | Enter run | Escape cancel"
+    : "Up/Down preview | Enter select | Shift+Enter beside | Escape cancel";
   remember(bench.focus);
   const buffer = current();
   if (kind === "cite" && buffer.kind !== "draft") return status("Insert citations while drafting.");
   picker = { kind, viewId: bench.focus, sourceId: buffer.id, selected: 0, items: [],
+    after: options.after ?? null, titleTarget: options.target ?? null,
     ticket: kind === "cite" ? bench.beginCitation(buffer.id, currentEditor().state.selection.main.head) : null };
-  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task" })[kind];
-  $("#query").value = "";
-  $("#beside").hidden = ["commands", "cite", "home"].includes(kind);
+  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task", title: `Authored title for ${buffer.id}`, name: "Your claimed name" })[kind];
+  $("#query").value = picker.titleTarget ? picker.titleTarget.get() : "";
+  $("#beside").hidden = ["commands", "cite", "home"].includes(kind) || prompt;
   renderPicker();
   $("#picker").showModal();
   $("#query").focus();
 }
 
 function choose(beside) {
+  const { kind, ticket, viewId, after, titleTarget } = picker;
+  if (kind === "title" || kind === "name") {
+    const value = $("#query").value.trim();
+    closePicker();
+    if (kind === "title") {
+      titleTarget.set(value);
+      persist(); refreshChrome();
+      if (after) after(value);
+      else status(value ? `Title set: ${value}` : "Title cleared; publication requires one.");
+    } else {
+      if (!value) return status("No name given; nothing recorded.");
+      claimedName = value;
+      if (after) after(value); else status(`Name recorded: ${value}`);
+    }
+    return;
+  }
   const selection = picker.items[picker.selected];
   if (!selection) return;
-  const { kind, ticket, viewId } = picker;
   closePicker();
   if (kind === "commands") return runCommand(selection.id);
   if (kind === "home") {
     const buffer = bench.buffer(bench.view(viewId).bufferId);
-    buffer.home = selection.id; persist(); refreshChrome(); return;
+    buffer.home = selection.id; persist(); refreshChrome();
+    if (after) after(selection);
+    return;
   }
   if (kind === "cite") {
     try {
@@ -1226,23 +1223,7 @@ $("#picker").addEventListener("cancel", (event) => { event.preventDefault(); clo
 $("#picker-close").onclick = closePicker;
 $("#choose").onclick = () => choose(false);
 $("#beside").onclick = () => choose(true);
-$("#publication").addEventListener("cancel", (event) => { event.preventDefault(); closeReview(); });
-$("#edit-note").onclick = closeReview;
-$("#publish").onclick = publish;
-$("#review-home").onchange = (event) => {
-  const buffer = bench.buffer(reviewBufferId);
-  buffer.home = event.target.value === "" ? null : Number(event.target.value);
-  if (reviewConfirmation) reviewConfirmation.home = buffer.home;
-  persist(); refreshChrome(); setPublishEnabled();
-};
-$("#review-actor-name").addEventListener("input", (event) => {
-  if (reviewConfirmation) reviewConfirmation.actor = event.target.value.trim() || null;
-  setPublishEnabled();
-});
-$("#inspect-task").onclick = () => { const home = bench.buffer(reviewBufferId)?.home; closeReview(); if (home !== null && home !== undefined) openBuffer(`t-${home}`); };
 $("#open-commands").onclick = () => { focusPane(bench.focus); openPicker("commands"); };
-$("#title-dialog").addEventListener("cancel", (event) => event.preventDefault());
-$("#title-cancel").onclick = () => $("#title-dialog").close();
 
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-record-target]");
@@ -1258,14 +1239,13 @@ document.addEventListener("click", (event) => {
   event.preventDefault();
   const id = /^#c-\d+$/.test(url.hash) ? url.hash.slice(1) : `t-${url.pathname.slice(3)}`;
   if (picker) closePicker();
-  if (reviewBufferId) closeReview();
   if (!bench.buffers.has(id)) published(id);
   if (event.shiftKey) split("row", id); else openBuffer(id);
 });
 
 // Only the requested Normal-mode jump chords override browser navigation.
 document.addEventListener("keydown", (event) => {
-  if (!snapshot || $("#picker").open || $("#publication").open || $("#title-dialog").open || event.isComposing) return;
+  if (!snapshot || $("#picker").open || event.isComposing) return;
   if (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "w" && event.target.closest(".cm-content,.reading") && ["Normal", "View"].includes(mode())) {
     event.preventDefault(); event.stopImmediatePropagation();
     pendingWindow = true; pendingZ = false; cancelLeader(); return;
@@ -1376,7 +1356,7 @@ async function start() {
     bench.open("home");
   }
   renderLayout(); focusPane(bench.focus);
-  status("Space Space: task/contribution/draft | Space sg: content | , e revise, , a accept, , x reject, , t title | : commands");
+  status("Space Space: task/contribution/draft | Space sg: content | , e revise, , a accept, , x reject, , t title, , p publish | : commands");
   const target = initialBuffer();
   if (target !== "home") {
     try { openBuffer(target, bench.focus); }
