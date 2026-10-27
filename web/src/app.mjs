@@ -6,7 +6,7 @@ import { headerFolding, sectionFold } from "./editor.mjs";
 import { markdown } from "@codemirror/lang-markdown";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { Fzf } from "fzf";
-import { Workbench, commandFor, confirmsLanded, leaves } from "./workbench.mjs";
+import { Workbench, commandFor, confirmsLanded, createTaskCommand, confirmsTaskCreated, launchRequest, leaves } from "./workbench.mjs";
 import { richDocuments } from "./rich.mjs";
 import { sourceAppearance } from "./appearance.mjs";
 
@@ -24,6 +24,8 @@ let pendingZ = false;
 let pendingWindow = false;
 let pickerPreviewGeneration = 0;
 let claimedName = null;    // the name a human typed when no cookie claimed one yet
+let stagedTask = null;     // the task name a prompt confirmed, awaiting its create command
+let stagedLaunch = null;   // the workspace choice a picker confirmed, awaiting its launch command
 let submitting = false;
 let nextDraft = 1;
 let messageTimer = 0;
@@ -114,7 +116,7 @@ function commentText(source) {
 function published(id) {
   let data;
   if (id === "home") {
-    data = { id, kind: "home", title: "Home", text: "Saccade\n\nFind work, inspect contributions, and write with sources beside you.\n\n: opens commands\nSpace Space  find task, contribution, or local draft\nSpace sg  search recorded content\n, e  revise the focused contribution\n, a / , x  accept / reject the standing offer\n, t  title the focused draft\n, p  publish the focused draft\ngd  follow id or citation\ngr  show backlinks\nCtrl+O / Ctrl+I  jump backward / forward\nSpace nn  new note\n\nOpen only the buffers and panes you want." };
+    data = { id, kind: "home", title: "Home", text: "Saccade\n\nFind work, inspect contributions, and write with sources beside you.\n\n: opens commands\nSpace Space  find task, contribution, or local draft\nSpace sg  search recorded content\n, e  revise the focused contribution\n, a / , x  accept / reject the standing offer\n, t  title the focused draft\n, p  publish the focused draft\ngd  follow id or citation\ngr  show backlinks\nCtrl+O / Ctrl+I  jump backward / forward\nSpace nn  new note\nSpace nt  new task\nSpace nl  launch a session\n\nOpen only the buffers and panes you want." };
   } else if (id.startsWith("t-")) {
     const source = task(Number(id.slice(2)));
     if (!source) throw new Error("task is unavailable");
@@ -724,6 +726,112 @@ function startReject() {
   status(`Grounds for rejecting ${offer.id}: , p publishes the decision. Home and target are fixed.`);
 }
 
+// -- task creation and incarnation launch: separate explicit acts ---------
+
+// the staged-choice law these two commands share with publication: a
+// prompt or picker Enter stages the value and returns; the explicit
+// command, run again, is the only thing that ever acts
+function newTask() {
+  if (stagedTask !== null) return createTask(stagedTask);
+  if (!identity.actor && !claimedName) {
+    openPicker("name", { after: () => status(`Name recorded: ${claimedName}. Run New task again to create.`) });
+    return;
+  }
+  openPicker("task-name");
+}
+
+async function sendCreate(name, actor) {
+  const request = { actor, command: createTaskCommand(name) };
+  const response = await fetch("/api/v1/workbench/command", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+  let data;
+  try { data = await response.json(); } catch { throw new Error("The response could not be read."); }
+  if (!response.ok) {
+    throw Object.assign(new Error("refused"), { refused: true, detail: typeof data.error === "string" ? data.error : `${data.error?.code}: ${data.error?.detail ?? ""}` });
+  }
+  const records = data.records;
+  if (!Array.isArray(records) || records.length !== 1 || !confirmsTaskCreated(records[0], name) || records[0].actor !== actor || records[0].tier !== "human") {
+    throw new Error("The response did not confirm the exact expected record.");
+  }
+  return { record: records[0], id: typeof data.id === "string" ? data.id : null };
+}
+
+async function createTask(name) {
+  if (submitting) return status("A submission is already in flight.");
+  stagedTask = null;
+  submitting = true;
+  status("Creating once...");
+  let finalMessage = "Creating once...";
+  try {
+    const { record, id } = await sendCreate(name, identity.actor ?? claimedName);
+    finalMessage = `Created task (birth record ${record.seq}).`;
+    if (id) {
+      finalMessage = `Created ${id}: ${name}.`;
+      try {
+        await reload(false);
+        if (snapshot.tasks.some((item) => `t-${item.id}` === id)) openBuffer(id, bench.focus, "view");
+        else finalMessage = `Created task (birth record ${record.seq}). Refresh unavailable; the thread opens from the finder.`;
+      } catch {
+        finalMessage = `Created ${id}: ${name}. Refresh unavailable; the thread opens from the finder.`;
+      }
+    }
+  } catch (error) {
+    finalMessage = error.refused
+      ? `Not created: ${error.detail} Nothing is staged; run New task to author again.`
+      : `Creation outcome unknown: ${error.message} Inspect the board before creating again; nothing is staged.`;
+  } finally {
+    submitting = false;
+    status(finalMessage);
+    persist(); renderLayout(); focusPane(bench.focus);
+  }
+}
+
+function startLaunch() {
+  if (stagedLaunch) return submitLaunch(stagedLaunch);
+  openPicker("workspace");
+}
+
+function refusalDetail(error) {
+  const wire = error?.data?.error;
+  if (wire && typeof wire === "object") {
+    return `${wire.code}: ${typeof wire.detail === "string" ? wire.detail : JSON.stringify(wire.detail)}`;
+  }
+  return error.message;
+}
+
+async function submitLaunch(staged) {
+  if (submitting) return status("A submission is already in flight.");
+  stagedLaunch = null;
+  submitting = true;
+  status("Submitting to the host once...");
+  let finalMessage = "Submitting to the host once...";
+  try {
+    if (staged.new) {
+      // provisioning is the workspace create door, unchanged: a failed
+      // launch leaves the creation fact standing, and the reply says so
+      const created = await api("/api/v1/workspace/create", { label: staged.new.label, client: "workbench" });
+      const provisioned = `Workspace provisioned - record ${created.workspace.seq}, branch ${created.workspace.branch} at ${created.workspace.path}.`;
+      try { await reload(false); } catch {}
+      try {
+        const data = await api("/api/v1/workbench/launch", launchRequest(created.workspace.path));
+        finalMessage = `${provisioned} Submitted to the host: terminal ${data.terminal} at ${data.workspace}. The session registers itself when it starts.`;
+      } catch (error) {
+        finalMessage = `${provisioned} The launch was not submitted: ${refusalDetail(error)}`;
+      }
+    } else {
+      const data = await api("/api/v1/workbench/launch", launchRequest(staged.existing));
+      finalMessage = `Submitted to the host: terminal ${data.terminal} at ${data.workspace}. The session registers itself when it starts; nothing recorded changed.`;
+    }
+  } catch (error) {
+    finalMessage = `Launch not submitted: ${refusalDetail(error)} Nothing is staged; run Launch to choose again.`;
+  } finally {
+    submitting = false;
+    status(finalMessage);
+    persist(); renderLayout(); focusPane(bench.focus);
+  }
+}
+
 // the title target behind a prompt: note drafts author their own title,
 // note and offer repairs revise the recorded one, everything else has none
 function titleTarget(buffer) {
@@ -1056,6 +1164,8 @@ const registry = [
   { id: "tasks", label: "Find task, contribution, or local draft", binding: " ", run: () => openPicker("tasks") },
   { id: "contents", label: "Search recorded content", binding: "sg", run: () => openPicker("contents") },
   { id: "new", label: "New note", binding: "nn", run: newNote },
+  { id: "task-new", label: "New task", binding: "nt", run: newTask },
+  { id: "launch", label: "Launch a session in a workspace", binding: "nl", run: startLaunch },
   { id: "cite", label: "Insert citation", binding: "ci", local: "i", when: () => current().kind === "draft" && current().eventual?.kind !== "reject" && !isReading(), run: () => openPicker("cite") },
   { id: "home-task", label: "Set draft home task", binding: "nh", local: "h", when: () => current().kind === "draft" && current().eventual?.kind !== "reject", run: () => openPicker("home") },
   { id: "publish", label: "Publish the focused draft or repair", local: "p", when: () => current().kind === "draft" || !!current().revisionPending, run: publishDraft },
@@ -1178,8 +1288,11 @@ function candidates() {
     const exact = list.find((item) => item.id === query || item.aliases?.includes(query));
     if (exact) return [exact];
     selector = (item) => `${item.label} ${item.id}`;
-  } else if (picker.kind === "title" || picker.kind === "name") {
+  } else if (picker.kind === "title" || picker.kind === "name" || picker.kind === "task-name" || picker.kind === "launch-label") {
     return [];
+  } else if (picker.kind === "workspace") {
+    list = [{ finderType: "workspace-new" }, ...snapshot.workspaces.map((item) => ({ ...item, finderType: "workspace" }))];
+    selector = (item) => item.finderType === "workspace-new" ? "Provision a new workspace" : `${item.path} ${item.branch}`;
   } else if (["tasks", "home"].includes(picker.kind)) {
     list = snapshot.tasks;
     if (/^t-\d+$/.test(query.trim())) return list.filter((item) => `t-${item.id}` === query.trim()).map((item) => ({ ...item, finderType: "task" }));
@@ -1211,6 +1324,11 @@ function excerpt(text) {
 
 function candidateLabel(item) {
   if (picker.kind === "commands") return item.label;
+  if (picker.kind === "workspace") {
+    return item.finderType === "workspace-new"
+      ? "Provision a new workspace\nThe server cuts a fresh worktree and branch, then the launch is submitted there"
+      : `Workspace record ${item.seq}  ${item.branch}\n${item.path}`;
+  }
   if (["tasks", "home"].includes(picker.kind)) {
     if (item.finderType === "task") return `Task t-${item.id}  ${item.name}`;
     if (item.finderType === "comment") return `${kindName(item.kind)} ${item.id}  ${item.title}\nt-${item.home} ${task(item.home)?.name ?? ""}  ${item.actor}`;
@@ -1265,6 +1383,10 @@ function highlightPicker() {
       host.append(el("h3", `${source.id}  ${source.actor}`));
       const body = el("div", undefined, "rich"); body.innerHTML = source.html; host.append(body);
     }
+  } else if (picker.kind === "workspace") {
+    host.append(el("pre", item.finderType === "workspace-new"
+      ? "Provision a new workspace\nThe server cuts a fresh worktree and branch (workspace-<token> without a label),\nthen the launch is submitted there. Nothing is claimed, owned, or bound."
+      : `record ${item.seq}\nbranch ${item.branch}\nbase ${item.base}\npath ${item.path}`));
   } else host.append(el("pre", item.text ?? item.label));
 }
 
@@ -1277,14 +1399,21 @@ function closePicker() {
 
 function openPicker(kind, options = {}) {
   cancelLeader(); pendingZ = false; pendingWindow = false;
-  const prompt = kind === "title" || kind === "name";
+  const prompt = ["title", "name", "task-name", "launch-label"].includes(kind);
   $("#picker").classList.toggle("commands", kind === "commands");
   $("#picker").classList.toggle("prompt", prompt);
   $("#picker-preview").hidden = kind === "commands" || prompt;
   $("#choose").textContent = kind === "commands" ? "Run command"
-    : kind === "title" ? "Set title" : kind === "name" ? "Record name" : "Open / select";
-  $("#query-label-text").textContent = kind === "title" ? "Title" : kind === "name" ? "Your name" : "Search";
-  $("#picker-hint").textContent = prompt ? "Enter confirm | Escape cancel"
+    : kind === "title" ? "Set title" : kind === "name" ? "Record name"
+    : kind === "task-name" ? "Set name" : kind === "launch-label" ? "Set label"
+    : kind === "workspace" ? "Stage workspace" : "Open / select";
+  $("#query-label-text").textContent = kind === "title" ? "Title" : kind === "name" ? "Your name"
+    : kind === "task-name" ? "Task name" : kind === "launch-label" ? "Label (optional)" : "Search";
+  $("#picker-hint").textContent =
+    kind === "task-name" ? "Enter stages the name | Escape cancels; run New task again to create"
+    : kind === "launch-label" ? "Enter stages the label | Escape cancels; run Launch again to provision and submit"
+    : kind === "workspace" ? "Up/Down choose | Enter stages | Escape cancels; run Launch again to submit"
+    : prompt ? "Enter confirm | Escape cancel"
     : kind === "commands" ? "Up/Down choose | Enter run | Escape cancel"
     : "Up/Down preview | Enter select | Shift+Enter beside | Escape cancel";
   remember(bench.focus);
@@ -1293,9 +1422,9 @@ function openPicker(kind, options = {}) {
   picker = { kind, viewId: bench.focus, sourceId: options.sourceId ?? buffer.id, selected: 0, items: [],
     after: options.after ?? null, titleTarget: options.target ?? null,
     ticket: kind === "cite" ? bench.beginCitation(buffer.id, currentEditor().state.selection.main.head) : null };
-  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${options.sourceId ?? buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task", title: `Authored title for ${buffer.id}`, name: "Your claimed name" })[kind];
+  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${options.sourceId ?? buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task", title: `Authored title for ${buffer.id}`, name: "Your claimed name", "task-name": "New task name", workspace: "Launch: choose the workspace", "launch-label": "New workspace label (optional)" })[kind];
   $("#query").value = picker.titleTarget ? picker.titleTarget.get() : "";
-  $("#beside").hidden = ["commands", "cite", "home"].includes(kind) || prompt;
+  $("#beside").hidden = ["commands", "cite", "home", "workspace"].includes(kind) || prompt;
   renderPicker();
   $("#picker").showModal();
   $("#query").focus();
@@ -1303,6 +1432,20 @@ function openPicker(kind, options = {}) {
 
 function choose(beside) {
   const { kind, ticket, viewId, after, titleTarget } = picker;
+  if (kind === "task-name" || kind === "launch-label") {
+    const value = $("#query").value.trim();
+    closePicker();
+    if (kind === "task-name") {
+      if (!value) return status("No name given; nothing is staged.");
+      stagedTask = value;
+      status(`Task name staged: ${value}. Run New task again to create it.`);
+    } else {
+      stagedLaunch = { new: { label: value || null } };
+      status(`Workspace staged: new${value ? ` (${value})` : ""}. Run Launch again to provision and submit.`);
+    }
+    if (after) after(value);
+    return;
+  }
   if (kind === "title" || kind === "name") {
     const value = $("#query").value.trim();
     closePicker();
@@ -1323,6 +1466,15 @@ function choose(beside) {
   if (!selection) return;
   closePicker();
   if (kind === "commands") return runCommand(selection.id);
+  if (kind === "workspace") {
+    if (selection.finderType === "workspace-new") {
+      openPicker("launch-label");
+      return;
+    }
+    stagedLaunch = { existing: selection.path };
+    status(`Workspace staged: ${selection.path}. Run Launch again to submit.`);
+    return;
+  }
   if (kind === "home") {
     const buffer = bench.buffer(bench.view(viewId).bufferId);
     buffer.home = selection.id; persist(); refreshChrome();
@@ -1552,6 +1704,7 @@ async function start() {
     panes: [...bench.views.values()].map((pane) => ({ id: pane.id, bufferId: pane.bufferId, position: bench.position(pane.id) })),
     mode: mode(), cursor: snapshot.cursor, presentation: isReading() ? "view" : "source",
     actor: identity.actor,
+    staged: { task: stagedTask, launch: stagedLaunch },
   }) };
 }
 start().catch((error) => { console.error(error); status(`Workbench unavailable: ${error.message}`); });

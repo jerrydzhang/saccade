@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Workbench, commandFor, confirmsLanded } from "../src/workbench.mjs";
+import { Workbench, commandFor, confirmsLanded, createTaskCommand, confirmsTaskCreated, launchRequest } from "../src/workbench.mjs";
 
 function workbench() {
   const bench = new Workbench();
@@ -226,4 +226,19 @@ test("a landed revision confirms exactly the fields the patch sent", () => {
   extraField.payload.title = "a concurrent title lands unbothered";
   assert.equal(confirmsLanded(surface, extraField), false,
     "a title the patch never sent is not claimed by the confirmation");
+});
+
+test("task creation rides the human write door and checks its own landed record", () => {
+  assert.deepEqual(createTaskCommand("The browser-authored task"),
+    { create_task: { name: "The browser-authored task" } });
+  const landed = { kind: "task_created", actor: "jerry", tier: "human",
+    payload: { name: "The browser-authored task" } };
+  assert.equal(confirmsTaskCreated(landed, "The browser-authored task"), true);
+  assert.equal(confirmsTaskCreated(landed, "Another name"), false,
+    "a different name is not claimed as this creation");
+  assert.equal(confirmsTaskCreated({ kind: "commented", payload: landed.payload }, "The browser-authored task"), false);
+});
+
+test("the launch request names one explicit existing workspace and nothing else", () => {
+  assert.deepEqual(launchRequest("/repo/wt/workspace-abc"), { workspace: { existing: "/repo/wt/workspace-abc" } });
 });

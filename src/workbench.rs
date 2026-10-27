@@ -160,7 +160,24 @@ pub fn snapshot(
             "explanation": view.explanation, "offer": view.offer_num,
         }));
     }
-    Ok(json!({"tasks": tasks, "comments": comments, "cursor": rows.last().map(|r| r.seq)}))
+    // the task-free workspaces the fold holds: birth facts only, never
+    // a filesystem claim - a vanished directory refuses at launch time
+    let workspaces: Vec<Value> = world
+        .workspaces
+        .iter()
+        .map(|(id, context)| {
+            json!({
+                "seq": id.0 .0,
+                "base": context.workspace.base.as_str(),
+                "branch": context.workspace.branch.as_str(),
+                "path": context.workspace.worktree.as_path().display().to_string(),
+                "born_at": context.born_at,
+            })
+        })
+        .collect();
+    Ok(
+        json!({"tasks": tasks, "comments": comments, "workspaces": workspaces, "cursor": rows.last().map(|r| r.seq)}),
+    )
 }
 
 /// The stateless draft preview: a pure render of the proposed body
