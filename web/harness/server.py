@@ -26,10 +26,14 @@ if args[:2] == ['worktree', 'show']:
     sys.exit(0)
 if args[:2] == ['terminal', 'create']:
     mode_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orca-mode')
-    if mode_path and os.path.exists(mode_path) and open(mode_path).read().strip() == 'fail':
+    mode = ''
+    if mode_path and os.path.exists(mode_path):
+        mode = open(mode_path).read().strip()
+    if mode == 'fail':
         print('the host refused the create', file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({'ok': True, 'result': {'terminal': {'handle': 'term_fake_1'}}}))
+    terminal = {} if mode == 'no-handle' else {'handle': 'term_fake_1'}
+    print(json.dumps({'ok': True, 'result': {'terminal': terminal}}))
     sys.exit(0)
 sys.exit(1)
 '''

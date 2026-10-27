@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Workbench, commandFor, confirmsLanded, createTaskCommand, confirmsTaskCreated, launchRequest } from "../src/workbench.mjs";
+import { Workbench, commandFor, confirmsLanded, createTaskCommand, confirmsTaskCreated, launchRequest, launchOutcome } from "../src/workbench.mjs";
 
 function workbench() {
   const bench = new Workbench();
@@ -241,4 +241,13 @@ test("task creation rides the human write door and checks its own landed record"
 
 test("the launch request names one explicit existing workspace and nothing else", () => {
   assert.deepEqual(launchRequest("/repo/wt/workspace-abc"), { workspace: { existing: "/repo/wt/workspace-abc" } });
+});
+
+test("a lost launch reply is unknown and a server answer is a confirmed fact", () => {
+  assert.deepEqual(launchOutcome(new Error("Failed to fetch")), { kind: "unknown", detail: "Failed to fetch" });
+  const answered = Object.assign(new Error("refused"), { data: { error: { code: "launch_host_refused", detail: "the host refused the create" } } });
+  assert.deepEqual(launchOutcome(answered), { kind: "answered", code: "launch_host_refused", detail: "the host refused the create" });
+  const shaped = Object.assign(new Error("refused"), { data: { error: { code: "launch_host_no_handle", detail: { text: "created" } } } });
+  assert.equal(launchOutcome(shaped).code, "launch_host_no_handle");
+  assert.equal(launchOutcome(shaped).detail, '{"text":"created"}', "a non-string detail still travels as the server's own fact");
 });

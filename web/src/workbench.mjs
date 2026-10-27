@@ -237,3 +237,14 @@ export function confirmsTaskCreated(record, name) {
 export function launchRequest(workspacePath) {
   return { workspace: { existing: workspacePath } };
 }
+
+// the honest launch outcome split: a server answer is a confirmed fact
+// with its own code and detail; a lost or unreadable reply is unknown -
+// the host may have accepted, so no face may call it "not submitted"
+export function launchOutcome(error) {
+  const wire = error?.data?.error;
+  if (wire && typeof wire === "object") {
+    return { kind: "answered", code: wire.code, detail: typeof wire.detail === "string" ? wire.detail : JSON.stringify(wire.detail) };
+  }
+  return { kind: "unknown", detail: error.message };
+}

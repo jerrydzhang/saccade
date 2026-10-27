@@ -6,7 +6,7 @@ import { headerFolding, sectionFold } from "./editor.mjs";
 import { markdown } from "@codemirror/lang-markdown";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { Fzf } from "fzf";
-import { Workbench, commandFor, confirmsLanded, createTaskCommand, confirmsTaskCreated, launchRequest, leaves } from "./workbench.mjs";
+import { Workbench, commandFor, confirmsLanded, createTaskCommand, confirmsTaskCreated, launchRequest, launchOutcome, leaves } from "./workbench.mjs";
 import { richDocuments } from "./rich.mjs";
 import { sourceAppearance } from "./appearance.mjs";
 
@@ -782,8 +782,11 @@ async function createTask(name) {
       : `Creation outcome unknown: ${error.message} Inspect the board before creating again; nothing is staged.`;
   } finally {
     submitting = false;
-    status(finalMessage);
     persist(); renderLayout(); focusPane(bench.focus);
+    // the status is the last act in every submission: a release signal
+    // that fires before the panes have been rebuilt would let the next
+    // keystrokes land in detached DOM
+    status(finalMessage);
   }
 }
 
@@ -792,12 +795,38 @@ function startLaunch() {
   openPicker("workspace");
 }
 
-function refusalDetail(error) {
-  const wire = error?.data?.error;
-  if (wire && typeof wire === "object") {
-    return `${wire.code}: ${typeof wire.detail === "string" ? wire.detail : JSON.stringify(wire.detail)}`;
+// a reply that does not name its own facts is an unknown outcome, not a
+// confirmed submission; the recorded-material note belongs to the flow
+// that actually changed nothing
+function submittedMessage(data, recordedNote) {
+  if (data?.submitted === true && typeof data.terminal === "string" && typeof data.workspace === "string") {
+    return `Submitted to the host: terminal ${data.terminal} at ${data.workspace}. The session registers itself when it starts.${recordedNote ? " Nothing recorded changed." : ""}`;
   }
-  return error.message;
+  return "Submission outcome unknown: the reply did not name the submitted facts. The host may have accepted the launch; inspect the host's terminals. Nothing is staged.";
+}
+
+function launchOutcomeMessage(error) {
+  const outcome = launchOutcome(error);
+  if (outcome.kind === "unknown") {
+    return `Launch outcome unknown: ${outcome.detail} The host may have accepted the submission; inspect the host's terminals before another attempt. Nothing is staged.`;
+  }
+  if (outcome.code === "launch_host_no_handle") {
+    return `The host created a terminal but named no handle: ${outcome.detail} The launch went through; inspect the host's terminals. Nothing is staged.`;
+  }
+  return `Launch not submitted: ${outcome.code}: ${outcome.detail} Nothing is staged; run Launch to choose again.`;
+}
+
+function provisionOutcomeMessage(error) {
+  const outcome = launchOutcome(error);
+  if (outcome.kind === "unknown") {
+    return `Provisioning outcome unknown: ${outcome.detail} The server may have provisioned a workspace; inspect the board before provisioning again. The launch was not submitted. Nothing is staged.`;
+  }
+  if (outcome.code === "storage") {
+    // the door's own partial fact: the effects ran and the detail says
+    // exactly what stands
+    return `Provisioning outcome unclear: ${outcome.detail} The launch was not submitted. Nothing is staged.`;
+  }
+  return `Not provisioned: ${outcome.code}: ${outcome.detail} The launch was not submitted. Nothing is staged; run Launch to choose again.`;
 }
 
 async function submitLaunch(staged) {
@@ -808,27 +837,37 @@ async function submitLaunch(staged) {
   let finalMessage = "Submitting to the host once...";
   try {
     if (staged.new) {
-      // provisioning is the workspace create door, unchanged: a failed
-      // launch leaves the creation fact standing, and the reply says so
-      const created = await api("/api/v1/workspace/create", { label: staged.new.label, client: "workbench" });
-      const provisioned = `Workspace provisioned - record ${created.workspace.seq}, branch ${created.workspace.branch} at ${created.workspace.path}.`;
-      try { await reload(false); } catch {}
+      let created = null;
       try {
-        const data = await api("/api/v1/workbench/launch", launchRequest(created.workspace.path));
-        finalMessage = `${provisioned} Submitted to the host: terminal ${data.terminal} at ${data.workspace}. The session registers itself when it starts.`;
+        created = await api("/api/v1/workspace/create", { label: staged.new.label, client: "workbench" });
+        if (typeof created?.workspace?.path !== "string" || typeof created?.workspace?.seq !== "number") {
+          throw new Error("The reply did not name the provisioned workspace.");
+        }
       } catch (error) {
-        finalMessage = `${provisioned} The launch was not submitted: ${refusalDetail(error)}`;
+        finalMessage = provisionOutcomeMessage(error);
+      }
+      if (created) {
+        const provisioned = `Workspace provisioned - record ${created.workspace.seq}, branch ${created.workspace.branch} at ${created.workspace.path}.`;
+        try { await reload(false); } catch {}
+        try {
+          const data = await api("/api/v1/workbench/launch", launchRequest(created.workspace.path));
+          finalMessage = `${provisioned} ${submittedMessage(data, false)}`;
+        } catch (error) {
+          finalMessage = `${provisioned} ${launchOutcomeMessage(error)}`;
+        }
       }
     } else {
-      const data = await api("/api/v1/workbench/launch", launchRequest(staged.existing));
-      finalMessage = `Submitted to the host: terminal ${data.terminal} at ${data.workspace}. The session registers itself when it starts; nothing recorded changed.`;
+      try {
+        const data = await api("/api/v1/workbench/launch", launchRequest(staged.existing));
+        finalMessage = submittedMessage(data, true);
+      } catch (error) {
+        finalMessage = launchOutcomeMessage(error);
+      }
     }
-  } catch (error) {
-    finalMessage = `Launch not submitted: ${refusalDetail(error)} Nothing is staged; run Launch to choose again.`;
   } finally {
     submitting = false;
-    status(finalMessage);
     persist(); renderLayout(); focusPane(bench.focus);
+    status(finalMessage);
   }
 }
 
@@ -1042,8 +1081,8 @@ async function submitConfirmed(surface, actor) {
     }
   } finally {
     submitting = false;
-    status(finalMessage);
     persist(); renderLayout(); focusPane(bench.focus);
+    status(finalMessage);
   }
 }
 
@@ -1288,11 +1327,13 @@ function candidates() {
     const exact = list.find((item) => item.id === query || item.aliases?.includes(query));
     if (exact) return [exact];
     selector = (item) => `${item.label} ${item.id}`;
-  } else if (picker.kind === "title" || picker.kind === "name" || picker.kind === "task-name" || picker.kind === "launch-label") {
+  } else if (picker.kind === "title" || picker.kind === "name" || picker.kind === "task-name" || picker.kind === "launch-label" || picker.kind === "workspace-path") {
     return [];
   } else if (picker.kind === "workspace") {
-    list = [{ finderType: "workspace-new" }, ...snapshot.workspaces.map((item) => ({ ...item, finderType: "workspace" }))];
-    selector = (item) => item.finderType === "workspace-new" ? "Provision a new workspace" : `${item.path} ${item.branch}`;
+    list = [{ finderType: "workspace-new" }, { finderType: "workspace-path" }, ...snapshot.workspaces.map((item) => ({ ...item, finderType: "workspace" }))];
+    selector = (item) => item.finderType === "workspace-new" ? "Provision a new workspace"
+      : item.finderType === "workspace-path" ? "Name an existing directory"
+      : `${item.path} ${item.branch}`;
   } else if (["tasks", "home"].includes(picker.kind)) {
     list = snapshot.tasks;
     if (/^t-\d+$/.test(query.trim())) return list.filter((item) => `t-${item.id}` === query.trim()).map((item) => ({ ...item, finderType: "task" }));
@@ -1327,7 +1368,9 @@ function candidateLabel(item) {
   if (picker.kind === "workspace") {
     return item.finderType === "workspace-new"
       ? "Provision a new workspace\nThe server cuts a fresh worktree and branch, then the launch is submitted there"
-      : `Workspace record ${item.seq}  ${item.branch}\n${item.path}`;
+      : item.finderType === "workspace-path"
+        ? "Name an existing directory\nType an existing directory on the host; the launch validates it"
+        : `Workspace record ${item.seq}  ${item.branch}\n${item.path}`;
   }
   if (["tasks", "home"].includes(picker.kind)) {
     if (item.finderType === "task") return `Task t-${item.id}  ${item.name}`;
@@ -1386,7 +1429,9 @@ function highlightPicker() {
   } else if (picker.kind === "workspace") {
     host.append(el("pre", item.finderType === "workspace-new"
       ? "Provision a new workspace\nThe server cuts a fresh worktree and branch (workspace-<token> without a label),\nthen the launch is submitted there. Nothing is claimed, owned, or bound."
-      : `record ${item.seq}\nbranch ${item.branch}\nbase ${item.base}\npath ${item.path}`));
+      : item.finderType === "workspace-path"
+        ? "Name an existing directory\nAn existing directory on the host, typed as an absolute path - the same\nselection the launch door has always taken. The server validates it;\nnothing is created, claimed, owned, or bound."
+        : `record ${item.seq}\nbranch ${item.branch}\nbase ${item.base}\npath ${item.path}`));
   } else host.append(el("pre", item.text ?? item.label));
 }
 
@@ -1399,19 +1444,22 @@ function closePicker() {
 
 function openPicker(kind, options = {}) {
   cancelLeader(); pendingZ = false; pendingWindow = false;
-  const prompt = ["title", "name", "task-name", "launch-label"].includes(kind);
+  const prompt = ["title", "name", "task-name", "launch-label", "workspace-path"].includes(kind);
   $("#picker").classList.toggle("commands", kind === "commands");
   $("#picker").classList.toggle("prompt", prompt);
   $("#picker-preview").hidden = kind === "commands" || prompt;
   $("#choose").textContent = kind === "commands" ? "Run command"
     : kind === "title" ? "Set title" : kind === "name" ? "Record name"
     : kind === "task-name" ? "Set name" : kind === "launch-label" ? "Set label"
+    : kind === "workspace-path" ? "Set directory"
     : kind === "workspace" ? "Stage workspace" : "Open / select";
   $("#query-label-text").textContent = kind === "title" ? "Title" : kind === "name" ? "Your name"
-    : kind === "task-name" ? "Task name" : kind === "launch-label" ? "Label (optional)" : "Search";
+    : kind === "task-name" ? "Task name" : kind === "launch-label" ? "Label (optional)"
+    : kind === "workspace-path" ? "Existing directory" : "Search";
   $("#picker-hint").textContent =
     kind === "task-name" ? "Enter stages the name | Escape cancels; run New task again to create"
     : kind === "launch-label" ? "Enter stages the label | Escape cancels; run Launch again to provision and submit"
+    : kind === "workspace-path" ? "Enter stages the directory | Escape cancels; run Launch again to submit"
     : kind === "workspace" ? "Up/Down choose | Enter stages | Escape cancels; run Launch again to submit"
     : prompt ? "Enter confirm | Escape cancel"
     : kind === "commands" ? "Up/Down choose | Enter run | Escape cancel"
@@ -1422,7 +1470,7 @@ function openPicker(kind, options = {}) {
   picker = { kind, viewId: bench.focus, sourceId: options.sourceId ?? buffer.id, selected: 0, items: [],
     after: options.after ?? null, titleTarget: options.target ?? null,
     ticket: kind === "cite" ? bench.beginCitation(buffer.id, currentEditor().state.selection.main.head) : null };
-  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${options.sourceId ?? buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task", title: `Authored title for ${buffer.id}`, name: "Your claimed name", "task-name": "New task name", workspace: "Launch: choose the workspace", "launch-label": "New workspace label (optional)" })[kind];
+  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${options.sourceId ?? buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task", title: `Authored title for ${buffer.id}`, name: "Your claimed name", "task-name": "New task name", workspace: "Launch: choose the workspace", "launch-label": "New workspace label (optional)", "workspace-path": "Existing directory" })[kind];
   $("#query").value = picker.titleTarget ? picker.titleTarget.get() : "";
   $("#beside").hidden = ["commands", "cite", "home", "workspace"].includes(kind) || prompt;
   renderPicker();
@@ -1432,16 +1480,20 @@ function openPicker(kind, options = {}) {
 
 function choose(beside) {
   const { kind, ticket, viewId, after, titleTarget } = picker;
-  if (kind === "task-name" || kind === "launch-label") {
+  if (kind === "task-name" || kind === "launch-label" || kind === "workspace-path") {
     const value = $("#query").value.trim();
     closePicker();
     if (kind === "task-name") {
       if (!value) return status("No name given; nothing is staged.");
       stagedTask = value;
       status(`Task name staged: ${value}. Run New task again to create it.`);
-    } else {
+    } else if (kind === "launch-label") {
       stagedLaunch = { new: { label: value || null } };
       status(`Workspace staged: new${value ? ` (${value})` : ""}. Run Launch again to provision and submit.`);
+    } else {
+      if (!value) return status("No directory named; nothing is staged.");
+      stagedLaunch = { existing: value };
+      status(`Workspace staged: ${value}. Run Launch again to submit.`);
     }
     if (after) after(value);
     return;
@@ -1469,6 +1521,10 @@ function choose(beside) {
   if (kind === "workspace") {
     if (selection.finderType === "workspace-new") {
       openPicker("launch-label");
+      return;
+    }
+    if (selection.finderType === "workspace-path") {
+      openPicker("workspace-path");
       return;
     }
     stagedLaunch = { existing: selection.path };

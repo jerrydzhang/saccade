@@ -3095,6 +3095,10 @@ if [ "$1" = terminal ] && [ "$2" = create ]; then
     printf 'the host refused the create\n' >&2
     exit 1
   fi
+  if [ -n "${FAKE_ORCA_NO_HANDLE:-}" ]; then
+    printf '{"ok":true,"result":{"terminal":{}}}\n'
+    exit 0
+  fi
   printf '{"handle":"%s","worktreePath":"%s","orphaned":false}\n' "$handle" "$path" >> "$FAKE_ORCA_STATE"
   if [ -n "${FAKE_ORCA_SPAWN:-}" ]; then
     submitted=""
@@ -6927,5 +6931,63 @@ async fn the_workbench_projection_names_the_workspaces_the_fold_holds() {
         "{workspaces}"
     );
     assert!(ws["born_at"].is_u64(), "{workspaces}");
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_launch_door_names_a_created_terminal_it_cannot_report() {
+    let db = scratch_db("workbench-launch-no-handle");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let host = fake_host(db.parent().unwrap());
+    let bin_dir = host.parent().unwrap().to_path_buf();
+    let _direnv = fake_direnv(&bin_dir);
+    let pi = stub_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    let host_state = db.parent().unwrap().join("host-state");
+    std::fs::write(&host_log, b"").unwrap();
+    std::fs::write(&host_state, b"").unwrap();
+    let (base_url, mut serve) = spawn_serve_subprocess(
+        &db,
+        &root,
+        &[
+            ("PATH", bin_dir.display().to_string()),
+            ("FAKE_ORCA_LOG", host_log.display().to_string()),
+            ("FAKE_ORCA_STATE", host_state.display().to_string()),
+            ("FAKE_ORCA_NO_HANDLE", "1".to_string()),
+            ("SACCADE_PI", pi.display().to_string()),
+        ],
+    );
+
+    let workspace = db.parent().unwrap().join("unreported-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let records_before = get_json(&base_url, "/api/v1/records").1;
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}}),
+    );
+    // the host created the terminal; the door cannot report its handle.
+    // The refusal is a confirmed partial outcome, never a claim of
+    // non-submission.
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "launch_host_no_handle",
+        "{body}"
+    );
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("the terminal was created but the host named no handle")),
+        "{body}"
+    );
+    assert_eq!(
+        json_of(&get_json(&base_url, "/api/v1/records").1),
+        json_of(&records_before),
+        "the unreportable launch changed no record"
+    );
+
+    serve.kill().unwrap();
+    serve.wait().unwrap();
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
