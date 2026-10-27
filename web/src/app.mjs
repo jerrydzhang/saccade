@@ -557,10 +557,16 @@ function showHome(viewId, reader, buffer) {
   // a Show more click focuses its button and the re-render removes it:
   // keep focus on the reader or the pane's keys go dead
   const hadFocus = reader.contains(document.activeElement);
+  // the scroll guard spans the swap and its restore, so the transient
+  // clamped scroll a re-render can fire is never taken for reading
+  reader.pendingSignature = signature;
   reader.replaceChildren(surfaces);
   if (hadFocus) reader.focus({ preventScroll: true });
   reader.signature = signature;
-  requestAnimationFrame(() => { if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop; });
+  requestAnimationFrame(() => {
+    if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop;
+    reader.pendingSignature = null;
+  });
 }
 
 function button(text, fn, title) {
@@ -1299,7 +1305,7 @@ function absorb(fresh) {
     }
   }
   for (const id of editors.keys()) {
-    if (["comment", "task"].includes(bench.buffer(bench.view(id).bufferId).kind) && isReading(id)) showPresentation(id);
+    if (["comment", "home", "task"].includes(bench.buffer(bench.view(id).bufferId).kind) && isReading(id)) showPresentation(id);
   }
   refreshChrome();
 }

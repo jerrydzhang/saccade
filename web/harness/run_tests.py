@@ -1755,6 +1755,40 @@ def main():
             }''', timeout=15000)
             check(True, 'both Source panes of one buffer take the recorded revision')
 
+            # combined preservation: a landing neither clears a staged
+            # create nor disturbs the home surface's revealed count and
+            # reading scroll
+            leader(page, 'nt'); prompt_ready(page)
+            page.fill('#query', 'The staged survivor')
+            page.keyboard.press('Enter')
+            page.wait_for_function('!document.querySelector("#picker").open')
+            check(state(page)['staged']['task'] == 'The staged survivor', 'the create name is staged')
+            server.cli('comment', f't-{live_id}', '--title', 'The staging neighbor', 'A record lands while a create is staged.')
+            staging_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=staging_cursor)
+            check(state(page)['staged']['task'] == 'The staged survivor', 'a landing leaves the staged create standing')
+            leader(page, 'nt'); wait_submission(page, 'Created')
+            check(next(t['name'] for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The staged survivor') == 'The staged survivor', 'the staged create still publishes after the landing')
+            check(state(page)['staged']['task'] is None, 'the stage clears only when its own create lands')
+
+            leader(page, 'hh')
+            page.wait_for_selector('.pane.active .home-activity .home-entry')
+            revealed = page.locator('.pane.active .home-activity .home-entry').count()
+            page.locator('.pane.active .home-activity button.home-more').click()
+            page.wait_for_timeout(150)
+            revealed_after_more = page.locator('.pane.active .home-activity .home-entry').count()
+            check(revealed_after_more > revealed, 'Show more reveals older activity')
+            page.locator('.pane.active .reading').focus()
+            page.keyboard.press('G'); page.wait_for_timeout(150)
+            home_scroll = page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop')
+            server.cli('comment', f't-{live_id}', '--title', 'The home refresh neighbor', 'A record lands while the home surface stands revealed and scrolled.')
+            home_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=home_cursor)
+            page.wait_for_timeout(150)
+            check('The home refresh neighbor' in page.locator('.pane.active .home-activity .home-entry').first.inner_text(), 'a landing re-renders the home activity newest first')
+            check(page.locator('.pane.active .home-activity .home-entry').count() == revealed_after_more, 'a landing preserves the home reveal count')
+            check(abs(page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop') - home_scroll) <= 2, 'a landing preserves the home reading scroll')
+
             if errors:
                 print('PAGE-ERRORS:', errors, flush=True)
             check(not errors, 'the live-update flow has no browser exceptions')
