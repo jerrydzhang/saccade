@@ -6856,8 +6856,12 @@ async fn the_workbench_launch_door_submits_honestly_through_a_fake_host() {
         typed.contains(&format!("SACCADE_ACTOR={}", shell_quote_pi_label(&pi))),
         "{typed}"
     );
+    let expected_direnv = option_env!("SACCADE_DIRENV")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| std::fs::canonicalize(&direnv).unwrap());
     assert!(
-        typed.contains(&format!("&& {} exec", direnv.display().to_string())),
+        typed.contains(&format!("&& {} exec", expected_direnv.display())),
         "{typed}"
     );
     // the argv ends at the pi: no prompt rides a workbench launch
