@@ -651,7 +651,7 @@ mod test {
             temp_base.join("no-such-dir").join("leaf")
         );
         let relative = canonical_dir(Path::new("f.txt"));
-        assert!(relative.is_err() == false);
+        assert!(relative.is_ok());
 
         // a registered worktree reads back with its branch; an absent
         // branch tip reads None quietly, not as a plumbing failure
