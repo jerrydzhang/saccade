@@ -810,13 +810,18 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
         name: saccade::Prose::new("across the line".into()).unwrap(),
     };
 
-    // a same-line, different-minor peer (a 0.14 server to this 0.15
-    // binary) never sees the command: the write refuses before posting
-    let (url, posts, handle) = fake_peer(Some("0.14.0"), 200, 1);
+    let major = env!("CARGO_PKG_VERSION_MAJOR");
+    let minor: usize = env!("CARGO_PKG_VERSION_MINOR").parse().unwrap();
+    let patch: usize = env!("CARGO_PKG_VERSION_PATCH").parse().unwrap();
+    let different_minor = format!("{major}.{}.0", minor + 1);
+    let different_patch = format!("{major}.{minor}.{}", patch + 1);
+
+    // A different minor refuses before the command posts.
+    let (url, posts, handle) = fake_peer(Some(&different_minor), 200, 1);
     match client::send(&url, &agent, command(), None) {
         Err(ClientFail::VersionMismatch { ours, theirs, .. }) => {
             assert_eq!(ours, env!("CARGO_PKG_VERSION"));
-            assert_eq!(theirs, "0.14.0");
+            assert_eq!(theirs, different_minor);
         }
         other => panic!("a breaking peer refuses the write: {other:?}"),
     }
@@ -827,9 +832,8 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
     );
     retire_peer(&url, &posts, 1, handle);
 
-    // a patch difference stays compatible: the command posts and the
-    // peer's acknowledgment comes back
-    let (url, posts, handle) = fake_peer(Some("0.15.1"), 200, 2);
+    // A patch difference permits the command POST and acknowledgement.
+    let (url, posts, handle) = fake_peer(Some(&different_patch), 200, 2);
     let reply =
         client::send(&url, &agent, command(), None).expect("a patch difference is not breaking");
     assert_eq!(reply.records.len(), 0);

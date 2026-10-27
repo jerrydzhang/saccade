@@ -87,6 +87,9 @@ with them.
   binaries move in step. PATCH covers everything else; UI surfaces and
   internal modules are never breaking alone. 1.0.0 is the external-adoption
   line above.
+- Required stored-format migrations are bounded version-to-version steps in
+  code, run before serving with transactional validation and recovery
+  safeguards. Behavioral breaks alone do not justify data rewriting.
 - Rendering is descriptive, never persuasive: deterministic grouping,
   ordering, staleness, and standing-offer projection present record
   facts - neutral local cardinality included. No unread or aggregate
@@ -131,16 +134,27 @@ with them.
   workspaces; several incarnations can use one. New versus existing workspace
   choice is explicit. Established branch/path names survive task and session
   changes and do not derive from task or incarnation numbering.
+- Workspace cleanup is reversible eviction, not retirement: preserve its
+  identity, branch, saved sessions, and recorded work. Restoration uses the
+  retained branch's current local tip, never an implicit reset or pull.
+  Available and Cleaned change only through verified completed effects,
+  not intermediate progress states. Probes check consistency; finding a
+  directory does not silently restore a Cleaned workspace.
 - Messages are durable communication, never comment variants or implicit
   thread publications. Agent messages carry machine-supplied sender,
   message, and reply references; native human input remains native. Known
   contacts come from creation, contact, or explicit introduction, not a
   global directory, authority, expertise, or an obligation to work.
-- Messages activate recipients at supported execution boundaries. Sending
-  and waiting are separate; integration-owned waits yield to incoming input,
-  not by aborting arbitrary work. Waits are read-side, not resident workflow
-  objects. The human participates through native conversation and the
-  descriptive pull surface, not unsolicited push signals.
+- Messages are recorded before an immediate submission attempt. Submission
+  means native input queue acceptance, never reading or action. Missing
+  confirmation is missing evidence, not a delivery obligation or another
+  resident lifecycle. Messages activate already-running recipients at
+  supported boundaries, never restart stopped sessions; explicit manual
+  resume drains no recorded backlog. Sending and waiting are separate;
+  integration-owned waits yield to incoming input, not by aborting arbitrary
+  work. Waits are read-side, not resident workflow objects. The human
+  participates through native conversation and the descriptive pull surface,
+  not unsolicited push signals.
 - The requesting incarnation interprets returned contributions against its
   goal and retains continuation unless explicitly handed onward. Delivery
   supplies activation, never judgment or a successor goal. A use records
