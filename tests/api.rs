@@ -432,7 +432,7 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     assert_eq!(deliveries[0]["message"]["seq"], 3);
     assert_eq!(deliveries[0]["message"]["task"], 0);
     // the record reads pending until the queue's acceptance lands
-    let (_, mailbox) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let (_, mailbox) = get_json(&base_url, "/api/v1/messages?incarnation=1");
     assert_eq!(json_of(&mailbox)["messages"][0]["state"], "pending");
     let (status, body) = post_json(
         &base_url,
@@ -490,7 +490,7 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
 
     // the mailbox read returns both directions in birth order, all
     // confirmed; the mailbox is a descriptive read with no park
-    let (status, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let (status, body) = get_json(&base_url, "/api/v1/messages?incarnation=1");
     assert_eq!(status, 200, "{body}");
     let mail = json_of(&body)["messages"].as_array().unwrap().clone();
     assert_eq!(mail.len(), 2);
@@ -512,9 +512,87 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     assert_eq!(mail[1]["state"], "submitted");
 
     // unknown recipients refuse the read
-    let (status, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=99");
+    let (status, body) = get_json(&base_url, "/api/v1/messages?incarnation=99");
     assert_eq!(status, 400, "{body}");
     assert_eq!(json_of(&body)["error"]["code"], "invalid_incarnation_id");
+
+    // the retired pending transport fails closed on every request shape:
+    // the legacy parked-poll params and the arg-less read both get the
+    // named 410 with no message content, so an old integration's drain
+    // dies at its first poll
+    for legacy_shape in [
+        "/api/v1/messages/pending?incarnation=1&wait_ms=25000&bridge=1",
+        "/api/v1/messages/pending?incarnation=1",
+    ] {
+        let (status, body) = get_json(&base_url, legacy_shape);
+        assert_eq!(status, 410, "{body}");
+        assert_eq!(
+            json_of(&body)["error"]["code"],
+            "retired_messages_pending",
+            "{body}"
+        );
+        assert!(
+            json_of(&body).get("messages").is_none(),
+            "the retired route leaked mailbox content: {body}"
+        );
+    }
+    // a recorded-unsubmitted message stands as evidence and is never
+    // leaked by the retired route: a bridge-absent recipient's send
+    // leaves the pending record, and both legacy shapes serve nothing
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "bridgeless1",
+            "session_file": "/sessions/bridgeless1.jsonl",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    // the birth-record position addresses the mailbox reads; the public
+    // number addresses the send
+    let bridgeless_birth = json_of(&body)["incarnation"].as_u64().unwrap();
+    let bridgeless = json_of(&body)["num"].as_u64().unwrap();
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
+            "to": bridgeless,
+            "body": "the recipient's bridge is absent; this stands pending",
+        }),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "recipient_unknown",
+        "the bridge-absent refusal names the probe outcome: {body}"
+    );
+    for legacy_shape in [
+        format!("/api/v1/messages/pending?incarnation={bridgeless_birth}&wait_ms=25000&bridge=1"),
+        format!("/api/v1/messages/pending?incarnation={bridgeless_birth}"),
+    ] {
+        let (status, body) = get_json(&base_url, &legacy_shape);
+        assert_eq!(status, 410, "{body}");
+        assert_eq!(
+            json_of(&body)["error"]["code"],
+            "retired_messages_pending",
+            "{body}"
+        );
+        assert!(
+            json_of(&body).get("messages").is_none(),
+            "the retired route leaked mailbox content: {body}"
+        );
+    }
+    // and the standing evidence reads only through the new history route
+    let (_, body) = get_json(
+        &base_url,
+        &format!("/api/v1/messages?incarnation={bridgeless_birth}"),
+    );
+    eprintln!("HISTORY READ: {body}");
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    assert_eq!(mail.len(), 1, "{body}");
+    assert_eq!(mail[0]["state"], "pending", "{body}");
 
     // submission never repeats: the table holds on confirmed mail
     let (status, body) = post_json(
@@ -544,14 +622,20 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     assert_eq!(json_of(&body)["error"]["code"], "human_only");
 
     // the sender's own mail reads in the mailbox too, with its state
-    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=0");
+    let (_, body) = get_json(&base_url, "/api/v1/messages?incarnation=0");
     let mine = json_of(&body)["messages"].as_array().unwrap().clone();
     let sent_by_me: Vec<&Value> = mine.iter().filter(|m| m["from"]["seq"] == 0).collect();
-    assert_eq!(sent_by_me.len(), 1);
-    assert_eq!(sent_by_me[0]["seq"], 3);
+    // the confirmed delivery and the refused attempt's standing evidence
+    assert_eq!(sent_by_me.len(), 2);
+    let confirmed = sent_by_me.iter().find(|m| m["seq"] == 3).unwrap();
     // one shared delivery state: the recipient's submission reads here too
-    assert_eq!(sent_by_me[0]["state"], "submitted");
-    assert_eq!(sent_by_me[0]["to"]["num"], 1);
+    assert_eq!(confirmed["state"], "submitted");
+    assert_eq!(confirmed["to"]["num"], 1);
+    let standing = sent_by_me.iter().find(|m| m["state"] == "pending").unwrap();
+    assert_eq!(
+        standing["to"]["num"], 2,
+        "the refused attempt stands pending"
+    );
 
     // the messages are durable, addressed, and home-free: the raw log
     // holds them off every task thread
@@ -3918,7 +4002,7 @@ fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     );
     let staged_seq = deliveries[0]["message"]["seq"].as_u64().unwrap();
     // the record reads pending until the queue's acceptance is reported
-    let (_, mailbox) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let (_, mailbox) = get_json(&base_url, "/api/v1/messages?incarnation=1");
     assert_eq!(
         json_of(&mailbox)["messages"][0]["state"],
         "pending",
@@ -3998,7 +4082,7 @@ fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
         "{body}"
     );
     assert_eq!(json_of(&body)["message"]["seq"], taken_seq);
-    let (_, mailbox) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let (_, mailbox) = get_json(&base_url, "/api/v1/messages?incarnation=1");
     let mail = json_of(&mailbox)["messages"].as_array().unwrap().clone();
     assert!(
         mail.iter()
@@ -4247,7 +4331,7 @@ async fn a_wire_send_to_an_unreachable_peer_records_the_attempt_and_launches_not
     // keep m-N across a refused submission
     assert_eq!(json_of(&body)["message"]["num"], 0);
     // the record stands as evidence of the attempt, never an obligation
-    let (_, mailbox) = get_json(&url, "/api/v1/messages/pending?incarnation=1");
+    let (_, mailbox) = get_json(&url, "/api/v1/messages?incarnation=1");
     let mail = json_of(&mailbox)["messages"].as_array().unwrap().clone();
     assert_eq!(mail.len(), 1, "{mailbox}");
     assert_eq!(mail[0]["state"], "pending");
@@ -4325,10 +4409,7 @@ async fn a_wire_send_to_an_unreachable_peer_records_the_attempt_and_launches_not
     // recipient holds both ingresses' attempts, all pending, none
     // submitted by any machinery
     for (incarnation, count) in [(1, 2), (2, 1), (3, 1)] {
-        let (status, body) = get_json(
-            &url,
-            &format!("/api/v1/messages/pending?incarnation={incarnation}"),
-        );
+        let (status, body) = get_json(&url, &format!("/api/v1/messages?incarnation={incarnation}"));
         assert_eq!(status, 200, "{body}");
         let mail = json_of(&body)["messages"].as_array().unwrap().clone();
         assert_eq!(mail.len(), count, "the refused attempts stand: {body}");
@@ -4887,10 +4968,7 @@ fn a_send_to_a_stopped_peer_discloses_through_the_real_door() {
 
     // delivery facts stay honest: the record stands pending, evidence
     // of the attempt, never a promise
-    let (_, body) = get_json(
-        &url,
-        &format!("/api/v1/messages/pending?incarnation={peer_birth}"),
-    );
+    let (_, body) = get_json(&url, &format!("/api/v1/messages?incarnation={peer_birth}"));
     let mail = json_of(&body)["messages"].as_array().unwrap().clone();
     assert!(
         mail.iter()
@@ -5041,7 +5119,7 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
     // the question is durable addressed communication from the
     // creator's own scope, never argv-shaped human input; its record
     // stands pending, evidence of the refused attempt
-    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let (_, body) = get_json(&base_url, "/api/v1/messages?incarnation=1");
     let mail = json_of(&body)["messages"].as_array().unwrap().clone();
     assert_eq!(mail.len(), 1, "{body}");
     assert_eq!(mail[0]["from"]["num"], 0);
@@ -5073,7 +5151,7 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(err.contains("recipient_stopped"), "{err}");
     assert!(err.contains("was recorded"), "{err}");
-    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let (_, body) = get_json(&base_url, "/api/v1/messages?incarnation=1");
     let mail = json_of(&body)["messages"].as_array().unwrap().clone();
     assert_eq!(mail.len(), 2, "{body}");
     assert_eq!(mail[1]["body"], "status check");
@@ -6896,7 +6974,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     // the question is durable addressed mail from the creator's scope
     let (_, body) = get_json(
         &base_url,
-        &format!("/api/v1/messages/pending?incarnation={rover_birth}"),
+        &format!("/api/v1/messages?incarnation={rover_birth}"),
     );
     let mail = json_of(&body)["messages"].as_array().unwrap().clone();
     let sent: Vec<&Value> = mail.iter().filter(|m| m["from"]["num"] == 0).collect();

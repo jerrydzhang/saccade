@@ -640,7 +640,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 
 	async function mailbox(incarnation: number): Promise<MailboxMessage[]> {
 		const reply = await tracker<{ messages: MailboxMessage[] }>(
-			`/api/v1/messages/pending?incarnation=${incarnation}`,
+			`/api/v1/messages?incarnation=${incarnation}`,
 		);
 		return reply.messages;
 	}
