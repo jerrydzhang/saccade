@@ -811,7 +811,7 @@ def main():
             bar = lambda: [page.locator('#bar-mode').text_content(), page.locator('#bar-kind').text_content(), page.locator('#bar-ident').text_content(), page.locator('#bar-info').text_content(), page.locator('#bar-flags').text_content()]
             check(bar() == ['NORMAL', 'Home', 'home', '', '[-]'], 'home opens with the exact mode-kind-ident-info-flags bar tuple')
             page.goto(base + f'/t/{survey_id}'); page.wait_for_function('window.workbenchUI !== undefined')
-            check(bar()[:3] == ['NORMAL', 'Task', f't-{survey_id}'], 'a task buffer shows the Task kind')
+            check(bar()[:3] == ['RENDERED', 'Task', f't-{survey_id}'], 'a task deep link opens its thread as rendered Task cards')
             def deep(comment_id):
                 page.goto(base + '/' + comment_id.replace('-', '/', 1))
                 page.wait_for_function('window.workbenchUI !== undefined')
@@ -836,6 +836,138 @@ def main():
             local(page, 'x')
             tuple_now = bar()
             check(tuple_now[1] == 'Reject' and tuple_now[2].startswith('draft:') and tuple_now[3].startswith('rejecting c-'), 'a grounds draft shows the Reject intent kind with its draft ident')
+            context.close()
+
+            # thread cards: the ratified read-only thread interaction - every
+            # contribution a rich card, j/k selection kept visible, contextual
+            # actions on the selection, and /t/N#c-M selected-comment routing
+            context = browser.new_context(viewport={'width': 1500, 'height': 980})
+            page = context.new_page(); ready(page, base)
+            thread_bar = lambda: [page.locator('#bar-mode').text_content(), page.locator('#bar-kind').text_content(), page.locator('#bar-ident').text_content(), page.locator('#bar-info').text_content()]
+            page.goto(base + '/t/0'); page.wait_for_function('window.workbenchUI !== undefined')
+            check(thread_bar()[:3] == ['RENDERED', 'Task', 't-0'], 'a task deep link opens its thread as rendered cards')
+            t0_cards = [c['id'] for c in request(base + '/api/v1/workbench')[1]['comments'] if c['home'] == 0]
+            check(page.locator('.pane.active .thread-card').count() == len(t0_cards), 'every contribution of the thread renders as its own card')
+            check(page.locator('.pane.active .thread-card[data-comment="c-2"] .rich .mref').count() >= 1, 'thread cards carry the canonical rich rendering with citation links')
+            check('withdrawn' in page.locator('.pane.active .thread-card[data-comment="c-3"]').inner_text(), 'a withdrawn contribution renders its tombstone card')
+            page.locator('.pane.active .reading').focus()
+            check(page.locator('.pane.active .thread-card.selected').count() == 0, 'a thread opens with no card selected')
+            page.keyboard.press('j')
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-0"]').count() == 1, 'j selects the first card from no selection')
+            check(page.locator('#bar-info').text_content().startswith('selected c-0'), 'the bar names the selected contribution')
+            local(page, 'e')
+            check(draft(page)['id'] == 'c-0' and draft(page)['revisionPending'] is not None, 'comma e on the selected card opens that contribution repair in its standalone buffer')
+            check(thread_bar()[:3] == ['NORMAL', 'Note', 'c-0'] and thread_bar()[3].startswith('revising'), 'the repair keeps the record kind and names the revision')
+            local(page, 'e')
+            check(draft(page)['revisionPending'] is None, 'comma e again discards the probe repair')
+            page.goto(base + '/t/0#c-0'); page.wait_for_function('window.workbenchUI !== undefined')
+            page.locator('.pane.active .reading').focus()
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-0"]').count() == 1, 'a deep link reselects its card in a restored session')
+            page.keyboard.press('j')
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-1"]').count() == 1, 'j steps to the next card')
+            page.keyboard.press('k')
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-0"]').count() == 1, 'k steps back to the previous card')
+            page.keyboard.press('k')
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-0"]').count() == 1, 'k clamps at the first card without wrapping')
+            page.set_viewport_size({'width': 1500, 'height': 420})
+            page.keyboard.press('j'); page.keyboard.press('j'); page.keyboard.press('j')
+            page.wait_for_timeout(150)
+            in_view = page.evaluate('''() => {
+                const reader = document.querySelector(".pane.active .reading");
+                const card = document.querySelector(".pane.active .thread-card.selected");
+                const a = card.getBoundingClientRect(), r = reader.getBoundingClientRect();
+                return a.top >= r.top - 1 && a.bottom <= r.bottom + 1;
+            }''')
+            check(in_view and page.locator('.pane.active .thread-card.selected[data-comment="c-3"]').count() == 1, 'a newly selected card is scrolled fully into view')
+            page.set_viewport_size({'width': 1500, 'height': 980})
+            # the location already carries #c-0, so this is a fresh full
+            # load onto the deep link, not a same-document hash change
+            page.goto(base + '/t/0#c-0')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-0"]').count() == 1, 'a /t/N#c-M deep link selects that card in the thread')
+            page.keyboard.press('g'); page.keyboard.press('r')
+            page.wait_for_function('document.querySelector("#picker").open')
+            check('Backlinks to c-0' in page.locator('#picker-title').text_content(), 'gr backlinks the selected card')
+            check('c-2' in page.locator('#results button').first.inner_text(), 'the backlinks list the citing contribution')
+            page.keyboard.press('Escape')
+            page.evaluate("location.hash = '#c-2'")
+            page.wait_for_timeout(250)
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-2"]').count() == 1, 'a hash change reselects within the open thread')
+            page.evaluate("location.hash = '#c-4'")
+            page.wait_for_timeout(250)
+            check(page.locator('.pane.active .thread-card.selected').count() == 0, 'a hash naming a contribution of another thread selects nothing here')
+            server.cli('create', 'task', 'The thread selection account')
+            fresh_task = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The thread selection account')['id']
+            server.cli('offer', f't-{fresh_task}', '--title', 'The thread standing account', 'Accept or reject this account from its thread card.')
+            fresh_offer = next(c for c in request(base + '/api/v1/workbench')[1]['comments'] if c['kind'] == 'offer' and c['home'] == fresh_task)['id']
+            page.goto(base + f'/t/{fresh_task}'); page.wait_for_function('window.workbenchUI !== undefined')
+            page.locator('.pane.active .reading').focus()
+            page.keyboard.press('j')
+            check(page.locator(f'.pane.active .thread-card.selected[data-comment="{fresh_offer}"]').count() == 1, 'the standing offer card selects on its thread')
+            local(page, 'a'); prompt_ready(page)
+            check('name' in page.locator('#picker-title').text_content().lower(), 'the accept from the thread still prompts for its claimed name')
+            answer_prompt(page, 'jerry')
+            accept_before = request(base + '/api/v1/workbench')[1]['cursor']
+            local(page, 'a'); wait_submission(page, 'Recorded')
+            check(request(base + '/api/v1/workbench')[1]['cursor'] == accept_before + 1, 'the accept through the selected card landed exactly one record')
+            check(next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['id'] == fresh_task)['state'] == 'concluded', 'the selected card accept concluded its task')
+            page.goto(base + f'/t/{standing_id}'); page.wait_for_function('window.workbenchUI !== undefined')
+            page.locator('.pane.active .reading').focus()
+            page.keyboard.press('j')
+            check(page.locator(f'.pane.active .thread-card.selected[data-comment="{standing_offer_id}"]').count() == 1, 'the survey standing offer card selects on its thread')
+            local(page, 'x')
+            check(draft(page)['eventual'] and draft(page)['eventual']['offer'] == standing_offer_id, 'comma x on the selected card drafts grounds against that offer')
+            page.goto(base + '/c/2'); page.wait_for_function('window.workbenchUI !== undefined')
+            check(draft(page)['id'] == 'c-2' and state(page)['mode'] == 'View', 'the standalone contribution view stays available for deeper reading')
+            page.locator('.pane.active .reading a.mref').first.click()
+            check(draft(page)['id'] == 't-0' and page.locator('.pane.active .thread-card.selected[data-comment="c-0"]').count() == 1, 'a citation marker opens the referenced comment in its thread with it selected')
+            page.keyboard.press('Control+o')
+            check(draft(page)['id'] == 'c-2', 'the jump list returns to the standalone contribution')
+            page.goto(base + '/t/1'); page.wait_for_function('window.workbenchUI !== undefined')
+            page.locator('.pane.active .reading').focus()
+            page.keyboard.press('j'); page.keyboard.press('j')
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-5"]').count() == 1, 'j clamps at the last card')
+            leader(page, 'uv')
+            check(state(page)['mode'] == 'Normal' and page.locator('.pane.active .reading').is_hidden(), 'Space uv opens the read-only recorded listing as Source')
+            check('c-5' in draft(page)['text'], 'the Source listing still carries the recorded contributions')
+            leader(page, 'uv')
+            check(state(page)['mode'] == 'View' and page.locator('.pane.active .thread-card.selected[data-comment="c-5"]').count() == 1, 'returning to View restores the cards with the selection')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            check(page.locator('.pane.active .thread-card.selected[data-comment="c-5"]').count() == 1, 'the card view and its selection survive a reload')
+            page.goto(base + '/t/2'); page.wait_for_function('window.workbenchUI !== undefined')
+            check(page.locator('.pane.active .thread-card .rich math').count() >= 2 and page.locator('.pane.active .thread-card .rich table').count() >= 1, 'thread cards carry the canonical math and table rendering')
+            check(page.locator('.pane.active .thread-card .rich img').count() >= 1, 'thread cards render artifact pointers through the canonical renderer')
+            page.set_viewport_size({'width': 1500, 'height': 420})
+            # the survey's own accept: earlier contexts landed accepts on other tasks
+            survey_accept = next(c['id'] for c in request(base + '/api/v1/workbench')[1]['comments'] if c['kind'] == 'accept' and c['home'] == survey_id)
+            page.goto(base + f'/t/{survey_id}#{survey_accept}'); page.wait_for_function('window.workbenchUI !== undefined')
+            # the scroll to the selected card rides a requestAnimationFrame;
+            # a card near the thread end stops at the maximum scroll position
+            page.wait_for_function('''() => {
+                const reader = document.querySelector(".pane.active .reading");
+                const card = document.querySelector(".pane.active .thread-card.selected");
+                if (!card) return false;
+                const a = card.getBoundingClientRect(), r = reader.getBoundingClientRect();
+                return reader.scrollTop > 0 && a.top >= r.top - 1 && a.bottom <= r.bottom + 1;
+            }''')
+            check(page.locator(f'.pane.active .thread-card.selected[data-comment="{survey_accept}"]').count() == 1, 'a deep link scrolls its selected card into view beside the surrounding thread')
+            page.set_viewport_size({'width': 1500, 'height': 980})
+            survey_text = page.locator('.pane.active .reading').inner_text()
+            check(page.locator('.pane.active .thread-card').count() == 5 and all(word in survey_text for word in ['offer', 'reject', 'accept', 'use']), 'a thread renders every recorded kind as a card')
+            page.keyboard.press('Escape')
+            page.keyboard.press(':')
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('contribution')
+            thread_labels = page.locator('#results button').all_inner_texts()
+            page.keyboard.press('Escape')
+            check(sum('Select next contribution in the thread' in label for label in thread_labels) == 1 and sum('Select previous contribution in the thread' in label for label in thread_labels) == 1, 'the palette lists the thread selection commands on a thread')
+            server.cli('create', 'task', 'The empty thread survey')
+            empty_id = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The empty thread survey')['id']
+            page.goto(base + f'/t/{empty_id}'); page.wait_for_function('window.workbenchUI !== undefined')
+            check(page.locator('.pane.active .thread-card').count() == 0, 'a thread without contributions shows only its task meta')
+            page.locator('.pane.active .reading').focus()
+            page.keyboard.press('j')
+            wait_submission(page, 'no contributions')
             context.close()
 
             # registry parity: folds, reader scroll, and pane focus are
@@ -952,9 +1084,10 @@ def main():
             check('names nothing recorded' not in page.locator('#message').inner_text(), 'a valid deep link leaves the default hint standing')
             page.goto(base + '/t/99'); page.wait_for_function('window.workbenchUI !== undefined')
             check('names nothing recorded' in page.locator('#message').inner_text(), 'the initial URL names its missing target instead of the hint')
+            page.goto(base); page.wait_for_function('window.workbenchUI !== undefined')
             page.evaluate("location.hash = '#c-6'")
             page.wait_for_timeout(250)
-            check(draft(page)['id'] == 'c-6', 'a hash link navigates the restored session')
+            check(draft(page)['id'] == 'c-6', 'a hash link navigates the restored session to the standalone contribution')
             context.close()
             run_editor_checks(browser, base, check, request, state, draft, leader, command, RUN)
             browser.close(); browser = None

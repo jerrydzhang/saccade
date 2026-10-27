@@ -343,6 +343,20 @@ dialog footer span { font-size: 11px; color: var(--muted); }
 
 .reading .dmath { display: block; margin: 18px 0; overflow: auto; }
 
+.thread-meta { margin: 0 0 14px; }
+.thread-card {
+  border-top: 1px solid var(--line-soft);
+  margin: 0 -12px;
+  padding: 12px 12px 6px;
+}
+.thread-card .reading-meta { margin: 0 0 10px; }
+.thread-card .rich { margin: 0 0 8px; }
+/* selection reuses the picker's raised row with a focus edge */
+.thread-card.selected {
+  background: var(--inset);
+  box-shadow: inset 3px 0 var(--focus);
+}
+
 .rich {
   font: 500 15px/1.68 var(--sans);
   overflow-wrap: anywhere;

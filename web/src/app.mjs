@@ -173,7 +173,26 @@ function presentation(viewId = bench.focus) {
 
 function isReading(viewId = bench.focus) {
   const pane = bench.views.get(viewId);
-  return !!pane && ["comment", "draft"].includes(bench.buffer(pane.bufferId).kind) && presentation(viewId).mode === "view";
+  return !!pane && ["comment", "draft", "task"].includes(bench.buffer(pane.bufferId).kind) && presentation(viewId).mode === "view";
+}
+
+function threadFocused(viewId = bench.focus) {
+  const pane = bench.views.get(viewId);
+  return !!pane && bench.buffer(pane.bufferId).kind === "task" && isReading(viewId);
+}
+
+function threadSelection(viewId = bench.focus) {
+  if (!threadFocused(viewId)) return null;
+  return presentation(viewId).selected ?? null;
+}
+
+// the comment the contextual actions name: the focused contribution
+// buffer, or the focused thread's selected card
+function actionTarget() {
+  const buffer = current();
+  if (buffer.kind === "comment") return buffer.source ? buffer : null;
+  const id = threadSelection();
+  return id ? bench.buffers.get(id) ?? published(id) : null;
 }
 
 function remember(viewId) {
@@ -224,6 +243,11 @@ function identifierInfo(buffer) {
   } else if (buffer.kind === "draft") {
     if (buffer.eventual?.kind === "reject") parts.push(`rejecting c-${buffer.eventual.offer}`);
     else parts.push(buffer.home === null ? "no home" : `t-${buffer.home}`, buffer.authoredTitle || "no title");
+  }
+  if (buffer.kind === "task") {
+    const selected = threadSelection();
+    const card = selected && comment(selected);
+    if (card) parts.push(`selected ${selected}  ${card.kind}${card.title ? `  ${card.title}` : ""}`);
   }
   if (tag) parts.push(tag);
   return parts.join("  ");
@@ -321,6 +345,10 @@ function showPresentation(viewId) {
     reader.previewToken = null; reader.pendingSignature = null;
     return;
   }
+  if (buffer.kind === "task") {
+    showThread(viewId, reader, buffer);
+    return;
+  }
   if (buffer.kind === "draft" || buffer.revisionPending) {
     showDraft(viewId, reader, buffer);
     return;
@@ -400,6 +428,36 @@ function showDraft(viewId, reader, buffer) {
     if (!reader.signature) body.textContent = `Draft preview unavailable: ${error.message}. Source remains available; viewing does not publish.`;
     else status(`Draft preview update unavailable: ${error.message}. Previous rendering retained; Source has the current text.`);
   });
+}
+
+// a task thread renders one card per contribution with the same
+// construction the standalone contribution view uses; the selection is
+// applied here and toggled in place by the j/k commands
+function showThread(viewId, reader, buffer) {
+  const selected = presentation(viewId).selected ?? null;
+  const signature = JSON.stringify([buffer.text, selected]);
+  if (reader.signature === signature) return;
+  const source = task(buffer.home);
+  const meta = [`${buffer.id}  ${source.name}`, `state: ${source.state}`, `owner: ${source.owner ?? "none recorded"}`];
+  if (source.explanation) meta.push(`explanation: ${source.explanation}`);
+  const nodes = [el("pre", meta.join("\n"), "reading-meta thread-meta")];
+  for (const item of snapshot.comments.filter((c) => c.home === buffer.home)) {
+    const view = commentText(item);
+    const card = el("article", undefined, "thread-card");
+    card.dataset.comment = item.id;
+    if (item.id === selected) card.classList.add("selected");
+    const body = el("div", undefined, "rich");
+    body.innerHTML = item.html;
+    card.append(
+      el("pre", view.text.slice(0, view.bodyFrom - 2), "reading-meta"),
+      body,
+      el("pre", view.text.slice(view.bodyTo), "reading-meta"),
+    );
+    nodes.push(card);
+  }
+  reader.replaceChildren(...nodes);
+  reader.signature = signature;
+  requestAnimationFrame(() => { if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop; });
 }
 
 function button(text, fn, title) {
@@ -485,7 +543,7 @@ function jumpState(viewId) {
 }
 
 function jumpLocation(viewId) {
-  return { bufferId: bench.view(viewId).bufferId, position: bench.position(viewId), presentation: ["comment", "draft"].includes(bench.buffer(bench.view(viewId).bufferId).kind) ? structuredClone(presentation(viewId)) : null };
+  return { bufferId: bench.view(viewId).bufferId, position: bench.position(viewId), presentation: ["comment", "draft", "task"].includes(bench.buffer(bench.view(viewId).bufferId).kind) ? structuredClone(presentation(viewId)) : null };
 }
 
 function pushHistory(viewId) {
@@ -494,18 +552,23 @@ function pushHistory(viewId) {
   stack.forward.length = 0;
 }
 
-function openBuffer(id, viewId = bench.focus, preferred = "view") {
+function openBuffer(id, viewId = bench.focus, preferred = "view", selected) {
   remember(viewId);
   if (!bench.buffers.has(id)) published(id);
   if (bench.view(viewId).bufferId !== id) pushHistory(viewId);
   bench.open(id, viewId);
-  if (["comment", "draft"].includes(bench.buffer(id).kind)) presentation(viewId).mode = preferred;
+  if (["comment", "draft", "task"].includes(bench.buffer(id).kind)) presentation(viewId).mode = preferred;
+  // a passed selection assigns exactly - null clears, omitted remembers
+  if (selected !== undefined) presentation(viewId).selected = selected;
   renderLayout(); focusPane(viewId);
+  if (selected && bench.buffer(id).kind === "task") {
+    requestAnimationFrame(() => readers.get(viewId)?.querySelector(`[data-comment="${selected}"]`)?.scrollIntoView({ block: "start" }));
+  }
 }
 
 function split(axis, id = bench.view().bufferId) {
   remember(bench.focus);
-  const same = id === bench.view().bufferId && ["comment", "draft"].includes(current().kind) ? structuredClone(presentation()) : null;
+  const same = id === bench.view().bufferId && ["comment", "draft", "task"].includes(current().kind) ? structuredClone(presentation()) : null;
   bench.split(axis, id);
   if (same) { presentation(); bench.view().presentations[id] = same; }
   renderLayout(); focusPane(bench.focus);
@@ -551,8 +614,9 @@ function back() { jump("back"); }
 function forward() { jump("forward"); }
 
 function backlinks() {
-  if (current().kind !== "comment") return status("Open a contribution to inspect its explicit backlinks.");
-  openPicker("backlinks");
+  const target = actionTarget();
+  if (!target || target.kind !== "comment") return status("Open a contribution to inspect its explicit backlinks.");
+  openPicker("backlinks", { sourceId: target.id });
 }
 
 function togglePresentation() {
@@ -582,7 +646,9 @@ function togglePresentation() {
   }
   if (reading) state.sourceSeen = true;
   persist();
-  status(reading ? `Source: ${editable(current()) ? "editable" : "read-only"} Vim text. Space uv returns to View.` : "View: j/k scroll; Tab or mouse selects links. Space uv opens Source.");
+  status(reading ? `Source: ${editable(current()) ? "editable" : "read-only"} Vim text. Space uv returns to View.`
+    : threadFocused() ? "View: j/k selects the next or previous contribution; Tab or mouse follows links. Space uv opens Source."
+    : "View: j/k scroll; Tab or mouse selects links. Space uv opens Source.");
 }
 
 // -- the surfaces that mutate -------------------------------------------------
@@ -597,8 +663,8 @@ function newNote() {
 }
 
 function startRevision() {
-  const buffer = current();
-  if (buffer.kind !== "comment" || !buffer.source) return;
+  const buffer = actionTarget();
+  if (!buffer || buffer.kind !== "comment" || !buffer.source) return;
   if (buffer.revisionPending) { status("This contribution already has a pending repair under review."); return; }
   const standing = buffer.source;
   buffer.revisionPending = {
@@ -611,6 +677,7 @@ function startRevision() {
   };
   buffer.text = standing.body;
   buffer.master = null;
+  if (current().id !== buffer.id) openBuffer(buffer.id, bench.focus, "source");
   presentation().mode = "source";
   renderLayout(); focusPane(bench.focus);
   status(`Revising ${buffer.id}: edit Source, View previews the proposed repair, , p publishes it. , e again discards.`);
@@ -627,7 +694,7 @@ function discardRevision() {
 }
 
 function standingOffer(buffer) {
-  if (buffer.kind !== "comment" || !buffer.source) return null;
+  if (!buffer || buffer.kind !== "comment" || !buffer.source) return null;
   if (buffer.source.kind !== "offer" || buffer.source.withdrawn) return null;
   const home = task(buffer.source.home);
   if (!home || home.state !== "offered" || home.offer !== buffer.source.num) return null;
@@ -635,14 +702,14 @@ function standingOffer(buffer) {
 }
 
 function startAccept() {
-  const buffer = current();
+  const buffer = actionTarget();
   const offer = standingOffer(buffer);
   if (!offer) return status("Accept applies to the standing offer of an offered task.");
   submitSurface(acceptSurface(buffer));
 }
 
 function startReject() {
-  const buffer = current();
+  const buffer = actionTarget();
   const offer = standingOffer(buffer);
   if (!offer) return status("Reject applies to the standing offer of an offered task.");
   const existing = [...bench.buffers.values()].find((b) => b.kind === "draft" && b.eventual?.kind === "reject" && b.eventual.offer === offer.id);
@@ -966,6 +1033,9 @@ async function reload(announce = true) {
       observeMode(view);
     }
   }
+  for (const id of editors.keys()) {
+    if (bench.buffer(bench.view(id).bufferId).kind === "task" && isReading(id)) showPresentation(id);
+  }
   refreshChrome();
   if (announce) status("Recorded material refreshed. Draft references were not retargeted.");
 }
@@ -973,9 +1043,9 @@ async function reload(announce = true) {
 // -- the command registry ------------------------------------------------------
 
 function revisableContext() {
-  const buffer = current();
-  return buffer.kind === "comment" && buffer.source && !buffer.source.withdrawn
-    && ["note", "offer", "reject", "use"].includes(buffer.source.kind);
+  const target = actionTarget();
+  return !!target?.source && !target.source.withdrawn
+    && ["note", "offer", "reject", "use"].includes(target.source.kind);
 }
 
 const registry = [
@@ -985,10 +1055,10 @@ const registry = [
   { id: "cite", label: "Insert citation", binding: "ci", local: "i", when: () => current().kind === "draft" && current().eventual?.kind !== "reject" && !isReading(), run: () => openPicker("cite") },
   { id: "home-task", label: "Set draft home task", binding: "nh", local: "h", when: () => current().kind === "draft" && current().eventual?.kind !== "reject", run: () => openPicker("home") },
   { id: "publish", label: "Publish the focused draft or repair", local: "p", when: () => current().kind === "draft" || !!current().revisionPending, run: publishDraft },
-  { id: "revise", label: "Revise this contribution", local: "e", when: () => revisableContext() && !current().revisionPending, run: startRevision },
+  { id: "revise", label: "Revise this contribution", local: "e", when: () => revisableContext() && !actionTarget()?.revisionPending, run: startRevision },
   { id: "discard-revision", label: "Discard pending repair", local: "e", when: () => !!current().revisionPending, run: discardRevision },
-  { id: "accept", label: "Accept the standing offer", local: "a", when: () => !!standingOffer(current()), run: startAccept },
-  { id: "reject", label: "Reject the standing offer with grounds", local: "x", when: () => !!standingOffer(current()), run: startReject },
+  { id: "accept", label: "Accept the standing offer", local: "a", when: () => !!standingOffer(actionTarget()), run: startAccept },
+  { id: "reject", label: "Reject the standing offer with grounds", local: "x", when: () => !!standingOffer(actionTarget()), run: startReject },
   { id: "title", label: "Title the focused draft or repair", local: "t", when: () => current().kind === "draft" || !!current().revisionPending, run: editTitle },
   { id: "write", aliases: ["w"], label: "Save draft locally", when: () => current().kind === "draft" || current().revisionPending, run: () => { const b = current(); const prior = { savedText: b.savedText, savedTitle: b.revisionPending?.savedTitle, savedBody: b.revisionPending?.savedBody }; if (b.kind === "draft") b.savedText = b.text; if (b.revisionPending) { b.revisionPending.savedTitle = b.revisionPending.title; b.revisionPending.savedBody = b.text; } if (persist()) { refreshChrome(); status("Saved locally in this browser. Nothing sent."); } else { if (b.kind === "draft") b.savedText = prior.savedText; if (b.revisionPending) { b.revisionPending.savedTitle = prior.savedTitle; b.revisionPending.savedBody = prior.savedBody; } refreshChrome(); } } },
   { id: "undo", label: "Undo edit", when: () => editable(current()) && !isReading(), run: () => Vim.handleKey(getCM(currentEditor()), "u") },
@@ -1002,6 +1072,8 @@ const registry = [
   { id: "reader-up", label: "Scroll rendered pane up", when: () => isReading(), run: () => scrollReader(-56) },
   { id: "reader-top", label: "Scroll rendered pane to top", when: () => isReading(), run: () => scrollReader("top") },
   { id: "reader-bottom", label: "Scroll rendered pane to bottom", when: () => isReading(), run: () => scrollReader("bottom") },
+  { id: "thread-next", label: "Select next contribution in the thread", when: threadFocused, run: () => selectCard(1) },
+  { id: "thread-prev", label: "Select previous contribution in the thread", when: threadFocused, run: () => selectCard(-1) },
   { id: "focus-h", label: "Focus pane left", when: () => bench.views.size > 1, run: () => focusLeaf(-1) },
   { id: "focus-l", label: "Focus pane right", when: () => bench.views.size > 1, run: () => focusLeaf(1) },
   { id: "focus-k", label: "Focus pane above", when: () => bench.views.size > 1, run: () => focusLeaf(-1) },
@@ -1012,8 +1084,8 @@ const registry = [
   { id: "only", label: "Show only current pane", binding: "wo", run: onlyPane },
   ...["h", "j", "k", "l"].map((d) => ({ id: `focus-${d}`, binding: `w${d}`, label: `Focus pane ${{ h: "left", j: "below", k: "above", l: "right" }[d]}`, run: () => neighbor(d) })),
   { id: "follow", label: "Follow id or reference under cursor", binding: "gd", when: () => !isReading() && !!currentEditor(), run: follow },
-  { id: "backlinks", label: "Show explicit backlinks", binding: "gr", when: () => current().kind === "comment", run: backlinks },
-  { id: "rendering", label: "Toggle View / Source", binding: "uv", when: () => ["comment", "draft"].includes(current().kind), run: togglePresentation },
+  { id: "backlinks", label: "Show explicit backlinks", binding: "gr", when: () => actionTarget()?.kind === "comment", run: backlinks },
+  { id: "rendering", label: "Toggle View / Source", binding: "uv", when: () => ["comment", "draft", "task"].includes(current().kind), run: togglePresentation },
   { id: "back", label: "Jump backward", binding: "jb", run: back },
   { id: "forward", label: "Jump forward", run: forward },
   { id: "home", label: "Open home buffer", binding: "hh", run: () => openBuffer("home") },
@@ -1039,6 +1111,24 @@ function scrollReader(amount) {
     : reader.scrollTop + amount;
   presentation().scrollTop = reader.scrollTop;
   persist();
+}
+
+// j and k step the thread selection, clamped at the ends; from no
+// selection either key lands on the first card
+function selectCard(step) {
+  if (!threadFocused()) return;
+  const cards = snapshot.comments.filter((c) => c.home === current().home);
+  if (!cards.length) return status("This thread has no contributions to select.");
+  const at = cards.findIndex((c) => c.id === presentation().selected);
+  const index = at === -1 ? 0 : Math.max(0, Math.min(cards.length - 1, at + step));
+  if (cards[index].id === presentation().selected) return;
+  presentation().selected = cards[index].id;
+  const reader = readers.get(bench.focus);
+  reader.querySelectorAll(".thread-card.selected").forEach((node) => node.classList.remove("selected"));
+  const card = reader.querySelector(`[data-comment="${cards[index].id}"]`);
+  card.classList.add("selected");
+  card.scrollIntoView({ block: "nearest" });
+  persist(); refreshChrome();
 }
 
 function focusLeaf(step) {
@@ -1196,10 +1286,10 @@ function openPicker(kind, options = {}) {
   remember(bench.focus);
   const buffer = current();
   if (kind === "cite" && buffer.kind !== "draft") return status("Insert citations while drafting.");
-  picker = { kind, viewId: bench.focus, sourceId: buffer.id, selected: 0, items: [],
+  picker = { kind, viewId: bench.focus, sourceId: options.sourceId ?? buffer.id, selected: 0, items: [],
     after: options.after ?? null, titleTarget: options.target ?? null,
     ticket: kind === "cite" ? bench.beginCitation(buffer.id, currentEditor().state.selection.main.head) : null };
-  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task", title: `Authored title for ${buffer.id}`, name: "Your claimed name" })[kind];
+  $("#picker-title").textContent = ({ commands: ": Commands", tasks: "Find task, contribution, or local draft", contents: "Search recorded content", backlinks: `Backlinks to ${options.sourceId ?? buffer.id}`, cite: "Insert citation: search or enter c-N", home: "Choose draft home task", title: `Authored title for ${buffer.id}`, name: "Your claimed name" })[kind];
   $("#query").value = picker.titleTarget ? picker.titleTarget.get() : "";
   $("#beside").hidden = ["commands", "cite", "home"].includes(kind) || prompt;
   renderPicker();
@@ -1302,10 +1392,13 @@ document.addEventListener("click", (event) => {
   const url = new URL(link.href);
   if (url.origin !== location.origin || !/^\/t\/\d+$/.test(url.pathname)) return;
   event.preventDefault();
-  const id = /^#c-\d+$/.test(url.hash) ? url.hash.slice(1) : `t-${url.pathname.slice(3)}`;
+  const thread = `t-${url.pathname.slice(3)}`;
+  const selected = /^#c-\d+$/.test(url.hash) ? url.hash.slice(1) : null;
   if (picker) closePicker();
-  if (!bench.buffers.has(id)) published(id);
-  if (event.shiftKey) split("row", id); else openBuffer(id);
+  if (event.shiftKey) {
+    split("row", thread);
+    if (selected) { presentation().selected = selected; showPresentation(bench.focus); }
+  } else openBuffer(thread, bench.focus, "view", selected);
 });
 
 // Only the requested Normal-mode jump chords override browser navigation.
@@ -1395,7 +1488,9 @@ document.addEventListener("keydown", (event) => {
     const reader = readers.get(bench.focus);
     if (["j", "k", "G"].includes(event.key) || (pendingG && event.key === "g")) {
       event.preventDefault(); event.stopImmediatePropagation();
-      runCommand(event.key === "G" ? "reader-bottom" : (pendingG && event.key === "g") ? "reader-top"
+      const threadKey = (event.key === "j" || event.key === "k") && threadFocused();
+      runCommand(threadKey ? (event.key === "j" ? "thread-next" : "thread-prev")
+        : event.key === "G" ? "reader-bottom" : (pendingG && event.key === "g") ? "reader-top"
         : event.key === "j" ? "reader-down" : "reader-up");
       pendingG = false; return;
     }
@@ -1403,12 +1498,21 @@ document.addEventListener("keydown", (event) => {
   pendingG = event.key === "g" && !pendingG;
 }, true);
 
-function initialBuffer() {
-  const hash = /^#c-\d+$/.test(location.hash) ? location.hash.slice(1) : null;
-  if (hash) return hash;
-  if (/^\/t\/\d+$/.test(location.pathname)) return location.pathname.slice(1).replace("/", "-");
-  if (/^\/c\/\d+$/.test(location.pathname)) return location.pathname.slice(1).replace("/", "-");
-  return "home";
+// the URL names either a contribution or a thread, and a task path with
+// a #c-M hash names the thread with that contribution selected
+function deepLink() {
+  const thread = location.pathname.match(/^\/t\/(\d+)$/);
+  const card = location.hash.match(/^#c-\d+$/);
+  if (thread) {
+    const named = card ? location.hash.slice(1) : null;
+    // the hash selects only a contribution that lives in the named thread
+    const selected = named === null ? undefined
+      : comment(named)?.home === Number(thread[1]) ? named : null;
+    return { id: `t-${thread[1]}`, selected };
+  }
+  if (card) return { id: location.hash.slice(1) };
+  if (/^\/c\/\d+$/.test(location.pathname)) return { id: location.pathname.slice(1).replace("/", "-") };
+  return { id: "home" };
 }
 
 async function start() {
@@ -1422,16 +1526,16 @@ async function start() {
   }
   renderLayout(); focusPane(bench.focus);
   status("Space Space: task/contribution/draft | Space sg: content | , e revise, , a accept, , x reject, , t title, , p publish | : commands");
-  const target = initialBuffer();
-  if (target !== "home") {
-    try { openBuffer(target, bench.focus); }
-    catch { status(`The linked ${target} names nothing recorded; home stands.`); }
+  const linked = deepLink();
+  if (linked.id !== "home") {
+    try { openBuffer(linked.id, bench.focus, "view", linked.selected); }
+    catch { status(`The linked ${linked.id} names nothing recorded; home stands.`); }
   }
   window.addEventListener("hashchange", () => {
-    const linked = initialBuffer();
-    if (linked === "home") return;
-    try { openBuffer(linked, bench.focus); }
-    catch { status(`The linked ${linked} names nothing recorded.`); }
+    const linked = deepLink();
+    if (linked.id === "home") return;
+    try { openBuffer(linked.id, bench.focus, "view", linked.selected); }
+    catch { status(`The linked ${linked.id} names nothing recorded.`); }
   });
   window.workbenchUI = { state: () => ({
     focus: bench.focus, layout: structuredClone(bench.layout),
