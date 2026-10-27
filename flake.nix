@@ -65,6 +65,7 @@
                 just
                 typescript
                 nodejs
+                direnv
                 saccade.packages.${system}.default
                 devPi
               ];
@@ -146,6 +147,10 @@
           # the pinned harness this binary's start door launches;
           # SACCADE_PI remains the development override
           SACCADE_PI = "${saccadePi}/bin/saccade-pi";
+          # the launch doors equip the workspace through this direnv; the
+          # baked store path is both the resolution and the closure edge,
+          # never a runtime override
+          SACCADE_DIRENV = "${pkgs.direnv}/bin/direnv";
           # the embedded workbench assets ride the build interface,
           # never a runtime path
           SACCADE_WEB_ASSETS = webAssets;

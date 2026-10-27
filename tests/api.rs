@@ -3393,6 +3393,54 @@ async fn identity_reads_the_scope_and_the_retired_words_refuse_at_the_parser() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_launch_without_direnv_refuses_before_the_host_is_asked() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("launch-no-direnv");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    let host = fake_host(db.parent().unwrap());
+    let pi = stub_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    std::fs::write(&host_log, b"").unwrap();
+
+    let workspace = db.parent().unwrap().join("bare-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let out = std::process::Command::new(bin)
+        .args([
+            "--server",
+            &base_url,
+            "--repo",
+            root.to_str().unwrap(),
+            "launch",
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--",
+            "register and wait",
+        ])
+        // the fake host stays reachable; direnv deliberately is not
+        .env("PATH", host.parent().unwrap().display().to_string())
+        .env("FAKE_ORCA_LOG", host_log.display().to_string())
+        .env("SACCADE_PI", &pi)
+        .output()
+        .expect("spawn sac");
+    assert!(
+        !out.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("direnv"), "{err}");
+    assert!(err.contains("never starts unequipped"), "{err}");
+    // the refusal precedes any host contact: the fake host saw nothing
+    assert_eq!(std::fs::read_to_string(&host_log).unwrap(), "");
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_launch_scrubs_stale_inheritance() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let db = scratch_db("launch-scrub");
@@ -3468,6 +3516,23 @@ async fn the_launch_scrubs_stale_inheritance() {
     assert!(
         typed.contains(&format!("SACCADE_REPO={}", root.display())),
         "{typed}"
+    );
+    // the workspace command routes through direnv exec so the committed
+    // .envrc governs the session; the scrub rides env, never VAR=
+    // prefixes to direnv, and the trust checks stay direnv's own
+    let exec_at = typed
+        .find(" exec ")
+        .expect("the launch routes through direnv");
+    assert!(
+        typed[..exec_at].contains("&& "),
+        "direnv rides the typed line after the cd: {typed}"
+    );
+    assert!(
+        typed[exec_at..].starts_with(&format!(
+            " exec {} env -u SACCADE_INCARNATION",
+            shell_quoted(workspace.to_str().unwrap())
+        )),
+        "direnv exec targets the launch workspace: {typed}"
     );
     // the handoff helper's controller door is named, never guessed from
     // a PATH, and a stale inherited CLI path is scrubbed before the
