@@ -33,6 +33,9 @@
     overlays = [rust-overlay.overlays.default];
     # the native integration the composed harness loads
     saccadePiExtensions = ["native/saccade.ts"];
+    # the composition's own receipt preload, copied into the store as a
+    # pair so the registration path is a space-free store path
+    saccadeCompositionPreloadFiles = ["native/saccade-composition-shim.mjs" "native/saccade-composition-hooks.mjs"];
   in {
     devShells = forAllSystems (
       system: let
@@ -51,9 +54,19 @@
           inherit inputs pkgs;
           modules = [
             ({config, ...}: let
+              # the composition's receipt preload, copied into the
+              # store as a pair: the registration path stays a
+              # space-free store path, and the hook transforms nothing
+              # without the pinned anchor, so inherited registrations
+              # in child processes stay inert
+              compositionPreload = pkgs.runCommand "saccade-composition-preload" {} ''
+                mkdir -p $out
+                ${lib.concatMapStrings (path: "cp ${./. + "/${path}"} $out/${baseNameOf path}\n") saccadeCompositionPreloadFiles}
+              '';
               devPi = lib.hiPrio (pkgs.writeShellApplication {
                 name = "saccade-pi";
                 text = ''
+                  export NODE_OPTIONS="--import ${compositionPreload}/saccade-composition-shim.mjs''${NODE_OPTIONS:+ $NODE_OPTIONS}"
                   exec ${wrapped-pi.packages.${system}.default}/bin/wrapped-pi ${lib.escapeShellArgs (lib.concatMap (path: ["-e" "${config.devenv.root}/${path}"]) saccadePiExtensions)} "$@"
                 '';
               });
@@ -101,12 +114,17 @@
         pi = wrapped-pi.packages.${system}.default.override {
           extraExtensions = map (path: ./. + "/${path}") saccadePiExtensions;
         };
+        compositionPreload = pkgs.runCommand "saccade-composition-preload" {} ''
+          mkdir -p $out
+          ${lib.concatMapStrings (path: "cp ${./. + "/${path}"} $out/${baseNameOf path}\n") saccadeCompositionPreloadFiles}
+        '';
         saccadePi = pkgs.writeShellApplication {
           name = "saccade-pi";
           # util-linux rides the closure: the integration's guard helper
           # is flock, never an assumed ambient binary
           runtimeInputs = [pkgs.util-linux];
           text = ''
+            export NODE_OPTIONS="--import ${compositionPreload}/saccade-composition-shim.mjs"
             exec ${pi}/bin/wrapped-pi "$@"
           '';
         };

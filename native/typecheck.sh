@@ -53,10 +53,12 @@ cat > native/tsconfig.local.json <<TSCONFIG
 }
 TSCONFIG
 # the runtime links: saccade.ts imports typebox and pi-tui as values,
-# so the plain node test command needs them resolvable
+# and the acceptance smoke drives the pinned SDK itself, so the plain
+# node test command needs them resolvable
 mkdir -p native/node_modules native/node_modules/@earendil-works
 ln -sfn "$node_modules/typebox" native/node_modules/typebox
 ln -sfn "$node_modules/@earendil-works/pi-tui" native/node_modules/@earendil-works/pi-tui
+ln -sfn "$node_modules/@earendil-works/pi-coding-agent" native/node_modules/@earendil-works/pi-coding-agent
 if [ "$setup_only" = "--setup-only" ]; then
 	echo "typecheck: pinned SDK resolved at $node_modules; config and runtime link written"
 	exit 0

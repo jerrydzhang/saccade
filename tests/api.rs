@@ -3433,7 +3433,6 @@ fn bounded_sac<S: AsRef<str>>(
         "SACCADE_INCARNATION_SEQ",
         "SACCADE_WORKSPACE",
         "SACCADE_LAUNCH_TOKEN",
-        "SACCADE_ACTIVATION_LAUNCHER",
     ] {
         cmd.env_remove(key);
     }
@@ -3852,7 +3851,6 @@ fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
         bin,
         &bin_dir,
         None,
-        None,
         &[("SACCADE_CONFIRM_WAIT_SECS", "1")],
     );
 
@@ -4111,15 +4109,14 @@ fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// A serving subprocess: publishes its address file, so activation's
-/// routing is the real one, and carries the launcher seam plus the
-/// fake host on PATH for its own activation child.
+/// A serving subprocess: publishes its address file, so the probe
+/// routing is the real one, and carries the fake host on PATH for its
+/// own child doors.
 fn spawn_serving_subprocess(
     db: &Path,
     repo: &Path,
     bin: &str,
     host_dir: &Path,
-    launcher: Option<&Path>,
     state_home: Option<&Path>,
     extra_envs: &[(&str, &str)],
 ) -> (String, u32) {
@@ -4143,9 +4140,6 @@ fn spawn_serving_subprocess(
         // a genuinely cold state root: the guard dirs must come into
         // being from nothing, not from warmed probe residue
         cmd.env("XDG_STATE_HOME", dir);
-    }
-    if let Some(path) = launcher {
-        cmd.env("SACCADE_ACTIVATION_LAUNCHER", path);
     }
     for (key, value) in extra_envs {
         cmd.env(key, value);
@@ -4194,29 +4188,13 @@ async fn a_wire_send_to_an_unreachable_peer_records_the_attempt_and_launches_not
     let db = scratch_db("wire-unreachable");
     let (root, _first, _head) = scratch_repo(db.parent().unwrap());
 
-    // the launcher seam: would record any launch argv, so the test
-    // fails if a send ever restarts a stopped or unknown recipient
+    // an empty PATH prefix: no fake host exists here, so a launch
+    // attempt could not even reach one - the refusals below carry the
+    // no-launch proof on their own
     let bin_dir = db.parent().unwrap().join("probe-bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let seam = bin_dir.join("activation-launcher");
-    let launch_log = db.parent().unwrap().join("launch.log");
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"{}\"\nexit 0\n",
-        launch_log.display()
-    );
-    std::fs::write(&seam, script).unwrap();
-    std::fs::set_permissions(&seam, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-
     let cold_state = db.parent().unwrap().join("xdg-state");
-    let (url, pid) = spawn_serving_subprocess(
-        &db,
-        &root,
-        bin,
-        &bin_dir,
-        Some(&seam),
-        Some(&cold_state),
-        &[],
-    );
+    let (url, pid) = spawn_serving_subprocess(&db, &root, bin, &bin_dir, Some(&cold_state), &[]);
 
     // a live sender and three recipients: one stopped (free guard),
     // one running but disconnected (guard held here), one unprobeable
@@ -4343,8 +4321,6 @@ async fn a_wire_send_to_an_unreachable_peer_records_the_attempt_and_launches_not
             guard.display()
         );
     }
-    let logged = std::fs::read_to_string(&launch_log).unwrap_or_default();
-    assert!(logged.is_empty(), "a send launched a recipient: {logged:?}");
     // every refused attempt's record stands as evidence: the stopped
     // recipient holds both ingresses' attempts, all pending, none
     // submitted by any machinery
@@ -4400,7 +4376,7 @@ fn door_fixture(home: &Path) -> DoorFixture {
     }
 }
 
-/// The environment one real-door subprocess runs under: fake host first on PATH, the fixture harness as pinned Pi, the launcher seam disabled, and the cold state home the fixture server named its guard under.
+/// The environment one real-door subprocess runs under: fake host first on PATH, the fixture harness as pinned Pi, and the cold state home the fixture server named its guard under.
 fn door_envs(fx: &DoorFixture, guard: Option<&Path>) -> Vec<(&'static str, String)> {
     let mut envs = vec![
         (
@@ -4457,7 +4433,6 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
         &root,
         bin,
         fx.host.parent().unwrap(),
-        None,
         Some(&fx.cold_state),
         &[],
     );
@@ -4641,7 +4616,6 @@ fn switch_resume_runs_through_the_real_door() {
         &root,
         bin,
         fx.host.parent().unwrap(),
-        None,
         Some(&fx.cold_state),
         &[],
     );
@@ -4840,7 +4814,6 @@ fn a_send_to_a_stopped_peer_discloses_through_the_real_door() {
         &root,
         bin,
         fx.host.parent().unwrap(),
-        None,
         Some(&fx.cold_state),
         &server_envs,
     );
@@ -6701,7 +6674,6 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
             .env("SACCADE_TASK", "")
             .env("SACCADE_WORKSPACE", "")
             .env("SACCADE_LAUNCH_TOKEN", "")
-            .env("SACCADE_ACTIVATION_LAUNCHER", "")
             .envs(envs.iter().copied())
             .output()
             .expect("spawn sac");
@@ -6869,7 +6841,6 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
                 .env("SACCADE_TASK", "")
                 .env("SACCADE_WORKSPACE", "")
                 .env("SACCADE_LAUNCH_TOKEN", "")
-                .env("SACCADE_ACTIVATION_LAUNCHER", "")
                 .stdout(std::fs::File::create(&ask_out).unwrap())
                 .stderr(std::fs::File::create(&ask_err).unwrap())
                 .status()

@@ -93,6 +93,8 @@ interface QueuedDelivery {
 	messageSeq: number;
 	incarnation: number;
 	sessionFile: string;
+	/** The per-call receipt reported acceptance of this exact message. */
+	accepted?: boolean;
 }
 
 // Take the guard's kernel lock on the open file description this fd
@@ -368,9 +370,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// the session's association: resolved or registered fresh at every
 	// session start by the session's actual native id and locator
 	let association: Association | null = null;
-	// the session context the delivery confirmations read queue
-	// acceptance from: set at session start, cleared at shutdown
-	let sessionCtx: ExtensionContext | null = null;
 	let attachError: string | null = null;
 	// this start is the intentional in-memory mode: the pinned contract
 	// leaves getSessionFile undefined exactly when persist is false, so
@@ -684,15 +683,15 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	}
 
 	// Queue one message natively, then confirm the sender's attempt on
-	// the only bar that exists: the native input queue's acceptance,
-	// observable without waiting for the recipient's work. Pinned 1.2.0:
-	// sendUserMessage returns void and its internal failures are
-	// invisible here (the runtime routes them to its own error sink),
-	// so acceptance reads the session context itself - the queue
-	// holding the input, or a run consuming it. Positive evidence
-	// confirms immediately; no evidence leaves the delivery held for
-	// the later boundaries, never confirmed on a guess and never
-	// requeued.
+	// the runtime's own per-call receipt: the composition preload
+	// forwards preflightResult into prompt, so this delivery's callback
+	// reports queued at steer insertion, started at run start, and
+	// handled when another extension's input handler consumed the input
+	// - each an observed fact about this exact message, never an
+	// inference from aggregate queue or run state. A rejected delivery
+	// (compaction and auth throws fire no callback) stays held without
+	// any confirmation and is dropped at a later idle boundary; nothing
+	// is ever requeued.
 	function queueDelivery(message: MailboxMessage): void {
 		if (association === null) return;
 		if (queued.has(message.seq)) return;
@@ -704,29 +703,24 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			sessionFile: association.sessionFile,
 		};
 		deliveries.add(delivery);
-		pi.sendUserMessage(delivery.envelope, { deliverAs: "steer" });
-		void confirmOnAcceptance(delivery);
-	}
-
-	// The queue's acceptance, read twice around a settle: the input
-	// pending natively, or a run active to consume it. Both probes
-	// unavailable is uncertainty; anything else without either is just
-	// not-yet - the held delivery waits for the later boundaries.
-	async function confirmOnAcceptance(delivery: QueuedDelivery): Promise<void> {
-		const ctx = sessionCtx;
-		if (ctx === null) return;
-		for (const delay of [0, 150]) {
-			if (delay > 0) {
-				await new Promise((resolve) => setTimeout(resolve, delay));
-			}
-			if (association === null) return;
-			const accepted =
-				ctx.hasPendingMessages?.() === true || ctx.isIdle?.() === false;
-			if (accepted) {
+		// the receipt option flows through the loader verbatim into the
+		// adapted sendUserMessage; the pinned ExtensionAPI type does not
+		// declare it yet, hence the local shape
+		const options = {
+			deliverAs: "steer",
+			preflightResult: (outcome: "queued" | "started" | "handled") => {
+				if (outcome === "handled") {
+					// intercepted before queueing: a proven non-delivery,
+					// reported by the send as no confirmation
+					queued.delete(delivery.messageSeq);
+					deliveries.delete(delivery);
+					return;
+				}
+				delivery.accepted = true;
 				confirmOne(delivery);
-				return;
-			}
-		}
+			},
+		} as unknown as Parameters<ExtensionAPI["sendUserMessage"]>[1];
+		pi.sendUserMessage(delivery.envelope, options);
 	}
 
 	// The delivery machinery's act, re-posted by the later boundaries
@@ -764,10 +758,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return false;
 	}
 
-	// The later boundaries settle what the immediate read could not: a
-	// held delivery confirms when the queue's acceptance is observable
-	// - the input still pending, or the envelope already in saved
-	// history, which only an accepted input reaches - and drops when
+	// The later boundaries settle what the per-call receipt could not:
+	// a held delivery whose receipt already reported acceptance re-posts
+	// its acknowledgement - bookkeeping of an observed acceptance, never
+	// a redelivery - and one that never observed acceptance drops when
 	// the session is idle, the queue empty, and the envelope absent:
 	// the runtime refused the input, nothing to confirm, no redelivery
 	// ever. A delivery bound to an association that is no longer live
@@ -782,10 +776,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				deliveries.delete(delivery);
 				continue;
 			}
-			const accepted =
-				ctx.hasPendingMessages?.() === true ||
-				savedEntryHas(ctx, delivery.envelope);
-			if (accepted) {
+			if (delivery.accepted) {
 				confirmOne(delivery);
 				continue;
 			}
@@ -1391,7 +1382,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		// submitting or delivering into a session this incarnation is not
 		cancelAllWaits();
 		unpersistedSession = false;
-		sessionCtx = ctx;
 		const who = await attach(ctx);
 		if (!who) {
 			if (attachError) pi.appendEntry("saccade_attach", { error: attachError });
@@ -1434,7 +1424,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		cancelPendingHandoff("the session ended before the handoff's run settled");
 		cancelAllWaits();
 		suspendAssociation();
-		sessionCtx = null;
 		return undefined;
 	});
 

@@ -160,9 +160,9 @@ class FakePi implements ExtensionAPI {
 	// the honest resting state: a session nobody is running
 	idle = true;
 	pendingNative = false;
-	// when set, an accepted input stays unobservable: the queue holds
-	// nothing the acceptance probes can see, so the confirmation waits
-	// for the later boundaries - the held-path seam
+	// when set, an accepted input stays unobservable: the receipt
+	// callback never fires, so the confirmation waits for the later
+	// boundaries - the lost-receipt seam
 	silentAccept = false;
 
 	hasUI = true;
@@ -188,7 +188,11 @@ class FakePi implements ExtensionAPI {
 	shutdowns = 0;
 	sendUserMessage(
 		content: string,
-		opts?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
+		opts?: {
+			deliverAs?: "steer" | "followUp";
+			expandPromptTemplates?: boolean;
+			preflightResult?: (outcome: "queued" | "started" | "handled") => void;
+		},
 	) {
 		if (this.failNextSend > 0) {
 			this.failNextSend -= 1;
@@ -198,10 +202,13 @@ class FakePi implements ExtensionAPI {
 		this.steers.push(content);
 		this.modes.push(opts?.deliverAs);
 		// the runtime's own truth: an accepted input is either pending
-		// natively or already consuming a run
+		// natively or already consuming a run, and the per-call receipt
+		// names which acceptance happened
 		if (!this.silentAccept) {
+			const started = this.idle;
 			this.pendingNative = true;
 			this.idle = false;
+			opts?.preflightResult?.(started ? "started" : "queued");
 		}
 	}
 	appendEntries: Array<{ type: string; data: unknown }> = [];
@@ -1045,26 +1052,73 @@ test("a confirmed delivery stays submitted when the runtime later discards it", 
 	await stop(h);
 });
 
-test("unobservable acceptance holds the confirmation; saved evidence confirms later", async () => {
+test("a receipt-less delivery never confirms from later history", async () => {
 	const h = harness("sac-test-15", "/sessions/aaaa1111.jsonl");
 	await h.pi.emit("session_start");
-	// the queue took the input, but no acceptance evidence is
-	// observable: the attempt is never optimistically confirmed
+	// the queue took the input, but the receipt never fired: history
+	// outside the bounded attempt is inadmissible as acceptance
 	h.pi.silentAccept = true;
 	h.tracker.stage(0, mail({ seq: 73, num: 7, to: { seq: 0, num: 0 } }));
 	await tick();
 	await tick();
 	assert.equal(h.pi.steers.length, 1);
-	assert.equal(h.tracker.submissions.length, 0, "no evidence, no optimistic submit");
-	// the envelope lands in saved history, which only an accepted
-	// input reaches: the later boundary confirms from that evidence
+	assert.equal(h.tracker.submissions.length, 0, "no receipt, no confirmation");
+	// the envelope lands in saved history: the record still reads
+	// nothing - history never substitutes for the per-call receipt
 	h.pi.session.entries.push({
 		type: "message",
 		message: { role: "user", content: h.pi.steers[0] },
 	});
 	await h.pi.emit("agent_settled");
 	await tick();
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 73 }]);
+	assert.deepEqual(h.tracker.submissions, []);
+	await stop(h);
+});
+
+test("unrelated queued content never confirms a rejected delivery", async () => {
+	const h = harness("sac-test-26", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	// unrelated input is already queued when our delivery is refused
+	h.pi.pendingNative = true;
+	h.pi.failNextSend = 1;
+	h.tracker.stage(0, mail({ seq: 74, num: 8, to: { seq: 0, num: 0 } }));
+	await tick();
+	await tick();
+	// ours produced no receipt and the unrelated entry is not ours to
+	// confirm: nothing lands
+	assert.equal(h.pi.steers.length, 0);
+	assert.equal(h.tracker.submissions.length, 0);
+	// and the refused delivery drops at the idle boundary
+	await h.pi.emit("agent_settled");
+	await tick();
+	assert.equal(h.tracker.submissions.length, 0);
+	await stop(h);
+});
+
+test("a busy accept confirms at queue time without waiting for the turn", async () => {
+	const h = harness("sac-test-27", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	// the recipient is mid-run when the delivery arrives: the steer
+	// queues and the receipt names queued
+	h.pi.idle = false;
+	h.tracker.stage(0, mail({ seq: 75, num: 9, to: { seq: 0, num: 0 } }));
+	await tick();
+	await tick();
+	assert.equal(h.pi.steers.length, 1);
+	// confirmed at queue time: the turn never had to finish
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 75 }]);
+	await stop(h);
+});
+
+test("an idle accept confirms at run start without waiting for the turn", async () => {
+	const h = harness("sac-test-28", "/sessions/aaaa1111.jsonl");
+	await h.pi.emit("session_start");
+	h.tracker.stage(0, mail({ seq: 76, num: 10, to: { seq: 0, num: 0 } }));
+	await tick();
+	await tick();
+	// the receipt names started: the run's own input, accepted at run
+	// start, confirmed before any assistant output
+	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 76 }]);
 	await stop(h);
 });
 

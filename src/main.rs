@@ -1616,14 +1616,11 @@ fn send_door(
     identity_fallback_guard(cli, &context, attached_terminal())?;
     let body = Prose::new(body_source(body, stdin)?)?;
     client::handshake(&url);
+    // success carries the wire's queue-acceptance confirmation; a
+    // refused or unacknowledged attempt comes back as the wire's
+    // error, naming the recorded m-N and the reason
     let sent = client::send_message(&url, &context, to_num, reply_num, task_num, &body)
         .map_err(Fail::Client)?;
-    // delivery activation: a running peer's bridge delivers; a stopped
-    // one resumes from its exact saved session; every doubt stays
-    // pending and says so - the send itself never un-lands
-    // activation is the wire's own act after this landed write - one
-    // mechanism for every entrance - so the door's face is the plain
-    // pending line and nothing else
     if cli.json {
         return Ok(serde_json::to_string_pretty(
             &serde_json::to_value(&sent).expect("the send reply is plain data"),
