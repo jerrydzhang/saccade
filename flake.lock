@@ -3924,11 +3924,11 @@
         "saccade": "saccade_4"
       },
       "locked": {
-        "lastModified": 1791990113,
-        "narHash": "sha256-dNxO4HKGtT9kkiRZQnTCy66mSQIUXVGAewR4r/NjHho=",
+        "lastModified": 1792692987,
+        "narHash": "sha256-CuJGq3Twm5YPbnV0f4JZ1o+lVFpf0eWx/hNOm1AULHA=",
         "owner": "jerrydzhang",
         "repo": "wrapped-pi",
-        "rev": "ec7c46e6bce65f3f00f827fda05ed09e636c15e2",
+        "rev": "4a77089a44cfbf4efa60c9085f7327dd1811b120",
         "type": "github"
       },
       "original": {
