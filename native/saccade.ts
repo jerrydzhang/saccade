@@ -55,6 +55,13 @@ interface MailboxMessage {
 	born_at: number;
 }
 
+// One staged delivery handed over the transport read: the runtime
+// half of a sender's submission attempt, correlated by its token.
+interface StagedDelivery {
+	token: string;
+	message: MailboxMessage;
+}
+
 interface Association extends AttachReply {
 	nativeId: string;
 	sessionFile: string;
@@ -86,6 +93,8 @@ interface QueuedDelivery {
 	messageSeq: number;
 	incarnation: number;
 	sessionFile: string;
+	/** The per-call receipt reported acceptance of this exact message. */
+	accepted?: boolean;
 }
 
 // Take the guard's kernel lock on the open file description this fd
@@ -370,12 +379,11 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	const waits = new Set<WaitState>();
 	// envelopes queued natively, submissions not yet confirmed
 	const deliveries = new Set<QueuedDelivery>();
-	// message seqs already queued under this association, with the
-	// message itself for correlation: startup, the wait tool, and the
-	// background bridge all drain the same mailbox, and a message
-	// enters the native queue exactly once - until reality disagrees
-	// (the send was refused, or the queued input was discarded), at
-	// which point the guard releases and the next drain delivers again
+	// message seqs queued natively under this association, with the
+	// message itself: the input correlation's state, consumed when the
+	// envelope enters the session and cleared with the association -
+	// never a redelivery door, since the transport handoff is
+	// exactly-once
 	const queued = new Map<number, MailboxMessage>();
 	// the armed own-session handoff this process has not yet shut down
 	// for: null once the helper is launched (the shutdown is the armed
@@ -637,31 +645,13 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return reply.messages;
 	}
 
-	// Filter to the addressee and queue each new message natively - the
-	// queueing half of the one incoming path.
-	function queueIncoming(messages: MailboxMessage[]): MailboxMessage[] {
-		const who = association;
-		if (!who) return [];
-		const incoming = incomingFor(who.incarnation, messages);
-		for (const message of incoming) {
-			queueDelivery(message);
-		}
-		return incoming;
-	}
-
-	// The one incoming read: startup, the wait tool, and the background
-	// bridge all come through here; the queued-once guard keeps a
-	// message to a single envelope.
-	async function drainIncoming(): Promise<MailboxMessage[]> {
-		const who = association;
-		if (!who) return [];
-		return queueIncoming(await mailbox(who.incarnation));
-	}
-
-	// The background bridge: one parked read per association, woken by
-	// the record's landing server-side, delivering at whatever native
-	// boundary the session supports - into the running queue, or as a
-	// turn when idle. The loop dies with its association, so a
+	// The background bridge: one parked transport read per association,
+	// woken when a sender's attempt stages a delivery task. Each task
+	// is handed exactly once and queue natively at whatever boundary
+	// the session supports - into the running queue, or as a turn when
+	// idle. The loop carries no recorded mail at all: a recorded
+	// message without confirmed submission is evidence, and nothing
+	// drains it later. The loop dies with its association, so a
 	// reassociated session never delivers as a stale recipient, and a
 	// failed read reconnects with backoff - transport, nothing more.
 	const bridgeLoops = new Set<Association>();
@@ -672,16 +662,16 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			let backoff = 500;
 			while (association === assoc) {
 				try {
-					const reply = await tracker<{ messages: MailboxMessage[] }>(
-						`/api/v1/messages/pending?incarnation=${assoc.incarnation}&wait_ms=25000&bridge=1`,
+					const reply = await tracker<{ deliveries: StagedDelivery[] }>(
+						`/api/v1/messages/deliver?incarnation=${assoc.incarnation}&wait_ms=25000`,
 					);
+					// the handoff is valid only for the association that
+					// read it: a reassociation between staging and
+					// handoff never queues a stale delivery
+					if (association !== assoc) break;
 					backoff = 500;
-					const delivered = queueIncoming(reply.messages);
-					if (delivered.length > 0) {
-						// the parked read signals landings; pending mail that
-						// awaits its own submission re-reads at the ordinary
-						// cadence, never a hot loop against the tracker
-						await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+					for (const staged of reply.deliveries) {
+						queueDelivery(staged.message);
 					}
 				} catch {
 					await new Promise((resolve) => setTimeout(resolve, backoff));
@@ -692,13 +682,16 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		})();
 	}
 
-	// Queue one message natively and return: the steer queue delivers at
-	// the next turn boundary, never after the whole run. The submission
-	// is confirmed separately, by the delivery observers. Pinned 1.2.0:
-	// sendUserMessage returns void and its internal failures are
-	// invisible here (the runtime routes them to its own error sink) -
-	// a refused or discarded delivery is recovered at the next
-	// supported boundary, never by watching a promise.
+	// Queue one message natively, then confirm the sender's attempt on
+	// the runtime's own per-call receipt: the composition preload
+	// forwards preflightResult into prompt, so this delivery's callback
+	// reports queued at steer insertion, started at run start, and
+	// handled when another extension's input handler consumed the input
+	// - each an observed fact about this exact message, never an
+	// inference from aggregate queue or run state. A rejected delivery
+	// (compaction and auth throws fire no callback) stays held without
+	// any confirmation and is dropped at a later idle boundary; nothing
+	// is ever requeued.
 	function queueDelivery(message: MailboxMessage): void {
 		if (association === null) return;
 		if (queued.has(message.seq)) return;
@@ -710,27 +703,45 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			sessionFile: association.sessionFile,
 		};
 		deliveries.add(delivery);
-		pi.sendUserMessage(delivery.envelope, { deliverAs: "steer" });
+		// the receipt option flows through the loader verbatim into the
+		// adapted sendUserMessage; the pinned ExtensionAPI type does not
+		// declare it yet, hence the local shape
+		const options = {
+			deliverAs: "steer",
+			preflightResult: (outcome: "queued" | "started" | "handled") => {
+				if (outcome === "handled") {
+					// intercepted before queueing: a proven non-delivery,
+					// reported by the send as no confirmation
+					queued.delete(delivery.messageSeq);
+					deliveries.delete(delivery);
+					return;
+				}
+				delivery.accepted = true;
+				confirmOne(delivery);
+			},
+		} as unknown as Parameters<ExtensionAPI["sendUserMessage"]>[1];
+		pi.sendUserMessage(delivery.envelope, options);
 	}
 
-	// Release the guards of deliveries that reality no longer holds:
-	// neither persisted in saved history nor natively pending while the
-	// session is truly idle means the queued input was refused before
-	// insertion or discarded after queueing. The next drain delivers
-	// again - recoverability over the once-flag, no timers.
-	function reconcileDiscarded(ctx: ExtensionContext): boolean {
-		if (ctx.isIdle?.() !== true || ctx.hasPendingMessages?.() !== false) {
-			return false;
-		}
-		let released = false;
-		for (const delivery of [...deliveries]) {
-			if (!savedEntryHas(ctx, delivery.envelope)) {
+	// The delivery machinery's act, re-posted by the later boundaries
+	// while its acknowledgement is missing: bookkeeping of an accepted
+	// queueing, never a redelivery.
+	function confirmOne(delivery: QueuedDelivery): void {
+		tracker("/api/v1/messages/submit", {
+			method: "POST",
+			body: JSON.stringify({
+				incarnation: delivery.incarnation,
+				message: delivery.messageSeq,
+			}),
+		})
+			.then(() => {
+				// the correlation entry stays for the input event; the
+				// association's lifecycle clears it
 				deliveries.delete(delivery);
-				queued.delete(delivery.messageSeq);
-				released = true;
-			}
-		}
-		return released;
+			})
+			.catch(() => {
+				// stays held; a later boundary re-posts
+			});
 	}
 
 	// Extension message events are not proof of insertion - the
@@ -747,15 +758,15 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return false;
 	}
 
-	// Confirm what the saved history actually holds: a delivery whose
-	// envelope is in the saved entries submits; a delivery bound to an
-	// association that is no longer live cancels. A failed submit - or
-	// a success whose response is lost - goes back to the queue and may
-	// re-post on later boundaries until the next resume clears it:
-	// limited retry-on-later-boundary bookkeeping, not convergence and
-	// not an exactly-once promise.
-	function confirmDeliveries(ctx: ExtensionContext): void {
-		reconcileDiscarded(ctx);
+	// The later boundaries settle what the per-call receipt could not:
+	// a held delivery whose receipt already reported acceptance re-posts
+	// its acknowledgement - bookkeeping of an observed acceptance, never
+	// a redelivery - and one that never observed acceptance drops when
+	// the session is idle, the queue empty, and the envelope absent:
+	// the runtime refused the input, nothing to confirm, no redelivery
+	// ever. A delivery bound to an association that is no longer live
+	// cancels outright.
+	function confirmHeld(ctx: ExtensionContext): void {
 		for (const delivery of [...deliveries]) {
 			if (
 				association === null ||
@@ -765,34 +776,36 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				deliveries.delete(delivery);
 				continue;
 			}
-			if (!savedEntryHas(ctx, delivery.envelope)) continue;
-			deliveries.delete(delivery);
-			tracker("/api/v1/messages/submit", {
-				method: "POST",
-				body: JSON.stringify({
-					incarnation: delivery.incarnation,
-					message: delivery.messageSeq,
-				}),
-			}).catch(() => {
-				deliveries.add(delivery);
-			});
+			if (delivery.accepted) {
+				confirmOne(delivery);
+				continue;
+			}
+			if (
+				ctx.isIdle?.() === true &&
+				ctx.hasPendingMessages?.() === false &&
+				!savedEntryHas(ctx, delivery.envelope)
+			) {
+				// refused before acceptance: the correlation dies with it
+				queued.delete(delivery.messageSeq);
+				deliveries.delete(delivery);
+			}
 		}
 	}
 
 	// The confirmation boundaries: any later message end, run end, or
 	// settle - each checks the saved entries, never an event alone.
 	pi.on("message_end", (_event: unknown, ctx: ExtensionContext) => {
-		confirmDeliveries(ctx);
+		confirmHeld(ctx);
 		confirmContinuations(ctx);
 		return undefined;
 	});
 	pi.on("agent_end", (_event: unknown, ctx: ExtensionContext) => {
-		confirmDeliveries(ctx);
+		confirmHeld(ctx);
 		confirmContinuations(ctx);
 		return undefined;
 	});
 	pi.on("agent_settled", (event: AgentSettledEvent, ctx: ExtensionContext) => {
-		confirmDeliveries(ctx);
+		confirmHeld(ctx);
 		confirmContinuations(ctx);
 		if (event.aborted === true) {
 			// the run was aborted: only this handoff cancels, with its
@@ -1049,7 +1062,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		name: "saccade_send",
 		label: "Saccade send",
 		description:
-			"Send a durable message to another registered incarnation. Addressing uses public numbers: the recipient i-<n>, an optional reply_to m-<n> naming the message this one answers, and an optional task t-<n> riding as context without publishing to its thread. Nonblocking; pair with saccade_wait when the reply matters now.",
+			"Send a durable message to another registered incarnation. Addressing uses public numbers: the recipient i-<n>, an optional reply_to m-<n> naming the message this one answers, and an optional task t-<n> riding as context without publishing to its thread. The message records first, then the attempt waits briefly for the recipient's queue to accept it - success means accepted, a failure names the recorded m-N and why; pair with saccade_wait when the reply matters now.",
 		parameters: SendParams,
 		execute: async (_id, params: Static<typeof SendParams>, _signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
@@ -1079,7 +1092,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 						(params.reply_to
 							? ` replying to m-${numToken(params.reply_to, "m-")}`
 							: "") +
-						"; it stays pending until their integration submits it",
+						"; accepted into their session's input queue",
 				);
 			} catch (error) {
 				return failed(`not sent: ${errorText(error)}`);
@@ -1096,9 +1109,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		execute: async (_id, params: Static<typeof WaitParams>, signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
 			if (!who) return failed(`cannot wait: ${attachError}`);
-			// an explicit wait is a supported recovery boundary: refused
-			// or discarded deliveries release before this wait reads
-			reconcileDiscarded(ctx);
 			const wantReply = params.reply_to ? numToken(params.reply_to, "m-") : null;
 			const incarnation = who.incarnation;
 			const state: WaitState = {
@@ -1143,36 +1153,33 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			// whatever the path, the wait's machinery is already down
 			if (released === "extension") {
 				return text(
-					"the wait ended because native input arrived through the integration; any pending messages stay in the mailbox - saccade_wait again to receive them",
+					"the wait ended because native input arrived through the integration; recorded mail without a confirmed submission stays record evidence only - sac messages to read it, nothing re-delivers it",
 				);
 			}
 			if (released === "input") {
 				return text(
-					"the wait ended because native human input arrived; any pending messages stay in the mailbox - saccade_wait again to receive them",
+					"the wait ended because native human input arrived; recorded mail without a confirmed submission stays record evidence only - sac messages to read it, nothing re-delivers it",
 				);
 			}
 			if (released === "cancelled") {
 				return text(
-					"the wait ended without a message (the call was cancelled); any pending messages stay in the mailbox - saccade_wait again to receive them",
+					"the wait ended without a message (the call was cancelled); recorded mail without a confirmed submission stays record evidence only - sac messages to read it",
 				);
 			}
 			if (released === "detached") {
 				return text(
-					"the wait ended because this session's saccade association changed; nothing was delivered - saccade_identity to re-check, saccade_wait to receive",
+					"the wait ended because this session's saccade association changed; nothing arrived - saccade_identity to re-check, saccade_wait again",
 				);
 			}
-			// queue and return: the native queue drains after this tool
-			// call is done, and the submission confirms asynchronously
-			// from the saved history, never inside this call
+			// the arrivals were already placed into this session's input
+			// queue by their senders' submissions; the wait only reports
+			// them, never queues a copy
 			const delivered = state.mail ?? [];
-			for (const message of delivered) {
-				queueDelivery(message);
-			}
 			const named = delivered
 				.map((m) => `m-${m.num} from i-${m.from.num}`)
 				.join(", ");
 			return text(
-				`received ${named}; delivered into your session as your next input - reply through saccade_send with reply_to`,
+				`received ${named}; delivered into your session through its input queue - reply through saccade_send with reply_to`,
 			);
 		},
 	});
@@ -1391,15 +1398,8 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			}
 			return;
 		}
-		// activation at a supported boundary: the mailbox drains at start
-		try {
-			await drainIncoming();
-		} catch (error) {
-			pi.appendEntry("saccade_attach", {
-				incarnation: who.incarnation,
-				error: errorText(error),
-			});
-		}
+		// no mailbox drain at start: recorded mail without a confirmed
+		// submission is evidence, and nothing delivers it later
 		// a saved armed handoff correlates against this exact association;
 		// an unread correlation stays unconsumed, never stale by guess
 		try {
@@ -1414,7 +1414,8 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async () => {
 		// idempotent teardown: waits finish, queued deliveries cancel,
-		// the association and its env channel go with the session - and
+		// the association, its env channel, and the captured session
+		// context go with the session - and
 		// the exact-session guard stays kernel-held: process death is
 		// its release, and a reload's next start reuses it. A handoff
 		// still armed here never launched its helper: reload and session
@@ -1455,10 +1456,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			}
 			return { action: "continue" };
 		}
-		// a human correction is a supported recovery boundary: guards
-		// for refused or discarded deliveries release here, so an
-		// explicit wait or the bridge's next read delivers again
-		reconcileDiscarded(ctx);
+		// a human correction is a supported settle boundary: held
+		// confirmations settle here - refused inputs drop, never to be
+		// delivered again
+		confirmHeld(ctx);
 		// the human took the session back: an armed handoff cancels with
 		// its gate, and the input proceeds in the staying session
 		cancelPendingHandoff("native human input arrived; the session stays");
@@ -1492,14 +1493,15 @@ export function userText(message: { role: string; content: unknown }): string {
 	return "";
 }
 
-// The addressee's mail alone: the mailbox reads both directions, and
-// delivery filters on the recipient - a self-addressed message is
-// incoming mail like any other.
+// The addressee's arrivals alone: a message releases a wait only once
+// its submission was confirmed - accepted into this session's input
+// queue - and pending records are evidence that never arrives. A
+// self-addressed message is incoming mail like any other.
 export function incomingFor(
 	incarnation: number,
 	messages: MailboxMessage[],
 ): MailboxMessage[] {
-	return messages.filter((m) => m.state === "pending" && m.to.seq === incarnation);
+	return messages.filter((m) => m.state === "submitted" && m.to.seq === incarnation);
 }
 
 // An address is exactly <prefix><ASCII digits>: no bare number, no

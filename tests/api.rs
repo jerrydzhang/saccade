@@ -2,6 +2,7 @@
 //! back or a typed error, the tier law holding through HTTP exactly as it
 //! holds in process.
 
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
@@ -332,6 +333,23 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     );
     assert_eq!(json_of(&body)["num"], 1);
 
+    // both sessions hold a delivery bridge: a send reaches a recipient
+    // only through its integration's transport connection, so the
+    // round-trip rides two parked deliver reads
+    let read_one = {
+        let url = base_url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, "/api/v1/messages/deliver?incarnation=1&wait_ms=15000")
+        })
+    };
+    let read_zero = {
+        let url = base_url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, "/api/v1/messages/deliver?incarnation=0&wait_ms=15000")
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
     // an existing exact native session resolves, never a second birth
     let (status, body) = post_json(
         &base_url,
@@ -388,44 +406,90 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     assert_eq!(status, 400, "{body}");
     assert_eq!(json_of(&body)["error"]["code"], "invalid_incarnation_id");
 
-    // the registered session sends: the sender rides the scope
+    // the registered session sends: the sender rides the scope. The
+    // send records, then waits for the attempt: the recipient's
+    // integration (played here) takes the staged delivery and confirms
+    let send_one = {
+        let url = base_url.clone();
+        std::thread::spawn(move || {
+            post_json(
+                &url,
+                "/api/v1/messages/send",
+                &json!({
+                    "context": {"actor": "pi", "tier": "agent",
+                                "scope": {"task": null, "incarnation": 0, "workspace": null}},
+                    "to": 1,
+                    "task": 0,
+                    "body": "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix",
+                }),
+            )
+        })
+    };
+    let (status, body) = read_one.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    let deliveries = json_of(&body)["deliveries"].as_array().unwrap().clone();
+    assert_eq!(deliveries.len(), 1, "{body}");
+    assert_eq!(deliveries[0]["message"]["seq"], 3);
+    assert_eq!(deliveries[0]["message"]["task"], 0);
+    // the record reads pending until the queue's acceptance lands
+    let (_, mailbox) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    assert_eq!(json_of(&mailbox)["messages"][0]["state"], "pending");
     let (status, body) = post_json(
         &base_url,
-        "/api/v1/messages/send",
-        &json!({
-            "context": {"actor": "pi", "tier": "agent",
-                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
-            "to": 1,
-            "task": 0,
-            "body": "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix",
-        }),
+        "/api/v1/messages/submit",
+        &json!({"incarnation": 1, "message": 3}),
     );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["records"][0]["kind"], "message_submitted");
+    let (status, body) = send_one.join().unwrap();
     assert_eq!(status, 200, "{body}");
     let reply = json_of(&body);
     assert_eq!(reply["message"]["seq"], 3);
     assert_eq!(reply["message"]["num"], 0);
     assert_eq!(reply["from"]["seq"], 0);
     assert_eq!(reply["from"]["num"], 0);
+    assert_eq!(reply["submission"]["state"], "submitted");
 
-    // the reply names the message it answers by its public number
+    // the reply names the message it answers by its public number, and
+    // rides the same attempt through the other integration
+    let send_zero = {
+        let url = base_url.clone();
+        std::thread::spawn(move || {
+            post_json(
+                &url,
+                "/api/v1/messages/send",
+                &json!({
+                    "context": {"actor": "pi", "tier": "agent",
+                                "scope": {"task": null, "incarnation": 1, "workspace": null}},
+                    "to": 0,
+                    "reply_to": 0,
+                    "body": "the edge case held under review",
+                }),
+            )
+        })
+    };
+    let (status, body) = read_zero.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    let deliveries = json_of(&body)["deliveries"].as_array().unwrap().clone();
+    assert_eq!(deliveries.len(), 1, "{body}");
+    assert_eq!(deliveries[0]["message"]["reply_to"], 0);
+    // the first submit's own record shifted the reply's birth position:
+    // the handoff names it, never a literal
+    let reply_seq = deliveries[0]["message"]["seq"].as_u64().unwrap();
     let (status, body) = post_json(
         &base_url,
-        "/api/v1/messages/send",
-        &json!({
-            "context": {"actor": "pi", "tier": "agent",
-                        "scope": {"task": null, "incarnation": 1, "workspace": null}},
-            "to": 0,
-            "reply_to": 0,
-            "body": "the edge case held under review",
-        }),
+        "/api/v1/messages/submit",
+        &json!({"incarnation": 0, "message": reply_seq}),
     );
     assert_eq!(status, 200, "{body}");
-    let reply = json_of(&body);
-    assert_eq!(reply["message"]["seq"], 4);
-    assert_eq!(reply["message"]["num"], 1);
+    let (status, body) = send_zero.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["message"]["seq"], reply_seq);
+    assert_eq!(json_of(&body)["message"]["num"], 1);
+    assert_eq!(json_of(&body)["submission"]["state"], "submitted");
 
-    // the mailbox read returns both directions in birth order; the
-    // integration filters its own pending inbound
+    // the mailbox read returns both directions in birth order, all
+    // confirmed; the mailbox is a descriptive read with no park
     let (status, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
     assert_eq!(status, 200, "{body}");
     let mail = json_of(&body)["messages"].as_array().unwrap().clone();
@@ -436,47 +500,32 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     assert_eq!(mail[0]["from"]["num"], 0);
     assert_eq!(mail[0]["from"]["actor"], "pi");
     assert_eq!(mail[0]["task"], 0);
-    assert_eq!(mail[0]["state"], "pending");
+    assert_eq!(mail[0]["state"], "submitted");
     assert_eq!(
         mail[0]["body"],
         "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix"
     );
-    assert_eq!(mail[1]["seq"], 4);
+    assert_eq!(mail[1]["seq"], reply_seq as usize);
     assert_eq!(mail[1]["from"]["num"], 1);
     assert_eq!(mail[1]["to"]["num"], 0);
     assert_eq!(mail[1]["reply_to"], 0);
+    assert_eq!(mail[1]["state"], "submitted");
 
     // unknown recipients refuse the read
     let (status, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=99");
     assert_eq!(status, 400, "{body}");
     assert_eq!(json_of(&body)["error"]["code"], "invalid_incarnation_id");
 
-    // submission is the addressee's machinery act; judgment tiers are
-    // refused at the authority table
-    let (status, body) = post_command(
-        &base_url,
-        &envelope("pi", "agent", json!({"submit_message": {"id": 3, "by": 1}})),
-    );
-    assert_eq!(status, 400, "{body}");
-    assert_eq!(json_of(&body)["error"]["code"], "human_only");
-
+    // submission never repeats: the table holds on confirmed mail
     let (status, body) = post_json(
         &base_url,
         "/api/v1/messages/submit",
         &json!({"incarnation": 1, "message": 3}),
     );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(json_of(&body)["records"][0]["kind"], "message_submitted");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "invalid_state_transition");
 
-    // submission is a state, not an address change: the mail reads
-    // submitted, and only the pending inbound goes
-    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
-    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
-    let inbound_pending: Vec<&Value> = mail
-        .iter()
-        .filter(|m| m["to"]["seq"] == 1 && m["state"] == "pending")
-        .collect();
-    assert!(inbound_pending.is_empty());
+    // the sender's own mail is not the recipient's to submit
     let (status, body) = post_json(
         &base_url,
         "/api/v1/messages/submit",
@@ -484,6 +533,15 @@ async fn the_native_integration_attaches_sends_and_submits_over_the_wire() {
     );
     assert_eq!(status, 400, "{body}");
     assert_eq!(json_of(&body)["error"]["code"], "invalid_message_id");
+
+    // judgment tiers are refused at the authority table: the delivery
+    // record is machinery's own act
+    let (status, body) = post_command(
+        &base_url,
+        &envelope("pi", "agent", json!({"submit_message": {"id": 3, "by": 1}})),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "human_only");
 
     // the sender's own mail reads in the mailbox too, with its state
     let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=0");
@@ -822,7 +880,11 @@ async fn command_writes_refuse_peers_outside_the_binary_s_version_line() {
     // claims this binary's own version: the status is part of the proof
     let (url, posts, handle) = fake_peer(Some(env!("CARGO_PKG_VERSION")), 500, 1);
     match client::send(&url, &agent, command(), None) {
-        Err(ClientFail::Refused { code, detail }) => {
+        Err(ClientFail::Refused {
+            code,
+            detail,
+            message: _,
+        }) => {
             assert_eq!(code, "malformed_response");
             assert!(detail.contains("status 500"), "{detail}");
         }
@@ -880,7 +942,11 @@ async fn client_send_lands_and_refuses_through_the_wire() {
     )
     .unwrap_err();
     match &fail {
-        ClientFail::Refused { code, detail } => {
+        ClientFail::Refused {
+            code,
+            detail,
+            message: _,
+        } => {
             assert_eq!(code, "invalid_comment_id");
             assert!(detail.contains("the birth of task t-0"), "{detail}");
             assert!(detail.contains("address its thread as t-0"), "{detail}");
@@ -905,7 +971,11 @@ async fn client_send_lands_and_refuses_through_the_wire() {
     )
     .unwrap_err();
     match &fail {
-        ClientFail::Refused { code, detail } => {
+        ClientFail::Refused {
+            code,
+            detail,
+            message: _,
+        } => {
             assert_eq!(code, "invalid_task_id");
             assert!(
                 detail.contains("no task t-9 exists; this tracker holds 1 task, t-0"),
@@ -3363,7 +3433,6 @@ fn bounded_sac<S: AsRef<str>>(
         "SACCADE_INCARNATION_SEQ",
         "SACCADE_WORKSPACE",
         "SACCADE_LAUNCH_TOKEN",
-        "SACCADE_ACTIVATION_LAUNCHER",
     ] {
         cmd.env_remove(key);
     }
@@ -3766,10 +3835,24 @@ async fn the_launch_scrubs_stale_inheritance() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
+#[test]
+fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
+    let bin = env!("CARGO_BIN_EXE_sac");
     let db = scratch_db("native-bridge");
-    let base_url = spawn_server(&db).await;
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    // the confirmation window's test seam rides the serving
+    // subprocess's own environment: the expiry classification below
+    // must not wait the production bound
+    let bin_dir = db.parent().unwrap().join("probe-bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let (base_url, pid) = spawn_serving_subprocess(
+        &db,
+        &root,
+        bin,
+        &bin_dir,
+        None,
+        &[("SACCADE_CONFIRM_WAIT_SECS", "1")],
+    );
 
     // two registered peers: the addressee parks a bridge read
     let (status, body) = post_json(
@@ -3785,15 +3868,12 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     );
     assert_eq!(status, 200, "{body}");
 
-    // a parked read holds while the mailbox is empty and announces its
-    // incarnation for the call's duration
+    // a parked transport read holds while no delivery is staged and
+    // announces its incarnation for the call's duration
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let url = base_url.clone();
     std::thread::spawn(move || {
-        let (status, body) = get_json(
-            &url,
-            "/api/v1/messages/pending?incarnation=1&wait_ms=10000&bridge=1",
-        );
+        let (status, body) = get_json(&url, "/api/v1/messages/deliver?incarnation=1&wait_ms=10000");
         done_tx.send((status, body)).unwrap();
     });
     std::thread::sleep(std::time::Duration::from_millis(400));
@@ -3806,39 +3886,72 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     assert_eq!(live[0]["incarnation"], 1);
     assert_eq!(live[0]["connections"], 1);
 
-    // a landed record wakes the parked read - the landing is the
-    // trigger, never a timer over the log
-    let (status, body) = post_json(
-        &base_url,
-        "/api/v1/messages/send",
-        &json!({
-            "context": {"actor": "pi", "tier": "agent",
-                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
-            "to": 1,
-            "body": "the bridge wakes on the landing",
-        }),
-    );
-    assert_eq!(status, 200, "{body}");
+    // a send records first, then its attempt stages the delivery task
+    // and wakes the parked transport read; the recipient's integration
+    // (played here) confirms, and only then does the send succeed
+    let (send_tx, send_rx) = std::sync::mpsc::channel();
+    let send_url = base_url.clone();
+    std::thread::spawn(move || {
+        let (status, body) = post_json(
+            &send_url,
+            "/api/v1/messages/send",
+            &json!({
+                "context": {"actor": "pi", "tier": "agent",
+                            "scope": {"task": null, "incarnation": 0, "workspace": null}},
+                "to": 1,
+                "body": "the bridge wakes on the stage",
+            }),
+        );
+        send_tx.send((status, body)).unwrap();
+    });
     let (status, body) = done_rx
         .recv_timeout(std::time::Duration::from_secs(5))
-        .expect("the landing woke the parked read");
+        .expect("the stage woke the parked read");
     assert_eq!(status, 200, "{body}");
-    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
-    assert!(
-        mail.iter()
-            .any(|m| m["to"]["seq"] == 1 && m["state"] == "pending"),
-        "{body}"
+    let deliveries = json_of(&body)["deliveries"].as_array().unwrap().clone();
+    assert_eq!(deliveries.len(), 1, "{body}");
+    assert!(deliveries[0]["token"].as_str().is_some());
+    assert_eq!(deliveries[0]["message"]["to"]["seq"], 1);
+    assert_eq!(
+        deliveries[0]["message"]["body"],
+        "the bridge wakes on the stage"
     );
-
-    // pending mail keeps a re-read immediate; the connection went with
-    // the finished read
-    let start = std::time::Instant::now();
-    let (status, _) = get_json(
+    let staged_seq = deliveries[0]["message"]["seq"].as_u64().unwrap();
+    // the record reads pending until the queue's acceptance is reported
+    let (_, mailbox) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    assert_eq!(
+        json_of(&mailbox)["messages"][0]["state"],
+        "pending",
+        "{mailbox}"
+    );
+    // the integration's confirmation: the only writer of Submitted
+    let (status, body) = post_json(
         &base_url,
-        "/api/v1/messages/pending?incarnation=1&wait_ms=10000&bridge=1",
+        "/api/v1/messages/submit",
+        &json!({"incarnation": 1, "message": staged_seq}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = send_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the confirmation released the send");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["submission"]["state"], "submitted");
+    assert_eq!(json_of(&body)["message"]["seq"], staged_seq);
+
+    // the handoff is exactly once and the record reads submitted: a
+    // re-read returns empty; the connection went with the finished read
+    // the handoff is exactly once and the record reads submitted: a
+    // re-read with no staged task returns nothing (bounded, not
+    // immediate - a future stage may park it)
+    let (status, body) = get_json(
+        &base_url,
+        "/api/v1/messages/deliver?incarnation=1&wait_ms=300",
     );
     assert_eq!(status, 200);
-    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    assert!(
+        json_of(&body)["deliveries"].as_array().unwrap().is_empty(),
+        "the stage handed twice: {body}"
+    );
     std::thread::sleep(std::time::Duration::from_millis(150));
     let (_, body) = get_json(&base_url, "/api/v1/native/bridge");
     assert!(
@@ -3846,6 +3959,84 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
             .as_array()
             .unwrap()
             .is_empty(),
+        "{body}"
+    );
+
+    // a taken delivery whose acknowledgement never lands reports
+    // unacknowledged - never a proven failure - and the record stays
+    // pending evidence
+    let (send_tx2, send_rx2) = std::sync::mpsc::channel();
+    let send_url2 = base_url.clone();
+    std::thread::spawn(move || {
+        let (status, body) = post_json(
+            &send_url2,
+            "/api/v1/messages/send",
+            &json!({
+                "context": {"actor": "pi", "tier": "agent",
+                            "scope": {"task": null, "incarnation": 0, "workspace": null}},
+                "to": 1,
+                "body": "taken but never confirmed",
+            }),
+        );
+        send_tx2.send((status, body)).unwrap();
+    });
+    let (status, body) = get_json(
+        &base_url,
+        "/api/v1/messages/deliver?incarnation=1&wait_ms=5000",
+    );
+    assert_eq!(status, 200, "{body}");
+    let taken = json_of(&body)["deliveries"].as_array().unwrap().clone();
+    assert_eq!(taken.len(), 1, "{body}");
+    let taken_seq = taken[0]["message"]["seq"].as_u64().unwrap();
+    let (status, body) = send_rx2
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the unacknowledged attempt returned inside its bound");
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "submission_unacknowledged",
+        "{body}"
+    );
+    assert_eq!(json_of(&body)["message"]["seq"], taken_seq);
+    let (_, mailbox) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let mail = json_of(&mailbox)["messages"].as_array().unwrap().clone();
+    assert!(
+        mail.iter()
+            .any(|m| m["seq"] == taken_seq && m["state"] == "pending"),
+        "{mailbox}"
+    );
+
+    // a staged delivery no integration ever takes reports the proven
+    // untaken refusal: nothing reached any native queue
+    let (send_tx3, send_rx3) = std::sync::mpsc::channel();
+    let send_url3 = base_url.clone();
+    std::thread::spawn(move || {
+        let (status, body) = post_json(
+            &send_url3,
+            "/api/v1/messages/send",
+            &json!({
+                "context": {"actor": "pi", "tier": "agent",
+                            "scope": {"task": null, "incarnation": 0, "workspace": null}},
+                "to": 1,
+                "body": "staged but never taken",
+            }),
+        );
+        send_tx3.send((status, body)).unwrap();
+    });
+    let (status, body) = send_rx3
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the untaken attempt returned inside its bound");
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "submission_untaken",
+        "{body}"
+    );
+    assert!(
+        json_of(&body)["error"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("took no delivery"),
         "{body}"
     );
 
@@ -3863,7 +4054,7 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-hex");
     assert_eq!(status, 200, "{body}");
     // the reply names the birth record's seq and the dense public number
-    assert_eq!(json_of(&body)["incarnation"], 3);
+    assert_eq!(json_of(&body)["incarnation"], 6);
     assert_eq!(json_of(&body)["num"], 2);
     let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-unknown");
     assert_eq!(status, 404, "{body}");
@@ -3886,7 +4077,7 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     assert_eq!(status, 404, "{body}");
     let (status, body) = get_json(&base_url, "/api/v1/native/launch?token=launch-hex");
     assert_eq!(status, 200, "{body}");
-    assert_eq!(json_of(&body)["incarnation"], 3);
+    assert_eq!(json_of(&body)["incarnation"], 6);
 
     // a fresh fork under a STALE token births its own incarnation but
     // never retargets the door's mapping: the correlation keeps
@@ -3908,22 +4099,24 @@ async fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(
         json_of(&body)["incarnation"],
-        3,
+        6,
         "the mapping never retargeted"
     );
 
+    let _ = std::process::Command::new("kill")
+        .arg(pid.to_string())
+        .status();
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
-/// A serving subprocess: publishes its address file, so activation's
-/// routing is the real one, and carries the launcher seam plus the
-/// fake host on PATH for its own activation child.
+/// A serving subprocess: publishes its address file, so the probe
+/// routing is the real one, and carries the fake host on PATH for its
+/// own child doors.
 fn spawn_serving_subprocess(
     db: &Path,
     repo: &Path,
     bin: &str,
     host_dir: &Path,
-    launcher: Option<&Path>,
     state_home: Option<&Path>,
     extra_envs: &[(&str, &str)],
 ) -> (String, u32) {
@@ -3947,9 +4140,6 @@ fn spawn_serving_subprocess(
         // a genuinely cold state root: the guard dirs must come into
         // being from nothing, not from warmed probe residue
         cmd.env("XDG_STATE_HOME", dir);
-    }
-    if let Some(path) = launcher {
-        cmd.env("SACCADE_ACTIVATION_LAUNCHER", path);
     }
     for (key, value) in extra_envs {
         cmd.env(key, value);
@@ -3993,69 +4183,48 @@ fn spawn_serving_subprocess(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_wire_send_activates_a_stopped_peer_through_the_launcher() {
+async fn a_wire_send_to_an_unreachable_peer_records_the_attempt_and_launches_nothing() {
     let bin = env!("CARGO_BIN_EXE_sac");
-    let db = scratch_db("wire-activate");
+    let db = scratch_db("wire-unreachable");
     let (root, _first, _head) = scratch_repo(db.parent().unwrap());
 
-    // the launcher seam: records the launch argv and exits successfully,
-    // so the decision is observable without a real host, and the test
-    // fails if activation is disabled
+    // an empty PATH prefix: no fake host exists here, so a launch
+    // attempt could not even reach one - the refusals below carry the
+    // no-launch proof on their own
     let bin_dir = db.parent().unwrap().join("probe-bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let seam = bin_dir.join("activation-launcher");
-    let launch_log = db.parent().unwrap().join("launch.log");
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"{}\"\nexit 0\n",
-        launch_log.display()
-    );
-    std::fs::write(&seam, script).unwrap();
-    std::fs::set_permissions(&seam, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-
-    // the recipient's saved session: a valid header whose workspace
-    // exists and holds no live process - the resumable shape
-    let workspace = db.parent().unwrap().join("stopped-peer-ws");
-    std::fs::create_dir_all(&workspace).unwrap();
-    let saved = db.parent().unwrap().join("peer-session.jsonl");
-    std::fs::write(
-        &saved,
-        format!(
-            "{{\"type\":\"session\",\"id\":\"stopped001\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
-            workspace.display()
-        ),
-    )
-    .unwrap();
-
     let cold_state = db.parent().unwrap().join("xdg-state");
-    let (url, pid) = spawn_serving_subprocess(
-        &db,
-        &root,
-        bin,
-        &bin_dir,
-        Some(&seam),
-        Some(&cold_state),
-        &[],
-    );
+    let (url, pid) = spawn_serving_subprocess(&db, &root, bin, &bin_dir, Some(&cold_state), &[]);
 
-    // a live sender and the stopped recipient
-    let (status, body) = post_json(
-        &url,
-        "/api/v1/native/attach",
-        &json!({
-            "native_id": "sender0001",
-            "session_file": "/sessions/sender0001.jsonl",
-        }),
-    );
-    assert_eq!(status, 200, "{body}");
-    let (status, body) = post_json(
-        &url,
-        "/api/v1/native/attach",
-        &json!({"native_id": "stopped001", "session_file": saved.to_str().unwrap()}),
-    );
-    assert_eq!(status, 200, "{body}");
+    // a live sender and three recipients: one stopped (free guard),
+    // one running but disconnected (guard held here), one unprobeable
+    // (its guard path is a directory)
+    let mut guards = Vec::new();
+    for native_id in ["sender0001", "stopped001", "liveguar1", "darkguar1"] {
+        let (status, body) = post_json(
+            &url,
+            "/api/v1/native/attach",
+            &json!({
+                "native_id": native_id,
+                "session_file": format!("/sessions/{native_id}.jsonl"),
+            }),
+        );
+        assert_eq!(status, 200, "{body}");
+        let named = json_of(&body)["guard"]
+            .as_str()
+            .expect("the attach names the guard")
+            .to_string();
+        assert!(!named.is_empty(), "a server with a repo names every guard");
+        // attach readiness: the guard's parent exists on a cold state root
+        let guard = std::path::Path::new(&named);
+        assert!(
+            guard.parent().is_some_and(|p| p.is_dir()),
+            "the guard's parent materializes on a cold state root: {named}"
+        );
+        guards.push(guard.to_path_buf());
+    }
 
-    // the wire's own send face: the stopped peer must be activated by
-    // the landed write, through the launcher seam
+    // the stopped recipient: a free guard is confirmed-stopped evidence
     let (status, body) = post_json(
         &url,
         "/api/v1/messages/send",
@@ -4063,45 +4232,38 @@ async fn a_wire_send_activates_a_stopped_peer_through_the_launcher() {
             "context": {"actor": "pi", "tier": "agent",
                         "scope": {"task": null, "incarnation": 0, "workspace": null}},
             "to": 1,
-            "body": "wake through the wire",
+            "body": "wake a stopped peer",
         }),
     );
-    assert_eq!(status, 200, "{body}");
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    loop {
-        let logged = std::fs::read_to_string(&launch_log).unwrap_or_default();
-        if logged.contains("--resume") && logged.contains("i-1") {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "activation never reached the launcher; log: {logged:?}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
-    // cold-state readiness: the attach reply names the guard file, and
-    // the probe that activation ran has created it from nothing
-    let (status, body) = post_json(
-        &url,
-        "/api/v1/native/attach",
-        &json!({"native_id": "guardcheck", "session_file": "/sessions/guardcheck.jsonl"}),
-    );
-    assert_eq!(status, 200, "{body}");
-    let named = json_of(&body)["guard"]
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "recipient_stopped");
+    let detail = json_of(&body)["error"]["detail"]
         .as_str()
-        .expect("the attach names the guard")
+        .unwrap()
         .to_string();
-    assert!(!named.is_empty(), "a server with a repo names every guard");
-    // attach readiness: the guard's parent exists on a cold state root
-    let guard = std::path::Path::new(&named);
-    assert!(
-        guard.parent().is_some_and(|p| p.is_dir()),
-        "the guard's parent materializes on a cold state root: {named}"
+    assert!(detail.contains("m-0 was recorded"), "{detail}");
+    assert!(detail.contains("--resume i-1"), "{detail}");
+    // the message reference rides the body beside the error: machines
+    // keep m-N across a refused submission
+    assert_eq!(json_of(&body)["message"]["num"], 0);
+    // the record stands as evidence of the attempt, never an obligation
+    let (_, mailbox) = get_json(&url, "/api/v1/messages/pending?incarnation=1");
+    let mail = json_of(&mailbox)["messages"].as_array().unwrap().clone();
+    assert_eq!(mail.len(), 1, "{mailbox}");
+    assert_eq!(mail[0]["state"], "pending");
+
+    // the running-but-disconnected recipient: this process holds the
+    // guard, the bridge holds no connection
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&guards[2])
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
     );
-    // and a landed write's probe creates the file itself: activation
-    // reached the decision on this cold root
     let (status, body) = post_json(
         &url,
         "/api/v1/messages/send",
@@ -4109,46 +4271,68 @@ async fn a_wire_send_activates_a_stopped_peer_through_the_launcher() {
             "context": {"actor": "pi", "tier": "agent",
                         "scope": {"task": null, "incarnation": 0, "workspace": null}},
             "to": 2,
-            "body": "probe the cold guard",
+            "body": "wake a live peer",
         }),
     );
-    assert_eq!(status, 200, "{body}");
-    // the activation is fire-and-forget: poll briefly for its probe
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    while !guard.exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "activation never probed the cold guard: {named}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "recipient_disconnected");
+    assert_eq!(json_of(&body)["message"]["num"], 1);
+    drop(held);
 
-    // the command ingress activates through the same seam: a SendMessage
-    // over /api/v1/command must append a second observed launch
-    let before = std::fs::read_to_string(&launch_log)
-        .unwrap_or_default()
-        .len();
+    // the unprobeable recipient: an unopenable guard leaves liveness
+    // unknown, and unknown stays unknown - never an exited-session claim
+    std::fs::create_dir(&guards[3]).unwrap();
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {"actor": "pi", "tier": "agent",
+                        "scope": {"task": null, "incarnation": 0, "workspace": null}},
+            "to": 3,
+            "body": "wake an unknown peer",
+        }),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "recipient_unknown");
+    assert_eq!(json_of(&body)["message"]["num"], 2);
+
+    // the command ingress runs the same record-then-attempt: the
+    // command lands and its reply carries the attempt's truth
     let (status, body) = post_json(
         &url,
         "/api/v1/command",
         &json!({
             "context": {"actor": "pi", "tier": "agent",
                         "scope": {"task": null, "incarnation": 0, "workspace": null}},
-            "command": {"send_message": {"from": 0, "to": 1, "body": "wake through the command face"}},
+            "command": {"send_message": {"from": 0, "to": 1, "body": "the command face discloses too"}},
         }),
     );
     assert_eq!(status, 200, "{body}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    loop {
-        let logged = std::fs::read_to_string(&launch_log).unwrap_or_default();
-        if logged.len() > before {
-            break;
-        }
+    assert_eq!(json_of(&body)["submission"]["state"], "refused");
+    assert_eq!(json_of(&body)["submission"]["code"], "recipient_stopped");
+
+    // every refusal probed for real: the recipients' guards
+    // materialized from the cold root (the dark one stands as the
+    // directory the probe refused), and no launch ever reached the seam
+    for guard in guards.iter().skip(1) {
         assert!(
-            std::time::Instant::now() < deadline,
-            "the command ingress never activated; log: {logged:?}"
+            guard.exists(),
+            "the probe never ran for {}",
+            guard.display()
         );
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // every refused attempt's record stands as evidence: the stopped
+    // recipient holds both ingresses' attempts, all pending, none
+    // submitted by any machinery
+    for (incarnation, count) in [(1, 2), (2, 1), (3, 1)] {
+        let (status, body) = get_json(
+            &url,
+            &format!("/api/v1/messages/pending?incarnation={incarnation}"),
+        );
+        assert_eq!(status, 200, "{body}");
+        let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+        assert_eq!(mail.len(), count, "the refused attempts stand: {body}");
+        assert!(mail.iter().all(|m| m["state"] == "pending"), "{body}");
     }
 
     let _ = std::process::Command::new("kill")
@@ -4192,7 +4376,7 @@ fn door_fixture(home: &Path) -> DoorFixture {
     }
 }
 
-/// The environment one real-door subprocess runs under: fake host first on PATH, the fixture harness as pinned Pi, the launcher seam disabled, and the cold state home the fixture server named its guard under.
+/// The environment one real-door subprocess runs under: fake host first on PATH, the fixture harness as pinned Pi, and the cold state home the fixture server named its guard under.
 fn door_envs(fx: &DoorFixture, guard: Option<&Path>) -> Vec<(&'static str, String)> {
     let mut envs = vec![
         (
@@ -4249,7 +4433,6 @@ fn the_real_resume_door_submits_then_observes_the_guard() {
         &root,
         bin,
         fx.host.parent().unwrap(),
-        None,
         Some(&fx.cold_state),
         &[],
     );
@@ -4433,7 +4616,6 @@ fn switch_resume_runs_through_the_real_door() {
         &root,
         bin,
         fx.host.parent().unwrap(),
-        None,
         Some(&fx.cold_state),
         &[],
     );
@@ -4606,14 +4788,15 @@ fn switch_resume_runs_through_the_real_door() {
 }
 
 #[test]
-fn a_send_activates_through_the_real_door() {
+fn a_send_to_a_stopped_peer_discloses_through_the_real_door() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let db = scratch_db("send-real-door");
     let home = db.parent().unwrap();
     let (root, _first, _head) = scratch_repo(home);
     let fx = door_fixture(home);
 
-    // the server's own env carries the launch: no launcher seam, the guard path rides the fixture's pointer file
+    // the server's own env carries the real fixture: the guard the
+    // preflight probes is the same file a real holder would take
     std::fs::write(&fx.guard_file, b"").unwrap();
     let server_envs = [
         ("FAKE_ORCA_LOG", fx.host_log.to_str().unwrap()),
@@ -4631,7 +4814,6 @@ fn a_send_activates_through_the_real_door() {
         &root,
         bin,
         fx.host.parent().unwrap(),
-        None,
         Some(&fx.cold_state),
         &server_envs,
     );
@@ -4670,7 +4852,12 @@ fn a_send_activates_through_the_real_door() {
     );
     std::fs::write(&fx.guard_file, guard.to_str().unwrap()).unwrap();
 
-    // the landed write drives the real door: submission first, then the guard
+    // the send records, then its attempt refuses at the real guard: a
+    // free guard is a confirmed-stopped peer, and no launch is ever
+    // submitted - the host is not even contacted
+    let host_before = std::fs::read_to_string(&fx.host_log)
+        .unwrap_or_default()
+        .len();
     let (status, body) = post_json(
         &url,
         "/api/v1/messages/send",
@@ -4681,34 +4868,25 @@ fn a_send_activates_through_the_real_door() {
             "body": "wake through the real door",
         }),
     );
-    assert_eq!(status, 200, "{body}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let witness = loop {
-        let witness = std::fs::read_to_string(&fx.child_log).unwrap_or_default();
-        if witness.contains("submitted-command-started") && witness.contains("guard-taken") {
-            break witness;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the send never drove the real door; witness: {witness:?}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    };
-    let started = witness.find("submitted-command-started").unwrap();
-    let taken = witness.find("guard-taken").unwrap();
-    assert!(started < taken, "{witness}");
-    let submitted = command_of(&fx.host_log, "");
-    assert!(submitted.contains("--session peer001"), "{submitted}");
-    assert_eq!(saccade::activate::guard_held(&guard), Some(true));
-    let dump = std::fs::read_to_string(&fx.dump).unwrap();
-    assert!(dump.contains("--session peer001"), "{dump}");
-    assert!(
-        dump.contains(&format!("pwd: {}", workspace.display())),
-        "{dump}"
-    );
-    assert!(dump.contains(&format!("SACCADE_SERVER={url}")), "{dump}");
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(json_of(&body)["error"]["code"], "recipient_stopped");
+    let detail = json_of(&body)["error"]["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(detail.contains("m-0 was recorded"), "{detail}");
+    assert!(detail.contains("--resume i-1"), "{detail}");
+    assert_eq!(json_of(&body)["message"]["num"], 0);
+    // no launch reached the host: the log grew by nothing
+    let host_after = std::fs::read_to_string(&fx.host_log)
+        .unwrap_or_default()
+        .len();
+    assert_eq!(host_after, host_before, "a send launched a stopped peer");
+    // the peer's guard was probed for real and stays free
+    assert_eq!(saccade::activate::guard_held(&guard), Some(false));
 
-    // delivery facts stay honest: submitted, not read
+    // delivery facts stay honest: the record stands pending, evidence
+    // of the attempt, never a promise
     let (_, body) = get_json(
         &url,
         &format!("/api/v1/messages/pending?incarnation={peer_birth}"),
@@ -4720,7 +4898,6 @@ fn a_send_activates_through_the_real_door() {
         "{body}"
     );
 
-    stop_holder(&fx.pidfile, &guard);
     let _ = std::process::Command::new("kill")
         .arg(server_pid.to_string())
         .status();
@@ -4847,15 +5024,23 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
         std::fs::read_to_string(&ask_out).unwrap_or_default(),
         std::fs::read_to_string(&ask_err).unwrap_or_default(),
     );
+    // the launch succeeded and the question is recorded; its
+    // submission to the peer - whose integration holds no connection
+    // here - is disclosed honestly on the same success face
     assert!(status.success(), "stdout: {out_text}\nstderr: {err}");
     assert!(out_text.contains("i-1 registered"), "{out_text}");
     assert!(
         out_text.contains("your question went as m-0 from i-0"),
         "{out_text}"
     );
+    assert!(
+        out_text.contains("its submission was refused (recipient_stopped)"),
+        "{out_text}"
+    );
 
     // the question is durable addressed communication from the
-    // creator's own scope, never argv-shaped human input
+    // creator's own scope, never argv-shaped human input; its record
+    // stands pending, evidence of the refused attempt
     let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
     let mail = json_of(&body)["messages"].as_array().unwrap().clone();
     assert_eq!(mail.len(), 1, "{body}");
@@ -4864,9 +5049,9 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
     assert_eq!(mail[0]["state"], "pending");
     assert_eq!(mail[0]["body"], "what holds at the failing edge case?");
 
-    // a server-routed send delegates activation to the wire handler -
-    // one mechanism for every entrance - so the door prints the plain
-    // pending line and the wire's own decision runs server-side
+    // a server-routed send through the same door refuses the same way:
+    // success only on confirmed submission, with the record's
+    // reference in the refusal
     let out = std::process::Command::new(bin)
         .args([
             "--server",
@@ -4884,14 +5069,71 @@ async fn the_send_door_activates_and_the_ask_door_introduces() {
         .env("SACCADE_TASK", "")
         .output()
         .expect("spawn sac");
+    assert!(!out.status.success(), "a refused submission exited success");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("recipient_stopped"), "{err}");
+    assert!(err.contains("was recorded"), "{err}");
+    let (_, body) = get_json(&base_url, "/api/v1/messages/pending?incarnation=1");
+    let mail = json_of(&body)["messages"].as_array().unwrap().clone();
+    assert_eq!(mail.len(), 2, "{body}");
+    assert_eq!(mail[1]["body"], "status check");
+    assert_eq!(mail[1]["state"], "pending");
+
+    // the success face: the creator's own integration (a parked
+    // transport read played here) takes the self-addressed attempt and
+    // confirms it while the door waits, and the door prints the queue
+    // acceptance
+    let reader = std::thread::spawn({
+        let base_url = base_url.clone();
+        move || {
+            let (status, body) = get_json(
+                &base_url,
+                "/api/v1/messages/deliver?incarnation=0&wait_ms=10000",
+            );
+            let deliveries = json_of(&body)["deliveries"].as_array().unwrap().clone();
+            assert_eq!(deliveries.len(), 1, "{body}");
+            let staged = deliveries[0]["message"]["seq"].as_u64().unwrap();
+            let (submit_status, _) = post_json(
+                &base_url,
+                "/api/v1/messages/submit",
+                &json!({"incarnation": 0, "message": staged}),
+            );
+            (status, submit_status, staged)
+        }
+    });
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let out = std::process::Command::new(bin)
+        .args([
+            "--server",
+            &base_url,
+            "--repo",
+            root.to_str().unwrap(),
+            "send",
+            "--to",
+            "i-0",
+            "self check",
+        ])
+        .env("PATH", &host_path)
+        .env("SACCADE_ACTOR", "creator")
+        .env("SACCADE_INCARNATION_SEQ", "0")
+        .env("SACCADE_TASK", "")
+        .output()
+        .expect("spawn sac");
+    let (status, submit_status, staged) = reader.join().unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(submit_status, 200);
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert!(text.contains("sent m-"), "{text}");
-    assert!(!text.contains("activation"), "{text}");
+    assert!(text.contains("sent m-2 to i-0"), "{text}");
+    assert!(
+        text.contains("accepted into their session's input queue"),
+        "{text}"
+    );
+    assert!(!text.contains("pending"), "{text}");
 
     // without a declared incarnation the ask door refuses, taught
     let out = std::process::Command::new(bin)
@@ -6432,7 +6674,6 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
             .env("SACCADE_TASK", "")
             .env("SACCADE_WORKSPACE", "")
             .env("SACCADE_LAUNCH_TOKEN", "")
-            .env("SACCADE_ACTIVATION_LAUNCHER", "")
             .envs(envs.iter().copied())
             .output()
             .expect("spawn sac");
@@ -6600,7 +6841,6 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
                 .env("SACCADE_TASK", "")
                 .env("SACCADE_WORKSPACE", "")
                 .env("SACCADE_LAUNCH_TOKEN", "")
-                .env("SACCADE_ACTIVATION_LAUNCHER", "")
                 .stdout(std::fs::File::create(&ask_out).unwrap())
                 .stderr(std::fs::File::create(&ask_err).unwrap())
                 .status()

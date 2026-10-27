@@ -11,8 +11,14 @@ use serde::{Deserialize, Serialize};
 pub enum ClientFail {
     /// Nothing answered at the URL
     ServerUnreachable { url: String },
-    /// The server answered and refused; `code` is its error code.
-    Refused { code: String, detail: String },
+    /// The server answered and refused; `code` is its error code, and
+    /// a landed record the refusal names (a send's own m-N) rides
+    /// beside it so the caller keeps the reference
+    Refused {
+        code: String,
+        detail: String,
+        message: Option<MessageFacts>,
+    },
     Undiscovered {
         db: std::path::PathBuf,
         hint: std::path::PathBuf,
@@ -61,7 +67,11 @@ impl std::fmt::Display for ClientFail {
                 f,
                 "no server answered at {url}: start one (`sac serve`) or pass the right --server"
             ),
-            ClientFail::Refused { code, detail } => write!(f, "{code}: {detail}"),
+            ClientFail::Refused {
+                code,
+                detail,
+                message: _,
+            } => write!(f, "{code}: {detail}"),
             ClientFail::Undiscovered { db, hint } => write!(
                 f,
                 "no server discovered for {}: no address hint at {}; start one beside that tracker (`sac serve`)",
@@ -166,6 +176,7 @@ pub fn send(
         let body: RecordsBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
             code: "malformed_response".into(),
             detail: e.to_string(),
+            message: None,
         })?;
         Ok(Reply {
             records: body.records,
@@ -175,10 +186,12 @@ pub fn send(
         let body: ErrorBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
             code: "malformed_response".into(),
             detail: e.to_string(),
+            message: None,
         })?;
         Err(ClientFail::Refused {
             code: body.error.code,
             detail: body.error.detail.to_string(),
+            message: None,
         })
     }
 }
@@ -260,11 +273,13 @@ pub fn identity(url: &str) -> Result<ServerIdentity, ClientFail> {
         return Err(ClientFail::Refused {
             code: "malformed_response".into(),
             detail: format!("the identity route answered status {status}"),
+            message: None,
         });
     }
     let body: serde_json::Value = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
         code: "malformed_response".into(),
         detail: e.to_string(),
+        message: None,
     })?;
     Ok(ServerIdentity {
         version: body["version"].as_str().unwrap_or_default().to_string(),
@@ -331,6 +346,7 @@ pub fn records(url: &str) -> Result<Vec<StoredRecord>, ClientFail> {
     let body: RecordsBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
         code: "malformed_response".into(),
         detail: e.to_string(),
+        message: None,
     })?;
     Ok(body.records)
 }
@@ -376,6 +392,7 @@ fn post_json<T: serde::de::DeserializeOwned>(
         serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
             code: "malformed_response".into(),
             detail: e.to_string(),
+            message: None,
         })
     } else {
         Err(error_of(&text))
@@ -391,16 +408,20 @@ fn error_of(text: &str) -> ClientFail {
     #[derive(Deserialize)]
     struct ErrorBody {
         error: ErrorDetail,
+        #[serde(default)]
+        message: Option<MessageFacts>,
     }
     let body: ErrorBody = serde_json::from_str(text).unwrap_or(ErrorBody {
         error: ErrorDetail {
             code: "malformed_response".into(),
             detail: serde_json::Value::String(bound(text)),
         },
+        message: None,
     });
     ClientFail::Refused {
         code: body.error.code,
         detail: bound(&body.error.detail.to_string()),
+        message: body.message,
     }
 }
 
@@ -467,6 +488,15 @@ pub struct SendMessageReply {
     pub records: Vec<StoredRecord>,
     pub message: MessageFacts,
     pub from: MessageFacts,
+    /// The native-submission attempt's truth; absent only from a
+    /// pre-attempt server, never from this wire's own success reply
+    #[serde(default)]
+    pub submission: Option<SubmissionFacts>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SubmissionFacts {
+    pub state: String,
 }
 
 /// Send a durable addressed message from the declared incarnation;
@@ -499,28 +529,6 @@ pub fn send_message(
             "client": env!("CARGO_PKG_VERSION"),
         }),
     )
-}
-
-/// Record the recipient's submission: the delivery machinery's act.
-pub fn submit_message(
-    url: &str,
-    incarnation: usize,
-    message: usize,
-) -> Result<Vec<StoredRecord>, ClientFail> {
-    #[derive(Deserialize)]
-    struct SubmitBody {
-        records: Vec<StoredRecord>,
-    }
-    let body: SubmitBody = post_json(
-        url,
-        "/api/v1/messages/submit",
-        serde_json::json!({
-            "incarnation": incarnation,
-            "message": message,
-            "client": env!("CARGO_PKG_VERSION"),
-        }),
-    )?;
-    Ok(body.records)
 }
 
 /// One message as the mailbox read returns it: the stable birth
@@ -575,6 +583,7 @@ pub fn mailbox(url: &str, incarnation: usize) -> Result<Vec<MailboxMessage>, Cli
     let body: MailboxBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
         code: "malformed_response".into(),
         detail: e.to_string(),
+        message: None,
     })?;
     Ok(body.messages)
 }
@@ -678,6 +687,7 @@ pub fn bridge_connections(url: &str) -> Result<Vec<usize>, ClientFail> {
     let body: BridgeBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
         code: "malformed_response".into(),
         detail: e.to_string(),
+        message: None,
     })?;
     Ok(body
         .incarnations
@@ -722,6 +732,7 @@ pub fn launch_of(url: &str, token: &str) -> Result<Option<(usize, usize)>, Clien
     let body: LaunchBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
         code: "malformed_response".into(),
         detail: e.to_string(),
+        message: None,
     })?;
     Ok(Some((body.incarnation, body.num)))
 }

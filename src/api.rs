@@ -51,18 +51,22 @@ pub struct Association {
 }
 
 /// The native bridge's operational cache: which incarnations hold a
-/// live delivery connection right now, and the launch tokens a compose
-/// door is waiting on. Runtime facts only - transport state and
-/// correlation, never record identity, authority, or obligation; lost
-/// on restart and rebuilt by the sessions themselves.
+/// live delivery connection right now, the launch tokens a compose
+/// door is waiting on, and the delivery tasks of send attempts now in
+/// flight. Runtime facts only - transport state and correlation, never
+/// record identity, authority, or obligation; lost on restart and
+/// rebuilt by the sessions themselves.
 #[derive(Clone, Default)]
 pub struct BridgeCache {
-    /// wakes parked delivery polls when a record lands
+    /// wakes parked delivery polls when a record lands or a task is
+    /// staged
     notify: Arc<tokio::sync::Notify>,
     /// incarnation birth seq -> runtime association
     live: Arc<std::sync::Mutex<HashMap<usize, Association>>>,
     /// launch token -> (incarnation seq, public number), expiring
     launches: Arc<Mutex<HashMap<String, LaunchEntry>>>,
+    /// the send attempts' staged delivery tasks, handed exactly once
+    stages: Arc<Mutex<Vec<StagedDelivery>>>,
 }
 
 impl BridgeCache {
@@ -97,6 +101,46 @@ impl BridgeCache {
         let mut launches = self.launches.lock().expect("the launch cache holds");
         launches.retain(|_, (_, _, at)| at.elapsed() < std::time::Duration::from_secs(900));
         launches.get(token).map(|(i, n, _)| (*i, *n))
+    }
+
+    /// Stage one delivery task for the recipient's integration: the
+    /// send attempt's transport half, woken immediately.
+    fn stage_delivery(&self, incarnation: usize, message: usize, token: String) {
+        let mut stages = self.stages.lock().expect("the delivery stage holds");
+        stages.retain(|task| task.staged_at.elapsed().as_secs() < STAGE_TTL_SECS);
+        stages.push(StagedDelivery {
+            incarnation,
+            message,
+            token,
+            staged_at: Instant::now(),
+        });
+    }
+
+    /// Hand every staged task for this incarnation to the transport
+    /// read: each attempt's task is taken exactly once, expired stages
+    /// pruned on the way.
+    fn take_staged(&self, incarnation: usize) -> Vec<(String, usize)> {
+        let mut stages = self.stages.lock().expect("the delivery stage holds");
+        stages.retain(|task| task.staged_at.elapsed().as_secs() < STAGE_TTL_SECS);
+        let mut taken = Vec::new();
+        stages.retain(|task| {
+            if task.incarnation == incarnation {
+                taken.push((task.token.clone(), task.message));
+                false
+            } else {
+                true
+            }
+        });
+        taken
+    }
+
+    /// Retire a stage at its attempt's end: true when it was still
+    /// here, meaning no transport read ever handed it.
+    fn drop_stage(&self, token: &str) -> bool {
+        let mut stages = self.stages.lock().expect("the delivery stage holds");
+        let before = stages.len();
+        stages.retain(|task| task.token != *token);
+        before != stages.len()
     }
 
     /// The incarnations holding at least one delivery connection: the
@@ -160,7 +204,8 @@ impl Drop for BridgeLive {
                 // keep last_seen; prune only when the window passed
                 let now = Instant::now();
                 live.retain(|_, a| {
-                    a.connections > 0 || now.duration_since(a.last_seen).as_secs() < 300
+                    a.connections > 0
+                        || now.duration_since(a.last_seen).as_secs() < BRIDGE_ASSOCIATION_SECS
                 });
             }
         }
@@ -580,17 +625,33 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                     .messages
                     .get(&crate::MessageId(RecordId(sent)))
                     .expect("the landed message folds in");
+                let num = numbers.message_num(crate::MessageId(RecordId(sent)));
+                let label = match num {
+                    Some(n) => format!("m-{n}"),
+                    None => format!("seq {sent}"),
+                };
                 reply["message"] = json!({
                     "seq": sent,
-                    "num": numbers.message_num(crate::MessageId(RecordId(sent))),
+                    "num": num,
                 });
                 reply["from"] = json!({
                     "seq": mctx.message.from.0 .0,
                     "num": numbers.incarnation_num(mctx.message.from),
                 });
-                // the command ingress activates exactly like the wire's
-                // own send face: one mechanism, no entrance left out
-                spawn_activation(&app, *to_id, numbers.incarnation_num(*to_id).unwrap_or(0));
+                // the same record-then-attempt as the send face: one
+                // mechanism, no entrance left out; the command landed,
+                // so the attempt's truth rides the reply as data
+                let to_num = numbers.incarnation_num(*to_id).unwrap_or(0);
+                reply["submission"] =
+                    match attempt_submission(&app, *to_id, to_num, sent, &label).await {
+                        Submission::Submitted => json!({"state": "submitted"}),
+                        Submission::Refused { code, detail } => {
+                            json!({"state": "refused", "code": code, "detail": detail})
+                        }
+                        Submission::Unacknowledged { detail } => {
+                            json!({"state": "unacknowledged", "detail": detail})
+                        }
+                    };
             }
             (StatusCode::OK, Json(reply)).into_response()
         }
@@ -628,6 +689,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/messages/send", post(message_send))
         .route("/api/v1/messages/submit", post(message_submit))
         .route("/api/v1/messages/pending", get(messages_pending))
+        .route("/api/v1/messages/deliver", get(messages_deliver))
         .route("/api/v1/version", get(version))
         .route("/api/v1/workbench", get(workbench))
         .route("/api/v1/workbench/preview", post(workbench_preview))
@@ -1629,14 +1691,237 @@ struct MessageSendRequest {
     client: Option<String>,
 }
 
-/// One activation spawn, shared by every SendMessage ingress: the
-/// landed write itself wakes the host, never the face that used it.
-/// Fire and forget - the reply never waits on host mechanics.
-fn spawn_activation(app: &AppState, to_id: crate::IncarnationId, to_num: usize) {
-    let app = app.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        crate::activate::after_send(&app, to_id, to_num);
-    });
+/// How long a bridge association stays deliverable past its last
+/// observed connection: a parked read's brief gap or a transient
+/// socket loss must not fail a send the next cycle would carry. The
+/// bridge cache prunes associations past the same window.
+const BRIDGE_ASSOCIATION_SECS: u64 = 300;
+
+/// How long a send waits for the recipient's integration to accept the
+/// delivery into the native input queue. The confirmation bar is queue
+/// acceptance, never the recipient's turn or work, so the bound covers
+/// transport cycles, not conversation.
+const SUBMISSION_CONFIRM_WAIT_SECS: u64 = 15;
+
+/// The confirmation bound's one test seam: a scratch tracker holds the
+/// window short so the honest classification at expiry is observable
+/// without waiting the production bound. Production never sets it.
+fn confirm_wait_secs() -> u64 {
+    std::env::var("SACCADE_CONFIRM_WAIT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(SUBMISSION_CONFIRM_WAIT_SECS)
+}
+
+/// How long a staged delivery task outlives its send handler: a send
+/// whose process dies leaves at most one late delivery, never a retry
+/// loop.
+const STAGE_TTL_SECS: u64 = 120;
+
+/// One staged native-submission task: the runtime half of a send,
+/// born after the record landed and gone when its attempt ends. Never
+/// a record and never an obligation - a dead handler leaves at most
+/// one late delivery.
+struct StagedDelivery {
+    incarnation: usize,
+    message: usize,
+    token: String,
+    staged_at: Instant,
+}
+
+/// A correlation token for one delivery attempt: transport identity
+/// only, never a record reference.
+fn delivery_token() -> String {
+    let mut bytes = [0u8; 16];
+    let filled = std::fs::File::open("/dev/urandom")
+        .is_ok_and(|mut file| std::io::Read::read_exact(&mut file, &mut bytes).is_ok());
+    if !filled {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mix = nanos ^ ((std::process::id() as u128) << 64);
+        for (at, piece) in bytes.chunks_mut(8).enumerate() {
+            let shift = 8 * at;
+            for (i, slot) in piece.iter_mut().enumerate() {
+                *slot = (mix >> (shift + 8 * i)) as u8;
+            }
+        }
+    }
+    let mut token = String::with_capacity(32);
+    for b in bytes {
+        token.push_str(&format!("{b:02x}"));
+    }
+    token
+}
+
+/// Whether the recipient's integration can take a delivery right now.
+/// The bridge's live connection - or its recent association, a parked
+/// read's brief gap - is the only channel into a native session;
+/// beyond it the session's own guard distinguishes the refusal
+/// reasons. Runtime evidence only: nothing launches, nothing infers a
+/// lifecycle, nothing claims an exited session from uncertain
+/// evidence.
+enum Channel {
+    Deliverable,
+    /// proven non-submission: nothing reached the native queue
+    Severed(&'static str, String),
+}
+
+fn delivery_channel(
+    app: &AppState,
+    world: &World,
+    to: crate::IncarnationId,
+    to_num: usize,
+    label: &str,
+) -> Channel {
+    if app.bridge.connected().iter().any(|(i, _)| *i == to.0.0)
+        || app.bridge.recently_associated(
+            to.0.0,
+            std::time::Duration::from_secs(BRIDGE_ASSOCIATION_SECS),
+        )
+    {
+        return Channel::Deliverable;
+    }
+    let ctx = world
+        .incarnations
+        .get(&to)
+        .expect("the landed message names a resident recipient");
+    let crate::Incarnation::Native { native_id, .. } = &ctx.incarnation else {
+        return Channel::Severed(
+            "invalid_incarnation_id",
+            format!("{label} names a recipient with no native session boundary"),
+        );
+    };
+    let Some(repo_root) = app.repo_root() else {
+        return Channel::Severed(
+            "recipient_unknown",
+            format!(
+                "{label} was recorded, but i-{to_num}'s guard cannot be probed because the server holds no repo state root; their integration holds no delivery connection and liveness is unknown, so nothing reached their session"
+            ),
+        );
+    };
+    let guard = crate::activate::guard_path(repo_root, native_id.as_str());
+    match crate::activate::guard_held(&guard) {
+        Some(true) => Channel::Severed(
+            "recipient_disconnected",
+            format!(
+                "{label} was recorded, but i-{to_num}'s session is running - its guard is held - while its integration holds no delivery connection; nothing reached their session, and a send never launches or restarts one"
+            ),
+        ),
+        Some(false) => Channel::Severed(
+            "recipient_stopped",
+            format!(
+                "{label} was recorded, but i-{to_num}'s session is not running (its guard is free); nothing reached their session. Resume them explicitly with `sac launch --resume i-{to_num}`, then send again"
+            ),
+        ),
+        None => Channel::Severed(
+            "recipient_unknown",
+            format!(
+                "{label} was recorded, but i-{to_num}'s session guard cannot be probed, so liveness is unknown; their integration holds no delivery connection and nothing reached their session"
+            ),
+        ),
+    }
+}
+
+/// One send's native-submission attempt: stage a runtime delivery task
+/// for the recipient's integration, then wait for its positive
+/// confirmation - the record moving to Submitted, which only the
+/// integration's queue-acceptance submission writes. The bound never
+/// waits on the recipient's work. Outcome families: submitted; a
+/// proven refusal naming why nothing reached the queue; or
+/// unacknowledged, the attempt's honest uncertainty.
+enum Submission {
+    Submitted,
+    Refused { code: &'static str, detail: String },
+    Unacknowledged { detail: String },
+}
+
+async fn attempt_submission(
+    app: &AppState,
+    to: crate::IncarnationId,
+    to_num: usize,
+    sent: usize,
+    label: &str,
+) -> Submission {
+    let snapshot = match app.snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(_) => {
+            return Submission::Unacknowledged {
+                detail: format!(
+                    "{label} was recorded, but the fold could not be read to stage the delivery"
+                ),
+            };
+        }
+    };
+    let Channel::Severed(code, detail) = delivery_channel(app, &snapshot.world, to, to_num, label)
+    else {
+        let token = delivery_token();
+        app.bridge.stage_delivery(to.0.0, sent, token.clone());
+        app.bridge.wake();
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(confirm_wait_secs());
+        loop {
+            // armed before the read so a confirmation landing between
+            // the read and the park cannot be missed
+            let wake = app.bridge.notify.notified();
+            tokio::pin!(wake);
+            wake.as_mut().enable();
+            let submitted = app
+                .snapshot()
+                .ok()
+                .and_then(|s| {
+                    s.world
+                        .messages
+                        .get(&crate::MessageId(RecordId(sent)))
+                        .map(|mctx| mctx.state == crate::MessageState::Submitted)
+                })
+                .unwrap_or(false);
+            if submitted {
+                app.bridge.drop_stage(&token);
+                return Submission::Submitted;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                // retire the stage first, then one last fold read: a
+                // confirmation landing inside this gap is still the
+                // attempt's own, never an unacknowledged outcome
+                let still_staged = app.bridge.drop_stage(&token);
+                let submitted = app
+                    .snapshot()
+                    .ok()
+                    .and_then(|s| {
+                        s.world
+                            .messages
+                            .get(&crate::MessageId(RecordId(sent)))
+                            .map(|mctx| mctx.state == crate::MessageState::Submitted)
+                    })
+                    .unwrap_or(false);
+                if submitted {
+                    return Submission::Submitted;
+                }
+                // still staged means their integration took no delivery:
+                // nothing reached the queue, a proven refusal. A taken
+                // stage whose acknowledgement never landed stays
+                // uncertain, never a proven failure.
+                return match still_staged {
+                    true => Submission::Refused {
+                        code: "submission_untaken",
+                        detail: format!(
+                            "{label} was recorded, but their integration took no delivery within the attempt window; nothing reached their session's input queue"
+                        ),
+                    },
+                    false => Submission::Unacknowledged {
+                        detail: format!(
+                            "{label} was recorded and their integration took the delivery, but no queue-acceptance acknowledgement landed within the attempt window"
+                        ),
+                    },
+                };
+            }
+            let _ = tokio::time::timeout_at(deadline, wake).await;
+        }
+    };
+    Submission::Refused { code, detail }
 }
 
 async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
@@ -1669,7 +1954,8 @@ async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
         },
         scope: request.context.scope,
     };
-    // the public numbers resolve against the fold before the write
+    // the public numbers resolve against the fold before the write:
+    // a send's reference guards teach before anything lands
     let resolved = (|| {
         let snapshot = app.snapshot().map_err(|read_fail| match read_fail {
             ReadFail::Degraded(d) => ApiFail::Degraded(d.reason),
@@ -1712,20 +1998,49 @@ async fn message_send(State(app): State<AppState>, body: Bytes) -> Response {
                 .messages
                 .get(&crate::MessageId(RecordId(sent)))
                 .expect("the landed message folds in");
-            let reply = json!({
-                "records": stored,
-                "message": {
-                    "seq": sent,
-                    "num": numbers.message_num(crate::MessageId(RecordId(sent))),
-                },
-                "from": {
-                    "seq": mctx.message.from.0 .0,
-                    "num": numbers.incarnation_num(mctx.message.from),
-                },
+            let num = numbers.message_num(crate::MessageId(RecordId(sent)));
+            let label = match num {
+                Some(n) => format!("m-{n}"),
+                None => format!("seq {sent}"),
+            };
+            let message = json!({
+                "seq": sent,
+                "num": num,
             });
-            // one activation mechanism for every entrance
-            spawn_activation(&app, to_id, request.to);
-            (StatusCode::OK, Json(reply)).into_response()
+            let from = json!({
+                "seq": mctx.message.from.0 .0,
+                "num": numbers.incarnation_num(mctx.message.from),
+            });
+            // the record stands; the attempt reports its own truth:
+            // success only on the queue's confirmed acceptance
+            match attempt_submission(&app, to_id, request.to, sent, &label).await {
+                Submission::Submitted => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "records": stored,
+                        "message": message,
+                        "from": from,
+                        "submission": {"state": "submitted"},
+                    })),
+                )
+                    .into_response(),
+                Submission::Refused { code, detail } => (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": {"code": code, "detail": detail},
+                        "message": message,
+                    })),
+                )
+                    .into_response(),
+                Submission::Unacknowledged { detail } => (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": {"code": "submission_unacknowledged", "detail": detail},
+                        "message": message,
+                    })),
+                )
+                    .into_response(),
+            }
         }
         Err(e) => {
             let (status, code, detail) = match e {
@@ -1789,17 +2104,6 @@ struct MailboxQuery {
     /// The reader's own incarnation: a bare birth-record position, the
     /// machine identity channel the session attaches with
     incarnation: usize,
-    /// Park until incoming pending mail exists or this many
-    /// milliseconds pass, capped at 30s: the delivery bridge's parked
-    /// read, woken by the record's landing, never a timer over the log.
-    /// Absent, the read returns immediately.
-    #[serde(default)]
-    wait_ms: Option<u64>,
-    /// Announce a delivery bridge connection for the call's duration:
-    /// the operational liveness the activation decision reads. "1" or
-    /// "true"; the integration sends the digit.
-    #[serde(default)]
-    bridge: Option<String>,
 }
 
 /// The mailbox JSON: the reader's mail in birth order, any state, both
@@ -1838,33 +2142,66 @@ fn mailbox_view(snapshot: &Snapshot, id: crate::IncarnationId) -> Value {
     json!({ "messages": messages, "cursor": snapshot.rows.last().map(|r| r.seq) })
 }
 
-/// Whether mail sits unsubmitted for this incarnation: the predicate a
-/// parked bridge read waits on.
-fn has_pending_incoming(world: &World, id: crate::IncarnationId) -> bool {
-    world
-        .messages
-        .values()
-        .any(|mctx| mctx.message.to == id && mctx.state == crate::MessageState::Pending)
-}
-
-/// The reader's own mail, in birth order, any state. A read the
-/// integration polls - parked at most wait_ms when asked, woken by the
-/// record's landing - never a subscription the tracker keeps.
+/// The reader's own mail, in birth order, any state: a descriptive
+/// read over the records. `pending` is a recorded message without a
+/// confirmed submission - evidence of its attempt, never a promise of
+/// later delivery - and `submitted` means the recipient's native input
+/// queue accepted it.
 async fn messages_pending(
     State(app): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<MailboxQuery>,
 ) -> Response {
-    let _live = if matches!(query.bridge.as_deref(), Some("1") | Some("true")) {
-        Some(BridgeLive::new(&app.bridge, query.incarnation))
-    } else {
-        None
+    let snapshot = match app.snapshot() {
+        Ok(s) => s,
+        Err(read_fail) => {
+            let (status, code, detail) = match read_fail {
+                ReadFail::Degraded(d) => ApiFail::Degraded(d.reason).parts(),
+                ReadFail::Db(reason) => ApiFail::Db(reason).parts(),
+            };
+            return (
+                status,
+                Json(json!({"error": {"code": code, "detail": detail}})),
+            )
+                .into_response();
+        }
     };
+    let id = crate::IncarnationId(RecordId(query.incarnation));
+    if !snapshot.world.incarnations.contains_key(&id) {
+        return api_failure(ApiFail::Reject(Reject::InvalidIncarnationId, None));
+    }
+    (StatusCode::OK, Json(mailbox_view(&snapshot, id))).into_response()
+}
+
+#[derive(Deserialize)]
+struct DeliveryQuery {
+    /// The delivering session's incarnation: the addressee taking its
+    /// own staged mail
+    incarnation: usize,
+    /// Park until a staged delivery task exists or this many
+    /// milliseconds pass, capped at 30s: the integration's parked
+    /// transport read, woken by a staged task, never a timer over the
+    /// log. Absent, the read returns immediately.
+    #[serde(default)]
+    wait_ms: Option<u64>,
+}
+
+/// The recipient integration's transport read: the staged delivery
+/// tasks of send attempts now in flight, each handed exactly once.
+/// This read is the bridge itself - it announces the association for
+/// its duration - and it never drains recorded mail: a recorded
+/// message without confirmed submission is evidence, and no machinery
+/// carries it later.
+async fn messages_deliver(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<DeliveryQuery>,
+) -> Response {
+    let _live = BridgeLive::new(&app.bridge, query.incarnation);
     let wait_ms = query.wait_ms.unwrap_or(0).min(30_000);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
     let id = crate::IncarnationId(RecordId(query.incarnation));
     loop {
-        // armed before the read so a landing between the read and the
-        // park cannot be missed
+        // armed before the read so a staged task landing between the
+        // read and the park cannot be missed
         let wake = app.bridge.notify.notified();
         tokio::pin!(wake);
         wake.as_mut().enable();
@@ -1885,9 +2222,44 @@ async fn messages_pending(
         if !snapshot.world.incarnations.contains_key(&id) {
             return api_failure(ApiFail::Reject(Reject::InvalidIncarnationId, None));
         }
-        let satisfied = has_pending_incoming(&snapshot.world, id);
-        if satisfied || wait_ms == 0 || tokio::time::Instant::now() >= deadline {
-            return (StatusCode::OK, Json(mailbox_view(&snapshot, id))).into_response();
+        let staged = app.bridge.take_staged(query.incarnation);
+        let deliveries: Vec<Value> = staged
+            .iter()
+            .filter_map(|(token, seq)| {
+                let mctx = snapshot
+                    .world
+                    .messages
+                    .get(&crate::MessageId(RecordId(*seq)))?;
+                // a stage whose record already reads submitted was
+                // confirmed out-of-band: nothing left to hand
+                if mctx.state != crate::MessageState::Pending {
+                    return None;
+                }
+                let sender = &mctx.message.from;
+                Some(json!({
+                    "token": token,
+                    "message": {
+                        "seq": seq,
+                        "num": snapshot.world.message_num(crate::MessageId(RecordId(*seq))),
+                        "from": {
+                            "seq": sender.0 .0,
+                            "num": snapshot.world.incarnation_num(*sender),
+                            "actor": mctx.actor.as_str(),
+                        },
+                        "to": {
+                            "seq": mctx.message.to.0 .0,
+                            "num": snapshot.world.incarnation_num(mctx.message.to),
+                        },
+                        "reply_to": mctx.message.reply_to.map(|r| snapshot.world.message_num(r)),
+                        "task": mctx.message.task.map(|t| t.0),
+                        "body": mctx.message.body.as_str(),
+                        "born_at": mctx.born_at,
+                    },
+                }))
+            })
+            .collect();
+        if !deliveries.is_empty() || wait_ms == 0 || tokio::time::Instant::now() >= deadline {
+            return (StatusCode::OK, Json(json!({ "deliveries": deliveries }))).into_response();
         }
         let _ = tokio::time::timeout_at(deadline, wake).await;
     }
