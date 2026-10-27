@@ -1560,7 +1560,24 @@ fn lifecycle_target(
         db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
     };
     let canonical = workspace::canonical_dir(Path::new(path_str)).map_err(ApiFail::Workspace)?;
-    let births = world.workspace_births_at(&canonical);
+    // the exact recorded target: a birth addresses by its own stored
+    // string or by the canonical form it resolves to - a historical
+    // recorded path with a symlink segment stays addressable - while
+    // two stored paths resolving to one directory refuse as ambiguous
+    let mut births = world.workspace_births_at(&canonical);
+    for birth in world.workspace_births() {
+        if births.contains(&birth) {
+            continue;
+        }
+        let stored = world.workspace_facts(birth).map(|f| f.worktree);
+        let aliases = stored
+            .map(|p| workspace::canonical_dir(p.as_path()).map(|c| c == canonical))
+            .unwrap_or(Ok(false));
+        if aliases.unwrap_or(false) {
+            births.push(birth);
+        }
+    }
+    births.sort();
     match births.len() {
         0 => {
             return Err(ApiFail::Refused(
@@ -1660,8 +1677,10 @@ fn clean_operation(
     let registered = registrations.get(&canonical).cloned();
     let present = canonical.is_dir();
 
+    let mut verified: Vec<String> = Vec::new();
     // recorded cleaned and every resource absent is idempotent success:
-    // no duplicate transition, verified through the same doors
+    // no duplicate transition, verified through the same doors the
+    // cleanup itself ran - terminal list and visible absence alike
     if stage == crate::WorkspaceStage::Cleaned {
         if present || registered.is_some() {
             return Err(ApiFail::Refused(
@@ -1678,24 +1697,82 @@ fn clean_operation(
                 ),
             ));
         }
-        verified_within(
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match crate::host::workspace_terminals(&dir_str) {
+                Ok(terminals) if terminals.is_empty() => {
+                    verified.push("verified: the host names no terminals for the workspace".into());
+                    break;
+                }
+                Ok(terminals) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(ApiFail::Refused(
+                            StatusCode::CONFLICT,
+                            "workspace_terminals_open",
+                            format!(
+                                "the host names {} live terminal(s) at a workspace recorded Cleaned; the recorded closure does not hold - inspect and retry",
+                                terminals.len()
+                            ),
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                Err(e) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(ApiFail::Refused(
+                            StatusCode::BAD_GATEWAY,
+                            "workspace_host_unverified",
+                            format!(
+                                "terminal state unverified at a workspace recorded Cleaned: {e}; the idempotence answer names only what verified - retry when the host answers"
+                            ),
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        }
+        match verified_within(
             || crate::host::workspace_visible_presence(&dir_str),
             &format!("visible absence of {dir_str}"),
-        )?;
+        )? {
+            crate::host::HostPresence::VisiblyAbsent => {
+                verified.push(format!(
+                    "verified: the host names no workspace at {dir_str}"
+                ));
+            }
+            crate::host::HostPresence::Listed => {
+                return Err(ApiFail::Refused(
+                    StatusCode::CONFLICT,
+                    "workspace_still_listed",
+                    format!(
+                        "{} is recorded Cleaned but the host still lists a workspace there; the recorded closure does not hold - inspect and retry",
+                        dir_str
+                    ),
+                ));
+            }
+        }
         return Ok(CleanReply {
             cleaned: false,
             already_cleaned: true,
             workspace: LifecycleWorkspace::of(facts),
-            verified: vec![
-                "recorded Cleaned: checkout and worktree registration already absent".into(),
-                format!("host names no workspace at {dir_str}"),
-            ],
+            verified,
             records: Vec::new(),
         });
     }
 
-    let mut verified: Vec<String> = Vec::new();
     let destructive = registered.is_some();
+    // a stale git registration at a recorded path is named, never
+    // pruned by a door: git's own repair stays a human act
+    if registered.is_some() && !canonical.is_dir() {
+        return Err(ApiFail::Refused(
+            StatusCode::CONFLICT,
+            "workspace_checkout_mismatch",
+            format!(
+                "git still registers a worktree at {} whose directory is gone; cleanup refuses the stale registration and never prunes it - inspect it and run git worktree prune by hand",
+                dir_str
+            ),
+        ));
+    }
     if destructive {
         // the retained branch is the restore contract's foundation: a
         // missing branch refuses the destructive act before anything runs
@@ -1901,6 +1978,20 @@ fn restore_operation(
     let dir_str = canonical.display().to_string();
     let registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
     let registered = registrations.get(&canonical).cloned();
+    // a git registration whose directory is gone restores and reuses
+    // nothing, at either stage: a stale admin entry is named as the
+    // mismatch it is, and git's own repair stays a human act - nothing
+    // counts as a matching checkout without the directory standing
+    if registered.is_some() && !canonical.is_dir() {
+        return Err(ApiFail::Refused(
+            StatusCode::CONFLICT,
+            "workspace_checkout_mismatch",
+            format!(
+                "git still registers a worktree at {} whose directory is gone; a stale registration neither restores nor reuses - inspect it and run git worktree prune by hand",
+                dir_str
+            ),
+        ));
+    }
 
     // the matching registered checkout standing on an Available
     // workspace is no-op success: no duplicate restoration fact lands,
@@ -2077,13 +2168,7 @@ fn reconcile_operation(
     };
     let registrations = workspace::registered_worktrees(&repo_root).map_err(ApiFail::Workspace)?;
     // every workspace birth in birth order, created and established
-    let mut births: Vec<RecordId> = world.workspaces.keys().map(|id| id.0).collect();
-    for ctx in &world.tasks {
-        if let Some(established) = &ctx.workspace {
-            births.push(established.birth);
-        }
-    }
-    births.sort();
+    let births = world.workspace_births();
     // paths shared by several births are a conflict before any act
     let mut shared: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let mut entries: Vec<(RecordId, crate::store::WorkspaceFacts)> = Vec::new();
@@ -2110,8 +2195,16 @@ fn reconcile_operation(
             conflicts.push(entry("several workspace births share this path".into()));
             continue;
         }
-        let canonical =
-            workspace::canonical_dir(facts.worktree.as_path()).map_err(ApiFail::Workspace)?;
+        let canonical = match workspace::canonical_dir(facts.worktree.as_path()) {
+            Ok(canonical) => canonical,
+            Err(e) => {
+                conflicts.push(entry(format!(
+                    "the recorded path cannot canonicalize: {}",
+                    e.detail()
+                )));
+                continue;
+            }
+        };
         let registered = registrations.get(&canonical).cloned();
         let present = canonical.is_dir();
         let stage = world.workspace_stage(birth);

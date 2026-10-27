@@ -5235,7 +5235,7 @@ fn explicit_destinations_route_reads_and_writes_to_one_tracker() {
     let (mut serve_c, url_c) = spawn_serve(bin, &db_c, &[], &[]);
 
     let sac = |args: &[&str], envs: &[(&str, &str)]| {
-        let mut cmd = std::process::Command::new(bin);
+        let mut cmd = scrubbed(std::process::Command::new(bin));
         cmd.args(args);
         for (k, v) in envs {
             cmd.env(k, v);
@@ -5404,7 +5404,7 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
     std::fs::create_dir_all(&empty_state).unwrap();
 
     let sac_in = |cwd: &std::path::Path, args: &[&str], state_home: &std::path::Path| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .args(args)
             .env("XDG_STATE_HOME", state_home)
             .env("SACCADE_ACTOR", "pi")
@@ -5427,7 +5427,7 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
     assert!(out.contains("unresolved"), "{out}");
 
     // the repo-derived serve publishes beside its db; the client finds it
-    let mut serve_cmd = std::process::Command::new(bin);
+    let mut serve_cmd = scrubbed(std::process::Command::new(bin));
     serve_cmd
         .args(["serve", "--port", "0"])
         .stdout(std::process::Stdio::null())
@@ -5593,7 +5593,7 @@ async fn the_declared_repo_carries_the_serving_effects() {
     };
 
     let run = |cwd: &std::path::Path, args: &[String]| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .env(
                 "PATH",
                 format!(
@@ -7119,11 +7119,46 @@ async fn the_workbench_projection_names_the_workspaces_the_fold_holds() {
     );
     assert_eq!(status, 200, "{body}");
     let created = json_of(&body);
+    // the historical kind projects beside the creations: a hand-written
+    // task-bound establishment enters the same panel with its own stage
+    {
+        let mut conn = saccade::db::open(&db).unwrap();
+        saccade::db::record(
+            &mut conn,
+            &saccade::store::Context::system(),
+            saccade::Command::CreateTask {
+                name: saccade::Prose::new("a lineage with an establishment".into()).unwrap(),
+            },
+            1,
+        )
+        .unwrap();
+        saccade::db::record(
+            &mut conn,
+            &saccade::store::Context::system(),
+            saccade::Command::EstablishWorkspace {
+                task_id: saccade::TaskId(0),
+                base: saccade::GitCommit::new("abc123".into()).unwrap(),
+                branch: saccade::GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: saccade::WorktreePath::new("/elsewhere/wt/t-0".into()).unwrap(),
+            },
+            2,
+        )
+        .unwrap();
+    }
     let workspaces = json_of(&get_json(&base, "/api/v1/workbench").1)["workspaces"].clone();
     let list = workspaces.as_array().unwrap();
-    assert_eq!(list.len(), 1, "{workspaces}");
-    let ws = &list[0];
-    assert_eq!(ws["seq"], created["workspace"]["seq"], "{workspaces}");
+    assert_eq!(list.len(), 2, "{workspaces}");
+    let established = list
+        .iter()
+        .find(|w| w["home"].as_u64() == Some(0))
+        .expect("the established kind projects with its home task");
+    assert_eq!(established["branch"], "saccade/t-0", "{workspaces}");
+    assert_eq!(established["stage"], "available", "{workspaces}");
+    assert!(established["born_at"].is_null(), "{workspaces}");
+    let ws = list
+        .iter()
+        .find(|w| w["seq"] == created["workspace"]["seq"])
+        .expect("the created kind still projects");
     assert_eq!(ws["base"], created["workspace"]["base"], "{workspaces}");
     assert_eq!(ws["path"], created["workspace"]["path"], "{workspaces}");
     assert!(
@@ -7131,6 +7166,7 @@ async fn the_workbench_projection_names_the_workspaces_the_fold_holds() {
         "{workspaces}"
     );
     assert!(ws["born_at"].is_u64(), "{workspaces}");
+    assert!(ws["home"].is_null(), "{workspaces}");
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
@@ -7207,7 +7243,6 @@ struct LifecycleRig {
     registered: std::path::PathBuf,
     host_state: std::path::PathBuf,
     close_fail: std::path::PathBuf,
-    path_var: String,
     host_env: Vec<(String, String)>,
 }
 
@@ -7219,6 +7254,7 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
     let (root, _first, _head) = scratch_repo(&dir);
     let db = dir.join("saccade.db");
     let host = fake_host(&dir);
+    let pi = stub_pi(&dir);
     let host_log = dir.join("host.log");
     let host_state = dir.join("host-state");
     let registered = dir.join("host-registered");
@@ -7226,11 +7262,6 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
     std::fs::write(&host_log, b"").unwrap();
     std::fs::write(&host_state, b"").unwrap();
     std::fs::write(&registered, b"").unwrap();
-    let path_var = format!(
-        "{}:{}",
-        host.parent().unwrap().display(),
-        std::env::var("PATH").unwrap()
-    );
     let host_env = vec![
         ("FAKE_ORCA_LOG".to_string(), host_log.display().to_string()),
         (
@@ -7245,7 +7276,17 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
             "FAKE_ORCA_CLOSE_FAIL".to_string(),
             close_fail.display().to_string(),
         ),
-        ("PATH".to_string(), path_var.clone()),
+        (
+            "PATH".to_string(),
+            format!(
+                "{}:{}",
+                host.parent().unwrap().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        ),
+        // the rig is hermetic: the serve subprocess and every CLI run
+        // name the stub harness, never an inherited or compiled pin
+        ("SACCADE_PI".to_string(), pi.display().to_string()),
     ];
     let serve_envs: Vec<(&str, &str)> = host_env
         .iter()
@@ -7266,7 +7307,6 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
         registered,
         host_state,
         close_fail,
-        path_var,
         host_env,
     }
 }
@@ -7322,10 +7362,8 @@ fn rig_open_terminal(rig: &LifecycleRig, handle: &str, path: &str) {
 
 /// The CLI face pointed at the rig's server, the fake host on PATH.
 fn rig_sac(rig: &LifecycleRig, args: &[&str]) -> (bool, String, String) {
-    let mut envs: Vec<(String, String)> = vec![
-        ("SACCADE_PI".to_string(), "/nonexistent/pi".to_string()),
-        ("SACCADE_ACTOR".to_string(), "lifecycle-bot".to_string()),
-    ];
+    let mut envs: Vec<(String, String)> =
+        vec![("SACCADE_ACTOR".to_string(), "lifecycle-bot".to_string())];
     envs.extend(rig.host_env.clone());
     let env_refs: Vec<(&str, String)> = envs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
     let mut full = vec![
@@ -7550,6 +7588,24 @@ async fn clean_stops_on_open_terminals_then_retry_completes() {
         rig_tip(&rig, &branch),
         sh(&rig.root, &["rev-parse", "HEAD"]).trim()
     );
+
+    // the recorded-Cleaned idempotence verifies the host too: a
+    // terminal the host still names refuses the no-op success
+    rig_open_terminal(&rig, "term_after_2", &ws);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(
+        !ok,
+        "the occupied cleaned workspace answered idempotent: {err}"
+    );
+    assert!(err.contains("workspace_terminals_open"), "{err}");
+    // the terminal leaves, and the same door verifies its way to the
+    // no-op success again
+    std::fs::write(&rig.host_state, b"").unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the verified idempotent re-run refuses: {out}{err}");
+    assert!(out.contains("already cleaned"), "{out}{err}");
+    assert!(out.contains("the host names no terminals"), "{out}");
+    assert!(out.contains("the host names no workspace at"), "{out}{err}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -7580,6 +7636,39 @@ async fn restore_reuses_recreates_and_refuses_its_mismatches() {
             .filter(|line| line == &format!("worktree {ws}"))
             .count(),
         1
+    );
+
+    // a stale git registration whose directory is gone restores
+    // nothing: the mismatch refuses, no fact lands, the stage stays
+    let (_, _, ws_stale) = rig_provision(&rig, "stale-entry");
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_stale]);
+    assert!(ok, "the stale setup clean refuses: {err}");
+    let stale_branch = {
+        let (_, body) = get_json(&rig.url, "/api/v1/records");
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r["kind"] == "workspace_created" && r["payload"]["worktree"] == json!(ws_stale)
+            })
+            .map(|r| r["payload"]["branch"].as_str().unwrap().to_string())
+            .expect("the stale birth names its branch")
+    };
+    sh(&rig.root, &["worktree", "add", &ws_stale, &stale_branch]);
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let records_before_stale = body.clone();
+    std::fs::remove_dir_all(&ws_stale).unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws_stale]);
+    assert!(!ok, "the stale registration restored anyway: {err}");
+    assert!(err.contains("workspace_checkout_mismatch"), "{err}");
+    assert!(err.contains("stale registration"), "{err}");
+    assert!(!std::path::Path::new(&ws_stale).exists());
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    assert_eq!(
+        json_of(&records_before_stale)["records"],
+        json_of(&body)["records"],
+        "the stale registration landed no restoration fact"
     );
 
     // the absent-path recreate stands at the branch's CURRENT local
@@ -7778,6 +7867,28 @@ async fn the_cleaned_stage_guards_launch_workbench_and_switch() {
         "{body}"
     );
 
+    // the resume path pins the same guard: a saved session whose
+    // header cwd sits in the cleaned workspace refuses until an
+    // explicit restore - the guard fires before any host submission
+    let saved_resume = rig.dir.join("native-cafe0001.jsonl");
+    std::fs::write(
+        &saved_resume,
+        format!(
+            "{{\"type\":\"session\",\"id\":\"cafe0001\",\"cwd\":\"{ws}\"}}\n{{\"kind\":\"filler\"}}\n"
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &rig.url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "cafe0001", "session_file": saved_resume.display().to_string()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let resume_num = json_of(&body)["num"].as_u64().unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["launch", "--resume", &format!("i-{resume_num}")]);
+    assert!(!ok, "a cleaned workspace took a resume: {err}");
+    assert!(err.contains("recorded Cleaned"), "{err}");
+
     // the explicit restore admits the directory again
     let (ok, _out, err) = rig_sac(&rig, &["workspace", "restore", &ws]);
     assert!(ok, "the restore refuses: {err}");
@@ -7812,7 +7923,7 @@ async fn reconcile_verifies_preserves_and_records_on_apply() {
     assert!(out.contains("dry run"), "{out}");
     assert!(out.contains(&format!("record {kept_seq} {kept}")), "{out}");
     assert!(out.contains("preserved"), "{out}");
-    assert!(out.contains("Cleaned recorded now") == false, "{out}");
+    assert!(!out.contains("Cleaned recorded now"), "{out}");
     let (_, body) = get_json(&rig.url, "/api/v1/records");
     let kinds: Vec<String> = json_of(&body)["records"]
         .as_array()
@@ -7860,4 +7971,80 @@ async fn reconcile_verifies_preserves_and_records_on_apply() {
         "the preserved workspace's branch stands"
     );
     let _ = gone_branch;
+}
+
+/// A recorded path addresses its own birth: a historical establishment
+/// whose stored string carries a symlink segment resolves through it -
+/// stored identity preserved, and two stored paths aliasing one
+/// directory refuse as ambiguous rather than picking.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
+    let rig = lifecycle_rig("alias");
+    // a historical establishment whose recorded path carries a symlink
+    // segment: hand-written, exactly what an old log may hold
+    let link = rig.dir.join("link");
+    let real_home = rig.dir.join("real-wt");
+    std::fs::create_dir_all(&real_home).unwrap();
+    std::os::unix::fs::symlink(&real_home, &link).unwrap();
+    let real = real_home.join("hist-line");
+    let recorded = link.join("hist-line");
+    sh(
+        &rig.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "saccade/t-9",
+            &real.display().to_string(),
+            "HEAD",
+        ],
+    );
+    let establishment = |task: i32, branch: &str, worktree: &str| {
+        let mut conn = saccade::db::open(&rig.dir.join("saccade.db")).unwrap();
+        saccade::db::record(
+            &mut conn,
+            &saccade::store::Context::system(),
+            saccade::Command::CreateTask {
+                name: saccade::Prose::new(format!("a lineage behind {branch}")).unwrap(),
+            },
+            task as u64 * 2,
+        )
+        .unwrap();
+        saccade::db::record(
+            &mut conn,
+            &saccade::store::Context::system(),
+            saccade::Command::EstablishWorkspace {
+                task_id: saccade::TaskId(task as usize),
+                base: saccade::GitCommit::new("abc123".into()).unwrap(),
+                branch: saccade::GitBranch::new(branch.into()).unwrap(),
+                worktree: saccade::WorktreePath::new(worktree.into()).unwrap(),
+            },
+            task as u64 * 2 + 1,
+        )
+        .unwrap();
+    };
+    establishment(0, "saccade/t-9", recorded.display().to_string().as_str());
+
+    // the recorded string itself addresses the birth: the ordered clean
+    // contract runs over the real checkout it names
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", recorded.to_str().unwrap()]);
+    assert!(
+        ok,
+        "the recorded string does not address its birth: {out}{err}"
+    );
+    assert!(!real.exists(), "the real checkout is gone");
+    assert_eq!(
+        rig_tip(&rig, "saccade/t-9"),
+        sh(&rig.root, &["rev-parse", "HEAD"]).trim()
+    );
+
+    // a second stored path over the same directory makes the alias
+    // unsafe: both shapes refuse as ambiguous, neither is picked
+    establishment(1, "saccade/t-10", real.display().to_string().as_str());
+    for shape in [recorded.to_str().unwrap(), real.to_str().unwrap()] {
+        let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", shape]);
+        assert!(!ok, "the aliased directory resolved to one birth: {err}");
+        assert!(err.contains("workspace_ambiguous_path"), "{err}");
+    }
 }

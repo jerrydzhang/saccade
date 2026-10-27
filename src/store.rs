@@ -323,6 +323,19 @@ impl World {
         births
     }
 
+    /// Every workspace birth in birth order, both kinds - the
+    /// reconciliation and resolution walks' enumeration.
+    pub fn workspace_births(&self) -> Vec<RecordId> {
+        let mut births: Vec<RecordId> = self.workspaces.keys().map(|id| id.0).collect();
+        for ctx in &self.tasks {
+            if let Some(established) = &ctx.workspace {
+                births.push(established.birth);
+            }
+        }
+        births.sort();
+        births
+    }
+
     /// The workspace birth's current lifecycle stage, owned by the
     /// workspace; None when the record names no workspace birth.
     pub fn workspace_stage(&self, birth: RecordId) -> Option<WorkspaceStage> {

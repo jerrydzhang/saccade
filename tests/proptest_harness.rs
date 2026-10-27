@@ -400,12 +400,11 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
         // to; unknown draws refuse and the sequence carries on
         Action::CleanWorkspace { draw } | Action::RestoreWorkspace { draw } => {
             let birth = record_ref_at(records, *draw);
-            let command = if matches!(action, Action::CleanWorkspace { .. }) {
+            if matches!(action, Action::CleanWorkspace { .. }) {
                 Command::CleanWorkspace { workspace: birth }
             } else {
                 Command::RestoreWorkspace { workspace: birth }
-            };
-            command
+            }
         }
         Action::Send { from, to, reply } => Command::SendMessage {
             from: native_at(world, *from).unwrap_or(saccade::IncarnationId(RecordId(usize::MAX))),
