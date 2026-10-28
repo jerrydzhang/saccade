@@ -22,7 +22,7 @@ function __saccade_positions
             continue
         end
         switch $t
-            case --db --repo --server --actor --at --title --body --ref --explanation --grounds --reason --note --name --to --reply --task --source --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
+            case --db --repo --server --actor --at --title --body-file --ref --explanation --grounds --reason --note --name --to --reply --task --source --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
                 set prev_value 1
                 continue
             case '-*'
@@ -75,13 +75,14 @@ function __saccade_prev_value_flag
     # cursor is completing that value, no id belongs there
     set -l tokens (commandline -opc)
     switch $tokens[-1]
-        case --db --repo --server --actor --at --title --body --ref --explanation --grounds --reason --note --name --to --reply --task --source --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
+        case --db --repo --server --actor --at --title --body-file --ref --explanation --grounds --reason --note --name --to --reply --task --source --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
             return 0
     end
     return 1
 end
 
 function __saccade_verbs
+    printf 'create\tCreate a new task\n'
     printf 'claim\tTake whole-task responsibility; a transfer, never a state change\n'
     printf 'cancel\tHuman-only: stop an unfinished undertaking, explaining why\n'
     printf 'reopen\tHuman-only: resume a cancelled undertaking, explaining why\n'
@@ -117,6 +118,10 @@ function __saccade_candidates
     sac complete $argv 2>/dev/null
 end
 
+function __saccade_shells
+    printf 'fish\tthe primary shell\n'
+end
+
 function __saccade_workspace_verbs
     printf 'new\tProvision a NEW workspace through Git effects\n'
     printf 'switch\tMove a stopped native session saved directory\n'
@@ -137,8 +142,9 @@ complete -c sac -l at -r -f -d 'event time override'
 complete -c sac -l server -r -f -d 'select this running server for reads, writes, and waits'
 complete -c sac -n '__saccade_verb create; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'task'
 complete -c sac -n '__saccade_verb list; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'task'
-complete -c sac -n '__saccade_verb skill; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'install' -a 'check'
-complete -c sac -n '__saccade_verb completions; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'fish\tthe primary shell'
+complete -c sac -n '__saccade_verb skill; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'install'
+complete -c sac -n '__saccade_verb skill; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a 'check'
+complete -c sac -n '__saccade_verb completions; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_shells)'
 complete -c sac -n '__saccade_verb cancel; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb reopen; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb claim; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
@@ -151,7 +157,8 @@ complete -c sac -n '__saccade_verb send; and __saccade_prev --task' -a '(__sacca
 complete -c sac -n '__saccade_verb artifact; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb wait; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb show; and test (__saccade_npos) -ge 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb wait; and __saccade_prev --until' -a 'activity' -a 'offer'
+complete -c sac -n '__saccade_verb wait; and __saccade_prev --until' -a 'activity'
+complete -c sac -n '__saccade_verb wait; and __saccade_prev --until' -a 'offer'
 complete -c sac -n '__saccade_verb launch; and __saccade_prev --workspace' -a '(__saccade_candidates workspaces)' -k
 complete -c sac -n '__saccade_verb launch; and __saccade_prev --workspace' -a '(__fish_complete_directories)'
 complete -c sac -n '__saccade_verb launch; and __saccade_prev --resume' -a '(__saccade_candidates incarnations)'

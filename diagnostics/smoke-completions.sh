@@ -78,6 +78,10 @@ fish -i -c '
   report restore "sac workspace restore "
   report use_source "sac use t-0 --source "
   report title_value "sac comment --title "
+  report create_static "sac create "
+  report skill_static "sac skill "
+  report until_static "sac wait t-0 --until "
+  report shell_static "sac completions "
 ' > "$SMOKE/probes.out" 2> "$SMOKE/probes.err" || { cat "$SMOKE/probes.err"; fail "fish probes errored"; }
 [ -s "$SMOKE/probes.err" ] && { cat "$SMOKE/probes.err"; fail "fish stderr noise"; }
 
@@ -115,6 +119,17 @@ section restore | grep -q "realdir" && fail "restore leaked the filesystem fallb
 
 section use_source | grep -Fq "t-0${TAB}smoke the completions door" || { section use_source; fail "use --source misses tasks"; }
 [ -z "$(section title_value)" ] || { section title_value; fail "a title value leaked candidates"; }
+
+# static skeleton: create completes; multi-candidate registrations keep
+# every candidate; a static description survives in one piece
+section create_static | grep -qx "task" || { section create_static; fail "create offers no task kind"; }
+section skill_static | grep -qx "install" || { section skill_static; fail "skill lost install"; }
+section skill_static | grep -qx "check" || { section skill_static; fail "skill lost check"; }
+section until_static | grep -qx "activity" || { section until_static; fail "wait --until lost activity"; }
+section until_static | grep -qx "offer" || { section until_static; fail "wait --until lost offer"; }
+section shell_static | grep -Fq "fish${TAB}the primary shell" || { section shell_static; fail "completions lost the fish description"; }
+section shell_static | grep -qx "primary" && fail "the fish description split on spaces"
+section shell_static | grep -qx "shell" && fail "the fish description split on spaces"
 
 # completion never records: the record count is unchanged
 BEFORE=$("$BIN" log | grep -c '^seq ')
