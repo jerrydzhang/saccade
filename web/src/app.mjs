@@ -1499,9 +1499,12 @@ function scrollReader(amount) {
   const list = homeFocused() ? homeScrollList() : null;
   const scroller = list ?? readers.get(bench.focus);
   if (!scroller) return;
-  scroller.scrollTop = amount === "top" ? 0 : amount === "bottom" ? scroller.scrollHeight
-    : scroller.scrollTop + amount;
   const pane = presentation();
+  const stored = (pane.homeSection ?? "activity") === "tasks" ? pane.tasksScroll : pane.activityScroll;
+  // a pending rebuild's fresh list holds no reading position; step from the stored offset
+  const base = list && readers.get(bench.focus)?.pendingSignature && typeof stored === "number" ? stored : scroller.scrollTop;
+  scroller.scrollTop = amount === "top" ? 0 : amount === "bottom" ? scroller.scrollHeight
+    : base + amount;
   if (!list) pane.scrollTop = scroller.scrollTop;
   else if ((pane.homeSection ?? "activity") === "tasks") pane.tasksScroll = scroller.scrollTop;
   else pane.activityScroll = scroller.scrollTop;
