@@ -3990,6 +3990,312 @@ async fn the_launch_scrubs_stale_inheritance() {
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
+/// A stub harness that dumps like the plain stub and exits with
+/// $PI_EXIT: the here run's status propagation needs a child whose
+/// status is named.
+fn status_pi(dir: &std::path::Path) -> std::path::PathBuf {
+    let pi = dir.join("pi exiting dump");
+    std::fs::write(
+        &pi,
+        r#"#!/bin/sh
+{
+  printf 'argv: %s\n' "$*"
+  printf 'pwd: %s\n' "$PWD"
+  env | grep '^SACCADE_' | sort
+} > "$PI_DUMP"
+exit "${PI_EXIT:-0}"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&pi, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    pi
+}
+
+/// The here arm runs the shared composition in the invoking terminal:
+/// equip, scrub, and routing all arrived, the child's own status is
+/// the command's, and the host was never asked for a terminal.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_here_launch_runs_here_and_never_asks_the_host() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("here-launch");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    let host = fake_host(db.parent().unwrap());
+    let pi = status_pi(db.parent().unwrap());
+    let host_log = db.parent().unwrap().join("host.log");
+    let dump_path = db.parent().unwrap().join("here.dump");
+    std::fs::write(&host_log, b"").unwrap();
+
+    let workspace = db.parent().unwrap().join("here-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let run = |args: &[String], pi_exit: &str| -> (Option<i32>, String, String) {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args(args.iter().map(|a| a.as_str()))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    host.parent().unwrap().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("FAKE_ORCA_LOG", host_log.display().to_string())
+            .env("SACCADE_PI", &pi)
+            .env("PI_DUMP", dump_path.display().to_string())
+            .env("PI_EXIT", pi_exit)
+            // everything stale the launching shell happens to carry
+            .env("SACCADE_INCARNATION_SEQ", "999")
+            .env("SACCADE_TASK", "t-0")
+            .env("SACCADE_WORKSPACE", "/nowhere")
+            .env("SACCADE_DB", "/stale/routing.db")
+            .env("SACCADE_CLI", "/stale/sac");
+        // the scrub removes rather than empties: these names carry clap env fallbacks
+        for key in [
+            "SACCADE_REPO",
+            "SACCADE_DB",
+            "SACCADE_SERVER",
+            "SACCADE_ACTOR",
+            "SACCADE_TASK",
+            "SACCADE_INCARNATION_SEQ",
+            "SACCADE_WORKSPACE",
+            "SACCADE_LAUNCH_TOKEN",
+        ] {
+            cmd.env_remove(key);
+        }
+        let out = cmd.output().expect("spawn sac");
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let launch_args = |extra: &[&str]| -> Vec<String> {
+        let mut full: Vec<String> = [
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "launch".to_string(),
+            "--here".to_string(),
+            "--workspace".to_string(),
+            workspace.to_str().unwrap().to_string(),
+            "--".to_string(),
+            "the here run".to_string(),
+        ]
+        .to_vec();
+        full.extend(extra.iter().map(|s| s.to_string()));
+        full
+    };
+
+    // the child's own status is the command's, and the session ran the
+    // shared composition: routing, scrub, argv, and cwd all arrived
+    let _ = std::fs::remove_file(&dump_path);
+    let (code, out, err) = run(&launch_args(&[]), "7");
+    assert_eq!(code, Some(7), "stdout: {out}\nstderr: {err}");
+    assert!(out.is_empty(), "the quiet door reports nothing: {out}");
+    let dump = std::fs::read_to_string(&dump_path).unwrap();
+    assert!(dump.contains("argv: the here run"), "{dump}");
+    assert!(
+        dump.contains(&format!("pwd: {}", workspace.display())),
+        "{dump}"
+    );
+    assert!(
+        dump.contains(&format!(
+            "SACCADE_ACTOR={}",
+            command_label(&pi.display().to_string())
+        )),
+        "{dump}"
+    );
+    assert!(
+        dump.contains(&format!("SACCADE_SERVER={base_url}")),
+        "{dump}"
+    );
+    assert!(
+        dump.contains(&format!("SACCADE_REPO={}", root.display())),
+        "{dump}"
+    );
+    assert!(
+        dump.contains(&format!(
+            "SACCADE_CLI={}",
+            std::fs::canonicalize(env!("CARGO_BIN_EXE_sac"))
+                .unwrap()
+                .display()
+        )),
+        "{dump}"
+    );
+    assert!(
+        !dump.contains("SACCADE_TASK="),
+        "stale scope must not ride the launch: {dump}"
+    );
+    assert!(!dump.contains("SACCADE_INCARNATION_SEQ="), "{dump}");
+    assert!(!dump.contains("SACCADE_LAUNCH_TOKEN="), "{dump}");
+    assert!(
+        !dump.contains("/stale"),
+        "stale values never survive: {dump}"
+    );
+    assert!(
+        !dump.contains("SACCADE_WORKSPACE="),
+        "the stale workspace never rides: {dump}"
+    );
+    assert!(
+        !dump.contains("SACCADE_DB="),
+        "the stale db never rides: {dump}"
+    );
+    // the host was never asked: no worktree show, no terminal create
+    assert_eq!(
+        std::fs::read_to_string(&host_log).unwrap(),
+        "",
+        "the here arm asked the host"
+    );
+
+    // success is the child's own zero, and the json face lands after
+    // the run: the workspace named and the child's status
+    let _ = std::fs::remove_file(&dump_path);
+    let json_args = {
+        let mut full = launch_args(&[]);
+        // --json is global: it must sit before the trailing prompt
+        full.insert(4, "--json".to_string());
+        full
+    };
+    let (code, out, err) = run(&json_args, "0");
+    assert_eq!(code, Some(0), "stdout: {out}\nstderr: {err}");
+    let face = json_of(&out);
+    assert_eq!(
+        face["workspace"],
+        json!(workspace.display().to_string()),
+        "{out}"
+    );
+    assert_eq!(face["exit"], 0, "{out}");
+
+    // the resume arm composes identically and runs here: the saved
+    // session's argv carries --session and its locator
+    let saved = db.parent().unwrap().join("here-resumee.jsonl");
+    std::fs::write(
+        &saved,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"hereresume01\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "hereresume01", "session_file": saved.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let resume_num = json_of(&body)["num"].as_u64().unwrap();
+    let guard = PathBuf::from(
+        json_of(&body)["guard"]
+            .as_str()
+            .expect("the attach names the guard"),
+    );
+    let resume_args = |extra: &[&str]| -> Vec<String> {
+        let mut full: Vec<String> = [
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "launch".to_string(),
+            "--here".to_string(),
+            "--resume".to_string(),
+            format!("i-{resume_num}"),
+        ]
+        .to_vec();
+        full.extend(extra.iter().map(|s| s.to_string()));
+        full
+    };
+    let _ = std::fs::remove_file(&dump_path);
+    let (code, out, err) = run(&resume_args(&[]), "0");
+    assert_eq!(code, Some(0), "stdout: {out}\nstderr: {err}");
+    let dump = std::fs::read_to_string(&dump_path).unwrap();
+    assert!(
+        dump.contains("--session hereresume01 --session-dir"),
+        "{dump}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&host_log).unwrap(),
+        "",
+        "the here resume asked the host"
+    );
+
+    // the busy preflight refuses a live holder before anything runs here
+    use std::os::fd::AsRawFd;
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&guard)
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let (code, _out, err) = run(&resume_args(&[]), "0");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("already held"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(&host_log).unwrap(),
+        "",
+        "a busy here resume asked the host"
+    );
+    drop(held);
+
+    // the host arm's composition refusals hold here, before any run
+    let (code, _out, err) = run(
+        &[
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "launch".to_string(),
+            "--here".to_string(),
+            "--ask".to_string(),
+            "come look".to_string(),
+        ],
+        "0",
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("--ask"), "{err}");
+    let (code, _out, err) = run(
+        &[
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "launch".to_string(),
+            "--here".to_string(),
+            "--new".to_string(),
+            "provisioned".to_string(),
+        ],
+        "0",
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("--workspace"), "{err}");
+    let (code, _out, err) = run(
+        &[
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "launch".to_string(),
+            "--here".to_string(),
+        ],
+        "0",
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("launch needs an explicit choice"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(&host_log).unwrap(),
+        "",
+        "the refusals asked the host"
+    );
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
 #[test]
 fn the_delivery_bridge_parks_wakes_and_reports_liveness() {
     let bin = env!("CARGO_BIN_EXE_sac");
@@ -8456,6 +8762,10 @@ async fn the_cleaned_stage_guards_launch_workbench_and_switch() {
     sh(&rig.root, &["worktree", "add", &ws, &guard_branch]);
     let (ok, _out, err) = rig_sac(&rig, &["launch", "--workspace", &ws]);
     assert!(!ok, "a cleaned workspace took a launch: {err}");
+    assert!(err.contains("recorded Cleaned"), "{err}");
+    // the same-terminal arm rides the same stage guard
+    let (ok, _out, err) = rig_sac(&rig, &["launch", "--workspace", &ws, "--here"]);
+    assert!(!ok, "a cleaned workspace took a here launch: {err}");
     assert!(err.contains("recorded Cleaned"), "{err}");
     let (status, body) = post_json(
         &rig.url,

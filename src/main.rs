@@ -270,6 +270,12 @@ enum Cmd {
         /// a positional prompt and with --resume
         #[arg(long, conflicts_with = "resume")]
         ask: Option<String>,
+        /// Run the composed session in this terminal: a foreground
+        /// child of the invoking shell, no host terminal asked, and
+        /// the door returns when the session exits with its status as
+        /// this command's. Composes with --workspace and --resume
+        #[arg(long)]
+        here: bool,
         /// The initial prompt, quoted; native human input when omitted
         #[arg(last = true)]
         prompt: Vec<String>,
@@ -449,6 +455,13 @@ fn main() -> ExitCode {
         return skill_door(cli.json, *verb);
     }
 
+    // the same-terminal launch owns the process exit - the composed
+    // session's own status is this command's - so it never rides the
+    // ordinary success/failure face
+    if let Cmd::Launch { here: true, .. } = &cli.command {
+        return launch_here_door(&cli);
+    }
+
     match run(&cli) {
         Ok(output) => {
             if !output.is_empty() {
@@ -456,18 +469,22 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(fail) => {
-            if cli.json {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({ "error": fail.code(), "detail": fail.to_string() })
-                );
-            } else {
-                eprintln!("error: {fail}");
-            }
-            ExitCode::FAILURE
-        }
+        Err(fail) => fail_exit(&cli, &fail),
     }
+}
+
+/// The shared refusal face: the json envelope or the error line, then
+/// the failed exit.
+fn fail_exit(cli: &Cli, fail: &Fail) -> ExitCode {
+    if cli.json {
+        eprintln!(
+            "{}",
+            serde_json::json!({ "error": fail.code(), "detail": fail.to_string() })
+        );
+    } else {
+        eprintln!("error: {fail}");
+    }
+    ExitCode::FAILURE
 }
 
 #[derive(Debug)]
@@ -758,6 +775,9 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             base,
             ask,
             prompt,
+            // --here dispatches in main before run: the child's own
+            // status is the command's, which this face cannot express
+            here: _,
         } => {
             if let Some(labeled) = new.as_deref().map(str::to_owned) {
                 let label = (!labeled.is_empty()).then_some(labeled.as_str());
@@ -1756,17 +1776,104 @@ fn launch_door(
     ))
 }
 
-/// One compose launch through the host: the exact workspace, the
-/// terminal handle, the command line. Mechanics only - rendering and
-/// any follow-on act belong to the calling door.
-fn launch_native(
+/// The same-terminal launch door: the composed session runs as a
+/// foreground child of the invoking terminal - the same routing,
+/// direnv equip, and scrub the host arm composes, with no host ask at
+/// all: no discovery wait, no terminal create, no handle. The door
+/// returns when the child exits and the child's own status is the
+/// command's; success is quiet, because the session's own output was
+/// the report.
+fn launch_here_door(cli: &Cli) -> ExitCode {
+    let Cmd::Launch {
+        workspace,
+        resume,
+        new,
+        ask,
+        prompt,
+        ..
+    } = &cli.command
+    else {
+        unreachable!("the here door dispatches only for launches");
+    };
+    // --ask stays a host-terminal launch: peer creation wants its own
+    // terminal; --new is not one of the same-terminal compositions
+    if ask.is_some() {
+        return fail_exit(
+            cli,
+            &Fail::Usage(
+                "launch --here runs the composed session in the caller's own terminal; \
+                 --ask stays a host-terminal launch because peer creation wants its own terminal"
+                    .into(),
+            ),
+        );
+    }
+    if new.is_some() {
+        return fail_exit(
+            cli,
+            &Fail::Usage(
+                "launch --here composes with --workspace <dir> or --resume i-<n>; \
+                 --new provisions through the server and launches through a host terminal"
+                    .into(),
+            ),
+        );
+    }
+    match launch_here_run(cli, workspace.as_deref(), resume.as_deref(), prompt) {
+        Ok((dir_str, exit)) => {
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({"workspace": dir_str, "exit": exit.status()})
+                );
+            }
+            match exit.status() {
+                0 => ExitCode::SUCCESS,
+                code => ExitCode::from(code as u8),
+            }
+        }
+        Err(fail) => fail_exit(cli, &fail),
+    }
+}
+
+/// The same-terminal mechanics: destination, shared composition,
+/// shared line, then the run in this terminal.
+fn launch_here_run(
+    cli: &Cli,
+    workspace: Option<&std::path::Path>,
+    resume: Option<&str>,
+    prompt: &[String],
+) -> Result<(String, host::ChildExit), Fail> {
+    let destination = resolve_destination(cli)?;
+    let composed = compose_launch(cli, &destination, workspace, resume, prompt, None)?;
+    let (dir_str, command) = launch_line(&composed)?;
+    let exit = host::run_in_caller_terminal(&command)
+        .map_err(|e| Fail::Usage(format!("the composed session could not start: {e}")))?;
+    Ok((dir_str, exit))
+}
+
+/// One composed launch, ready for a submission arm: the routing, the
+/// exact workspace, the argv, the terminal title, and the resumed
+/// session's guard when the resume arm built one. Mechanics only -
+/// the host arm submits it, the same-terminal arm runs it.
+struct LaunchComposition {
+    routing: String,
+    dir: std::path::PathBuf,
+    argv: Vec<String>,
+    title: String,
+    guard: Option<PathBuf>,
+}
+
+/// Compose one launch: the routing line, the exact workspace and
+/// argv, the terminal title, and the resume arm's guard preflight.
+/// Both submission arms share this head, so no arm grows its own
+/// launch dialect.
+fn compose_launch(
     cli: &Cli,
     destination: &Destination,
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
     prompt: &[String],
     launch_token: Option<&str>,
-) -> Result<(String, String), Fail> {
+) -> Result<LaunchComposition, Fail> {
     let url = server_url(destination, "launch")?;
     let pi = host::pinned_pi().map_err(|e| Fail::Usage(e.to_string()))?;
     let repo = resolve_repo(cli)?;
@@ -1910,15 +2017,31 @@ fn launch_native(
             ));
         }
     };
-    let dir_str = dir.display().to_string();
-    // the shared construction: the directory is re-validated (a launch
-    // selects, it never creates), direnv resolves before anything is
-    // submitted, and the host is asked only for a terminal the door can
-    // equip. The reply is the host's acceptance of a submission -
-    // attach and execution belong to the session itself.
-    let (dir_str, command) = host::launch_command(Path::new(&dir_str), &routing, &argv)
-        .map_err(|e| Fail::Usage(e.to_string()))?;
-    let terminal = host::submit_terminal(&dir_str, &title, &command)
+    Ok(LaunchComposition {
+        routing,
+        dir,
+        argv,
+        title,
+        guard: handoff,
+    })
+}
+
+/// One compose launch through the host: the exact workspace, the
+/// terminal handle, the command line. Mechanics only - rendering and
+/// any follow-on act belong to the calling door. The same-terminal
+/// arm composes identically and runs the line itself instead of
+/// asking the host.
+fn launch_native(
+    cli: &Cli,
+    destination: &Destination,
+    workspace: Option<&std::path::Path>,
+    resume: Option<&str>,
+    prompt: &[String],
+    launch_token: Option<&str>,
+) -> Result<(String, String), Fail> {
+    let composed = compose_launch(cli, destination, workspace, resume, prompt, launch_token)?;
+    let (dir_str, command) = launch_line(&composed)?;
+    let terminal = host::submit_terminal(&dir_str, &composed.title, &command)
         .map_err(|e| Fail::Usage(e.to_string()))?;
     // the rigorous handoff, after the submission: this door's success
     // is the launched session's guard being held - observed, bounded,
@@ -1927,7 +2050,7 @@ fn launch_native(
     // or the bound passes; a bound pass reports failure and the mail
     // stays relaunchable, with a late attacher refused at its own
     // attach by the live holder's guard.
-    if let Some(guard) = handoff {
+    if let Some(guard) = composed.guard {
         let deadline = std::time::Instant::now()
             + std::time::Duration::from_secs(saccade::activate::GUARD_HANDOFF_SECS);
         loop {
@@ -1945,6 +2068,16 @@ fn launch_native(
         }
     }
     Ok((dir_str, terminal))
+}
+
+/// The line the executing shell runs: the directory re-validated (a
+/// launch selects, it never creates) and direnv resolved before either
+/// arm acts - the same-terminal arm runs it here, the host arm submits
+/// it to a terminal the host creates.
+fn launch_line(composed: &LaunchComposition) -> Result<(String, String), Fail> {
+    let dir_str = composed.dir.display().to_string();
+    host::launch_command(Path::new(&dir_str), &composed.routing, &composed.argv)
+        .map_err(|e| Fail::Usage(e.to_string()))
 }
 
 /// The cleaned-workspace launch guard: a recorded workspace whose
