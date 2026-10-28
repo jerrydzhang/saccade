@@ -5,6 +5,7 @@
 //! launch dialect. Nothing here touches the record; a submission's
 //! success is the host's answer, never a claim that a session runs.
 
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 
 /// A launch construction or host-submission refusal. The Display text
@@ -226,6 +227,43 @@ pub fn launch_command(
         dir_str.clone(),
         workspace_launch_command(&direnv, &dir_str, routing, argv),
     ))
+}
+
+/// One composed line's answer when it ran in the caller's own
+/// terminal: the child's own exit code, or the signal that ended it.
+#[derive(Debug, PartialEq)]
+pub enum ChildExit {
+    Exited(i32),
+    Signalled(i32),
+}
+
+impl ChildExit {
+    /// The status a shell would report for this exit: the child's own
+    /// code when it exited, 128 plus the signal number when a signal
+    /// ended it. An unknown ending is never a success.
+    pub fn status(&self) -> i32 {
+        match self {
+            ChildExit::Exited(code) => *code,
+            ChildExit::Signalled(sig) => 128 + sig,
+        }
+    }
+}
+
+/// The same-terminal arm: run one composed launch line as a foreground
+/// child of the invoking terminal, stdio inherited. The host is never
+/// asked - no discovery wait, no terminal create - and the caller
+/// waits the child out; the answer is the child's own. sh executes the
+/// line because the composition is POSIX shell, the same grammar the
+/// host terminal would type.
+pub fn run_in_caller_terminal(command: &str) -> Result<ChildExit, std::io::Error> {
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .status()?;
+    Ok(match status.code() {
+        Some(code) => ChildExit::Exited(code),
+        None => ChildExit::Signalled(status.signal().unwrap_or(1)),
+    })
 }
 
 fn orca(args: &[&str]) -> Result<std::process::Output, std::io::Error> {
@@ -551,6 +589,23 @@ mod test {
         assert!(empty.is_empty());
         let malformed = terminal_handles(&answer("[{}]"));
         assert!(malformed.is_err(), "a malformed row is not absence");
+    }
+
+    #[test]
+    fn the_same_terminal_arm_reports_the_childs_own_exit_code() {
+        let success = run_in_caller_terminal("true").unwrap();
+        assert_eq!(success, ChildExit::Exited(0));
+        assert_eq!(success.status(), 0);
+        let failed = run_in_caller_terminal("exit 7").unwrap();
+        assert_eq!(failed, ChildExit::Exited(7));
+        assert_eq!(failed.status(), 7);
+    }
+
+    #[test]
+    fn the_same_terminal_arm_reports_a_signal_the_way_a_shell_would() {
+        let signalled = run_in_caller_terminal("kill -TERM $$").unwrap();
+        assert_eq!(signalled, ChildExit::Signalled(15));
+        assert_eq!(signalled.status(), 143);
     }
 
     #[test]
