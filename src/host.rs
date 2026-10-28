@@ -298,9 +298,6 @@ pub fn submit_terminal(dir: &str, title: &str, command: &str) -> Result<String, 
 // and metadata erasure are not ours: git's own checkout removal is,
 // and the visible read contract rides it.
 
-/// The host's terminal handles for one exact workspace, from its own
-/// list door. selector_not_found is the host naming zero terminals;
-/// any other failure is unverified, never empty.
 /// The handles from a parsed terminal-list answer: every row must name
 /// a non-empty string handle, or the whole answer is unverified - a
 /// row the codec cannot read is uncertainty, never absence. The
