@@ -1009,6 +1009,112 @@ def main():
             wait_submission(page, 'no contributions')
             context.close()
 
+            # ratified arrow behavior on a thread: Up/Down keep the
+            # browser's own scrolling and select the card holding the
+            # viewport center, geometrically and without snapping; wheel
+            # and passive restorations never select, and j/k plus explicit
+            # links keep their own semantics
+            server.cli('create', 'task', 'The arrow scroll survey')
+            arrow_task = next(t for t in request(base + '/api/v1/workbench')[1]['tasks'] if t['name'] == 'The arrow scroll survey')['id']
+            server.cli('comment', f't-{arrow_task}', '--title', 'The arrow opener', 'A short opener card for the arrow survey.')
+            server.cli('comment', f't-{arrow_task}', '--title', 'The tall arrow card', 'A long body that keeps the viewport center inside one card while the arrows travel through it. ' * 120)
+            server.cli('comment', f't-{arrow_task}', '--title', 'The arrow closer', 'A short closer card for the arrow survey.')
+            arrow_comments = [c['id'] for c in request(base + '/api/v1/workbench')[1]['comments'] if c['home'] == arrow_task]
+            opener_id, tall_id, closer_id = arrow_comments[0], arrow_comments[1], arrow_comments[2]
+
+            def settle_scroller(selector):
+                # the native arrow animation runs a handful of frames;
+                # wait until the scroller has stood still across three
+                page.wait_for_function('''(sel) => new Promise((done) => {
+                    const node = document.querySelector(sel);
+                    let last = node.scrollTop, still = 0;
+                    const step = () => {
+                        if (node.scrollTop === last) { if (++still >= 3) return done(true); }
+                        else { last = node.scrollTop; still = 0; }
+                        requestAnimationFrame(step);
+                    };
+                    requestAnimationFrame(step);
+                })''', arg=selector)
+
+            context = browser.new_context(viewport={'width': 1500, 'height': 700})
+            page = context.new_page(); ready(page, base)
+            page.goto(base + f'/t/{arrow_task}'); page.wait_for_function('window.workbenchUI !== undefined')
+            reader_top = lambda: page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop')
+            selected_card = lambda: page.locator('.pane.active .thread-card.selected').get_attribute('data-comment')
+            # the independent center oracle: the card containing the
+            # viewport center, clamped to an end card outside the cards
+            center_card = '''() => {
+                const r = document.querySelector(".pane.active .reading");
+                const c = r.getBoundingClientRect().top + r.clientHeight / 2;
+                const cards = [...r.querySelectorAll(".thread-card")];
+                const hit = cards.find((n) => { const b = n.getBoundingClientRect(); return b.top <= c && c < b.bottom; });
+                return (hit ?? (c < cards[0].getBoundingClientRect().top ? cards[0] : cards[cards.length - 1]))?.dataset.comment ?? null;
+            }'''
+            page.locator('.pane.active .reading').focus()
+            check(page.locator('.pane.active .thread-card.selected').count() == 0, 'the arrow survey thread opens with no card selected')
+            before = reader_top()
+            page.keyboard.press('ArrowDown')
+            settle_scroller('.pane.active .reading')
+            top = reader_top()
+            check(top > before and top - before <= 120, f'one native arrow press travels its own small step, not a card jump ({before} -> {top})')
+            check(selected_card() == page.evaluate(center_card), 'the arrow-selected card is the one holding the viewport center')
+            for _ in range(30):
+                if selected_card() == tall_id:
+                    break
+                page.keyboard.press('ArrowDown')
+                settle_scroller('.pane.active .reading')
+            check(selected_card() == tall_id, 'the long card selects while its body covers the viewport center')
+            within = reader_top()
+            page.keyboard.press('ArrowDown')
+            settle_scroller('.pane.active .reading')
+            after = reader_top()
+            check(selected_card() == tall_id, 'the long card stays selected while scrolling within it')
+            check(0 < after - within <= 120, f'the native step inside a long card stays small ({within} -> {after})')
+            held = selected_card()
+            page.mouse.move(700, 350)
+            page.mouse.wheel(0, 300)
+            settle_scroller('.pane.active .reading')
+            check(reader_top() > after and selected_card() == held, 'wheel scrolling moves the thread but never retargets the selection')
+            page.keyboard.press('k')
+            page.wait_for_function('(want) => document.querySelector(".pane.active .thread-card.selected")?.dataset.comment === want', arg=opener_id)
+            check(page.evaluate('''() => { const r = document.querySelector(".pane.active .reading"); const a = document.querySelector(".pane.active .thread-card.selected").getBoundingClientRect(); const b = r.getBoundingClientRect(); return a.top >= b.top - 1 && a.bottom <= b.bottom + 1; }'''), 'k from an arrow selection still steps and scrolls its card fully into view')
+            page.keyboard.press('j')
+            page.wait_for_function('(want) => document.querySelector(".pane.active .thread-card.selected")?.dataset.comment === want', arg=tall_id)
+            settle_scroller('.pane.active .reading')
+            before_hash_scroll = reader_top()
+            page.evaluate(f"location.hash = '#{closer_id}'")
+            page.wait_for_function('(want) => document.querySelector(".pane.active .thread-card.selected")?.dataset.comment === want', arg=closer_id)
+            # the explicit scroll rides a requestAnimationFrame after the
+            # selection lands; a card near the thread end stops at the
+            # maximum scroll position, fully in view
+            page.wait_for_function('''() => { const a = document.querySelector(".pane.active .thread-card.selected"); if (!a) return false; const b = a.getBoundingClientRect(), r = document.querySelector(".pane.active .reading").getBoundingClientRect(); return b.top >= r.top - 1 && b.bottom <= r.bottom + 1; }''')
+            check(selected_card() == closer_id and reader_top() > before_hash_scroll, 'an explicit deep link replaces arrow tracking and scrolls its card into view')
+            held = selected_card()
+            page.keyboard.press('Shift+ArrowDown')
+            settle_scroller('.pane.active .reading')
+            check(selected_card() == held, 'a modified arrow neither selects nor steers')
+            held_scroll = reader_top()
+            server.cli('comment', f't-{arrow_task}', '--title', 'The arrow landing', 'This card lands under a live arrow selection.')
+            page.wait_for_function('() => document.querySelectorAll(".pane.active .thread-card").length === 4')
+            page.wait_for_timeout(150)
+            check(selected_card() == held, 'a landing never retargets an arrow-driven selection')
+            check(abs(reader_top() - held_scroll) <= 2, 'the landing keeps the reading offset under the arrow selection')
+            page.keyboard.press('G')
+            settle_scroller('.pane.active .reading')
+            held = selected_card(); boundary_scroll = reader_top()
+            page.keyboard.press('ArrowDown')
+            settle_scroller('.pane.active .reading')
+            check(reader_top() == boundary_scroll and selected_card() == held, 'a boundary arrow press neither scrolls nor selects')
+            page.mouse.move(700, 350)
+            page.mouse.wheel(0, -240)
+            settle_scroller('.pane.active .reading')
+            check(reader_top() < boundary_scroll and selected_card() == held, 'scrolling after a boundary press never selects: no reactive state was left behind')
+            leader(page, 'uv')
+            check(state(page)['mode'] == 'Normal' and page.locator('.pane.active .reading').is_hidden(), 'Space uv opens Source under the arrow selection')
+            leader(page, 'uv')
+            check(state(page)['mode'] == 'View' and selected_card() == held, 'returning to View keeps the arrow-driven selection')
+            context.close()
+
             # home: the ratified activity surfaces - inclusion, ordering,
             # first-pass bounds with Show more, selected-card navigation,
             # and layout that reads the pane's own space
@@ -1138,6 +1244,84 @@ def main():
             page.wait_for_function('document.querySelector(".pane.active .thread-card") !== null')
             check(page.locator('.pane.active .thread-card.selected').count() == 0, 'an artifact entry opens the thread with no card selected')
             check(page.locator('.pane.active .reading .thread-meta').first.inner_text().startswith('t-'), 'standalone thread reading is unchanged beside it')
+            context.close()
+
+            # home: the ratified independent sections - h/l choose with
+            # real keyboard focus, j/k scrolls the chosen section, native
+            # Up/Down scroll the focused section, and both offsets plus
+            # the chosen section survive rebuilds, reparents, and reload
+            context = browser.new_context(viewport={'width': 1500, 'height': 480})
+            page = context.new_page(); ready(page, base)
+            section_offset = lambda section: page.evaluate(f'() => document.querySelector(".pane.active .home-{section} .home-list").scrollTop')
+            chosen = lambda section: page.evaluate(f'() => document.querySelector(".pane.active .home-{section} h2").classList.contains("chosen")')
+            focused_section = lambda: page.evaluate('() => document.activeElement?.closest(".home-activity, .home-tasks")?.classList[0] ?? null')
+            check(page.locator('.pane.active .home-surfaces').evaluate('node => getComputedStyle(node).gridTemplateColumns.split(" ").length') == 2, 'the wide pane keeps tasks beside activity under the section scrollers')
+            page.locator('.pane.active .reading').focus()
+            check(focused_section() == 'home-activity' and chosen('activity') and not chosen('tasks'), 'home focus and the chosen treatment rest on activity before any choice')
+            page.keyboard.press('j'); page.keyboard.press('j')
+            page.wait_for_function('(n) => document.querySelector(".pane.active .home-activity .home-list").scrollTop > n', arg=0)
+            activity_at = section_offset('activity')
+            check(page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop') == 0, 'home j scrolls the section while the outer reader stays put')
+            page.keyboard.press('l')
+            check(chosen('tasks') and not chosen('activity') and focused_section() == 'home-tasks', 'l chooses the tasks section with real keyboard focus')
+            check(section_offset('activity') == activity_at, 'choosing the other section leaves the first undisturbed')
+            page.keyboard.press('j')
+            page.wait_for_function('(n) => document.querySelector(".pane.active .home-tasks .home-list").scrollTop > n', arg=0)
+            tasks_at = section_offset('tasks')
+            check(section_offset('activity') == activity_at, 'tasks j scrolls only the tasks section')
+            page.keyboard.press('h')
+            check(chosen('activity') and focused_section() == 'home-activity', 'h returns the choice and the focus to activity')
+            check(section_offset('activity') == activity_at and section_offset('tasks') == tasks_at, 'h and l preserve both section offsets')
+            # a synthetic click: Playwright's own actionability scroll
+            # would move the list and be recorded as a real offset before
+            # the rebuild ever runs
+            page.locator(pane + '.home-tasks button.home-more').evaluate('node => node.click()')
+            page.wait_for_function('(n) => document.querySelectorAll(".pane.active .home-tasks .home-entry").length > n', arg=10)
+            page.wait_for_function('(n) => document.querySelector(".pane.active .home-tasks .home-list").scrollTop === n', arg=tasks_at)
+            check(section_offset('activity') == activity_at and section_offset('tasks') == tasks_at, 'a Show more rebuild preserves both section offsets')
+            check(chosen('activity'), 'a Show more rebuild keeps the chosen section')
+            server.cli('comment', 't-1', '--title', 'The section landing neighbor', 'A record lands while both home sections stand scrolled and one is chosen.')
+            landing_cursor = request(base + '/api/v1/workbench')[1]['cursor']
+            page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=landing_cursor)
+            page.wait_for_timeout(150)
+            check(section_offset('activity') == activity_at and section_offset('tasks') == tasks_at, 'a landing preserves both section offsets')
+            check(chosen('activity'), 'a landing keeps the chosen section')
+            page.keyboard.press('l')
+            check(chosen('tasks') and focused_section() == 'home-tasks', 'l re-chooses tasks before leaving home')
+            finder(page, 'cursor')
+            page.keyboard.press('Enter')
+            check(draft(page)['id'] == 't-0', 'the pane leaves home for a task')
+            command(page, 'home')
+            page.wait_for_selector('.pane.active .home-surfaces')
+            page.wait_for_function('(n) => document.querySelector(".pane.active .home-tasks .home-list").scrollTop === n', arg=tasks_at)
+            check(chosen('tasks') and focused_section() == 'home-tasks', 'revisiting home restores the chosen section with its focus')
+            check(section_offset('activity') == activity_at, 'revisiting home restores the other section offset')
+            leader(page, 'wv')
+            page.wait_for_selector('.pane:not(.active) .home-surfaces')
+            page.wait_for_timeout(200)
+            check(abs(section_offset('tasks') - tasks_at) <= 2, 'a split re-parent carries the chosen section offset into the new pane')
+            leader(page, 'wo')
+            page.wait_for_timeout(200)
+            check(section_offset('activity') == activity_at and abs(section_offset('tasks') - tasks_at) <= 2, 'an only-pane re-parent preserves both section offsets')
+            page.reload(); page.wait_for_function('window.workbenchUI !== undefined')
+            page.wait_for_selector('.pane.active .home-surfaces')
+            page.wait_for_function('(n) => document.querySelector(".pane.active .home-tasks .home-list").scrollTop === n', arg=tasks_at)
+            check(chosen('tasks'), 'a reload restores the chosen section')
+            check(abs(section_offset('activity') - activity_at) <= 2, 'a reload restores the other section offset')
+            check(page.evaluate('() => getComputedStyle(document.querySelector(".pane.active .home-tasks h2.chosen")).color') == 'rgb(162, 195, 196)', 'the chosen heading wears the existing focus color')
+            page.locator('.pane.active .reading').focus()
+            check(focused_section() == 'home-tasks', 'home refocus lands on the chosen section list')
+            tasks_before = section_offset('tasks')
+            page.keyboard.press('ArrowDown')
+            settle_scroller('.pane.active .home-tasks .home-list')
+            check(section_offset('tasks') > tasks_before, 'native Up/Down scroll the genuinely focused section')
+            check(page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop') == 0, 'the outer reader never becomes the scroller on home')
+            page.keyboard.press('Escape'); page.keyboard.press(':')
+            page.wait_for_function('document.querySelector("#picker").open')
+            page.keyboard.type('Select recent')
+            labels = page.locator('#results button').all_inner_texts()
+            page.keyboard.press('Escape')
+            check(sum('Select recent activity on home' in label for label in labels) == 1 and sum('Select recently active tasks on home' in label for label in labels) == 1, 'the palette lists both home section commands')
             context.close()
 
             # registry parity: folds, reader scroll, and pane focus are
@@ -1845,14 +2029,19 @@ def main():
             check(revealed_after_more > revealed, 'Show more reveals older activity')
             page.locator('.pane.active .reading').focus()
             page.keyboard.press('G'); page.wait_for_timeout(150)
-            home_scroll = page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop')
+            # G rests the chosen activity section scrolled; the tasks
+            # section stands undisturbed beside it
+            home_scroll = page.evaluate('() => document.querySelector(".pane.active .home-activity .home-list").scrollTop')
+            task_scroll_before = page.evaluate('() => document.querySelector(".pane.active .home-tasks .home-list").scrollTop')
+            check(home_scroll > 0, 'the selected activity section rests scrolled to its bottom')
             server.cli('comment', f't-{live_id}', '--title', 'The home refresh neighbor', 'A record lands while the home surface stands revealed and scrolled.')
             home_cursor = request(base + '/api/v1/workbench')[1]['cursor']
             page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=home_cursor)
             page.wait_for_timeout(150)
             check('The home refresh neighbor' in page.locator('.pane.active .home-activity .home-entry').first.inner_text(), 'a landing re-renders the home activity newest first')
             check(page.locator('.pane.active .home-activity .home-entry').count() == revealed_after_more, 'a landing preserves the home reveal count')
-            check(abs(page.evaluate('() => document.querySelector(".pane.active .reading").scrollTop') - home_scroll) <= 2, 'a landing preserves the home reading scroll')
+            check(abs(page.evaluate('() => document.querySelector(".pane.active .home-activity .home-list").scrollTop') - home_scroll) <= 2, 'a landing preserves the selected section scroll')
+            check(page.evaluate('() => document.querySelector(".pane.active .home-tasks .home-list").scrollTop') == task_scroll_before, 'a landing preserves the undisturbed section scroll')
 
             if errors:
                 print('PAGE-ERRORS:', errors, flush=True)
