@@ -121,7 +121,7 @@ function commentText(source) {
 function published(id) {
   let data;
   if (id === "home") {
-    data = { id, kind: "home", title: "Home", text: "Saccade\n\nFind work, inspect contributions, and write with sources beside you.\n\n: opens commands\nSpace Space  find task, contribution, or local draft\nSpace sg  search recorded content\n, e  revise the focused contribution\n, a / , x  accept / reject the standing offer\n, t  title the focused draft\n, p  publish the focused draft\ngd  follow id or citation\ngr  show backlinks\nCtrl+O / Ctrl+I  jump backward / forward\nSpace nn  new note\nSpace nt  new task\nSpace nl  launch a session\n\nOpen only the buffers and panes you want." };
+    data = { id, kind: "home", title: "Home", text: "Saccade\n\nFind work, inspect contributions, and write with sources beside you.\n\n: opens commands\nSpace Space  find task, contribution, or local draft\nSpace sg  search recorded content\n, e  revise the focused contribution\n, a / , x  accept / reject the standing offer\n, t  title the focused draft\n, p  publish the focused draft\ngd  follow id or citation\ngr  show backlinks\nCtrl+O / Ctrl+I  jump backward / forward\nSpace nn  new note\nSpace nt  new task\nSpace nl  launch a session\nh / l  choose the home section; j / k scrolls it\n\nOpen only the buffers and panes you want." };
   } else if (id.startsWith("t-")) {
     const source = task(Number(id.slice(2)));
     if (!source) throw new Error("task is unavailable");
@@ -186,6 +186,18 @@ function isReading(viewId = bench.focus) {
 function threadFocused(viewId = bench.focus) {
   const pane = bench.views.get(viewId);
   return !!pane && bench.buffer(pane.bufferId).kind === "task" && isReading(viewId);
+}
+
+function homeFocused(viewId = bench.focus) {
+  const pane = bench.views.get(viewId);
+  return !!pane && bench.buffer(pane.bufferId).kind === "home" && isReading(viewId);
+}
+
+// home's chosen section, named by the scrollable list keyboard focus
+// rests on, so the browser's own arrow keys scroll it
+function homeScrollList(viewId = bench.focus) {
+  const section = presentation(viewId).homeSection ?? "activity";
+  return readers.get(viewId)?.querySelector(section === "tasks" ? ".home-tasks .home-list" : ".home-activity .home-list") ?? null;
 }
 
 function threadSelection(viewId = bench.focus) {
@@ -332,9 +344,14 @@ function mountEditor(viewId, node) {
   reader.tabIndex = 0;
   reader.setAttribute("aria-label", "Rendered document");
   host.append(reader); readers.set(viewId, reader);
-  reader.addEventListener("focusin", () => { bench.focus = viewId; refreshChrome(); });
+  reader.addEventListener("focusin", () => { bench.focus = viewId; refreshChrome(); retargetHomeSectionFocus(viewId); });
   reader.addEventListener("scroll", () => {
     if (readers.get(viewId) === reader && isReading(viewId) && !reader.pendingSignature) { presentation(viewId).scrollTop = reader.scrollTop; persist(); }
+  });
+  reader.addEventListener("scrollend", () => disarmArrowTracking(viewId));
+  reader.addEventListener("wheel", () => disarmArrowTracking(viewId), { passive: true });
+  reader.addEventListener("focusout", (event) => {
+    if (!reader.contains(event.relatedTarget)) disarmArrowTracking(viewId);
   });
   showPresentation(viewId);
   view.scrollDOM.addEventListener("scroll", () => { if (!isReading(viewId)) { remember(viewId); persist(); } });
@@ -352,6 +369,7 @@ function showPresentation(viewId) {
   reader.hidden = !reading;
   if (!reading) {
     reader.previewToken = null; reader.pendingSignature = null;
+    disarmArrowTracking(viewId);
     return;
   }
   if (buffer.kind === "task") {
@@ -456,6 +474,7 @@ function showThread(viewId, reader, buffer) {
   const selected = presentation(viewId).selected ?? null;
   const signature = JSON.stringify([buffer.text, selected]);
   if (reader.signature === signature) return;
+  disarmArrowTracking(viewId);
   const source = task(buffer.home);
   const meta = [`${buffer.id}  ${source.name}`, `state: ${source.state}`, `owner: ${source.owner ?? "none recorded"}`];
   if (source.explanation) meta.push(`explanation: ${source.explanation}`);
@@ -532,10 +551,13 @@ function showHome(viewId, reader, buffer) {
   const tasksShown = pane.tasksShown ?? TASKS_STEP;
   const signature = JSON.stringify([buffer.text, snapshot.cursor, activityShown, tasksShown]);
   if (reader.signature === signature) return;
+  disarmArrowTracking(viewId);
   const surfaces = el("div", undefined, "home-surfaces");
   const activity = el("section", undefined, "home-activity");
   activity.append(el("h2", "Recent activity"));
   const activityList = el("div", undefined, "home-list");
+  activityList.tabIndex = 0;
+  activityList.setAttribute("aria-label", "Recent activity");
   for (const entry of snapshot.recent_activity.slice(0, activityShown)) activityList.append(activityNode(entry));
   if (snapshot.recent_activity.length > activityShown) {
     const more = button("Show more", () => { pane.activityShown = activityShown + ACTIVITY_STEP; showPresentation(viewId); persist(); }, "Reveal older entries");
@@ -546,6 +568,8 @@ function showHome(viewId, reader, buffer) {
   const active = el("section", undefined, "home-tasks");
   active.append(el("h2", "Recently active tasks"));
   const taskList = el("div", undefined, "home-list");
+  taskList.tabIndex = 0;
+  taskList.setAttribute("aria-label", "Recently active tasks");
   for (const entry of snapshot.recently_active_tasks.slice(0, tasksShown)) taskList.append(recentTaskNode(entry));
   if (snapshot.recently_active_tasks.length > tasksShown) {
     const more = button("Show more", () => { pane.tasksShown = tasksShown + TASKS_STEP; showPresentation(viewId); persist(); }, "Reveal older entries");
@@ -553,6 +577,12 @@ function showHome(viewId, reader, buffer) {
     taskList.append(more);
   }
   active.append(taskList);
+  activityList.addEventListener("scroll", () => {
+    if (readers.get(viewId) === reader && isReading(viewId) && !reader.pendingSignature) { pane.activityScroll = activityList.scrollTop; persist(); }
+  });
+  taskList.addEventListener("scroll", () => {
+    if (readers.get(viewId) === reader && isReading(viewId) && !reader.pendingSignature) { pane.tasksScroll = taskList.scrollTop; persist(); }
+  });
   surfaces.append(activity, active);
   // a Show more click focuses its button and the re-render removes it:
   // keep focus on the reader or the pane's keys go dead
@@ -561,10 +591,17 @@ function showHome(viewId, reader, buffer) {
   // clamped scroll a re-render can fire is never taken for reading
   reader.pendingSignature = signature;
   reader.replaceChildren(surfaces);
+  markHomeSections(viewId);
   if (hadFocus) reader.focus({ preventScroll: true });
   reader.signature = signature;
   requestAnimationFrame(() => {
-    if (isReading(viewId)) reader.scrollTop = presentation(viewId).scrollTop;
+    if (isReading(viewId)) {
+      reader.scrollTop = presentation(viewId).scrollTop;
+      const restoredActivity = reader.querySelector(".home-activity .home-list");
+      const restoredTasks = reader.querySelector(".home-tasks .home-list");
+      if (restoredActivity && typeof pane.activityScroll === "number") restoredActivity.scrollTop = pane.activityScroll;
+      if (restoredTasks && typeof pane.tasksScroll === "number") restoredTasks.scrollTop = pane.tasksScroll;
+    }
     reader.pendingSignature = null;
   });
 }
@@ -651,8 +688,10 @@ function renderLayout() {
   const moved = new Map();
   for (const [id] of panes) {
     const reader = readers.get(id), view = editors.get(id);
+    if (reader) disarmArrowTracking(id);
     if (reader && isReading(id)) {
-      if (!reader.pendingSignature) moved.set(id, { reader, scroll: reader.scrollTop });
+      if (!reader.pendingSignature) moved.set(id, { reader, scroll: reader.scrollTop,
+        sections: [...reader.querySelectorAll(".home-list")].map((list) => ({ list, top: list.scrollTop })) });
     } else if (view && !view.dom.hidden) {
       moved.set(id, { view, bufferId: view.bufferId, scroll: view.scrollDOM.scrollTop });
     }
@@ -662,6 +701,11 @@ function renderLayout() {
     const reader = readers.get(id), view = editors.get(id);
     if (move.reader) {
       if (reader === move.reader && isReading(id) && !reader.pendingSignature && reader.scrollTop !== move.scroll) reader.scrollTop = move.scroll;
+      if (reader === move.reader && isReading(id) && !reader.pendingSignature) {
+        for (const save of move.sections) {
+          if (save.list.isConnected && save.list.scrollTop !== save.top) save.list.scrollTop = save.top;
+        }
+      }
     } else if (view === move.view && view.bufferId === move.bufferId && !isReading(id) && view.scrollDOM.scrollTop !== move.scroll) {
       view.scrollDOM.scrollTop = move.scroll;
     }
@@ -698,6 +742,9 @@ function openBuffer(id, viewId = bench.focus, preferred = "view", selected) {
 }
 
 function scrollCardIntoView(viewId, id) {
+  // an explicit selection replaces any arrow-driven intent before its
+  // own scrolling can be mistaken for one
+  disarmArrowTracking(viewId);
   requestAnimationFrame(() => readers.get(viewId)?.querySelector(`[data-comment="${id}"]`)?.scrollIntoView({ block: "start" }));
 }
 
@@ -783,6 +830,7 @@ function togglePresentation() {
   persist();
   status(reading ? `Source: ${editable(current()) ? "editable" : "read-only"} Vim text. Space uv returns to View.`
     : threadFocused() ? "View: j/k selects the next or previous contribution; Tab or mouse follows links. Space uv opens Source."
+    : current().kind === "home" ? "View: h/l choose the section, j/k scrolls it; Up/Down scroll the focused section. Space uv opens Source."
     : "View: j/k scroll; Tab or mouse selects links. Space uv opens Source.");
 }
 
@@ -1413,6 +1461,8 @@ const registry = [
   { id: "reader-bottom", label: "Scroll rendered pane to bottom", when: () => isReading(), run: () => scrollReader("bottom") },
   { id: "thread-next", label: "Select next contribution in the thread", when: threadFocused, run: () => selectCard(1) },
   { id: "thread-prev", label: "Select previous contribution in the thread", when: threadFocused, run: () => selectCard(-1) },
+  { id: "home-activity", label: "Select recent activity on home", when: homeFocused, run: () => selectHomeSection("activity") },
+  { id: "home-tasks", label: "Select recently active tasks on home", when: homeFocused, run: () => selectHomeSection("tasks") },
   { id: "focus-h", label: "Focus pane left", when: () => bench.views.size > 1, run: () => focusLeaf(-1) },
   { id: "focus-l", label: "Focus pane right", when: () => bench.views.size > 1, run: () => focusLeaf(1) },
   { id: "focus-k", label: "Focus pane above", when: () => bench.views.size > 1, run: () => focusLeaf(-1) },
@@ -1443,12 +1493,21 @@ function foldHere(action) {
   if (!sectionFold(currentEditor(), action)) status("No Markdown section here.");
 }
 
+// home's chosen section scrolls itself, so j/k and G/gg step that
+// section; every other reading kind keeps the reader scroller
 function scrollReader(amount) {
-  const reader = readers.get(bench.focus);
-  if (!reader) return;
-  reader.scrollTop = amount === "top" ? 0 : amount === "bottom" ? reader.scrollHeight
-    : reader.scrollTop + amount;
-  presentation().scrollTop = reader.scrollTop;
+  const list = homeFocused() ? homeScrollList() : null;
+  const scroller = list ?? readers.get(bench.focus);
+  if (!scroller) return;
+  const pane = presentation();
+  const stored = (pane.homeSection ?? "activity") === "tasks" ? pane.tasksScroll : pane.activityScroll;
+  // a pending rebuild's fresh list holds no reading position; step from the stored offset
+  const base = list && readers.get(bench.focus)?.pendingSignature && typeof stored === "number" ? stored : scroller.scrollTop;
+  scroller.scrollTop = amount === "top" ? 0 : amount === "bottom" ? scroller.scrollHeight
+    : base + amount;
+  if (!list) pane.scrollTop = scroller.scrollTop;
+  else if ((pane.homeSection ?? "activity") === "tasks") pane.tasksScroll = scroller.scrollTop;
+  else pane.activityScroll = scroller.scrollTop;
   persist();
 }
 
@@ -1460,14 +1519,108 @@ function selectCard(step) {
   if (!cards.length) return status("This thread has no contributions to select.");
   const at = cards.findIndex((c) => c.id === presentation().selected);
   const index = at === -1 ? 0 : Math.max(0, Math.min(cards.length - 1, at + step));
-  if (cards[index].id === presentation().selected) return;
-  presentation().selected = cards[index].id;
-  const reader = readers.get(bench.focus);
-  reader.querySelectorAll(".thread-card.selected").forEach((node) => node.classList.remove("selected"));
-  const card = reader.querySelector(`[data-comment="${cards[index].id}"]`);
-  card.classList.add("selected");
-  card.scrollIntoView({ block: "nearest" });
+  if (!markSelectedCard(bench.focus, cards[index].id)) return;
+  readers.get(bench.focus)?.querySelector(`[data-comment="${cards[index].id}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+function markSelectedCard(viewId, id) {
+  const pane = presentation(viewId);
+  if (pane.selected === id) return false;
+  pane.selected = id;
+  const reader = readers.get(viewId);
+  reader?.querySelectorAll(".thread-card.selected").forEach((node) => node.classList.remove("selected"));
+  reader?.querySelector(`[data-comment="${id}"]`)?.classList.add("selected");
   persist(); refreshChrome();
+  return true;
+}
+
+// the card holding the reader viewport center: cards tile without
+// vertical gaps, so containment is total - a long card stays selected
+// while the center travels inside it, and a center in the meta band or
+// the tail padding clamps to the nearest end card
+function centeredCard(reader) {
+  const center = reader.getBoundingClientRect().top + reader.clientHeight / 2;
+  const cards = [...reader.querySelectorAll(".thread-card")];
+  if (!cards.length) return null;
+  return cards.find((card) => {
+    const rect = card.getBoundingClientRect();
+    return rect.top <= center && center < rect.bottom;
+  }) ?? (center < cards[0].getBoundingClientRect().top ? cards[0] : cards.at(-1));
+}
+
+function selectCenteredCard(viewId) {
+  const reader = readers.get(viewId);
+  if (!reader || reader.pendingSignature) return;
+  const card = centeredCard(reader);
+  if (card) markSelectedCard(viewId, card.dataset.comment);
+}
+
+// Up/Down keep the browser's own scrolling and arm tracking of exactly
+// the animation they start: the loop selects the card at the animated
+// offset frame by frame and disarms itself, so no passive scroll -
+// restore, reflow, rebuild - ever retargets the selection. A boundary
+// press starts no animation and runs out on the still-frame horizon.
+function armArrowTracking(viewId) {
+  const reader = readers.get(viewId);
+  if (!reader || reader.arrowToken) return;
+  const token = {};
+  reader.arrowToken = token;
+  reader.arrowLast = reader.scrollTop;
+  reader.arrowStill = 0;
+  const step = () => {
+    if (reader.arrowToken !== token) return;
+    if (readers.get(viewId) !== reader || bench.focus !== viewId || !threadFocused(viewId)) { reader.arrowToken = null; return; }
+    if (reader.scrollTop !== reader.arrowLast) {
+      reader.arrowLast = reader.scrollTop;
+      reader.arrowStill = 0;
+      selectCenteredCard(viewId);
+    } else if (++reader.arrowStill > 6) { reader.arrowToken = null; return; }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function disarmArrowTracking(viewId) {
+  const reader = readers.get(viewId);
+  if (reader?.arrowToken) reader.arrowToken = null;
+}
+
+// h and l move real keyboard focus to the chosen section's scrollable
+// list, so the browser's own arrow keys scroll it natively
+function selectHomeSection(name) {
+  if (!homeFocused()) return;
+  presentation().homeSection = name;
+  markHomeSections(bench.focus);
+  homeScrollList(bench.focus)?.focus({ preventScroll: true });
+  persist(); refreshChrome();
+}
+
+function markHomeSections(viewId) {
+  const reader = readers.get(viewId);
+  if (!reader) return;
+  const section = presentation(viewId).homeSection ?? "activity";
+  reader.querySelector(".home-activity h2")?.classList.toggle("chosen", section === "activity");
+  reader.querySelector(".home-tasks h2")?.classList.toggle("chosen", section === "tasks");
+}
+
+function retargetHomeSectionFocus(viewId) {
+  const reader = readers.get(viewId);
+  if (!reader) return;
+  const active = document.activeElement;
+  // focus placement chooses: the heading, j/k, and the browser's own
+  // arrows all drive whichever section holds real focus
+  if (active && active !== reader && reader.contains(active)) {
+    const pane = presentation(viewId);
+    const section = active.closest(".home-tasks") ? "tasks" : "activity";
+    if ((pane.homeSection ?? "activity") !== section) {
+      pane.homeSection = section;
+      markHomeSections(viewId);
+      persist();
+    }
+    return;
+  }
+  if (active !== reader) return;
+  homeScrollList(viewId)?.focus({ preventScroll: true });
 }
 
 function focusLeaf(step) {
@@ -1889,10 +2042,20 @@ document.addEventListener("keydown", (event) => {
   }
   if (isReading()) {
     const reader = readers.get(bench.focus);
-    if (["j", "k", "G"].includes(event.key) || (pendingG && event.key === "g")) {
+    const arrow = event.key === "ArrowDown" || event.key === "ArrowUp";
+    if (!arrow) disarmArrowTracking(bench.focus);
+    if (arrow && !event.shiftKey && threadFocused()) {
+      // the browser keeps the key: its native scroll animation is what
+      // the armed tracking loop rides
+      armArrowTracking(bench.focus);
+      return;
+    }
+    const homeKey = (event.key === "h" || event.key === "l") && homeFocused();
+    if (homeKey || ["j", "k", "G"].includes(event.key) || (pendingG && event.key === "g")) {
       event.preventDefault(); event.stopImmediatePropagation();
       const threadKey = (event.key === "j" || event.key === "k") && threadFocused();
-      runCommand(threadKey ? (event.key === "j" ? "thread-next" : "thread-prev")
+      runCommand(homeKey ? (event.key === "h" ? "home-activity" : "home-tasks")
+        : threadKey ? (event.key === "j" ? "thread-next" : "thread-prev")
         : event.key === "G" ? "reader-bottom" : (pendingG && event.key === "g") ? "reader-top"
         : event.key === "j" ? "reader-down" : "reader-up");
       pendingG = false; return;

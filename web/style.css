@@ -360,16 +360,44 @@ dialog footer span { font-size: 11px; color: var(--muted); }
   box-shadow: inset 3px 0 var(--focus);
 }
 
-/* home: recent activity first; recently active tasks below on a
-   narrow pane, beside it on a wide one. Chronological record facts
+/* home: recent activity first; recently active tasks beside it on a
+   wide pane, below on a narrow one, each section scrolling itself
+   inside the pane in either arrangement. Chronological record facts
    only - no totals, no badges; the reveal bounds live in the pane. */
-.home-surfaces { display: grid; grid-template-columns: minmax(0, 1fr); }
+.reading:has(> .home-surfaces) {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 18px;
+}
+.home-surfaces {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.home-activity, .home-tasks {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
 .home-tasks { border-top: 1px solid var(--line-soft); margin-top: 22px; padding-top: 4px; }
 @container (min-width: 760px) {
-  .home-surfaces { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0 30px; }
+  .home-surfaces { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); grid-template-rows: minmax(0, 1fr); gap: 0 30px; }
   .home-tasks { border-top: 0; margin: 0; padding: 0 0 0 30px; border-left: 1px solid var(--line-soft); }
 }
-.home-list { display: flex; flex-direction: column; }
+.home-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+/* the chosen section keeps the existing focus color; real keyboard
+   focus shows the standard focus outline on its list */
+.home-list:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
+.home-activity h2.chosen, .home-tasks h2.chosen { color: var(--focus); }
 .home-entry {
   display: flex;
   justify-content: space-between;
