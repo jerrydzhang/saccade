@@ -205,7 +205,7 @@
         # SACCADE_WEB_ASSETS build interface
         webAssets = pkgs.buildNpmPackage {
           pname = "saccade-workbench-web";
-          version = "0.16.1";
+          version = "0.16.2";
           src = pkgs.lib.sourceByRegex ./web [
             "^src$"
             "^src/.*\\.mjs$"
