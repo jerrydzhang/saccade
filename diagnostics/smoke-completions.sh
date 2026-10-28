@@ -29,7 +29,8 @@ mkdir -p "$XDG_DATA_HOME/fish/vendor_completions.d"
 # discovery looks
 "$BIN" serve --repo "$SMOKE/repo" --bind 127.0.0.1 --port $PORT >"$SMOKE/serve.log" 2>&1 &
 SERVE_PID=$!
-trap 'kill $SERVE_PID 2>/dev/null; rm -rf "$SMOKE"' EXIT
+# SMOKE_KEEP=1 preserves the scratch dir for inspection
+trap 'kill $SERVE_PID 2>/dev/null; if [ "${SMOKE_KEEP:-}" != 1 ]; then rm -rf "$SMOKE"; fi' EXIT
 for i in $(seq 1 50); do
   curl -sf "http://127.0.0.1:$PORT/api/v1/version" >/dev/null 2>&1 && break
   [ "$i" = 50 ] && fail "server never came up: $(cat "$SMOKE/serve.log")"
@@ -82,6 +83,15 @@ fish -i -c '
   report skill_static "sac skill "
   report until_static "sac wait t-0 --until "
   report shell_static "sac completions "
+  report global_flag "sac --ac"
+  report cancel_flag_name "sac cancel t-0 --expl"
+  report cancel_no_leak "sac cancel t-0 --wor"
+  report launch_flag_name "sac launch --work"
+  report launch_no_leak "sac launch --re"
+  report comment_flag_name "sac comment --ti"
+  report revise_flag_name "sac revise --body-f"
+  report global_beside_verb "sac cancel --j"
+  report flag_value_still_clean "sac comment --title "
 ' > "$SMOKE/probes.out" 2> "$SMOKE/probes.err" || { cat "$SMOKE/probes.err"; fail "fish probes errored"; }
 [ -s "$SMOKE/probes.err" ] && { cat "$SMOKE/probes.err"; fail "fish stderr noise"; }
 
@@ -127,9 +137,22 @@ section skill_static | grep -qx "install" || { section skill_static; fail "skill
 section skill_static | grep -qx "check" || { section skill_static; fail "skill lost check"; }
 section until_static | grep -qx "activity" || { section until_static; fail "wait --until lost activity"; }
 section until_static | grep -qx "offer" || { section until_static; fail "wait --until lost offer"; }
-section shell_static | grep -Fq "fish${TAB}the primary shell" || { section shell_static; fail "completions lost the fish description"; }
+section shell_static | grep -Fqe "fish${TAB}the primary shell" || { section shell_static; fail "completions lost the fish description"; }
 section shell_static | grep -qx "primary" && fail "the fish description split on spaces"
 section shell_static | grep -qx "shell" && fail "the fish description split on spaces"
+
+# flag names: global position-independent, per-verb names exactly as
+# the CLI defines them, no cross-verb leaks, values stay clean
+section global_flag | grep -Fqe "--actor${TAB}actor name recorded on events" || { section global_flag; fail "global flag names do not complete"; }
+section cancel_flag_name | grep -Fqe "--explanation" || { section cancel_flag_name; fail "cancel misses --explanation"; }
+[ -z "$(section cancel_no_leak)" ] || { section cancel_no_leak; fail "another verb's flag leaked into cancel"; }
+section launch_flag_name | grep -Fqe "--workspace" || { section launch_flag_name; fail "launch misses --workspace"; }
+section launch_no_leak | grep -Fqe "--resume" || { section launch_no_leak; fail "launch misses --resume"; }
+section launch_no_leak | grep -qFe "--reason" && fail "use's --reason leaked into launch"
+section comment_flag_name | grep -Fqe "--title" || { section comment_flag_name; fail "comment misses --title"; }
+section revise_flag_name | grep -Fqe "--body-file" || { section revise_flag_name; fail "revise misses --body-file"; }
+section global_beside_verb | grep -Fqe "--json${TAB}machine-readable output" || { section global_beside_verb; fail "global flags do not ride beside the per-verb set"; }
+[ -z "$(section flag_value_still_clean)" ] || { section flag_value_still_clean; fail "a flag name leaked into its own value"; }
 
 # completion never records: the record count is unchanged
 BEFORE=$("$BIN" log | grep -c '^seq ')
