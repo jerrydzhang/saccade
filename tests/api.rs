@@ -3388,7 +3388,11 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
 /// presence from the registration file or an existing directory,
 /// selector_not_found otherwise, and a terminal state the close door
 /// actually mutates. FAKE_ORCA_CLOSE_FAIL (one-shot flag file) makes
-/// exactly one close ask fail.
+/// exactly one close ask fail. FAKE_ORCA_SHOW_GARBAGE makes the
+/// visible-presence answer unreadable for as long as it stands.
+/// FAKE_ORCA_STALE (with FAKE_ORCA_STALE_COUNT and FAKE_ORCA_STALE_ASKS)
+/// models a stale catalog: paths listed there answer Listed for their
+/// first FAKE_ORCA_STALE_ASKS asks each, then discover the removal.
 fn fake_host(dir: &std::path::Path) -> std::path::PathBuf {
     let bin_dir = dir.join("host-bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -3409,7 +3413,6 @@ if [ "$1" = worktree ]; then
     # visible presence follows the live checkout, never the
     # registration file: a gone checkout is selector_not_found
     if [ -f "${FAKE_ORCA_SHOW_GARBAGE:-/dev/null-nothing}" ]; then
-      rm -f "${FAKE_ORCA_SHOW_GARBAGE}"
       printf 'not json at all\n'
       exit 0
     fi
@@ -3418,6 +3421,17 @@ if [ "$1" = worktree ]; then
     if [ -n "$path" ] && [ -f "${FAKE_ORCA_LISTED:-/dev/null-nothing}" ] && grep -Fxq "$path" "$FAKE_ORCA_LISTED" 2>/dev/null; then
       printf '{"ok":true,"result":{"worktree":{"path":"%s"}}}\n' "$path"
       exit 0
+    fi
+    # a stale catalog: the path answers Listed for its first N asks,
+    # counted per path, then the discovery catches up - the model for
+    # the bounded visible-absence re-ask
+    if [ -n "$path" ] && [ -f "${FAKE_ORCA_STALE:-/dev/null-nothing}" ] && grep -Fxq "$path" "${FAKE_ORCA_STALE}" 2>/dev/null; then
+      printf '%s\n' "$path" >> "${FAKE_ORCA_STALE_COUNT}"
+      n=$(grep -Fc "$path" "${FAKE_ORCA_STALE_COUNT}" 2>/dev/null)
+      if [ "$n" -le "${FAKE_ORCA_STALE_ASKS:-1}" ]; then
+        printf '{"ok":true,"result":{"worktree":{"path":"%s"}}}\n' "$path"
+        exit 0
+      fi
     fi
     if [ -n "$path" ] && [ -d "$path" ]; then
       printf '{"ok":true,"result":{"worktree":{"path":"%s"}}}\n' "$path"
@@ -7578,6 +7592,7 @@ struct LifecycleRig {
     close_fail: std::path::PathBuf,
     listed: std::path::PathBuf,
     show_garbage: std::path::PathBuf,
+    stale: std::path::PathBuf,
     host_env: Vec<(String, String)>,
 }
 
@@ -7596,10 +7611,14 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
     let close_fail = dir.join("close-fail");
     let listed = dir.join("host-listed");
     let show_garbage = dir.join("show-garbage");
+    let stale = dir.join("host-stale");
+    let stale_count = dir.join("host-stale-count");
     std::fs::write(&host_log, b"").unwrap();
     std::fs::write(&host_state, b"").unwrap();
     std::fs::write(&registered, b"").unwrap();
     std::fs::write(&listed, b"").unwrap();
+    std::fs::write(&stale, b"").unwrap();
+    std::fs::write(&stale_count, b"").unwrap();
     let host_env = vec![
         ("FAKE_ORCA_LOG".to_string(), host_log.display().to_string()),
         (
@@ -7618,6 +7637,23 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
         (
             "FAKE_ORCA_SHOW_GARBAGE".to_string(),
             show_garbage.display().to_string(),
+        ),
+        ("FAKE_ORCA_STALE".to_string(), stale.display().to_string()),
+        (
+            "FAKE_ORCA_STALE_COUNT".to_string(),
+            stale_count.display().to_string(),
+        ),
+        ("FAKE_ORCA_STALE_ASKS".to_string(), "2".to_string()),
+        // the visible-absence poll's shrunk seams: the stale window
+        // turns over and the at-ceiling classifications stay observable
+        // without production bounds
+        (
+            "SACCADE_HOST_ABSENCE_WAIT_SECS".to_string(),
+            "1".to_string(),
+        ),
+        (
+            "SACCADE_HOST_ABSENCE_POLL_MS".to_string(),
+            "100".to_string(),
         ),
         (
             "PATH".to_string(),
@@ -7652,6 +7688,7 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
         close_fail,
         listed,
         show_garbage,
+        stale,
         host_env,
     }
 }
@@ -7951,6 +7988,224 @@ async fn clean_stops_on_open_terminals_then_retry_completes() {
     assert!(out.contains("already cleaned"), "{out}{err}");
     assert!(out.contains("the host names no terminals"), "{out}");
     assert!(out.contains("the host names no workspace at"), "{out}{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clean_polls_a_stale_listed_answer_to_verified_absence() {
+    let rig = lifecycle_rig("clean-stale");
+    let (seq, branch, ws) = rig_provision(&rig, "lagging");
+    rig_register(&rig, &ws);
+    rig_open_terminal(&rig, "term_lag_3", &ws);
+    // the host's catalog lags the removal: the path answers Listed for
+    // its first two asks, then the discovery catches up
+    std::fs::write(&rig.stale, ws.as_bytes()).unwrap();
+
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the clean refuses across the stale window: {out}{err}");
+    assert!(out.contains("cleaned - record 1"), "{out}");
+    assert!(out.contains("the host names no workspace there"), "{out}");
+    // the Listed answer was re-asked until it flipped, never banked
+    let log = std::fs::read_to_string(rig.dir.join("host.log")).unwrap();
+    let show_asks = log.lines().filter(|line| *line == "show").count();
+    assert!(show_asks >= 3, "the stale answer was asked once: {log}");
+    assert!(!std::path::Path::new(&ws).exists());
+    assert_eq!(
+        rig_tip(&rig, &branch),
+        sh(&rig.root, &["rev-parse", "HEAD"]).trim()
+    );
+    let _ = seq;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clean_refuses_still_listed_at_the_ceiling_then_recovers() {
+    let rig = lifecycle_rig("clean-listed");
+    let (_, branch, ws) = rig_provision(&rig, "divergent-clean");
+    rig_register(&rig, &ws);
+    rig_open_terminal(&rig, "term_div_4", &ws);
+    // the host answers Listed forever: the stale window passes, the
+    // ceiling lands today's refusal, and no fact records
+    use std::io::Write as _;
+    let mut listed = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&rig.listed)
+        .unwrap();
+    writeln!(listed, "{ws}").unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(!ok, "the divergent host cleaned anyway: {err}");
+    assert!(err.contains("workspace_still_listed"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "the host still lists a workspace at {ws} after the checkout removal"
+        )),
+        "{err}"
+    );
+    assert!(
+        err.contains("the record lands only on visible absence - inspect and retry"),
+        "{err}"
+    );
+    assert!(
+        !std::path::Path::new(&ws).exists(),
+        "the removal itself already ran"
+    );
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let kinds: Vec<String> = json_of(&body)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !kinds.contains(&"workspace_cleaned".to_string()),
+        "{kinds:?}"
+    );
+
+    // the host catches up: the rerun is the recovery path, and the
+    // fact records exactly once
+    std::fs::write(&rig.listed, b"").unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the recovery clean refuses: {out}{err}");
+    assert!(out.contains("cleaned - record 1"), "{out}");
+    assert_eq!(
+        rig_tip(&rig, &branch),
+        sh(&rig.root, &["rev-parse", "HEAD"]).trim()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_cleaned_idempotence_polls_the_same_stale_window() {
+    let rig = lifecycle_rig("idem-stale");
+    let (_, _, ws) = rig_provision(&rig, "rerun");
+    rig_register(&rig, &ws);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the setup clean refuses: {err}");
+    let (_, records_after_clean) = get_json(&rig.url, "/api/v1/records");
+
+    // the rerun across a stale window still answers idempotent: the
+    // Listed answers re-ask, the flip verifies, no duplicate fact
+    std::fs::write(&rig.stale, ws.as_bytes()).unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the stale rerun refuses: {out}{err}");
+    assert!(out.contains("already cleaned"), "{out}");
+    assert!(
+        out.contains(&format!("the host names no workspace at {ws}")),
+        "{out}"
+    );
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    assert_eq!(
+        json_of(&records_after_clean)["records"],
+        json_of(&body)["records"],
+        "the idempotent rerun landed a record"
+    );
+
+    // a divergent host at the recorded-Cleaned workspace refuses with
+    // today's wording after the ceiling
+    use std::io::Write as _;
+    let mut listed = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&rig.listed)
+        .unwrap();
+    writeln!(listed, "{ws}").unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(!ok, "the divergent rerun answered idempotent: {err}");
+    assert!(err.contains("workspace_still_listed"), "{err}");
+    assert!(
+        err.contains("is recorded Cleaned but the host still lists a workspace there"),
+        "{err}"
+    );
+
+    // the host catches up: the door verifies its way back to no-op
+    std::fs::write(&rig.listed, b"").unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the healed rerun refuses: {out}{err}");
+    assert!(out.contains("already cleaned"), "{out}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clean_refuses_unverified_at_the_ceiling_when_the_host_never_answers() {
+    let rig = lifecycle_rig("clean-garbage");
+    let (_, _, ws) = rig_provision(&rig, "unanswered");
+    rig_register(&rig, &ws);
+    rig_open_terminal(&rig, "term_garbage_5", &ws);
+    // the host's visible-presence answer stays unreadable: the door
+    // retries inside the ceiling, then refuses with today's unverified
+    // shape and lands no fact
+    std::fs::write(&rig.show_garbage, b"unreadable\n").unwrap();
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(!ok, "the unreadable host cleaned anyway: {err}");
+    assert!(err.contains("workspace_host_unverified"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "the host gave no verified answer for visible absence of {ws} within its bound"
+        )),
+        "{err}"
+    );
+    assert!(!std::path::Path::new(&ws).exists());
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let kinds: Vec<String> = json_of(&body)["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !kinds.contains(&"workspace_cleaned".to_string()),
+        "{kinds:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reconcile_polls_the_stale_window_in_both_absence_arms() {
+    let rig = lifecycle_rig("reconcile-stale");
+    // a recorded-Cleaned workspace whose host answer lags
+    let (_cleaned_seq, _branch, ws) = rig_provision(&rig, "lagging-cleaned");
+    rig_register(&rig, &ws);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws]);
+    assert!(ok, "the setup clean refuses: {err}");
+    // an Available workspace whose checkout was removed by hand while
+    // the host answer lags
+    let (gone_seq, _gone_branch, gone) = rig_provision(&rig, "departed-late");
+    sh(&rig.root, &["worktree", "remove", &gone]);
+    std::fs::write(&rig.stale, format!("{ws}\n{gone}").as_bytes()).unwrap();
+
+    // both arms re-ask the stale answers and verify absence: the
+    // recorded-Cleaned birth stays preserved, the departed birth
+    // records its Cleaned fact
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
+    assert!(ok, "the stale reconcile fails: {out}{err}");
+    assert!(
+        out.contains("verified: recorded Cleaned, checkout absent, host names no workspace"),
+        "{out}"
+    );
+    assert!(
+        out.contains("checkout absent and the host names no workspace; Cleaned recorded now"),
+        "{out}"
+    );
+    let log = std::fs::read_to_string(rig.dir.join("host.log")).unwrap();
+    let show_asks = log.lines().filter(|line| *line == "show").count();
+    assert!(show_asks >= 6, "a stale answer was asked once: {log}");
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
+    let cleaned_for_gone: Vec<&serde_json::Value> = records
+        .iter()
+        .filter(|r| {
+            r["kind"] == "workspace_cleaned" && r["payload"]["workspace"] == json!(gone_seq)
+        })
+        .collect();
+    assert_eq!(
+        cleaned_for_gone.len(),
+        1,
+        "the departed birth recorded once: {body}"
+    );
+    assert_eq!(
+        cleaned_for_gone[0]["payload"]["workspace"],
+        json!(gone_seq),
+        "the departed birth is the cleaned one"
+    );
+
+    // the answers settled: a rerun lands nothing new
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
+    assert!(ok, "the settled rerun fails: {out}{err}");
+    assert!(out.contains("applied - no new facts recorded"), "{out}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -8393,15 +8648,19 @@ async fn reconcile_verifies_preserves_and_records_on_apply() {
         "{out}"
     );
 
-    // an unreadable host answer is a conflict naming the uncertainty
+    // a persistently unreadable host answer is a conflict naming the
+    // uncertainty after the same ceiling, never a verified absence
     let (_, _, ws_unknown) = rig_provision(&rig, "unreadable");
     rig_register(&rig, &ws_unknown);
     let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_unknown]);
     assert!(ok, "the unknown setup clean refuses: {err}");
-    std::fs::write(&rig.show_garbage, b"once\n").unwrap();
+    std::fs::write(&rig.show_garbage, b"unreadable\n").unwrap();
     let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
     assert!(ok, "reconcile fails: {out}{err}");
     assert!(out.contains("host presence unreadable"), "{out}");
+
+    // the host heals and its verified answers decide again
+    std::fs::remove_file(&rig.show_garbage).unwrap();
 
     // verified absence of a recorded-Cleaned workspace reads as the
     // verified preserved fact

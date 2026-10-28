@@ -1699,29 +1699,72 @@ fn lifecycle_target(
     Ok((world, facts))
 }
 
-/// The bounded wait for one verified host answer: a poll with a
-/// deadline. Uncertainty at the bound refuses - arbitrary host errors
-/// are never read as absence or closure.
-fn verified_within<H, T>(mut probe: H, detail: &str) -> Result<T, ApiFail>
-where
-    H: FnMut() -> Result<T, crate::host::HostFail>,
-    T: PartialEq,
-{
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+/// How long the visible-absence check re-asks a Listed answer before
+/// the door gives its at-ceiling answer: the host's own budget for
+/// discovering external changes is 30 seconds, and this ceiling holds
+/// the same margin over it the launch discovery wait holds. A Listed
+/// answer inside the window is the host's stale catalog, never
+/// evidence of anything.
+const HOST_ABSENCE_WAIT_SECS: u64 = 90;
+
+/// The visible-absence poll cadence: the host's outer snapshot cache
+/// turns over each second, so faster asks buy nothing.
+const HOST_ABSENCE_POLL_MS: u64 = 2000;
+
+/// The visible-absence bound's one test seam: a scratch tracker holds
+/// the window short so the honest classification at expiry is observable
+/// without waiting the production bound. Production never sets it.
+fn host_absence_wait_secs() -> u64 {
+    std::env::var("SACCADE_HOST_ABSENCE_WAIT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(HOST_ABSENCE_WAIT_SECS)
+}
+
+/// The visible-absence cadence's test seam, beside the ceiling's: the
+/// stale-then-absent model must turn over inside a shrunk ceiling.
+/// Production never sets it.
+fn host_absence_poll_ms() -> u64 {
+    std::env::var("SACCADE_HOST_ABSENCE_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(HOST_ABSENCE_POLL_MS)
+}
+
+/// The visible-absence poll's at-ceiling outcome: the host still names
+/// the workspace, or no verified answer ever arrived.
+enum AbsenceCeiling {
+    StillListed,
+    Unverified(String),
+}
+
+/// The bounded wait for the host's visible absence. A Listed answer is
+/// the host's documented propagation window after an external removal,
+/// never evidence: the ask repeats until the host names nothing or the
+/// ceiling passes. selector_not_found alone proves absence; host
+/// errors retry inside the same ceiling, and uncertainty at the bound
+/// stays uncertainty - arbitrary host errors are never read as absence.
+fn visible_absence_within(dir: &str) -> Result<(), AbsenceCeiling> {
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(host_absence_wait_secs());
+    let cadence = std::time::Duration::from_millis(host_absence_poll_ms());
     loop {
-        match probe() {
-            Ok(value) => return Ok(value),
-            Err(_) if std::time::Instant::now() >= deadline => {
-                return Err(ApiFail::Refused(
-                    StatusCode::BAD_GATEWAY,
-                    "workspace_host_unverified",
-                    format!(
-                        "the host gave no verified answer for {detail} within its bound; nothing further was done"
-                    ),
-                ));
+        match crate::host::workspace_visible_presence(dir) {
+            Ok(crate::host::HostPresence::VisiblyAbsent) => return Ok(()),
+            Ok(crate::host::HostPresence::Listed) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(AbsenceCeiling::StillListed);
+                }
             }
-            Err(_) => std::thread::sleep(std::time::Duration::from_millis(500)),
+            Err(e) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(AbsenceCeiling::Unverified(e.to_string()));
+                }
+            }
         }
+        std::thread::sleep(cadence);
     }
 }
 
@@ -1818,22 +1861,28 @@ fn clean_operation(
                 }
             }
         }
-        match verified_within(
-            || crate::host::workspace_visible_presence(&dir_str),
-            &format!("visible absence of {dir_str}"),
-        )? {
-            crate::host::HostPresence::VisiblyAbsent => {
+        match visible_absence_within(&dir_str) {
+            Ok(()) => {
                 verified.push(format!(
                     "verified: the host names no workspace at {dir_str}"
                 ));
             }
-            crate::host::HostPresence::Listed => {
+            Err(AbsenceCeiling::StillListed) => {
                 return Err(ApiFail::Refused(
                     StatusCode::CONFLICT,
                     "workspace_still_listed",
                     format!(
                         "{} is recorded Cleaned but the host still lists a workspace there; the recorded closure does not hold - inspect and retry",
                         dir_str
+                    ),
+                ));
+            }
+            Err(AbsenceCeiling::Unverified(_)) => {
+                return Err(ApiFail::Refused(
+                    StatusCode::BAD_GATEWAY,
+                    "workspace_host_unverified",
+                    format!(
+                        "the host gave no verified answer for visible absence of {dir_str} within its bound; nothing further was done"
                     ),
                 ));
             }
@@ -1989,20 +2038,26 @@ fn clean_operation(
 
     // the host's visible absence, after the git removal: the host's
     // own read contract, never assumed from an earlier step
-    match verified_within(
-        || crate::host::workspace_visible_presence(&dir_str),
-        &format!("visible absence of {dir_str}"),
-    )? {
-        crate::host::HostPresence::VisiblyAbsent => {
+    match visible_absence_within(&dir_str) {
+        Ok(()) => {
             verified.push("verified: the host names no workspace there".into());
         }
-        crate::host::HostPresence::Listed => {
+        Err(AbsenceCeiling::StillListed) => {
             return Err(ApiFail::Refused(
                 StatusCode::CONFLICT,
                 "workspace_still_listed",
                 format!(
                     "the host still lists a workspace at {} after the checkout removal; the record lands only on visible absence - inspect and retry",
                     dir_str
+                ),
+            ));
+        }
+        Err(AbsenceCeiling::Unverified(_)) => {
+            return Err(ApiFail::Refused(
+                StatusCode::BAD_GATEWAY,
+                "workspace_host_unverified",
+                format!(
+                    "the host gave no verified answer for visible absence of {dir_str} within its bound; nothing further was done"
                 ),
             ));
         }
@@ -2288,15 +2343,17 @@ fn reconcile_operation(
                     }
                     _ => {}
                 }
-                match crate::host::workspace_visible_presence(&dir_str) {
-                    Ok(crate::host::HostPresence::VisiblyAbsent) => preserved.push(entry(
+                match visible_absence_within(&dir_str) {
+                    Ok(()) => preserved.push(entry(
                         "verified: recorded Cleaned, checkout absent, host names no workspace"
                             .into(),
                     )),
-                    Ok(crate::host::HostPresence::Listed) => conflicts.push(entry(
+                    Err(AbsenceCeiling::StillListed) => conflicts.push(entry(
                         "the host still lists a workspace recorded Cleaned".into(),
                     )),
-                    Err(e) => conflicts.push(entry(format!("host presence unreadable: {e}"))),
+                    Err(AbsenceCeiling::Unverified(e)) => {
+                        conflicts.push(entry(format!("host presence unreadable: {e}")))
+                    }
                 }
             }
             (Some(crate::WorkspaceStage::Cleaned), _, true) => {
@@ -2354,8 +2411,8 @@ fn reconcile_operation(
                     }
                     _ => {}
                 }
-                match crate::host::workspace_visible_presence(&dir_str) {
-                    Ok(crate::host::HostPresence::VisiblyAbsent) => {
+                match visible_absence_within(&dir_str) {
+                    Ok(()) => {
                         if apply {
                             to_record.push(Event::WorkspaceCleaned { workspace: birth });
                         }
@@ -2368,10 +2425,12 @@ fn reconcile_operation(
                             }
                         )));
                     }
-                    Ok(crate::host::HostPresence::Listed) => {
+                    Err(AbsenceCeiling::StillListed) => {
                         conflicts.push(entry("the host still lists a workspace there".into()));
                     }
-                    Err(e) => conflicts.push(entry(format!("host presence unreadable: {e}"))),
+                    Err(AbsenceCeiling::Unverified(e)) => {
+                        conflicts.push(entry(format!("host presence unreadable: {e}")))
+                    }
                 }
             }
             (None, _, _) => {
