@@ -1075,6 +1075,21 @@ def main():
             page.mouse.wheel(0, 300)
             settle_scroller('.pane.active .reading')
             check(reader_top() > after and selected_card() == held, 'wheel scrolling moves the thread but never retargets the selection')
+            # focus replacement kills tracking: the animation the pane's
+            # own arrows started may not keep selecting after focus leaves
+            leader(page, 'wv')
+            leader(page, 'wh')
+            page.locator('.pane').nth(0).locator('.reading').focus()
+            pane1_selected = lambda: page.locator('.pane').nth(0).locator('.thread-card.selected').get_attribute('data-comment')
+            held_pane1 = pane1_selected()
+            pane1_top = page.evaluate('() => document.querySelector(".pane .reading").scrollTop')
+            page.keyboard.press('ArrowDown')
+            leader(page, 'wl')
+            settle_scroller('.pane .reading')
+            check(page.evaluate('() => document.querySelector(".pane .reading").scrollTop') > pane1_top, 'the pane keeps its native animation after focus moved away')
+            check(pane1_selected() == held_pane1, 'focus replacement stops arrow tracking: the unfocused pane never retargets')
+            leader(page, 'wo')
+            page.wait_for_timeout(150)
             page.keyboard.press('k')
             page.wait_for_function('(want) => document.querySelector(".pane.active .thread-card.selected")?.dataset.comment === want', arg=opener_id)
             check(page.evaluate('''() => { const r = document.querySelector(".pane.active .reading"); const a = document.querySelector(".pane.active .thread-card.selected").getBoundingClientRect(); const b = r.getBoundingClientRect(); return a.top >= b.top - 1 && a.bottom <= b.bottom + 1; }'''), 'k from an arrow selection still steps and scrolls its card fully into view')
@@ -1272,6 +1287,14 @@ def main():
             page.keyboard.press('h')
             check(chosen('activity') and focused_section() == 'home-activity', 'h returns the choice and the focus to activity')
             check(section_offset('activity') == activity_at and section_offset('tasks') == tasks_at, 'h and l preserve both section offsets')
+            # real focus placement chooses its section: the heading, j/k,
+            # and native arrows all follow whichever list holds focus
+            page.locator(pane + '.home-tasks .home-list').evaluate('node => node.focus()')
+            check(chosen('tasks') and focused_section() == 'home-tasks', 'real focus placement chooses its section')
+            page.keyboard.press('j')
+            page.wait_for_function('(n) => document.querySelector(".pane.active .home-tasks .home-list").scrollTop > n', arg=tasks_at)
+            check(section_offset('activity') == activity_at, 'j drives the focus-chosen section')
+            tasks_at = section_offset('tasks')
             # a synthetic click: Playwright's own actionability scroll
             # would move the list and be recorded as a real offset before
             # the rebuild ever runs
@@ -1279,13 +1302,37 @@ def main():
             page.wait_for_function('(n) => document.querySelectorAll(".pane.active .home-tasks .home-entry").length > n', arg=10)
             page.wait_for_function('(n) => document.querySelector(".pane.active .home-tasks .home-list").scrollTop === n', arg=tasks_at)
             check(section_offset('activity') == activity_at and section_offset('tasks') == tasks_at, 'a Show more rebuild preserves both section offsets')
-            check(chosen('activity'), 'a Show more rebuild keeps the chosen section')
+            check(chosen('tasks'), 'a Show more rebuild keeps the focus-chosen section')
             server.cli('comment', 't-1', '--title', 'The section landing neighbor', 'A record lands while both home sections stand scrolled and one is chosen.')
             landing_cursor = request(base + '/api/v1/workbench')[1]['cursor']
             page.wait_for_function('(n) => window.workbenchUI.state().cursor === n', arg=landing_cursor)
             page.wait_for_timeout(150)
             check(section_offset('activity') == activity_at and section_offset('tasks') == tasks_at, 'a landing preserves both section offsets')
-            check(chosen('activity'), 'a landing keeps the chosen section')
+            check(chosen('tasks'), 'a landing keeps the focus-chosen section')
+            # a command inside the pending rebuild window survives the
+            # restore: the section offset persists at command time like
+            # the reader path does
+            page.evaluate('''() => {
+                window.__heldRaf = window.requestAnimationFrame;
+                window.__rafQueue = [];
+                window.requestAnimationFrame = (cb) => { window.__rafQueue.push(cb); return 0; };
+            }''')
+            server.cli('comment', 't-1', '--title', 'The held window neighbor', 'A record lands while the rebuild restore is held.')
+            # the window itself is the wait: pendingSignature set means the
+            # rebuild ran and the held restore has not
+            page.wait_for_function('() => document.querySelector(".pane.active .reading").pendingSignature !== null')
+            page.locator(pane + '.home-tasks .home-list').evaluate('node => node.focus()')
+            page.keyboard.press('j')
+            held_expect = section_offset('tasks')
+            page.evaluate('''() => {
+                window.requestAnimationFrame = window.__heldRaf;
+                const queue = window.__rafQueue; window.__rafQueue = [];
+                queue.forEach((cb) => window.requestAnimationFrame(cb));
+            }''')
+            page.wait_for_function('([a, t]) => document.querySelector(".pane.active .home-activity .home-list").scrollTop === a && document.querySelector(".pane.active .home-tasks .home-list").scrollTop === t', arg=[activity_at, held_expect])
+            check(section_offset('tasks') == held_expect and section_offset('activity') == activity_at, f'a command inside the rebuild window survives the restore (tasks {section_offset("tasks")} vs held {held_expect}, activity {section_offset("activity")} vs {activity_at})')
+            check(chosen('tasks'), 'the rebuild window keeps the focus-chosen section')
+            tasks_at = section_offset('tasks')
             page.keyboard.press('l')
             check(chosen('tasks') and focused_section() == 'home-tasks', 'l re-chooses tasks before leaving home')
             finder(page, 'cursor')

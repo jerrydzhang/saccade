@@ -350,6 +350,9 @@ function mountEditor(viewId, node) {
   });
   reader.addEventListener("scrollend", () => disarmArrowTracking(viewId));
   reader.addEventListener("wheel", () => disarmArrowTracking(viewId), { passive: true });
+  reader.addEventListener("focusout", (event) => {
+    if (!reader.contains(event.relatedTarget)) disarmArrowTracking(viewId);
+  });
   showPresentation(viewId);
   view.scrollDOM.addEventListener("scroll", () => { if (!isReading(viewId)) { remember(viewId); persist(); } });
   view.contentDOM.addEventListener("focus", () => { bench.focus = viewId; refreshChrome(); });
@@ -574,8 +577,6 @@ function showHome(viewId, reader, buffer) {
     taskList.append(more);
   }
   active.append(taskList);
-  // each section keeps its own offset as pane state, recorded under the
-  // same rebuild guard as the reader and restored on every rebuild
   activityList.addEventListener("scroll", () => {
     if (readers.get(viewId) === reader && isReading(viewId) && !reader.pendingSignature) { pane.activityScroll = activityList.scrollTop; persist(); }
   });
@@ -1500,7 +1501,10 @@ function scrollReader(amount) {
   if (!scroller) return;
   scroller.scrollTop = amount === "top" ? 0 : amount === "bottom" ? scroller.scrollHeight
     : scroller.scrollTop + amount;
-  if (!list) presentation().scrollTop = scroller.scrollTop;
+  const pane = presentation();
+  if (!list) pane.scrollTop = scroller.scrollTop;
+  else if ((pane.homeSection ?? "activity") === "tasks") pane.tasksScroll = scroller.scrollTop;
+  else pane.activityScroll = scroller.scrollTop;
   persist();
 }
 
@@ -1562,7 +1566,7 @@ function armArrowTracking(viewId) {
   reader.arrowStill = 0;
   const step = () => {
     if (reader.arrowToken !== token) return;
-    if (readers.get(viewId) !== reader || !threadFocused(viewId)) { reader.arrowToken = null; return; }
+    if (readers.get(viewId) !== reader || bench.focus !== viewId || !threadFocused(viewId)) { reader.arrowToken = null; return; }
     if (reader.scrollTop !== reader.arrowLast) {
       reader.arrowLast = reader.scrollTop;
       reader.arrowStill = 0;
@@ -1598,7 +1602,21 @@ function markHomeSections(viewId) {
 
 function retargetHomeSectionFocus(viewId) {
   const reader = readers.get(viewId);
-  if (!reader || document.activeElement !== reader) return;
+  if (!reader) return;
+  const active = document.activeElement;
+  // focus placement chooses: the heading, j/k, and the browser's own
+  // arrows all drive whichever section holds real focus
+  if (active && active !== reader && reader.contains(active)) {
+    const pane = presentation(viewId);
+    const section = active.closest(".home-tasks") ? "tasks" : "activity";
+    if ((pane.homeSection ?? "activity") !== section) {
+      pane.homeSection = section;
+      markHomeSections(viewId);
+      persist();
+    }
+    return;
+  }
+  if (active !== reader) return;
   homeScrollList(viewId)?.focus({ preventScroll: true });
 }
 
