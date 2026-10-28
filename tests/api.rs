@@ -8526,3 +8526,124 @@ async fn the_recorded_path_itself_addresses_the_birth_through_an_alias() {
     assert!(ok, "reconcile fails: {out}{err}");
     assert!(out.contains("share this path"), "{out}");
 }
+
+#[test]
+fn completions_emit_scripts_and_the_candidate_doors_answer_the_fold() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = scratch_db("completions-door");
+    let system = saccade::Context::system();
+    let mut conn = saccade::db::open(&path).unwrap();
+    let now = 1;
+    // the story: a task, two workspaces (one cleaned), one registered
+    // native session
+    let commands = [
+        saccade::Command::CreateTask {
+            name: saccade::Prose::new("implement floop".into()).unwrap(),
+        },
+        saccade::Command::CreateWorkspace {
+            base: saccade::GitCommit::new("aaaa1111".into()).unwrap(),
+            branch: saccade::GitBranch::new("workspace-floop".into()).unwrap(),
+            worktree: saccade::WorktreePath::new("/tmp/sac-api-floop".into()).unwrap(),
+        },
+        saccade::Command::CreateWorkspace {
+            base: saccade::GitCommit::new("bbbb2222".into()).unwrap(),
+            branch: saccade::GitBranch::new("workspace-gloom".into()).unwrap(),
+            worktree: saccade::WorktreePath::new("/tmp/sac-api-gloom".into()).unwrap(),
+        },
+        saccade::Command::CleanWorkspace {
+            workspace: saccade::RecordId(2),
+        },
+        saccade::Command::RegisterIncarnation {
+            native_id: saccade::NativeSessionId::new("sess-7777".into()).unwrap(),
+            saved_session: saccade::SessionLocator::new("/home/j/.pi/sessions/7777.json".into())
+                .unwrap(),
+        },
+    ];
+    for command in commands {
+        saccade::db::record(&mut conn, &system, command, now).expect("the fixture story records");
+    }
+    drop(conn);
+
+    let sac = |args: &[&str]| {
+        let out = std::process::Command::new(bin)
+            .arg("--db")
+            .arg(&path)
+            .args(args)
+            .output()
+            .expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    // the script door: emitted from the binary, no destination resolves
+    let (ok, script, err) = sac(&["completions", "fish"]);
+    assert!(ok, "completions fish: {err}");
+    assert!(script.contains("complete -c sac"), "the fish skeleton");
+    assert!(
+        script.contains("sac complete $argv"),
+        "the PATH-name door call"
+    );
+    assert!(script.is_ascii(), "authored text is ASCII");
+    assert!(!sac(&["completions", "bash"]).0, "unshipped shells refuse");
+
+    // the candidate doors read the fold: tasks with title and state
+    let (ok, out, err) = sac(&["complete", "tasks"]);
+    assert!(ok, "complete tasks: {err}");
+    assert_eq!(out.trim(), "t-0\timplement floop (open)");
+
+    // workspaces: recorded paths with branch and stage, clean leading
+    // Available, restore leading Cleaned
+    let (ok, out, err) = sac(&["complete", "workspaces-clean"]);
+    assert!(ok, "complete workspaces-clean: {err}");
+    assert_eq!(
+        out.trim(),
+        "/tmp/sac-api-floop\tworkspace-floop, available\n\
+         /tmp/sac-api-gloom\tworkspace-gloom, cleaned"
+    );
+    let (ok, out, err) = sac(&["complete", "workspaces-restore"]);
+    assert!(ok, "complete workspaces-restore: {err}");
+    assert_eq!(
+        out.trim(),
+        "/tmp/sac-api-gloom\tworkspace-gloom, cleaned\n\
+         /tmp/sac-api-floop\tworkspace-floop, available"
+    );
+
+    // incarnations: the birth actor beside what the record holds
+    let (ok, out, err) = sac(&["complete", "incarnations"]);
+    assert!(ok, "complete incarnations: {err}");
+    assert_eq!(
+        out.trim(),
+        "i-0\tsaccade native session sess-7777, saved /home/j/.pi/sessions/7777.json"
+    );
+
+    // completion never records: the log is unchanged after every read
+    let (ok, before, _) = sac(&["log", "--json"]);
+    assert!(ok);
+    let (ok, _, err) = sac(&["complete", "tasks"]);
+    assert!(ok, "{err}");
+    let (ok, after, _) = sac(&["log", "--json"]);
+    assert!(ok);
+    assert_eq!(before, after, "the candidate door records nothing");
+
+    // silent failure: outside a repo and without a reachable
+    // destination the door answers empty, exit 0, no stderr
+    let outside = std::env::temp_dir().join(format!("sac-api-no-repo-{}", std::process::id()));
+    std::fs::create_dir_all(&outside).unwrap();
+    let out = std::process::Command::new(bin)
+        .arg("complete")
+        .arg("tasks")
+        .current_dir(&outside)
+        .env_remove("SACCADE_REPO")
+        .env("HOME", &outside)
+        .output()
+        .expect("spawn sac outside a repo");
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"", "no candidates outside a repo");
+    assert_eq!(out.stderr, b"", "the failure stays silent");
+
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+}
