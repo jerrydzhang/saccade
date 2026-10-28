@@ -12,7 +12,8 @@ reader - often you, after a context loss - never re-derives them. There is
 no managed execution in this build: the tracker records undertakings,
 accounts, and decisions - it holds no waits and supervises nothing
 (waiting is the caller's temporary read), and launching asks the host for
-a terminal, never manages the session.
+a terminal or takes the caller's own (--here), never managing the
+session.
 
 ## Identity
 
@@ -174,7 +175,7 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac withdraw c-<n> --note "..."` | any tier | the note's standing-error repair: title and body out, tombstone stays |
 | `sac artifact t-N <path> [--name ...]` | any tier | park an artifact on the thread - the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
 | `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; nothing is recorded |
-| `sac launch --workspace <dir> [-- prompt]` / `--new [label] [--base <ref>]` | any tier | launch the composed native Pi task-free: `--workspace` selects an explicit existing directory; `--new` provisions a fresh workspace through the server's Git effects and launches there; a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. No task, claim, or request is provisioned |
+| `sac launch --workspace <dir> [-- prompt]` / `--new [label] [--base <ref>]` | any tier | launch the composed native Pi task-free: `--workspace` selects an explicit existing directory; `--new` provisions a fresh workspace through the server's Git effects and launches there; a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. No task, claim, or request is provisioned; `--here` composes with `--workspace` and `--resume` and runs the composed session in the caller's own terminal - no host terminal, and the command's exit status is the session's |
 | `sac workspace new [label] [--base <ref>]` | any tier | provision a NEW task-free workspace through the server's Git effects: the label plus a generated uniqueness suffix (workspace-<token> without a label), cut at the named base or the primary HEAD. The birth record's position is the workspace's identity - no task, claim, or incarnation, and no new numbering |
 | `sac workspace switch i-<n> --to <dir> [--resume -- prompt]` | any tier | move a STOPPED native session's saved working directory to an explicit existing one: a held guard refuses (exit the session first) and an unprobeable one refuses as unknown, both before anything moves; the target must already exist; the saved header is retargeted atomically (same native id, body, and history), and the change record lands only after the header actually moved - it asserts the confirmed change, never a running process. `--resume` then continues the same native id there through the ordinary resume door |
 | `sac launch --workspace <dir> --ask "question"` | a registered incarnation | cheap peer creation with an initial question: launches the peer, and once it registers the question goes to it as a durable addressed message from your own scope - the newborn's address is your reply surface. Requires SACCADE_INCARNATION_SEQ; never argv-shaped human input, never a task or ownership |
@@ -187,9 +188,11 @@ and reopening (`sac reopen t-N --explanation "..."`).
 
 Not in this build (later slices, do not assume them): managed
 completion obligations, proposal machinery of any kind. Launching is
-the host's:
-`sac launch` asks the host (Orca) for one terminal and never
-supervises it - restarting Saccade leaves native sessions alone.
+the host's or the caller's own terminal:
+`sac launch` asks the host (Orca) for one terminal, or `--here` runs
+the composed session in the invoking terminal as its foreground child
+and returns its exit status when it exits - either way it never
+supervises, and restarting Saccade leaves native sessions alone.
 
 ## Prose
 
@@ -304,11 +307,13 @@ worktree's absolute path - beside the tracker's db, under `worktrees/`.
 Several sessions may select one workspace; selecting an existing
 directory (`sac launch --workspace`) provisions nothing.
 
-`sac launch` submits the composed native Pi into one host terminal at
-the chosen workspace, task-free: a fresh session registers itself as a
-new incarnation when it attaches, and `--resume i-<n>` continues a
-saved one from its recorded locator, validated against the saved
-header. No task, claim, or request is provisioned.
+`sac launch` runs the composed native Pi at
+the chosen workspace, task-free - in one host terminal, or as a
+foreground child of the invoking terminal with `--here`, which returns
+when the session exits with its exit status: a fresh session registers
+itself as a new incarnation when it attaches, and `--resume i-<n>`
+continues a saved one from its recorded locator, validated against the
+saved header. No task, claim, or request is provisioned.
 
 The log may also name task-bound workspaces: a historical
 establishment record carries the task reference, the canonical base

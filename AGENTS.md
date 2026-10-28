@@ -119,7 +119,9 @@ with them.
   non-goal (IDs break first if that changes - accepted).
 - Native Pi stays the pinned harness, never the ambient binary. Its
   Saccade-integrated composition is separately callable, not a replacement
-  for ordinary Pi. The host launches and resumes; the integration associates
+  for ordinary Pi. A launch asks the host for one terminal or takes the
+  caller's own (--here) and never supervises it, fresh starts and resumes
+  alike; the integration associates
   native sessions, delivers messages, and yields its own waits to input.
   There is no tracker-owned model loop or managed RPC harness.
 - An incarnation identifies a native session, not a task, workspace, or
