@@ -244,6 +244,14 @@
           # the embedded workbench assets ride the build interface,
           # never a runtime path
           SACCADE_WEB_ASSETS = webAssets;
+          # the fish script the binary itself emits installs as a vendor
+          # completion, so fish picks it up with zero user config and it
+          # updates atomically with the binary; the script invokes sac
+          # by PATH name, never a baked store path
+          postInstall = ''
+            mkdir -p $out/share/fish/vendor_completions.d
+            $out/bin/sac completions fish > $out/share/fish/vendor_completions.d/sac.fish
+          '';
           # the unattended-prose door alone drives a real host pty;
           # the nix sandbox mounts no /dev/pts and it cannot open the
           # slave there, while the full suite passes in the devShell

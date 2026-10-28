@@ -4,6 +4,7 @@ pub mod activate;
 pub mod api;
 pub mod attempts;
 pub mod client;
+pub mod completions;
 pub mod db;
 pub mod decide;
 pub mod events;

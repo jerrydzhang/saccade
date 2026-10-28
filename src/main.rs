@@ -292,6 +292,22 @@ enum Cmd {
     /// Report this session's environment-declared identity and routing:
     /// disclosure, never a liveness claim or proof of ownership
     Identity,
+    /// Emit a shell completion script from the binary itself: the
+    /// static command and flag skeleton plus the dynamic value hooks,
+    /// no external glue files
+    Completions {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+    /// The hidden candidate read doors the completion scripts call:
+    /// one `value TAB description` line per record fact, empty on any
+    /// failure, nothing recorded
+    #[command(hide = true)]
+    Complete {
+        /// The candidate kind the completion position asks for
+        #[arg(value_enum)]
+        kind: CompleteKind,
+    },
     /// Migrate a schema-3 or schema-4 tracker into a fresh one at
     /// this binary's schema: the source stays untouched, seq and
     /// timestamps carry over, prose renumbers onto the fold's public
@@ -423,6 +439,36 @@ enum SkillVerb {
 #[derive(Clone, Copy, ValueEnum)]
 enum ObjKind {
     Task,
+}
+
+/// The shells whose scripts this binary emits. Fish is the primary;
+/// bash and zsh stay a later option.
+#[derive(Clone, Copy, ValueEnum)]
+enum Shell {
+    Fish,
+}
+
+/// The hidden candidate doors the completion scripts call: the names
+/// ride the value enum, the derivation lives in saccade::completions.
+#[derive(Clone, Copy, ValueEnum)]
+enum CompleteKind {
+    Tasks,
+    Incarnations,
+    Workspaces,
+    WorkspacesClean,
+    WorkspacesRestore,
+}
+
+impl From<CompleteKind> for saccade::completions::Kind {
+    fn from(kind: CompleteKind) -> Self {
+        match kind {
+            CompleteKind::Tasks => saccade::completions::Kind::Tasks,
+            CompleteKind::Incarnations => saccade::completions::Kind::Incarnations,
+            CompleteKind::Workspaces => saccade::completions::Kind::Workspaces,
+            CompleteKind::WorkspacesClean => saccade::completions::Kind::WorkspacesClean,
+            CompleteKind::WorkspacesRestore => saccade::completions::Kind::WorkspacesRestore,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -574,6 +620,18 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     // outcome, refusal included, so diagnosis survives broken routing
     if let Cmd::Identity = &cli.command {
         return identity_door(cli);
+    }
+    // the completions door emits its script from the binary itself:
+    // no destination resolves, no fold reads
+    if let Cmd::Completions { shell } = &cli.command {
+        return Ok(match shell {
+            Shell::Fish => saccade::completions::FISH.to_string(),
+        });
+    }
+    // the candidate doors are reads like every other, and completion
+    // never errs aloud: any failure is no candidates, exit 0
+    if let Cmd::Complete { kind } = &cli.command {
+        return Ok(complete_candidates(cli, *kind));
     }
     // serve starts a server, so it never resolves a client destination
     if let Cmd::Serve { bind, port } = &cli.command {
@@ -809,6 +867,9 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         Cmd::Workspace { verb } => return workspace_door(cli, &destination, verb),
         Cmd::Identity => unreachable!("identity dispatches before the destination resolves"),
         Cmd::Serve { .. } => unreachable!("serve dispatches before the destination resolves"),
+        Cmd::Completions { .. } | Cmd::Complete { .. } => {
+            unreachable!("the completion doors dispatch before the destination resolves")
+        }
         Cmd::Migrate { out } => {
             let source = match &destination {
                 Destination::Local { db } => db.clone(),
@@ -1013,6 +1074,26 @@ fn world_of(destination: &Destination) -> Result<World, Fail> {
     match loadout.state {
         LoadState::Full(world) => Ok(world),
         LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+    }
+}
+
+/// The hidden candidate door's answer: the kind's lines over the
+/// fold, or empty when the read cannot happen - outside a repo,
+/// unreachable destination, degraded world. Nothing records, nothing
+/// errs.
+fn complete_candidates(cli: &Cli, kind: CompleteKind) -> String {
+    let fold = || -> Result<(World, Vec<db::StoredRecord>), Fail> {
+        let destination = resolve_destination(cli)?;
+        let loadout = loadout_of(&destination)?;
+        let world = match loadout.state {
+            LoadState::Full(world) => world,
+            LoadState::Degraded(reason) => return Err(Fail::Degraded(reason)),
+        };
+        Ok((world, loadout.rows))
+    };
+    match fold() {
+        Ok((world, rows)) => saccade::completions::Kind::from(kind).candidates(&world, &rows),
+        Err(_) => String::new(),
     }
 }
 
