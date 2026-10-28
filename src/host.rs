@@ -301,6 +301,34 @@ pub fn submit_terminal(dir: &str, title: &str, command: &str) -> Result<String, 
 /// The host's terminal handles for one exact workspace, from its own
 /// list door. selector_not_found is the host naming zero terminals;
 /// any other failure is unverified, never empty.
+/// The handles from a parsed terminal-list answer: every row must name
+/// a non-empty string handle, or the whole answer is unverified - a
+/// row the codec cannot read is uncertainty, never absence. The
+/// diagnostic names the row's index and shape, never its payload.
+fn terminal_handles(answer: &serde_json::Value) -> Result<Vec<String>, HostFail> {
+    let rows = answer
+        .pointer("/result/terminals")
+        .and_then(|t| t.as_array())
+        .ok_or_else(|| HostFail::TerminalList("the answer names no terminal rows".into()))?;
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            row.get("handle")
+                .and_then(|h| h.as_str())
+                .filter(|handle| !handle.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| match row.as_object() {
+                    Some(_) => HostFail::TerminalList(format!(
+                        "terminal row {index} names no readable handle"
+                    )),
+                    None => HostFail::TerminalList(format!(
+                        "terminal row {index} is not a terminal object"
+                    )),
+                })
+        })
+        .collect()
+}
+
 pub fn workspace_terminals(dir: &str) -> Result<Vec<String>, HostFail> {
     let out = orca(&[
         "terminal",
@@ -314,24 +342,7 @@ pub fn workspace_terminals(dir: &str) -> Result<Vec<String>, HostFail> {
     let value: serde_json::Value = serde_json::from_str(body.trim())
         .map_err(|e| HostFail::TerminalList(format!("unreadable answer: {e}")))?;
     match value.get("ok").and_then(|ok| ok.as_bool()) {
-        Some(true) => {
-            let handles = value
-                .pointer("/result/terminals")
-                .and_then(|t| t.as_array())
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|row| {
-                            row.get("handle")
-                                .and_then(|h| h.as_str())
-                                .map(str::to_string)
-                        })
-                        .collect()
-                })
-                .ok_or_else(|| {
-                    HostFail::TerminalList("the answer names no terminal rows".into())
-                })?;
-            Ok(handles)
-        }
+        Some(true) => terminal_handles(&value),
         // the host answers for the workspace by name: no such workspace
         // names no terminals, through its own read contract
         Some(false)
@@ -485,6 +496,64 @@ mod test {
             "{err}"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_terminal_row_decoder_admits_only_fully_readable_rows() {
+        let answer = |rows: &str| -> serde_json::Value {
+            serde_json::from_str(&format!(
+                "{{\"ok\":true,\"result\":{{\"terminals\":{rows}}}}}"
+            ))
+            .expect("the table's envelope parses")
+        };
+        // (rows, expectation): malformed or partially readable answers
+        // fail the whole answer with a row-index/shape diagnostic; only
+        // fully readable rows and the empty list verify
+        let table: [(&str, Result<Vec<&str>, &str>); 7] = [
+            ("[]", Ok(vec![])),
+            (r#"[{"handle":"a"},{"handle":"b"}]"#, Ok(vec!["a", "b"])),
+            (
+                r#"[{"handle":""}]"#,
+                Err("terminal row 0 names no readable handle"),
+            ),
+            (r#"[{}]"#, Err("terminal row 0 names no readable handle")),
+            (
+                r#"["junk"]"#,
+                Err("terminal row 0 is not a terminal object"),
+            ),
+            (
+                r#"[{"handle":42}]"#,
+                Err("terminal row 0 names no readable handle"),
+            ),
+            (
+                r#"[{"handle":"good"},{}]"#,
+                Err("terminal row 1 names no readable handle"),
+            ),
+        ];
+        for (rows, expected) in &table {
+            let decoded = terminal_handles(&answer(rows));
+            match expected {
+                Ok(handles) => assert_eq!(
+                    decoded.unwrap(),
+                    handles.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+                    "{rows}"
+                ),
+                Err(detail) => {
+                    let failed = decoded.unwrap_err();
+                    assert!(failed.to_string().contains(detail), "{rows}: {failed}");
+                    assert!(
+                        matches!(failed, HostFail::TerminalList(_)),
+                        "{rows}: {failed}"
+                    );
+                }
+            }
+        }
+        // the pin underneath the table: malformed data can never yield
+        // the empty verified closure - only the genuinely empty list does
+        let empty = terminal_handles(&answer("[]")).unwrap();
+        assert!(empty.is_empty());
+        let malformed = terminal_handles(&answer("[{}]"));
+        assert!(malformed.is_err(), "a malformed row is not absence");
     }
 
     #[test]
