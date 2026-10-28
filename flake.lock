@@ -3416,11 +3416,11 @@
         "wrapped-pi": "wrapped-pi"
       },
       "locked": {
-        "lastModified": 1793082733,
-        "narHash": "sha256-7L6jNTg+SYVxpGX0bjdGZmBdr+mg0R18ZGqq007y5cU=",
+        "lastModified": 1793147211,
+        "narHash": "sha256-6BEpdXm3MpQD5fc2Ar4AzoOJBDaVkbcWsg1/RnMPov8=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "229e8236008ea7a4398b0dd97c002f01977e5f4d",
+        "rev": "ff0923c7a5bf6ef5aef2741335e4bc3f22d2e8c1",
         "type": "github"
       },
       "original": {
