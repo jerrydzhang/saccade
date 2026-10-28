@@ -57,6 +57,7 @@ class Server:
             (self.run / name).mkdir()
         self.db = self.run / 'workbench.db'
         self.repo = self.run / 'repo'
+        self.version = subprocess.check_output([str(SAC), '--version'], text=True).strip().split()[1]
         self.fakebin = self.run / 'fakebin'
         self.fakebin.mkdir()
         orca = self.fakebin / 'orca'
@@ -157,7 +158,7 @@ class Server:
     def identity(self):
         status, raw = self.request('/api/v1/version')
         data = json.loads(raw)
-        if status != 200 or data.get('version') != '0.15.0' or data.get('db') != str(self.db):
+        if status != 200 or data.get('version') != self.version or data.get('db') != str(self.db):
             raise RuntimeError('serve DB/version gate refused')
         return data
 
