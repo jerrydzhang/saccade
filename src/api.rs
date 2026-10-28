@@ -2269,9 +2269,35 @@ fn reconcile_operation(
         let stage = world.workspace_stage(birth);
         match (stage, registered, present) {
             (Some(crate::WorkspaceStage::Cleaned), None, false) => {
-                preserved.push(entry(
-                    "recorded Cleaned; checkout and worktree registration absent".into(),
-                ));
+                // recorded Cleaned is verified through the same doors the
+                // cleanup itself ran: orphan or live host resources
+                // surface as this birth's conflict, never as a
+                // reconciled state
+                let dir_str = canonical.display().to_string();
+                match crate::host::workspace_terminals(&dir_str) {
+                    Ok(t) if !t.is_empty() => {
+                        conflicts.push(entry(format!(
+                            "the host names {} live terminal(s) at a workspace recorded Cleaned",
+                            t.len()
+                        )));
+                        continue;
+                    }
+                    Err(e) => {
+                        conflicts.push(entry(format!("terminal state unreadable: {e}")));
+                        continue;
+                    }
+                    _ => {}
+                }
+                match crate::host::workspace_visible_presence(&dir_str) {
+                    Ok(crate::host::HostPresence::VisiblyAbsent) => preserved.push(entry(
+                        "verified: recorded Cleaned, checkout absent, host names no workspace"
+                            .into(),
+                    )),
+                    Ok(crate::host::HostPresence::Listed) => conflicts.push(entry(
+                        "the host still lists a workspace recorded Cleaned".into(),
+                    )),
+                    Err(e) => conflicts.push(entry(format!("host presence unreadable: {e}"))),
+                }
             }
             (Some(crate::WorkspaceStage::Cleaned), _, true) => {
                 conflicts.push(entry(

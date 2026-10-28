@@ -3408,6 +3408,17 @@ if [ "$1" = worktree ]; then
   if [ "$2" = show ]; then
     # visible presence follows the live checkout, never the
     # registration file: a gone checkout is selector_not_found
+    if [ -f "${FAKE_ORCA_SHOW_GARBAGE:-/dev/null-nothing}" ]; then
+      rm -f "${FAKE_ORCA_SHOW_GARBAGE}"
+      printf 'not json at all\n'
+      exit 0
+    fi
+    # a divergent host names paths in this file listed even when the
+    # checkout is gone - the model for the Listed conflict
+    if [ -n "$path" ] && [ -f "${FAKE_ORCA_LISTED:-/dev/null-nothing}" ] && grep -Fxq "$path" "$FAKE_ORCA_LISTED" 2>/dev/null; then
+      printf '{"ok":true,"result":{"worktree":{"path":"%s"}}}\n' "$path"
+      exit 0
+    fi
     if [ -n "$path" ] && [ -d "$path" ]; then
       printf '{"ok":true,"result":{"worktree":{"path":"%s"}}}\n' "$path"
     else
@@ -7565,6 +7576,8 @@ struct LifecycleRig {
     registered: std::path::PathBuf,
     host_state: std::path::PathBuf,
     close_fail: std::path::PathBuf,
+    listed: std::path::PathBuf,
+    show_garbage: std::path::PathBuf,
     host_env: Vec<(String, String)>,
 }
 
@@ -7581,9 +7594,12 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
     let host_state = dir.join("host-state");
     let registered = dir.join("host-registered");
     let close_fail = dir.join("close-fail");
+    let listed = dir.join("host-listed");
+    let show_garbage = dir.join("show-garbage");
     std::fs::write(&host_log, b"").unwrap();
     std::fs::write(&host_state, b"").unwrap();
     std::fs::write(&registered, b"").unwrap();
+    std::fs::write(&listed, b"").unwrap();
     let host_env = vec![
         ("FAKE_ORCA_LOG".to_string(), host_log.display().to_string()),
         (
@@ -7597,6 +7613,11 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
         (
             "FAKE_ORCA_CLOSE_FAIL".to_string(),
             close_fail.display().to_string(),
+        ),
+        ("FAKE_ORCA_LISTED".to_string(), listed.display().to_string()),
+        (
+            "FAKE_ORCA_SHOW_GARBAGE".to_string(),
+            show_garbage.display().to_string(),
         ),
         (
             "PATH".to_string(),
@@ -7629,6 +7650,8 @@ fn lifecycle_rig(tag: &str) -> LifecycleRig {
         registered,
         host_state,
         close_fail,
+        listed,
+        show_garbage,
         host_env,
     }
 }
@@ -8290,7 +8313,10 @@ async fn reconcile_verifies_preserves_and_records_on_apply() {
     // the applied run records the verified Cleaned facts in one batch
     let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
     assert!(ok, "the applied run fails: {out}{err}");
-    assert!(out.contains("applied"), "{out}");
+    assert!(
+        out.contains("applied - 1 verified Cleaned fact(s) recorded"),
+        "{out}"
+    );
     assert!(out.contains(&gone), "{out}");
     assert!(out.contains(&bad), "{out}");
     let (_, body) = get_json(&rig.url, "/api/v1/records");
@@ -8322,6 +8348,69 @@ async fn reconcile_verifies_preserves_and_records_on_apply() {
         "the preserved workspace's branch stands"
     );
     let _ = gone_branch;
+
+    // the recorded-Cleaned arm verifies the same doors the cleanup ran:
+    // an orphan terminal the host still names is a conflict, never a
+    // reconciled state, and --apply lands no fact for it
+    let (_, _, ws_orphan) = rig_provision(&rig, "orphaned");
+    rig_register(&rig, &ws_orphan);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_orphan]);
+    assert!(ok, "the orphan setup clean refuses: {err}");
+    rig_open_terminal(&rig, "orphan_term_7", &ws_orphan);
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    let records_before_orphan = body.clone();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
+    assert!(ok, "reconcile fails: {out}{err}");
+    assert!(
+        out.contains("the host names 1 live terminal(s) at a workspace recorded Cleaned"),
+        "{out}"
+    );
+    assert!(out.contains("applied - no new facts recorded"), "{out}");
+    let (_, body) = get_json(&rig.url, "/api/v1/records");
+    assert_eq!(
+        json_of(&records_before_orphan)["records"],
+        json_of(&body)["records"],
+        "the orphan conflict landed no fact"
+    );
+    std::fs::write(&rig.host_state, b"").unwrap();
+
+    // the divergent Listed answer is a conflict at a recorded-Cleaned
+    // workspace with the checkout gone
+    let (_, _, ws_divergent) = rig_provision(&rig, "divergent");
+    rig_register(&rig, &ws_divergent);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_divergent]);
+    assert!(ok, "the divergent setup clean refuses: {err}");
+    use std::io::Write as _;
+    let mut listed_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&rig.listed)
+        .unwrap();
+    writeln!(listed_file, "{ws_divergent}").unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
+    assert!(ok, "reconcile fails: {out}{err}");
+    assert!(
+        out.contains("the host still lists a workspace recorded Cleaned"),
+        "{out}"
+    );
+
+    // an unreadable host answer is a conflict naming the uncertainty
+    let (_, _, ws_unknown) = rig_provision(&rig, "unreadable");
+    rig_register(&rig, &ws_unknown);
+    let (ok, _out, err) = rig_sac(&rig, &["workspace", "clean", &ws_unknown]);
+    assert!(ok, "the unknown setup clean refuses: {err}");
+    std::fs::write(&rig.show_garbage, b"once\n").unwrap();
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile"]);
+    assert!(ok, "reconcile fails: {out}{err}");
+    assert!(out.contains("host presence unreadable"), "{out}");
+
+    // verified absence of a recorded-Cleaned workspace reads as the
+    // verified preserved fact
+    let (ok, out, err) = rig_sac(&rig, &["workspace", "reconcile", "--apply"]);
+    assert!(ok, "the final reconcile fails: {out}{err}");
+    assert!(
+        out.contains("verified: recorded Cleaned, checkout absent, host names no workspace"),
+        "{out}"
+    );
 }
 
 /// A recorded path addresses its own birth: a historical establishment

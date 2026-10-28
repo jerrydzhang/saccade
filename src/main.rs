@@ -2434,10 +2434,17 @@ fn workspace_reconcile_door(
         }))
         .expect("plain data"));
     }
-    let mode = if apply {
-        "applied - verified Cleaned facts recorded"
+    // the header says only what actually landed: an applied run over
+    // conflicts records no facts and says so
+    let mode = if !apply {
+        "dry run - nothing recorded (pass --apply to record)".to_string()
+    } else if !reply.records.is_empty() {
+        format!(
+            "applied - {} verified Cleaned fact(s) recorded",
+            reply.records.len()
+        )
     } else {
-        "dry run - nothing recorded (pass --apply to record)"
+        "applied - no new facts recorded".to_string()
     };
     let section = |name: &str, rows: &[client::ReconcileEntry]| -> String {
         if rows.is_empty() {
