@@ -123,7 +123,12 @@ with them.
   production joins the machine's own host server. Harnesses are
   interchangeable terminals within the host; the contract's verbs are
   the entire host boundary, and another host is a dialect plus its own
-  claim, never an architecture change. A launch asks the host for one
+  claim, never an architecture change. The contract is the doors' floor,
+  never the deployment ceiling: doors never depend on host capabilities
+  beyond the contract, while the deployment may exploit host richness
+  through the host's own no-fork surfaces - shipped host artifacts are
+  conveniences on the host's faces, and no door routes through them.
+  A launch asks the host for one
   terminal or adopts the caller's own (the here door refuses every
   unaddressable form) and never supervises it; message delivery and
   waits run through the same contract. There is no tracker-owned model
