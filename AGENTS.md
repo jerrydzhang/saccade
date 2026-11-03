@@ -117,19 +117,24 @@ with them.
   service, not before.
 - Single authority is the honest homelab contract; distributed replicas are a
   non-goal (IDs break first if that changes - accepted).
-- Native Pi stays the pinned harness, never the ambient binary. Its
-  Saccade-integrated composition is separately callable, not a replacement
-  for ordinary Pi. A launch asks the host for one terminal or takes the
-  caller's own (--here) and never supervises it, fresh starts and resumes
-  alike; the integration associates
-  native sessions, delivers messages, and yields its own waits to input.
-  There is no tracker-owned model loop or managed RPC harness.
+- The host contract is law; each tracker version names one dev host with
+  a tested claim for exactly that version, pinned as a repo flake lock
+  entry. The pin is a development guarantee, never a runtime gate;
+  production joins the machine's own host server. Harnesses are
+  interchangeable terminals within the host; the contract's verbs are
+  the entire host boundary, and another host is a dialect plus its own
+  claim, never an architecture change. A launch asks the host for one
+  terminal or adopts the caller's own (the here door refuses every
+  unaddressable form) and never supervises it; message delivery and
+  waits run through the same contract. There is no tracker-owned model
+  loop or managed RPC harness.
 - An incarnation identifies a native session, not a task, workspace, or
   running process, and has no lifecycle in the tracker. Turns, compaction,
   resume, and workspace handoff retain identity; fresh sessions and forks
   create another. Historical existence asserts no current execution.
-  Native-session associations and saved locations are record facts;
-  terminal handles are runtime information.
+  Session associations - host addresses, launched or adopted - and saved
+  locations are record facts; transient terminal handles are runtime
+  information.
 - Tasks, incarnations, and workspaces have separate identities. Participation
   need not begin with a task, and launching never transfers whole-task
   ownership implicitly. An incarnation can select, create, and switch
@@ -148,7 +153,8 @@ with them.
   contacts come from creation, contact, or explicit introduction, not a
   global directory, authority, expertise, or an obligation to work.
 - Messages are recorded before an immediate submission attempt. Submission
-  means native input queue acceptance, never reading or action. Missing
+  means host-accepted ordered submission - written and submitted - never
+  reading or action. Missing
   confirmation is missing evidence, not a delivery obligation or another
   resident lifecycle. Messages activate already-running recipients at
   supported boundaries, never restart stopped sessions; explicit manual
