@@ -2586,13 +2586,9 @@ async fn incarnation_register(State(app): State<AppState>, body: Bytes) -> Respo
     }
 }
 
-/// The launch door's birth, resolving the attach-before-register
-/// race: a fresh native id births with its returned address, while an
-/// incarnation the session already birthed by attaching (locator
-/// bound, no address) takes the address instead - one incarnation
-/// either way, and the reply names the resolved identity. A known id
-/// with no bound locator is a second door birth: the fold refuses it,
-/// never a silent re-addressing.
+/// Recovery is the attach-born unaddressed case only: an addressed
+/// session keeps the fold's registration refusal - address moves
+/// belong to the relaunch door.
 fn incarnation_register_operation(
     inner: &mut Inner,
     native_id: crate::NativeSessionId,
@@ -2608,7 +2604,9 @@ fn incarnation_register_operation(
         .iter()
         .find(|(_, ctx)| ctx.incarnation.native_id() == Some(&native_id));
     match known {
-        Some((id, ctx)) if ctx.incarnation.saved_session().is_some() => {
+        Some((id, ctx))
+            if ctx.incarnation.saved_session().is_some() && ctx.incarnation.address().is_none() =>
+        {
             let command = Command::AssignHostAddress {
                 incarnation: *id,
                 address: Some(address),

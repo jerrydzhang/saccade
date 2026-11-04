@@ -671,10 +671,7 @@ fn the_native_integration_attaches_and_sends_over_the_wire() {
         .collect();
     assert_eq!(standing.len(), 2, "the refused attempts stand pending");
 
-    // the other arrival order: a session attach that lands before its
-    // door's registration resolves into one incarnation - the register
-    // carries the returned address to the attach-born identity instead
-    // of birthing a twin
+    // attach first, then register resolves the attach-born birth
     let (status, body) = post_json(
         &base_url,
         "/api/v1/native/attach",
@@ -703,8 +700,32 @@ fn the_native_integration_attaches_and_sends_over_the_wire() {
     assert_eq!(records[0]["payload"]["incarnation"], attach_birth);
     assert_eq!(records[0]["payload"]["address"], "t3");
 
-    // the door's second birth for a known unbound id is a duplicate:
-    // the fold refuses it - no twin, no silent re-addressing
+    // a re-register of the addressed+bound session keeps the prior refusal
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "cccc4444", "address": "t6", "adopted": false}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "saved_session_mismatch",
+        "{body}"
+    );
+    // the refusal moved no address: the recovery owns only the unaddressed case
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log will not fold"),
+    };
+    let resolved = world
+        .incarnations
+        .values()
+        .find(|ctx| ctx.incarnation.native_id().map(|n| n.as_str()) == Some("cccc4444"))
+        .unwrap();
+    assert_eq!(resolved.incarnation.address(), Some("t3"));
+
+    // a second door birth for a known unbound id is the fold's duplicate
     let (status, body) = post_json(
         &base_url,
         "/api/v1/incarnations/register",
@@ -4947,10 +4968,7 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
     );
     stop_holder(&fx.pidfile, &guard);
 
-    // the liveness preflight gates the relaunched kind: the recorded
-    // address reads live - the fake host's default - so a duplicate is
-    // never submitted, and an unprobeable address refuses as unknown,
-    // naming its evidence, never reading as free
+    // a live recorded address refuses the resume
     let run_log = fx.hcs.parent().unwrap().join("argv-run.log");
     let runs_before = std::fs::read_to_string(&run_log).unwrap();
     let mut live_envs = envs.clone();
@@ -4969,7 +4987,7 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
     assert!(!ok, "an unprobeable address must refuse the resume");
     assert!(err.contains("liveness cannot be read"), "{err}");
     assert!(err.contains("mangled"), "{err}");
-    // both refusals probed the address (hc get) and submitted no launch
+    // the refusals probed the address and submitted no launch
     let runs_after = std::fs::read_to_string(&run_log).unwrap();
     assert_eq!(runs_after, runs_before, "the refusals submitted no launch");
 

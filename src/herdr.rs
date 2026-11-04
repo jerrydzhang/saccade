@@ -1027,9 +1027,7 @@ esac
 
     #[test]
     fn launch_live_and_close_expire_their_bound_into_honest_refusals() {
-        // one shared window over the single asks: a hung core is
-        // killed, never awaited - the launch names an unaskable host
-        // (no terminal was created), live and close stay unknown
+        // the three single asks expire their shared window into their honest refusals
         let (host, dir) = fake("ask-hang", &["run.x=hang", "get.x=hang", "kill.x=hang"]);
         let host = host.with_ask_bound(Duration::from_millis(400));
         let started = std::time::Instant::now();
