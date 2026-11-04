@@ -1473,85 +1473,6 @@ fn human_ctx() -> Context {
     }
 }
 
-type FormReply = (u16, String, Option<String>);
-
-/// The form reply plus the Set-Cookie header, for first-claim contracts.
-fn post_form_ck(
-    url: &str,
-    headers: &[(&str, &str)],
-    body: &str,
-) -> (u16, String, Option<String>, Option<String>) {
-    let mut r = ureq::post(url)
-        .config()
-        .max_redirects(0)
-        .http_status_as_error(false)
-        .build();
-    for (k, v) in headers {
-        r = r.header(*k, *v);
-    }
-    let mut r = r.send(body).expect("the loopback server answers");
-    let loc = r
-        .headers()
-        .get("location")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    let cookie = r
-        .headers()
-        .get("set-cookie")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    (
-        r.status().as_u16(),
-        r.body_mut().read_to_string().unwrap(),
-        loc,
-        cookie,
-    )
-}
-
-fn world_of(state: &ConsoleState) -> saccade::World {
-    match state.snapshot() {
-        Ok(s) => s.world,
-        Err(_) => panic!("the snapshot refused"),
-    }
-}
-
-/// The task's thread lines, oldest first.
-fn lines_of(world: &saccade::World, n: usize) -> Vec<saccade::views::CommentLine> {
-    let mut v: Vec<_> = saccade::views::thread_view(world, TaskId(n))
-        .expect("the thread folds")
-        .items
-        .into_iter()
-        .flat_map(|item| match item {
-            saccade::views::ThreadItem::Note(line) => vec![line],
-            saccade::views::ThreadItem::Artifacts(_) => Vec::new(),
-        })
-        .collect();
-    v.sort_by_key(|l| l.seq);
-    v
-}
-
-fn post_form(url: &str, headers: &[(&str, &str)], body: &str) -> FormReply {
-    let mut r = ureq::post(url)
-        .config()
-        .max_redirects(0)
-        .http_status_as_error(false)
-        .build();
-    for (k, v) in headers {
-        r = r.header(*k, *v);
-    }
-    let mut r = r.send(body).expect("the loopback server answers");
-    let loc = r
-        .headers()
-        .get("location")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    (
-        r.status().as_u16(),
-        r.body_mut().read_to_string().unwrap(),
-        loc,
-    )
-}
-
 fn get_html(url: &str) -> (u16, String) {
     let mut r = ureq::get(url)
         .config()
@@ -1573,21 +1494,6 @@ fn seed_task(state: &ConsoleState, name: &str) {
             bare_request(),
         )
         .expect("the seed task lands");
-}
-
-/// The last comment_revised record's payload, as the door's patch
-/// intent landed it.
-fn last_revision_of(state: &ConsoleState) -> String {
-    match state.snapshot() {
-        Ok(s) => s
-            .rows
-            .iter()
-            .rev()
-            .find(|r| r.kind == "comment_revised")
-            .map(|r| r.payload.clone())
-            .expect("a revision landed"),
-        Err(_) => panic!("the snapshot refused"),
-    }
 }
 
 /// The workbench page owns /, /t/N, and /c/N deep links, and the

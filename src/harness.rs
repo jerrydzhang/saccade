@@ -248,9 +248,8 @@ mod tests {
     // one claude-code-shaped transcript: records naming sessionId and cwd
     fn cc_story(session_id: &str, cwd: &str) -> Vec<u8> {
         let records = [
-            format!(
-                r#"{{"type":"summary","summary":"implement the adapter","leafUuid":"11111111-1111-4111-8111-111111111111"}}"#
-            ),
+            r#"{"type":"summary","summary":"implement the adapter","leafUuid":"11111111-1111-4111-8111-111111111111"}"#
+                .to_string(),
             format!(
                 r#"{{"type":"user","uuid":"22222222-2222-4222-8222-222222222222","parentUuid":null,"timestamp":"2026-10-21T03:40:04.770Z","sessionId":"{session_id}","cwd":"{cwd}","gitBranch":"saccade/t-53","version":"2.1.238","message":{{"role":"user","content":"implement the harness adapter"}}}}"#
             ),
@@ -286,7 +285,7 @@ mod tests {
         assert_eq!(Harness::Pi.as_str(), "pi");
         assert_eq!(Harness::ClaudeCode.as_str(), "claude-code");
         for (token, harness) in [("pi", Harness::Pi), ("claude-code", Harness::ClaudeCode)] {
-            let wire = serde_json::to_value(&harness).unwrap();
+            let wire = serde_json::to_value(harness).unwrap();
             assert_eq!(wire.as_str().unwrap(), token);
             assert_eq!(serde_json::from_value::<Harness>(wire).unwrap(), harness);
         }
@@ -320,8 +319,7 @@ mod tests {
         );
     }
 
-    // the argv inventory: each harness speaks its own fresh and resume
-    // flags, the prompt rides as one positional word
+    // the argv inventory: each harness speaks its own fresh and resume flags
     #[test]
     fn the_argv_inventory_carries_each_harnesss_own_flags() {
         let repo = Path::new("/repo/wt");
@@ -406,8 +404,7 @@ mod tests {
         );
     }
 
-    // the saved-header inventory: each harness reads its own file's
-    // facts, and every refusal names its variant with bytes untouched
+    // the saved-header inventory: each harness's facts and refusals
     #[test]
     fn the_saved_header_inventory_reads_each_harnesss_own_facts() {
         let dir = scratch("header");
@@ -427,8 +424,7 @@ mod tests {
             Err(HandoffFail::Missing(_))
         ));
 
-        // a session that moved: the first carrying record keeps the
-        // launch-time cwd, no later record rewrites it
+        // a moved session: the first carrying record keeps the launch-time cwd
         let moved = dir.join("moved.jsonl");
         let mut bytes = cc_story("aaaa1111-1111-4111-8111-111111111111", "/repo/born");
         bytes.extend_from_slice(

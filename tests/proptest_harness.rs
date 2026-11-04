@@ -206,23 +206,6 @@ fn record_ref_at(records: usize, n: u8) -> RecordId {
     }
 }
 
-/// The standing Offered or Concluded accounts, with a one-past-the-end sentinel.
-fn reliable_offer_at(world: &World, n: u8) -> Option<CommentId> {
-    let ids: Vec<CommentId> = world
-        .tasks
-        .iter()
-        .filter(|ctx| {
-            matches!(
-                ctx.task.state,
-                saccade::TaskState::Offered | saccade::TaskState::Concluded
-            )
-        })
-        .filter_map(|ctx| ctx.current_offer)
-        .collect();
-    let slot = n as usize % (ids.len() + 1);
-    ids.get(slot).copied()
-}
-
 /// The historical incarnation born with a task's establishment; the
 /// sentinel slot draws a guaranteed-absent reference.
 fn incarnation_at(world: &World, task: TaskId, n: u8) -> Option<saccade::IncarnationId> {

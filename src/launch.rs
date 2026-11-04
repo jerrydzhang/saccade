@@ -147,15 +147,11 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
         } => {
             let dir = canonical_workspace(workspace)?;
             cleaned_guard(world, &dir)?;
-            // the pinned binary resolves before anything exists: a
-            // missing pin refuses a launch that never started
+            // the pin resolves before anything exists: a miss refuses
+            // a launch that never started
             let bin = harness.pinned_binary().map_err(|e| pin_miss(&harness, e))?;
-            // the door pre-allocates the native session: the harness
-            // creates the exact id at its first save, and the door
-            // births the incarnation itself, so identity and address
-            // exist at launch time - no attach handshake, no
-            // correlation token. The tracker's own session tree is the
-            // pi save target; the door prepares it.
+            // the door pre-allocates the native id: identity and
+            // address exist at launch time, no attach handshake
             let native_id = pi_session::generate_session_id();
             if harness == Harness::Pi {
                 let sessions = pi_session::sessions_dir(repo);
@@ -209,11 +205,8 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                 )));
             }
             // strict resume: the saved file must exist and carry the
-            // recorded native id - a missing file refuses, it never
-            // fabricates fresh state under the same identity. A
-            // launch-door birth binds its locator at the harness's
-            // first save; an unbound birth has nothing saved, so
-            // nothing can resume.
+            // recorded native id, and an unbound birth has nothing
+            // saved to resume
             let Some(saved_session) = saved_session else {
                 return Err(LaunchFail::Usage(format!(
                     "{token}'s saved session locator is not bound yet: the session has not saved, so there is nothing to resume"
@@ -229,10 +222,9 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                     native_id.as_str()
                 )));
             }
-            // the recorded change is the workspace authority: a switch
-            // records where the session lives and the file is never
-            // rewritten to follow it; the header cwd answers only for
-            // sessions whose fold holds no change
+            // the recorded change is the workspace authority; the
+            // header cwd answers only for sessions whose fold holds
+            // no change
             let dir = match world.workspace_changes.get(&id) {
                 Some(change) => std::path::PathBuf::from(change.worktree.as_path()),
                 None => std::path::PathBuf::from(&header.cwd),
@@ -244,18 +236,16 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                 )));
             }
             cleaned_guard(world, &dir)?;
-            // liveness preflight, before anything is submitted - and
-            // only for the launched kind: a launched terminal dies
-            // with its session, so a live terminal names a live
-            // session. An adopted pane is the caller's own program and
-            // outlives the session, so terminal liveness is never
-            // session liveness for it - the native duplicate-attach
-            // refusal is that kind's backstop. An addressless
-            // pre-contract incarnation has no host evidence at all:
-            // the resume proceeds without a liveness refusal, and a
-            // live twin is caught at the resumed session's attach - the
-            // pre-B migration is exit + resume. A live session refuses
-            // the launch - a duplicate is never submitted.
+            // liveness preflight, only for the launched kind: a
+            // launched terminal dies with its session, so a live
+            // terminal names a live session; an adopted pane is the
+            // caller's own program and outlives the session, so
+            // terminal liveness is never session liveness for it - the
+            // native duplicate-attach refusal is that kind's backstop.
+            // An addressless pre-contract incarnation has no host
+            // evidence at all: the resume proceeds, and a live twin is
+            // caught at the resumed session's attach - the pre-B
+            // migration is exit + resume
             if let Some(carried) = address.as_ref().filter(|_| !*adopted).cloned() {
                 // the preflight's own host: resolution failure is the
                 // deployment's break, never a free liveness answer

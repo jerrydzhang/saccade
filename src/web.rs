@@ -411,15 +411,6 @@ mod tests {
         })
     }
 
-    fn agent() -> &'static Context {
-        static A: OnceLock<Context> = OnceLock::new();
-        A.get_or_init(|| Context {
-            actor: ActorName::new("pi".into()).unwrap(),
-            tier: Tier::Agent,
-            scope: None,
-        })
-    }
-
     fn record(seq: usize, at: u64, ctx: &Context, event: Event) -> Record {
         Record {
             id: RecordId(seq),
