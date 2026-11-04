@@ -1,58 +1,67 @@
-// tmux prefix for herdr: ctrl-space opens this mod as a focused overlay,
-// the next keystroke fires its mapped command and closes it. The win98
-// shipped mod proves the machinery (overlay focus, in-view keys,
-// closeOverlay); the exact registration calls below are verified against
-// the generated .d.ts beside the laptop AGENTS.md, then herdr-app check.
-// The palette stays the escape hatch on its built-in ctrl-shift-p.
+// tmux prefix for herdr: ctrl-space (bound in keys.json as "tmux:prefix")
+// opens this mod as a small overlay that takes the keyboard; the next
+// keystroke fires its mapped command and closes the overlay. All calls
+// are the app's own documented surfaces: nextCommand delivers the
+// keys.json binding, openOverlay shows the mod, content_focus_handle
+// takes the keyboard, run executes an app command.
 import { View, div } from "gpui-kit";
-import { closeOverlay, run, theme } from "herdr";
+import { openOverlay, closeOverlay, nextCommand, props, run, theme } from "herdr";
 
-// one-shot chord table: key -> [command, args]
+// one-shot chord table: printable key -> [command, args]
 const CHORDS = {
-  h: ["pane.go", { direction: "left" }],
-  l: ["pane.go", { direction: "right" }],
-  k: ["pane.go", { direction: "up" }],
-  j: ["pane.go", { direction: "down" }],
-  z: ["pane.zoom", {}],
-  c: ["tab.new", {}],
-  n: ["tab.next", {}],
-  p: ["tab.prev", {}],
-  x: ["pane.close", {}],
-  s: ["space.next", {}],
-  a: ["space.prev", {}],
-  "%": ["pane.split", { direction: "right" }],
-  '"': ["pane.split", { direction: "down" }],
+  h: ["pane.go", "left"],
+  l: ["pane.go", "right"],
+  k: ["pane.go", "up"],
+  j: ["pane.go", "down"],
+  z: ["pane.zoom"],
+  c: ["tab.new"],
+  n: ["tab.next"],
+  p: ["tab.prev"],
+  x: ["pane.close"],
+  s: ["space.next"],
+  a: ["space.prev"],
+  "%": ["pane.split", "right"],
+  '"': ["pane.split", "down"],
 };
 
-for (let i = 1; i <= 9; i++) {
-  CHORDS[String(i)] = ["tab.select", { tab: i }];
-}
-
 export default class TmuxPrefix extends View {
-  // the overlay's whole render: a thin strip saying the prefix is armed,
-  // colored from the theme so it belongs to the app's look
-  render() {
+  init(_props, cx) {
+    this.focus = cx.focus_handle();
+    // the command loop: every press of the bound key arrives here
+    cx.spawn(async () => {
+      for (;;) {
+        const c = await nextCommand();
+        if (c === "tmux:prefix" || c === "prefix") {
+          openOverlay({
+            mod: "tmux",
+            kind: "window",
+            frame: "none",
+            key: "tmux-prefix",
+          });
+        }
+      }
+    });
+    // a window-kind overlay does not take the keyboard by itself
+    cx.spawn(async () => {
+      this.focus.focus();
+    });
+  }
+
+  render(_cx) {
     const t = theme();
     return div()
-      .p(6)
+      .content_focus_handle(this.focus)
+      .on_key_down((e, _cx) => {
+        closeOverlay(props().overlay);
+        const key = e.key_char ?? e.key;
+        const hit = CHORDS[key] ?? (/^[1-9]$/.test(key) ? ["tab.select", key] : null);
+        if (hit) run(hit[0], hit.slice(1));
+      })
+      .p(8)
       .bg(t.accent)
       .rounded(4)
       .text_color(t.accent_foreground)
       .text_size(13)
-      .child("tmux prefix - h j k l z c n p 1-9 % \" x s a");
+      .child("prefix - h j k l | z | c n p 1-9 | % \" | x | s a");
   }
-
-  on_key_down(e, cx) {
-    const key = e.key; // verify: bare printable name on the event
-    const chord = CHORDS[key];
-    closeOverlay(props_of(this));
-    if (chord) cx.exec(() => run(chord[0], chord[1]));
-    return true; // consumed either way: one shot, unknown closes
-  }
-}
-
-// draft: the app passes the overlay's own props into the view; the win98
-// mod reads props().overlay - keep that shape until the .d.ts names it
-function props_of(view) {
-  return view.props ? view.props() : {};
 }
