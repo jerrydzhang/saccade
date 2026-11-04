@@ -301,10 +301,12 @@
 
               process.manager.implementation = "native";
               processes.sac = {
-                # production posture: empty is unset by the adapter resolution
-                # contract, so the server joins the machine host while dev
-                # shells keep the sandboxed dev arm
-                env.SACCADE_HERDR = "";
+                # production posture, deterministic: the override arm wins over
+                # any PATH order (the devshell PATH carries a dev-arm wrapper
+                # also named herdr-core; empty-string resolution lost that
+                # race at runtime), so the server always joins the machine
+                # core through the system binary
+                env.SACCADE_HERDR = "/etc/profiles/per-user/jerry/bin/herdr-core";
                 exec = "${saccade.packages.${system}.default}/bin/sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811";
                 restart = {
                   on = "on_failure";
