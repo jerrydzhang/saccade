@@ -1,10 +1,8 @@
 //! The recorded harness distinction and its compiled-in native session
-//! adapters: the pinned binary, the fresh and resume command lines,
-//! and the saved-transcript header facts ordinary resume validates.
-//! Small compiled-in functions, never a plugin framework. The caller
-//! owns process quiescence and the native startup itself; these
-//! compose one argv and read one file, never the record or the
-//! tracker.
+//! adapters: the pinned binary, the fresh and resume command lines, and
+//! the saved-transcript header facts ordinary resume validates. The
+//! caller owns process quiescence and the native startup itself; these
+//! compose one argv and read one file, never the record or the tracker.
 
 use std::path::{Path, PathBuf};
 
@@ -12,10 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::pi_session::{HandoffFail, SessionHeader};
 
-/// The harness a native session runs under. Recorded at the
-/// registration and the attach; native identity is interpreted within
-/// its harness, and registrations born before the field existed fold
-/// as pi.
+/// The harness a native session runs under; the default is what
+/// registrations born before the field carried.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Harness {
@@ -33,12 +29,9 @@ impl Harness {
         }
     }
 
-    /// The pinned binary: the runtime override env first, then the
-    /// flake pin this binary was built with. Never an arbitrary PATH
-    /// guess; every harness resolves by the same shape.
+    /// The pinned binary; a PATH guess is never taken.
     pub fn pinned_binary(&self) -> Result<PathBuf, String> {
         match self {
-            // pi's pin is the host launch mechanics' own
             Harness::Pi => crate::host::pinned_pi().map_err(|e| e.to_string()),
             Harness::ClaudeCode => resolve_pin(
                 std::env::var_os("SACCADE_CLAUDE_CODE"),
@@ -48,10 +41,8 @@ impl Harness {
         }
     }
 
-    /// The composed fresh-launch argv: one pinned binary started at
-    /// the exact repo, carrying the pre-allocated native id. Pi saves
-    /// under the tracker's own session dir; claude-code takes only the
-    /// UUID and lands the transcript in its own project tree.
+    /// The fresh-launch argv; pi saves under the tracker's own session
+    /// dir, claude-code takes only the UUID.
     pub fn fresh_argv(
         &self,
         repo: &Path,
@@ -62,9 +53,8 @@ impl Harness {
         self.fresh_line(&bin, repo, native_id, prompt)
     }
 
-    /// The composed resume argv: the saved locator is each harness's
-    /// own resume token. Pi re-speaks the native id and its session
-    /// dir; claude-code resumes by the absolute transcript path.
+    /// The resume argv; the saved locator is each harness's own
+    /// resume token.
     pub fn resume_argv(
         &self,
         native_id: &str,
@@ -75,10 +65,8 @@ impl Harness {
         Ok(self.resume_line(&bin, native_id, session, prompt))
     }
 
-    /// The saved transcript's validated header facts: its native id
-    /// and its initial cwd. The cwd is the launch-time workspace
-    /// fallback only - a recorded workspace change stays the
-    /// authority, and the file is never rewritten to follow.
+    /// The saved transcript's header facts; the cwd is the launch-time
+    /// fallback, a recorded workspace change stays the authority.
     pub fn read_header(&self, session: &Path) -> Result<SessionHeader, String> {
         match self {
             Harness::Pi => crate::pi_session::read_header(session).map_err(|e| e.to_string()),
@@ -135,8 +123,7 @@ impl Harness {
                         .unwrap_or_default(),
                 );
             }
-            // the transcript path is claude-code's own resume token:
-            // --resume accepts the absolute .jsonl file in place of an id
+            // the transcript path is claude-code's own resume token
             Harness::ClaudeCode => {
                 argv.push("--resume".into());
                 argv.push(session.display().to_string());
@@ -147,8 +134,6 @@ impl Harness {
     }
 }
 
-/// One prompt word list rides as the harnesses' single positional
-/// text, the composition the launch doors already speak.
 fn prompt_tail(prompt: &[String]) -> Vec<String> {
     if prompt.is_empty() {
         Vec::new()
@@ -157,9 +142,7 @@ fn prompt_tail(prompt: &[String]) -> Vec<String> {
     }
 }
 
-/// Pin resolution as pure data so the precedence is testable: the
-/// non-empty runtime override wins, then the compile pin, and
-/// otherwise the harness names what it missed.
+// pure so the precedence is testable without touching the environment
 fn resolve_pin(
     env: Option<std::ffi::OsString>,
     compile: Option<&str>,
@@ -174,9 +157,7 @@ fn resolve_pin(
     Err(missing.to_string())
 }
 
-/// claude-code's --session-id takes a valid UUID; the tracker's fresh
-/// native ids already are, and anything else would launch a session
-/// claude-code refuses or renames.
+// claude-code refuses or renames a session whose --session-id is no UUID
 fn is_uuid(s: &str) -> bool {
     let bytes = s.as_bytes();
     if bytes.len() != 36 {
@@ -194,10 +175,8 @@ fn is_uuid(s: &str) -> bool {
     true
 }
 
-/// A claude-code transcript carries no session header line: every
-/// record names its own sessionId and cwd. Validation reads the first
-/// record carrying both - existing transcript fields only, nothing
-/// invented - and strict saved-id matching stays with the caller.
+// claude-code writes no header line: the first record carrying both
+// sessionId and cwd answers, from existing transcript fields only
 fn claude_code_header(path: &Path) -> Result<SessionHeader, HandoffFail> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -266,8 +245,7 @@ mod tests {
         dir
     }
 
-    // a claude-code-shaped transcript: no header line, records naming
-    // their own sessionId and cwd, then a story of turns
+    // one claude-code-shaped transcript: records naming sessionId and cwd
     fn cc_story(session_id: &str, cwd: &str) -> Vec<u8> {
         let records = [
             format!(
@@ -302,9 +280,9 @@ mod tests {
         }
     }
 
+    // the wire vocabulary lives here and nowhere else
     #[test]
     fn the_wire_tokens_are_kebab_and_round_trip() {
-        // the wire vocabulary lives here and nowhere else
         assert_eq!(Harness::Pi.as_str(), "pi");
         assert_eq!(Harness::ClaudeCode.as_str(), "claude-code");
         for (token, harness) in [("pi", Harness::Pi), ("claude-code", Harness::ClaudeCode)] {
@@ -312,13 +290,12 @@ mod tests {
             assert_eq!(wire.as_str().unwrap(), token);
             assert_eq!(serde_json::from_value::<Harness>(wire).unwrap(), harness);
         }
-        // anything else is version skew, never a silent pi
         assert!(serde_json::from_value::<Harness>(serde_json::json!("codex")).is_err());
     }
 
+    // the non-empty runtime override wins, then the compile pin
     #[test]
     fn pin_resolution_names_its_own_precedence() {
-        // the runtime override wins over the compile pin
         assert_eq!(
             resolve_pin(
                 Some("/override/bin".into()),
@@ -328,12 +305,10 @@ mod tests {
             .unwrap(),
             PathBuf::from("/override/bin")
         );
-        // an empty override is no override
         assert_eq!(
             resolve_pin(Some("".into()), Some("/compile/bin"), "missing").unwrap(),
             PathBuf::from("/compile/bin")
         );
-        // neither pin names the miss
         let missed = resolve_pin(
             None,
             None,
@@ -345,15 +320,17 @@ mod tests {
         );
     }
 
+    // the argv inventory: each harness speaks its own fresh and resume
+    // flags, the prompt rides as one positional word
     #[test]
-    fn fresh_argv_speaks_each_harnesss_own_flags() {
+    fn the_argv_inventory_carries_each_harnesss_own_flags() {
         let repo = Path::new("/repo/wt");
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
         let prompt = ["first words".to_string(), "second words".to_string()];
-        let pi = Harness::Pi
-            .fresh_line(Path::new("pi"), repo, "native-id-1", &prompt)
-            .unwrap();
         assert_eq!(
-            pi,
+            Harness::Pi
+                .fresh_line(Path::new("pi"), repo, "native-id-1", &prompt)
+                .unwrap(),
             vec![
                 "pi".to_string(),
                 "--session-id".to_string(),
@@ -363,31 +340,28 @@ mod tests {
                 "first words second words".to_string(),
             ]
         );
-        // the bin comes from the pin resolution, so the shape is read
-        // off the line after the program word
-        let cc_uuid = "550e8400-e29b-41d4-a716-446655440000";
-        let cc = Harness::ClaudeCode
-            .fresh_line(Path::new("/compile/claude-code"), repo, cc_uuid, &prompt)
-            .unwrap();
         assert_eq!(
-            cc,
+            Harness::ClaudeCode
+                .fresh_line(Path::new("/compile/claude-code"), repo, uuid, &prompt)
+                .unwrap(),
             vec![
                 "/compile/claude-code".to_string(),
                 "--session-id".to_string(),
-                cc_uuid.to_string(),
+                uuid.to_string(),
                 "first words second words".to_string(),
             ]
         );
         // an empty prompt rides no positional word
         let quiet = Harness::ClaudeCode
-            .fresh_line(Path::new("/compile/claude-code"), repo, cc_uuid, &[])
+            .fresh_line(Path::new("/compile/claude-code"), repo, uuid, &[])
             .unwrap();
         assert_eq!(quiet.len(), 3);
-    }
-
-    #[test]
-    fn claude_code_fresh_launch_takes_only_valid_uuids() {
-        let repo = Path::new("/repo/wt");
+        // pi's ids are its own vocabulary: any saved shape
+        assert!(
+            Harness::Pi
+                .fresh_line(Path::new("pi"), repo, "handoff-smoke-1a2b3c4d", &[])
+                .is_ok()
+        );
         let refused = Harness::ClaudeCode.fresh_line(
             Path::new("/compile/claude-code"),
             repo,
@@ -398,40 +372,31 @@ mod tests {
             refused.unwrap_err(),
             "claude-code --session-id takes a valid UUID; handoff-smoke-1a2b3c4d is not one"
         );
-        // pi's ids are the harness's own vocabulary: any saved shape
-        let accepted = Harness::Pi.fresh_line(Path::new("pi"), repo, "handoff-smoke-1a2b3c4d", &[]);
-        assert!(accepted.is_ok());
-    }
+        assert!(is_uuid("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(is_uuid("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"));
+        assert!(!is_uuid("handoff-smoke-1a2b3c4d"));
+        assert!(!is_uuid("550e8400e29b41d4a716446655440000"));
+        assert!(!is_uuid("550e8400-e29b-41d4-a716-44665544000g"));
 
-    #[test]
-    fn resume_argv_speaks_each_harnesss_own_token() {
         let session = Path::new("/sessions/550e8400-e29b-41d4-a716-446655440000.jsonl");
-        let pi = Harness::Pi.resume_line(
-            Path::new("pi"),
-            "550e8400-e29b-41d4-a716-446655440000",
-            session,
-            &[],
-        );
         assert_eq!(
-            pi,
+            Harness::Pi.resume_line(Path::new("pi"), uuid, session, &[]),
             vec![
                 "pi".to_string(),
                 "--session".to_string(),
-                "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                uuid.to_string(),
                 "--session-dir".to_string(),
                 "/sessions".to_string(),
             ]
         );
-        // claude-code resumes by the absolute transcript path; the id
-        // rides the file it names
-        let cc = Harness::ClaudeCode.resume_line(
-            Path::new("/compile/claude-code"),
-            "550e8400-e29b-41d4-a716-446655440000",
-            session,
-            &["continue the adapter".to_string()],
-        );
+        // claude-code resumes by the transcript path; the id rides the file
         assert_eq!(
-            cc,
+            Harness::ClaudeCode.resume_line(
+                Path::new("/compile/claude-code"),
+                uuid,
+                session,
+                &["continue the adapter".to_string()],
+            ),
             vec![
                 "/compile/claude-code".to_string(),
                 "--resume".to_string(),
@@ -441,74 +406,70 @@ mod tests {
         );
     }
 
+    // the saved-header inventory: each harness reads its own file's
+    // facts, and every refusal names its variant with bytes untouched
     #[test]
-    fn the_cc_transcript_reads_its_facts_from_the_first_carrying_record() {
-        let dir = scratch("cc-read");
-        let session = dir.join("550e8400-e29b-41d4-a716-446655440000.jsonl");
-        std::fs::write(
-            &session,
-            cc_story("550e8400-e29b-41d4-a716-446655440000", "/repo/wt"),
-        )
-        .unwrap();
-        let header = claude_code_header(&session).unwrap();
-        // the transcript's own fields answer for identity and the
-        // launch-time cwd; nothing durable is invented
+    fn the_saved_header_inventory_reads_each_harnesss_own_facts() {
+        let dir = scratch("header");
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cc = dir.join(format!("{uuid}.jsonl"));
+        std::fs::write(&cc, cc_story(uuid, "/repo/wt")).unwrap();
         assert_eq!(
-            header,
+            Harness::ClaudeCode.read_header(&cc).unwrap(),
             SessionHeader {
-                id: "550e8400-e29b-41d4-a716-446655440000".into(),
+                id: uuid.into(),
                 cwd: "/repo/wt".into(),
             }
         );
-        assert_eq!(
-            std::fs::read(&session).unwrap(),
-            cc_story("550e8400-e29b-41d4-a716-446655440000", "/repo/wt")
-        );
+        assert_eq!(std::fs::read(&cc).unwrap(), cc_story(uuid, "/repo/wt"));
         assert!(matches!(
             claude_code_header(&dir.join("absent.jsonl")),
             Err(HandoffFail::Missing(_))
         ));
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
 
-    #[test]
-    fn the_cc_cwd_is_the_launch_time_fallback_only() {
-        // a session that moved: the first carrying record names where
-        // it was born, and no later record rewrites that fact
-        let dir = scratch("cc-moved");
-        let session = dir.join("moved.jsonl");
+        // a session that moved: the first carrying record keeps the
+        // launch-time cwd, no later record rewrites it
+        let moved = dir.join("moved.jsonl");
         let mut bytes = cc_story("aaaa1111-1111-4111-8111-111111111111", "/repo/born");
         bytes.extend_from_slice(
             br#"{"type":"user","uuid":"44444444-4444-4444-8444-444444444444","sessionId":"aaaa1111-1111-4111-8111-111111111111","cwd":"/repo/moved","message":{"role":"user","content":"now from the new workspace"}}"#,
         );
         bytes.push(b'\n');
-        std::fs::write(&session, &bytes).unwrap();
-        let header = claude_code_header(&session).unwrap();
-        assert_eq!(header.cwd, "/repo/born");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
+        std::fs::write(&moved, &bytes).unwrap();
+        assert_eq!(claude_code_header(&moved).unwrap().cwd, "/repo/born");
 
-    #[test]
-    fn failed_cc_validation_names_its_variant_and_touches_nothing() {
-        let dir = scratch("cc-refusals");
+        let pi = dir.join("pi-session.jsonl");
+        std::fs::write(
+            &pi,
+            br#"{"type":"session","version":3,"id":"handoff-smoke-1a2b3c4d","cwd":"/repo/wt"}
+{"type":"message","id":"4ba0a050","parentId":null}
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Harness::Pi.read_header(&pi).unwrap(),
+            SessionHeader {
+                id: "handoff-smoke-1a2b3c4d".into(),
+                cwd: "/repo/wt".into(),
+            }
+        );
+        // claude-code validation refuses a pi session: its records carry no sessionId
+        let cc_on_pi = Harness::ClaudeCode.read_header(&pi).unwrap_err();
+        assert!(cc_on_pi.contains("carries no id"), "{cc_on_pi}");
+
         let cases: Vec<(&str, Vec<u8>, &str)> = vec![
-            // an empty file carries no transcript
             ("empty.jsonl", Vec::new(), "Empty"),
-            // binary noise parses to no record at all
             ("garbage.jsonl", b"\xff\xfe not json\n".to_vec(), "MalformedHeader"),
-            // records without a sessionId carry no identity
             (
                 "no-id.jsonl",
                 br#"{"type":"user","cwd":"/repo/wt","message":{"role":"user","content":"who am I"}}"#.to_vec(),
                 "MissingId",
             ),
-            // records with an id but no cwd carry no launch fact
             (
                 "no-cwd.jsonl",
                 br#"{"type":"user","sessionId":"bbbb2222-2222-4222-8222-222222222222","message":{"role":"user","content":"where am I"}}"#.to_vec(),
                 "MissingCwd",
             ),
-            // an empty-string field is no fact
             (
                 "blank-cwd.jsonl",
                 br#"{"type":"user","sessionId":"bbbb2222-2222-4222-8222-222222222222","cwd":"","message":{}}"#.to_vec(),
@@ -520,44 +481,8 @@ mod tests {
             std::fs::write(&path, bytes).unwrap();
             let outcome = claude_code_header(&path);
             assert_eq!(variant(&outcome.unwrap_err()), *expected, "{name}");
-            // the original bytes survive the refused read
             assert_eq!(std::fs::read(&path).unwrap(), *bytes, "{name}");
         }
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn the_pi_header_reads_through_the_same_face() {
-        let dir = scratch("pi-delegate");
-        let session = dir.join("session.jsonl");
-        std::fs::write(
-            &session,
-            br#"{"type":"session","version":3,"id":"handoff-smoke-1a2b3c4d","cwd":"/repo/wt"}
-{"type":"message","id":"4ba0a050","parentId":null}
-"#,
-        )
-        .unwrap();
-        let header = Harness::Pi.read_header(&session).unwrap();
-        assert_eq!(
-            header,
-            SessionHeader {
-                id: "handoff-smoke-1a2b3c4d".into(),
-                cwd: "/repo/wt".into(),
-            }
-        );
-        // claude-code validation refuses a pi session: its records
-        // carry no sessionId
-        let cc = Harness::ClaudeCode.read_header(&session).unwrap_err();
-        assert!(cc.contains("carries no id"), "{cc}");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn uuid_check_takes_the_saved_shapes() {
-        assert!(is_uuid("550e8400-e29b-41d4-a716-446655440000"));
-        assert!(is_uuid("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"));
-        assert!(!is_uuid("handoff-smoke-1a2b3c4d"));
-        assert!(!is_uuid("550e8400e29b41d4a716446655440000"));
-        assert!(!is_uuid("550e8400-e29b-41d4-a716-44665544000g"));
     }
 }
