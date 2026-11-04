@@ -2059,16 +2059,22 @@ fn launch_door(
     resume: Option<&str>,
     prompt: &[String],
 ) -> Result<String, Fail> {
-    let (dir_str, terminal) = launch_native(cli, destination, workspace, resume, prompt)?;
+    let launch = launch_native(cli, destination, workspace, resume, prompt)?;
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "workspace": dir_str,
-            "terminal": terminal,
+            "workspace": launch.workspace,
+            "terminal": launch.terminal,
+            "space": launch.space,
+            "tab": launch.tab,
+            "place_refusal": launch.place_refusal,
         }))
         .expect("plain data"));
     }
     Ok(format!(
-        "integrated pi launching at {dir_str} - address {terminal}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one"
+        "integrated pi launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one",
+        ws = launch.workspace,
+        t = launch.terminal,
+        place = placement_lines(&launch.terminal, &launch.place_refusal),
     ))
 }
 
@@ -2392,13 +2398,38 @@ fn compose_launch(
 /// any follow-on act belong to the calling door. The same-terminal
 /// arm composes identically and runs the line itself instead of
 /// asking the host.
+/// What a submitted launch produced: the workspace and terminal the
+/// host named, the placement the door declared at birth, and the label
+/// ask's refusal when the host refused it - the terminal exists either
+/// way, so a refusal discloses and never undoes the launch.
+struct SubmittedLaunch {
+    workspace: String,
+    terminal: String,
+    space: String,
+    tab: String,
+    place_refusal: Option<String>,
+}
+
+/// The reply's placement line: how to look, descriptive never pushy;
+/// a refused declaration discloses instead of hinting.
+fn placement_lines(terminal: &str, place_refusal: &Option<String>) -> String {
+    match place_refusal {
+        Some(evidence) => {
+            format!("  placement was refused: {evidence} - the session runs unlabeled")
+        }
+        None => format!(
+            "  look for it in the herdr app's sidebar, or attach from a terminal: hc attach {terminal}"
+        ),
+    }
+}
+
 fn launch_native(
     cli: &Cli,
     destination: &Destination,
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
     prompt: &[String],
-) -> Result<(String, String), Fail> {
+) -> Result<SubmittedLaunch, Fail> {
     let composed = compose_launch(cli, destination, workspace, resume, prompt)?;
     let url = server_url(destination, "launch")?;
     let argv = host::composed_launch_argv(&composed.dir, &composed.routing, &composed.argv)
@@ -2409,6 +2440,14 @@ fn launch_native(
     let address = host
         .launch(&composed.dir, &argv)
         .map_err(|e| Fail::Usage(e.to_string()))?;
+    // placement at birth: the author declares where the terminal
+    // lives, before the door replies - the space is stable per
+    // workspace, and a standing space for the same identity keeps it
+    let placement = saccade::placement::for_dir(&host, &composed.dir);
+    let place_refusal = host
+        .place(&address, &placement.space, &placement.tab)
+        .err()
+        .map(|e| e.to_string());
     let host_address = address.0.clone();
     // the door births the fresh identity itself, before pi's first
     // save; a resume carries its identity and records the address move
@@ -2419,7 +2458,13 @@ fn launch_native(
     if let Some(id) = composed.resume_id {
         client::assign_host_address(&url, id.0.0, &host_address, false).map_err(Fail::Client)?;
     }
-    Ok((composed.dir.display().to_string(), host_address))
+    Ok(SubmittedLaunch {
+        workspace: composed.dir.display().to_string(),
+        terminal: host_address,
+        space: placement.space,
+        tab: placement.tab,
+        place_refusal,
+    })
 }
 
 /// The cleaned-workspace launch guard: a recorded workspace whose
@@ -2468,6 +2513,9 @@ fn cleaned_guard(destination: &Destination, dir: &Path) -> Result<(), Fail> {
 struct AskOutcome {
     workspace: String,
     terminal: String,
+    space: String,
+    tab: String,
+    place_refusal: Option<String>,
     birth: usize,
     num: usize,
     /// the question's birth position when its record landed; a send
@@ -2531,7 +2579,7 @@ fn ask_run(
         .unwrap_or_else(|| format!("seq {}", creator.0.0));
     // the launch births the newborn itself: identity and address exist
     // at launch time, and the question's recipient is never polled for
-    let (dir_str, terminal) = launch_native(cli, destination, Some(workspace), None, &[])?;
+    let submitted = launch_native(cli, destination, Some(workspace), None, &[])?;
     let loadout = loadout_of(destination)?;
     let LoadState::Full(world) = loadout.state else {
         return Err(Fail::Degraded(
@@ -2541,11 +2589,13 @@ fn ask_run(
     let newborn = world
         .incarnations
         .iter()
-        .find(|(_, ctx)| ctx.incarnation.address() == Some(terminal.as_str()))
+        .find(|(_, ctx)| ctx.incarnation.address() == Some(submitted.terminal.as_str()))
         .map(|(id, _)| *id)
         .ok_or_else(|| {
             Fail::Usage(format!(
-                "the launched session at {dir_str} carries no birth record (address {terminal}); nothing was sent - a later `sac send --to` reaches it by number"
+                "the launched session at {ws} carries no birth record (address {t}); nothing was sent - a later `sac send --to` reaches it by number",
+                ws = submitted.workspace,
+                t = submitted.terminal,
             ))
         })?;
     let num = world
@@ -2589,8 +2639,11 @@ fn ask_run(
         Err(other) => return Err(Fail::Client(other)),
     };
     Ok(AskOutcome {
-        workspace: dir_str,
-        terminal,
+        workspace: submitted.workspace,
+        terminal: submitted.terminal,
+        space: submitted.space,
+        tab: submitted.tab,
+        place_refusal: submitted.place_refusal,
         birth,
         num,
         message_seq: sent_message_seq,
@@ -2611,6 +2664,9 @@ fn ask_door(
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "workspace": outcome.workspace,
             "terminal": outcome.terminal,
+            "space": outcome.space,
+            "tab": outcome.tab,
+            "place_refusal": outcome.place_refusal,
             "incarnation": {"seq": outcome.birth, "num": outcome.num},
             "question": {"num": outcome.message_num, "seq": outcome.message_seq},
             "submission": outcome.submission,
@@ -2629,11 +2685,12 @@ fn ask_door(
         .map(|line| format!("; {line}"))
         .unwrap_or_default();
     Ok(format!(
-        "i-{num} registered at {workspace} (terminal {terminal}); your question went as {answer} from {creator}; they receive it through their session's input queue{disclosure}",
+        "i-{num} registered at {workspace} (terminal {terminal}); your question went as {answer} from {creator}; they receive it through their session's input queue{disclosure}\n{place}",
         num = outcome.num,
         workspace = outcome.workspace,
         terminal = outcome.terminal,
         creator = outcome.creator,
+        place = placement_lines(&outcome.terminal, &outcome.place_refusal),
     ))
 }
 
@@ -2716,10 +2773,17 @@ fn workspace_switch_door(
     );
     if resume {
         // the change fact already stands; a failed launch says so
-        let (dir_str, terminal) = match launch_native(cli, destination, None, Some(token), prompt) {
+        let launch = match launch_native(cli, destination, None, Some(token), prompt) {
             Ok(launch) => launch,
             Err(e) => return Err(launch_failed(&changed, e)),
         };
+        let resumed = serde_json::json!({
+            "workspace": launch.workspace,
+            "terminal": launch.terminal,
+            "space": launch.space,
+            "tab": launch.tab,
+            "place_refusal": launch.place_refusal,
+        });
         if cli.json {
             return Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "changed": true,
@@ -2728,12 +2792,15 @@ fn workspace_switch_door(
                 "from": reply.from,
                 "to": reply.to,
                 "records": reply.records,
-                "resumed": {"workspace": dir_str, "terminal": terminal},
+                "resumed": resumed,
             }))
             .expect("plain data"));
         }
         return Ok(format!(
-            "{changed}\nintegrated pi launching at {dir_str} - terminal {terminal}\n  the resumed session carries the same native id and history"
+            "{changed}\nintegrated pi launching at {ws} - terminal {t}\n{place}\n  the resumed session carries the same native id and history",
+            ws = launch.workspace,
+            t = launch.terminal,
+            place = placement_lines(&launch.terminal, &launch.place_refusal),
         ));
     }
     if cli.json {
@@ -2940,15 +3007,22 @@ fn launch_new_door(
                 Ok(outcome) => serde_json::json!({
                     "workspace": outcome.workspace,
                     "terminal": outcome.terminal,
+                    "space": outcome.space,
+                    "tab": outcome.tab,
+                    "place_refusal": outcome.place_refusal,
                     "incarnation": {"seq": outcome.birth, "num": outcome.num},
                     "question": {"num": outcome.message_num, "seq": outcome.message_seq},
                 }),
                 Err(e) => return Err(launch_failed(&provisioned, e)),
             },
             None => match launch_native(cli, destination, Some(Path::new(&path)), None, prompt) {
-                Ok((dir_str, terminal)) => {
-                    serde_json::json!({"workspace": dir_str, "terminal": terminal})
-                }
+                Ok(launch) => serde_json::json!({
+                    "workspace": launch.workspace,
+                    "terminal": launch.terminal,
+                    "space": launch.space,
+                    "tab": launch.tab,
+                    "place_refusal": launch.place_refusal,
+                }),
                 Err(e) => return Err(launch_failed(&provisioned, e)),
             },
         };
@@ -2964,8 +3038,11 @@ fn launch_new_door(
             Err(e) => return Err(launch_failed(&provisioned, e)),
         },
         None => match launch_native(cli, destination, Some(Path::new(&path)), None, prompt) {
-            Ok((dir_str, terminal)) => format!(
-                "integrated pi launching at {dir_str} - address {terminal}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one"
+            Ok(launch) => format!(
+                "integrated pi launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one",
+                ws = launch.workspace,
+                t = launch.terminal,
+                place = placement_lines(&launch.terminal, &launch.place_refusal),
             ),
             Err(e) => return Err(launch_failed(&provisioned, e)),
         },

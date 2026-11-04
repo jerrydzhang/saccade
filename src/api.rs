@@ -837,12 +837,17 @@ enum WorkbenchLaunchWorkspace {
 }
 
 /// What a submission did: the host's terminal acceptance and the
-/// workspace it names - never a claim that a session runs.
+/// workspace it names - never a claim that a session runs. The
+/// placement is what the door declared at birth; the refusal, when it
+/// stands, discloses that the declaration did not land.
 #[derive(Serialize)]
 pub struct LaunchReply {
     pub submitted: bool,
     pub workspace: String,
     pub terminal: String,
+    pub space: String,
+    pub tab: String,
+    pub place_refusal: Option<String>,
 }
 
 /// The workbench's host launch: the same shared construction the CLI
@@ -1051,11 +1056,22 @@ fn launch_operation(
             e.to_string(),
         )
     })?;
+    // placement at birth: the author declares where the terminal
+    // lives, before the door replies; a refusal discloses - the
+    // terminal exists either way, and the launch is never undone
+    let placement = crate::placement::for_dir(&host, &dir);
+    let place_refusal = host
+        .place(&address, &placement.space, &placement.tab)
+        .err()
+        .map(|e| e.to_string());
     Ok((
         LaunchReply {
             submitted: true,
             workspace: dir.display().to_string(),
             terminal: address.0.clone(),
+            space: placement.space,
+            tab: placement.tab,
+            place_refusal,
         },
         Some((native_id, address.0)),
     ))

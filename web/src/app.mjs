@@ -977,7 +977,12 @@ function startLaunch() {
 // that actually changed nothing
 function submittedMessage(data, recordedNote) {
   if (data?.submitted === true && typeof data.terminal === "string" && typeof data.workspace === "string") {
-    return `Submitted to the host: terminal ${data.terminal} at ${data.workspace}. The session registers itself when it starts.${recordedNote ? " Nothing recorded changed." : ""}`;
+    const placed = typeof data.space === "string" && !data.place_refusal
+      ? ` It declares its placement in space ${data.space}; look for it in the herdr app's sidebar, or attach from a terminal with hc attach ${data.terminal}.`
+      : data.place_refusal
+        ? ` Placement was refused: ${data.place_refusal} The session runs unlabeled.`
+        : "";
+    return `Submitted to the host: terminal ${data.terminal} at ${data.workspace}.${placed} The session registers itself when it starts.${recordedNote ? " Nothing recorded changed." : ""}`;
   }
   return "Submission outcome unknown: the reply did not name the submitted facts. The host may have accepted the launch; inspect the host's terminals. Nothing is staged.";
 }

@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::host_contract::{
-    CloseFact, CloseRefusal, HostAddress, HostContract, LaunchRefusal, Liveness, SubmitRefusal,
-    WaitWake,
+    CloseFact, CloseRefusal, HostAddress, HostContract, LaunchRefusal, Liveness, PlaceRefusal,
+    SubmitRefusal, WaitWake,
 };
 
 /// The explicit override: set and nonempty, it is the host binary,
@@ -32,9 +32,23 @@ pub const DEFAULT_SUBMIT_BOUND: Duration = Duration::from_secs(10);
 /// The poll interval of the bounded attempt's watch.
 const POLL: Duration = Duration::from_millis(25);
 
-/// The terminal-table read's bound: one listing, the effect's own
-/// surface, never a door and never a poll.
+/// The terminal-table read's bound: one listing, the launch door's
+/// placement lookup and the clean contract's ordered step, never a
+/// poll.
 const TERMINALS_BOUND: Duration = Duration::from_secs(10);
+
+/// The placement declaration's bound: one label write on one address,
+/// the launch's own follow-on ask, never a poll.
+const PLACE_BOUND: Duration = Duration::from_secs(10);
+
+/// The standing placement one live terminal carries, stripped of the
+/// dialect's label vocabulary: the ids alone. The tab is optional -
+/// a space-only label is a legal adoption shape.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TerminalPlacement {
+    pub space: String,
+    pub tab: Option<String>,
+}
 
 /// One row of the host's terminal table, fully readable or the whole
 /// answer refuses: the address submissions and closes target, the
@@ -210,6 +224,38 @@ impl HerdrCore {
                 }
             })
             .collect()
+    }
+
+    /// The standing placement one live terminal carries: the
+    /// vocabulary stays inside the dialect - the caller sees only the
+    /// ids. A terminal whose record cannot be asked or read, or whose
+    /// state is not live, lends nothing; the placement lookup treats
+    /// every miss as no standing placement.
+    pub fn placement_of(&self, address: &HostAddress) -> Option<TerminalPlacement> {
+        let args: Vec<OsString> = ["get", &address.0, "--json"]
+            .iter()
+            .map(OsString::from)
+            .collect();
+        let out = self.ask_bounded(&args, TERMINALS_BOUND).ok()?;
+        if !out.ok {
+            return None;
+        }
+        let value: serde_json::Value = serde_json::from_str(out.stdout.trim()).ok()?;
+        if value.get("state").and_then(|s| s.as_str()) != Some("live") {
+            return None;
+        }
+        let field = |name: &str| -> Option<String> {
+            value
+                .pointer("/labels")
+                .and_then(|l| l.get(name))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        Some(TerminalPlacement {
+            space: field("herdr.space")?,
+            tab: field("herdr.tab"),
+        })
     }
 
     pub fn over(binary: impl Into<PathBuf>) -> Self {
@@ -440,6 +486,33 @@ impl HostContract for HerdrCore {
         }
     }
 
+    /// One placement declaration: the label write on the address the
+    /// launch just returned, both labels in one ask. The app's own
+    /// adoption path reads them; an id it does not know becomes a new
+    /// space or tab.
+    fn place(&self, address: &HostAddress, space: &str, tab: &str) -> Result<(), PlaceRefusal> {
+        let space_label = format!("herdr.space={space}");
+        let tab_label = format!("herdr.tab={tab}");
+        let args: Vec<OsString> = ["label", &address.0, "--json"]
+            .iter()
+            .map(OsString::from)
+            .chain([OsString::from(space_label), OsString::from(tab_label)])
+            .collect();
+        match self.ask_bounded(&args, PLACE_BOUND) {
+            Err(Bound::Expired) => Err(PlaceRefusal::Unknown(
+                "the placement ask outlived its bound".into(),
+            )),
+            Err(Bound::Spawn(e)) => Err(PlaceRefusal::Unknown(e.to_string())),
+            Ok(out) if out.ok => Ok(()),
+            Ok(out) => match out.error_kind().as_deref() {
+                Some("not_found") | Some("finished") => {
+                    Err(PlaceRefusal::AddressNotLive(out.evidence()))
+                }
+                _ => Err(PlaceRefusal::HostRefused(out.evidence())),
+            },
+        }
+    }
+
     fn close(&self, address: &HostAddress) -> Result<CloseFact, CloseRefusal> {
         let args: Vec<OsString> = ["kill", &address.0].iter().map(OsString::from).collect();
         let out = self
@@ -524,6 +597,20 @@ case "$kind" in
     printf 'garbage\n'; exit 0 ;;
   kill-ok)
     printf '{"address":"t7","state":"finished","reason":"killed","signal":1}\n'; exit 0 ;;
+  label-ok)
+    printf '{}\n'; exit 0 ;;
+  label-notfound)
+    printf '{"error":{"kind":"not_found","message":"no terminal \\"t7\\""}}\n' >&2; exit 3 ;;
+  label-finished)
+    printf '{"error":{"kind":"finished","message":"terminal finished"}}\n' >&2; exit 11 ;;
+  label-refused)
+    printf 'label refused' >&2; exit 5 ;;
+  get-labeled)
+    printf '{"state":"live","labels":{"herdr.space":"spaStanding","herdr.tab":"tbStanding"}}\n'; exit 0 ;;
+  get-labeled-notab)
+    printf '{"state":"live","labels":{"herdr.space":"spaStanding"}}\n'; exit 0 ;;
+  get-labeled-finished)
+    printf '{"state":"finished","labels":{"herdr.space":"spaStanding","herdr.tab":"tbStanding"}}\n'; exit 0 ;;
   kill-unconfirmed)
     printf '{"address":"t7","state":"running"}\n'; exit 0 ;;
   kill-notfound)
@@ -927,5 +1014,84 @@ esac
         let host = HerdrCore::over("/nonexistent/sac-herdr-missing");
         let err = host.close(&HostAddress("t7".into())).unwrap_err();
         assert!(matches!(err, CloseRefusal::Unknown(_)), "{err}");
+    }
+
+    #[test]
+    fn place_writes_both_labels_in_one_ask_and_accepts_ok() {
+        let (host, dir) = fake("place-ok", &["label.x=label-ok"]);
+        host.place(&HostAddress("t3".into()), "spaA", "tbB")
+            .unwrap();
+        assert_eq!(
+            argv_log(&dir, "label"),
+            vec![
+                "t3".to_string(),
+                "--json".to_string(),
+                "herdr.space=spaA".to_string(),
+                "herdr.tab=tbB".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn place_routes_absent_and_finished_addresses_to_not_live() {
+        let (host, dir) = fake(
+            "place-notlive",
+            &["label.x=label-notfound", "label.x=label-finished"],
+        );
+        let err = host
+            .place(&HostAddress("t3".into()), "spaA", "tbB")
+            .unwrap_err();
+        assert!(matches!(err, PlaceRefusal::AddressNotLive(_)), "{err}");
+        let err = host
+            .place(&HostAddress("t3".into()), "spaA", "tbB")
+            .unwrap_err();
+        assert!(matches!(err, PlaceRefusal::AddressNotLive(_)), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn place_names_other_host_refusals_and_unaskable_hosts() {
+        let (host, dir) = fake("place-refused", &["label.x=label-refused"]);
+        let err = host
+            .place(&HostAddress("t3".into()), "spaA", "tbB")
+            .unwrap_err();
+        assert!(matches!(err, PlaceRefusal::HostRefused(_)), "{err}");
+        assert!(err.to_string().contains("label refused"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let host = HerdrCore::over("/nonexistent/sac-herdr-missing");
+        let err = host
+            .place(&HostAddress("t3".into()), "spaA", "tbB")
+            .unwrap_err();
+        assert!(matches!(err, PlaceRefusal::Unknown(_)), "{err}");
+    }
+
+    #[test]
+    fn placement_of_reads_the_standing_labels_of_a_live_record() {
+        let (host, dir) = fake("placement-of", &["get.x=get-labeled"]);
+        let placed = host.placement_of(&HostAddress("t7".into())).unwrap();
+        assert_eq!(placed.space, "spaStanding");
+        assert_eq!(placed.tab.as_deref(), Some("tbStanding"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (host, dir) = fake("placement-of-notab", &["get.x=get-labeled-notab"]);
+        let placed = host.placement_of(&HostAddress("t7".into())).unwrap();
+        assert_eq!(placed.space, "spaStanding");
+        assert_eq!(placed.tab, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn placement_of_lends_nothing_from_unlive_unreadable_or_unlabeled_records() {
+        let (host, dir) = fake("placement-of-dead", &["get.x=get-labeled-finished"]);
+        assert_eq!(host.placement_of(&HostAddress("t7".into())), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let (host, dir) = fake("placement-of-absent", &["get.x=get-notfound"]);
+        assert_eq!(host.placement_of(&HostAddress("t7".into())), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let (host, dir) = fake("placement-of-bare", &["get.x=get-live"]);
+        assert_eq!(host.placement_of(&HostAddress("t7".into())), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let host = HerdrCore::over("/nonexistent/sac-herdr-missing");
+        assert_eq!(host.placement_of(&HostAddress("t7".into())), None);
     }
 }

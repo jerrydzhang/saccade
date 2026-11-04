@@ -15,6 +15,7 @@ pub mod migrate;
 pub mod objects;
 pub mod paths;
 pub mod pi_session;
+pub mod placement;
 pub mod refusals;
 pub mod serve;
 pub mod skill;

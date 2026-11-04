@@ -3,6 +3,7 @@
 //! holds in process.
 
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
@@ -3555,8 +3556,10 @@ if [ "$1" = run ]; then
   exit 0
 fi
 if [ "$1" = get ]; then
-  printf '{"state":"%s"}
-' "${SACCADE_FAKE_HC_STATE:-live}"
+  labels=""
+  if [ -f "$here/labels-$2.json" ]; then labels=",\"labels\":$(cat "$here/labels-$2.json")"; fi
+  printf '{"state":"%s"%s}
+' "${SACCADE_FAKE_HC_STATE:-live}" "$labels"
   exit 0
 fi
 if [ "$1" = send ] && [ "$2" = "t9" ]; then
@@ -4790,6 +4793,23 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
         "{out}"
     );
     assert_eq!(launched["terminal"], "t9", "{out}");
+    // the resume places into the recorded workspace's space: the same
+    // stable derivation a fresh launch there would declare
+    let expected = saccade::placement::derived(&workspace);
+    assert_eq!(launched["space"], expected.space.as_str(), "{out}");
+    assert_eq!(launched["tab"], expected.tab.as_str(), "{out}");
+    assert_eq!(launched["place_refusal"], Value::Null, "{out}");
+    let label: Vec<String> = hc_argv(fx.hcs.parent().unwrap(), "label");
+    assert_eq!(
+        label,
+        vec![
+            "t9".to_string(),
+            "--json".to_string(),
+            format!("herdr.space={}", expected.space),
+            format!("herdr.tab={}", expected.tab),
+        ],
+        "the resume declares placement on the resumed terminal"
+    );
 
     // the composition rode the host argv: the resume session, its
     // locator, the settled flags
@@ -4968,6 +4988,22 @@ fn switch_resume_runs_through_the_real_door() {
     assert!(out.contains("workspace changed"), "{out}");
     assert!(out.contains("integrated pi launching"), "{out}");
     assert!(out.contains(selected_a.to_str().unwrap()), "{out}");
+    assert!(
+        out.contains("look for it in the herdr app's sidebar"),
+        "the resume reply names how to look: {out}"
+    );
+    // the composed resume declared placement in the changed workspace's
+    // space - the derived pair follows the recorded workspace
+    let switched = saccade::placement::derived(&selected_a);
+    let label_log = std::fs::read_to_string(home.join("hcs-bin").join("argv-label.log")).unwrap();
+    assert!(
+        label_log.contains(&format!("herdr.space={}", switched.space)),
+        "the switch-resume declares the recorded workspace's space: {label_log}"
+    );
+    assert!(
+        label_log.contains(&format!("herdr.tab={}", switched.tab)),
+        "the switch-resume declares the recorded workspace's tab: {label_log}"
+    );
 
     // the header never moved: same native id, same history, same launch
     // cwd - the record is the authority, and the file is not rewritten
@@ -7222,6 +7258,23 @@ async fn the_workbench_launch_door_submits_honestly_through_a_fake_host() {
         "{body}"
     );
     assert_eq!(reply["terminal"], "t1", "{body}");
+    // the workbench door declares placement identically: the stable
+    // derivation over the workspace, named in the reply
+    let expected = saccade::placement::derived(&workspace);
+    assert_eq!(reply["space"], expected.space.as_str(), "{body}");
+    assert_eq!(reply["tab"], expected.tab.as_str(), "{body}");
+    assert_eq!(reply["place_refusal"], Value::Null, "{body}");
+    let label: Vec<String> = hc_argv(&db.parent().unwrap().join("hc-bin"), "label");
+    assert_eq!(
+        label,
+        vec![
+            "t1".to_string(),
+            "--json".to_string(),
+            format!("herdr.space={}", expected.space),
+            format!("herdr.tab={}", expected.tab),
+        ],
+        "the workbench launch declares placement at birth"
+    );
     // the launch lands exactly one record: the door's own birth
     let records_after: usize = serde_json::from_str::<Value>(
         &get_json(&base_url, "/api/v1/records").1,
@@ -8744,6 +8797,24 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
     );
     let reply: Value = serde_json::from_str(&text).expect("the launch face is json");
     assert_eq!(reply["terminal"], "t1", "{text}");
+    // the door declares placement at birth: the ids are the stable
+    // derivation over the workspace, and the reply names them
+    let expected = saccade::placement::derived(&workspace);
+    assert_eq!(reply["space"], expected.space.as_str(), "{text}");
+    assert_eq!(reply["tab"], expected.tab.as_str(), "{text}");
+    assert_eq!(reply["place_refusal"], Value::Null, "{text}");
+    let label_argv = std::fs::read_to_string(fake_dir.join("argv-label.log")).unwrap();
+    let label: Vec<&str> = label_argv.lines().skip(1).collect();
+    assert_eq!(
+        label,
+        vec![
+            "t1",
+            "--json",
+            &format!("herdr.space={}", expected.space),
+            &format!("herdr.tab={}", expected.tab),
+        ],
+        "the placement declaration is one ask after the address returns"
+    );
 
     // the composed argv carries the settled parentage law, the
     // notes-silence flag, the json ask, and the pre-allocated session
@@ -8840,6 +8911,53 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
             .map(str::to_string),
         Some("t9".to_string()),
         "the address moved with the relaunch"
+    );
+
+    // a refused placement never fails the launch: the terminal exists,
+    // the door discloses the refusal, and the identity still lands
+    let refusing = fake_dir.join("hc-label-refusing");
+    std::fs::write(
+        &refusing,
+        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-$1.log\"\nif [ \"$1\" = label ]; then\n  printf '{\"error\":{\"kind\":\"not_found\",\"message\":\"gone\"}}\\n' >&2\n  exit 3\nfi\nprintf '{\"address\":\"t2\",\"cwd\":\"x\",\"state\":\"live\",\"turn\":0}\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&refusing, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = scrubbed(std::process::Command::new(bin))
+        .args(["launch", "--json", "--workspace"])
+        .arg(&workspace)
+        .env("SACCADE_SERVER", &url)
+        .env("SACCADE_HERDR", &refusing)
+        .env("SACCADE_PI", &pi)
+        .env("SACCADE_REPO", &dir)
+        .output()
+        .expect("spawn sac");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "a refused placement does not fail the launch: {text}{err}"
+    );
+    let reply: Value = serde_json::from_str(&text).expect("the launch face is json");
+    assert_eq!(reply["terminal"], "t2", "{text}");
+    assert_eq!(reply["space"], expected.space.as_str(), "{text}");
+    assert!(
+        reply["place_refusal"]
+            .as_str()
+            .is_some_and(|d| d.contains("the address is not live")),
+        "{text}"
+    );
+    // the second door birth stands beside the first
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log will not fold"),
+    };
+    assert!(
+        world
+            .incarnations
+            .iter()
+            .any(|(_, ctx)| ctx.incarnation.address() == Some("t2")),
+        "the disclosed launch still birthed its identity"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
