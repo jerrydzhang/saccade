@@ -293,10 +293,11 @@
               env = {
                 SACCADE_PI = "${devPi}/bin/saccade-pi";
                 PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
-                # the development arm: the sandboxed pinned wrapper, so
-                # dev never joins the machine server; empty where the
-                # target carries no pin, which resolution treats as unset
-                SACCADE_HERDR = lib.optionalString (devHerdr != null) "${devHerdr}/bin/herdr-core";
+                # no SACCADE_HERDR here, by ruling: interactive use hits the
+                # ambient production core (the orca shape); the sandboxed
+                # dev arm is the opt-in flake output herdr-core-dev, never a
+                # PATH entry - a wrapper named herdr-core would shadow
+                # ambient resolution and recreate the posture seam
               };
 
               process.manager.implementation = "native";
