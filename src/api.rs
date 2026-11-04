@@ -966,6 +966,11 @@ fn launch_fail(fail: crate::launch::LaunchFail) -> ApiFail {
     }
 }
 
+/// The birth facts a submission carries for the in-process door: the
+/// pre-allocated native id, the returned address, the composed
+/// harness.
+type LaunchBirth = (String, String, crate::Harness);
+
 /// One workbench launch: the server's own published URL for the
 /// routing, the shared composition the CLI doors use, the host
 /// submission. The stages and their order are the CLI door's; the
@@ -974,7 +979,7 @@ fn launch_operation(
     app: &AppState,
     workspace: &WorkbenchLaunchWorkspace,
     harness: crate::Harness,
-) -> Result<(LaunchReply, Option<(String, String, crate::Harness)>), ApiFail> {
+) -> Result<(LaunchReply, Option<LaunchBirth>), ApiFail> {
     let WorkbenchLaunchWorkspace::Existing(path) = workspace;
     let Some(url) = app.server_url().map(str::to_string) else {
         return Err(ApiFail::Refused(

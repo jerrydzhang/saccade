@@ -862,10 +862,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             // status is the command's, which this face cannot express
             here: _,
         } => {
-            let harness = match harness_choice(harness) {
-                Ok(harness) => harness,
-                Err(fail) => return Err(fail),
-            };
+            let harness = harness_choice(harness)?;
             if let Some(labeled) = new.as_deref().map(str::to_owned) {
                 let label = (!labeled.is_empty()).then_some(labeled.as_str());
                 return launch_new_door(
@@ -2365,21 +2362,19 @@ fn launch_here_run(
     // incarnation's input would drive the child. One exception, per
     // the same-pane ruling: the resume target returning to its own
     // recorded pane is not two.
-    if let Ok(carried) = std::env::var("HC_TERMINAL_ID") {
-        if !carried.is_empty() {
-            if let Some((holder, _)) = world.incarnations.iter().find(|(holder, ctx)| {
-                ctx.incarnation.address() == Some(carried.as_str())
-                    && resume_target != Some(**holder)
-            }) {
-                let holder_num = world
-                    .incarnation_num(*holder)
-                    .map(|n| format!("i-{n}"))
-                    .unwrap_or_else(|| format!("seq {}", holder.0.0));
-                return Err(Fail::Usage(format!(
-                    "this terminal is already the address of {holder_num}: a foreground attach would route {holder_num}'s input into the attached session, and peers go through the host door"
-                )));
-            }
-        }
+    if let Ok(carried) = std::env::var("HC_TERMINAL_ID")
+        && !carried.is_empty()
+        && let Some((holder, _)) = world.incarnations.iter().find(|(holder, ctx)| {
+            ctx.incarnation.address() == Some(carried.as_str()) && resume_target != Some(**holder)
+        })
+    {
+        let holder_num = world
+            .incarnation_num(*holder)
+            .map(|n| format!("i-{n}"))
+            .unwrap_or_else(|| format!("seq {}", holder.0.0));
+        return Err(Fail::Usage(format!(
+            "this terminal is already the address of {holder_num}: a foreground attach would route {holder_num}'s input into the attached session, and peers go through the host door"
+        )));
     }
     let arm = launch_arm(&world, workspace, resume, harness, prompt)?;
     let composed = saccade::launch::compose(saccade::launch::LaunchRequest {

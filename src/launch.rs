@@ -199,14 +199,14 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
             };
             // the recorded kind is the authority: an explicit harness
             // is a claim about the session, and a wrong claim refuses
-            if let Some(expected) = expected {
-                if expected != *harness {
-                    return Err(LaunchFail::Usage(format!(
-                        "{token} runs {} as recorded; resume starts the recorded harness, and --harness {} would launch another kind",
-                        harness.as_str(),
-                        expected.as_str(),
-                    )));
-                }
+            if let Some(expected) = expected
+                && expected != *harness
+            {
+                return Err(LaunchFail::Usage(format!(
+                    "{token} runs {} as recorded; resume starts the recorded harness, and --harness {} would launch another kind",
+                    harness.as_str(),
+                    expected.as_str(),
+                )));
             }
             // strict resume: the saved file must exist and carry the
             // recorded native id - a missing file refuses, it never
