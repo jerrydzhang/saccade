@@ -195,9 +195,13 @@
           # first (a real GPU on a desktop keeps its drivers); mesa's
           # share is appended so a headless box still finds lavapipe
           export XDG_DATA_DIRS=${pkgs.mesa}/share:''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}
-          # HERDR_APP_HOME is the app's whole home when set, used raw;
-          # otherwise the config dir's herdr-app folder
-          home=''${HERDR_APP_HOME:-''${XDG_CONFIG_HOME:-''${HOME:-/nonexistent}/.config}/herdr-app}
+          # a deployment-owned home: the app's HERDR_APP_HOME is used raw
+          # when the caller sets one, and otherwise this deployment's own
+          # folder - never the shared ~/.config/herdr-app, which belongs to
+          # the person (their hand-made mods, layouts and keys stay theirs,
+          # and this wrapper never writes there)
+          home=''${HERDR_APP_HOME:-''${XDG_CONFIG_HOME:-''${HOME:-/nonexistent}/.config}/herdr-app-saccade}
+          export HERDR_APP_HOME="$home"
           mods=$home/mods
           stamp=$mods/saccade/.version
           # the stamp is the mod package's store path - its content hash:

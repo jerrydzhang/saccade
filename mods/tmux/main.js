@@ -38,12 +38,11 @@ export default class TmuxPrefix extends View {
             frame: "none",
             key: "tmux-prefix",
           });
+          // a window-kind overlay does not take the keyboard by itself;
+          // focus once it exists
+          this.focus.focus();
         }
       }
-    });
-    // a window-kind overlay does not take the keyboard by itself
-    cx.spawn(async () => {
-      this.focus.focus();
     });
   }
 

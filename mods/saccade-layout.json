@@ -190,6 +190,14 @@
                   }
                 }
               ]
+            },
+            {
+              "id": "tmux-host",
+              "type": "block",
+              "hidden": true,
+              "content": {
+                "mod": "tmux"
+              }
             }
           ]
         },
