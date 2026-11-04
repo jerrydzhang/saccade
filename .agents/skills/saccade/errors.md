@@ -97,14 +97,15 @@ finding - name it on the thread before proceeding.
   be asked or read; the detail carries what answered. A row the
   adapter cannot fully read fails the whole answer - uncertainty is
   never absence.
-- `saved_session_missing` - the saved session locator is not bound
-  yet (the session has not saved), or the file a change or resume
-  names does not exist; only the exact recorded association resolves.
-- `saved_session_mismatch` - a registration reused a native id against
-  other history; an id never rebinds to a session it was not born
-  with.
-- `saved_session_unreadable` - the saved session exists but its
-  header cannot be read or validated; nothing was recorded.
+- `saved_session_missing` - the native startup hook has not bound the
+  saved-session locator, or the file a change or resume names does not
+  exist; only the exact recorded association resolves.
+- `saved_session_mismatch` - a registration reused a native id within
+  its harness against other history; an id never rebinds to a session
+  it was not born with.
+- `saved_session_unreadable` - the saved session exists but its native
+  identity or initial workspace cannot be read or validated; nothing
+  was recorded.
 - `session_live` - the host's liveness answer names a live terminal at
   the recorded address; exit that session first. Workspace switching
   moves stopped sessions only.

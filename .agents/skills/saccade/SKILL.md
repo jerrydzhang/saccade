@@ -12,8 +12,8 @@ reader - often you, after a context loss - never re-derives them. There is
 no managed execution in this build: the tracker records undertakings,
 accounts, and decisions - it holds no waits and supervises nothing
 (waiting is the caller's temporary read), and launching asks the host for
-a terminal or takes the caller's own (--here), never managing the
-session.
+a terminal, never managing the session. With --here, the invoking terminal
+attaches as a viewer; detaching leaves the session running.
 
 ## Identity
 
@@ -176,7 +176,7 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac artifact t-N <path> [--name ...]` | any tier | park an artifact on the thread - the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
 | `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; both flags required; nothing is recorded |
 | `sac wait i-<n> [--timeout <secs>]` | anonymous | the arrival wait: block until a message addressed to that incarnation lands, reading the mailbox for truth on every host wake and quiet alike - any state releases, the state named as it read; the mailbox cursor at entry is the provable staleness, so pre-entry mail never releases; `--timeout` bounds the whole watch (quiet - nothing was consumed); an unaddressed pre-contract session takes no arrival wait (exit + resume migrates it); a recorded address move ends the watch with its disclosure; nothing is recorded |
-| `sac launch --workspace <dir> [-- prompt]` / `--new [label] [--base <ref>]` | any tier | launch the composed native Pi task-free: `--workspace` selects an explicit existing directory; `--new` provisions a fresh workspace through the server's Git effects and launches there; a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. No task, claim, or request is provisioned; `--here` composes with `--workspace` and `--resume` and runs the composed session in the caller's own terminal - no host terminal, and the command's exit status is the session's |
+| `sac launch --workspace <dir> [--harness pi\|claude-code] [-- prompt]` / `--new [label] [--base <ref>]` | any tier | launch a packaged native harness task-free (Pi by default): `--workspace` selects an explicit existing directory; `--new` provisions through the server's Git effects. The door registers the incarnation; its native startup hook binds the saved-session locator. `--resume i-<n>` uses the recorded harness and exact saved session; an explicit different harness refuses. No task, claim, or request is provisioned. `--here` launches the same independent host terminal and attaches the invoking terminal as its viewer; detaching leaves the session running, and attach success is not the session's exit status |
 | `sac workspace new [label] [--base <ref>]` | any tier | provision a NEW task-free workspace through the server's Git effects: the label plus a generated uniqueness suffix (workspace-<token> without a label), cut at the named base or the primary HEAD. The birth record's position is the workspace's identity - no task, claim, or incarnation, and no new numbering |
 | `sac workspace switch i-<n> --to <dir> [--resume -- prompt]` | any tier | change where a STOPPED native session lives: the host's liveness answer gates it (launched sessions only - a live terminal refuses with exit-the-session-first, an unprobeable one refuses as unknown; an adopted pane's own duplicate-attach is its backstop), an unaddressed pre-contract session refuses to its migration, and the target must already exist; the record is the whole effect - no session file moves, resume reads the recorded workspace - and it asserts the confirmed change, never a running process. `--resume` then continues the same native id there through the ordinary resume door |
 | `sac launch --workspace <dir> --ask "question"` | a registered incarnation | cheap peer creation with an initial question: launches the peer, and once it registers the question goes to it as a durable addressed message from your own scope - the newborn's address is your reply surface. Requires SACCADE_INCARNATION_SEQ; never argv-shaped human input, never a task or ownership |
@@ -188,14 +188,13 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac skill install` / `sac skill check` | any tier | deploy this binary's copy of this skill into ./.agents/skills/saccade, or verify the copy against it; a differing copy refuses until deleted |
 
 Not in this build (later slices, do not assume them): managed
-completion obligations, proposal machinery of any kind. Launching is
-the host's or the caller's own terminal:
-`sac launch` asks the host (herdr-core) for one terminal, or `--here`
-runs the composed session in the invoking terminal as its foreground
-child and returns its exit status when it exits. `--here` adopts the
-caller's own terminal and refuses every form it cannot address; the
-host door asks for one terminal and never supervises it, and
-restarting Saccade leaves native sessions alone.
+completion obligations, proposal machinery of any kind. `sac launch`
+asks the host (herdr-core) for one independent terminal and never
+supervises it. `--here` attaches the invoking terminal as a viewer of
+that new terminal; it requires interactive stdin, not a caller host
+address. Detaching leaves the native session running. A registered
+incarnation cannot use foreground attachment to route its own input
+into a child. Restarting Saccade leaves native sessions alone.
 
 The host contract's deployment precondition is `notes = false` on the
 machine's host server: the host writes no authored text into a
@@ -339,21 +338,24 @@ worktree's absolute path - beside the tracker's db, under `worktrees/`.
 Several sessions may select one workspace; selecting an existing
 directory (`sac launch --workspace`) provisions nothing.
 
-`sac launch` runs the composed native Pi at
-the chosen workspace, task-free - in one host terminal, or as a
-foreground child of the invoking terminal with `--here`, which returns
-when the session exits with its exit status: a fresh session registers
-itself as a new incarnation when it attaches, and `--resume i-<n>`
-continues a saved one from its recorded locator, validated against the
-saved header. No task, claim, or request is provisioned.
+`sac launch` runs the selected packaged harness at the chosen workspace,
+task-free, in one independent host terminal. `--harness pi` is the
+fresh-launch default; `--harness claude-code` uses Claude Code with its
+native subscription authentication. Credentials stay outside the package;
+launch never logs in or edits global harness settings. `--here` attaches
+the invoking terminal as a viewer, not as the incarnation's address.
+The door registers a fresh incarnation and its native startup hook binds
+the saved-session locator. `--resume i-<n>` uses that incarnation's
+recorded harness and validates its exact saved session. No task, claim,
+or request is provisioned.
 
 The log may also name task-bound workspaces: a historical
 establishment record carries the task reference, the canonical base
 commit, the branch (`saccade/t-<n>`), and the worktree's absolute
 path. That record's position births a **historical attribution
 identity**, referenced `i-N`: claims carry it, and it holds no native
-session - a real session's identity is the registration born when the
-composed Pi attaches (`SACCADE_INCARNATION_SEQ` carries it). These
+session - a real session's identity is its native registration
+(`SACCADE_INCARNATION_SEQ` carries it). These
 establishments, their checkpoints, and their attribution read and fold
 exactly as always; the commands that established, reopened, executed
 into, checkpointed, or tore such workspaces down are retired. The
@@ -364,9 +366,9 @@ A native session's workspace changes by explicit change:
 incarnation, asks the host's liveness at the recorded address (a
 launched session's terminal dying with it makes terminal liveness read
 as session liveness; a live terminal refuses - exit that session
-first - and an unprobeable answer refuses as unknown; an adopted pane
-is the caller's own program and skips the probe, its native
-duplicate-attach refusal the backstop), and lands the change record -
+first - and an unprobeable answer refuses as unknown; a historical
+adopted pane skips the probe, with native duplicate-session exclusion
+as its backstop), and lands the change record -
 the whole effect. No session file moves: the fold's change cache is
 where a session lives, resume reads it there, and the saved file is
 never rewritten to follow. The fact stays true if a later launch

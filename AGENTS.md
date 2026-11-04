@@ -128,18 +128,20 @@ with them.
   beyond the contract, while the deployment may exploit host richness
   through the host's own no-fork surfaces - shipped host artifacts are
   conveniences on the host's faces, and no door routes through them.
-  A launch asks the host for one
-  terminal or adopts the caller's own (the here door refuses every
-  unaddressable form) and never supervises it; message delivery and
-  waits run through the same contract. There is no tracker-owned model
-  loop or managed RPC harness.
+  A launch asks the host for one terminal and never supervises it.
+  The here door attaches the invoking terminal as a viewer of that
+  launched terminal, never adopts the caller's shell address; detaching
+  leaves the session running. Message delivery, waits, and attachment
+  run through the same contract. There is no tracker-owned model loop
+  or managed RPC harness.
 - An incarnation identifies a native session, not a task, workspace, or
   running process, and has no lifecycle in the tracker. Turns, compaction,
   resume, and workspace handoff retain identity; fresh sessions and forks
-  create another. Historical existence asserts no current execution.
-  Session associations - host addresses, launched or adopted - and saved
-  locations are record facts; transient terminal handles are runtime
-  information.
+  create another. The harness is part of native-session identity;
+  resume uses the recorded harness, never a new default. Historical
+  existence asserts no current execution. Session associations - host
+  addresses, including historical adopted addresses - and saved locations
+  are record facts; transient terminal handles are runtime information.
 - Tasks, incarnations, and workspaces have separate identities. Participation
   need not begin with a task, and launching never transfers whole-task
   ownership implicitly. An incarnation can select, create, and switch
