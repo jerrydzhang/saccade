@@ -4812,8 +4812,12 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
         ok,
         "the door consults no guard for an addressless resume: {err}"
     );
+    // the door consults no guard for an addressless resume: it succeeded
+    // while the guard was held above, and it took nothing itself. After
+    // the drop, the resumed session's own attach may already hold the
+    // guard - that holder is the session's, never the door's, so the
+    // free-state read here would race the child and pin nothing
     drop(held);
-    assert_eq!(guard_held(&guard), Some(false));
     let launched = json_of(&out);
     assert_eq!(
         launched["workspace"],
