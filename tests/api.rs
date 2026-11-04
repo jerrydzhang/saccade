@@ -4098,6 +4098,7 @@ async fn launch_with_direnv_stripped_from_the_path() {
         // the fake host stays reachable; direnv deliberately is not
         .env("PATH", host.parent().unwrap().display().to_string())
         .env("FAKE_ORCA_LOG", host_log.display().to_string())
+        .env("SACCADE_HERDR", &host)
         .env("SACCADE_PI", &pi)
         .output()
         .expect("spawn sac");
@@ -7409,6 +7410,7 @@ async fn the_launch_door_refuses_an_unequipped_start_before_the_host_is_asked() 
             ("PATH", bin_dir.display().to_string()),
             ("FAKE_ORCA_LOG", host_log.display().to_string()),
             ("FAKE_ORCA_STATE", host_state.display().to_string()),
+            ("SACCADE_HERDR", host.display().to_string()),
             ("SACCADE_PI", pi.display().to_string()),
         ],
     );

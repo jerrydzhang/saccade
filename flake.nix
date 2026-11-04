@@ -141,13 +141,15 @@
         name = "herdr-core";
         runtimeInputs = [pkgs.coreutils];
         text = ''
-          dev=''${XDG_STATE_HOME:-''${HOME:-/tmp}/.local/state}/saccade/herdr-core-dev
-          mkdir -p "$dev/home" "$dev/config" "$dev/data" "$dev/state"
-          export HOME="$dev/home"
-          export XDG_CONFIG_HOME="$dev/config"
-          export XDG_DATA_HOME="$dev/data"
-          export XDG_STATE_HOME="$dev/state"
-          export HC_SESSION=saccade-dev
+          dev=''${XDG_STATE_HOME:-''${HOME:-/tmp}/.local/state}/saccade/hcd
+          mkdir -p "$dev/h" "$dev/c" "$dev/d" "$dev/s"
+          export HOME="$dev/h"
+          export XDG_CONFIG_HOME="$dev/c"
+          export XDG_DATA_HOME="$dev/d"
+          export XDG_STATE_HOME="$dev/s"
+          # short names keep the derived socket path under the kernel's
+          # 107-byte limit even in deep build-sandbox HOMEs
+          export HC_SESSION=dev
           exec ${herdrCore}/bin/herdr-core "$@"
         '';
       };
@@ -299,6 +301,10 @@
 
               process.manager.implementation = "native";
               processes.sac = {
+                # production posture: empty is unset by the adapter resolution
+                # contract, so the server joins the machine host while dev
+                # shells keep the sandboxed dev arm
+                env.SACCADE_HERDR = "";
                 exec = "${saccade.packages.${system}.default}/bin/sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811";
                 restart = {
                   on = "on_failure";

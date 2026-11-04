@@ -1663,7 +1663,33 @@
         "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz"
       }
     },
+    "herdr-app-aarch64-linux_2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793483419,
+        "narHash": "sha256-xNmkPXXa2Tustkg2OP+eIuSziyqcWsMhbae9H45ku/8=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz"
+      }
+    },
     "herdr-app-x86_64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793483418,
+        "narHash": "sha256-Kx0QKYramjgM9SxAAJats6o1+O14nGaf+5vnBxEp9UY=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz"
+      }
+    },
+    "herdr-app-x86_64-linux_2": {
       "flake": false,
       "locked": {
         "lastModified": 1793483418,
@@ -1689,7 +1715,33 @@
         "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
       }
     },
+    "herdr-core-aarch64-linux_2": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793624171,
+        "narHash": "sha256-URBw4Oo794eS6RRWv4LthkTqzzDcbOPFStLpfohi28g=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
+      }
+    },
     "herdr-core-x86_64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793624075,
+        "narHash": "sha256-jdgIcDV9Y9RhvofLHpDLYtB/iCpnJ9pF0nlZ0LlqLrM=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
+      }
+    },
+    "herdr-core-x86_64-linux_2": {
       "flake": false,
       "locked": {
         "lastModified": 1793624075,
@@ -3464,6 +3516,10 @@
     "saccade": {
       "inputs": {
         "devenv": "devenv_2",
+        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux_2",
+        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux_2",
+        "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_2",
+        "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_2",
         "nixpkgs": "nixpkgs_5",
         "rust-overlay": "rust-overlay_4",
         "saccade": [
@@ -3472,11 +3528,11 @@
         "wrapped-pi": "wrapped-pi"
       },
       "locked": {
-        "lastModified": 1793211321,
-        "narHash": "sha256-GwGeEWqQyXXFSQmP892wMqKQN9tpK6wMLSmDTAufJPw=",
+        "lastModified": 1793805447,
+        "narHash": "sha256-N+axQzBYmXFWyEBROOi4rI6KQBpotvREiX8v4I410IA=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "6e311243aa430e8b100686e0cf124b8e230f9333",
+        "rev": "34850bff3ba094c34a296a453502f06a0a181527",
         "type": "github"
       },
       "original": {
