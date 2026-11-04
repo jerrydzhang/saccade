@@ -22,6 +22,14 @@ finding - name it on the thread before proceeding.
   detail names the evidence. Nothing retries.
 - `host_unavailable` - no herdr-core host could be resolved to attempt
   the submission; the message stays pending.
+- `launch_no_pi` / `launch_no_claude_code` (workbench) - the selected
+  harness has no executable pin. Use the packaged composition or its
+  explicit development override (`SACCADE_PI` / `SACCADE_CLAUDE_CODE`);
+  launch never guesses a harness from PATH. The CLI reports the cause
+  as `usage`.
+- `launch_no_direnv` (workbench) - workspace equipment could not be
+  resolved; no terminal was requested. The CLI reports the cause as
+  `usage`.
 - `invalid_task_id` - no such task; ids are exact
   `t-N` tokens, not searches.
 - `invalid_comment_id` - the `c-N` target names no comment; a task birth
@@ -142,7 +150,11 @@ finding - name it on the thread before proceeding.
   serves a different database than the one the hint sits beside.
 - `usage` - the command line itself is wrong; both explicit
   destinations (`--db` with `--server`) refuse here, as does the
-  server-only `launch` aimed at a local `--db`.
+  server-only `launch` aimed at a local `--db`. A fresh `--ask` whose
+  native startup binding exceeds its bound also refuses here: the
+  detail names the standing launch, and no question was recorded or
+  sent. A failed foreground attach likewise leaves its launch standing
+  and names its address; an attach failure never undoes the launch.
 
 When the tracker misbehaves or a refusal needs reproducing, read
 `diagnosing.md` beside this file: the attempts log reconstructs the
