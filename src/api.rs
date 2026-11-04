@@ -407,7 +407,6 @@ impl ApiFail {
                 // other stage is the host environment's, never the
                 // caller's bad input
                 let status = match fail {
-                    HostFail::Workspace(_) => StatusCode::BAD_REQUEST,
                     HostFail::NoPi | HostFail::NoDirenv => StatusCode::INTERNAL_SERVER_ERROR,
                     // lifecycle host answers the server could not read:
                     // the environment's break, never the caller's input
@@ -2564,36 +2563,81 @@ async fn incarnation_register(State(app): State<AppState>, body: Bytes) -> Respo
     let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = match &mut *guard {
-        ServerState::Ready(inner) => {
-            let command = Command::RegisterIncarnation {
-                native_id: request.native_id,
-                saved_session: None,
-                address: Some(request.address),
-                adopted: request.adopted,
-            };
-            db::record(
-                &mut inner.conn,
-                &Context::system(),
-                command,
-                db::now_epoch(),
-            )
-            .map(|(stored, _)| stored)
-            .map_err(ApiFail::from)
-        }
+        ServerState::Ready(inner) => incarnation_register_operation(
+            inner,
+            request.native_id,
+            request.address,
+            request.adopted,
+        ),
         ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
     };
     integration_outcome(&app, &guard, None, &received, started, &outcome);
     match outcome {
-        Ok(records) => (
+        Ok((records, incarnation, registered)) => (
             StatusCode::OK,
             Json(json!({
-                "registered": true,
-                "incarnation": records[0].seq,
+                "registered": registered,
+                "incarnation": incarnation,
                 "records": records,
             })),
         )
             .into_response(),
         Err(fail) => api_failure(fail),
+    }
+}
+
+/// The launch door's birth, resolving the attach-before-register
+/// race: a fresh native id births with its returned address, while an
+/// incarnation the session already birthed by attaching (locator
+/// bound, no address) takes the address instead - one incarnation
+/// either way, and the reply names the resolved identity. A known id
+/// with no bound locator is a second door birth: the fold refuses it,
+/// never a silent re-addressing.
+fn incarnation_register_operation(
+    inner: &mut Inner,
+    native_id: crate::NativeSessionId,
+    address: String,
+    adopted: bool,
+) -> Result<(Vec<StoredRecord>, usize, bool), ApiFail> {
+    let loadout = db::load(&inner.conn).map_err(|e| ApiFail::Db(e.to_string()))?;
+    let db::LoadState::Full(world) = loadout.state else {
+        return Err(ApiFail::Degraded("the log will not fold".into()));
+    };
+    let known = world
+        .incarnations
+        .iter()
+        .find(|(_, ctx)| ctx.incarnation.native_id() == Some(&native_id));
+    match known {
+        Some((id, ctx)) if ctx.incarnation.saved_session().is_some() => {
+            let command = Command::AssignHostAddress {
+                incarnation: *id,
+                address: Some(address),
+                adopted,
+            };
+            let (stored, _) = db::record(
+                &mut inner.conn,
+                &Context::system(),
+                command,
+                db::now_epoch(),
+            )?;
+            Ok((stored, id.0.0, false))
+        }
+        _ => {
+            let command = Command::RegisterIncarnation {
+                native_id,
+                saved_session: None,
+                address: Some(address),
+                adopted,
+            };
+            let (stored, _) = db::record(
+                &mut inner.conn,
+                &Context::system(),
+                command,
+                db::now_epoch(),
+            )?;
+            let birth = stored[0].seq;
+            Ok((stored, birth, true))
+        }
     }
 }
 

@@ -41,3 +41,6 @@ web/harness/__pycache__/
 web/dist/
 mods/saccade/gpui-kit.d.ts
 mods/saccade/herdr.d.ts
+
+# numbered result links from multi-output or repeated nix builds
+result-[0-9]*

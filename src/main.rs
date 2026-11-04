@@ -2368,10 +2368,18 @@ fn compose_launch(
                 let host = saccade::herdr::HerdrCore::resolved()
                     .map_err(|e| Fail::Usage(e.to_string()))?;
                 let answer = host.live(&saccade::host_contract::HostAddress(carried.clone()));
-                if let saccade::host_contract::Liveness::Live = answer {
-                    return Err(Fail::Usage(format!(
-                        "{token}'s session is live at its recorded host address; no launch is submitted; exit that session first"
-                    )));
+                match answer {
+                    saccade::host_contract::Liveness::Live => {
+                        return Err(Fail::Usage(format!(
+                            "{token}'s session is live at its recorded host address; no launch is submitted; exit that session first"
+                        )));
+                    }
+                    saccade::host_contract::Liveness::Unknown(evidence) => {
+                        return Err(Fail::Usage(format!(
+                            "{token}'s liveness cannot be read from the host at its recorded address ({evidence}); no launch is submitted - settle the terminal or the record first"
+                        )));
+                    }
+                    saccade::host_contract::Liveness::Gone => {}
                 }
             }
             (dir, argv, None, Some(id))

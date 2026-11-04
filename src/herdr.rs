@@ -41,6 +41,11 @@ const TERMINALS_BOUND: Duration = Duration::from_secs(10);
 /// the launch's own follow-on ask, never a poll.
 const PLACE_BOUND: Duration = Duration::from_secs(10);
 
+/// The single-ask bound shared by launch, live, and close: one verb,
+/// one answer - the host names its terminal in the window or the ask
+/// refuses honestly, never an unbounded wait on a hung core.
+const ASK_BOUND: Duration = Duration::from_secs(10);
+
 /// The standing placement one live terminal carries, stripped of the
 /// dialect's label vocabulary: the ids alone. The tab is optional -
 /// a space-only label is a legal adoption shape.
@@ -176,6 +181,7 @@ fn find_ambient(dirs: &[PathBuf]) -> Option<PathBuf> {
 pub struct HerdrCore {
     binary: PathBuf,
     submit_bound: Duration,
+    ask_bound: Duration,
 }
 
 impl HerdrCore {
@@ -262,6 +268,7 @@ impl HerdrCore {
         HerdrCore {
             binary: binary.into(),
             submit_bound: DEFAULT_SUBMIT_BOUND,
+            ask_bound: ASK_BOUND,
         }
     }
 
@@ -270,16 +277,9 @@ impl HerdrCore {
         self
     }
 
-    fn ask(&self, args: &[OsString]) -> std::io::Result<Answer> {
-        let out = std::process::Command::new(&self.binary)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .output()?;
-        Ok(Answer {
-            ok: out.status.success(),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        })
+    pub fn with_ask_bound(mut self, bound: Duration) -> Self {
+        self.ask_bound = bound;
+        self
     }
 
     /// The bounded ask: the child self-bounds where the verb carries
@@ -401,9 +401,12 @@ impl HostContract for HerdrCore {
         args.push(OsString::from("--json"));
         args.push(OsString::from("--"));
         args.extend(argv.iter().map(OsString::from));
-        let out = self
-            .ask(&args)
-            .map_err(|e| LaunchRefusal::Unavailable(e.to_string()))?;
+        let out = self.ask_bounded(&args, self.ask_bound).map_err(|e| {
+            LaunchRefusal::Unavailable(match e {
+                Bound::Spawn(e) => e.to_string(),
+                Bound::Expired => "the launch ask outlived its bound".into(),
+            })
+        })?;
         if !out.ok {
             return Err(LaunchRefusal::HostRefused(out.evidence()));
         }
@@ -425,9 +428,12 @@ impl HostContract for HerdrCore {
             .iter()
             .map(OsString::from)
             .collect();
-        let out = match self.ask(&args) {
+        let out = match self.ask_bounded(&args, self.ask_bound) {
             Ok(out) => out,
-            Err(e) => return Liveness::Unknown(e.to_string()),
+            Err(Bound::Spawn(e)) => return Liveness::Unknown(e.to_string()),
+            Err(Bound::Expired) => {
+                return Liveness::Unknown("the liveness ask outlived its bound".into());
+            }
         };
         if out.ok {
             let state = serde_json::from_str::<serde_json::Value>(out.stdout.trim())
@@ -515,9 +521,12 @@ impl HostContract for HerdrCore {
 
     fn close(&self, address: &HostAddress) -> Result<CloseFact, CloseRefusal> {
         let args: Vec<OsString> = ["kill", &address.0].iter().map(OsString::from).collect();
-        let out = self
-            .ask(&args)
-            .map_err(|e| CloseRefusal::Unknown(e.to_string()))?;
+        let out = self.ask_bounded(&args, self.ask_bound).map_err(|e| {
+            CloseRefusal::Unknown(match e {
+                Bound::Spawn(e) => e.to_string(),
+                Bound::Expired => "the close ask outlived its bound".into(),
+            })
+        })?;
         if out.ok {
             // the reply is the terminal's own object; its state fact is
             // the closure evidence - no re-list names it
@@ -1014,6 +1023,29 @@ esac
         let host = HerdrCore::over("/nonexistent/sac-herdr-missing");
         let err = host.close(&HostAddress("t7".into())).unwrap_err();
         assert!(matches!(err, CloseRefusal::Unknown(_)), "{err}");
+    }
+
+    #[test]
+    fn launch_live_and_close_expire_their_bound_into_honest_refusals() {
+        // one shared window over the single asks: a hung core is
+        // killed, never awaited - the launch names an unaskable host
+        // (no terminal was created), live and close stay unknown
+        let (host, dir) = fake("ask-hang", &["run.x=hang", "get.x=hang", "kill.x=hang"]);
+        let host = host.with_ask_bound(Duration::from_millis(400));
+        let started = std::time::Instant::now();
+        let err = host.launch(&std::env::temp_dir(), &[]).unwrap_err();
+        assert!(matches!(err, LaunchRefusal::Unavailable(_)), "{err}");
+        assert!(
+            matches!(host.live(&HostAddress("t7".into())), Liveness::Unknown(_)),
+            "a hung liveness ask is unknown, never gone"
+        );
+        let err = host.close(&HostAddress("t7".into())).unwrap_err();
+        assert!(matches!(err, CloseRefusal::Unknown(_)), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the bound is enforced, not awaited"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

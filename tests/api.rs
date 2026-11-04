@@ -671,6 +671,58 @@ fn the_native_integration_attaches_and_sends_over_the_wire() {
         .collect();
     assert_eq!(standing.len(), 2, "the refused attempts stand pending");
 
+    // the other arrival order: a session attach that lands before its
+    // door's registration resolves into one incarnation - the register
+    // carries the returned address to the attach-born identity instead
+    // of birthing a twin
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "cccc4444",
+            "session_file": "/sessions/cccc4444.jsonl",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["registered"], true);
+    let attach_birth = reply["incarnation"].as_u64().unwrap();
+    assert_eq!(reply["records"][0]["kind"], "incarnation_registered");
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "cccc4444", "address": "t3", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["registered"], false);
+    assert_eq!(reply["incarnation"], attach_birth);
+    let records = reply["records"].as_array().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["kind"], "host_address_assigned");
+    assert_eq!(records[0]["payload"]["incarnation"], attach_birth);
+    assert_eq!(records[0]["payload"]["address"], "t3");
+
+    // the door's second birth for a known unbound id is a duplicate:
+    // the fold refuses it - no twin, no silent re-addressing
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "dddd5555", "address": "t4", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "dddd5555", "address": "t5", "adopted": false}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "duplicate_native_session",
+        "{body}"
+    );
+
     // the command face rides the same operation: the record lands and
     // the attempt's truth rides the reply as data
     let (status, body) = post_json(
@@ -4894,6 +4946,32 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
         "the resume assigns the new address"
     );
     stop_holder(&fx.pidfile, &guard);
+
+    // the liveness preflight gates the relaunched kind: the recorded
+    // address reads live - the fake host's default - so a duplicate is
+    // never submitted, and an unprobeable address refuses as unknown,
+    // naming its evidence, never reading as free
+    let run_log = fx.hcs.parent().unwrap().join("argv-run.log");
+    let runs_before = std::fs::read_to_string(&run_log).unwrap();
+    let mut live_envs = envs.clone();
+    live_envs.push(("SACCADE_FAKE_HC_STATE", "live".to_string()));
+    let (ok, _out, err, timed_out) = bounded_sac(bin, &door_args("i-0"), &live_envs);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "a live address must refuse the resume");
+    assert!(
+        err.contains("is live at its recorded host address"),
+        "{err}"
+    );
+    let mut unknown_envs = envs.clone();
+    unknown_envs.push(("SACCADE_FAKE_HC_STATE", "mangled".to_string()));
+    let (ok, _out, err, timed_out) = bounded_sac(bin, &door_args("i-0"), &unknown_envs);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "an unprobeable address must refuse the resume");
+    assert!(err.contains("liveness cannot be read"), "{err}");
+    assert!(err.contains("mangled"), "{err}");
+    // both refusals probed the address (hc get) and submitted no launch
+    let runs_after = std::fs::read_to_string(&run_log).unwrap();
+    assert_eq!(runs_after, runs_before, "the refusals submitted no launch");
 
     let _ = std::process::Command::new("kill")
         .arg(server_pid.id().to_string())

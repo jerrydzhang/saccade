@@ -17,8 +17,6 @@ pub enum HostFail {
     NoPi,
     /// No direnv: the doors never start a session they cannot equip.
     NoDirenv,
-    /// The named workspace is not a usable existing directory.
-    Workspace(String),
 
     /// The host's terminal table could not be asked or its answer
     /// could not be read: the workspace's terminal facts are
@@ -30,7 +28,6 @@ impl HostFail {
     /// The wire refusal code each variant maps to at the door.
     pub fn wire_code(&self) -> &'static str {
         match self {
-            HostFail::Workspace(_) => "workspace_path_invalid",
             HostFail::NoPi => "launch_no_pi",
             HostFail::NoDirenv => "launch_no_direnv",
 
@@ -51,7 +48,6 @@ impl std::fmt::Display for HostFail {
                 "no direnv: the launch doors equip the workspace through direnv \
                  (build pin SACCADE_DIRENV or PATH), and a launch never starts unequipped"
             ),
-            HostFail::Workspace(detail) => write!(f, "{detail}"),
             HostFail::TerminalList(detail) => {
                 write!(f, "the host's terminal table failed: {detail}")
             }
@@ -78,28 +74,6 @@ pub fn command_label(program: &str) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "saccade".into())
-}
-
-/// One POSIX word, quoted so any bytes survive the shell that types it.
-pub fn shell_quote(word: &str) -> String {
-    if !word.is_empty()
-        && word.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'=' | b'/' | b'.' | b'+')
-        })
-    {
-        return word.to_string();
-    }
-    let mut out = String::with_capacity(word.len() + 2);
-    out.push('\'');
-    for c in word.chars() {
-        if c == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('\'');
-    out
 }
 
 /// First executable direnv under these directories, if any, returned
@@ -288,24 +262,6 @@ mod test {
         assert_eq!(command_label("/tools/wrapped-pi"), "wrapped-pi");
         assert_eq!(command_label("pi"), "pi");
         assert_eq!(command_label(""), "saccade");
-    }
-
-    #[test]
-    fn shell_quoting_keeps_word_boundaries() {
-        assert_eq!(shell_quote("sac"), "sac");
-        assert_eq!(shell_quote("/nix/store/x-bin/pi"), "/nix/store/x-bin/pi");
-        assert_eq!(
-            shell_quote("it's a 'quoted' $WORD"),
-            "'it'\\''s a '\\''quoted'\\'' $WORD'"
-        );
-        assert_eq!(shell_quote(""), "''");
-        let words = ["fix the 'flake' and $PATH", "--flag", ""];
-        let line = words
-            .iter()
-            .map(|w| shell_quote(w))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert_eq!(line, "'fix the '\\''flake'\\'' and $PATH' --flag ''");
     }
 
     #[test]
