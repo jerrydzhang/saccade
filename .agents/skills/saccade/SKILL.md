@@ -349,6 +349,14 @@ the saved-session locator. `--resume i-<n>` uses that incarnation's
 recorded harness and validates its exact saved session. No task, claim,
 or request is provisioned.
 
+Claude Code's own limits are disclosed, not papered over: a startup bind
+that fails leaves the CC session running unregistered (the hook's error
+notice names the failure; the incarnation stays unbound and takes no
+automated asks), and CC does not itself refuse a second live process on
+one session id - the doors mint a fresh id per launch and preflight
+resume liveness, but a manually duplicated session shares its identity.
+Pi's startup guard remains the stricter posture.
+
 The log may also name task-bound workspaces: a historical
 establishment record carries the task reference, the canonical base
 commit, the branch (`saccade/t-<n>`), and the worktree's absolute

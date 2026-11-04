@@ -13,6 +13,7 @@ typecheck:
 
 native-test: typecheck
     node --experimental-strip-types --test native/saccade.test.ts
+    node --test native/claude-code/claude-code.test.mjs
 
 web-build:
     cd web && npm run build
