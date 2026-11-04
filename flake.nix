@@ -26,10 +26,10 @@
       url = "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz";
       flake = false;
     };
-    # the desktop app, the second side of the spaces realization: the
-    # 0.1.11 line the laptop acceptance client runs, pinned the same
-    # way the core is, completing the versioned triple (app 0.1.11 +
-    # core 0.1.17 + the mod's own version)
+    # the desktop app, the second side of the pairing: the 0.1.11
+    # line the laptop acceptance client runs, pinned the same way the
+    # core is (app 0.1.11 + core 0.1.17 - placement belongs to the
+    # door, no mod between them)
     herdr-app-x86_64-linux = {
       url = "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz";
       flake = false;
@@ -102,9 +102,6 @@
         binarySha256 = "db7ddf3cb0b8519573490b729abf7eee7a2472436e2ddb490ad0686504edbe17";
       };
     };
-    # the spaces mod's own version, the triple's third leg; a change
-    # here re-seeds the user's copy through the wrapper's stamp
-    saccadeModVersion = "0.1.0";
     mkHerdrApp = {
       pkgs,
       src,
@@ -163,25 +160,12 @@
           inherit pkgs;
           inherit (pin) src binarySha256;
         };
-    # the spaces mod's store path: the mod folder plus the derived
-    # layout (main plus the saccade panel), one seeding bundle
-    mkSaccadeSpacesMod = {pkgs}:
-      pkgs.runCommand "saccade-spaces-mod-${saccadeModVersion}" {} ''
-        mkdir -p $out/mods/saccade $out/layouts
-        for f in mod.json main.js plan.js; do
-          ${pkgs.coreutils}/bin/install -m 0444 ${./mods/saccade}/$f $out/mods/saccade/$f
-        done
-        ${pkgs.coreutils}/bin/install -m 0444 ${./mods/saccade-layout.json} $out/layouts/saccade.json
-        echo -n ${saccadeModVersion} > $out/mods/saccade/.version
-      '';
-    # the app with the mod: a first-run seeding wrapper, the app's own
-    # sanctioned config path (mods the app scans and runs live). The
-    # stamp re-seeds when the mod's version moves; a changed mod file
-    # with a current stamp is a human edit and stays.
+    # the app as saccade ships it: a wrapper carrying the runtime
+    # libs the release links, nothing seeded - placement is the
+    # door's declaration, and no mod rides between them
     mkHerdrAppSaccade = {
       pkgs,
       herdrApp,
-      mod,
     }:
       pkgs.writeShellApplication {
         name = "herdr-app-saccade";
@@ -195,29 +179,14 @@
           # HERDR_APP_HOME is the app's whole home when set, used raw;
           # otherwise the config dir's herdr-app folder
           home=''${HERDR_APP_HOME:-''${XDG_CONFIG_HOME:-''${HOME:-/nonexistent}/.config}/herdr-app}
-          mods=$home/mods
-          stamp=$mods/saccade/.version
-          # the stamp is the mod package's store path - its content hash:
-          # a rebuilt mod re-seeds, a human-edited one whose stamp matches
-          # stays
-          want=${mod}
-          if [ "$stamp" != "$want" ]; then
-            mkdir -p "$mods/saccade" "$home/layouts"
-            for f in mod.json main.js plan.js; do
-              rm -f "$mods/saccade/$f"
-              install -m 0644 "${mod}/mods/saccade/$f" "$mods/saccade/$f"
-            done
-            # the deployment no longer ships a config override: a stale
-            # one from an older stamp would pin a wrong root
-            rm -f "$mods/saccade/config.json"
-            printf '%s' "$want" > "$stamp"
-            # the derived layout seeds always; the selection seeds only a
-            # fresh home - an existing home keeps its own layout choice,
-            # and switching once is the app's own documented act
-            install -m 0444 "${mod}/layouts/saccade.json" "$home/layouts/saccade.json"
-            if [ ! -f "$home/shared.json" ]; then
-              printf '{"layout":"saccade"}' > "$home/shared.json"
-            fi
+          # the retired mod's seeded copy leaves with the component:
+          # the wrapper removes only what it seeded (the saccade folder
+          # carrying its own stamp) - anything else under mods is the
+          # person's and stays, and the app starts on main when the
+          # selected layout file is gone
+          if [ -f "$home/mods/saccade/.version" ]; then
+            rm -rf "$home/mods/saccade"
+            rm -f "$home/layouts/saccade.json"
           fi
           exec ${herdrApp}/bin/herdr-app "$@"
         '';
@@ -332,7 +301,6 @@
         devHerdrCore = herdrCore system pkgs;
         devHerdrPin = herdrDev system pkgs;
         devHerdrApp = herdrApp system pkgs;
-        devMod = mkSaccadeSpacesMod {inherit pkgs;};
         pi = wrapped-pi.packages.${system}.default.override {
           extraExtensions = map (path: ./. + "/${path}") saccadePiExtensions;
         };
@@ -440,16 +408,13 @@
           herdr-core-dev = devHerdrPin;
         }
         // lib.optionalAttrs (devHerdrApp != null) {
-          # the spaces realization's second side: the pinned app, the
-          # mod folder alone, and the app with the mod seeded - the
-          # versioned triple's app side, runnable with nix, no manual
-          # file installs
+          # the pairing's app side: the pinned app and the wrapper that
+          # carries its runtime libs - runnable with nix, no manual
+          # file installs, nothing seeded
           herdr-app = devHerdrApp;
-          saccade-spaces-mod = devMod;
           herdr-app-saccade = mkHerdrAppSaccade {
             inherit pkgs;
             herdrApp = devHerdrApp;
-            mod = devMod;
           };
         }
     );
