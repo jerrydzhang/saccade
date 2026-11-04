@@ -76,10 +76,19 @@
     };
     # the three X runtime libs the release binary dynamically links
     # and the tarball does not carry
+    # the libraries the release binary needs, split by how it finds
+    # them: libxcb and libxkbcommon are DT_NEEDED (ldd sees them); the
+    # wayland client stack and the vulkan loader are dlopened by gpui's
+    # linux platform at init and surface creation (ldd never shows
+    # them, and a clean env panics without them); mesa carries libGL,
+    # libEGL, the software vulkan driver, and the ICD files
     herdrAppLibs = pkgs:
       pkgs.lib.makeLibraryPath [
         pkgs.libxcb
         pkgs.libxkbcommon
+        pkgs.wayland
+        pkgs.vulkan-loader
+        pkgs.mesa
       ];
     # the app release's own manifest hashes its tarball; the lock pins
     # those bytes and the derivation asserts the unpacked binary
@@ -177,6 +186,10 @@
         runtimeInputs = [pkgs.coreutils];
         text = ''
           export LD_LIBRARY_PATH=${herdrAppLibs pkgs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+          # the vulkan loader's ICD discovery rides the host's data dirs
+          # first (a real GPU on a desktop keeps its drivers); mesa's
+          # share is appended so a headless box still finds lavapipe
+          export XDG_DATA_DIRS=${pkgs.mesa}/share:''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}
           # HERDR_APP_HOME is the app's whole home when set, used raw;
           # otherwise the config dir's herdr-app folder
           home=''${HERDR_APP_HOME:-''${XDG_CONFIG_HOME:-''${HOME:-/nonexistent}/.config}/herdr-app}
