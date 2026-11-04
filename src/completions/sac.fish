@@ -192,6 +192,8 @@ complete -c sac -n '__saccade_verb launch' -l resume -r -f -d 'continue this sav
 complete -c sac -n '__saccade_verb launch' -l new -d 'provision a NEW workspace and launch there'
 complete -c sac -n '__saccade_verb launch' -l base -r -f -d 'the Git base for --new'
 complete -c sac -n '__saccade_verb launch' -l ask -r -f -d 'the initial question for a fresh peer'
+complete -c sac -n '__saccade_verb launch' -l harness -r -f -d 'the harness a fresh launch runs; a resume runs its recorded kind' -a 'pi claude-code'
+complete -c sac -n '__saccade_verb launch' -l here -d 'launch through the host, then attach it in this terminal'
 complete -c sac -n '__saccade_verb workspace new' -l base -r -f -d 'the Git base: a ref, defaulting to the primary HEAD'
 complete -c sac -n '__saccade_verb workspace switch' -l resume -d 'resume the session in the new directory'
 complete -c sac -n '__saccade_verb workspace switch' -l to -r -f -d 'the selected directory: it must already exist' -a '(__saccade_candidates workspaces)' -k

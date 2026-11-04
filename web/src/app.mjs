@@ -1035,7 +1035,7 @@ async function submitLaunch(staged) {
         const provisioned = `Workspace provisioned - record ${created.workspace.seq}, branch ${created.workspace.branch} at ${created.workspace.path}.`;
         try { await reload(false); } catch {}
         try {
-          const data = await api("/api/v1/workbench/launch", launchRequest(created.workspace.path));
+          const data = await api("/api/v1/workbench/launch", launchRequest(created.workspace.path, staged.harness));
           finalMessage = `${provisioned} ${submittedMessage(data, false)}`;
         } catch (error) {
           finalMessage = `${provisioned} ${launchOutcomeMessage(error)}`;
@@ -1043,7 +1043,7 @@ async function submitLaunch(staged) {
       }
     } else {
       try {
-        const data = await api("/api/v1/workbench/launch", launchRequest(staged.existing));
+        const data = await api("/api/v1/workbench/launch", launchRequest(staged.existing, staged.harness));
         finalMessage = submittedMessage(data, true);
       } catch (error) {
         finalMessage = launchOutcomeMessage(error);
@@ -1678,6 +1678,12 @@ function candidates() {
     selector = (item) => item.finderType === "workspace-new" ? "Provision a new workspace"
       : item.finderType === "workspace-path" ? "Name an existing directory"
       : `${item.path} ${item.branch}`;
+  } else if (picker.kind === "harness") {
+    list = [
+      { finderType: "harness", id: "pi", text: "pi\nThe pinned Pi; the default for existing callers" },
+      { finderType: "harness", id: "claude-code", text: "claude-code\nThe pinned Claude Code" },
+    ];
+    selector = (item) => item.text;
   } else if (["tasks", "home"].includes(picker.kind)) {
     list = snapshot.tasks;
     if (/^t-\d+$/.test(query.trim())) return list.filter((item) => `t-${item.id}` === query.trim()).map((item) => ({ ...item, finderType: "task" }));
@@ -1833,11 +1839,15 @@ function choose(beside) {
       status(`Task name staged: ${value}. Run New task again to create it.`);
     } else if (kind === "launch-label") {
       stagedLaunch = { new: { label: value || null } };
-      status(`Workspace staged: new${value ? ` (${value})` : ""}. Run Launch again to provision and submit.`);
+      status(`Workspace staged: new${value ? ` (${value})` : ""}. Choose the harness; run Launch again to submit.`);
+      openPicker("harness");
+      return;
     } else {
       if (!value) return status("No directory named; nothing is staged.");
       stagedLaunch = { existing: value };
-      status(`Workspace staged: ${value}. Run Launch again to submit.`);
+      status(`Workspace staged: ${value}. Choose the harness; run Launch again to submit.`);
+      openPicker("harness");
+      return;
     }
     if (after) after(value);
     return;
@@ -1872,7 +1882,13 @@ function choose(beside) {
       return;
     }
     stagedLaunch = { existing: selection.path };
-    status(`Workspace staged: ${selection.path}. Run Launch again to submit.`);
+    status(`Workspace staged: ${selection.path}. Choose the harness; run Launch again to submit.`);
+    openPicker("harness");
+    return;
+  }
+  if (kind === "harness") {
+    if (stagedLaunch) stagedLaunch.harness = selection.id;
+    status(`Harness staged: ${selection.id}. Run Launch again to submit.`);
     return;
   }
   if (kind === "home") {

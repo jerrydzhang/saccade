@@ -241,6 +241,9 @@ test("task creation rides the human write door and checks its own landed record"
 
 test("the launch request names one explicit existing workspace and nothing else", () => {
   assert.deepEqual(launchRequest("/repo/wt/workspace-abc"), { workspace: { existing: "/repo/wt/workspace-abc" } });
+  // a staged harness rides beside it; the default stages no field
+  assert.deepEqual(launchRequest("/repo/wt/workspace-abc", "claude-code"), { workspace: { existing: "/repo/wt/workspace-abc" }, harness: "claude-code" });
+  assert.deepEqual(launchRequest("/repo/wt/workspace-abc", undefined), { workspace: { existing: "/repo/wt/workspace-abc" } });
 });
 
 test("a lost launch reply is unknown and a server answer is a confirmed fact", () => {

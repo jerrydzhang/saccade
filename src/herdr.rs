@@ -7,12 +7,13 @@
 
 use std::ffi::OsString;
 use std::io::Read;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::host_contract::{
-    CloseFact, CloseRefusal, HostAddress, HostContract, LaunchRefusal, Liveness, PlaceRefusal,
-    SubmitRefusal, WaitWake,
+    AttachRefusal, CloseFact, CloseRefusal, HostAddress, HostContract, LaunchRefusal, Liveness,
+    PlaceRefusal, SubmitRefusal, WaitWake,
 };
 
 /// The explicit override: set and nonempty, it is the host binary,
@@ -545,6 +546,31 @@ impl HostContract for HerdrCore {
             _ => Err(CloseRefusal::HostRefused(out.evidence())),
         }
     }
+
+    /// Foreground attach: the adapter runs `attach <address>` as this
+    /// process's own child with inherited stdio, so the caller's
+    /// terminal carries the session until detach. The answer is the
+    /// attach's own exit; a nonzero one is the refusal evidence - the
+    /// session itself is never asked, supervised, or ended here.
+    fn attach(&self, address: &HostAddress) -> Result<crate::host::ChildExit, AttachRefusal> {
+        let args: Vec<OsString> = ["attach", &address.0].iter().map(OsString::from).collect();
+        let mut child = std::process::Command::new(&self.binary)
+            .args(&args)
+            .spawn()
+            .map_err(|e| AttachRefusal::Unavailable(e.to_string()))?;
+        let status = child
+            .wait()
+            .map_err(|e| AttachRefusal::Unavailable(e.to_string()))?;
+        match status.code() {
+            Some(0) => Ok(crate::host::ChildExit::Exited(0)),
+            Some(code) => Err(AttachRefusal::HostRefused(format!(
+                "attach exited with {code}"
+            ))),
+            None => Ok(crate::host::ChildExit::Signalled(
+                status.signal().unwrap_or(1),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -596,6 +622,10 @@ case "$kind" in
     printf '{"error":{"kind":"finished","message":"terminal finished"}}\n' >&2; exit 11 ;;
   send-refused)
     printf 'send refused' >&2; exit 5 ;;
+  attach-ok)
+    printf 'the attached view\n'; exit 0 ;;
+  attach-refused)
+    printf 'no such terminal\n' >&2; exit 4 ;;
   wait-message)
     printf '{"reason":"message","status":"working","ended":false}\n'; exit 0 ;;
   wait-timeout)
@@ -937,6 +967,35 @@ esac
         let host = HerdrCore::over("/nonexistent/sac-herdr-missing");
         let err = host.submit(&HostAddress("t7".into()), "hello").unwrap_err();
         assert!(matches!(err, SubmitRefusal::Unknown(_)), "{err}");
+    }
+
+    // -- attach ---------------------------------------------------------
+
+    #[test]
+    fn attach_runs_the_foreground_view_and_reports_its_own_exit() {
+        let (host, dir) = fake("attach-ok", &["attach.x=attach-ok"]);
+        let exit = host.attach(&HostAddress("t7".into())).unwrap();
+        assert_eq!(exit, crate::host::ChildExit::Exited(0));
+        // the address rides bare: the adapter's own attach verb, no
+        // json, no timeout - the caller's terminal is the surface
+        assert_eq!(argv_log(&dir, "attach"), vec!["t7"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_names_a_nonzero_exit_as_the_refusal_evidence() {
+        let (host, dir) = fake("attach-refused", &["attach.x=attach-refused"]);
+        let err = host.attach(&HostAddress("t7".into())).unwrap_err();
+        assert!(matches!(err, AttachRefusal::HostRefused(_)), "{err}");
+        assert!(err.to_string().contains("attach exited with 4"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn attach_names_an_unspawnable_adapter() {
+        let host = HerdrCore::over("/nonexistent/sac-herdr-missing");
+        let err = host.attach(&HostAddress("t7".into())).unwrap_err();
+        assert!(matches!(err, AttachRefusal::Unavailable(_)), "{err}");
     }
 
     #[test]

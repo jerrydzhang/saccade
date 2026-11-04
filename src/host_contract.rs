@@ -91,6 +91,30 @@ pub enum PlaceRefusal {
     Unknown(String),
 }
 
+/// A foreground attach refusal, naming the evidence. The attach only
+/// views the session in the caller's terminal; a refusal leaves the
+/// session itself untouched, and the address stands for a manual
+/// retry.
+#[derive(Debug)]
+pub enum AttachRefusal {
+    /// The host adapter could not be started or waited out.
+    Unavailable(String),
+    /// The attach itself exited nonzero: the address names no
+    /// attachable session, and the adapter's exit is the evidence.
+    HostRefused(String),
+}
+
+impl std::fmt::Display for AttachRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AttachRefusal::Unavailable(detail) => {
+                write!(f, "the host adapter could not be started: {detail}")
+            }
+            AttachRefusal::HostRefused(detail) => write!(f, "the attach refused: {detail}"),
+        }
+    }
+}
+
 /// The five verbs. dyn-compatible: doors hold the dialect behind the
 /// interface, never a host type.
 pub trait HostContract: Sync {
@@ -116,6 +140,12 @@ pub trait HostContract: Sync {
     /// fact the reply named. Consumed only by the workspace clean
     /// effect's ordered contract, never as a standalone door.
     fn close(&self, address: &HostAddress) -> Result<CloseFact, CloseRefusal>;
+    /// Foreground attach: the calling terminal views the session at
+    /// the address until the caller detaches - stdio is the caller's
+    /// own, and the answer is the attach's own exit, never the
+    /// session's. Detach ends the attach and leaves the session
+    /// running; nothing here supervises what it attached to.
+    fn attach(&self, address: &HostAddress) -> Result<crate::host::ChildExit, AttachRefusal>;
 }
 
 impl std::fmt::Display for LaunchRefusal {

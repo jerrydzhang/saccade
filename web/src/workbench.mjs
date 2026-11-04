@@ -232,10 +232,13 @@ export function confirmsTaskCreated(record, name) {
   return record.kind === "task_created" && payload?.name === name;
 }
 
-// the launch door names one explicit existing workspace; the door
-// selects, it never creates
-export function launchRequest(workspacePath) {
-  return { workspace: { existing: workspacePath } };
+// the launch door names one explicit existing workspace and, when
+// the operator staged a choice, the harness the fresh session runs;
+// the absent field is the server's pi default, never a silent kind
+export function launchRequest(workspacePath, harness) {
+  const request = { workspace: { existing: workspacePath } };
+  if (harness) request.harness = harness;
+  return request;
 }
 
 // the honest launch outcome split: a server answer is a confirmed fact

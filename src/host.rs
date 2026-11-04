@@ -5,7 +5,6 @@
 //! launch dialect. Nothing here touches the record; a submission's
 //! success is the host's answer, never a claim that a session runs.
 
-use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 
 /// A launch construction or host-submission refusal. The Display text
@@ -120,8 +119,9 @@ pub fn direnv_binary() -> Result<PathBuf, HostFail> {
     found.ok_or(HostFail::NoDirenv)
 }
 
-/// One composed line's answer when it ran in the caller's own
-/// terminal: the child's own exit code, or the signal that ended it.
+/// A foreground child's own ending: the exit code it reported, or the
+/// signal that ended it. The attach verb's answer - never a session's
+/// own status, which no verb here observes.
 #[derive(Debug, PartialEq)]
 pub enum ChildExit {
     Exited(i32),
@@ -179,26 +179,6 @@ pub fn composed_launch_argv(
     Ok(argv)
 }
 
-/// The same-terminal arm: run one composed argv as a foreground child
-/// of the invoking terminal, stdio inherited, in the workspace as cwd.
-/// The host is never asked - the caller's terminal IS the address -
-/// and the caller waits the child out; the answer is the child's own
-/// exit, or the signal that ended it. direnv exec runs the session
-/// directly: no shell, so the session stays the foreground program.
-pub fn run_argv_in_caller_terminal(
-    argv: &[String],
-    cwd: &std::path::Path,
-) -> Result<ChildExit, std::io::Error> {
-    let status = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .current_dir(cwd)
-        .status()?;
-    Ok(match status.code() {
-        Some(code) => ChildExit::Exited(code),
-        None => ChildExit::Signalled(status.signal().unwrap_or(1)),
-    })
-}
-
 // -- the workspace lifecycle's host contract -----------------------------
 // One exact workspace's terminal facts over the adapter's terminal
 // table, and the close fact through the contract's own verb. The
@@ -226,36 +206,6 @@ pub fn workspace_terminals(
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[test]
-    fn the_same_terminal_arm_reports_the_childs_own_exit_code() {
-        let success =
-            run_argv_in_caller_terminal(&["true".to_string()], &std::env::temp_dir()).unwrap();
-        assert_eq!(success, ChildExit::Exited(0));
-        assert_eq!(success.status(), 0);
-        let failed = run_argv_in_caller_terminal(
-            &["sh".to_string(), "-c".to_string(), "exit 7".to_string()],
-            &std::env::temp_dir(),
-        )
-        .unwrap();
-        assert_eq!(failed, ChildExit::Exited(7));
-        assert_eq!(failed.status(), 7);
-    }
-
-    #[test]
-    fn the_same_terminal_arm_reports_a_signal_the_way_a_shell_would() {
-        let signalled = run_argv_in_caller_terminal(
-            &[
-                "sh".to_string(),
-                "-c".to_string(),
-                "kill -TERM $$".to_string(),
-            ],
-            &std::env::temp_dir(),
-        )
-        .unwrap();
-        assert_eq!(signalled, ChildExit::Signalled(15));
-        assert_eq!(signalled.status(), 143);
-    }
 
     #[test]
     fn the_attribution_label_is_the_own_file_name() {

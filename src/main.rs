@@ -277,6 +277,12 @@ enum Cmd {
         /// this command's. Composes with --workspace and --resume
         #[arg(long)]
         here: bool,
+        /// The harness a fresh launch runs: pi (the default, existing
+        /// callers unchanged) or claude-code. A resume always starts
+        /// the recorded harness; an explicit harness naming another
+        /// kind refuses
+        #[arg(long)]
+        harness: Option<String>,
         /// The initial prompt, quoted; native human input when omitted
         #[arg(last = true)]
         prompt: Vec<String>,
@@ -850,11 +856,16 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             new,
             base,
             ask,
+            harness,
             prompt,
             // --here dispatches in main before run: the child's own
             // status is the command's, which this face cannot express
             here: _,
         } => {
+            let harness = match harness_choice(harness) {
+                Ok(harness) => harness,
+                Err(fail) => return Err(fail),
+            };
             if let Some(labeled) = new.as_deref().map(str::to_owned) {
                 let label = (!labeled.is_empty()).then_some(labeled.as_str());
                 return launch_new_door(
@@ -863,6 +874,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                     label,
                     base.as_deref(),
                     ask.as_deref(),
+                    harness,
                     prompt,
                 );
             }
@@ -872,13 +884,14 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                         "launch --ask launches a fresh peer: pass --workspace <dir> or --new [label]".into(),
                     ));
                 };
-                return ask_door(cli, &destination, workspace, question);
+                return ask_door(cli, &destination, workspace, harness, question);
             }
             return launch_door(
                 cli,
                 &destination,
                 workspace.as_deref(),
                 resume.as_deref(),
+                harness,
                 prompt,
             );
         }
@@ -2046,56 +2059,208 @@ fn messages_door(
     Ok(out.join("\n"))
 }
 
-/// The launch door: the composed native Pi in an explicit existing
-/// workspace, task-free. A fresh launch registers a new incarnation at
-/// session start; --resume continues a saved one, validated against
-/// its recorded native session before anything launches. A launch
-/// token, when given, rides the routing so the launching door can
-/// learn which incarnation registered under its launch.
+/// The selected launch harness: the two compiled-in kinds, spoken as
+/// the wire's own tokens; anything else refuses with the values named.
+fn parse_harness(value: &str) -> Result<saccade::Harness, Fail> {
+    match value {
+        "pi" => Ok(saccade::Harness::Pi),
+        "claude-code" => Ok(saccade::Harness::ClaudeCode),
+        other => Err(Fail::Usage(format!(
+            "'{other}' is not a harness (expected pi or claude-code)"
+        ))),
+    }
+}
+
+/// The typed harness a door carries: None means no explicit choice
+/// (fresh launches compose Pi, resumes run the recorded kind).
+fn harness_choice(value: &Option<String>) -> Result<Option<saccade::Harness>, Fail> {
+    value.as_deref().map(parse_harness).transpose()
+}
+
+impl From<saccade::launch::LaunchFail> for Fail {
+    fn from(f: saccade::launch::LaunchFail) -> Self {
+        match f {
+            // the wire code is the serving edge's vocabulary; the CLI
+            // face is the prose itself
+            saccade::launch::LaunchFail::Refused { detail, .. } => Fail::Usage(detail),
+            saccade::launch::LaunchFail::Usage(detail) => Fail::Usage(detail),
+            saccade::launch::LaunchFail::Degraded(reason) => Fail::Degraded(reason),
+        }
+    }
+}
+
+/// The reply's placement line: how to look, descriptive never pushy;
+/// a refused declaration discloses instead of hinting.
+fn placement_lines(terminal: &str, place_refusal: &Option<String>) -> String {
+    match place_refusal {
+        Some(evidence) => {
+            format!("  placement was refused: {evidence} - the session runs unlabeled")
+        }
+        None => format!(
+            "  look for it in the herdr app's sidebar, or attach from a terminal: hc attach {terminal}"
+        ),
+    }
+}
+
+/// The launch door: the composed native session in an explicit
+/// existing workspace, task-free. A fresh launch registers a new
+/// incarnation at session start; --resume continues a saved one,
+/// validated against its recorded native session before anything
+/// launches.
 fn launch_door(
     cli: &Cli,
     destination: &Destination,
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
+    harness: Option<saccade::Harness>,
     prompt: &[String],
 ) -> Result<String, Fail> {
-    let launch = launch_native(cli, destination, workspace, resume, prompt)?;
+    let submitted = submitted_launch(cli, destination, workspace, resume, harness, prompt)?;
+    let launch_face = submitted_face(&submitted);
     if cli.json {
-        return Ok(serde_json::to_string_pretty(&serde_json::json!({
-            "workspace": launch.workspace,
-            "terminal": launch.terminal,
-            "space": launch.space,
-            "tab": launch.tab,
-            "place_refusal": launch.place_refusal,
-        }))
-        .expect("plain data"));
+        return Ok(serde_json::to_string_pretty(&launch_face).expect("plain data"));
     }
     Ok(format!(
-        "integrated pi launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one",
-        ws = launch.workspace,
-        t = launch.terminal,
-        place = placement_lines(&launch.terminal, &launch.place_refusal),
+        "integrated {h} launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one",
+        h = launch_harness_name(&submitted),
+        ws = submitted.workspace,
+        t = submitted.terminal,
+        place = placement_lines(&submitted.terminal, &submitted.place_refusal),
     ))
 }
 
-/// The same-terminal launch door: the composed session runs as a
-/// foreground child of the invoking terminal - the same routing,
-/// direnv equip, and scrub the host arm composes, with no host ask at
-/// all: no discovery wait, no terminal create, no handle. The door
-/// returns when the child exits and the child's own status is the
-/// command's; success is quiet, because the session's own output was
-/// the report.
+/// The launch reply's json face: the submitted facts, the fresh
+/// birth when this launch carries one - the exact (harness, native
+/// id) pair, never an address rediscovery - and the resume target's
+/// birth record when the arm resumed.
+fn submitted_face(submitted: &saccade::launch::Submitted) -> serde_json::Value {
+    let fresh = submitted.fresh.as_ref();
+    serde_json::json!({
+        "workspace": submitted.workspace,
+        "terminal": submitted.terminal,
+        "space": submitted.space,
+        "tab": submitted.tab,
+        "place_refusal": submitted.place_refusal,
+        "harness": launch_harness_name(submitted),
+        "native_id": fresh.map(|f| f.native_id.clone()),
+        "resumed": submitted.resume.as_ref().map(|r| r.id.0.0),
+    })
+}
+
+/// The harness name a launch face names: the fresh selection, or the
+/// resume target's recorded kind.
+fn launch_harness_name(submitted: &saccade::launch::Submitted) -> &str {
+    submitted
+        .fresh
+        .as_ref()
+        .map(|f| f.harness.as_str())
+        .or_else(|| submitted.resume.as_ref().map(|r| r.harness.as_str()))
+        .unwrap_or("pi")
+}
+
+/// One shared host submission: the folded world, the resolved host,
+/// and the composition through the one lib module, then the calling
+/// door's own registration. Every CLI arm - host, here, ask - rides
+/// this head, so no arm grows its own launch dialect.
+fn submitted_launch(
+    cli: &Cli,
+    destination: &Destination,
+    workspace: Option<&std::path::Path>,
+    resume: Option<&str>,
+    harness: Option<saccade::Harness>,
+    prompt: &[String],
+) -> Result<saccade::launch::Submitted, Fail> {
+    let url = server_url(destination, "launch")?;
+    let repo = resolve_repo(cli)?;
+    let loadout = loadout_of(destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "the launch needs the world; the log will not fold".into(),
+        ));
+    };
+    let arm = launch_arm(&world, workspace, resume, harness, prompt)?;
+    let composed = saccade::launch::compose(saccade::launch::LaunchRequest {
+        world: &world,
+        repo: &repo,
+        url: url.clone(),
+        exe: std::env::current_exe().ok(),
+        arm,
+    })?;
+    let submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
+    // the door births the fresh identity itself, before the harness's
+    // first save; a resume records the address move
+    if let Some(fresh) = &submitted.fresh {
+        client::register_incarnation(
+            &url,
+            &fresh.native_id,
+            &submitted.terminal,
+            false,
+            fresh.harness,
+        )
+        .map_err(Fail::Client)?;
+    }
+    if let Some(resumed) = &submitted.resume {
+        client::assign_host_address(&url, resumed.id.0.0, &submitted.terminal, false)
+            .map_err(Fail::Client)?;
+    }
+    Ok(submitted)
+}
+
+/// The typed arm a door selected: the resume token resolves against
+/// the fold here, so the composition speaks incarnations, never
+/// token strings.
+fn launch_arm<'a>(
+    world: &saccade::World,
+    workspace: Option<&'a std::path::Path>,
+    resume: Option<&str>,
+    harness: Option<saccade::Harness>,
+    prompt: &'a [String],
+) -> Result<saccade::launch::LaunchArm<'a>, Fail> {
+    match (workspace, resume) {
+        (Some(dir), None) => Ok(saccade::launch::LaunchArm::Fresh {
+            workspace: dir,
+            prompt,
+            harness: harness.unwrap_or(saccade::Harness::Pi),
+        }),
+        (None, Some(token)) => {
+            let id = resolve_incarnation(world, token)?;
+            Ok(saccade::launch::LaunchArm::Resume {
+                id,
+                prompt,
+                expected: harness,
+            })
+        }
+        _ => Err(Fail::Usage(
+            "launch needs an explicit choice: --workspace <dir> for a fresh session, \
+             --resume i-<n> for a saved one"
+                .into(),
+        )),
+    }
+}
+
+/// The same-terminal launch door: an ordinary host launch - the same
+/// composition and submission the host door makes, address recorded -
+/// then the caller's terminal attaches to it in the foreground. No
+/// address is adopted: the session carries its own launched terminal,
+/// and detaching (ctrl+\) ends the attach and leaves the session
+/// running. The attach's own exit is the command's; the session's own
+/// ending is never invented from it.
 fn launch_here_door(cli: &Cli) -> ExitCode {
     let Cmd::Launch {
         workspace,
         resume,
         new,
         ask,
+        harness,
         prompt,
         ..
     } = &cli.command
     else {
         unreachable!("the here door dispatches only for launches");
+    };
+    let harness = match harness_choice(harness) {
+        Ok(harness) => harness,
+        Err(fail) => return fail_exit(cli, &fail),
     };
     // --ask stays a host-terminal launch: peer creation wants its own
     // terminal; --new is not one of the same-terminal compositions
@@ -2119,15 +2284,35 @@ fn launch_here_door(cli: &Cli) -> ExitCode {
             ),
         );
     }
-    match launch_here_run(cli, workspace.as_deref(), resume.as_deref(), prompt) {
-        Ok((dir_str, exit)) => {
+    match launch_here_run(
+        cli,
+        workspace.as_deref(),
+        resume.as_deref(),
+        harness,
+        prompt,
+    ) {
+        Ok(outcome) => {
             if cli.json {
                 println!(
                     "{}",
-                    serde_json::json!({"workspace": dir_str, "exit": exit.status()})
+                    serde_json::json!({
+                        "workspace": outcome.workspace,
+                        "terminal": outcome.terminal,
+                        "harness": outcome.harness,
+                        "resumed": outcome.resumed_num,
+                        "native_id": outcome.native_id,
+                        "exit": outcome.attach.status(),
+                    })
+                );
+            } else {
+                println!(
+                    "the {h} session runs at {ws} - address {t}\n  the attach ended (ctrl+\\ detaches); the session keeps running\n  reattach from any terminal: hc attach {t}",
+                    h = outcome.harness,
+                    ws = outcome.workspace,
+                    t = outcome.terminal,
                 );
             }
-            match exit.status() {
+            match outcome.attach.status() {
                 0 => ExitCode::SUCCESS,
                 code => ExitCode::from(code as u8),
             }
@@ -2136,387 +2321,130 @@ fn launch_here_door(cli: &Cli) -> ExitCode {
     }
 }
 
-/// The same-terminal mechanics: destination, shared composition, the
-/// caller terminal's adoption, then the child in this terminal. The
-/// address is the caller's own host declaration - every registered
-/// incarnation carries exactly one, launched or adopted - and the door
-/// refuses every unaddressable form before anything runs.
+/// What a here run ended with: the submitted launch's facts and the
+/// attach's own exit - the session's status is never one of them.
+struct HereRun {
+    workspace: String,
+    terminal: String,
+    harness: &'static str,
+    resumed_num: Option<usize>,
+    native_id: Option<String>,
+    attach: host::ChildExit,
+}
+
+/// The same-terminal mechanics: the shared composition guards run
+/// first (a refused launch never needs a terminal), then the real
+/// stdin gate - the attach inherits this terminal - then the ordinary
+/// host submission, the fresh birth or address move, and the
+/// foreground attach. The caller's own host declaration never becomes
+/// the session's address; it only names the pane the no-nested guard
+/// refuses for.
 fn launch_here_run(
     cli: &Cli,
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
+    harness: Option<saccade::Harness>,
     prompt: &[String],
-) -> Result<(String, host::ChildExit), Fail> {
+) -> Result<HereRun, Fail> {
     let destination = resolve_destination(cli)?;
-    let composed = compose_launch(cli, &destination, workspace, resume, prompt)?;
-    // the caller's terminal names itself through the host's own env:
-    // the adoption is the declaration, never a probe
-    let adopted = std::env::var("HC_TERMINAL_ID").unwrap_or_default();
-    if adopted.is_empty() {
-        return Err(Fail::Usage(
-            "this terminal carries no host address (no HC_TERMINAL_ID): --here adopts the caller's host terminal, and an unhosted caller's path is a native launch with a self-declared actor".into(),
-        ));
-    }
-    // two incarnations never share a pane: an address already carried
-    // by a recorded incarnation means the caller is one, and peers
-    // go through the host door - messages to a suspended parent would
-    // land in the child. One exception, per the same-pane ruling: the
-    // resume target returning to its own recorded pane is not two.
+    let url = server_url(&destination, "launch")?;
+    let repo = resolve_repo(cli)?;
     let loadout = loadout_of(&destination)?;
     let LoadState::Full(world) = loadout.state else {
         return Err(Fail::Degraded(
             "the here door needs the world; the log will not fold".into(),
         ));
     };
-    let resume_target = composed.resume_id;
-    if let Some((holder, _)) = world.incarnations.iter().find(|(holder, ctx)| {
-        ctx.incarnation.address() == Some(adopted.as_str()) && resume_target != Some(**holder)
-    }) {
-        let holder_num = world
-            .incarnation_num(*holder)
-            .map(|n| format!("i-{n}"))
-            .unwrap_or_else(|| format!("seq {}", holder.0.0));
-        return Err(Fail::Usage(format!(
-            "this terminal is already the address of {holder_num}: two incarnations never share a pane, and peers go through the host door"
-        )));
-    }
-    let url = server_url(&destination, "launch")?;
-    // the door births the fresh identity itself; a resume records the
-    // adopted address as the association's move
-    if let Some(native_id) = &composed.native_id {
-        // pi pending the launch-selection refactor: this door composes
-        // the pinned pi only
-        client::register_incarnation(&url, native_id, &adopted, true, saccade::Harness::Pi)
-            .map_err(Fail::Client)?;
-    }
-    if let Some(id) = composed.resume_id {
-        client::assign_host_address(&url, id.0.0, &adopted, true).map_err(Fail::Client)?;
-    }
-    let argv = host::composed_launch_argv(&composed.dir, &composed.routing, &composed.argv)
-        .map_err(|e| Fail::Usage(e.to_string()))?;
-    let exit = host::run_argv_in_caller_terminal(&argv, &composed.dir)
-        .map_err(|e| Fail::Usage(format!("the composed session could not start: {e}")))?;
-    Ok((composed.dir.display().to_string(), exit))
-}
-
-/// One composed launch, ready for a submission arm: the routing, the
-/// exact workspace, the argv, the terminal title, and the launch's
-/// identity facts - the fresh launch's pre-allocated native session
-/// id, or the resume target's birth record. Mechanics only - the host
-/// arm submits it, the same-terminal arm runs it.
-struct LaunchComposition {
-    routing: Vec<String>,
-    dir: std::path::PathBuf,
-    argv: Vec<String>,
-    native_id: Option<String>,
-    resume_id: Option<saccade::IncarnationId>,
-}
-
-/// Compose one launch: the routing line, the exact workspace and
-/// argv, the terminal title, and the resume arm's guard preflight.
-/// Both submission arms share this head, so no arm grows its own
-/// launch dialect.
-fn compose_launch(
-    cli: &Cli,
-    destination: &Destination,
-    workspace: Option<&std::path::Path>,
-    resume: Option<&str>,
-    prompt: &[String],
-) -> Result<LaunchComposition, Fail> {
-    let url = server_url(destination, "launch")?;
-    let pi = host::pinned_pi().map_err(|e| Fail::Usage(e.to_string()))?;
-    let repo = resolve_repo(cli)?;
-    let label = host::command_label(&pi.display().to_string());
-    // routing rides the launch environment: the integration reaches
-    // the tracker's server directly, the repo names the tracker
-    // besides, and the CLI path lets the session's own handoff helper
-    // call the controller door by name instead of guessing at a PATH.
-    // The words are env assignments, never shell: the direnv exec
-    // stage runs the composed session directly, no shell in between.
-    let mut routing = vec![
-        format!("SACCADE_ACTOR={label}"),
-        format!("SACCADE_SERVER={url}"),
-        format!("SACCADE_REPO={}", repo.display()),
-    ];
-    if let Ok(exe) = std::env::current_exe() {
-        routing.push(format!("SACCADE_CLI={}", exe.display()));
-    }
-    let prompt_text = prompt.join(" ");
-    let (dir, argv, native_id, resume_id) = match (workspace, resume) {
-        (Some(dir), None) => {
-            let dir = dir
-                .canonicalize()
-                .map_err(|e| Fail::Usage(format!("workspace {}: {e}", dir.display())))?;
-            if !dir.is_dir() {
-                return Err(Fail::Usage(format!(
-                    "{} is not an existing directory; launch selects an explicit existing workspace, it never creates one",
-                    dir.display()
-                )));
-            }
-            // a recorded Cleaned workspace blocks ordinary use until an
-            // explicit restore; unrelated directories pass untouched
-            cleaned_guard(destination, &dir)?;
-            // the door pre-allocates the native session: pi creates the
-            // exact id at its first save, and the door births the
-            // incarnation itself, so identity and address exist at
-            // launch time - no attach handshake, no correlation token
-            let native_id = saccade::pi_session::generate_session_id();
-            let sessions = saccade::pi_session::sessions_dir(&repo);
-            let _ = std::fs::create_dir_all(&sessions);
-            let mut argv = vec![
-                pi.display().to_string(),
-                "--session-id".to_string(),
-                native_id.clone(),
-                "--session-dir".to_string(),
-                sessions.display().to_string(),
-            ];
-            if !prompt_text.is_empty() {
-                argv.push(prompt_text);
-            }
-            (dir, argv, Some(native_id), None)
-        }
-        (None, Some(token)) => {
-            let loadout = loadout_of(destination)?;
-            let LoadState::Full(world) = loadout.state else {
-                return Err(Fail::Degraded(
-                    "resume needs the world; the log will not fold".into(),
-                ));
-            };
-            let id = resolve_incarnation(&world, token)?;
-            // the title and error faces render the fold's canonical
-            // public number, never the typed spelling (i-i-N came from
-            // concatenating both)
-            let num = world
-                .incarnation_num(id)
-                .expect("the fold just resolved this incarnation");
-            let token = &format!("i-{num}");
-            let ctx = &world.incarnations[&id];
-            let saccade::Incarnation::Native {
-                native_id,
-                saved_session,
-                address,
-                adopted,
-                ..
-            } = &ctx.incarnation
-            else {
-                return Err(Fail::Usage(format!(
-                    "{token} carries no saved native session to resume; historical attribution identities have none",
-                )));
-            };
-            // strict resume: the saved file must exist and carry the
-            // recorded native id - a missing file refuses, it never
-            // fabricates fresh state under the same identity. A
-            // launch-door birth binds its locator at pi's first save; an
-            // unbound birth has nothing saved, so nothing can resume.
-            let Some(saved_session) = saved_session else {
-                return Err(Fail::Usage(format!(
-                    "{token}'s saved session locator is not bound yet: the session has not saved, so there is nothing to resume"
-                )));
-            };
-            let header = saccade::pi_session::read_header(saved_session.as_path())
-                .map_err(|e| Fail::Usage(format!("{token}'s saved session cannot resume: {e}")))?;
-            if header.id != native_id.as_str() {
-                return Err(Fail::Usage(format!(
-                    "{token}'s saved session carries id {}, not {}",
-                    header.id,
-                    native_id.as_str()
-                )));
-            }
-            // the recorded change is the workspace authority: a switch
-            // records where the session lives and the file is never
-            // rewritten to follow it; the header cwd answers only for
-            // sessions whose fold holds no change
-            let dir = match world.workspace_changes.get(&id) {
-                Some(change) => std::path::PathBuf::from(change.worktree.as_path()),
-                None => std::path::PathBuf::from(&header.cwd),
-            };
-            if !dir.is_dir() {
-                return Err(Fail::Usage(format!(
-                    "the workspace {} is missing; resume starts from the recorded workspace, never a substitute",
-                    dir.display()
-                )));
-            }
-            // the same cleaned guard: a saved session whose workspace
-            // was cleaned resumes only after an explicit restore there
-            cleaned_guard(destination, &dir)?;
-            let locator = saved_session
-                .as_path()
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            let mut argv = vec![
-                pi.display().to_string(),
-                "--session".to_string(),
-                native_id.as_str().to_string(),
-                "--session-dir".to_string(),
-                locator,
-            ];
-            if !prompt_text.is_empty() {
-                argv.push(prompt_text);
-            }
-            // liveness preflight, before anything is submitted - and
-            // only for the launched kind: a launched terminal dies with
-            // its session, so a live terminal names a live session. An
-            // adopted pane is the caller's own program and outlives the
-            // session, so terminal liveness is never session liveness
-            // for it - the native duplicate-attach refusal is that
-            // kind's backstop. An addressless pre-contract incarnation has
-            // no host evidence at all: the resume proceeds without a
-            // liveness refusal, and a live twin is caught at the
-            // resumed session's attach - the pre-B migration is exit
-            // + resume. Live refuses the launch - a duplicate is
-            // never submitted - and unknown names its evidence rather
-            // than reading as free.
-            if let Some(carried) = address.as_ref().filter(|_| !*adopted).cloned() {
-                let host = saccade::herdr::HerdrCore::resolved()
-                    .map_err(|e| Fail::Usage(e.to_string()))?;
-                let answer = host.live(&saccade::host_contract::HostAddress(carried.clone()));
-                match answer {
-                    saccade::host_contract::Liveness::Live => {
-                        return Err(Fail::Usage(format!(
-                            "{token}'s session is live at its recorded host address; no launch is submitted; exit that session first"
-                        )));
-                    }
-                    saccade::host_contract::Liveness::Unknown(evidence) => {
-                        return Err(Fail::Usage(format!(
-                            "{token}'s liveness cannot be read from the host at its recorded address ({evidence}); no launch is submitted - settle the terminal or the record first"
-                        )));
-                    }
-                    saccade::host_contract::Liveness::Gone => {}
-                }
-            }
-            (dir, argv, None, Some(id))
-        }
-        _ => {
-            return Err(Fail::Usage(
-                "launch needs an explicit choice: --workspace <dir> for a fresh session, \
-                 --resume i-<n> for a saved one"
-                    .into(),
-            ));
-        }
+    let resume_target = match resume {
+        Some(token) => Some(resolve_incarnation(&world, token)?),
+        None => None,
     };
-    Ok(LaunchComposition {
-        routing,
-        dir,
-        argv,
-        native_id,
-        resume_id,
-    })
-}
-
-/// One compose launch through the host: the exact workspace, the
-/// terminal handle, the command line. Mechanics only - rendering and
-/// any follow-on act belong to the calling door. The same-terminal
-/// arm composes identically and runs the line itself instead of
-/// asking the host.
-/// What a submitted launch produced: the workspace and terminal the
-/// host named, the placement the door declared at birth, and the label
-/// ask's refusal when the host refused it - the terminal exists either
-/// way, so a refusal discloses and never undoes the launch.
-struct SubmittedLaunch {
-    workspace: String,
-    terminal: String,
-    space: String,
-    tab: String,
-    place_refusal: Option<String>,
-}
-
-/// The reply's placement line: how to look, descriptive never pushy;
-/// a refused declaration discloses instead of hinting.
-fn placement_lines(terminal: &str, place_refusal: &Option<String>) -> String {
-    match place_refusal {
-        Some(evidence) => {
-            format!("  placement was refused: {evidence} - the session runs unlabeled")
+    // no-nested safety: a foreground attach would route this pane's
+    // input into the attached session, so a pane that already carries
+    // a recorded incarnation never attaches here - the suspended
+    // incarnation's input would drive the child. One exception, per
+    // the same-pane ruling: the resume target returning to its own
+    // recorded pane is not two.
+    if let Ok(carried) = std::env::var("HC_TERMINAL_ID") {
+        if !carried.is_empty() {
+            if let Some((holder, _)) = world.incarnations.iter().find(|(holder, ctx)| {
+                ctx.incarnation.address() == Some(carried.as_str())
+                    && resume_target != Some(**holder)
+            }) {
+                let holder_num = world
+                    .incarnation_num(*holder)
+                    .map(|n| format!("i-{n}"))
+                    .unwrap_or_else(|| format!("seq {}", holder.0.0));
+                return Err(Fail::Usage(format!(
+                    "this terminal is already the address of {holder_num}: a foreground attach would route {holder_num}'s input into the attached session, and peers go through the host door"
+                )));
+            }
         }
-        None => format!(
-            "  look for it in the herdr app's sidebar, or attach from a terminal: hc attach {terminal}"
-        ),
     }
-}
-
-fn launch_native(
-    cli: &Cli,
-    destination: &Destination,
-    workspace: Option<&std::path::Path>,
-    resume: Option<&str>,
-    prompt: &[String],
-) -> Result<SubmittedLaunch, Fail> {
-    let composed = compose_launch(cli, destination, workspace, resume, prompt)?;
-    let url = server_url(destination, "launch")?;
-    let argv = host::composed_launch_argv(&composed.dir, &composed.routing, &composed.argv)
-        .map_err(|e| Fail::Usage(e.to_string()))?;
-    // the host ask is one verb: the adapter returns the opaque address
-    // synchronously, and the launch never supervises what it launched
-    let host = saccade::herdr::HerdrCore::resolved().map_err(|e| Fail::Usage(e.to_string()))?;
-    let address = host
-        .launch(&composed.dir, &argv)
-        .map_err(|e| Fail::Usage(e.to_string()))?;
-    // placement at birth: the author declares where the terminal
-    // lives, before the door replies - the space is stable per
-    // workspace, and a standing space for the same identity keeps it
-    let placement = saccade::placement::for_dir(&host, &composed.dir);
-    let place_refusal = host
-        .place(&address, &placement.space, &placement.tab)
-        .err()
-        .map(|e| e.to_string());
-    let host_address = address.0.clone();
-    // the door births the fresh identity itself, before pi's first
-    // save; a resume carries its identity and records the address move
-    if let Some(native_id) = composed.native_id {
-        // pi pending the launch-selection refactor: this door composes
-        // the pinned pi only
-        client::register_incarnation(&url, &native_id, &host_address, false, saccade::Harness::Pi)
-            .map_err(Fail::Client)?;
-    }
-    if let Some(id) = composed.resume_id {
-        client::assign_host_address(&url, id.0.0, &host_address, false).map_err(Fail::Client)?;
-    }
-    Ok(SubmittedLaunch {
-        workspace: composed.dir.display().to_string(),
-        terminal: host_address,
-        space: placement.space,
-        tab: placement.tab,
-        place_refusal,
-    })
-}
-
-/// The cleaned-workspace launch guard: a recorded workspace whose
-/// stage is Cleaned refuses ordinary use until an explicit restore,
-/// addressed by the one shared resolver - its own stored string or
-/// the canonical form it resolves to. Unrecognized directories and
-/// primary checkouts are not workspaces and pass untouched; aliased
-/// identities refuse rather than being picked.
-fn cleaned_guard(destination: &Destination, dir: &Path) -> Result<(), Fail> {
-    let loadout = loadout_of(destination)?;
-    let LoadState::Full(world) = loadout.state else {
-        return Err(Fail::Degraded(
-            "the launch guard needs the world; the log will not fold".into(),
+    let arm = launch_arm(&world, workspace, resume, harness, prompt)?;
+    let composed = saccade::launch::compose(saccade::launch::LaunchRequest {
+        world: &world,
+        repo: &repo,
+        url: url.clone(),
+        exe: std::env::current_exe().ok(),
+        arm,
+    })?;
+    // the attach inherits this terminal's stdin: a pipe or file
+    // carries no attach, and the door refuses before any launch
+    if !std::io::stdin().is_terminal() {
+        return Err(Fail::Usage(
+            "launch --here attaches the session in this terminal: stdin must be a real terminal, and this one is not; run the launch without --here for a host terminal".into(),
         ));
-    };
-    let canonical = saccade::workspace::canonical_dir(dir).map_err(|e| Fail::Usage(e.detail()))?;
-    match saccade::workspace::resolve_workspace_address(&world, dir)
-        .map_err(|e| Fail::Usage(e.detail()))?
-    {
-        saccade::workspace::LifecycleAddress::Single(birth) => {
-            if world.workspace_stage(birth) == Some(saccade::WorkspaceStage::Cleaned) {
-                return Err(Fail::Usage(format!(
-                    "{} is recorded Cleaned (record {}); ordinary use waits for an explicit restore: sac workspace restore {}",
-                    canonical.display(),
-                    birth.0,
-                    canonical.display()
-                )));
-            }
-        }
-        saccade::workspace::LifecycleAddress::Ambiguous(births) => {
-            return Err(Fail::Usage(format!(
-                "{} is the recorded path of {} workspace births; resolve their history by hand before launching there",
-                canonical.display(),
-                births.len()
-            )));
-        }
-        saccade::workspace::LifecycleAddress::Unrecorded => {}
     }
-    Ok(())
+    let submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
+    // the door births the fresh identity itself, before the harness's
+    // first save; a resume records the address move - a launched
+    // terminal either way, never this pane
+    if let Some(fresh) = &submitted.fresh {
+        client::register_incarnation(
+            &url,
+            &fresh.native_id,
+            &submitted.terminal,
+            false,
+            fresh.harness,
+        )
+        .map_err(Fail::Client)?;
+    }
+    if let Some(resumed) = &submitted.resume {
+        client::assign_host_address(&url, resumed.id.0.0, &submitted.terminal, false)
+            .map_err(Fail::Client)?;
+    }
+    // the foreground attach: this terminal views the launched session
+    // until detach; the launch stands regardless of the attach's fate
+    let host = saccade::herdr::HerdrCore::resolved().map_err(|e| Fail::Usage(e.to_string()))?;
+    let attach = host
+        .attach(&saccade::host_contract::HostAddress(submitted.terminal.clone()))
+        .map_err(|e| {
+            Fail::Usage(format!(
+                "the launch stands at address {t} in {ws}; the attach did not carry: {e} - attach by hand: hc attach {t}",
+                t = submitted.terminal,
+                ws = submitted.workspace,
+            ))
+        })?;
+    // the fold numbers are dense birth order: the snapshot's number
+    // for the resume target is the number the move keeps
+    let resumed_num = resume_target.and_then(|id| world.incarnation_num(id));
+    Ok(HereRun {
+        workspace: submitted.workspace,
+        terminal: submitted.terminal,
+        harness: match submitted
+            .fresh
+            .as_ref()
+            .map(|f| f.harness)
+            .or_else(|| submitted.resume.as_ref().map(|r| r.harness))
+        {
+            Some(saccade::Harness::ClaudeCode) => "claude-code",
+            _ => "pi",
+        },
+        resumed_num,
+        native_id: submitted.fresh.map(|f| f.native_id),
+        attach,
+    })
 }
 
 /// What an ask launch did: the newborn's address and the question's,
@@ -2544,12 +2472,13 @@ struct AskOutcome {
 /// creator is a registered incarnation; the question is durable
 /// addressed communication from its own scope - machine-supplied
 /// origin on the record - never argv shaped into native human input.
-/// The newborn's address arrives by launch-token correlation; knowing
-/// it confers nothing beyond the reply surface.
+/// The newborn is the exact birth the launch composed - the (harness,
+/// native id) pair - never an address rediscovery.
 fn ask_run(
     cli: &Cli,
     destination: &Destination,
     workspace: &std::path::Path,
+    harness: Option<saccade::Harness>,
     question: &str,
 ) -> Result<AskOutcome, Fail> {
     let url = server_url(destination, "launch")?;
@@ -2592,22 +2521,38 @@ fn ask_run(
         .unwrap_or_else(|| format!("seq {}", creator.0.0));
     // the launch births the newborn itself: identity and address exist
     // at launch time, and the question's recipient is never polled for
-    let submitted = launch_native(cli, destination, Some(workspace), None, &[])?;
+    let submitted = submitted_launch(cli, destination, Some(workspace), None, harness, &[])?;
     let loadout = loadout_of(destination)?;
     let LoadState::Full(world) = loadout.state else {
         return Err(Fail::Degraded(
             "launch --ask needs the world; the log will not fold".into(),
         ));
     };
+    // the newborn is the exact birth this launch composed - the
+    // (harness, native id) pair - never a first address match
+    let Some(fresh) = &submitted.fresh else {
+        return Err(Fail::Usage(
+            "the ask launch submitted no fresh birth; nothing was sent".into(),
+        ));
+    };
     let newborn = world
         .incarnations
         .iter()
-        .find(|(_, ctx)| ctx.incarnation.address() == Some(submitted.terminal.as_str()))
+        .find(|(_, ctx)| match &ctx.incarnation {
+            saccade::Incarnation::Native {
+                native_id,
+                harness,
+                ..
+            } => native_id.as_str() == fresh.native_id && *harness == fresh.harness,
+            _ => false,
+        })
         .map(|(id, _)| *id)
         .ok_or_else(|| {
             Fail::Usage(format!(
-                "the launched session at {ws} carries no birth record (address {t}); nothing was sent - a later `sac send --to` reaches it by number",
+                "the launched session at {ws} carries no birth record ({n} under {h}, address {t}); nothing was sent - a later `sac send --to` reaches it by number",
                 ws = submitted.workspace,
+                n = fresh.native_id,
+                h = fresh.harness.as_str(),
                 t = submitted.terminal,
             ))
         })?;
@@ -2670,9 +2615,10 @@ fn ask_door(
     cli: &Cli,
     destination: &Destination,
     workspace: &std::path::Path,
+    harness: Option<saccade::Harness>,
     question: &str,
 ) -> Result<String, Fail> {
-    let outcome = ask_run(cli, destination, workspace, question)?;
+    let outcome = ask_run(cli, destination, workspace, harness, question)?;
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "workspace": outcome.workspace,
@@ -2786,7 +2732,7 @@ fn workspace_switch_door(
     );
     if resume {
         // the change fact already stands; a failed launch says so
-        let launch = match launch_native(cli, destination, None, Some(token), prompt) {
+        let launch = match submitted_launch(cli, destination, None, Some(token), None, prompt) {
             Ok(launch) => launch,
             Err(e) => return Err(launch_failed(&changed, e)),
         };
@@ -2810,7 +2756,8 @@ fn workspace_switch_door(
             .expect("plain data"));
         }
         return Ok(format!(
-            "{changed}\nintegrated pi launching at {ws} - terminal {t}\n{place}\n  the resumed session carries the same native id and history",
+            "{changed}\nintegrated {h} launching at {ws} - terminal {t}\n{place}\n  the resumed session carries the same native id and history",
+            h = launch_harness_name(&launch),
             ws = launch.workspace,
             t = launch.terminal,
             place = placement_lines(&launch.terminal, &launch.place_refusal),
@@ -3001,14 +2948,15 @@ fn launch_failed(standing: &str, error: Fail) -> Fail {
 
 /// The explicit-new launch: provision through the server's effects,
 /// then hand the fresh directory to the ordinary doors - fresh launch
-/// or ask, exactly the existing composition. A launch failure leaves
-/// the creation fact true.
+/// or ask, exactly the existing composition, under the selected
+/// harness. A launch failure leaves the creation fact true.
 fn launch_new_door(
     cli: &Cli,
     destination: &Destination,
     label: Option<&str>,
     base: Option<&str>,
     ask: Option<&str>,
+    harness: Option<saccade::Harness>,
     prompt: &[String],
 ) -> Result<String, Fail> {
     let birth = provision_new(destination, label, base)?;
@@ -3016,26 +2964,29 @@ fn launch_new_door(
     let provisioned = render_birth(&birth);
     if cli.json {
         let launch = match ask {
-            Some(question) => match ask_run(cli, destination, Path::new(&path), question) {
-                Ok(outcome) => serde_json::json!({
-                    "workspace": outcome.workspace,
-                    "terminal": outcome.terminal,
-                    "space": outcome.space,
-                    "tab": outcome.tab,
-                    "place_refusal": outcome.place_refusal,
-                    "incarnation": {"seq": outcome.birth, "num": outcome.num},
-                    "question": {"num": outcome.message_num, "seq": outcome.message_seq},
-                }),
-                Err(e) => return Err(launch_failed(&provisioned, e)),
-            },
-            None => match launch_native(cli, destination, Some(Path::new(&path)), None, prompt) {
-                Ok(launch) => serde_json::json!({
-                    "workspace": launch.workspace,
-                    "terminal": launch.terminal,
-                    "space": launch.space,
-                    "tab": launch.tab,
-                    "place_refusal": launch.place_refusal,
-                }),
+            Some(question) => {
+                match ask_run(cli, destination, Path::new(&path), harness, question) {
+                    Ok(outcome) => serde_json::json!({
+                        "workspace": outcome.workspace,
+                        "terminal": outcome.terminal,
+                        "space": outcome.space,
+                        "tab": outcome.tab,
+                        "place_refusal": outcome.place_refusal,
+                        "incarnation": {"seq": outcome.birth, "num": outcome.num},
+                        "question": {"num": outcome.message_num, "seq": outcome.message_seq},
+                    }),
+                    Err(e) => return Err(launch_failed(&provisioned, e)),
+                }
+            }
+            None => match submitted_launch(
+                cli,
+                destination,
+                Some(Path::new(&path)),
+                None,
+                harness,
+                prompt,
+            ) {
+                Ok(launch) => submitted_face(&launch),
                 Err(e) => return Err(launch_failed(&provisioned, e)),
             },
         };
@@ -3046,13 +2997,21 @@ fn launch_new_door(
         .expect("plain data"));
     }
     let door = match ask {
-        Some(question) => match ask_door(cli, destination, Path::new(&path), question) {
+        Some(question) => match ask_door(cli, destination, Path::new(&path), harness, question) {
             Ok(door) => door,
             Err(e) => return Err(launch_failed(&provisioned, e)),
         },
-        None => match launch_native(cli, destination, Some(Path::new(&path)), None, prompt) {
+        None => match submitted_launch(
+            cli,
+            destination,
+            Some(Path::new(&path)),
+            None,
+            harness,
+            prompt,
+        ) {
             Ok(launch) => format!(
-                "integrated pi launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one",
+                "integrated {h} launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one",
+                h = launch_harness_name(&launch),
                 ws = launch.workspace,
                 t = launch.terminal,
                 place = placement_lines(&launch.terminal, &launch.place_refusal),

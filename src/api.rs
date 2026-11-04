@@ -826,6 +826,10 @@ struct WorkbenchLaunchRequest {
     /// The explicit existing workspace directory the session starts in;
     /// the door selects, it never creates
     workspace: WorkbenchLaunchWorkspace,
+    /// The harness the fresh session runs; absent folds as pi, the
+    /// same decode law the registration and attach carry
+    #[serde(default)]
+    harness: crate::Harness,
 }
 
 #[derive(Deserialize)]
@@ -838,7 +842,8 @@ enum WorkbenchLaunchWorkspace {
 /// What a submission did: the host's terminal acceptance and the
 /// workspace it names - never a claim that a session runs. The
 /// placement is what the door declared at birth; the refusal, when it
-/// stands, discloses that the declaration did not land.
+/// stands, discloses that the declaration did not land. The reply
+/// names the harness the launch actually composed under.
 #[derive(Serialize)]
 pub struct LaunchReply {
     pub submitted: bool,
@@ -847,6 +852,7 @@ pub struct LaunchReply {
     pub space: String,
     pub tab: String,
     pub place_refusal: Option<String>,
+    pub harness: crate::Harness,
 }
 
 /// The workbench's host launch: the same shared construction the CLI
@@ -896,19 +902,18 @@ async fn workbench_launch(
     // the host ask can wait on its bounded discovery: it runs off the
     // runtime, and the attempts line waits for the whole answer
     let blocking_app = app.clone();
-    let outcome =
-        tokio::task::spawn_blocking(move || launch_operation(&blocking_app, &request.workspace))
-            .await
-            .expect("the launch operation does not panic");
+    let outcome = tokio::task::spawn_blocking(move || {
+        launch_operation(&blocking_app, &request.workspace, request.harness)
+    })
+    .await
+    .expect("the launch operation does not panic");
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     // the door-birthed incarnation lands under the writer lock, right
     // after the address returns: identity and address exist at launch
-    if let Ok((_, Some((native_id, address)))) = &outcome {
+    if let Ok((_, Some((native_id, address, harness)))) = &outcome {
         let birth = Command::RegisterIncarnation {
             adopted: false,
-            // pi pending the launch-selection refactor: this door
-            // composes the pinned pi only
-            harness: crate::Harness::Pi,
+            harness: *harness,
             native_id: match crate::NativeSessionId::new(native_id.clone()) {
                 Ok(id) => id,
                 Err(e) => {
@@ -936,13 +941,40 @@ async fn workbench_launch(
     }
 }
 
+/// The serving edge's face for a shared launch refusal: the code is
+/// the composition's own, the status is the stage's - a caller-named
+/// workspace refuses as the caller's input, every environment stage
+/// as the deployment's break, and the host's own answer as a bad
+/// gateway.
+fn launch_fail(fail: crate::launch::LaunchFail) -> ApiFail {
+    match fail {
+        crate::launch::LaunchFail::Refused { code, detail } => {
+            let status = match code {
+                "workspace_path_invalid" => StatusCode::BAD_REQUEST,
+                "workspace_cleaned" | "workspace_ambiguous_path" => StatusCode::CONFLICT,
+                "launch_host_refused" => StatusCode::BAD_GATEWAY,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            ApiFail::Refused(status, code, detail)
+        }
+        // the workbench never resumes: a door-shaped refusal has no
+        // wire consumer here
+        crate::launch::LaunchFail::Usage(detail) => {
+            ApiFail::Refused(StatusCode::BAD_REQUEST, "usage", detail)
+        }
+        crate::launch::LaunchFail::Degraded(reason) => ApiFail::Degraded(reason),
+    }
+}
+
 /// One workbench launch: the server's own published URL for the
-/// routing, the shared pinned-pi and direnv construction, the host
-/// submission. The stages and their order are the CLI door's.
+/// routing, the shared composition the CLI doors use, the host
+/// submission. The stages and their order are the CLI door's; the
+/// fresh birth facts ride the answer for the in-process registration.
 fn launch_operation(
     app: &AppState,
     workspace: &WorkbenchLaunchWorkspace,
-) -> Result<(LaunchReply, Option<(String, String)>), ApiFail> {
+    harness: crate::Harness,
+) -> Result<(LaunchReply, Option<(String, String, crate::Harness)>), ApiFail> {
     let WorkbenchLaunchWorkspace::Existing(path) = workspace;
     let Some(url) = app.server_url().map(str::to_string) else {
         return Err(ApiFail::Refused(
@@ -952,131 +984,44 @@ fn launch_operation(
                 .into(),
         ));
     };
-    let pi = crate::host::pinned_pi().map_err(ApiFail::Host)?;
     let Some(repo_root) = app.repo_root().map(Path::to_path_buf) else {
         return Err(ApiFail::NoRepo);
     };
-    // a recorded Cleaned workspace takes no new sessions until an
-    // explicit restore; unrelated directories and primary stay valid
+    // one world read for the guard and the composition
+    let conn = db::open_read(app.db_path()).map_err(|e| ApiFail::Db(e.to_string()))?;
+    let world = match db::load(&conn)
+        .map_err(|e| ApiFail::Db(e.to_string()))?
+        .state
     {
-        let conn = db::open_read(app.db_path()).map_err(|e| ApiFail::Db(e.to_string()))?;
-        let world = match db::load(&conn)
-            .map_err(|e| ApiFail::Db(e.to_string()))?
-            .state
-        {
-            db::LoadState::Full(world) => world,
-            db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
-        };
-        let canonical =
-            crate::workspace::canonical_dir(Path::new(path)).map_err(ApiFail::Workspace)?;
-        match crate::workspace::resolve_workspace_address(&world, Path::new(path))
-            .map_err(ApiFail::Workspace)?
-        {
-            crate::workspace::LifecycleAddress::Single(birth) => {
-                if world.workspace_stage(birth) == Some(crate::WorkspaceStage::Cleaned) {
-                    return Err(ApiFail::Refused(
-                        StatusCode::CONFLICT,
-                        "workspace_cleaned",
-                        format!(
-                            "{} is recorded Cleaned (record {}); a cleaned workspace takes no new sessions until an explicit restore: sac workspace restore {}",
-                            canonical.display(),
-                            birth.0,
-                            canonical.display()
-                        ),
-                    ));
-                }
-            }
-            // several stored paths over one directory: the ordinary-use
-            // guard refuses rather than picking an identity
-            crate::workspace::LifecycleAddress::Ambiguous(births) => {
-                return Err(ApiFail::Refused(
-                    StatusCode::CONFLICT,
-                    "workspace_ambiguous_path",
-                    format!(
-                        "{} is the recorded path of {} workspace births; resolve their history by hand before launching there",
-                        canonical.display(),
-                        births.len()
-                    ),
-                ));
-            }
-            crate::workspace::LifecycleAddress::Unrecorded => {}
-        }
-    }
-    // routing rides the launch environment as env words; the workbench
-    // door composes identically to the CLI doors, through the one
-    // mechanics module
-    let mut routing = vec![
-        format!(
-            "SACCADE_ACTOR={}",
-            crate::host::command_label(&pi.display().to_string())
-        ),
-        format!("SACCADE_SERVER={url}"),
-        format!("SACCADE_REPO={}", repo_root.display()),
-    ];
-    if let Ok(exe) = std::env::current_exe() {
-        routing.push(format!("SACCADE_CLI={}", exe.display()));
-    }
-    // the door pre-allocates the native session and births the
-    // incarnation in-process: identity and address exist at launch
-    let native_id = crate::pi_session::generate_session_id();
-    let sessions = crate::pi_session::sessions_dir(&repo_root);
-    let _ = std::fs::create_dir_all(&sessions);
-    let session_argv = vec![
-        pi.display().to_string(),
-        "--session-id".to_string(),
-        native_id.clone(),
-        "--session-dir".to_string(),
-        sessions.display().to_string(),
-    ];
-    let dir = crate::workspace::canonical_dir(Path::new(path)).map_err(ApiFail::Workspace)?;
-    // the workspace is re-validated before the host ask: a launch
-    // selects an existing directory, it never creates one
-    if !dir.is_dir() {
-        return Err(ApiFail::Refused(
-            StatusCode::BAD_REQUEST,
-            "workspace_path_invalid",
-            format!(
-                "{} is not an existing directory; launch selects an explicit existing workspace, it never creates one",
-                dir.display()
-            ),
-        ));
-    }
-    let argv =
-        crate::host::composed_launch_argv(&dir, &routing, &session_argv).map_err(ApiFail::Host)?;
-    use crate::host_contract::HostContract;
-    let host = crate::herdr::HerdrCore::resolved().map_err(|e| {
-        ApiFail::Refused(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "launch_no_herdr",
-            e.to_string(),
-        )
-    })?;
-    let address = host.launch(&dir, &argv).map_err(|e| {
-        ApiFail::Refused(
-            StatusCode::BAD_GATEWAY,
-            "launch_host_refused",
-            e.to_string(),
-        )
-    })?;
-    // placement at birth: the author declares where the terminal
-    // lives, before the door replies; a refusal discloses - the
-    // terminal exists either way, and the launch is never undone
-    let placement = crate::placement::for_dir(&host, &dir);
-    let place_refusal = host
-        .place(&address, &placement.space, &placement.tab)
-        .err()
-        .map(|e| e.to_string());
-    Ok((
-        LaunchReply {
-            submitted: true,
-            workspace: dir.display().to_string(),
-            terminal: address.0.clone(),
-            space: placement.space,
-            tab: placement.tab,
-            place_refusal,
+        db::LoadState::Full(world) => world,
+        db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
+    };
+    let composed = crate::launch::compose(crate::launch::LaunchRequest {
+        world: &world,
+        repo: &repo_root,
+        url,
+        exe: std::env::current_exe().ok(),
+        arm: crate::launch::LaunchArm::Fresh {
+            workspace: Path::new(path),
+            prompt: &[],
+            harness,
         },
-        Some((native_id, address.0)),
-    ))
+    })
+    .map_err(launch_fail)?;
+    let submitted = crate::launch::submit(composed).map_err(launch_fail)?;
+    let reply = LaunchReply {
+        submitted: true,
+        workspace: submitted.workspace.clone(),
+        terminal: submitted.terminal.clone(),
+        space: submitted.space,
+        tab: submitted.tab,
+        place_refusal: submitted.place_refusal,
+        harness,
+    };
+    let birth = submitted
+        .fresh
+        .map(|fresh| (fresh.native_id, submitted.terminal, harness));
+    Ok((reply, birth))
 }
 
 // -- the task-free workspace controller ----------------------------------

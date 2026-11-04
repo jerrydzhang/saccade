@@ -11,6 +11,7 @@ pub mod harness;
 pub mod herdr;
 pub mod host;
 pub mod host_contract;
+pub mod launch;
 pub mod markers;
 pub mod migrate;
 pub mod objects;
@@ -33,6 +34,9 @@ use serde::{Deserialize, Serialize};
 pub use decide::decide;
 pub use events::{Command, Event, RecordRef};
 pub use harness::Harness;
+pub use launch::{
+    Composition, FreshBirth, LaunchArm, LaunchFail, LaunchRequest, ResumeTarget, Submitted,
+};
 pub use objects::comment::{
     Binding, Comment, CommentContext, CommentId, CommentKind, CommentState, Target, UseBinding,
 };

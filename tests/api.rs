@@ -3603,6 +3603,14 @@ if [ "$1" = send ] && [ -n "${SACCADE_FAKE_HC_SEND_FAILS:-}" ]; then
 ' "${SACCADE_FAKE_HC_SEND_FAILS}"
   exit 1
 fi
+if [ "$1" = attach ]; then
+  if [ -n "${SACCADE_FAKE_HC_ATTACH_FAILS:-}" ]; then
+    printf 'no attachable terminal here\n' >&2
+    exit 4
+  fi
+  printf 'attached view\n'
+  exit 0
+fi
 printf '{}
 '
 exit 0
@@ -4320,6 +4328,282 @@ async fn the_launch_scrubs_stale_inheritance() {
         typed.ends_with("--session-dir") || typed.ends_with("register and wait"),
         "the composed prompt rides the argv tail: {typed}"
     );
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+/// A sac run with stdin on a pty slave: the here door's attach
+/// inherits a real terminal, and the door's own faces come back
+/// through collected pipes.
+fn run_here_in_pty(bin: &str, args: &[String], envs: &[(&str, String)]) -> std::process::Output {
+    let mut masters = Vec::new();
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args.iter().map(String::as_str))
+        .stdin(pty_stdio(&mut masters));
+    for key in [
+        "SACCADE_REPO",
+        "SACCADE_DB",
+        "SACCADE_SERVER",
+        "SACCADE_ACTOR",
+        "SACCADE_TASK",
+        "SACCADE_INCARNATION_SEQ",
+        "SACCADE_WORKSPACE",
+        "HC_TERMINAL_ID",
+    ] {
+        cmd.env_remove(key);
+    }
+    cmd.env("SACCADE_TEST_CONTEXT", "1");
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    let out = cmd.output().expect("spawn sac");
+    for master in masters {
+        unsafe { libc::close(master) };
+    }
+    out
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("here-attach");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    let hc = fake_hc(db.parent().unwrap());
+    let pi = stub_pi(db.parent().unwrap());
+    let workspace = db.parent().unwrap().join("here-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    let args = |extra: &[&str]| {
+        let mut args = vec![
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "launch".to_string(),
+            "--workspace".to_string(),
+            workspace.to_str().unwrap().to_string(),
+        ];
+        args.extend(extra.iter().map(|s| (*s).to_string()));
+        args
+    };
+    let envs = [
+        ("SACCADE_HERDR", hc.display().to_string()),
+        ("SACCADE_PI", pi.display().to_string()),
+    ];
+
+    // the attached view: a real stdin terminal launches through the
+    // host, births the incarnation, then attaches; the attach's own
+    // exit is the command's and the json face names the harness
+    let out = run_here_in_pty(bin, &args(&["--here", "--json"]), &envs);
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // the attached view rides the inherited stdio beside the reply:
+    // the fake's own screen bytes land in the same stream
+    let text = String::from_utf8_lossy(&out.stdout);
+    let json_at = text.find('{').expect("the json face answers");
+    let launched: Value = serde_json::from_str(&text[json_at..]).unwrap();
+    assert_eq!(launched["terminal"], json!("t1"), "{launched}");
+    assert_eq!(launched["harness"], json!("pi"), "{launched}");
+    assert_eq!(launched["resumed"], Value::Null, "{launched}");
+    assert_eq!(launched["exit"], json!(0), "{launched}");
+    assert!(launched["native_id"].is_string(), "{launched}");
+    // the attach went to the launched address, bare
+    assert_eq!(
+        hc_argv(&db.parent().unwrap().join("hc-bin"), "attach"),
+        vec!["t1".to_string()]
+    );
+    // the birth is a launched kind carrying its harness - never this
+    // pane, never an adoption
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let fold = json_of(&body);
+    let births: Vec<&Value> = fold["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "incarnation_registered")
+        .collect();
+    assert_eq!(births.len(), 1, "{fold}");
+    assert_eq!(births[0]["payload"]["address"], json!("t1"), "{fold}");
+    assert_eq!(births[0]["payload"]["adopted"], json!(false), "{fold}");
+    assert_eq!(births[0]["payload"]["harness"], json!("pi"), "{fold}");
+
+    // the text face names the detach law: the attach ended, the
+    // session keeps running, and the address stands for a reattach
+    let out = run_here_in_pty(bin, &args(&["--here"]), &envs);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("the session keeps running"), "{text}");
+    assert!(text.contains("hc attach t1"), "{text}");
+
+    // a refused attach discloses the standing launch: the address and
+    // the by-hand command; the birth stands either way
+    let mut failed_envs = envs.to_vec();
+    failed_envs.push(("SACCADE_FAKE_HC_ATTACH_FAILS", "1".to_string()));
+    let out = run_here_in_pty(bin, &args(&["--here"]), &failed_envs);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the launch stands at address t1"), "{err}");
+    assert!(err.contains("hc attach t1"), "{err}");
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    assert_eq!(
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["kind"] == "incarnation_registered")
+            .count(),
+        3,
+        "{body}"
+    );
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_here_door_refuses_a_pipe_and_a_nested_pane_before_any_launch() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("here-refusals");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    let hc = fake_hc(db.parent().unwrap());
+    let pi = stub_pi(db.parent().unwrap());
+    let workspace = db.parent().unwrap().join("here-refused");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    // an incarnation already carries a pane: the nested-guard target
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "nestor001", "address": "tp", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let mut args = vec![
+        "--server".to_string(),
+        base_url.clone(),
+        "--repo".to_string(),
+        root.to_str().unwrap().to_string(),
+        "launch".to_string(),
+        "--workspace".to_string(),
+        workspace.to_str().unwrap().to_string(),
+        "--here".to_string(),
+    ];
+    let envs = [
+        ("SACCADE_HERDR", hc.display().to_string()),
+        ("SACCADE_PI", pi.display().to_string()),
+    ];
+
+    // no real stdin terminal: the attach would inherit a pipe, and the
+    // door refuses before any host contact
+    let (ok, _out, err, timed_out) = bounded_sac(bin, &args, &envs);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "{err}");
+    assert!(err.contains("stdin must be a real terminal"), "{err}");
+    assert!(
+        hc_argv(&db.parent().unwrap().join("hc-bin"), "run").is_empty(),
+        "the refusal preceded any host contact"
+    );
+
+    // the invoking pane is a recorded incarnation's address: a
+    // foreground attach would route that incarnation's input into the
+    // child, so the door refuses before anything runs
+    args.push("--json".to_string());
+    let mut nested = envs.to_vec();
+    nested.push(("HC_TERMINAL_ID", "tp".to_string()));
+    let (ok, _out, err, timed_out) = bounded_sac(bin, &args, &nested);
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "{err}");
+    assert!(err.contains("already the address of i-0"), "{err}");
+    assert!(
+        hc_argv(&db.parent().unwrap().join("hc-bin"), "run").is_empty(),
+        "the nested refusal preceded any host contact"
+    );
+
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_runs_its_recorded_harness_and_an_explicit_mismatch_refuses() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let db = scratch_db("resume-harness");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let base_url = spawn_workspace_server(&db, &root).await;
+
+    let hc = fake_hc(db.parent().unwrap());
+    let pi = stub_pi(db.parent().unwrap());
+    let workspace = db.parent().unwrap().join("pi-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let saved = db.parent().unwrap().join("resumee01.jsonl");
+    std::fs::write(
+        &saved,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"resumee01\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n{{\"type\":\"message\",\"id\":\"aa\",\"parentId\":null}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "resumee01", "session_file": saved.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let resume_args = |extra: &[&str]| {
+        let mut args = vec![
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "launch".to_string(),
+            "--resume".to_string(),
+            "i-0".to_string(),
+        ];
+        args.extend(extra.iter().map(|s| (*s).to_string()));
+        args
+    };
+    let envs = [
+        ("SACCADE_HERDR", hc.display().to_string()),
+        ("SACCADE_PI", pi.display().to_string()),
+    ];
+
+    // the recorded kind is the authority: claiming another kind is a
+    // wrong claim about the session, refused before any host contact
+    let (ok, _out, err, timed_out) = bounded_sac(
+        bin,
+        &resume_args(&["--harness", "claude-code", "--json"]),
+        &envs,
+    );
+    assert!(!timed_out, "{err}");
+    assert!(!ok, "{err}");
+    assert!(err.contains("runs pi as recorded"), "{err}");
+    assert!(
+        hc_argv(&db.parent().unwrap().join("hc-bin"), "run").is_empty(),
+        "the mismatch refused before any host contact"
+    );
+
+    // the explicit matching claim rides the recorded harness: the
+    // launch proceeds and the reply names pi
+    let (ok, out, err, timed_out) =
+        bounded_sac(bin, &resume_args(&["--harness", "pi", "--json"]), &envs);
+    assert!(!timed_out, "{err}");
+    assert!(ok, "{out}{err}");
+    let launched = json_of(&out);
+    assert_eq!(launched["harness"], json!("pi"), "{out}");
+    assert_eq!(launched["native_id"], Value::Null, "{out}");
+    let run_log = hc_argv(&db.parent().unwrap().join("hc-bin"), "run").join(" ");
+    assert!(run_log.contains("--session resumee01"), "{run_log}");
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
@@ -7228,9 +7512,12 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
     );
     let newborn = asked["launch"]["incarnation"]["num"].as_u64().unwrap();
     // the i-N counted births only: rover i-0, ghost i-1, the pre-B
-    // attach i-2, the newborn i-3 (the fake host's run address t1 is
-    // no incarnation's recorded address here) - creation never counted
-    assert_eq!(newborn, 3, "{asked}");
+    // attach i-2, the trailblaze door birth i-3, the newborn i-4 -
+    // creation never counted. The ask resolves its own exact birth,
+    // the (harness, native id) pair it composed: a first-address
+    // match would name the older trailblaze session, which carries
+    // the same fake host address t1
+    assert_eq!(newborn, 4, "{asked}");
     assert!(asked["launch"]["question"]["seq"].is_u64(), "{asked}");
     // the question is durable addressed mail from the creator's scope
     let (_, body) = get_json(
@@ -7497,6 +7784,107 @@ async fn the_workbench_launch_door_submits_honestly_through_a_fake_host() {
         &base_url,
         "/api/v1/workbench/launch",
         &json!({"workspace": {"resume": "i-1"}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        "malformed_request",
+        "{body}"
+    );
+
+    serve.kill().unwrap();
+    serve.wait().unwrap();
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_workbench_launch_selects_the_harness_the_request_names() {
+    let db = scratch_db("workbench-launch-harness");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let pi = stub_pi(db.parent().unwrap());
+    // the second harness: a stub binary under the same pin shape; the
+    // fake host never starts it, so the file is the whole pin fact
+    let cc = db.parent().unwrap().join("stub-claude-code");
+    std::fs::write(&cc, b"#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let hc = fake_hc(db.parent().unwrap());
+    let (base_url, mut serve) = spawn_serve_subprocess(
+        &db,
+        &root,
+        &[
+            ("SACCADE_HERDR", hc.display().to_string()),
+            ("SACCADE_PI", pi.display().to_string()),
+            ("SACCADE_CLAUDE_CODE", cc.display().to_string()),
+        ],
+    );
+
+    let workspace = db.parent().unwrap().join("harness-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    // the named harness composes the named line and rides the reply
+    // and the birth
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}, "harness": "claude-code"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["submitted"], json!(true), "{body}");
+    assert_eq!(reply["harness"], json!("claude-code"), "{body}");
+    assert_eq!(reply["terminal"], json!("t1"), "{body}");
+    let run_log = hc_argv(&db.parent().unwrap().join("hc-bin"), "run").join(" ");
+    assert!(run_log.contains("--session-id"), "{run_log}");
+    assert!(
+        !run_log.contains("--session-dir"),
+        "claude-code takes only the uuid: {run_log}"
+    );
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let fold = json_of(&body);
+    let births: Vec<&Value> = fold["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "incarnation_registered")
+        .collect();
+    assert_eq!(births.len(), 1, "{fold}");
+    assert_eq!(
+        births[0]["payload"]["harness"],
+        json!("claude-code"),
+        "{fold}"
+    );
+
+    // the absent field is the pi default, never a silent other kind
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["harness"], json!("pi"), "{body}");
+    let run_log = hc_argv(&db.parent().unwrap().join("hc-bin"), "run").join(" ");
+    assert!(run_log.contains("--session-dir"), "{run_log}");
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let fold = json_of(&body);
+    let births: Vec<&Value> = fold["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "incarnation_registered")
+        .collect();
+    assert_eq!(births.len(), 2, "{fold}");
+    assert_eq!(births[1]["payload"]["harness"], json!("pi"), "{fold}");
+
+    // an unknown harness token is a decode refusal, never a silent pi
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/workbench/launch",
+        &json!({"workspace": {"existing": workspace.to_str().unwrap()}, "harness": "codex"}),
     );
     assert_eq!(status, 400, "{body}");
     assert_eq!(
@@ -8823,6 +9211,11 @@ fn completions_emit_scripts_and_the_candidate_doors_answer_the_fold() {
     assert!(
         script.contains("sac complete $argv"),
         "the PATH-name door call"
+    );
+    // the harness flag names both kinds in the value list
+    assert!(
+        script.contains("-l harness"),
+        "the launch harness flag completes: {script}"
     );
     assert!(script.is_ascii(), "authored text is ASCII");
     assert!(!sac(&["completions", "bash"]).0, "unshipped shells refuse");
