@@ -470,13 +470,24 @@ fn the_native_integration_attaches_and_sends_over_the_wire() {
     assert_eq!(reply["from"]["num"], 0);
     assert_eq!(reply["submission"]["state"], "submitted");
     // the submit reached the host: the adapter ask named the recorded
-    // address and carried the body verbatim
+    // address and carried the wire envelope - machine-supplied origin,
+    // task segment when the context rides one, then the body untouched
+    // (the unicode body rides byte for byte, the envelope line ASCII)
     let sent_argv = hc_argv(hc.parent().unwrap(), "send");
-    assert_eq!(sent_argv.len(), 2, "one submit ask: {sent_argv:?}");
+    assert_eq!(
+        sent_argv.len(),
+        4,
+        "one submit ask spans its own lines: {sent_argv:?}"
+    );
     assert_eq!(sent_argv[0], "t2");
-    assert!(
-        sent_argv[1].starts_with("please look at the failing edge case"),
+    assert_eq!(
+        sent_argv[1], "[saccade message m-0 | from i-0 | task t-0]",
         "{sent_argv:?}"
+    );
+    assert_eq!(sent_argv[2], "");
+    assert_eq!(
+        sent_argv[3],
+        "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix"
     );
 
     // the reply names the message it answers by its public number
@@ -495,6 +506,18 @@ fn the_native_integration_attaches_and_sends_over_the_wire() {
     assert_eq!(json_of(&body)["message"]["num"], 1);
     assert_eq!(json_of(&body)["submission"]["state"], "submitted");
     let reply_seq = json_of(&body)["message"]["seq"].as_u64().unwrap();
+    // the reply's envelope carries the replying-to segment and no task
+    let sent_argv = hc_argv(hc.parent().unwrap(), "send");
+    assert_eq!(
+        sent_argv.len(),
+        9,
+        "two submit asks, the second op line between them: {sent_argv:?}"
+    );
+    assert_eq!(
+        sent_argv[6], "[saccade message m-1 | from i-1 | replying to m-0]",
+        "{sent_argv:?}"
+    );
+    assert_eq!(sent_argv[8], "the edge case held under review");
 
     // the mailbox read returns both directions in birth order, all
     // confirmed; the mailbox is a descriptive read
@@ -698,7 +721,8 @@ fn the_native_integration_attaches_and_sends_over_the_wire() {
     ordered.sort_by_key(|m| m["seq"].as_u64().unwrap());
     assert_eq!(ordered.len(), 3, "{body}");
     // submit order: the fake host's send log names the same three
-    // bodies, and its order matches the record order exactly
+    // bodies (each beneath its envelope line), and the order matches
+    // the record order exactly
     let logged = hc_argv(hc.parent().unwrap(), "send");
     let asks: Vec<&String> = logged
         .iter()
@@ -4574,10 +4598,14 @@ fn the_sole_writer_submits_only_through_the_adapter_and_launches_nothing() {
     );
     assert_eq!(status, 200, "{body}");
     assert_eq!(json_of(&body)["submission"]["state"], "submitted", "{body}");
+    // the submission carries the wire envelope: one origin line, a
+    // blank line, the body untouched - no reply, no task here
     let asks = hc_argv(&bin_dir, "send");
-    assert_eq!(asks.len(), 2, "{asks:?}");
+    assert_eq!(asks.len(), 4, "{asks:?}");
     assert_eq!(asks[0], "t5");
-    assert_eq!(asks[1], "wake the addressed peer");
+    assert_eq!(asks[1], "[saccade message m-0 | from i-0]");
+    assert_eq!(asks[2], "");
+    assert_eq!(asks[3], "wake the addressed peer");
 
     // no launch ever reached the host: the send path asks send alone
     let runs = std::fs::read_to_string(bin_dir.join("argv-run.log")).unwrap_or_default();
@@ -5309,6 +5337,14 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
     assert_eq!(mail[0]["body"], "what holds at the failing edge case?");
     let sends = hc_argv(hc.parent().unwrap(), "send");
     assert!(sends.contains(&"t1".to_string()), "{sends:?}");
+    // the question rides the wire envelope: origin line, blank line,
+    // the body untouched
+    assert!(
+        sends
+            .iter()
+            .any(|s| s == "[saccade message m-0 | from i-0]"),
+        "{sends:?}"
+    );
     assert!(
         sends
             .iter()

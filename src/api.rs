@@ -24,7 +24,7 @@ use crate::host::HostFail;
 use crate::store::{Context, RecordId, Scope, Tier, World};
 use crate::types::pointers::WorktreePath;
 use crate::workspace::{self, WorkspaceFail};
-use crate::{Command, Reject};
+use crate::{Command, MessageId, Reject};
 
 enum ServerState {
     Ready(Inner),
@@ -2730,16 +2730,37 @@ impl SubmitOutcome {
 /// core, and the lock order is always address-then-writer, never the
 /// reverse, so the server cannot deadlock. Runs on a blocking thread
 /// (the launch door's pattern): the adapter ask is a subprocess call.
+/// The wire envelope a submission carries: machine-supplied origin on
+/// one ASCII line - the dense message number, the sender's incarnation
+/// number, and the reply and task segments only when they exist -
+/// then a blank line and the body untouched. Wire-only: the record's
+/// body and every read stay as authored; the envelope exists at the
+/// submit door alone, so a recipient knows who is talking and holds
+/// the id to reply to without a prior query.
+fn wire_envelope(world: &World, id: MessageId) -> Option<String> {
+    let mail = &world.messages.get(&id)?.message;
+    let num = world.message_num(id)?;
+    let from = world.incarnation_num(mail.from)?;
+    let mut head = format!("[saccade message m-{num} | from i-{from}");
+    if let Some(reply) = mail.reply_to {
+        head += &format!(" | replying to m-{}", world.message_num(reply)?);
+    }
+    if let Some(task) = mail.task {
+        head += &format!(" | task t-{}", task.0);
+    }
+    head.push(']');
+    Some(format!("{head}\n\n{}", mail.body.as_str()))
+}
+
 fn send_operation(
     app: &AppState,
     context: &Context,
     command: Command,
     received: AsReceived,
 ) -> Result<(Vec<StoredRecord>, SubmitOutcome), ExecuteFail> {
-    let Command::SendMessage { to, body, .. } = &command else {
+    let Command::SendMessage { to, .. } = &command else {
         unreachable!("the send operation serves SendMessage alone");
     };
-    let body_text = body.as_str().to_string();
     let to = *to;
     // the recipient's id names the lock; the address is resolved
     // fresh under it, so a move between record and submit submits at
@@ -2758,7 +2779,8 @@ fn send_operation(
     let sent = stored.first().expect("a message lands its one record").seq;
     // the freshest address under the lock: an unaddressed recipient is
     // the pre-B shape - the record stands as evidence, nothing submits
-    let Some(address) = app.snapshot().ok().and_then(|s| addressed(&s.world)) else {
+    let snapshot = app.snapshot().ok();
+    let Some(address) = snapshot.as_ref().and_then(|s| addressed(&s.world)) else {
         return Ok((
             stored,
             SubmitOutcome::Refused {
@@ -2769,9 +2791,17 @@ fn send_operation(
             },
         ));
     };
+    // the envelope composes from the recorded facts at the submit
+    // door; the snapshot that resolved the address holds the
+    // just-landed message, so its numbers are fold-guaranteed
+    let message_id = MessageId(RecordId(sent));
+    let wire_text = snapshot
+        .as_ref()
+        .and_then(|s| wire_envelope(&s.world, message_id))
+        .expect("the just-landed message composes its wire envelope");
     use crate::host_contract::HostContract;
     let submission = match crate::herdr::HerdrCore::resolved() {
-        Ok(host) => host.submit(&crate::host_contract::HostAddress(address), &body_text),
+        Ok(host) => host.submit(&crate::host_contract::HostAddress(address), &wire_text),
         Err(e) => {
             return Ok((
                 stored,

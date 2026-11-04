@@ -277,7 +277,19 @@ Delivery facts for messages are small and ordinary: a message records
 first, then its send attempts one ordered submission through the host
 adapter at the recipient's recorded address - concurrent sends to one
 recipient serialize at the sole writer, so record order is submit
-order. `submitted` means the host accepted the ordered submission -
+order. What the submission carries is the wire envelope, composed at
+the submit door from the recorded facts - one machine-supplied ASCII
+origin line, then a blank line, then the body untouched:
+
+    [saccade message m-N | from i-M | replying to m-K | task t-T]
+
+The replying-to and task segments appear only when the message
+carries them, and the bracketed line is origin, never authored prose:
+the record's body stays exactly as authored, `sac messages` and the
+fold render clean, and a recipient reading the terminal learns the
+sender, the message id to reply to (`sac send --reply m-N`), and the
+task context without a prior query.
+`submitted` means the host accepted the ordered submission -
 never a claim of reading, agreement, completion, or task acceptance;
 `pending` is a recorded message without a confirmed submission,
 evidence of its attempt and never a promise of later delivery -
