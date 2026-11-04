@@ -8,6 +8,7 @@ use saccade::World;
 use saccade::client;
 use saccade::db::{self, ExecuteFail, LoadState, StoredRecord};
 use saccade::host;
+use saccade::host_contract::HostContract;
 use saccade::objects::task::TaskId;
 use saccade::views::{
     ArtifactLine, CommentLine, MessageLine, SearchGroup, SearchQuery, TaskView, Term, ThreadItem,
@@ -16,7 +17,7 @@ use saccade::views::{
 };
 use saccade::{
     ActorName, Artifact, Command, CommentId, CommentKind, ContentHash, Context, IncarnationId,
-    Prose, RecordId, Reject, Scope, Target, Tier, WorktreePath, wire,
+    MessageId, Prose, RecordId, Reject, Scope, Target, Tier, WorktreePath, wire,
 };
 
 mod skill;
@@ -345,23 +346,30 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Block until a matching record lands on the target: activity
-    /// mode matches records folding into a task, or the records
-    /// structurally tied to a comment - its citations, repairs, and
-    /// decisions; offer mode matches an Offer born on the task.
-    /// Matches are strictly after the given global position; nothing
-    /// is recorded
+    /// Block until a match lands: a task (t-<n>) or comment (c-<n>)
+    /// target matches record activity or an offer, the cursor named
+    /// by --after and the mode by --until; an incarnation (i-<n>)
+    /// target waits for messages addressed to it - waking on
+    /// arrivals at its host terminal, reading its mailbox for truth,
+    /// bounded overall by --timeout seconds. Nothing is recorded
     Wait {
-        /// The task (t-<n>) or comment (c-<n>) to wait on
+        /// The target: t-<n> or c-<n> for record activity, i-<n> for
+        /// arrival waiting
         target: String,
         /// The global record position matched strictly after - the
-        /// cursor a read disclosed, never defaulted
+        /// cursor a read disclosed, never defaulted; required for
+        /// t-<n>/c-<n>, refused for i-<n>
         #[arg(long)]
-        after: u64,
-        /// What wakes the wait - required, never chosen for you;
-        /// offer addresses a task only
+        after: Option<u64>,
+        /// What wakes a t-<n>/c-<n> wait - required there, refused
+        /// for i-<n>; offer addresses a task only
         #[arg(long)]
-        until: UntilMode,
+        until: Option<UntilMode>,
+        /// The overall bound in seconds for an i-<n> arrival wait;
+        /// without it the wait runs until a message lands or the call
+        /// is interrupted
+        #[arg(long)]
+        timeout: Option<u64>,
     },
 }
 
@@ -380,9 +388,9 @@ enum WorkspaceVerb {
         #[arg(long)]
         base: Option<String>,
     },
-    /// Move a stopped native session's saved working directory to an
-    /// explicit existing one: a live session refuses (exit it first),
-    /// and the change record lands only after the header moved
+    /// Change where a stopped native session lives: an explicit
+    /// existing directory; a live session refuses (exit it first), and
+    /// the record is the whole effect
     Switch {
         /// The incarnation (i-<n>)
         incarnation: String,
@@ -807,7 +815,17 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             target,
             after,
             until,
-        } => return wait_door(cli, &destination, target, *after, until.until()),
+            timeout,
+        } => {
+            return wait_door(
+                cli,
+                &destination,
+                target,
+                *after,
+                until.map(UntilMode::until),
+                *timeout,
+            );
+        }
         Cmd::Send {
             to,
             reply,
@@ -1559,14 +1577,46 @@ fn read_only(cli: &Cli, loadout: &db::Loadout) -> Result<String, Fail> {
 }
 
 const WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+/// One arrival-wait iteration at the host: the door re-enters while
+/// the overall bound allows.
+const ARRIVAL_ITERATION: std::time::Duration = std::time::Duration::from_secs(10);
+/// The brief pause between host waits on a quiet answer.
+const ARRIVAL_PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
 
 fn wait_door(
     cli: &Cli,
     destination: &Destination,
     target: &str,
-    after: u64,
-    until: saccade::views::WaitUntil,
+    after: Option<u64>,
+    until: Option<saccade::views::WaitUntil>,
+    timeout: Option<u64>,
 ) -> Result<String, Fail> {
+    // the incarnation form is the arrival wait: its own door, its own
+    // flags - the t/c forms keep their required pair
+    if target.trim_start().starts_with("i-") {
+        if after.is_some() {
+            return Err(Fail::Usage(
+                "--after is the t-<n>/c-<n> wait's cursor; an i-<n> arrival wait takes --timeout, not --after".into(),
+            ));
+        }
+        if until.is_some() {
+            return Err(Fail::Usage(
+                "--until is the t-<n>/c-<n> wait's mode; an i-<n> arrival wait takes --timeout, not --until".into(),
+            ));
+        }
+        return wait_arrival_door(cli, destination, target, timeout);
+    }
+    let Some(after) = after else {
+        return Err(Fail::Usage(
+            "the t-<n>/c-<n> wait names its cursor: --after <seq> is required".into(),
+        ));
+    };
+    let Some(until) = until else {
+        return Err(Fail::Usage(
+            "the t-<n>/c-<n> wait names its mode: --until activity or --until offer is required"
+                .into(),
+        ));
+    };
     let raw = wait_target(target)?;
     if matches!(raw, WaitToken::Comment(_)) && until == saccade::views::WaitUntil::Offer {
         return Err(Fail::Usage(
@@ -1611,6 +1661,106 @@ fn wait_door(
             ));
         }
         std::thread::sleep(WAIT_POLL);
+    }
+}
+
+/// The arrival wait: block until a message addressed to the named
+/// incarnation lands after this wait's entry. The host's wake is
+/// advisory - every return (wake or quiet) re-reads the mailbox, so
+/// a spurious wake costs one read and a real message is never
+/// consumed unseen - and the entry cursor never advances through the
+/// wait's own wakes, only through the mail it reported. The address
+/// cross-check re-folds each pass: an incarnation whose recorded
+/// address moved ends the wait with a disclosure, never a silent
+/// watch of a stale terminal. Nothing is recorded; interruption ends
+/// it.
+fn wait_arrival_door(
+    cli: &Cli,
+    destination: &Destination,
+    token: &str,
+    timeout: Option<u64>,
+) -> Result<String, Fail> {
+    let loadout = loadout_of(destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "wait needs the world; the log will not fold".into(),
+        ));
+    };
+    let id = resolve_incarnation(&world, token.trim())?;
+    let num = world.incarnation_num(id).unwrap_or(id.0.0);
+    let entry_address = world.incarnations[&id]
+        .incarnation
+        .address()
+        .map(str::to_string);
+    let Some(address) = entry_address else {
+        return Err(Fail::Usage(format!(
+            "i-{num} carries no host address: pre-B sessions take no arrival wait; the sanctioned migration is exit + resume"
+        )));
+    };
+    // the cursor names the mail that already exists at entry; only
+    // mail born after it releases the wait
+    let entry_cursor = world
+        .messages
+        .iter()
+        .filter(|(_, mctx)| mctx.message.to == id)
+        .map(|(mid, _)| mid.0.0)
+        .max()
+        .unwrap_or(0);
+    let host = saccade::herdr::HerdrCore::resolved().map_err(|e| Fail::Usage(e.to_string()))?;
+    let deadline =
+        timeout.map(|secs| std::time::Instant::now() + std::time::Duration::from_secs(secs));
+    loop {
+        // the iteration never overshoots the overall bound: a short
+        // --timeout ends quiet at its own edge, not at the iteration's
+        let iteration = match deadline {
+            Some(at) => at
+                .saturating_duration_since(std::time::Instant::now())
+                .min(ARRIVAL_ITERATION),
+            None => ARRIVAL_ITERATION,
+        };
+        if iteration.is_zero() {
+            return Ok(render_arrival_quiet(cli, num));
+        }
+        let wake = host.wait(
+            &saccade::host_contract::HostAddress(address.clone()),
+            iteration,
+        );
+        let loadout = loadout_of(destination)?;
+        let world = match loadout.state {
+            LoadState::Full(world) => world,
+            LoadState::Degraded(reason) => return Err(Fail::Degraded(reason)),
+        };
+        // the address cross-check: a moved association means this
+        // watch names a terminal the incarnation no longer holds
+        let current = world.incarnations[&id].incarnation.address();
+        if current != Some(address.as_str()) {
+            let _ = wake;
+            return Err(Fail::Usage(format!(
+                "i-{num}'s recorded address moved while waiting; this watch ended without reading new mail - wait again"
+            )));
+        }
+        let arrived: Vec<MessageId> = world
+            .messages
+            .iter()
+            .filter(|(mid, mctx)| mctx.message.to == id && mid.0.0 > entry_cursor)
+            .map(|(mid, _)| *mid)
+            .collect();
+        if !arrived.is_empty() {
+            let lines: Vec<MessageLine> = arrived
+                .iter()
+                .map(|m| message_line(&world, *m).expect("a resident message renders"))
+                .collect();
+            let cursor = loadout.rows.last().map(|r| r.seq);
+            return Ok(render_arrival(cli, &lines, cursor));
+        }
+        if let Some(deadline) = deadline
+            && std::time::Instant::now() >= deadline
+        {
+            return Ok(render_arrival_quiet(cli, num));
+        }
+        if matches!(wake, saccade::host_contract::WaitWake::Quiet) {
+            std::thread::sleep(ARRIVAL_PAUSE);
+        }
     }
 }
 
@@ -1685,6 +1835,53 @@ fn cursor_line(cursor: Option<usize>) -> String {
     }
 }
 
+/// The arrival wait's answer: the mail that landed, each line naming
+/// its state - pending is a recorded attempt without a confirmed
+/// submission, evidence the caller interprets.
+fn render_arrival(cli: &Cli, lines: &[MessageLine], cursor: Option<usize>) -> String {
+    if cli.json {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "messages": lines,
+            "cursor": cursor,
+        }))
+        .expect("message lines are plain data");
+    }
+    let mut out: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            let mut head = format!(
+                "m-{}  i-{} -> i-{} | {}",
+                line.num, line.from, line.to, line.state
+            );
+            if let Some(reply) = line.reply_to {
+                head.push_str(&format!(" | replies to m-{reply}"));
+            }
+            if let Some(task) = line.task {
+                head.push_str(&format!(" | context t-{task}"));
+            }
+            head.push('\n');
+            head.push_str(&format!("      {}", line.body));
+            head
+        })
+        .collect();
+    out.push(cursor_line(cursor));
+    out.join("\n")
+}
+
+/// The overall bound's quiet answer: no mail landed, nothing consumed.
+fn render_arrival_quiet(cli: &Cli, num: usize) -> String {
+    if cli.json {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "quiet": true,
+            "incarnation": num,
+        }))
+        .expect("plain data");
+    }
+    format!(
+        "i-{num}: quiet - no message addressed to it landed within the bound; nothing was consumed"
+    )
+}
+
 /// A public dense token's number: the wire carries what the human
 /// typed, and the server resolves it against its own fold.
 fn dense_token(token: &str, prefix: &str) -> Result<usize, Fail> {
@@ -1745,11 +1942,29 @@ fn send_door(
     identity_fallback_guard(cli, &context, attached_terminal())?;
     let body = Prose::new(body_source(body, stdin)?)?;
     client::handshake(&url);
-    // success carries the wire's queue-acceptance confirmation; a
-    // refused or unacknowledged attempt comes back as the wire's
-    // error, naming the recorded m-N and the reason
-    let sent = client::send_message(&url, &context, to_num, reply_num, task_num, &body)
-        .map_err(Fail::Client)?;
+    // success carries the host-accepted submission; a refused attempt
+    // comes back naming the recorded m-N beside the evidence - the
+    // record stands, the refusal explains it
+    let sent = match client::send_message(&url, &context, to_num, reply_num, task_num, &body) {
+        Ok(sent) => sent,
+        Err(client::ClientFail::Refused {
+            code,
+            detail,
+            message,
+        }) => {
+            let named = match message {
+                Some(facts) => facts
+                    .num
+                    .map(|n| format!("m-{n}"))
+                    .unwrap_or_else(|| format!("seq {}", facts.seq)),
+                None => "its record".to_string(),
+            };
+            return Err(Fail::Usage(format!(
+                "not sent: {named} was recorded and stays pending ({code}): {detail}"
+            )));
+        }
+        Err(other) => return Err(Fail::Client(other)),
+    };
     if cli.json {
         return Ok(serde_json::to_string_pretty(
             &serde_json::to_value(&sent).expect("the send reply is plain data"),
@@ -1844,7 +2059,7 @@ fn launch_door(
     resume: Option<&str>,
     prompt: &[String],
 ) -> Result<String, Fail> {
-    let (dir_str, terminal) = launch_native(cli, destination, workspace, resume, prompt, None)?;
+    let (dir_str, terminal) = launch_native(cli, destination, workspace, resume, prompt)?;
     if cli.json {
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "workspace": dir_str,
@@ -1853,7 +2068,7 @@ fn launch_door(
         .expect("plain data"));
     }
     Ok(format!(
-        "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+        "integrated pi launching at {dir_str} - address {terminal}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one"
     ))
 }
 
@@ -1915,8 +2130,11 @@ fn launch_here_door(cli: &Cli) -> ExitCode {
     }
 }
 
-/// The same-terminal mechanics: destination, shared composition,
-/// shared line, then the run in this terminal.
+/// The same-terminal mechanics: destination, shared composition, the
+/// caller terminal's adoption, then the child in this terminal. The
+/// address is the caller's own host declaration - every registered
+/// incarnation carries exactly one, launched or adopted - and the door
+/// refuses every unaddressable form before anything runs.
 fn launch_here_run(
     cli: &Cli,
     workspace: Option<&std::path::Path>,
@@ -1924,23 +2142,65 @@ fn launch_here_run(
     prompt: &[String],
 ) -> Result<(String, host::ChildExit), Fail> {
     let destination = resolve_destination(cli)?;
-    let composed = compose_launch(cli, &destination, workspace, resume, prompt, None)?;
-    let (dir_str, command) = launch_line(&composed)?;
-    let exit = host::run_in_caller_terminal(&command)
+    let composed = compose_launch(cli, &destination, workspace, resume, prompt)?;
+    // the caller's terminal names itself through the host's own env:
+    // the adoption is the declaration, never a probe
+    let adopted = std::env::var("HC_TERMINAL_ID").unwrap_or_default();
+    if adopted.is_empty() {
+        return Err(Fail::Usage(
+            "this terminal carries no host address (no HC_TERMINAL_ID): --here adopts the caller's host terminal, and an unhosted caller's path is a native launch with a self-declared actor".into(),
+        ));
+    }
+    // two incarnations never share a pane: an address already carried
+    // by a recorded incarnation means the caller is one, and peers
+    // go through the host door - messages to a suspended parent would
+    // land in the child. One exception, per the same-pane ruling: the
+    // resume target returning to its own recorded pane is not two.
+    let loadout = loadout_of(&destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "the here door needs the world; the log will not fold".into(),
+        ));
+    };
+    let resume_target = composed.resume_id;
+    if let Some((holder, _)) = world.incarnations.iter().find(|(holder, ctx)| {
+        ctx.incarnation.address() == Some(adopted.as_str()) && resume_target != Some(**holder)
+    }) {
+        let holder_num = world
+            .incarnation_num(*holder)
+            .map(|n| format!("i-{n}"))
+            .unwrap_or_else(|| format!("seq {}", holder.0.0));
+        return Err(Fail::Usage(format!(
+            "this terminal is already the address of {holder_num}: two incarnations never share a pane, and peers go through the host door"
+        )));
+    }
+    let url = server_url(&destination, "launch")?;
+    // the door births the fresh identity itself; a resume records the
+    // adopted address as the association's move
+    if let Some(native_id) = &composed.native_id {
+        client::register_incarnation(&url, native_id, &adopted, true).map_err(Fail::Client)?;
+    }
+    if let Some(id) = composed.resume_id {
+        client::assign_host_address(&url, id.0.0, &adopted, true).map_err(Fail::Client)?;
+    }
+    let argv = host::composed_launch_argv(&composed.dir, &composed.routing, &composed.argv)
+        .map_err(|e| Fail::Usage(e.to_string()))?;
+    let exit = host::run_argv_in_caller_terminal(&argv, &composed.dir)
         .map_err(|e| Fail::Usage(format!("the composed session could not start: {e}")))?;
-    Ok((dir_str, exit))
+    Ok((composed.dir.display().to_string(), exit))
 }
 
 /// One composed launch, ready for a submission arm: the routing, the
-/// exact workspace, the argv, the terminal title, and the resumed
-/// session's guard when the resume arm built one. Mechanics only -
-/// the host arm submits it, the same-terminal arm runs it.
+/// exact workspace, the argv, the terminal title, and the launch's
+/// identity facts - the fresh launch's pre-allocated native session
+/// id, or the resume target's birth record. Mechanics only - the host
+/// arm submits it, the same-terminal arm runs it.
 struct LaunchComposition {
-    routing: String,
+    routing: Vec<String>,
     dir: std::path::PathBuf,
     argv: Vec<String>,
-    title: String,
-    guard: Option<PathBuf>,
+    native_id: Option<String>,
+    resume_id: Option<saccade::IncarnationId>,
 }
 
 /// Compose one launch: the routing line, the exact workspace and
@@ -1953,36 +2213,27 @@ fn compose_launch(
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
     prompt: &[String],
-    launch_token: Option<&str>,
 ) -> Result<LaunchComposition, Fail> {
     let url = server_url(destination, "launch")?;
     let pi = host::pinned_pi().map_err(|e| Fail::Usage(e.to_string()))?;
     let repo = resolve_repo(cli)?;
     let label = host::command_label(&pi.display().to_string());
-    // routing rides the launch line: the integration reaches the
-    // tracker's server directly, the repo names the tracker besides,
-    // and the CLI path lets the session's own handoff helper call the
-    // controller door by name instead of guessing at a PATH
-    let mut routing = format!(
-        "SACCADE_ACTOR={} SACCADE_SERVER={} SACCADE_REPO={}",
-        host::shell_quote(&label),
-        host::shell_quote(&url),
-        host::shell_quote(&repo.display().to_string()),
-    );
+    // routing rides the launch environment: the integration reaches
+    // the tracker's server directly, the repo names the tracker
+    // besides, and the CLI path lets the session's own handoff helper
+    // call the controller door by name instead of guessing at a PATH.
+    // The words are env assignments, never shell: the direnv exec
+    // stage runs the composed session directly, no shell in between.
+    let mut routing = vec![
+        format!("SACCADE_ACTOR={label}"),
+        format!("SACCADE_SERVER={url}"),
+        format!("SACCADE_REPO={}", repo.display()),
+    ];
     if let Ok(exe) = std::env::current_exe() {
-        routing.push_str(&format!(
-            " SACCADE_CLI={}",
-            host::shell_quote(&exe.display().to_string())
-        ));
-    }
-    if let Some(token) = launch_token {
-        routing.push_str(&format!(
-            " SACCADE_LAUNCH_TOKEN={}",
-            host::shell_quote(token)
-        ));
+        routing.push(format!("SACCADE_CLI={}", exe.display()));
     }
     let prompt_text = prompt.join(" ");
-    let (dir, argv, title, handoff) = match (workspace, resume) {
+    let (dir, argv, native_id, resume_id) = match (workspace, resume) {
         (Some(dir), None) => {
             let dir = dir
                 .canonicalize()
@@ -1996,11 +2247,24 @@ fn compose_launch(
             // a recorded Cleaned workspace blocks ordinary use until an
             // explicit restore; unrelated directories pass untouched
             cleaned_guard(destination, &dir)?;
-            let mut argv = vec![pi.display().to_string()];
+            // the door pre-allocates the native session: pi creates the
+            // exact id at its first save, and the door births the
+            // incarnation itself, so identity and address exist at
+            // launch time - no attach handshake, no correlation token
+            let native_id = saccade::pi_session::generate_session_id();
+            let sessions = saccade::pi_session::sessions_dir(&repo);
+            let _ = std::fs::create_dir_all(&sessions);
+            let mut argv = vec![
+                pi.display().to_string(),
+                "--session-id".to_string(),
+                native_id.clone(),
+                "--session-dir".to_string(),
+                sessions.display().to_string(),
+            ];
             if !prompt_text.is_empty() {
                 argv.push(prompt_text);
             }
-            (dir, argv, "sac launch".to_string(), None)
+            (dir, argv, Some(native_id), None)
         }
         (None, Some(token)) => {
             let loadout = loadout_of(destination)?;
@@ -2021,6 +2285,9 @@ fn compose_launch(
             let saccade::Incarnation::Native {
                 native_id,
                 saved_session,
+                address,
+                adopted,
+                ..
             } = &ctx.incarnation
             else {
                 return Err(Fail::Usage(format!(
@@ -2029,7 +2296,14 @@ fn compose_launch(
             };
             // strict resume: the saved file must exist and carry the
             // recorded native id - a missing file refuses, it never
-            // fabricates fresh state under the same identity
+            // fabricates fresh state under the same identity. A
+            // launch-door birth binds its locator at pi's first save; an
+            // unbound birth has nothing saved, so nothing can resume.
+            let Some(saved_session) = saved_session else {
+                return Err(Fail::Usage(format!(
+                    "{token}'s saved session locator is not bound yet: the session has not saved, so there is nothing to resume"
+                )));
+            };
             let header = saccade::pi_session::read_header(saved_session.as_path())
                 .map_err(|e| Fail::Usage(format!("{token}'s saved session cannot resume: {e}")))?;
             if header.id != native_id.as_str() {
@@ -2039,10 +2313,17 @@ fn compose_launch(
                     native_id.as_str()
                 )));
             }
-            let dir = std::path::PathBuf::from(&header.cwd);
+            // the recorded change is the workspace authority: a switch
+            // records where the session lives and the file is never
+            // rewritten to follow it; the header cwd answers only for
+            // sessions whose fold holds no change
+            let dir = match world.workspace_changes.get(&id) {
+                Some(change) => std::path::PathBuf::from(change.worktree.as_path()),
+                None => std::path::PathBuf::from(&header.cwd),
+            };
             if !dir.is_dir() {
                 return Err(Fail::Usage(format!(
-                    "the saved session's workspace {} is missing; resume starts from the header cwd, never a substitute",
+                    "the workspace {} is missing; resume starts from the recorded workspace, never a substitute",
                     dir.display()
                 )));
             }
@@ -2064,31 +2345,30 @@ fn compose_launch(
             if !prompt_text.is_empty() {
                 argv.push(prompt_text);
             }
-            // busy and unknown preflight, before anything is submitted:
-            // a preexisting live holder is a live session, never proof
-            // this unsubmitted child has resumed, and an unprobeable
-            // guard leaves liveness unknown - both refuse here rather
-            // than duplicate the session. The handoff observation below
-            // rides out as the door's own evidence, after the host has
-            // the submission.
-            let guard = saccade::activate::guard_path(&repo, native_id.as_str());
-            if let Some(base) = guard.parent() {
-                let _ = std::fs::create_dir_all(base);
-            }
-            match saccade::activate::guard_held(&guard) {
-                Some(false) => {}
-                Some(true) => {
+            // liveness preflight, before anything is submitted - and
+            // only for the launched kind: a launched terminal dies with
+            // its session, so a live terminal names a live session. An
+            // adopted pane is the caller's own program and outlives the
+            // session, so terminal liveness is never session liveness
+            // for it - the native duplicate-attach refusal is that
+            // kind's backstop. An addressless pre-contract incarnation has
+            // no host evidence at all: the resume proceeds without a
+            // liveness refusal, and a live twin is caught at the
+            // resumed session's attach - the pre-B migration is exit
+            // + resume. Live refuses the launch - a duplicate is
+            // never submitted - and unknown names its evidence rather
+            // than reading as free.
+            if let Some(carried) = address.as_ref().filter(|_| !*adopted).cloned() {
+                let host = saccade::herdr::HerdrCore::resolved()
+                    .map_err(|e| Fail::Usage(e.to_string()))?;
+                let answer = host.live(&saccade::host_contract::HostAddress(carried.clone()));
+                if let saccade::host_contract::Liveness::Live = answer {
                     return Err(Fail::Usage(format!(
-                        "{token}'s session is live: its guard is already held, so no launch is submitted; exit that session first"
+                        "{token}'s session is live at its recorded host address; no launch is submitted; exit that session first"
                     )));
                 }
-                None => {
-                    return Err(Fail::Usage(
-                        "the session's guard cannot be probed, so liveness is unknown; no launch is submitted".into(),
-                    ));
-                }
             }
-            (dir, argv, format!("sac resume {token}"), Some(guard))
+            (dir, argv, None, Some(id))
         }
         _ => {
             return Err(Fail::Usage(
@@ -2102,8 +2382,8 @@ fn compose_launch(
         routing,
         dir,
         argv,
-        title,
-        guard: handoff,
+        native_id,
+        resume_id,
     })
 }
 
@@ -2118,47 +2398,28 @@ fn launch_native(
     workspace: Option<&std::path::Path>,
     resume: Option<&str>,
     prompt: &[String],
-    launch_token: Option<&str>,
 ) -> Result<(String, String), Fail> {
-    let composed = compose_launch(cli, destination, workspace, resume, prompt, launch_token)?;
-    let (dir_str, command) = launch_line(&composed)?;
-    let terminal = host::submit_terminal(&dir_str, &composed.title, &command)
+    let composed = compose_launch(cli, destination, workspace, resume, prompt)?;
+    let url = server_url(destination, "launch")?;
+    let argv = host::composed_launch_argv(&composed.dir, &composed.routing, &composed.argv)
         .map_err(|e| Fail::Usage(e.to_string()))?;
-    // the rigorous handoff, after the submission: this door's success
-    // is the launched session's guard being held - observed, bounded,
-    // never assumed, and terminal-create success alone proves neither
-    // attach nor execution. A late boot holds the door until it lands
-    // or the bound passes; a bound pass reports failure and the mail
-    // stays relaunchable, with a late attacher refused at its own
-    // attach by the live holder's guard.
-    if let Some(guard) = composed.guard {
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(saccade::activate::GUARD_HANDOFF_SECS);
-        loop {
-            match saccade::activate::guard_held(&guard) {
-                Some(true) => break,
-                Some(false) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(std::time::Duration::from_millis(400));
-                }
-                _ => {
-                    return Err(Fail::Usage(
-                        "the resumed session's guard was not taken within its bound; the launch stays unobserved".into(),
-                    ));
-                }
-            }
-        }
+    // the host ask is one verb: the adapter returns the opaque address
+    // synchronously, and the launch never supervises what it launched
+    let host = saccade::herdr::HerdrCore::resolved().map_err(|e| Fail::Usage(e.to_string()))?;
+    let address = host
+        .launch(&composed.dir, &argv)
+        .map_err(|e| Fail::Usage(e.to_string()))?;
+    let host_address = address.0.clone();
+    // the door births the fresh identity itself, before pi's first
+    // save; a resume carries its identity and records the address move
+    if let Some(native_id) = composed.native_id {
+        client::register_incarnation(&url, &native_id, &host_address, false)
+            .map_err(Fail::Client)?;
     }
-    Ok((dir_str, terminal))
-}
-
-/// The line the executing shell runs: the directory re-validated (a
-/// launch selects, it never creates) and direnv resolved before either
-/// arm acts - the same-terminal arm runs it here, the host arm submits
-/// it to a terminal the host creates.
-fn launch_line(composed: &LaunchComposition) -> Result<(String, String), Fail> {
-    let dir_str = composed.dir.display().to_string();
-    host::launch_command(Path::new(&dir_str), &composed.routing, &composed.argv)
-        .map_err(|e| Fail::Usage(e.to_string()))
+    if let Some(id) = composed.resume_id {
+        client::assign_host_address(&url, id.0.0, &host_address, false).map_err(Fail::Client)?;
+    }
+    Ok((composed.dir.display().to_string(), host_address))
 }
 
 /// The cleaned-workspace launch guard: a recorded workspace whose
@@ -2198,38 +2459,6 @@ fn cleaned_guard(destination: &Destination, dir: &Path) -> Result<(), Fail> {
         saccade::workspace::LifecycleAddress::Unrecorded => {}
     }
     Ok(())
-}
-
-/// A fresh random launch token: correlation only - it names the
-/// launcher's interest, rides the launch environment where the session
-/// can see it, and confers nothing on its holder. Never a record.
-fn launch_token() -> String {
-    let mut bytes = [0u8; 16];
-    // exactly sixteen bytes: /dev/urandom never ends, so anything
-    // read-to-EOF here would allocate forever
-    let filled = std::fs::File::open("/dev/urandom")
-        .is_ok_and(|mut file| std::io::Read::read_exact(&mut file, &mut bytes).is_ok());
-    if !filled {
-        // no urandom: nanos and pid distinguish concurrent doors well
-        // enough for an in-memory cache, and the door refuses on a
-        // collision anyway
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let mix = nanos ^ ((std::process::id() as u128) << 64);
-        for (at, piece) in bytes.chunks_mut(8).enumerate() {
-            let shift = 8 * at;
-            for (i, slot) in piece.iter_mut().enumerate() {
-                *slot = (mix >> (shift + 8 * i)) as u8;
-            }
-        }
-    }
-    let mut token = String::with_capacity(32);
-    for b in bytes {
-        token.push_str(&format!("{b:02x}"));
-    }
-    token
 }
 
 /// What an ask launch did: the newborn's address and the question's,
@@ -2300,23 +2529,29 @@ fn ask_run(
         .incarnation_num(creator)
         .map(|n| format!("i-{n}"))
         .unwrap_or_else(|| format!("seq {}", creator.0.0));
-    let token = launch_token();
-    let (dir_str, terminal) =
-        launch_native(cli, destination, Some(workspace), None, &[], Some(&token))?;
-    // the newborn announces itself through the launch cache; the poll
-    // is transport with a hard stop, not a subscription
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let (birth, num) = loop {
-        match client::launch_of(&url, &token).map_err(Fail::Client)? {
-            Some(found) => break found,
-            None if std::time::Instant::now() >= deadline => {
-                return Err(Fail::Usage(format!(
-                    "the composed session at {dir_str} did not register within 20s (terminal {terminal}); nothing was sent - it may still register, and a later `sac send --to` reaches it"
-                )));
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(400)),
-        }
+    // the launch births the newborn itself: identity and address exist
+    // at launch time, and the question's recipient is never polled for
+    let (dir_str, terminal) = launch_native(cli, destination, Some(workspace), None, &[])?;
+    let loadout = loadout_of(destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "launch --ask needs the world; the log will not fold".into(),
+        ));
     };
+    let newborn = world
+        .incarnations
+        .iter()
+        .find(|(_, ctx)| ctx.incarnation.address() == Some(terminal.as_str()))
+        .map(|(id, _)| *id)
+        .ok_or_else(|| {
+            Fail::Usage(format!(
+                "the launched session at {dir_str} carries no birth record (address {terminal}); nothing was sent - a later `sac send --to` reaches it by number"
+            ))
+        })?;
+    let num = world
+        .incarnation_num(newborn)
+        .expect("the fold just resolved this incarnation");
+    let birth = newborn.0.0;
     // the question records first, then rides the same attempt as any
     // send: a refused or unacknowledged submission is disclosed here,
     // never retried behind the door
@@ -2446,8 +2681,8 @@ fn workspace_new_door(
 
 /// `sac workspace switch`: the stopped-session change through the
 /// server, then an optional resume through the ordinary door. The
-/// change record's truth is the header move; the resume is a separate
-/// launch whose failure leaves that fact standing.
+/// change record is the whole effect; the resume is a separate launch
+/// whose failure leaves that fact standing.
 fn workspace_switch_door(
     cli: &Cli,
     destination: &Destination,
@@ -2473,7 +2708,7 @@ fn workspace_switch_door(
     let reply = client::change_workspace(&url, num, to).map_err(Fail::Client)?;
     let record = reply.records.first().map(|r| r.seq);
     let changed = format!(
-        "i-{num} workspace changed - saved cwd {from} -> {to}{record}",
+        "i-{num} workspace changed - {from} -> {to}{record}",
         num = reply.num,
         from = reply.from,
         to = reply.to,
@@ -2481,11 +2716,10 @@ fn workspace_switch_door(
     );
     if resume {
         // the change fact already stands; a failed launch says so
-        let (dir_str, terminal) =
-            match launch_native(cli, destination, None, Some(token), prompt, None) {
-                Ok(launch) => launch,
-                Err(e) => return Err(launch_failed(&changed, e)),
-            };
+        let (dir_str, terminal) = match launch_native(cli, destination, None, Some(token), prompt) {
+            Ok(launch) => launch,
+            Err(e) => return Err(launch_failed(&changed, e)),
+        };
         if cli.json {
             return Ok(serde_json::to_string_pretty(&serde_json::json!({
                 "changed": true,
@@ -2711,14 +2945,12 @@ fn launch_new_door(
                 }),
                 Err(e) => return Err(launch_failed(&provisioned, e)),
             },
-            None => {
-                match launch_native(cli, destination, Some(Path::new(&path)), None, prompt, None) {
-                    Ok((dir_str, terminal)) => {
-                        serde_json::json!({"workspace": dir_str, "terminal": terminal})
-                    }
-                    Err(e) => return Err(launch_failed(&provisioned, e)),
+            None => match launch_native(cli, destination, Some(Path::new(&path)), None, prompt) {
+                Ok((dir_str, terminal)) => {
+                    serde_json::json!({"workspace": dir_str, "terminal": terminal})
                 }
-            }
+                Err(e) => return Err(launch_failed(&provisioned, e)),
+            },
         };
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "provisioned": birth,
@@ -2731,9 +2963,9 @@ fn launch_new_door(
             Ok(door) => door,
             Err(e) => return Err(launch_failed(&provisioned, e)),
         },
-        None => match launch_native(cli, destination, Some(Path::new(&path)), None, prompt, None) {
+        None => match launch_native(cli, destination, Some(Path::new(&path)), None, prompt) {
             Ok((dir_str, terminal)) => format!(
-                "integrated pi launching at {dir_str} - terminal {terminal}\n  the session registers itself at start; `sac messages` reads its mailbox once it has"
+                "integrated pi launching at {dir_str} - address {terminal}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one"
             ),
             Err(e) => return Err(launch_failed(&provisioned, e)),
         },

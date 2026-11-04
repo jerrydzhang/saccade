@@ -399,6 +399,31 @@ fn post_json<T: serde::de::DeserializeOwned>(
     }
 }
 
+/// A POST whose 200 reply carries no body worth reading: the door
+/// cares that the record landed, and failures surface by code.
+fn post_json_unit(url: &str, path: &str, body: serde_json::Value) -> Result<(), ClientFail> {
+    let mut response = ureq::post(&format!("{url}{path}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(body)
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    let status = response.status().as_u16();
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    if status == 200 {
+        Ok(())
+    } else {
+        Err(error_of(&text))
+    }
+}
+
 fn error_of(text: &str) -> ClientFail {
     #[derive(Deserialize)]
     struct ErrorDetail {
@@ -725,99 +750,44 @@ pub fn reconcile_workspaces(url: &str, apply: bool) -> Result<ReconcileReply, Cl
     )
 }
 
-/// Which incarnations hold a live delivery connection right now: the
-/// activation decision's operational input, never a liveness proof -
-/// absence is not proof a native process exited.
-pub fn bridge_connections(url: &str) -> Result<Vec<usize>, ClientFail> {
-    #[derive(Deserialize)]
-    struct Entry {
-        incarnation: usize,
-    }
-    #[derive(Deserialize)]
-    struct BridgeBody {
-        incarnations: Vec<Entry>,
-    }
-    let mut response = ureq::get(&format!("{url}/api/v1/native/bridge"))
-        .config()
-        .http_status_as_error(false)
-        .build()
-        .call()
-        .map_err(|_| ClientFail::ServerUnreachable {
-            url: url.to_string(),
-        })?;
-    let status = response.status().as_u16();
-    let text = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|_| ClientFail::ServerUnreachable {
-            url: url.to_string(),
-        })?;
-    if status != 200 {
-        return Err(error_of(&text));
-    }
-    let body: BridgeBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
-        code: "malformed_response".into(),
-        detail: e.to_string(),
-        message: None,
-    })?;
-    Ok(body
-        .incarnations
-        .into_iter()
-        .map(|e| e.incarnation)
-        .collect())
+/// The launch door's own birth: the pre-allocated native id and the
+/// opaque host address, recorded before pi's first save. The
+/// association exists at launch time - no correlation token, no
+/// attach wait.
+pub fn register_incarnation(
+    url: &str,
+    native_id: &str,
+    address: &str,
+    adopted: bool,
+) -> Result<(), ClientFail> {
+    post_json_unit(
+        url,
+        "/api/v1/incarnations/register",
+        serde_json::json!({
+            "native_id": native_id,
+            "address": address,
+            "adopted": adopted,
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
 }
 
-/// Which incarnation registered under a compose launch token, if any:
-/// how a launching door learns the birth it caused. None when the
-/// token is unknown or expired - the session may still register later.
-pub fn launch_of(url: &str, token: &str) -> Result<Option<(usize, usize)>, ClientFail> {
-    #[derive(Deserialize)]
-    struct LaunchBody {
-        incarnation: usize,
-        num: usize,
-    }
-    let mut response = ureq::get(&format!(
-        "{url}/api/v1/native/launch?token={}",
-        urlencoding_lite(token)
-    ))
-    .config()
-    .http_status_as_error(false)
-    .build()
-    .call()
-    .map_err(|_| ClientFail::ServerUnreachable {
-        url: url.to_string(),
-    })?;
-    let status = response.status().as_u16();
-    let text = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|_| ClientFail::ServerUnreachable {
-            url: url.to_string(),
-        })?;
-    if status == 404 {
-        return Ok(None);
-    }
-    if status != 200 {
-        return Err(error_of(&text));
-    }
-    let body: LaunchBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
-        code: "malformed_response".into(),
-        detail: e.to_string(),
-        message: None,
-    })?;
-    Ok(Some((body.incarnation, body.num)))
-}
-
-/// Tokens are self-generated hex: percent-encoding is defense in depth
-/// for the one reserved character a query cannot carry bare.
-fn urlencoding_lite(token: &str) -> String {
-    let mut out = String::with_capacity(token.len());
-    for b in token.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
+/// The association's address moves with a relaunch: the same
+/// incarnation, another terminal.
+pub fn assign_host_address(
+    url: &str,
+    incarnation: usize,
+    address: &str,
+    adopted: bool,
+) -> Result<(), ClientFail> {
+    post_json_unit(
+        url,
+        "/api/v1/incarnations/address",
+        serde_json::json!({
+            "incarnation": incarnation,
+            "address": address,
+            "adopted": adopted,
+            "client": env!("CARGO_PKG_VERSION"),
+        }),
+    )
 }

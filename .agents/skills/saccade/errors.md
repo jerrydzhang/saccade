@@ -10,6 +10,18 @@ finding - name it on the thread before proceeding.
 - `identity_fallback` - a write with no terminal on stdin, stdout, or
   stderr and no `SACCADE_ACTOR` refuses before any write lands (`--actor`
   rides the terminal arm); export `SACCADE_ACTOR=<name>`.
+- `recipient_unaddressed` - the recipient carries no host address: a
+  pre-contract session takes no inbound submission; the sanctioned
+  migration is exit + resume. The message stays pending as evidence.
+- `recipient_not_live` - the host names no live terminal at the
+  recipient's recorded address; the message stays pending and the
+  detail carries the host's own answer.
+- `submission_refused` / `submission_unknown` / `submission_unresolved` -
+  the host refused the submission, or its answer cannot be read, or
+  its window expired unresolved; the message stays pending and the
+  detail names the evidence. Nothing retries.
+- `host_unavailable` - no herdr-core host could be resolved to attempt
+  the submission; the message stays pending.
 - `invalid_task_id` - no such task; ids are exact
   `t-N` tokens, not searches.
 - `invalid_comment_id` - the `c-N` target names no comment; a task birth
@@ -69,14 +81,11 @@ finding - name it on the thread before proceeding.
 - `workspace_checkout_mismatch` - the path holds bytes git does not
   register as this repo's worktree, or a worktree on another branch,
   bare or detached; no forced checkout, reset, or overwrite runs.
-- `workspace_terminals_open` - the host still names live terminals
-  for the workspace after its bound; no checkout removal ran.
-- `workspace_host_unverified` - the host gave no verified terminal or
-  presence answer within its bound; arbitrary host errors are never
-  read as absence or closure. Nothing further ran; retry.
-- `workspace_still_listed` - the host still lists the workspace after
-  the checkout removal; the Cleaned fact lands only on verified
-  visible absence.
+- `workspace_terminals_open` - the host still names terminals for the
+  workspace after the closes; no checkout removal ran.
+- `workspace_host_unverified` - a close named no finished state, or
+  the host's terminal table could not be read; arbitrary host errors
+  are never read as absence or closure. Nothing further ran; retry.
 - `workspace_absence_unverified` - the path or the git registration
   still stands after the removal attempt; inspect and retry.
 - `workspace_cleaned` - the launch, resume, or switch target is a
@@ -84,28 +93,26 @@ finding - name it on the thread before proceeding.
   explicit `sac workspace restore`.
 - `workspace_primary_refused` - the path is the primary checkout;
   cleanup never touches it.
-- `workspace_host_list_failed` / `workspace_host_close_failed` /
-  `workspace_host_show_failed` - the host's terminal list, terminal
-  close, or worktree show could not be asked or read; the detail
-  carries what answered.
-- `saved_session_missing` - the saved session file a change or resume
+- `workspace_host_list_failed` - the host's terminal table could not
+  be asked or read; the detail carries what answered. A row the
+  adapter cannot fully read fails the whole answer - uncertainty is
+  never absence.
+- `saved_session_missing` - the saved session locator is not bound
+  yet (the session has not saved), or the file a change or resume
   names does not exist; only the exact recorded association resolves.
-- `saved_session_mismatch` - the saved session file carries another
-  session's id; a reused native id never rebinds to other history.
+- `saved_session_mismatch` - a registration reused a native id against
+  other history; an id never rebinds to a session it was not born
+  with.
 - `saved_session_unreadable` - the saved session exists but its
-  header cannot be read or validated; nothing was moved.
-- `session_live` - the session's launch guard is held by a live
-  process; exit that session first. Workspace switching moves stopped
-  sessions only.
-- `session_quiescence_unknown` - the launch guard could not be
-  probed, so liveness is unknown; nothing was moved.
-- `session_activation_in_flight` - another activation holds the
-  session's lock; try again when it settles.
-- `session_lock_unavailable` - the session's activation lock file
-  could not be opened. Infrastructure; nothing was moved.
+  header cannot be read or validated; nothing was recorded.
+- `session_live` - the host's liveness answer names a live terminal at
+  the recorded address; exit that session first. Workspace switching
+  moves stopped sessions only.
+- `session_quiescence_unknown` - the host's liveness answer could not
+  be read, so quiescence is unknown; nothing was recorded.
 - `storage` - the database refused a write. Where an effect (a
-  provisioned workspace, a moved session header) already happened, the
-  detail discloses what stands - the effect is not rolled back.
+  provisioned workspace) already happened, the detail discloses what
+  stands - the effect is not rolled back.
 - `workspace_effect` - a git effect failed; the detail carries git's
   own stderr.
 - `workspace_no_repo` - the serving edge resolved no repo root at boot,

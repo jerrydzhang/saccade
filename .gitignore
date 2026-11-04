@@ -39,3 +39,5 @@ web/node_modules/
 web/runs/
 web/harness/__pycache__/
 web/dist/
+mods/saccade/gpui-kit.d.ts
+mods/saccade/herdr.d.ts

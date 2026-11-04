@@ -25,11 +25,8 @@ import type {
 	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
-	envelopeText,
 	handoffEnvelope,
 	handoffHelperScript,
-	headerCwd,
-	incomingFor,
 	numToken,
 	takeGuardLock,
 	userText,
@@ -75,42 +72,7 @@ test("an address is exactly the prefix and ASCII digits", () => {
 	assert.equal(numToken("i-9007199254740991", "i-"), 9007199254740991);
 });
 
-test("the envelope carries the machine-supplied origin in ASCII", () => {
-	const plain = mail({});
-	assert.equal(
-		envelopeText(plain),
-		"[saccade message m-3 | from i-1]\n\nthe smoke request",
-	);
-	const full = mail({ reply_to: 5, task: 2, num: 4 });
-	assert.equal(
-		envelopeText(full),
-		"[saccade message m-4 | from i-1 | replying to m-5 | task t-2]\n\nthe smoke request",
-	);
-	// the body is user data riding byte for byte
-	const unicode = mail({ body: "r\u00e9sum\u00e9 \u2014 \u2713" });
-	assert.ok(envelopeText(unicode).endsWith("r\u00e9sum\u00e9 \u2014 \u2713"));
-});
 
-test("arrival filters on the addressee and the confirmed submission, self-addressed included", () => {
-	const incoming = [
-		// a confirmed arrival to me
-		mail({ seq: 1, state: "submitted", to: { seq: 0, num: 0 } }),
-		// outgoing archive: mine as sender, not mine to receive
-		mail({ seq: 2, state: "submitted", from: { seq: 0, num: 0, actor: "me" }, to: { seq: 1, num: 1 } }),
-		// recorded without a confirmed submission: evidence, never an
-		// arrival
-		mail({ seq: 3, state: "pending", to: { seq: 0, num: 0 } }),
-		// another incarnation's mail entirely
-		mail({ seq: 4, state: "submitted", to: { seq: 2, num: 2 } }),
-		// self-addressed: from me and to me is still incoming mail
-		mail({ seq: 5, state: "submitted", from: { seq: 0, num: 0, actor: "me" }, to: { seq: 0, num: 0 } }),
-	];
-	const mine = incomingFor(0, incoming);
-	assert.deepEqual(
-		mine.map((m) => m.seq),
-		[1, 5],
-	);
-});
 
 test("user text flattens string and block content", () => {
 	assert.equal(userText({ role: "user", content: "plain" }), "plain");
@@ -128,13 +90,37 @@ test("user text flattens string and block content", () => {
 
 type SessionEntryLike = { type: string; message?: { role: string; content: unknown } };
 
+// The guard sidecar lives beside the session file, so every fake
+// session file must sit in a real directory. One memoized mapping per
+// literal path: reload sequences name the same file and must land on
+// the same sidecar.
+const sessionFiles = new Map<string, string>();
+function realSessionFile(file: string): string {
+	// a path that already exists is its own real session file (the
+	// consumption fixtures write real ones); only the /sessions
+	// literals need a home
+	if (existsSync(file)) return file;
+	let real = sessionFiles.get(file);
+	if (real === undefined) {
+		const dir = mkdtempSync(join(tmpdir(), "sac-session-"));
+		real = join(dir, file.replaceAll("/", "_"));
+		sessionFiles.set(file, real);
+	}
+	return real;
+}
+
+// The sidecar guard path for a fake session file.
+function guardOf(file: string): string {
+	return `${realSessionFile(file)}.guard`;
+}
+
 class FakeSession {
 	entries: SessionEntryLike[] = [];
 	nativeId: string;
 	file: string | undefined;
 	constructor(nativeId: string, file: string | undefined) {
 		this.nativeId = nativeId;
-		this.file = file;
+		this.file = file === undefined ? undefined : realSessionFile(file);
 	}
 	getSessionId() {
 		return this.nativeId;
@@ -382,19 +368,10 @@ class FakePi implements ExtensionAPI {
 class FakeTracker {
 	attachments = new Map<string, { incarnation: number; num: number }>();
 	mailboxes = new Map<number, any[]>();
-	// the sender attempts' staged tasks, handed exactly once by the
-	// transport read - the wire's stage registry, mirrored
-	stages = new Map<number, any[]>();
-	submissions: Array<{ incarnation: number; message: number }> = [];
 	sent: any[] = [];
 	attachBodies: any[] = [];
 	attachFails = false;
-	// guard paths are pure in the native id within one tracker; the
-	// salt keeps different tests' retained guards from colliding
-	guardSalt = Math.random().toString(36).slice(2);
 	failNext = 0;
-	// parked bridge reads: held until a record lands or the test wakes them
-	parked: Array<() => void> = [];
 	// the records fold the /api/v1/records read returns, and the path the
 	// next provision births; payloads travel as the JSON itself
 	records: Array<{ seq: number; kind: string; payload: unknown }> = [];
@@ -425,26 +402,12 @@ class FakeTracker {
 		return { status, json: async () => body };
 	}
 
-	// wake parked transport reads without staging anything
-	wake() {
-		for (const resolve of this.parked.splice(0)) resolve();
-	}
-
 	// a landed record joins the mailbox: a descriptive read only, and
-	// no machinery delivers it - arrivals release waits, nothing more
+	// no machinery delivers it
 	land(incarnation: number, message: any) {
 		const box = this.mailboxes.get(incarnation) ?? [];
 		box.push(message);
 		this.mailboxes.set(incarnation, box);
-	}
-
-	// one sender attempt's staged task, woken immediately: the transport
-	// half of record-then-attempt
-	stage(incarnation: number, message: any) {
-		const box = this.stages.get(incarnation) ?? [];
-		box.push({ token: `tok-${message.seq}-${box.length}`, message });
-		this.stages.set(incarnation, box);
-		for (const wake of this.parked.splice(0)) wake();
 	}
 
 	handle = async (rawUrl: any, init?: any) => {
@@ -459,41 +422,18 @@ class FakeTracker {
 			if (this.attachFails) {
 				return this.reply({ error: { code: "degraded", detail: "down" } }, 503);
 			}
-			const guard =
-				"/tmp/saccade-fake-guard-" + this.guardSalt + "-" + body.native_id + ".guard";
 			const known = this.attachments.get(body.native_id);
 			if (known) {
-				return this.reply({ registered: false, ...known, guard });
+				return this.reply({ registered: false, ...known });
 			}
 			const fresh = { incarnation: this.attachments.size, num: this.attachments.size };
 			this.attachments.set(body.native_id, fresh);
-			return this.reply({ registered: true, ...fresh, guard });
+			return this.reply({ registered: true, ...fresh });
 		}
 		if (path === "/api/v1/messages") {
 			const url = new URL(String(rawUrl));
 			const incarnation = Number(url.searchParams.get("incarnation"));
 			return this.reply({ messages: this.mailboxes.get(incarnation) ?? [] });
-		}
-		if (path === "/api/v1/messages/deliver") {
-			const url = new URL(String(rawUrl));
-			const incarnation = Number(url.searchParams.get("incarnation"));
-			const waitMs = Number(url.searchParams.get("wait_ms") ?? 0);
-			const taken = (this.stages.get(incarnation) ?? []).splice(0);
-			this.stages.set(incarnation, []);
-			if (taken.length === 0 && waitMs > 0) {
-				// the parked transport read: held until a task is staged
-				await new Promise<void>((resolve) => this.parked.push(resolve));
-				// a woken read can still fail mid-cycle, like any
-				// transport: the stage survives for the reconnected read
-				if (this.failNext > 0) {
-					this.failNext -= 1;
-					throw new Error("tracker unreachable");
-				}
-				const again = (this.stages.get(incarnation) ?? []).splice(0);
-				this.stages.set(incarnation, []);
-				return this.reply({ deliveries: again });
-			}
-			return this.reply({ deliveries: taken });
 		}
 		if (path === "/api/v1/messages/send") {
 			this.sent.push(body);
@@ -502,10 +442,6 @@ class FakeTracker {
 				message: { seq, num: seq },
 				from: { seq: body.context?.scope?.incarnation ?? 0, num: body.context?.scope?.incarnation ?? 0 },
 			});
-		}
-		if (path === "/api/v1/messages/submit") {
-			this.submissions.push({ incarnation: body.incarnation, message: body.message });
-			return this.reply({});
 		}
 		if (path === "/api/v1/records") {
 			return this.reply({ records: this.records });
@@ -713,143 +649,11 @@ async function stop(h: Harness): Promise<void> {
 	await h.pi.emit("session_shutdown");
 }
 
-test("a start or resume drains nothing: recorded pending is evidence, never backlog", async () => {
-	const h = harness("sac-test-25", "/sessions/aaaa1111.jsonl");
-	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("sac-test-25", me);
-	// recorded mail without a confirmed submission sits in the mailbox
-	h.tracker.land(0, mail({ seq: 80, num: 9, state: "pending", to: { seq: 0, num: 0 } }));
-	h.tracker.land(0, mail({ seq: 81, num: 10, state: "pending", to: { seq: 0, num: 0 } }));
-	await h.pi.emit("session_start");
-	await tick();
-	await tick();
-	// the start queued nothing and confirmed nothing: no machinery
-	// carries a recorded-but-unsubmitted message, on resume or ever
-	assert.equal(h.pi.steers.length, 0);
-	assert.equal(h.tracker.submissions.length, 0);
-	// and a later boundary never revisits it
-	await h.pi.emit("agent_settled");
-	await tick();
-	assert.equal(h.pi.steers.length, 0);
-	assert.equal(h.tracker.submissions.length, 0);
-	await stop(h);
-});
 
-test("a staged delivery rides the steer queue, so it lands at the next turn boundary", async () => {
-	const h = harness("sac-test-24", "/sessions/aaaa1111.jsonl");
-	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("sac-test-24", me);
-	await h.pi.emit("session_start");
-	// the sender's attempt stages its task; the transport hands it once
-	h.tracker.stage(0, mail({ seq: 60, to: { seq: 0, num: 0 } }));
-	await tick();
-	// the assertion pins the delivery mode: steer at the next turn boundary, never the run-end followUp
-	assert.deepEqual(h.pi.modes, ["steer"]);
-	// the queue's acceptance confirmed the sender's attempt
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 60 }]);
-	await stop(h);
-});
 
-test("a released wait reports confirmed arrivals and queues nothing", async () => {
-	const h = harness("sac-test-01", "/sessions/aaaa1111.jsonl");
-	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("sac-test-01", me);
-	await h.pi.emit("session_start");
-	// the arrival already rode its sender's submission into the queue:
-	// a submitted record the mailbox carries
-	h.tracker.land(0, mail({ seq: 50, state: "submitted", to: { seq: 0, num: 0 } }));
-	const wait = h.tools("saccade_wait");
-	const result = await boundary(
-		wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) }),
-		8000,
-		"saccade_wait",
-	);
-	assert.ok(resultText(result).includes("received m-3"), resultText(result));
-	// the wait only reports: the sender's attempt did the queueing
-	assert.equal(h.pi.steers.length, 0);
-	assert.equal(h.tracker.submissions.length, 0);
-	// and a pending record never releases a wait: it is evidence
-	h.tracker.land(0, mail({ seq: 51, num: 4, state: "pending", to: { seq: 0, num: 0 } }));
-	await tick();
-	assert.equal(h.pi.steers.length, 0);
-	await stop(h);
-});
 
-test("the attempt confirms at queue acceptance, before any turn boundary", async () => {
-	const h = harness("sac-test-02", "/sessions/aaaa1111.jsonl");
-	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("sac-test-02", me);
-	await h.pi.emit("session_start");
-	h.tracker.stage(0, mail({ seq: 51, num: 9, to: { seq: 0, num: 0 } }));
-	await tick();
-	// the queue accepted the input: the submission is already recorded,
-	// with no boundary fired and nothing inserted into history
-	assert.equal(h.pi.steers.length, 1);
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 51 }]);
-	assert.equal(h.pi.session.entries.length, 0, "no saved history yet");
-	// the later run confirms nothing twice
-	await h.pi.runQueue();
-	await tick();
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 51 }]);
-	await stop(h);
-});
 
-test("the wait finishes cancelled when the call aborts, queueing nothing", async () => {
-	const h = harness("sac-test-03", "/sessions/aaaa1111.jsonl");
-	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("sac-test-03", me);
-	await h.pi.emit("session_start");
 
-	const wait = h.tools("saccade_wait");
-	const controller = new AbortController();
-	const running = wait.execute(
-		"t1",
-		{},
-		controller.signal,
-		undefined,
-		{ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) },
-	);
-	controller.abort();
-	const result = await boundary(running, 8000, "aborted saccade_wait");
-	assert.ok(
-		resultText(result).includes("the call was cancelled"),
-	);
-	assert.equal(h.pi.steers.length, 0);
-	await h.pi.runQueue();
-	await tick();
-	assert.equal(h.tracker.submissions.length, 0);
-	await stop(h);
-});
-
-test("reassociation cancels a held delivery: no stale recipient submits", async () => {
-	const h = harness("sac-test-04", "/sessions/aaaa1111.jsonl");
-	const me = { incarnation: 0, num: 0 };
-	h.tracker.attachments.set("sac-test-04", me);
-	await h.pi.emit("session_start");
-	// the queue holds the input, but no acceptance evidence is
-	// observable: the confirmation stays held
-	h.pi.silentAccept = true;
-	h.tracker.stage(0, mail({ seq: 52, to: { seq: 0, num: 0 } }));
-	await tick();
-	assert.equal(h.pi.steers.length, 1);
-	assert.equal(h.tracker.submissions.length, 0);
-
-	// a new native session cancels the old association's held delivery
-	h.pi.session = new FakeSession("bbbb2222", "/sessions/bbbb2222.jsonl");
-	await h.pi.emit("session_start");
-	assert.equal(h.tracker.attachments.size, 2);
-
-	// a later boundary never submits the cancelled delivery
-	h.pi.steers = [];
-	h.pi.session.entries.push({
-		type: "message",
-		message: { role: "user", content: envelopeText(mail({ seq: 52, to: { seq: 0, num: 0 } })) },
-	});
-	await h.pi.emit("agent_settled");
-	await tick();
-	assert.equal(h.tracker.submissions.length, 0);
-	await stop(h);
-});
 
 test("agent possession survives a tracker outage; injected actors win", async () => {
 	const h = harness("sac-test-05", "/sessions/aaaa1111.jsonl");
@@ -872,285 +676,18 @@ test("agent possession survives a tracker outage; injected actors win", async ()
 	await stop(h);
 });
 
-test("a running registered peer receives without any wait tool", async () => {
-	const h = harness("sac-test-06", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	assert.equal(h.pi.steers.length, 0);
-	// the bridge holds a parked transport read; the sender's staged
-	// task wakes it
-	h.tracker.stage(0, mail({ seq: 60, num: 5, to: { seq: 0, num: 0 } }));
-	await tick();
-	assert.equal(h.pi.steers.length, 1);
-	assert.ok(h.pi.steers[0].includes("[saccade message m-5"));
-	// the queue's acceptance confirmed the attempt with no boundary
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 60 }]);
-	await h.pi.runQueue();
-	await tick();
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 60 }]);
-	await stop(h);
-});
 
-test("a staged delivery queues once and the wait never queues a copy", async () => {
-	const h = harness("sac-test-07", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	h.tracker.stage(0, mail({ seq: 61, num: 6, to: { seq: 0, num: 0 } }));
-	await tick();
-	assert.equal(h.pi.steers.length, 1);
-	// the confirmed arrival releases the wait, whose report queues
-	// nothing: one envelope, one path
-	h.tracker.land(0, mail({ seq: 61, num: 6, state: "submitted", to: { seq: 0, num: 0 } }));
-	const wait = h.tools("saccade_wait");
-	const result = await boundary(
-		wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) }),
-		8000,
-		"saccade_wait",
-	);
-	assert.ok(resultText(result).includes("received m-6"));
-	assert.equal(h.pi.steers.length, 1);
-	await stop(h);
-});
 
-test("a failed transport read reconnects and the stage still delivers", async () => {
-	const h = harness("sac-test-08", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	// two deliveries ride woken parked reads
-	h.tracker.stage(0, mail({ seq: 62, num: 7, to: { seq: 0, num: 0 } }));
-	await tick();
-	h.tracker.stage(0, mail({ seq: 63, num: 8, to: { seq: 0, num: 0 } }));
-	await tick();
-	await tick();
-	assert.equal(h.pi.steers.length, 2);
-	assert.deepEqual(h.tracker.submissions, [
-		{ incarnation: 0, message: 62 },
-		{ incarnation: 0, message: 63 },
-	]);
-	// the loop's next read fails at entry, then the backoff runs: the
-	// attempt staged mid-failure still delivers on the reconnected read
-	h.tracker.failNext = 1;
-	await tick();
-	h.tracker.stage(0, mail({ seq: 64, num: 9, to: { seq: 0, num: 0 } }));
-	const deadline = Date.now() + 8000;
-	while (h.pi.steers.length < 3 && Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, 100));
-	}
-	assert.equal(h.pi.steers.length, 3, "the reconnected transport delivered");
-	await tick();
-	await tick();
-	assert.deepEqual(h.tracker.submissions, [
-		{ incarnation: 0, message: 62 },
-		{ incarnation: 0, message: 63 },
-		{ incarnation: 0, message: 64 },
-	]);
-	await stop(h);
-});
-test("session shutdown stops the bridge: nothing delivers after it", async () => {
-	const h = harness("sac-test-09", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	await h.pi.emit("session_shutdown");
-	assert.equal(h.pi.steers.length, 0);
-	h.tracker.stage(0, mail({ seq: 64, num: 9, to: { seq: 0, num: 0 } }));
-	await tick();
-	assert.equal(h.pi.steers.length, 0);
-	assert.equal(h.tracker.submissions.length, 0);
-});
 
-test("reassociation strands the old bridge: no stale delivery, no stale submit", async () => {
-	const h = harness("sac-test-10", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	// a new native session reassociates; the old bridge's parked read dies
-	h.pi.session = new FakeSession("bbbb2222", "/sessions/bbbb2222.jsonl");
-	await h.pi.emit("session_start");
-	assert.equal(h.tracker.attachments.size, 2);
-	// a staged task for the OLD incarnation finds no old bridge
-	h.tracker.stage(0, mail({ seq: 65, num: 1, to: { seq: 0, num: 0 } }));
-	await tick();
-	assert.equal(h.pi.steers.length, 0, "the old bridge delivered nothing");
-	assert.equal(h.tracker.submissions.length, 0);
-	// and the new association still delivers its own
-	h.tracker.stage(1, mail({ seq: 66, num: 2, to: { seq: 1, num: 1 } }));
-	await tick();
-	assert.equal(h.pi.steers.length, 1);
-	await stop(h);
-});
 
-test("an extension-source input releases the wait as the message, not as human input", async () => {
-	const h = harness("sac-test-11", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	const wait = h.tools("saccade_wait");
-	const running = wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
-	h.tracker.stage(0, mail({ seq: 70, num: 4, to: { seq: 0, num: 0 } }));
-	const queued = Date.now() + 8000;
-	while (h.pi.steers.length === 0 && Date.now() < queued) {
-		await new Promise((resolve) => setTimeout(resolve, 50));
-	}
-	// the queued envelope enters the session as an extension-source input
-	const envelope = h.pi.steers[0];
-	assert.ok(envelope, "the transport queued the delivery");
-	await h.pi.emit("input", { source: "extension", text: envelope });
-	const result = await boundary(running, 8000, "saccade_wait");
-	const text = resultText(result);
-	assert.ok(text.includes("received m-4"), text);
-	assert.ok(!text.includes("human"), `mislabelled as human: ${text}`);
-	await stop(h);
-});
 
-test("interactive input keeps the human wording and no correlation", async () => {
-	const h = harness("sac-test-12", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	const wait = h.tools("saccade_wait");
-	const running = wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
-	await tick();
-	await h.pi.emit("input", { source: "interactive", text: "typing over it" });
-	const result = await boundary(running, 8000, "saccade_wait");
-	const text = resultText(result);
-	assert.ok(text.includes("native human input arrived"), text);
-	assert.equal(h.pi.steers.length, 0);
-	await stop(h);
-});
 
-test("a refused send drops at a boundary: no confirmation, no redelivery", async () => {
-	const h = harness("sac-test-13", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	h.pi.failNextSend = 1;
-	h.tracker.stage(0, mail({ seq: 71, num: 5, to: { seq: 0, num: 0 } }));
-	await tick();
-	await tick();
-	// the refusal is invisible to the extension (void + error sink):
-	// nothing queued, and no promise ever resolved or rejected here
-	assert.equal(h.pi.steers.length, 0, "the refused send queued nothing");
-	assert.ok(h.pi.errors.length > 0, "the runtime saw the failure");
-	assert.equal(h.tracker.submissions.length, 0, "no evidence, no confirmation");
-	// the session is idle with nothing natively pending: the boundary
-	// settles the held delivery as refused, and nothing redelivers it
-	await h.pi.emit("input", { source: "interactive", text: "fixed the auth" });
-	await tick();
-	await tick();
-	assert.equal(h.pi.steers.length, 0, "a refused delivery never requeues");
-	assert.equal(h.tracker.submissions.length, 0);
-	await stop(h);
-});
 
-test("a confirmed delivery stays submitted when the runtime later discards it", async () => {
-	const h = harness("sac-test-14", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	h.tracker.stage(0, mail({ seq: 72, num: 6, to: { seq: 0, num: 0 } }));
-	await tick();
-	assert.equal(h.pi.steers.length, 1);
-	// the queue's acceptance already confirmed the attempt
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 72 }]);
-	// the runtime discards the input before any run: idle, nothing
-	// pending, and the envelope never reaches saved history
-	h.pi.steers = [];
-	h.pi.idle = true;
-	h.pi.pendingNative = false;
-	await h.pi.emit("agent_settled");
-	await tick();
-	// the record stands - the recipient reads it from the mailbox -
-	// and nothing redelivers or retracts
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 72 }]);
-	assert.equal(h.pi.steers.length, 0);
-	await stop(h);
-});
 
-test("a receipt-less delivery never confirms from later history", async () => {
-	const h = harness("sac-test-15", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	// the queue took the input, but the receipt never fired: history
-	// outside the bounded attempt is inadmissible as acceptance
-	h.pi.silentAccept = true;
-	h.tracker.stage(0, mail({ seq: 73, num: 7, to: { seq: 0, num: 0 } }));
-	await tick();
-	await tick();
-	assert.equal(h.pi.steers.length, 1);
-	assert.equal(h.tracker.submissions.length, 0, "no receipt, no confirmation");
-	// the envelope lands in saved history: the record still reads
-	// nothing - history never substitutes for the per-call receipt
-	h.pi.session.entries.push({
-		type: "message",
-		message: { role: "user", content: h.pi.steers[0] },
-	});
-	await h.pi.emit("agent_settled");
-	await tick();
-	assert.deepEqual(h.tracker.submissions, []);
-	await stop(h);
-});
 
-test("unrelated queued content never confirms a rejected delivery", async () => {
-	const h = harness("sac-test-26", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	// unrelated input is already queued when our delivery is refused
-	h.pi.pendingNative = true;
-	h.pi.failNextSend = 1;
-	h.tracker.stage(0, mail({ seq: 74, num: 8, to: { seq: 0, num: 0 } }));
-	await tick();
-	await tick();
-	// ours produced no receipt and the unrelated entry is not ours to
-	// confirm: nothing lands
-	assert.equal(h.pi.steers.length, 0);
-	assert.equal(h.tracker.submissions.length, 0);
-	// and the refused delivery drops at the idle boundary
-	await h.pi.emit("agent_settled");
-	await tick();
-	assert.equal(h.tracker.submissions.length, 0);
-	await stop(h);
-});
 
-test("a busy accept confirms at queue time without waiting for the turn", async () => {
-	const h = harness("sac-test-27", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	// the recipient is mid-run when the delivery arrives: the steer
-	// queues and the receipt names queued
-	h.pi.idle = false;
-	h.tracker.stage(0, mail({ seq: 75, num: 9, to: { seq: 0, num: 0 } }));
-	await tick();
-	await tick();
-	assert.equal(h.pi.steers.length, 1);
-	// confirmed at queue time: the turn never had to finish
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 75 }]);
-	await stop(h);
-});
 
-test("an idle accept confirms at run start without waiting for the turn", async () => {
-	const h = harness("sac-test-28", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	h.tracker.stage(0, mail({ seq: 76, num: 10, to: { seq: 0, num: 0 } }));
-	await tick();
-	await tick();
-	// the receipt names started: the run's own input, accepted at run
-	// start, confirmed before any assistant output
-	assert.deepEqual(h.tracker.submissions, [{ incarnation: 0, message: 76 }]);
-	await stop(h);
-});
 
-test("another extension's input yields our wait with generic native wording", async () => {
-	const h = harness("sac-test-16", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	const wait = h.tools("saccade_wait");
-	const running = wait.execute("t1", {}, new AbortController().signal, undefined, { ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
-	await tick();
-	// not our envelope: another native extension's message
-	await h.pi.emit("input", {
-		source: "extension",
-		text: "[some other extension] probe",
-	});
-	const result = await boundary(running, 8000, "saccade_wait");
-	const text = resultText(result);
-	assert.ok(text.includes("native input arrived through the integration"), text);
-	assert.ok(!text.includes("human"), `fabricated human origin: ${text}`);
-	assert.ok(!text.includes("received m-"), `fabricated correlation: ${text}`);
-	assert.equal(h.pi.steers.length, 0);
-	await stop(h);
-});
-
-test("the attach carries the launch token it was launched with", async () => {
-	process.env.SACCADE_LAUNCH_TOKEN = "launch-abc123";
-	const h = harness("sac-test-17", "/sessions/aaaa1111.jsonl");
-	await h.pi.emit("session_start");
-	assert.equal(h.tracker.attachBodies.length, 1);
-	assert.equal(h.tracker.attachBodies[0].launch_token, "launch-abc123");
-	delete process.env.SACCADE_LAUNCH_TOKEN;
-	await stop(h);
-});
 
 test("the declared task anchors scope; an explicit task argument is message context", async () => {
 	process.env.SACCADE_ACTOR = "pi";
@@ -1259,8 +796,7 @@ test("the guard take classifies by the documented flock contract", () => {
 
 test("a transient tracker outage across reload keeps the exact-session guard held", async () => {
 	const h = harness("reload-guard0", "/sessions/reload-guard.jsonl", "pi", new FakeTracker());
-	const guard =
-		"/tmp/saccade-fake-guard-" + h.tracker.guardSalt + "-reload-guard0.guard";
+	const guard = guardOf("/sessions/reload-guard.jsonl");
 	await h.pi.emit("session_start");
 	assert.equal(probeHeld(guard), true, "the first attach holds the session's guard");
 	// the real reload sequence: shutdown, then a start whose attach
@@ -1283,33 +819,21 @@ test("a transient tracker outage across reload keeps the exact-session guard hel
 	await stop(h);
 });
 
-test("a protocol-launched boot that cannot verify refuses before model work", async () => {
-	process.env.SACCADE_LAUNCH_TOKEN = "boot-token";
-	const h = harness("launch-outage0", "/sessions/launch-outage.jsonl", "pi", new FakeTracker());
-	try {
-		h.tracker.attachFails = true;
-		await h.pi.emit("session_start");
-		assert.equal(h.pi.shutdowns, 1, "the unverified launched boot shuts down");
-	} finally {
-		delete process.env.SACCADE_LAUNCH_TOKEN;
-	}
-	await stop(h);
-});
 
 test("a reload to a different native session releases the old session's guard", async () => {
 	const h = harness("switch-old0", "/sessions/switch-old.jsonl", "pi", new FakeTracker());
-	const guardOf = (id: string) =>
-		"/tmp/saccade-fake-guard-" + h.tracker.guardSalt + "-" + id + ".guard";
+	const oldGuard = guardOf("/sessions/switch-old.jsonl");
+	const newGuard = guardOf("/sessions/switch-new.jsonl");
 	await h.pi.emit("session_start");
-	assert.equal(probeHeld(guardOf("switch-old0")), true, "the old session's guard is held");
+	assert.equal(probeHeld(oldGuard), true, "the old session's guard is held");
 	h.pi.session = new FakeSession("switch-new0", "/sessions/switch-new.jsonl");
 	await h.pi.emit("session_start");
 	assert.equal(
-		probeHeld(guardOf("switch-old0")),
+		probeHeld(oldGuard),
 		false,
 		"the old session's guard released with the identity change",
 	);
-	assert.equal(probeHeld(guardOf("switch-new0")), true, "the new session's guard is held");
+	assert.equal(probeHeld(newGuard), true, "the new session's guard is held");
 	await stop(h);
 });
 
@@ -1317,8 +841,7 @@ test("a fresh factory after shutdown adopts the held exact-session guard", async
 	// proof level: fresh factory, same module (cached-factory reload path); kernel evidence
 	const shared = new FakeTracker();
 	const first = harness("adopt-guard0", "/sessions/adopt-guard.jsonl", "pi", shared);
-	const guard =
-		"/tmp/saccade-fake-guard-" + shared.guardSalt + "-adopt-guard0.guard";
+	const guard = guardOf("/sessions/adopt-guard.jsonl");
 	await first.pi.emit("session_start");
 	assert.equal(probeHeld(guard), true, "the first instance holds the guard");
 	await first.pi.emit("session_shutdown", { reason: "reload" });
@@ -1345,8 +868,7 @@ test("a fresh factory after shutdown adopts the held exact-session guard", async
 test("the guard registry survives a full module re-evaluation", async () => {
 	// proof level: fresh module re-evaluation (jiti moduleCache:false shape); kernel evidence
 	const shared = new FakeTracker();
-	const guard =
-		"/tmp/saccade-fake-guard-" + shared.guardSalt + "-reeval-guard0.guard";
+	const guard = guardOf("/sessions/reeval-guard.jsonl");
 	process.env.SACCADE_ACTOR = "pi";
 	shared.install();
 	process.env.SACCADE_SERVER = shared.url();
@@ -1370,8 +892,7 @@ test("the guard registry survives a full module re-evaluation", async () => {
 test("a real second process refuses the attach and its death releases the lock", async () => {
 	// proof level: kernel, cross-process - refusal, single registration, release on real group death
 	const shared = new FakeTracker();
-	const guard =
-		"/tmp/saccade-fake-guard-" + shared.guardSalt + "-crossproc0.guard";
+	const guard = guardOf("/sessions/crossproc.jsonl");
 	const holder = spawn("flock", [guard, "sleep", "30"], {
 		stdio: ["ignore", "ignore", "ignore"],
 		detached: true,
@@ -1418,14 +939,16 @@ test("a real second process refuses the attach and its death releases the lock",
 	}
 });
 
-test("a human-started session that cannot verify exits, explaining the failure", async () => {
-	// ratified offline rule: no token, tracker down, no held guard - explain and exit
+test("a tracker outage at boot keeps the session alive and guarded: registration retries lazily", async () => {
+	// the guard take precedes any tracker ask, so identity is verified
+	// even when the tracker is down: the session stays, the failure is
+	// painted, and the next tool call registers lazily
 	const shared = new FakeTracker();
-	delete process.env.SACCADE_LAUNCH_TOKEN;
 	const h = harness("offline-gap0", "/sessions/offline-gap.jsonl", "pi", shared);
 	shared.attachFails = true;
 	await h.pi.emit("session_start");
-	assert.equal(h.pi.shutdowns, 1, "the unverified start exits");
+	assert.equal(h.pi.shutdowns, 0, "a verified identity never exits for a tracker outage");
+	assert.equal(probeHeld(guardOf("/sessions/offline-gap.jsonl")), true, "the guard is held");
 	const note = h.pi.appendEntries[h.pi.appendEntries.length - 1];
 	assert.ok(note, "the failure is explained, not silent");
 	assert.equal(note.type, "saccade_attach");
@@ -1444,7 +967,14 @@ test("a human-started session that cannot verify exits, explaining the failure",
 		/degraded/,
 		"the visible card names the tracker failure",
 	);
+	const identity = h.tools("saccade_identity");
+	const toolCtx = () => ({ ...h.ctx(), tools: [], executeTool: () => Promise.resolve({} as never) });
+	const refused = resultText(await identity.execute("t1", {}, undefined, undefined, toolCtx()));
+	assert.ok(refused.includes("not registered"), refused);
+	// the tracker returns: the lazy retry registers without a restart
 	shared.attachFails = false;
+	const ok = resultText(await identity.execute("t2", {}, undefined, undefined, toolCtx()));
+	assert.ok(ok.includes("i-0"), ok);
 	await stop(h);
 });
 
@@ -1521,11 +1051,15 @@ test("an in-memory helper start stays alive, unregistered, parent env cleared", 
 });
 
 test("a headless unverifiable start explains on stderr before exiting", async () => {
-	// no UI to paint: the explanation must still be observable
+	// no UI to paint: an identity that cannot verify (the guard take
+	// is unknown) must still be observable before the exit
 	const shared = new FakeTracker();
-	const h = harness("headless-off0", "/sessions/headless-off.jsonl", "pi", shared);
-	h.pi.hasUI = false;
-	shared.attachFails = true;
+	const shim = mkdtempSync("/tmp/saccade-flock-shim-");
+	writeFileSync(join(shim, "flock"), "#!/bin/sh\nexit 16\n");
+	chmodSync(join(shim, "flock"), 0o755);
+	const savedPath = process.env.PATH;
+	process.env.PATH = shim;
+	let h: ReturnType<typeof harness>;
 	const written: string[] = [];
 	const original = process.stderr.write.bind(process.stderr);
 	process.stderr.write = ((chunk: string | Uint8Array) => {
@@ -1533,18 +1067,22 @@ test("a headless unverifiable start explains on stderr before exiting", async ()
 		return true;
 	}) as typeof process.stderr.write;
 	try {
+		h = harness("headless-off0", "/sessions/headless-off.jsonl", "pi", shared);
+		h.pi.hasUI = false;
 		await h.pi.emit("session_start");
 	} finally {
 		process.stderr.write = original;
+		if (savedPath === undefined) delete process.env.PATH;
+		else process.env.PATH = savedPath;
 	}
 	assert.equal(h.pi.shutdowns >= 1, true, "the unverified start exits");
 	assert.match(
 		written.join(""),
-		/degraded/,
-		"stderr names the tracker failure",
+		/cannot be probed/,
+		"stderr names the identity failure",
 	);
-	shared.attachFails = false;
 	await stop(h);
+	rmSync(shim, { recursive: true, force: true });
 });
 
 // -- the explicit own-session workspace handoff ------------------------------
@@ -1744,24 +1282,6 @@ test("the handoff envelope carries the machine provenance in ASCII with the targ
 	assert.doesNotMatch(envelope.split("\n")[0] ?? "", /[^\x20-\x7e]/);
 });
 
-test("headerCwd reads the saved header the one way the controller does", () => {
-	const dir = scratchDir("header");
-	const file = join(dir, "session.jsonl");
-	writeFileSync(
-		file,
-		`{"type":"session","version":3,"id":"handoff-smoke-1a2b3c4d","cwd":"/story/wt-a"}\n{"type":"message","id":"ab12cd34","message":{"role":"user","content":"implement the handoff"}}\n`,
-	);
-	assert.equal(headerCwd(file), "/story/wt-a");
-	writeFileSync(file, `{"type":"message","id":"ab12cd34"}\n`);
-	assert.equal(headerCwd(file), null, "a conversation line first is no header");
-	writeFileSync(file, `{"type":"session","id":"handoff-smoke-1a2b3c4d"}\n`);
-	assert.equal(headerCwd(file), null, "a header without a cwd reads null");
-	writeFileSync(file, `{broken\n`);
-	assert.equal(headerCwd(file), null, "an unreadable file reads null");
-	assert.equal(headerCwd(join(dir, "absent.jsonl")), null);
-	rmSync(dir, { recursive: true, force: true });
-});
-
 test("the helper script waits on the exact guard then calls the controller door by name", () => {
 	const script = handoffHelperScript({
 		guard: "/state/act/s1234abcd.guard",
@@ -1951,7 +1471,7 @@ test("an armed handoff persists its facts, blocks admissions, and shuts the sess
 	assert.ok(armed, "the arm is a saved fact");
 	const data = armed!.data as HandoffEntryData;
 	assert.equal(data.nativeId, "arm6");
-	assert.equal(data.sessionFile, "/sessions/arm6.jsonl");
+	assert.equal(data.sessionFile, realSessionFile("/sessions/arm6.jsonl"));
 	assert.equal(data.toolCall, "call_arm");
 	assert.equal(data.target, target);
 	assert.equal(data.created, null, "an existing choice provisions nothing");
@@ -1995,7 +1515,7 @@ test("a failed arm append leaves nothing for the settle boundary to launch", asy
 	const armed = h.pi.appendEntries.find((e) => e.type === "saccade_handoff");
 	assert.equal(armed, undefined, "the failed append persisted nothing");
 	// the helper's log would sit beside the fake guard; nothing created it
-	const guard = "/tmp/saccade-fake-guard-" + h.tracker.guardSalt + "-appendfail19.guard";
+	const guard = guardOf("/sessions/appendfail.jsonl");
 	assert.equal(existsSync(guard.replace(/\.guard$/, ".handoff.log")), false, "no helper launched for the failed arm");
 	await wrapper.startAdmission("bash", { command: "ls", background: true });
 	assert.deepEqual(wrapper.blocked, [], "the failed append released the hold");
@@ -2052,28 +1572,30 @@ test("a helper that cannot launch cancels the handoff and keeps the session aliv
 	await stop(h);
 });
 
-test("native human input cancels an armed handoff; extension input does not", async () => {
+test("native input cancels an armed handoff; another extension's steering does not", async () => {
 	const h = harness("input8", "/sessions/input8.jsonl", "pi");
 	await h.pi.emit("session_start");
 	const wrapper = new FakeWrapper(h.pi);
 	const target = scratchDir("input8-target");
 	await withHandoffEnv(async () => {
 		await h.tools("saccade_workspace").execute("c1", { choice: "existing", path: target }, undefined, undefined, wrapper.ctxOf(h));
-		await h.pi.emit("input", { source: "extension", text: "[saccade message m-9 | from i-2]\n\nhello" });
+		await h.pi.emit("input", { source: "extension", text: "another extension steers" });
 		assert.equal(
 			h.pi.appendEntries.some((e) => e.type === "saccade_handoff_done"),
 			false,
-			"an arriving delivery is not a takeover",
+			"another extension's steering is not a takeover",
 		);
-		// still armed: admissions stay held through an arriving delivery
+		// still armed: admissions stay held through foreign steering
 		await wrapper.startAdmission("bash", { command: "sleep 5", background: true });
 		assert.deepEqual(wrapper.blocked, ["bash"]);
-		await h.pi.emit("input", { source: "user", text: "wait, stay here" });
+		// host-typed input arrives like interactive input: a human or a
+		// submitted message both take the session back
+		await h.pi.emit("input", { source: "interactive", text: "wait, stay here" });
 	});
 	assert.equal(h.pi.shutdowns, 0);
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
 	assert.equal((done!.data as HandoffDoneData).outcome, "cancelled");
-	assert.match((done!.data as HandoffDoneData).reason ?? "", /human input/);
+	assert.match((done!.data as HandoffDoneData).reason ?? "", /native input/);
 	await wrapper.startAdmission("bash", { command: "ls", background: true });
 	assert.deepEqual(wrapper.blocked, ["bash"], "the takeover released the hold");
 	rmSync(target, { recursive: true, force: true });
@@ -2403,17 +1925,19 @@ test("a forked or foreign session never consumes the armed handoff", async () =>
 	await stop(h);
 });
 
-test("an unmoved or re-moved header marks the arm stale without redirecting it", async () => {
+test("the arm activates on the confirmed record alone; the saved header is never consulted", async () => {
 	const target = "/story/wt-2";
+	// the header's launch cwd names another directory: the record is
+	// the authority, and the file is never rewritten to follow it
 	const file = savedSession("resume12", "/story/wt-elsewhere");
 	const h = harness("resume12", file, "pi", new FakeTracker());
 	h.tracker.records.push(changedRecord(413, 0, target));
 	h.pi.session.entries.push(armedEntry({ nativeId: "resume12", sessionFile: file }) as any);
 	await startWith(h);
+	assert.equal(h.pi.steers.length, 1);
+	await h.pi.runQueue();
 	const done = h.pi.appendEntries.find((e) => e.type === "saccade_handoff_done");
-	assert.equal((done!.data as HandoffDoneData).outcome, "stale");
-	assert.match((done!.data as HandoffDoneData).reason ?? "", /not the armed target/);
-	assert.equal(h.pi.steers.length, 0);
+	assert.equal((done!.data as HandoffDoneData).outcome, "activated");
 	await stop(h);
 });
 

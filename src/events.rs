@@ -105,10 +105,10 @@ pub enum Event {
         branch: GitBranch,
         worktree: WorktreePath,
     },
-    /// The confirmed saved-directory change of a native incarnation,
-    /// published only after the saved session's working directory was
-    /// actually retargeted. It asserts the confirmed change - never a
-    /// pending intent, never a running process.
+    /// The confirmed change of where a native incarnation lives,
+    /// published only after the host's liveness answer permitted it.
+    /// It asserts the confirmed change - never a pending intent, never
+    /// a running process.
     WorkspaceChanged {
         incarnation: IncarnationId,
         worktree: WorktreePath,
@@ -135,7 +135,28 @@ pub enum Event {
     /// session is resolved by the effect, never a second birth.
     IncarnationRegistered {
         native_id: NativeSessionId,
+        saved_session: Option<SessionLocator>,
+        address: Option<String>,
+        /// The address kind: launched (a new host terminal) or adopted
+        /// (the caller's own). Terminal liveness reads as session
+        /// liveness only for the launched kind.
+        #[serde(default)]
+        adopted: bool,
+    },
+    /// The attach completes a door-birthed registration: pi's own
+    /// saved-session locator, known at attach before the first save.
+    SavedSessionBound {
+        incarnation: IncarnationId,
         saved_session: SessionLocator,
+    },
+    /// The association's host address moves with a relaunch: the same
+    /// incarnation, another terminal, and the kind it now speaks.
+    /// Opaque bytes, per the address law.
+    HostAddressAssigned {
+        incarnation: IncarnationId,
+        address: Option<String>,
+        #[serde(default)]
+        adopted: bool,
     },
     /// A durable addressed message. The sender is the sending
     /// session's registered identity, never authored prose; the body
@@ -245,10 +266,26 @@ pub enum Command {
     },
     // Registration and submission are machinery verbs: System
     // authorship comes from the role, never input. A message is
-    // authored by its sending session's registered identity.
+    // authored by its sending session's registered identity. The
+    // door-birthed registration carries the opaque host address and
+    // may precede the saved locator, which the attach binds; the
+    // address moves when a registered incarnation launches again.
     RegisterIncarnation {
         native_id: NativeSessionId,
+        saved_session: Option<SessionLocator>,
+        address: Option<String>,
+        #[serde(default)]
+        adopted: bool,
+    },
+    BindSavedSession {
+        incarnation: IncarnationId,
         saved_session: SessionLocator,
+    },
+    AssignHostAddress {
+        incarnation: IncarnationId,
+        address: Option<String>,
+        #[serde(default)]
+        adopted: bool,
     },
     /// The sending side: `from` is the registered session's own
     /// identity, matched against the caller's declared scope at the

@@ -1,6 +1,5 @@
 //! Saccade - issue tracker (idk what makes it special yet other than it's mine)
 
-pub mod activate;
 pub mod api;
 pub mod attempts;
 pub mod client;
@@ -8,7 +7,9 @@ pub mod completions;
 pub mod db;
 pub mod decide;
 pub mod events;
+pub mod herdr;
 pub mod host;
+pub mod host_contract;
 pub mod markers;
 pub mod migrate;
 pub mod objects;
@@ -72,6 +73,10 @@ pub enum Reject {
     )]
     SavedSessionMismatch,
     #[error(
+        "this incarnation already carries its saved session; the attach binds a launch-door birth's locator once"
+    )]
+    LocatorAlreadyBound,
+    #[error(
         "a citation does not resolve: its target is no earlier record, or its marker has no reference"
     )]
     InvalidReference,
@@ -114,6 +119,7 @@ impl Reject {
             Reject::InvalidIncarnationId => "invalid_incarnation_id",
             Reject::DuplicateNativeSession => "duplicate_native_session",
             Reject::SavedSessionMismatch => "saved_session_mismatch",
+            Reject::LocatorAlreadyBound => "locator_already_bound",
             Reject::InvalidReference => "invalid_reference",
             Reject::InvalidMessageId => "invalid_message_id",
             Reject::HumanOnly => "human_only",
@@ -147,6 +153,7 @@ mod test {
             Reject::InvalidIncarnationId,
             Reject::DuplicateNativeSession,
             Reject::SavedSessionMismatch,
+            Reject::LocatorAlreadyBound,
             Reject::InvalidReference,
             Reject::InvalidMessageId,
             Reject::HumanOnly,

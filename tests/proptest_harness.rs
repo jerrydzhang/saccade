@@ -73,6 +73,14 @@ enum Action {
     Register {
         draw: u8,
     },
+    BindSaved {
+        draw: u8,
+        locator: u8,
+    },
+    AssignAddress {
+        draw: u8,
+        variant: u8,
+    },
     CleanWorkspace {
         draw: u8,
     },
@@ -105,6 +113,8 @@ impl Action {
             | Action::CreateWorkspace { .. }
             | Action::ChangeWorkspace { .. }
             | Action::Register { .. }
+            | Action::BindSaved { .. }
+            | Action::AssignAddress { .. }
             | Action::CleanWorkspace { .. }
             | Action::RestoreWorkspace { .. }
             | Action::Send { .. }
@@ -391,10 +401,31 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
         },
         Action::Register { draw } => Command::RegisterIncarnation {
             native_id: saccade::NativeSessionId::new(format!("native-{draw:02}")).unwrap(),
+            saved_session: Some(
+                saccade::SessionLocator::new(
+                    format!("/generated/sessions/native-{draw:02}.jsonl").into(),
+                )
+                .unwrap(),
+            ),
+            address: None,
+            adopted: false,
+        },
+        // the launch machinery's own association facts, drawn against
+        // whichever birth the sequence carries; unknown draws refuse
+        Action::BindSaved {
+            draw,
+            locator: file,
+        } => Command::BindSavedSession {
+            incarnation: saccade::IncarnationId(RecordId(*draw as usize)),
             saved_session: saccade::SessionLocator::new(
-                format!("/generated/sessions/native-{draw:02}.jsonl").into(),
+                format!("/generated/sessions/bound-{draw:02}-{file:02}.jsonl").into(),
             )
             .unwrap(),
+        },
+        Action::AssignAddress { draw, variant } => Command::AssignHostAddress {
+            incarnation: saccade::IncarnationId(RecordId(*draw as usize)),
+            address: Some(format!("/generated/tty/{draw:02}-{variant:02}")),
+            adopted: false,
         },
         // the lifecycle facts name whichever birth the draw resolves
         // to; unknown draws refuse and the sequence carries on
@@ -432,6 +463,8 @@ fn context(action: &Action, world: &World) -> Context {
     | Action::CreateWorkspace { .. }
     | Action::ChangeWorkspace { .. }
     | Action::Register { .. }
+    | Action::BindSaved { .. }
+    | Action::AssignAddress { .. }
     | Action::CleanWorkspace { .. }
     | Action::RestoreWorkspace { .. }
     | Action::Submit { .. } = action
@@ -544,6 +577,8 @@ fn action_strategy() -> BoxedStrategy<Action> {
             dir,
         }),
         2 => any::<u8>().prop_map(|draw| Action::Register { draw }),
+        1 => (any::<u8>(), any::<u8>()).prop_map(|(draw, file)| Action::BindSaved { draw, locator: file }),
+        1 => (any::<u8>(), any::<u8>()).prop_map(|(draw, variant)| Action::AssignAddress { draw, variant }),
         2 => any::<u8>().prop_map(|draw| Action::CleanWorkspace { draw }),
         2 => any::<u8>().prop_map(|draw| Action::RestoreWorkspace { draw }),
         3 => (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(from, to, reply)| Action::Send {
@@ -732,10 +767,8 @@ fn generator_reaches_deep_states() {
                                 *milestones.entry("message sent").or_default() += 1;
                             }
                         }
-                        Action::Submit { .. } => {
-                            if last.kind == "message_submitted" {
-                                *milestones.entry("message submitted").or_default() += 1;
-                            }
+                        Action::Submit { .. } if last.kind == "message_submitted" => {
+                            *milestones.entry("message submitted").or_default() += 1;
                         }
                         _ => {}
                     }
@@ -754,6 +787,7 @@ fn generator_reaches_deep_states() {
                         saccade::Reject::InvalidIncarnationId => "InvalidIncarnationId",
                         saccade::Reject::DuplicateNativeSession => "DuplicateNativeSession",
                         saccade::Reject::SavedSessionMismatch => "SavedSessionMismatch",
+                        saccade::Reject::LocatorAlreadyBound => "LocatorAlreadyBound",
                         saccade::Reject::InvalidMessageId => "InvalidMessageId",
                         saccade::Reject::InvalidActor => "InvalidActor",
                         saccade::Reject::ReasonRequired => "ReasonRequired",

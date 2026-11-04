@@ -94,11 +94,14 @@ fn incarnation_lines(world: &World, records: &[StoredRecord]) -> Vec<String> {
                 Incarnation::Native {
                     native_id,
                     saved_session,
-                } => format!(
-                    "{actor} native session {}, saved {}",
-                    native_id.as_str(),
-                    saved_session.as_path().display()
-                ),
+                    ..
+                } => {
+                    let saved = saved_session
+                        .as_ref()
+                        .map(|l| format!("saved {}", l.as_path().display()))
+                        .unwrap_or_else(|| "awaiting its first save".into());
+                    format!("{actor} native session {}, {saved}", native_id.as_str())
+                }
                 Incarnation::Established { task, workspace } => format!(
                     "{actor} established t-{}, workspace {}",
                     task.0,
@@ -219,8 +222,11 @@ mod test {
             },
             Event::IncarnationRegistered {
                 native_id: NativeSessionId::new("sess-7777".into()).unwrap(),
-                saved_session: SessionLocator::new("/home/j/.pi/sessions/7777.json".into())
-                    .unwrap(),
+                saved_session: Some(
+                    SessionLocator::new("/home/j/.pi/sessions/7777.json".into()).unwrap(),
+                ),
+                address: None,
+                adopted: false,
             },
         ];
         let mut world = World::new();

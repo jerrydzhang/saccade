@@ -23,11 +23,19 @@ pub enum Incarnation {
         task: TaskId,
         workspace: WorktreePath,
     },
-    /// A registered native session: the durable native id and the
-    /// saved-session locator ordinary resume validates.
+    /// A registered native session: the durable native id, the
+    /// saved-session locator ordinary resume validates (bound by the
+    /// attach when the launch door birthed the identity before pi's
+    /// first save), the opaque host address the association carries -
+    /// submission targets it, probes read it - and the address kind:
+    /// launched (a terminal that dies with the session, so terminal
+    /// liveness reads as session liveness) or adopted (the caller's
+    /// own pane, which outlives the session).
     Native {
         native_id: NativeSessionId,
-        saved_session: SessionLocator,
+        saved_session: Option<SessionLocator>,
+        address: Option<String>,
+        adopted: bool,
     },
 }
 
@@ -40,12 +48,32 @@ impl Incarnation {
         }
     }
 
-    /// The locator a native incarnation resumes from; historical
+    /// The locator a native incarnation resumes from; unbound while a
+    /// launch-door birth precedes pi's first save, and historical
     /// establishments carry none.
     pub fn saved_session(&self) -> Option<&SessionLocator> {
         match self {
-            Incarnation::Native { saved_session, .. } => Some(saved_session),
+            Incarnation::Native { saved_session, .. } => saved_session.as_ref(),
             Incarnation::Established { .. } => None,
+        }
+    }
+
+    /// The opaque host address the association carries, when the
+    /// launch recorded one; pre-contract births carry none.
+    pub fn address(&self) -> Option<&str> {
+        match self {
+            Incarnation::Native { address, .. } => address.as_deref(),
+            Incarnation::Established { .. } => None,
+        }
+    }
+
+    /// Whether the carried address is the caller's own pane (adopted):
+    /// such a pane outlives the session, so terminal liveness is never
+    /// session liveness for it.
+    pub fn adopted(&self) -> bool {
+        match self {
+            Incarnation::Native { adopted, .. } => *adopted,
+            Incarnation::Established { .. } => false,
         }
     }
 }

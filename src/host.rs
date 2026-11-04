@@ -19,25 +19,11 @@ pub enum HostFail {
     NoDirenv,
     /// The named workspace is not a usable existing directory.
     Workspace(String),
-    /// The host binary could not be asked about the worktree.
-    WorktreeShow(String),
-    /// The host's cached discovery never saw the worktree.
-    Undiscovered(String),
-    /// The host binary could not be asked for a terminal.
-    CreateSpawn(String),
-    /// The host was asked and refused.
-    CreateRefused(String),
-    /// The host created a terminal but named no handle.
-    NoHandle,
-    /// The host's terminal list could not be asked or its answer could
-    /// not be read: terminal closure is unverified, never absent.
+
+    /// The host's terminal table could not be asked or its answer
+    /// could not be read: the workspace's terminal facts are
+    /// unverified, never absent.
     TerminalList(String),
-    /// The host's terminal close could not be asked. Best-effort only:
-    /// the verification list is the gate, this names the failed ask.
-    TerminalClose(String),
-    /// The host's visible workspace answer could not be read: visible
-    /// absence is unverified, never assumed.
-    WorkspaceShow(String),
 }
 
 impl HostFail {
@@ -47,13 +33,8 @@ impl HostFail {
             HostFail::Workspace(_) => "workspace_path_invalid",
             HostFail::NoPi => "launch_no_pi",
             HostFail::NoDirenv => "launch_no_direnv",
-            HostFail::WorktreeShow(_) | HostFail::CreateSpawn(_) => "launch_host_unavailable",
-            HostFail::Undiscovered(_) => "launch_host_undiscovered",
-            HostFail::CreateRefused(_) => "launch_host_refused",
-            HostFail::NoHandle => "launch_host_no_handle",
+
             HostFail::TerminalList(_) => "workspace_host_list_failed",
-            HostFail::TerminalClose(_) => "workspace_host_close_failed",
-            HostFail::WorkspaceShow(_) => "workspace_host_show_failed",
         }
     }
 }
@@ -71,20 +52,9 @@ impl std::fmt::Display for HostFail {
                  (build pin SACCADE_DIRENV or PATH), and a launch never starts unequipped"
             ),
             HostFail::Workspace(detail) => write!(f, "{detail}"),
-            HostFail::WorktreeShow(detail) => write!(f, "orca worktree show: {detail}"),
-            HostFail::Undiscovered(path) => {
-                write!(f, "orca has not discovered {path} yet (bounded at 90s)")
+            HostFail::TerminalList(detail) => {
+                write!(f, "the host's terminal table failed: {detail}")
             }
-            HostFail::CreateSpawn(detail) => write!(f, "orca terminal create: {detail}"),
-            HostFail::CreateRefused(detail) => {
-                write!(f, "orca terminal create failed: {detail}")
-            }
-            HostFail::NoHandle => {
-                write!(f, "the terminal was created but the host named no handle")
-            }
-            HostFail::TerminalList(detail) => write!(f, "orca terminal list failed: {detail}"),
-            HostFail::TerminalClose(detail) => write!(f, "orca terminal close failed: {detail}"),
-            HostFail::WorkspaceShow(detail) => write!(f, "orca worktree show failed: {detail}"),
         }
     }
 }
@@ -176,59 +146,6 @@ pub fn direnv_binary() -> Result<PathBuf, HostFail> {
     found.ok_or(HostFail::NoDirenv)
 }
 
-/// The line the host terminal types: the workspace becomes the cwd,
-/// then direnv evaluates the first .envrc up from the workspace -
-/// passthrough where none exists, direnv's refusal where trust is
-/// missing - and the scrub and routing ride its environment. They ride
-/// the env program because direnv exec takes a program, never VAR=
-/// prefixes.
-pub fn workspace_launch_command(
-    direnv: &std::path::Path,
-    dir: &str,
-    routing: &str,
-    argv: &[String],
-) -> String {
-    let dir_quoted = shell_quote(dir);
-    format!(
-        "cd {dir_quoted} && {direnv_word} exec {dir_quoted} env -u SACCADE_INCARNATION \
-         -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK -u SACCADE_WORKSPACE -u SACCADE_DB \
-         -u SACCADE_LAUNCH_TOKEN -u SACCADE_CLI {routing} {argv_list}",
-        direnv_word = shell_quote(&direnv.display().to_string()),
-        routing = routing,
-        argv_list = argv
-            .iter()
-            .map(|w| shell_quote(w))
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
-}
-
-/// The composed launch line for one explicit workspace: the directory
-/// must exist (a launch selects, it never creates), direnv resolves
-/// before anything is submitted. Returns the canonical directory and
-/// the exact command the host terminal will type.
-pub fn launch_command(
-    workspace: &std::path::Path,
-    routing: &str,
-    argv: &[String],
-) -> Result<(String, String), HostFail> {
-    let dir = workspace
-        .canonicalize()
-        .map_err(|e| HostFail::Workspace(format!("workspace {}: {e}", workspace.display())))?;
-    if !dir.is_dir() {
-        return Err(HostFail::Workspace(format!(
-            "{} is not an existing directory; launch selects an explicit existing workspace, it never creates one",
-            dir.display()
-        )));
-    }
-    let direnv = direnv_binary()?;
-    let dir_str = dir.display().to_string();
-    Ok((
-        dir_str.clone(),
-        workspace_launch_command(&direnv, &dir_str, routing, argv),
-    ))
-}
-
 /// One composed line's answer when it ran in the caller's own
 /// terminal: the child's own exit code, or the signal that ended it.
 #[derive(Debug, PartialEq)]
@@ -249,16 +166,58 @@ impl ChildExit {
     }
 }
 
-/// The same-terminal arm: run one composed launch line as a foreground
-/// child of the invoking terminal, stdio inherited. The host is never
-/// asked - no discovery wait, no terminal create - and the caller
-/// waits the child out; the answer is the child's own. sh executes the
-/// line because the composition is POSIX shell, the same grammar the
-/// host terminal would type.
-pub fn run_in_caller_terminal(command: &str) -> Result<ChildExit, std::io::Error> {
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
+/// The composed launch argv for one exact workspace: the direnv equip
+/// re-spoken for direct-exec terminals - direnv exec runs the composed
+/// session itself, so the session stays the terminal foreground and a
+/// live probe stays honest. The env program carries the scrub and the
+/// routing words, exactly as the shell line did; the workspace is the
+/// caller's canonical directory. One mechanics form for every
+/// entrance: the CLI doors and the workbench launch door compose
+/// identically, so no face grows its own launch dialect.
+pub fn composed_launch_argv(
+    workspace: &std::path::Path,
+    routing: &[String],
+    session_argv: &[String],
+) -> Result<Vec<String>, HostFail> {
+    let direnv = direnv_binary()?;
+    let mut argv = vec![
+        direnv.display().to_string(),
+        "exec".to_string(),
+        workspace.display().to_string(),
+        "env".to_string(),
+        "-u".to_string(),
+        "SACCADE_INCARNATION".to_string(),
+        "-u".to_string(),
+        "SACCADE_INCARNATION_SEQ".to_string(),
+        "-u".to_string(),
+        "SACCADE_TASK".to_string(),
+        "-u".to_string(),
+        "SACCADE_WORKSPACE".to_string(),
+        "-u".to_string(),
+        "SACCADE_DB".to_string(),
+        "-u".to_string(),
+        "SACCADE_CLI".to_string(),
+        "-u".to_string(),
+        "SACCADE_TEST_CONTEXT".to_string(),
+    ];
+    argv.extend(routing.iter().cloned());
+    argv.extend(session_argv.iter().cloned());
+    Ok(argv)
+}
+
+/// The same-terminal arm: run one composed argv as a foreground child
+/// of the invoking terminal, stdio inherited, in the workspace as cwd.
+/// The host is never asked - the caller's terminal IS the address -
+/// and the caller waits the child out; the answer is the child's own
+/// exit, or the signal that ended it. direnv exec runs the session
+/// directly: no shell, so the session stays the foreground program.
+pub fn run_argv_in_caller_terminal(
+    argv: &[String],
+    cwd: &std::path::Path,
+) -> Result<ChildExit, std::io::Error> {
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(cwd)
         .status()?;
     Ok(match status.code() {
         Some(code) => ChildExit::Exited(code),
@@ -266,195 +225,28 @@ pub fn run_in_caller_terminal(command: &str) -> Result<ChildExit, std::io::Error
     })
 }
 
-fn orca(args: &[&str]) -> Result<std::process::Output, std::io::Error> {
-    std::process::Command::new("orca").args(args).output()
-}
-
-/// Wait for the host's cached discovery to see the worktree: bounded,
-/// exact-path, never a second checkout.
-fn orca_await_worktree(path: &str) -> Result<(), HostFail> {
-    let selector = format!("path:{path}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    loop {
-        let out = orca(&["worktree", "show", "--worktree", &selector])
-            .map_err(|e| HostFail::WorktreeShow(e.to_string()))?;
-        if out.status.success() {
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(HostFail::Undiscovered(path.to_string()));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-    }
-}
-
-/// The created terminal's handle from the host's pinned response shape.
-fn terminal_handle(stdout: &str) -> Result<String, HostFail> {
-    serde_json::from_str::<serde_json::Value>(stdout)
-        .ok()
-        .and_then(|v| {
-            v.get("result")
-                .and_then(|r| r.get("terminal"))
-                .and_then(|t| t.get("handle"))
-                .and_then(|h| h.as_str())
-                .map(str::to_string)
-        })
-        .ok_or(HostFail::NoHandle)
-}
-
-/// Submit one composed launch through the host: discovery wait, the
-/// terminal ask, the handle. The reply is the host's acceptance of a
-/// submission - attach and execution belong to the session itself.
-pub fn submit_terminal(dir: &str, title: &str, command: &str) -> Result<String, HostFail> {
-    orca_await_worktree(dir)?;
-    let out = orca(&[
-        "terminal",
-        "create",
-        "--worktree",
-        &format!("path:{dir}"),
-        "--title",
-        title,
-        "--command",
-        command,
-        "--json",
-    ])
-    .map_err(|e| HostFail::CreateSpawn(e.to_string()))?;
-    if !out.status.success() {
-        return Err(HostFail::CreateRefused(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
-    }
-    terminal_handle(&String::from_utf8_lossy(&out.stdout))
-}
-
 // -- the workspace lifecycle's host contract -----------------------------
-// Closure and visible absence for one exact workspace. The host's
-// parsed answers are the only facts here: an empty terminal list means
-// no terminals, selector_not_found means the workspace names nothing
-// in the host's visible surfaces - arbitrary host errors are never
-// read as absence or closure. Registration removal, branch deletion,
-// and metadata erasure are not ours: git's own checkout removal is,
-// and the visible read contract rides it.
+// One exact workspace's terminal facts over the adapter's terminal
+// table, and the close fact through the contract's own verb. The
+// host's parsed answers are the only facts here: an empty answer means
+// no terminals, never an unreadable one - arbitrary host errors are
+// never read as absence or closure.
 
-/// The handles from a parsed terminal-list answer: every row must name
-/// a non-empty string handle, or the whole answer is unverified - a
-/// row the codec cannot read is uncertainty, never absence. The
-/// diagnostic names the row's index and shape, never its payload.
-fn terminal_handles(answer: &serde_json::Value) -> Result<Vec<String>, HostFail> {
-    let rows = answer
-        .pointer("/result/terminals")
-        .and_then(|t| t.as_array())
-        .ok_or_else(|| HostFail::TerminalList("the answer names no terminal rows".into()))?;
-    rows.iter()
-        .enumerate()
-        .map(|(index, row)| {
-            row.get("handle")
-                .and_then(|h| h.as_str())
-                .filter(|handle| !handle.is_empty())
-                .map(str::to_string)
-                .ok_or_else(|| match row.as_object() {
-                    Some(_) => HostFail::TerminalList(format!(
-                        "terminal row {index} names no readable handle"
-                    )),
-                    None => HostFail::TerminalList(format!(
-                        "terminal row {index} is not a terminal object"
-                    )),
-                })
-        })
-        .collect()
-}
-
-pub fn workspace_terminals(dir: &str) -> Result<Vec<String>, HostFail> {
-    let out = orca(&[
-        "terminal",
-        "list",
-        "--worktree",
-        &format!("path:{dir}"),
-        "--json",
-    ])
-    .map_err(|e| HostFail::TerminalList(e.to_string()))?;
-    let body = String::from_utf8_lossy(&out.stdout);
-    let value: serde_json::Value = serde_json::from_str(body.trim())
-        .map_err(|e| HostFail::TerminalList(format!("unreadable answer: {e}")))?;
-    match value.get("ok").and_then(|ok| ok.as_bool()) {
-        Some(true) => terminal_handles(&value),
-        // the host answers for the workspace by name: no such workspace
-        // names no terminals, through its own read contract
-        Some(false)
-            if value.pointer("/error/code").and_then(|c| c.as_str())
-                == Some("selector_not_found") =>
-        {
-            Ok(Vec::new())
-        }
-        _ => Err(HostFail::TerminalList(format!(
-            "the host refused the list: {body}"
-        ))),
-    }
-}
-
-/// Ask the host to close every terminal of one exact workspace. The
-/// reply is acceptance of the ask, never confirmed closure - the
-/// verification list is the gate.
-pub fn close_workspace_terminals(dir: &str) -> Result<(), HostFail> {
-    let out = orca(&[
-        "terminal",
-        "close",
-        "--worktree",
-        &format!("path:{dir}"),
-        "--all",
-        "--json",
-    ])
-    .map_err(|e| HostFail::TerminalClose(e.to_string()))?;
-    let body = String::from_utf8_lossy(&out.stdout);
-    let value: serde_json::Value = serde_json::from_str(body.trim())
-        .map_err(|e| HostFail::TerminalClose(format!("unreadable answer: {e}")))?;
-    if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
-        return Ok(());
-    }
-    // a host that already names no such workspace has nothing to close:
-    // its own selector_not_found is the accepted ask
-    if value.pointer("/error/code").and_then(|c| c.as_str()) == Some("selector_not_found") {
-        return Ok(());
-    }
-    Err(HostFail::TerminalClose(format!(
-        "the host refused the close: {body}"
-    )))
-}
-
-/// The workspace's visible presence in the host's own surfaces.
-/// Listed stands when the host names it; VisiblyAbsent stands only on
-/// selector_not_found - the host declaring it names nothing. Any other
-/// answer is uncertainty and refuses.
-#[derive(Debug, PartialEq)]
-pub enum HostPresence {
-    Listed,
-    VisiblyAbsent,
-}
-
-pub fn workspace_visible_presence(dir: &str) -> Result<HostPresence, HostFail> {
-    let out = orca(&[
-        "worktree",
-        "show",
-        "--worktree",
-        &format!("path:{dir}"),
-        "--json",
-    ])
-    .map_err(|e| HostFail::WorkspaceShow(e.to_string()))?;
-    let body = String::from_utf8_lossy(&out.stdout);
-    let value: serde_json::Value = serde_json::from_str(body.trim())
-        .map_err(|e| HostFail::WorkspaceShow(format!("unreadable answer: {e}")))?;
-    match value.get("ok").and_then(|ok| ok.as_bool()) {
-        Some(true) => Ok(HostPresence::Listed),
-        Some(false)
-            if value.pointer("/error/code").and_then(|c| c.as_str())
-                == Some("selector_not_found") =>
-        {
-            Ok(HostPresence::VisiblyAbsent)
-        }
-        _ => Err(HostFail::WorkspaceShow(format!(
-            "the host gave no usable presence answer: {body}"
-        ))),
-    }
+/// The addresses of the host's terminals whose launch cwd names the
+/// exact directory, over one terminal-table read. A stranger's
+/// terminal - any other launch cwd - is invisible to this contract.
+pub fn workspace_terminals(
+    host: &crate::herdr::HerdrCore,
+    dir: &str,
+) -> Result<Vec<String>, HostFail> {
+    let rows = host
+        .terminals()
+        .map_err(|e| HostFail::TerminalList(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .filter(|t| t.cwd == dir)
+        .map(|t| t.address)
+        .collect())
 }
 
 #[cfg(test)]
@@ -462,148 +254,31 @@ mod test {
     use super::*;
 
     #[test]
-    fn the_launch_command_routes_through_direnv_and_keeps_the_scrub() {
-        let command = workspace_launch_command(
-            std::path::Path::new("/tools/direnv"),
-            "/some work space",
-            "SACCADE_ACTOR=pi SACCADE_SERVER=http://srv",
-            &[
-                "/pi/bin".to_string(),
-                "--session".to_string(),
-                "abc".to_string(),
-            ],
-        );
-        assert_eq!(
-            command,
-            "cd '/some work space' && /tools/direnv exec '/some work space' env \
-             -u SACCADE_INCARNATION -u SACCADE_INCARNATION_SEQ -u SACCADE_TASK \
-             -u SACCADE_WORKSPACE -u SACCADE_DB -u SACCADE_LAUNCH_TOKEN \
-             -u SACCADE_CLI SACCADE_ACTOR=pi SACCADE_SERVER=http://srv /pi/bin --session abc"
-        );
-    }
-
-    #[test]
-    fn direnv_resolution_demands_an_executable_file_and_lands_absolute() {
-        let root =
-            std::env::temp_dir().join(format!("sac-direnv-{}-{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&root);
-        let bin = root.join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        assert_eq!(direnv_from_paths([bin.clone()]), None);
-        std::fs::write(bin.join("direnv"), b"#!").unwrap();
-        assert_eq!(
-            direnv_from_paths([bin.clone()]),
-            None,
-            "a non-executable direnv is not a direnv"
-        );
-        std::fs::set_permissions(
-            bin.join("direnv"),
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-        let expected = std::fs::canonicalize(bin.join("direnv")).unwrap();
-        // redundant and symlinked entries land on the same canonical
-        // absolute, never a relative candidate the workspace would eat
-        let windy = bin.join("..").join("bin");
-        assert_eq!(direnv_from_paths([windy]), Some(expected.clone()));
-        assert!(expected.is_absolute());
-        let linked = root.join("link");
-        std::os::unix::fs::symlink(&bin, &linked).unwrap();
-        assert_eq!(direnv_from_paths([linked]), Some(expected));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn the_launch_line_refuses_a_missing_or_non_directory_workspace() {
-        let root =
-            std::env::temp_dir().join(format!("sac-launch-{}-{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&root);
-        let missing = root.join("absent");
-        let err = launch_command(&missing, "SACCADE_ACTOR=pi", &[]).unwrap_err();
-        assert!(matches!(err, HostFail::Workspace(_)), "{err}");
-        assert!(err.to_string().contains("workspace"), "{err}");
-        std::fs::create_dir_all(&root).unwrap();
-        let file = root.join("a-file");
-        std::fs::write(&file, b"x").unwrap();
-        let err = launch_command(&file, "SACCADE_ACTOR=pi", &[]).unwrap_err();
-        assert!(
-            err.to_string().contains("not an existing directory"),
-            "{err}"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn the_terminal_row_decoder_admits_only_fully_readable_rows() {
-        let answer = |rows: &str| -> serde_json::Value {
-            serde_json::from_str(&format!(
-                "{{\"ok\":true,\"result\":{{\"terminals\":{rows}}}}}"
-            ))
-            .expect("the table's envelope parses")
-        };
-        // (rows, expectation): malformed or partially readable answers
-        // fail the whole answer with a row-index/shape diagnostic; only
-        // fully readable rows and the empty list verify
-        let table: [(&str, Result<Vec<&str>, &str>); 7] = [
-            ("[]", Ok(vec![])),
-            (r#"[{"handle":"a"},{"handle":"b"}]"#, Ok(vec!["a", "b"])),
-            (
-                r#"[{"handle":""}]"#,
-                Err("terminal row 0 names no readable handle"),
-            ),
-            (r#"[{}]"#, Err("terminal row 0 names no readable handle")),
-            (
-                r#"["junk"]"#,
-                Err("terminal row 0 is not a terminal object"),
-            ),
-            (
-                r#"[{"handle":42}]"#,
-                Err("terminal row 0 names no readable handle"),
-            ),
-            (
-                r#"[{"handle":"good"},{}]"#,
-                Err("terminal row 1 names no readable handle"),
-            ),
-        ];
-        for (rows, expected) in &table {
-            let decoded = terminal_handles(&answer(rows));
-            match expected {
-                Ok(handles) => assert_eq!(
-                    decoded.unwrap(),
-                    handles.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
-                    "{rows}"
-                ),
-                Err(detail) => {
-                    let failed = decoded.unwrap_err();
-                    assert!(failed.to_string().contains(detail), "{rows}: {failed}");
-                    assert!(
-                        matches!(failed, HostFail::TerminalList(_)),
-                        "{rows}: {failed}"
-                    );
-                }
-            }
-        }
-        // the pin underneath the table: malformed data can never yield
-        // the empty verified closure - only the genuinely empty list does
-        let empty = terminal_handles(&answer("[]")).unwrap();
-        assert!(empty.is_empty());
-        let malformed = terminal_handles(&answer("[{}]"));
-        assert!(malformed.is_err(), "a malformed row is not absence");
-    }
-
-    #[test]
     fn the_same_terminal_arm_reports_the_childs_own_exit_code() {
-        let success = run_in_caller_terminal("true").unwrap();
+        let success =
+            run_argv_in_caller_terminal(&["true".to_string()], &std::env::temp_dir()).unwrap();
         assert_eq!(success, ChildExit::Exited(0));
         assert_eq!(success.status(), 0);
-        let failed = run_in_caller_terminal("exit 7").unwrap();
+        let failed = run_argv_in_caller_terminal(
+            &["sh".to_string(), "-c".to_string(), "exit 7".to_string()],
+            &std::env::temp_dir(),
+        )
+        .unwrap();
         assert_eq!(failed, ChildExit::Exited(7));
         assert_eq!(failed.status(), 7);
     }
 
     #[test]
     fn the_same_terminal_arm_reports_a_signal_the_way_a_shell_would() {
-        let signalled = run_in_caller_terminal("kill -TERM $$").unwrap();
+        let signalled = run_argv_in_caller_terminal(
+            &[
+                "sh".to_string(),
+                "-c".to_string(),
+                "kill -TERM $$".to_string(),
+            ],
+            &std::env::temp_dir(),
+        )
+        .unwrap();
         assert_eq!(signalled, ChildExit::Signalled(15));
         assert_eq!(signalled.status(), 143);
     }
@@ -631,5 +306,31 @@ mod test {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(line, "'fix the '\\''flake'\\'' and $PATH' --flag ''");
+    }
+
+    #[test]
+    fn the_terminal_table_names_only_the_exact_paths_workspace() {
+        let dir = std::env::temp_dir().join(format!("sac-host-ls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hc = dir.join("hc");
+        std::fs::write(
+            &hc,
+            r#"#!/bin/sh
+printf '{"terminals":[{"address":"a1","cwd":"/exact/ws","state":"live"},{"address":"a2","cwd":"/exact/ws/deeper","state":"live"},{"address":"a3","cwd":"/exact/ws","state":"finished"}]}
+'
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let addresses =
+            workspace_terminals(&crate::herdr::HerdrCore::over(&hc), "/exact/ws").unwrap();
+        // the exact path's terminals only: a deeper path is a stranger
+        assert_eq!(addresses, vec!["a1".to_string(), "a3".to_string()]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

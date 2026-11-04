@@ -51,6 +51,9 @@ pub enum Reason {
     /// different saved locator: only the exact recorded association
     /// resolves, a reused id never rebinds to other history.
     SavedSessionMismatch,
+    /// A bind names an incarnation that already carries its saved
+    /// locator: the attach completes a launch-door birth exactly once.
+    LocatorAlreadyBound,
     /// A citation names a record that is not an earlier birth: stable
     /// internal references identify birth records.
     InvalidReference,
@@ -97,6 +100,7 @@ impl From<Reason> for Reject {
             Reason::CheckpointRewind => Reject::CheckpointRewind,
             Reason::InvalidWorkspaceId => Reject::InvalidWorkspaceId,
             Reason::WorkspaceStageMismatch => Reject::WorkspaceStageMismatch,
+            Reason::LocatorAlreadyBound => Reject::LocatorAlreadyBound,
         }
     }
 }
@@ -843,6 +847,8 @@ impl World {
             Event::IncarnationRegistered {
                 ref native_id,
                 ref saved_session,
+                ref address,
+                adopted,
             } => {
                 // registering an existing exact native session resolves
                 // at the effect; the fold refuses the second birth, and
@@ -852,7 +858,7 @@ impl World {
                     .values()
                     .find(|ctx| ctx.incarnation.native_id() == Some(native_id));
                 match known {
-                    Some(ctx) if ctx.incarnation.saved_session() == Some(saved_session) => {
+                    Some(ctx) if ctx.incarnation.saved_session() == saved_session.as_ref() => {
                         return Err(Reason::DuplicateNativeSession);
                     }
                     Some(_) => return Err(Reason::SavedSessionMismatch),
@@ -866,10 +872,56 @@ impl World {
                         incarnation: Incarnation::Native {
                             native_id: native_id.clone(),
                             saved_session: saved_session.clone(),
+                            address: address.clone(),
+                            adopted,
                         },
                         born_at: record.timestamp,
                     },
                 );
+            }
+            Event::SavedSessionBound {
+                incarnation,
+                ref saved_session,
+            } => {
+                // the attach completes a launch-door birth exactly once:
+                // the incarnation must stand, be native, and be unbound
+                let ctx = self
+                    .incarnations
+                    .get_mut(&incarnation)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                let Incarnation::Native {
+                    saved_session: bound,
+                    ..
+                } = &mut ctx.incarnation
+                else {
+                    return Err(Reason::InvalidIncarnationId);
+                };
+                if bound.is_some() {
+                    return Err(Reason::LocatorAlreadyBound);
+                }
+                *bound = Some(saved_session.clone());
+            }
+            Event::HostAddressAssigned {
+                incarnation,
+                ref address,
+                adopted,
+            } => {
+                // the association's address moves with a relaunch; the
+                // incarnation must stand and be native
+                let ctx = self
+                    .incarnations
+                    .get_mut(&incarnation)
+                    .ok_or(Reason::InvalidIncarnationId)?;
+                let Incarnation::Native {
+                    address: carried,
+                    adopted: carried_kind,
+                    ..
+                } = &mut ctx.incarnation
+                else {
+                    return Err(Reason::InvalidIncarnationId);
+                };
+                *carried = address.clone();
+                *carried_kind = adopted;
             }
             Event::MessageSent {
                 from,
@@ -3208,7 +3260,11 @@ mod test {
     fn registered(id: &str) -> Command {
         Command::RegisterIncarnation {
             native_id: NativeSessionId::new(id.into()).unwrap(),
-            saved_session: SessionLocator::new(format!("/sessions/{id}.jsonl").into()).unwrap(),
+            saved_session: Some(
+                SessionLocator::new(format!("/sessions/{id}.jsonl").into()).unwrap(),
+            ),
+            address: None,
+            adopted: false,
         }
     }
 
@@ -3252,7 +3308,11 @@ mod test {
             world.incarnations[&IncarnationId(birth)].incarnation,
             Incarnation::Native {
                 native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
-                saved_session: SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap(),
+                saved_session: Some(
+                    SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap()
+                ),
+                address: None,
+                adopted: false,
             }
         );
 
@@ -3266,7 +3326,9 @@ mod test {
         // recorded association: it refuses, it never rebinds history
         let relocated = Command::RegisterIncarnation {
             native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
-            saved_session: SessionLocator::new("/elsewhere/aaaa1111.jsonl".into()).unwrap(),
+            saved_session: Some(SessionLocator::new("/elsewhere/aaaa1111.jsonl".into()).unwrap()),
+            address: None,
+            adopted: false,
         };
         let refused = log.execute_system(relocated, 3);
         assert!(matches!(refused, Err(Reject::SavedSessionMismatch)));
@@ -3277,7 +3339,175 @@ mod test {
             let refused = log.execute(ctx, registered("cccc3333"), 3);
             assert!(matches!(refused, Err(Reject::HumanOnly)));
         }
-        assert_eq!(log.records().len(), 2);
+
+        // the launch-door birth: an unbound locator and the opaque
+        // host address ride the birth itself
+        log.execute_system(
+            Command::RegisterIncarnation {
+                native_id: NativeSessionId::new("door-dddd".into()).unwrap(),
+                saved_session: None,
+                address: Some("/tty5".into()),
+                adopted: false,
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().incarnations[&IncarnationId(RecordId(2))].incarnation,
+            Incarnation::Native {
+                native_id: NativeSessionId::new("door-dddd".into()).unwrap(),
+                saved_session: None,
+                address: Some("/tty5".into()),
+                adopted: false,
+            }
+        );
+    }
+
+    /// The attach completes a door-birth exactly once: the locator
+    /// binds onto an unbound native incarnation, never over a bound
+    /// one, and never onto a non-incarnation record.
+    #[test]
+    fn the_locator_binds_an_unbound_birth_once() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        log.execute_system(
+            Command::RegisterIncarnation {
+                native_id: NativeSessionId::new("door-dddd".into()).unwrap(),
+                saved_session: None,
+                address: Some("/tty5".into()),
+                adopted: false,
+            },
+            2,
+        )
+        .unwrap();
+        let unbound = IncarnationId(RecordId(1));
+
+        // the binding is machinery's act, like the birth it completes
+        for ctx in [human(), agent()] {
+            let refused = log.execute(
+                ctx,
+                Command::BindSavedSession {
+                    incarnation: unbound,
+                    saved_session: SessionLocator::new("/sessions/door.jsonl".into()).unwrap(),
+                },
+                3,
+            );
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
+        }
+        log.execute_system(
+            Command::BindSavedSession {
+                incarnation: unbound,
+                saved_session: SessionLocator::new("/sessions/door.jsonl".into()).unwrap(),
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().incarnations[&unbound]
+                .incarnation
+                .saved_session(),
+            Some(&SessionLocator::new("/sessions/door.jsonl".into()).unwrap())
+        );
+
+        // a second bind refuses: the attach binds once, never overwrites
+        let refused = log.execute_system(
+            Command::BindSavedSession {
+                incarnation: unbound,
+                saved_session: SessionLocator::new("/sessions/other.jsonl".into()).unwrap(),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::LocatorAlreadyBound)));
+
+        // an extension-registered birth already carries its locator:
+        // the attach resolves it, it never rebinds
+        let bound = IncarnationId(RecordId(0));
+        let refused = log.execute_system(
+            Command::BindSavedSession {
+                incarnation: bound,
+                saved_session: SessionLocator::new("/sessions/aaaa1111-b.jsonl".into()).unwrap(),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::LocatorAlreadyBound)));
+
+        // no such incarnation: the bind names a birth the record never
+        // carried
+        let refused = log.execute_system(
+            Command::BindSavedSession {
+                incarnation: IncarnationId(RecordId(99)),
+                saved_session: SessionLocator::new("/sessions/none.jsonl".into()).unwrap(),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+        // an established identity is no bind target
+        let refused = log.execute_system(
+            Command::BindSavedSession {
+                incarnation: IncarnationId(RecordId(50)),
+                saved_session: SessionLocator::new("/sessions/none.jsonl".into()).unwrap(),
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
+    }
+
+    /// The association's address moves with a relaunch: the same
+    /// incarnation, another terminal, recorded by the machinery.
+    #[test]
+    fn the_address_moves_with_a_relaunch() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        let id = IncarnationId(RecordId(0));
+
+        for ctx in [human(), agent()] {
+            let refused = log.execute(
+                ctx,
+                Command::AssignHostAddress {
+                    incarnation: id,
+                    address: Some("/tty7".into()),
+                    adopted: false,
+                },
+                2,
+            );
+            assert!(matches!(refused, Err(Reject::HumanOnly)));
+        }
+        log.execute_system(
+            Command::AssignHostAddress {
+                incarnation: id,
+                address: Some("/tty7".into()),
+                adopted: false,
+            },
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().incarnations[&id].incarnation.address(),
+            Some("/tty7")
+        );
+        log.execute_system(
+            Command::AssignHostAddress {
+                incarnation: id,
+                address: Some("/tty9".into()),
+                adopted: false,
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            log.world().incarnations[&id].incarnation.address(),
+            Some("/tty9")
+        );
+        // a birth the record never carried is no assignment target
+        let refused = log.execute_system(
+            Command::AssignHostAddress {
+                incarnation: IncarnationId(RecordId(9)),
+                address: Some("/tty1".into()),
+                adopted: false,
+            },
+            4,
+        );
+        assert!(matches!(refused, Err(Reject::InvalidIncarnationId)));
     }
 
     /// A message's guards: the sender is the session's own registered

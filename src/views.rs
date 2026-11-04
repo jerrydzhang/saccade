@@ -106,6 +106,8 @@ pub fn wait_matches(
         Event::TaskClaimed { id, .. }
         | Event::TaskCancelled { id, .. }
         | Event::TaskReopened { id, .. } => *target == Target::Task(*id),
+        // the launch machinery's own facts name no comment target
+        Event::SavedSessionBound { .. } | Event::HostAddressAssigned { .. } => false,
         Event::Commented { home, .. } => match target {
             Target::Task(task) => home == task,
             Target::Comment(watched) => world
@@ -2667,7 +2669,11 @@ mod test {
         fn registered(_seq: usize, id: &str) -> Event {
             Event::IncarnationRegistered {
                 native_id: NativeSessionId::new(id.into()).unwrap(),
-                saved_session: SessionLocator::new(format!("/sessions/{id}.jsonl").into()).unwrap(),
+                saved_session: Some(
+                    SessionLocator::new(format!("/sessions/{id}.jsonl").into()).unwrap(),
+                ),
+                address: None,
+                adopted: false,
             }
         }
 

@@ -900,8 +900,11 @@ mod test {
             &system,
             Command::RegisterIncarnation {
                 native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
-                saved_session: crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into())
-                    .unwrap(),
+                saved_session: Some(
+                    crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap(),
+                ),
+                address: Some("/tty3".into()),
+                adopted: false,
             },
             33,
         )
@@ -911,8 +914,9 @@ mod test {
             &system,
             Command::RegisterIncarnation {
                 native_id: crate::NativeSessionId::new("bbbb2222".into()).unwrap(),
-                saved_session: crate::SessionLocator::new("/sessions/bbbb2222.jsonl".into())
-                    .unwrap(),
+                saved_session: None,
+                address: Some("/tty4".into()),
+                adopted: false,
             },
             33,
         )
@@ -1010,6 +1014,31 @@ mod test {
         )
         .unwrap();
         // the write path's world is the one a full reload produces,
+        // the launch machinery's association facts ride the same
+        // round-trip: a door-birth's locator binding, an address move
+        record(
+            &mut conn,
+            &system,
+            Command::BindSavedSession {
+                incarnation: IncarnationId(RecordId(36)),
+                saved_session: crate::SessionLocator::new("/sessions/bbbb2222-bound.jsonl".into())
+                    .unwrap(),
+            },
+            36,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &system,
+            Command::AssignHostAddress {
+                incarnation: IncarnationId(RecordId(36)),
+                address: Some("/tty9".into()),
+                adopted: false,
+            },
+            36,
+        )
+        .unwrap();
+
         // asserted after the last write of the story
         let (_, returned) = record(
             &mut conn,
@@ -1027,7 +1056,7 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 45);
+        assert_eq!(loadout.rows.len(), 47);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
@@ -1257,8 +1286,23 @@ mod test {
             world.incarnations[&IncarnationId(RecordId(35))].incarnation,
             crate::Incarnation::Native {
                 native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
-                saved_session: crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into())
-                    .unwrap(),
+                saved_session: Some(
+                    crate::SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap(),
+                ),
+                address: Some("/tty3".into()),
+                adopted: false,
+            }
+        );
+        // the door-birth's locator binds once and the address moves
+        assert_eq!(
+            world.incarnations[&IncarnationId(RecordId(36))].incarnation,
+            crate::Incarnation::Native {
+                native_id: crate::NativeSessionId::new("bbbb2222".into()).unwrap(),
+                saved_session: Some(
+                    crate::SessionLocator::new("/sessions/bbbb2222-bound.jsonl".into()).unwrap(),
+                ),
+                address: Some("/tty9".into()),
+                adopted: false,
             }
         );
         assert_eq!(world.messages.len(), 1);

@@ -26,7 +26,7 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 18] = [
+const KINDS: [&str; 20] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
@@ -43,6 +43,8 @@ const KINDS: [&str; 18] = [
     "workspace_cleaned",
     "workspace_restored",
     "incarnation_registered",
+    "saved_session_bound",
+    "host_address_assigned",
     "message_sent",
     "message_submitted",
 ];
@@ -225,10 +227,12 @@ mod test {
             },
             Event::IncarnationRegistered {
                 native_id: NativeSessionId::new("a1b2c3d4-evil".into()).unwrap(),
-                saved_session: SessionLocator::new(
-                    "/home/story/.pi/agent/sessions/a1b2c3d4.jsonl".into(),
-                )
-                .unwrap(),
+                saved_session: Some(
+                    SessionLocator::new("/home/story/.pi/agent/sessions/a1b2c3d4.jsonl".into())
+                        .unwrap(),
+                ),
+                address: None,
+                adopted: false,
             },
             Event::MessageSent {
                 from: IncarnationId(RecordId(16)),

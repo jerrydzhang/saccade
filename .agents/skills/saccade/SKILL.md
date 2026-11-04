@@ -162,8 +162,8 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac create task "name"` | any tier | the reply names what was born |
 | `sac claim t-N` | any tier | ownership transfer; never a state change |
 | `sac comment t-N --title "..." "..."` / `sac comment c-<n> --title "..." "..."` (`--ref` repeatable) | any tier | a note with its authored title, parked or replied; each `--ref` earns a `[^k]` citation marker |
-| `sac send --to i-<n> [--reply m-<n>] [--task t-<n>] "body"` (`--stdin`) | a registered incarnation | durable addressed communication: the sender rides the environment; the message records first, then the attempt submits it to the recipient's native input queue - success only on confirmed submission, a refusal discloses the record's m-N; never a comment, never a thread entry |
-| `sac messages [i-<n>]` | anonymous | the messages an incarnation participates in, in record order, with their delivery state (submitted = accepted into the recipient's input queue; pending = recorded without a confirmed submission - evidence, never a delivery promise); the mailbox defaults to the declared scope |
+| `sac send --to i-<n> [--reply m-<n>] [--task t-<n>] "body"` (`--stdin`) | a registered incarnation | durable addressed communication: the sender rides the environment; the message records first, then the attempt submits it through the host to the recipient's recorded address - success only on the host's ordered-submission acceptance, a refusal discloses the record's m-N beside the host's evidence; never a comment, never a thread entry |
+| `sac messages [i-<n>]` | anonymous | the messages an incarnation participates in, in record order, with their delivery state (submitted = the host accepted the ordered submission; pending = recorded without a confirmed submission - evidence of the attempt, never a delivery promise); the mailbox defaults to the declared scope |
 | `sac offer t-N --title "..." "..."` | any tier | the whole-task closing account with its authored title |
 | `sac accept c-<offer>` | any tier | conclude through the standing offer |
 | `sac reject c-<offer> --grounds "..."` | any tier | reconsideration with grounds; reopens the task |
@@ -174,10 +174,11 @@ and reopening (`sac reopen t-N --explanation "..."`).
 | `sac revise c-<n> [--title "..."] ["..."]` (prose also by `--stdin` or `--body-file`; at least one field) | any tier | presentation repair: a note or offer's title and/or body, the other variants' body; the fold names a reviser, `sac log` keeps the original |
 | `sac withdraw c-<n> --note "..."` | any tier | the note's standing-error repair: title and body out, tombstone stays |
 | `sac artifact t-N <path> [--name ...]` | any tier | park an artifact on the thread - the client hashes the file into the store at state_dir/artifacts/<sha256> and the wire carries {name, hash} only |
-| `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; nothing is recorded |
+| `sac wait t-N\|c-N --after <seq> --until offer\|activity` | anonymous | block until a match lands: structurally matching activity, or an Offer born on the task - either way strictly after the cursor; both flags required; nothing is recorded |
+| `sac wait i-<n> [--timeout <secs>]` | anonymous | the arrival wait: block until a message addressed to that incarnation lands, reading the mailbox for truth on every host wake and quiet alike - any state releases, the state named as it read; the mailbox cursor at entry is the provable staleness, so pre-entry mail never releases; `--timeout` bounds the whole watch (quiet - nothing was consumed); an unaddressed pre-contract session takes no arrival wait (exit + resume migrates it); a recorded address move ends the watch with its disclosure; nothing is recorded |
 | `sac launch --workspace <dir> [-- prompt]` / `--new [label] [--base <ref>]` | any tier | launch the composed native Pi task-free: `--workspace` selects an explicit existing directory; `--new` provisions a fresh workspace through the server's Git effects and launches there; a fresh session registers itself as a new incarnation at start; `--resume i-<n>` continues a saved native session from its recorded locator, validated against the saved header. No task, claim, or request is provisioned; `--here` composes with `--workspace` and `--resume` and runs the composed session in the caller's own terminal - no host terminal, and the command's exit status is the session's |
 | `sac workspace new [label] [--base <ref>]` | any tier | provision a NEW task-free workspace through the server's Git effects: the label plus a generated uniqueness suffix (workspace-<token> without a label), cut at the named base or the primary HEAD. The birth record's position is the workspace's identity - no task, claim, or incarnation, and no new numbering |
-| `sac workspace switch i-<n> --to <dir> [--resume -- prompt]` | any tier | move a STOPPED native session's saved working directory to an explicit existing one: a held guard refuses (exit the session first) and an unprobeable one refuses as unknown, both before anything moves; the target must already exist; the saved header is retargeted atomically (same native id, body, and history), and the change record lands only after the header actually moved - it asserts the confirmed change, never a running process. `--resume` then continues the same native id there through the ordinary resume door |
+| `sac workspace switch i-<n> --to <dir> [--resume -- prompt]` | any tier | change where a STOPPED native session lives: the host's liveness answer gates it (launched sessions only - a live terminal refuses with exit-the-session-first, an unprobeable one refuses as unknown; an adopted pane's own duplicate-attach is its backstop), an unaddressed pre-contract session refuses to its migration, and the target must already exist; the record is the whole effect - no session file moves, resume reads the recorded workspace - and it asserts the confirmed change, never a running process. `--resume` then continues the same native id there through the ordinary resume door |
 | `sac launch --workspace <dir> --ask "question"` | a registered incarnation | cheap peer creation with an initial question: launches the peer, and once it registers the question goes to it as a durable addressed message from your own scope - the newborn's address is your reply surface. Requires SACCADE_INCARNATION_SEQ; never argv-shaped human input, never a task or ownership |
 | `sac identity` | anonymous | report the environment-declared actor/tier, scope, and routing - disclosure, never a liveness claim |
 | `sac list` / `sac show <ids...>` / `sac log` | anonymous | the board, threads and records, raw events |
@@ -189,10 +190,20 @@ and reopening (`sac reopen t-N --explanation "..."`).
 Not in this build (later slices, do not assume them): managed
 completion obligations, proposal machinery of any kind. Launching is
 the host's or the caller's own terminal:
-`sac launch` asks the host (Orca) for one terminal, or `--here` runs
-the composed session in the invoking terminal as its foreground child
-and returns its exit status when it exits - either way it never
-supervises, and restarting Saccade leaves native sessions alone.
+`sac launch` asks the host (herdr-core) for one terminal, or `--here`
+runs the composed session in the invoking terminal as its foreground
+child and returns its exit status when it exits. `--here` adopts the
+caller's own terminal and refuses every form it cannot address; the
+host door asks for one terminal and never supervises it, and
+restarting Saccade leaves native sessions alone.
+
+The host contract's deployment precondition is `notes = false` on the
+machine's host server: the host writes no authored text into a
+session's transcript, so submitted saccade mail is the only text a
+submission carries. The launch door also passes the host's per-session
+no-notify form, and a composition scrubs the test-context marker - but
+the machine setting is the precondition, and a deployment that lacks
+it is a finding to flag, never something a saccade door edits.
 
 ## Prose
 
@@ -263,23 +274,32 @@ and holds nothing: it is a read the caller owns, not a registration
 the tracker keeps; ordinary interruption ends it.
 
 Delivery facts for messages are small and ordinary: a message records
-first, then its send attempts native submission through the
-recipient's integration. `submitted` means the recipient's native
-input queue accepted the delivery - never a claim of reading,
-agreement, completion, or task acceptance; `pending` is a recorded
-message without a confirmed submission, evidence of its attempt and
-never a promise of later delivery - nothing retries it, no backlog is
-drained, and a manual resume delivers nothing old. A send succeeds
-only on confirmed submission; a refusal or a lost acknowledgement
-discloses the record's m-N and says which, and the known refusal
-reasons name the runtime evidence: a held guard is a running session
-whose integration holds no connection, a free guard a confirmed-
-stopped one, an unprobeable guard an unknown - no send ever launches
-or restarts a session, and a transient disconnect never spawns a
-duplicate into a running session. The confirmation bar is queue
-acceptance itself, never the recipient's turn or saved history; a
-steer the runtime later discards leaves its submitted record as the
-recoverable evidence. The mailbox read is `sac messages`.
+first, then its send attempts one ordered submission through the host
+adapter at the recipient's recorded address - concurrent sends to one
+recipient serialize at the sole writer, so record order is submit
+order. `submitted` means the host accepted the ordered submission -
+never a claim of reading, agreement, completion, or task acceptance;
+`pending` is a recorded message without a confirmed submission,
+evidence of its attempt and never a promise of later delivery -
+nothing retries it, no backlog is drained, and a manual resume
+delivers nothing old. A send succeeds only on the host's acceptance; a
+refusal or a lost outcome record discloses the record's m-N and says
+which, and the known refusal reasons name the host's own evidence:
+`recipient_unaddressed` (a pre-contract session - exit + resume
+migrates it), `recipient_not_live` (no live terminal at the recorded
+address), `submission_refused`/`submission_unknown`/`submission_unresolved`
+(the host refused, or its answer cannot be read, or its window
+expired), and `host_unavailable`. No send ever launches or restarts a
+session. The confirmation bar is host acceptance itself, never the
+recipient's turn or saved history; a steer the runtime later discards
+leaves its submitted record as the recoverable evidence, and a
+recipient mid-dialog (a menu or modal open) may swallow the typed
+text - the submission's record stays true and that loss is the
+disclosed risk, which is why the mailbox read (`sac messages`) is the
+truth a waiter checks. The arrival wait waits on this same truth: it
+wakes on submissions and re-reads the mailbox, so an arrival is
+reported within one iteration bound even where the host names no
+wakes.
 
 ## Hygiene
 
@@ -327,15 +347,20 @@ exactly as always; the commands that established, reopened, executed
 into, checkpointed, or tore such workspaces down are retired. The
 record governs; the workspace is a cache.
 
-A native session's saved working directory moves by explicit change:
+A native session's workspace changes by explicit change:
 `sac workspace switch i-<n> --to <dir>` resolves the recorded
-incarnation, requires the session's launch guard to be free (kernel
-evidence it is not owned by a live process; unknown refuses),
-validates the exact saved association and the existing target, then
-retargets the saved header atomically and lands the change record only
-after the header actually moved. The fact stays true if a later launch
+incarnation, asks the host's liveness at the recorded address (a
+launched session's terminal dying with it makes terminal liveness read
+as session liveness; a live terminal refuses - exit that session
+first - and an unprobeable answer refuses as unknown; an adopted pane
+is the caller's own program and skips the probe, its native
+duplicate-attach refusal the backstop), and lands the change record -
+the whole effect. No session file moves: the fold's change cache is
+where a session lives, resume reads it there, and the saved file is
+never rewritten to follow. The fact stays true if a later launch
 fails; nothing is inferred, nothing is stopped, and no process list is
-consulted.
+consulted. An addressless pre-contract session refuses with its
+migration (exit + resume) named.
 
 Every recorded workspace carries a lifecycle stage owned by the
 workspace itself: **Available** at birth, **Cleaned** after a completed
@@ -349,17 +374,20 @@ says nothing about whether a directory or process exists now.
 exact recorded target only (primary and unrecognized directories
 refuse), work preserved - staged, unstaged, and untracked changes
 refuse while ignored files may disappear - then the ordered contract:
-terminal close, terminal closure verified through the host's own list,
-git worktree removal with the branch and every commit retained,
-checkout and worktree absence verified in git, visible absence
-verified through the host's own read surfaces, and only then the
-Cleaned record. Accepted host input is never treated as confirmed
-closure, arbitrary host errors are never read as absence, and no
-directory-wide or OS-wide process sweep ever runs. Re-running clean
-is the recovery path: already-closed host and already-absent checkout
-satisfy their steps, recorded Cleaned with resources absent is
-idempotent success without a duplicate record, and recorded Cleaned
-with resources present is a mismatch that never authorizes deletion.
+the workspace's terminals enumerated by exact-path match over one
+host read (a stranger's terminal is invisible to the contract), each
+closed by its own address with the finished-state fact taken from the
+close replies themselves, absence re-read once before any removal, git
+worktree removal with the branch and every commit retained, checkout
+and registration absence verified in git, and only then the Cleaned
+record. A reply without the finished fact refuses; arbitrary host
+errors are never read as absence or closure; there is no list polling
+and no directory-wide or OS-wide process sweep ever runs. Re-running
+clean is the recovery path: an already-absent checkout satisfies its
+step, recorded Cleaned with the host naming no terminals is idempotent
+success without a duplicate record, and recorded Cleaned with a live
+terminal or standing resources is a mismatch that never authorizes
+deletion.
 
 `sac workspace restore <path>` brings a workspace back as a matching
 git checkout, nothing more - and it is idempotent by postcondition:

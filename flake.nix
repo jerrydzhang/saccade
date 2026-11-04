@@ -13,6 +13,31 @@
     };
     wrapped-pi.url = "github:jerrydzhang/wrapped-pi";
     devenv.url = "github:cachix/devenv";
+    # the dev host: one herdr-core release per tracker version. The
+    # lock entry pins the tarball bytes (narHash) and the derivation
+    # asserts the binary against the release manifest's sha256, so the
+    # tested claim stays the exact tested bytes. The curl installer is
+    # not a door; this is a fixed derivation per target.
+    herdr-core-x86_64-linux = {
+      url = "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz";
+      flake = false;
+    };
+    herdr-core-aarch64-linux = {
+      url = "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz";
+      flake = false;
+    };
+    # the desktop app, the second side of the spaces realization: the
+    # 0.1.11 line the laptop acceptance client runs, pinned the same
+    # way the core is, completing the versioned triple (app 0.1.11 +
+    # core 0.1.17 + the mod's own version)
+    herdr-app-x86_64-linux = {
+      url = "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz";
+      flake = false;
+    };
+    herdr-app-aarch64-linux = {
+      url = "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz";
+      flake = false;
+    };
   };
 
   nixConfig = {
@@ -26,70 +51,177 @@
     saccade,
     wrapped-pi,
     devenv,
+    herdr-core-x86_64-linux,
+    herdr-core-aarch64-linux,
+    herdr-app-x86_64-linux,
+    herdr-app-aarch64-linux,
     ...
   } @ inputs: let
     inherit (nixpkgs) lib;
     forAllSystems = lib.genAttrs lib.systems.flakeExposed;
     overlays = [rust-overlay.overlays.default];
+    # the pinned release bytes per linux target: the release manifest
+    # hashes the tarball, which the lock entry pins by narHash; the
+    # binarySha256 here is the derived assertion over the unpacked
+    # binary, checked at build, completing the chain to the tested bytes
+    herdrPin = {
+      x86_64-linux = {
+        src = herdr-core-x86_64-linux;
+        binarySha256 = "028fe4d21bcdf2fe0c1d187dead79800aab85edbf14f3c0dcc115fcc74f589d4";
+      };
+      aarch64-linux = {
+        src = herdr-core-aarch64-linux;
+        binarySha256 = "713eed55c78d32d4994b9cdb2e36293bf6ba2a17c14bf8143b14bd0033b76dc2";
+      };
+    };
+    # the three X runtime libs the release binary dynamically links
+    # and the tarball does not carry
+    herdrAppLibs = pkgs:
+      pkgs.lib.makeLibraryPath [
+        pkgs.libxcb
+        pkgs.libxkbcommon
+      ];
+    # the app release's own manifest hashes its tarball; the lock pins
+    # those bytes and the derivation asserts the unpacked binary
+    herdrAppPin = {
+      x86_64-linux = {
+        src = herdr-app-x86_64-linux;
+        binarySha256 = "80bcd0405e59834f4c76c8458551d3f5134cde650651e4ad917c51e9366d3b42";
+      };
+      aarch64-linux = {
+        src = herdr-app-aarch64-linux;
+        binarySha256 = "db7ddf3cb0b8519573490b729abf7eee7a2472436e2ddb490ad0686504edbe17";
+      };
+    };
+    # the spaces mod's own version, the triple's third leg; a change
+    # here re-seeds the user's copy through the wrapper's stamp
+    saccadeModVersion = "0.1.0";
+    mkHerdrApp = {
+      pkgs,
+      src,
+      binarySha256,
+    }:
+      pkgs.runCommand "herdr-app-pinned" {} ''
+        set -o errexit
+        echo "${binarySha256}  ${src}/herdr-app" | ${pkgs.coreutils}/bin/sha256sum --check --strict -
+        mkdir -p $out/bin $out/share
+        ${pkgs.coreutils}/bin/install -m 0555 ${src}/herdr-app $out/bin/herdr-app
+        ${pkgs.coreutils}/bin/install -m 0444 ${src}/LICENSE \
+          ${src}/THIRD-PARTY-NOTICES ${src}/herdr-app.svg $out/share/
+      '';
+    mkHerdrCore = {
+      pkgs,
+      src,
+      binarySha256,
+    }:
+      pkgs.runCommand "herdr-core-pinned" {} ''
+        set -o errexit
+        echo "${binarySha256}  ${src}/herdr-core" | ${pkgs.coreutils}/bin/sha256sum --check --strict -
+        mkdir -p $out/bin
+        ${pkgs.coreutils}/bin/install -m 0555 ${src}/herdr-core $out/bin/herdr-core
+        ${pkgs.coreutils}/bin/install -m 0444 ${src}/LICENSE ${src}/THIRD-PARTY-NOTICES $out/
+      '';
+    # the development arm: scratch HOME/XDG plus hc's own session
+    # scoping (HC_SESSION), so a dev core and its sockets live apart
+    # from the machine server even with the ambient install present
+    mkHerdrDev = {
+      pkgs,
+      herdrCore,
+    }:
+      pkgs.writeShellApplication {
+        name = "herdr-core";
+        runtimeInputs = [pkgs.coreutils];
+        text = ''
+          dev=''${XDG_STATE_HOME:-''${HOME:-/tmp}/.local/state}/saccade/herdr-core-dev
+          mkdir -p "$dev/home" "$dev/config" "$dev/data" "$dev/state"
+          export HOME="$dev/home"
+          export XDG_CONFIG_HOME="$dev/config"
+          export XDG_DATA_HOME="$dev/data"
+          export XDG_STATE_HOME="$dev/state"
+          export HC_SESSION=saccade-dev
+          exec ${herdrCore}/bin/herdr-core "$@"
+        '';
+      };
+    herdrCore = system: pkgs: let
+      pin = herdrPin.${system} or null;
+    in
+      if pin == null
+      then null
+      else
+        mkHerdrCore {
+          inherit pkgs;
+          inherit (pin) src binarySha256;
+        };
+    # the spaces mod's store path: the mod folder plus the derived
+    # layout (main plus the saccade panel), one seeding bundle
+    mkSaccadeSpacesMod = {pkgs}:
+      pkgs.runCommand "saccade-spaces-mod-${saccadeModVersion}" {} ''
+        mkdir -p $out/mods/saccade $out/layouts
+        for f in mod.json main.js plan.js config.json; do
+          ${pkgs.coreutils}/bin/install -m 0444 ${./mods/saccade}/$f $out/mods/saccade/$f
+        done
+        ${pkgs.coreutils}/bin/install -m 0444 ${./mods/saccade-layout.json} $out/layouts/saccade.json
+        echo -n ${saccadeModVersion} > $out/mods/saccade/.version
+      '';
+    # the app with the mod: a first-run seeding wrapper, the app's own
+    # sanctioned config path (mods the app scans and runs live). The
+    # stamp re-seeds when the mod's version moves; a changed mod file
+    # with a current stamp is a human edit and stays.
+    mkHerdrAppSaccade = {
+      pkgs,
+      herdrApp,
+      mod,
+    }:
+      pkgs.writeShellApplication {
+        name = "herdr-app-saccade";
+        runtimeInputs = [pkgs.coreutils];
+        text = ''
+          export LD_LIBRARY_PATH=${herdrAppLibs pkgs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+          # HERDR_APP_HOME is the app's whole home when set, used raw;
+          # otherwise the config dir's herdr-app folder
+          home=''${HERDR_APP_HOME:-''${XDG_CONFIG_HOME:-''${HOME:-/nonexistent}/.config}/herdr-app}
+          mods=$home/mods
+          stamp=$mods/saccade/.version
+          want=${saccadeModVersion}
+          if [ ! -f "$stamp" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
+            mkdir -p "$mods/saccade" "$home/layouts"
+            for f in mod.json main.js plan.js config.json; do
+              install -m 0444 "${mod}/mods/saccade/$f" "$mods/saccade/$f"
+            done
+            printf '%s' "$want" > "$stamp"
+            # the derived layout seeds always; the selection seeds only a
+            # fresh home - an existing home keeps its own layout choice,
+            # and switching once is the app's own documented act
+            install -m 0444 "${mod}/layouts/saccade.json" "$home/layouts/saccade.json"
+            if [ ! -f "$home/shared.json" ]; then
+              printf '{"layout":"saccade"}' > "$home/shared.json"
+            fi
+          fi
+          exec ${herdrApp}/bin/herdr-app "$@"
+        '';
+      };
+    herdrApp = system: pkgs: let
+      pin = herdrAppPin.${system} or null;
+    in
+      if pin == null
+      then null
+      else
+        mkHerdrApp {
+          inherit pkgs;
+          inherit (pin) src binarySha256;
+        };
+    herdrDev = system: pkgs: let
+      core = herdrCore system pkgs;
+    in
+      if core == null
+      then null
+      else
+        mkHerdrDev {
+          inherit pkgs;
+          herdrCore = core;
+        };
     # the native integration the composed harness loads
     saccadePiExtensions = ["native/saccade.ts"];
-    # the receipt preload pair the generated wrapper registers
-    saccadeCompositionPreloadFiles = ["native/saccade-composition-shim.mjs" "native/saccade-composition-hooks.mjs"];
-    mkCompositionLaunchAdapter = {
-      pkgs,
-      wrappedPiPkg,
-      shimSrc,
-      hooksSrc,
-      extraArgs ? "",
-    }: let
-      wrappedPiBin = "${wrappedPiPkg}/bin/wrapped-pi";
-    in
-      pkgs.runCommand "saccade-pi-composition"
-        {
-          passthru.preloadDir = "preload";
-        } ''
-        set -o errexit
-        # wrapped-pi's exec line names the pinned pi bin: one anchor
-        piBin=$(${pkgs.gnugrep}/bin/grep -oP '^exec \K\S+' ${wrappedPiBin})
-        test -n "$piBin" && test -f "$piBin"
-        # the pinned runtime's own module tree carries the two receipt
-        # targets: the readable module and the minified bundle chunk,
-        # each asserted to hold its anchor exactly once - a moved or
-        # drift shape fails this build visibly
-        dist=$(dirname "$(dirname "$piBin")")/lib/pi/node_modules/@earendil-works/pi-coding-agent/dist
-        readable=$dist/core/agent-session.js
-        test -f "$readable"
-        test "$(${pkgs.gnugrep}/bin/grep -cF 'streamingBehavior: options?.deliverAs,' $readable)" -eq 1
-        chunk=$(${pkgs.gnugrep}/bin/grep -rlF 'streamingBehavior:options?.deliverAs,images,source:"extension"' $dist/bundle/chunks/ | head -1)
-        test -n "$chunk"
-        test "$(${pkgs.gnugrep}/bin/grep -cF 'streamingBehavior:options?.deliverAs,images,source:"extension"' $chunk)" -eq 1
-        # the baked receipt sources: the exact pinned module URLs the
-        # hook guards on, written without shell-quoting games
-        mkdir -p $out/preload $out/bin
-        printf '["file://%s", "file://%s"]\n' "$readable" "$chunk" > $out/preload/receipt-sources.json
-        cp ${shimSrc} $out/preload/saccade-composition-shim.mjs
-        cp ${hooksSrc} $out/preload/saccade-composition-hooks.mjs
-        # the pinned pi bin execs the cli bundle on exactly one line:
-        # insert the receipt preload before the bundle path, so the
-        # flag scopes to this Node invocation alone
-        ${pkgs.gnused}/bin/sed "s|^exec \"\([^\"]*\)\" |exec \"\1\" --import \"$out/preload\"/saccade-composition-shim.mjs |" "$piBin" > adapted-pi
-        grep -q -- '--import' adapted-pi
-        test "$(${pkgs.gnugrep}/bin/grep -c -- '--import' adapted-pi)" -eq 1
-        # saccade-pi: wrapped-pi verbatim, pointed at the adapted pi
-        ${pkgs.gnused}/bin/sed "s|^exec ''${piBin} |exec $out/bin/adapted-pi ${extraArgs} |" ${wrappedPiBin} > saccade-pi
-        grep -q "adapted-pi ${extraArgs}" saccade-pi
-        chmod +x adapted-pi saccade-pi
-        cp adapted-pi $out/bin/adapted-pi
-        cp saccade-pi $out/bin/saccade-pi
-      '';
-
-    # The composition launch adapter: generated at build time from the
-    # pinned wrapped-pi and pi launch scripts, interposing the receipt
-    # preload as an explicit --import on the composition's own Node
-    # invocation. Argument-scoped: child processes the session spawns
-    # run their own Node invocations and never carry the hook. Each
-    # generation step asserts its anchor, failing the build loudly when
-    # a pin moves the launch shape.
   in {
 
     devShells = forAllSystems (
@@ -109,26 +241,20 @@
           inherit inputs pkgs;
           modules = [
             ({config, ...}: let
-              # the composition's receipt preload, copied into the
-              # store as a pair: the adapter interposes it on the
-              # composition's own Node invocation as an explicit
-              # --import, arg-scoped so child processes never carry it
-              compositionPreload = pkgs.runCommand "saccade-composition-preload"
-                {
-                  shimSrc = ./native/saccade-composition-shim.mjs;
-                  hooksSrc = ./native/saccade-composition-hooks.mjs;
-                  passthru.preloadDir = "preload";
-                }
-                ''
-                  mkdir -p $out
-                  ${lib.concatMapStrings (path: "cp ${./. + "/${path}"} $out/${baseNameOf path}\n") saccadeCompositionPreloadFiles}
-                '';
-              devPi = lib.hiPrio (mkCompositionLaunchAdapter {
-                inherit pkgs;
-                wrappedPiPkg = wrapped-pi.packages.${system}.default;
-                inherit (compositionPreload) shimSrc hooksSrc;
+              # the dev wrapper: wrapped-pi pointed at this repo's
+              # working-tree extension, no adaptation, no preload
+              devPi = let
+                wrappedPiBin = "${wrapped-pi.packages.${system}.default}/bin/wrapped-pi";
                 extraArgs = lib.escapeShellArgs (lib.concatMap (path: ["-e" "${config.devenv.root}/${path}"]) saccadePiExtensions);
-              });
+              in
+                pkgs.hiPrio (pkgs.writeShellApplication {
+                  name = "saccade-pi";
+                  runtimeInputs = [pkgs.util-linux];
+                  text = ''
+                    exec ${wrappedPiBin} ${extraArgs} "$@"
+                  '';
+                });
+              devHerdr = herdrDev system pkgs;
             in {
               packages = with pkgs; [
                 rustToolchain
@@ -144,8 +270,11 @@
 
               env = {
                 SACCADE_PI = "${devPi}/bin/saccade-pi";
-                SACCADE_COMPOSITION_PRELOAD = "${devPi}/preload";
                 PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+                # the development arm: the sandboxed pinned wrapper, so
+                # dev never joins the machine server; empty where the
+                # target carries no pin, which resolution treats as unset
+                SACCADE_HERDR = lib.optionalString (devHerdr != null) "${devHerdr}/bin/herdr-core";
               };
 
               process.manager.implementation = "native";
@@ -171,33 +300,22 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
+        devHerdrCore = herdrCore system pkgs;
+        devHerdrPin = herdrDev system pkgs;
+        devHerdrApp = herdrApp system pkgs;
+        devMod = mkSaccadeSpacesMod {inherit pkgs;};
         pi = wrapped-pi.packages.${system}.default.override {
           extraExtensions = map (path: ./. + "/${path}") saccadePiExtensions;
         };
-        compositionPreload = pkgs.runCommand "saccade-composition-preload"
-          {
-            shimSrc = ./native/saccade-composition-shim.mjs;
-            hooksSrc = ./native/saccade-composition-hooks.mjs;
-            passthru.preloadDir = "preload";
-          }
-          ''
-            mkdir -p $out
-            ${lib.concatMapStrings (path: "cp ${./. + "/${path}"} $out/${baseNameOf path}\n") saccadeCompositionPreloadFiles}
-          '';
-        # the generated launch adapter is the wrapper's payload; the
-        # outer script only carries util-linux in the runtime closure
-        launchAdapter = mkCompositionLaunchAdapter {
-          inherit pkgs;
-          wrappedPiPkg = pi;
-          inherit (compositionPreload) shimSrc hooksSrc;
-        };
+        # the composed harness: wrapped-pi with the saccade extension,
+        # nothing interposed. util-linux rides the closure: the
+        # integration's guard helper is flock, never an assumed
+        # ambient binary.
         saccadePi = pkgs.writeShellApplication {
           name = "saccade-pi";
-          # util-linux rides the closure: the integration's guard helper
-          # is flock, never an assumed ambient binary
           runtimeInputs = [pkgs.util-linux];
           text = ''
-            exec ${launchAdapter}/bin/saccade-pi "$@"
+            exec ${pi}/bin/wrapped-pi "$@"
           '';
         };
         # the workbench frontend, built once from the committed sources
@@ -222,7 +340,7 @@
             cp dist/index.html dist/app.js dist/style.css $out/
           '';
         };
-        sac = pkgs.rustPlatform.buildRustPackage {
+        sac = pkgs.rustPlatform.buildRustPackage ({
           name = "saccade";
           src = ./.;
           buildInputs = [];
@@ -264,18 +382,47 @@
           '';
           cargoLock.lockFile = ./Cargo.lock;
           meta.mainProgram = "sac";
-        };
-      in {
-        saccade-pi = saccadePi;
+        }
+        // lib.optionalAttrs (devHerdrPin != null) {
+          # the pinned dev host this binary resolves last; SACCADE_HERDR
+          # remains the explicit override and the ambient binary the
+          # production arm
+          SACCADE_HERDR_PIN = "${devHerdrPin}/bin/herdr-core";
+        });
+      in
+        {
+          saccade-pi = saccadePi;
 
-        saccade-web-assets = webAssets;
+          saccade-web-assets = webAssets;
 
-        default = pkgs.symlinkJoin {
-          name = "saccade";
-          paths = [sac saccadePi];
-          meta.mainProgram = "sac";
-        };
-      }
+          default = pkgs.symlinkJoin {
+            name = "saccade";
+            paths = [sac saccadePi];
+            meta.mainProgram = "sac";
+          };
+        }
+        // lib.optionalAttrs (devHerdrCore != null) {
+          # the claim itself: the unpatched pinned herdr-core, runnable
+          # by anyone with the flake; no source patches, no fork
+          herdr-core = devHerdrCore;
+        }
+        // lib.optionalAttrs (devHerdrPin != null) {
+          # the development arm: the same bytes behind the dev sandbox
+          herdr-core-dev = devHerdrPin;
+        }
+        // lib.optionalAttrs (devHerdrApp != null) {
+          # the spaces realization's second side: the pinned app, the
+          # mod folder alone, and the app with the mod seeded - the
+          # versioned triple's app side, runnable with nix, no manual
+          # file installs
+          herdr-app = devHerdrApp;
+          saccade-spaces-mod = devMod;
+          herdr-app-saccade = mkHerdrAppSaccade {
+            inherit pkgs;
+            herdrApp = devHerdrApp;
+            mod = devMod;
+          };
+        }
     );
 
     formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.alejandra);

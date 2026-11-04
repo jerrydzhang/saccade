@@ -1650,6 +1650,58 @@
         "type": "github"
       }
     },
+    "herdr-app-aarch64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793483419,
+        "narHash": "sha256-xNmkPXXa2Tustkg2OP+eIuSziyqcWsMhbae9H45ku/8=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-aarch64.tar.gz"
+      }
+    },
+    "herdr-app-x86_64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793483418,
+        "narHash": "sha256-Kx0QKYramjgM9SxAAJats6o1+O14nGaf+5vnBxEp9UY=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/app/0.1.11/herdr-app-linux-x86_64.tar.gz"
+      }
+    },
+    "herdr-core-aarch64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793624171,
+        "narHash": "sha256-URBw4Oo794eS6RRWv4LthkTqzzDcbOPFStLpfohi28g=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-aarch64.tar.gz"
+      }
+    },
+    "herdr-core-x86_64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793624075,
+        "narHash": "sha256-jdgIcDV9Y9RhvofLHpDLYtB/iCpnJ9pF0nlZ0LlqLrM=",
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://releases.herdr.dev/core/0.1.17/herdr-core-linux-x86_64.tar.gz"
+      }
+    },
     "llm-agents": {
       "inputs": {
         "bun2nix": "bun2nix",
@@ -3107,6 +3159,10 @@
     "root": {
       "inputs": {
         "devenv": "devenv",
+        "herdr-app-aarch64-linux": "herdr-app-aarch64-linux",
+        "herdr-app-x86_64-linux": "herdr-app-x86_64-linux",
+        "herdr-core-aarch64-linux": "herdr-core-aarch64-linux",
+        "herdr-core-x86_64-linux": "herdr-core-x86_64-linux",
         "nixpkgs": "nixpkgs_2",
         "rust-overlay": "rust-overlay_2",
         "saccade": "saccade",
@@ -3416,11 +3472,11 @@
         "wrapped-pi": "wrapped-pi"
       },
       "locked": {
-        "lastModified": 1793190438,
-        "narHash": "sha256-YBXP27VEQ1KGZ+kmMidhZiZI7CcJmesX0jEBht3YXxs=",
+        "lastModified": 1793211321,
+        "narHash": "sha256-GwGeEWqQyXXFSQmP892wMqKQN9tpK6wMLSmDTAufJPw=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "8caf94ad9e8ea44e097e162709f6f22afeaa66dd",
+        "rev": "6e311243aa430e8b100686e0cf124b8e230f9333",
         "type": "github"
       },
       "original": {

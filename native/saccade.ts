@@ -1,9 +1,10 @@
 // Saccade's native integration, loaded by the saccade-pi composition:
-// the session attaches as an incarnation, sends durable addressed
-// messages, and waits that incoming messages or native human input
-// release - releasing only this integration's own wait, never
-// interrupting other work.
-import { closeSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
+// the session attaches as an incarnation and sends durable addressed
+// messages. Arrival is the host's: senders submit into this
+// session's terminal through the host adapter, and this integration
+// never carries, queues, or confirms deliveries - recorded mail is
+// evidence, and `sac messages` is its read.
+import { closeSync, openSync, realpathSync, statSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
@@ -23,7 +24,6 @@ import type {
 // executeTool signature itself.
 type NestedToolOutcome = Awaited<ReturnType<ExtensionToolContext["executeTool"]>>;
 
-const POLL_MS = 1500;
 // the automatic actor fallback: agent possession when the launch did
 // not inject a name; an injected SACCADE_ACTOR always wins
 const FALLBACK_ACTOR = "saccade-pi";
@@ -32,10 +32,6 @@ interface AttachReply {
 	registered: boolean;
 	incarnation: number;
 	num: number;
-	/** This session's launch guard: the server-authoritative path this
-	 * integration flock-locks from association until death - the
-	 * per-native-session runtime evidence activation reads. */
-	guard?: string;
 }
 
 interface SendReply {
@@ -43,58 +39,9 @@ interface SendReply {
 	from: { seq: number; num: number | null };
 }
 
-interface MailboxMessage {
-	seq: number;
-	num: number | null;
-	from: { seq: number; num: number | null; actor: string };
-	to: { seq: number; num: number | null };
-	reply_to: number | null;
-	task: number | null;
-	state: "pending" | "submitted";
-	body: string;
-	born_at: number;
-}
-
-// One staged delivery handed over the transport read: the runtime
-// half of a sender's submission attempt, correlated by its token.
-interface StagedDelivery {
-	token: string;
-	message: MailboxMessage;
-}
-
 interface Association extends AttachReply {
 	nativeId: string;
 	sessionFile: string;
-	/** The open descriptor whose shared open-file-description holds the
-	 * guard's kernel lock: closed on association change and death, so
-	 * any release is observed by the activator's probe. */
-	guardFd: number | null;
-}
-
-// One wait tool call owns one of these; nothing about a wait lives in
-// shared state, so a stale poll can never observe or strand a newer
-// wait's release.
-type Outcome = "message" | "input" | "extension" | "cancelled" | "detached";
-
-interface WaitState {
-	timer: ReturnType<typeof setInterval> | null;
-	offSignal: (() => void) | null;
-	done: boolean;
-	mail: MailboxMessage[] | null;
-	settle: (outcome: Outcome) => void;
-}
-
-// An envelope queued natively whose submission still awaits confirmed
-// insertion into the saved session history. Bound to the association
-// it was queued under, so a reassociated session never submits as a
-// stale recipient.
-interface QueuedDelivery {
-	envelope: string;
-	messageSeq: number;
-	incarnation: number;
-	sessionFile: string;
-	/** The per-call receipt reported acceptance of this exact message. */
-	accepted?: boolean;
 }
 
 // Take the guard's kernel lock on the open file description this fd
@@ -153,13 +100,6 @@ const SendParams = Type.Object({
 		Type.String({ description: "the message answered, m-<n>" }),
 	),
 	task: Type.Optional(Type.String({ description: "task context, t-<n>" })),
-});
-const WaitParams = Type.Object({
-	reply_to: Type.Optional(
-		Type.String({
-			description: "only messages answering m-<n> release the wait",
-		}),
-	),
 });
 const WorkspaceParams = Type.Object({
 	choice: Type.Union([Type.Literal("existing"), Type.Literal("new")], {
@@ -323,23 +263,9 @@ export function handoffEnvelope(data: HandoffEntryData, record: number): string 
 	return [
 		`[saccade workspace handoff | tool ${data.toolCall} | change record ${record}]`,
 		"",
-		`Your explicit own-session workspace handoff is confirmed: this native session kept its id, saved history, and declared scope; the saved working directory moved to ${data.target} (record ${record}).`,
+		`Your explicit own-session workspace handoff is confirmed: this native session kept its id, saved history, and declared scope; its workspace is now ${data.target} (record ${record}) and the saved session file never moved.`,
 		"Continue the goal you were pursuing when you called saccade_workspace - no new goal was created and nothing else changed.",
 	].join("\n");
-}
-
-// The saved header's cwd, read the one way the controller does: first
-// line, session header, its cwd field. Anything else is unreadable.
-export function headerCwd(sessionFile: string): string | null {
-	try {
-		const line = readFileSync(sessionFile, "utf8").split("\n", 1)[0] ?? "";
-		const header = JSON.parse(line) as { type?: string; cwd?: unknown };
-		if (header.type !== "session") return null;
-		if (typeof header.cwd !== "string" || header.cwd === "") return null;
-		return header.cwd;
-	} catch {
-		return null;
-	}
 }
 
 export default function saccadeIntegration(pi: ExtensionAPI) {
@@ -375,16 +301,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	// leaves getSessionFile undefined exactly when persist is false, so
 	// there is no saved session to verify and no startup exit
 	let unpersistedSession = false;
-	// the waits this integration currently owns
-	const waits = new Set<WaitState>();
-	// envelopes queued natively, submissions not yet confirmed
-	const deliveries = new Set<QueuedDelivery>();
-	// message seqs queued natively under this association, with the
-	// message itself: the input correlation's state, consumed when the
-	// envelope enters the session and cleared with the association -
-	// never a redelivery door, since the transport handoff is
-	// exactly-once
-	const queued = new Map<number, MailboxMessage>();
 	// the armed own-session handoff this process has not yet shut down
 	// for: null once the helper is launched (the shutdown is the armed
 	// run's own act), and cancelled with its gate on any other boundary
@@ -499,18 +415,23 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	}
 
 	// Suspend the association runtime without touching the guard: the
-	// identity channel goes with the association, queued deliveries die
-	// unsubmitted, and the bridge loop strands - but an exact-session
+	// identity channel goes with the association - but an exact-session
 	// guard stays kernel-held. Process death releases it; a reload's
 	// next start reuses it. Releasing before a reattach reply would let
 	// a transient tracker outage leave this live process unguarded
-	// while activation sees a free session and resumes another copy.
+	// while a duplicate takes the session's place.
 	function suspendAssociation() {
 		association = null;
 		attachError = null;
-		deliveries.clear();
-		queued.clear();
 		delete process.env.SACCADE_INCARNATION_SEQ;
+	}
+
+	// The session's own runtime guard: a sidecar beside the saved
+	// session file, keyed by the exact file this process runs. The
+	// duplicate-attach backstop is entirely extension-owned - the
+	// server never names guard paths.
+	function guardSidecar(sessionFile: string): string {
+		return `${sessionFile}.guard`;
 	}
 
 	// Resolve-or-register this session's incarnation from the session's
@@ -522,9 +443,11 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		suspendAssociation();
 		const held = heldGuard();
+		const guard = sessionFile !== undefined ? guardSidecar(sessionFile) : undefined;
 		if (
 			held &&
-			(held.sessionId !== sessionId || held.sessionFile !== sessionFile)
+			guard !== undefined &&
+			(held.sessionId !== sessionId || held.path !== guard)
 		) {
 			// a different native session's guard cannot be reused: this
 			// process no longer runs it, so the release is honest
@@ -544,11 +467,59 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			attachError = "no SACCADE_SERVER routing; the session stays unregistered";
 			return null;
 		}
-		if (!sessionId || !sessionFile) {
+		if (!sessionId || !sessionFile || guard === undefined) {
 			// a persisted session without its file is invalid identity:
 			// cannot verify, so the startup exit rule applies
 			attachError = "the session carries no saved native file; nothing to register";
 			return null;
+		}
+		// the session's own runtime guard: kernel-held from here to
+		// association change or death. Held = a live process already
+		// owns this native session: this process is a duplicate - it
+		// shuts down before any model work. Unknown = the host offers
+		// no flock: fail safe, no association, no participation - an
+		// unverified session must never look free. A guard held for
+		// this exact session from a previous start is reused, never
+		// reopened: the lock is already ours.
+		if (heldGuard()?.path === guard) {
+			// retained exact-session guard
+		} else {
+			releaseGuard();
+			let fd: number;
+			try {
+				fd = openSync(guard, "a+");
+			} catch (error) {
+				// an unopenable guard is as unsafe as an unknown take:
+				// the process exits rather than continue unguarded
+				attachError = `the guard path is unopenable: ${errorText(error)}`;
+				ctx.shutdown();
+				return null;
+			}
+			const taken = takeGuardLock(fd);
+			if (taken === false) {
+				closeSync(fd);
+				attachError =
+					"duplicate: this native session's guard is held by a live process";
+				// the supported termination path: the duplicate exits
+				// before any model work, on the context, not the pi
+				ctx.shutdown();
+				return null;
+			}
+			if (taken === undefined) {
+				// unknown refuses the association AND the session: no
+				// unguarded tracked process may keep running
+				closeSync(fd);
+				attachError =
+					"the guard cannot be probed here; refusing an unverified association";
+				ctx.shutdown();
+				return null;
+			}
+			holdGuard({
+				fd,
+				path: guard,
+				sessionId,
+				sessionFile,
+			});
 		}
 		try {
 			const reply = await tracker<AttachReply>("/api/v1/native/attach", {
@@ -556,72 +527,14 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				body: JSON.stringify({
 					native_id: sessionId,
 					session_file: sessionFile,
-					launch_token: process.env.SACCADE_LAUNCH_TOKEN || undefined,
 				}),
 			});
-			// the session's own runtime guard: kernel-held from here to
-			// association change or death. Held = a live process already
-			// owns this native session: this process is a duplicate - it
-			// shuts down before any model work. Unknown = the host
-			// offers no flock: fail safe, no association, no
-			// participation - an unverified session must never look
-			// free to the backend's probe. A guard held for this exact
-			// session from a previous start is reused, never reopened:
-			// the lock is already ours.
-			if (!reply.guard) {
-				releaseGuard();
-			} else if (heldGuard()?.path === reply.guard) {
-				// retained exact-session guard
-			} else {
-				releaseGuard();
-				let fd: number;
-				try {
-					fd = openSync(reply.guard, "a+");
-				} catch (error) {
-					// an unopenable guard is as unsafe as an unknown take:
-					// the process exits rather than continue unguarded
-					attachError = `the guard path is unopenable: ${errorText(error)}`;
-					ctx.shutdown();
-					return null;
-				}
-				const taken = takeGuardLock(fd);
-				if (taken === false) {
-					closeSync(fd);
-					attachError =
-						"duplicate: this native session's guard is held by a live process";
-					// the supported termination path: the duplicate exits
-					// before any model work, on the context, not the pi
-					ctx.shutdown();
-					return null;
-				}
-				if (taken === undefined) {
-					// unknown refuses the association AND the session: no
-					// unguarded tracked process may keep running
-					closeSync(fd);
-					attachError =
-						"the guard cannot be probed here; refusing an unverified association";
-					ctx.shutdown();
-					return null;
-				}
-				holdGuard({
-					fd,
-					path: reply.guard,
-					sessionId,
-					sessionFile,
-				});
-			}
 			association = {
 				...reply,
 				nativeId: sessionId,
 				sessionFile,
-				guardFd: heldGuard()?.fd ?? null,
 			};
 			process.env.SACCADE_INCARNATION_SEQ = String(reply.incarnation);
-			// the launch token's bootstrap is done: a later fork or
-			// reload in this process reattaches tokenless, so no other
-			// association can ever be retargeted by this one
-			delete process.env.SACCADE_LAUNCH_TOKEN;
-			startBridge(association);
 			return association;
 		} catch (error) {
 			attachError = errorText(error);
@@ -638,115 +551,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return association ?? (await attach(ctx));
 	}
 
-	async function mailbox(incarnation: number): Promise<MailboxMessage[]> {
-		const reply = await tracker<{ messages: MailboxMessage[] }>(
-			`/api/v1/messages?incarnation=${incarnation}`,
-		);
-		return reply.messages;
-	}
-
-	// The background bridge: one parked transport read per association,
-	// woken when a sender's attempt stages a delivery task. Each task
-	// is handed exactly once and queue natively at whatever boundary
-	// the session supports - into the running queue, or as a turn when
-	// idle. The loop carries no recorded mail at all: a recorded
-	// message without confirmed submission is evidence, and nothing
-	// drains it later. The loop dies with its association, so a
-	// reassociated session never delivers as a stale recipient, and a
-	// failed read reconnects with backoff - transport, nothing more.
-	const bridgeLoops = new Set<Association>();
-	function startBridge(assoc: Association): void {
-		if (bridgeLoops.has(assoc)) return;
-		bridgeLoops.add(assoc);
-		void (async () => {
-			let backoff = 500;
-			while (association === assoc) {
-				try {
-					const reply = await tracker<{ deliveries: StagedDelivery[] }>(
-						`/api/v1/messages/deliver?incarnation=${assoc.incarnation}&wait_ms=25000`,
-					);
-					// the handoff is valid only for the association that
-					// read it: a reassociation between staging and
-					// handoff never queues a stale delivery
-					if (association !== assoc) break;
-					backoff = 500;
-					for (const staged of reply.deliveries) {
-						queueDelivery(staged.message);
-					}
-				} catch {
-					await new Promise((resolve) => setTimeout(resolve, backoff));
-					backoff = Math.min(backoff * 2, 15000);
-				}
-			}
-			bridgeLoops.delete(assoc);
-		})();
-	}
-
-	// Queue one message natively, then confirm the sender's attempt on
-	// the runtime's own per-call receipt: the composition preload
-	// forwards preflightResult into prompt, so this delivery's callback
-	// reports queued at steer insertion, started at run start, and
-	// handled when another extension's input handler consumed the input
-	// - each an observed fact about this exact message, never an
-	// inference from aggregate queue or run state. A rejected delivery
-	// (compaction and auth throws fire no callback) stays held without
-	// any confirmation and is dropped at a later idle boundary; nothing
-	// is ever requeued.
-	function queueDelivery(message: MailboxMessage): void {
-		if (association === null) return;
-		if (queued.has(message.seq)) return;
-		queued.set(message.seq, message);
-		const delivery: QueuedDelivery = {
-			envelope: envelopeText(message),
-			messageSeq: message.seq,
-			incarnation: association.incarnation,
-			sessionFile: association.sessionFile,
-		};
-		deliveries.add(delivery);
-		// the receipt option flows through the loader verbatim into the
-		// adapted sendUserMessage; the pinned ExtensionAPI type does not
-		// declare it yet, hence the local shape
-		const options = {
-			deliverAs: "steer",
-			preflightResult: (outcome: "queued" | "started" | "handled") => {
-				if (outcome === "handled") {
-					// intercepted before queueing: a proven non-delivery,
-					// reported by the send as no confirmation
-					queued.delete(delivery.messageSeq);
-					deliveries.delete(delivery);
-					return;
-				}
-				delivery.accepted = true;
-				confirmOne(delivery);
-			},
-		} as unknown as Parameters<ExtensionAPI["sendUserMessage"]>[1];
-		pi.sendUserMessage(delivery.envelope, options);
-	}
-
-	// The delivery machinery's act, re-posted by the later boundaries
-	// while its acknowledgement is missing: bookkeeping of an accepted
-	// queueing, never a redelivery.
-	function confirmOne(delivery: QueuedDelivery): void {
-		tracker("/api/v1/messages/submit", {
-			method: "POST",
-			body: JSON.stringify({
-				incarnation: delivery.incarnation,
-				message: delivery.messageSeq,
-			}),
-		})
-			.then(() => {
-				// the correlation entry stays for the input event; the
-				// association's lifecycle clears it
-				deliveries.delete(delivery);
-			})
-			.catch(() => {
-				// stays held; a later boundary re-posts
-			});
-	}
-
 	// Extension message events are not proof of insertion - the
 	// message_end hook runs before the SessionManager append - so
-	// confirmation reads the saved entries themselves.
+	// handoff-continuation confirmation reads the saved entries
+	// themselves.
 	function savedEntryHas(ctx: ExtensionContext, envelope: string): boolean {
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "message") continue;
@@ -758,54 +566,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return false;
 	}
 
-	// The later boundaries settle what the per-call receipt could not:
-	// a held delivery whose receipt already reported acceptance re-posts
-	// its acknowledgement - bookkeeping of an observed acceptance, never
-	// a redelivery - and one that never observed acceptance drops when
-	// the session is idle, the queue empty, and the envelope absent:
-	// the runtime refused the input, nothing to confirm, no redelivery
-	// ever. A delivery bound to an association that is no longer live
-	// cancels outright.
-	function confirmHeld(ctx: ExtensionContext): void {
-		for (const delivery of [...deliveries]) {
-			if (
-				association === null ||
-				association.incarnation !== delivery.incarnation ||
-				association.sessionFile !== delivery.sessionFile
-			) {
-				deliveries.delete(delivery);
-				continue;
-			}
-			if (delivery.accepted) {
-				confirmOne(delivery);
-				continue;
-			}
-			if (
-				ctx.isIdle?.() === true &&
-				ctx.hasPendingMessages?.() === false &&
-				!savedEntryHas(ctx, delivery.envelope)
-			) {
-				// refused before acceptance: the correlation dies with it
-				queued.delete(delivery.messageSeq);
-				deliveries.delete(delivery);
-			}
-		}
-	}
-
-	// The confirmation boundaries: any later message end, run end, or
-	// settle - each checks the saved entries, never an event alone.
-	pi.on("message_end", (_event: unknown, ctx: ExtensionContext) => {
-		confirmHeld(ctx);
-		confirmContinuations(ctx);
-		return undefined;
-	});
-	pi.on("agent_end", (_event: unknown, ctx: ExtensionContext) => {
-		confirmHeld(ctx);
-		confirmContinuations(ctx);
-		return undefined;
-	});
 	pi.on("agent_settled", (event: AgentSettledEvent, ctx: ExtensionContext) => {
-		confirmHeld(ctx);
 		confirmContinuations(ctx);
 		if (event.aborted === true) {
 			// the run was aborted: only this handoff cancels, with its
@@ -943,9 +704,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		if (data.sessionFile !== ctx.sessionManager.getSessionFile()) {
 			return stale("the armed session file is not this session's");
 		}
-		if (headerCwd(data.sessionFile) !== data.target) {
-			return stale("the saved session's working directory is not the armed target");
-		}
 		const record = await confirmedChangeRecord(who.incarnation, data.target);
 		if (record === null) {
 			return stale("no confirmed workspace change record matches this incarnation and target");
@@ -1008,33 +766,6 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		return { ...text(content), isError: true } as const;
 	}
 
-	// Finish a wait exactly once and take its machinery down with it:
-	// timer, signal listener, and the active set. A finished wait's
-	// callbacks are inert, so it can never consume a newer wait's
-	// release.
-	function finish(state: WaitState, outcome: Outcome, mail: MailboxMessage[]) {
-		if (state.done) return;
-		state.done = true;
-		if (state.timer !== null) {
-			clearInterval(state.timer);
-			state.timer = null;
-		}
-		if (state.offSignal !== null) {
-			const off = state.offSignal;
-			state.offSignal = null;
-			off();
-		}
-		waits.delete(state);
-		state.mail = mail;
-		state.settle(outcome);
-	}
-
-	function cancelAllWaits() {
-		for (const state of [...waits]) {
-			finish(state, "detached", []);
-		}
-	}
-
 	pi.registerTool({
 		name: "saccade_identity",
 		label: "Saccade identity",
@@ -1062,7 +793,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		name: "saccade_send",
 		label: "Saccade send",
 		description:
-			"Send a durable message to another registered incarnation. Addressing uses public numbers: the recipient i-<n>, an optional reply_to m-<n> naming the message this one answers, and an optional task t-<n> riding as context without publishing to its thread. The message records first, then the attempt waits briefly for the recipient's queue to accept it - success means accepted, a failure names the recorded m-N and why; pair with saccade_wait when the reply matters now.",
+			"Send a durable message to another registered incarnation. Addressing uses public numbers: the recipient i-<n>, an optional reply_to m-<n> naming the message this one answers, and an optional task t-<n> riding as context without publishing to its thread. The message records first, then the attempt waits briefly for the recipient's queue to accept it - success means accepted, a failure names the recorded m-N and why; pair with `sac wait i-<n> --timeout <secs>` when the reply matters now.",
 		parameters: SendParams,
 		execute: async (_id, params: Static<typeof SendParams>, _signal, _onUpdate, ctx: ExtensionToolContext) => {
 			const who = await ensureAttached(ctx);
@@ -1101,94 +832,10 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "saccade_wait",
-		label: "Saccade wait",
-		description:
-			"Wait for incoming saccade messages addressed to this incarnation. Released by a matching message (delivered natively into your session) or by native human input; the result names which happened, never whether a request was answered. No messages and no input: it keeps waiting.",
-		parameters: WaitParams,
-		execute: async (_id, params: Static<typeof WaitParams>, signal, _onUpdate, ctx: ExtensionToolContext) => {
-			const who = await ensureAttached(ctx);
-			if (!who) return failed(`cannot wait: ${attachError}`);
-			const wantReply = params.reply_to ? numToken(params.reply_to, "m-") : null;
-			const incarnation = who.incarnation;
-			const state: WaitState = {
-				timer: null,
-				offSignal: null,
-				done: false,
-				mail: null,
-				settle: () => {},
-			};
-			const released = await new Promise<Outcome>((resolve) => {
-				state.settle = (outcome) => resolve(outcome);
-				waits.add(state);
-				// the tool call's own cancellation finishes the wait; the
-				// listener comes off in finish, so no path leaks it
-				if (signal) {
-					const onAbort = () => finish(state, "cancelled", []);
-					if (signal.aborted) {
-						onAbort();
-						return;
-					}
-					signal.addEventListener("abort", onAbort);
-					state.offSignal = () => signal.removeEventListener("abort", onAbort);
-				}
-				const poll = async () => {
-					if (state.done) return;
-					try {
-						const incoming = incomingFor(
-							incarnation,
-							await mailbox(incarnation),
-						);
-						const mine =
-							wantReply === null
-								? incoming
-								: incoming.filter((m) => m.reply_to === wantReply);
-						if (mine.length > 0) finish(state, "message", mine);
-					} catch {
-						// a poll that cannot reach the tracker keeps waiting
-					}
-				};
-				state.timer = setInterval(poll, POLL_MS);
-			});
-			// whatever the path, the wait's machinery is already down
-			if (released === "extension") {
-				return text(
-					"the wait ended because native input arrived through the integration; recorded mail without a confirmed submission stays record evidence only - sac messages to read it, nothing re-delivers it",
-				);
-			}
-			if (released === "input") {
-				return text(
-					"the wait ended because native human input arrived; recorded mail without a confirmed submission stays record evidence only - sac messages to read it, nothing re-delivers it",
-				);
-			}
-			if (released === "cancelled") {
-				return text(
-					"the wait ended without a message (the call was cancelled); recorded mail without a confirmed submission stays record evidence only - sac messages to read it",
-				);
-			}
-			if (released === "detached") {
-				return text(
-					"the wait ended because this session's saccade association changed; nothing arrived - saccade_identity to re-check, saccade_wait again",
-				);
-			}
-			// the arrivals were already placed into this session's input
-			// queue by their senders' submissions; the wait only reports
-			// them, never queues a copy
-			const delivered = state.mail ?? [];
-			const named = delivered
-				.map((m) => `m-${m.num} from i-${m.from.num}`)
-				.join(", ");
-			return text(
-				`received ${named}; delivered into your session through its input queue - reply through saccade_send with reply_to`,
-			);
-		},
-	});
-
-	pi.registerTool({
 		name: "saccade_workspace",
 		label: "Saccade workspace",
 		description:
-			"Move THIS session to another workspace, by explicit choice only: an existing directory, or a newly provisioned one. The saved working directory changes at a safe native boundary - this run settles, the session shuts down, and a bounded helper moves the saved session and resumes it there with the same native id, history, and declared scope. Refuses while background jobs or subagents are active or unverifiable (nothing is stopped), and blocks new background starts until the handoff resolves.",
+			"Move THIS session to another workspace, by explicit choice only: an existing directory, or a newly provisioned one. The change lands at a safe native boundary - this run settles, the session shuts down, and a bounded helper records the change and resumes the same native session there with its id, history, and declared scope. Refuses while background jobs or subagents are active or unverifiable (nothing is stopped), and blocks new background starts until the handoff resolves.",
 		parameters: WorkspaceParams,
 		execute: async (
 			id,
@@ -1364,9 +1011,9 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				return text(
 					[
 						`workspace handoff armed: background admissions are held, target ${target}${provisioned}.`,
-						"When this run settles, the session shuts down and a bounded helper moves the saved session's working directory and resumes it there - same native id, history, and declared scope.",
+						"When this run settles, the session shuts down and a bounded helper records where this session lives and resumes it there - same native id, history, and declared scope.",
 						`The helper's outcome log is ${log}; if the session does not come back, that file names the failure.`,
-						"Do not start background work. Native human input or a reload cancels the handoff and releases the hold.",
+						"Do not start background work. Native input or a reload cancels the handoff and releases the hold.",
 					].join("\n"),
 				);
 			} catch (error) {
@@ -1378,9 +1025,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
 		// every start reassociates by the session's actual native id and
 		// locator - new, fork, resume, and reload alike - and the old
-		// association's waits and queued deliveries die with it, never
-		// submitting or delivering into a session this incarnation is not
-		cancelAllWaits();
+		// association dies with it
 		unpersistedSession = false;
 		const who = await attach(ctx);
 		if (!who) {
@@ -1413,71 +1058,29 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
-		// idempotent teardown: waits finish, queued deliveries cancel,
-		// the association, its env channel, and the captured session
-		// context go with the session - and
-		// the exact-session guard stays kernel-held: process death is
-		// its release, and a reload's next start reuses it. A handoff
-		// still armed here never launched its helper: reload and session
-		// replacement cancel it with its gate; on the quit path the
-		// settle boundary already emptied it.
+		// idempotent teardown: the association and its env channel go
+		// with the session - and the exact-session guard stays
+		// kernel-held: process death is its release, and a reload's
+		// next start reuses it. A handoff still armed here never
+		// launched its helper: reload and session replacement cancel it
+		// with its gate; on the quit path the settle boundary already
+		// emptied it.
 		cancelPendingHandoff("the session ended before the handoff's run settled");
-		cancelAllWaits();
 		suspendAssociation();
 		return undefined;
 	});
 
-	// native input releases this integration's own waits, before the
-	// input queues; the input itself proceeds untouched. Source matters:
-	// an extension-source input IS this integration's own delivery
-	// entering the session - an agent message arriving, never human
-	// input - so the wait releases with the message's correlation; a
-	// human typing keeps the human wording. Neither reading claims a
-	// reply was satisfied.
-	pi.on("input", async (event: InputEvent, ctx: ExtensionContext) => {
-		if (event.source === "extension") {
-			const text = event.text;
-			const correlated = [...queued.values()].find(
-				(message) => envelopeText(message) === text,
-			);
-			if (correlated) {
-				// our own envelope: the wait releases with the real
-				// message correlation
-				for (const state of [...waits]) {
-					finish(state, "message", [correlated]);
-				}
-			} else {
-				// another extension's input is native input too: it
-				// yields our wait under a generic wording - never
-				// fabricated human origin, never a guessed correlation
-				for (const state of [...waits]) {
-					finish(state, "extension", []);
-				}
-			}
-			return { action: "continue" };
-		}
-		// a human correction is a supported settle boundary: held
-		// confirmations settle here - refused inputs drop, never to be
-		// delivered again
-		confirmHeld(ctx);
-		// the human took the session back: an armed handoff cancels with
-		// its gate, and the input proceeds in the staying session
-		cancelPendingHandoff("native human input arrived; the session stays");
-		for (const state of [...waits]) {
-			finish(state, "input", []);
+	// native interactive input - a human at the keys, or text the
+	// host typed in - takes the session back: an armed handoff cancels
+	// with its gate, and the input itself proceeds untouched in the
+	// staying session. Another extension's steering is not native
+	// input and cancels nothing.
+	pi.on("input", async (event: InputEvent, _ctx: ExtensionContext) => {
+		if (event.source !== "extension") {
+			cancelPendingHandoff("native input arrived; the session stays");
 		}
 		return { action: "continue" };
 	});
-}
-
-// The envelope a delivery injects: machine-supplied origin, ASCII
-// separators, the body untouched.
-export function envelopeText(message: MailboxMessage): string {
-	let head = `[saccade message m-${message.num} | from i-${message.from.num}`;
-	if (message.reply_to !== null) head += ` | replying to m-${message.reply_to}`;
-	if (message.task !== null) head += ` | task t-${message.task}`;
-	head += "]";
-	return `${head}\n\n${message.body}`;
 }
 
 // The user-facing text of a native user message, whatever content
@@ -1491,17 +1094,6 @@ export function userText(message: { role: string; content: unknown }): string {
 			.join("");
 	}
 	return "";
-}
-
-// The addressee's arrivals alone: a message releases a wait only once
-// its submission was confirmed - accepted into this session's input
-// queue - and pending records are evidence that never arrives. A
-// self-addressed message is incoming mail like any other.
-export function incomingFor(
-	incarnation: number,
-	messages: MailboxMessage[],
-): MailboxMessage[] {
-	return messages.filter((m) => m.state === "submitted" && m.to.seq === incarnation);
 }
 
 // An address is exactly <prefix><ASCII digits>: no bare number, no

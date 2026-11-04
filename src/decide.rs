@@ -25,7 +25,7 @@ fn required_tier(event: &Event) -> Authority {
         // provisioning by role: the machinery's establishment and
         // creation, the native registration, and the recipient's
         // delivery record. The confirmed change is machinery's act too:
-        // it lands after the physical retarget, never from a caller.
+        // it lands at the probe's pass, never from a caller.
         // Cleanup and restoration land only after their effects verified:
         // the same effect-only authority, never caller-authored facts.
         Event::WorkspaceEstablished { .. }
@@ -34,6 +34,8 @@ fn required_tier(event: &Event) -> Authority {
         | Event::WorkspaceCleaned { .. }
         | Event::WorkspaceRestored { .. }
         | Event::IncarnationRegistered { .. }
+        | Event::SavedSessionBound { .. }
+        | Event::HostAddressAssigned { .. }
         | Event::MessageSubmitted { .. } => Authority::Require(Tier::System),
     }
 }
@@ -115,9 +117,29 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::RegisterIncarnation {
             native_id,
             saved_session,
+            address,
+            adopted,
         } => vec![Event::IncarnationRegistered {
             native_id,
             saved_session,
+            address,
+            adopted,
+        }],
+        Command::BindSavedSession {
+            incarnation,
+            saved_session,
+        } => vec![Event::SavedSessionBound {
+            incarnation,
+            saved_session,
+        }],
+        Command::AssignHostAddress {
+            incarnation,
+            address,
+            adopted,
+        } => vec![Event::HostAddressAssigned {
+            incarnation,
+            address,
+            adopted,
         }],
         Command::SendMessage {
             from,
@@ -175,7 +197,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 22] = [
+        let events: [(Event, Authority); 24] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -339,7 +361,26 @@ mod test {
             (
                 Event::IncarnationRegistered {
                     native_id: native_id(),
+                    saved_session: Some(locator()),
+                    address: Some("/tty5".into()),
+                    adopted: false,
+                },
+                Require(Tier::System),
+            ),
+            // The attach's locator binding and the relaunch's address
+            // move are the machinery's own association facts.
+            (
+                Event::SavedSessionBound {
+                    incarnation: IncarnationId(RecordId(0)),
                     saved_session: locator(),
+                },
+                Require(Tier::System),
+            ),
+            (
+                Event::HostAddressAssigned {
+                    incarnation: IncarnationId(RecordId(0)),
+                    address: Some("/tty7".into()),
+                    adopted: false,
                 },
                 Require(Tier::System),
             ),
@@ -448,7 +489,11 @@ mod test {
             },
             Command::RegisterIncarnation {
                 native_id: NativeSessionId::new("a1b2c3d4".into()).unwrap(),
-                saved_session: SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap(),
+                saved_session: Some(
+                    SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap(),
+                ),
+                address: None,
+                adopted: false,
             },
             Command::SendMessage {
                 from: IncarnationId(RecordId(0)),

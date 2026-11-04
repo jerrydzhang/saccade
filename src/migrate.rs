@@ -261,7 +261,7 @@ pub fn migrate(source: &Path, out: &Path) -> Result<Report, MigrateFail> {
 /// renumbered onto the fold's public numbering.
 fn renumber_rows(
     rows: &[StoredRecord],
-    mut report: &mut Report,
+    report: &mut Report,
 ) -> Result<Vec<StoredRecord>, MigrateFail> {
     let mut walk = V3Walk {
         comments: BTreeMap::new(),
@@ -320,31 +320,31 @@ fn renumber_rows(
         let (kind, payload) = match row.kind.as_str() {
             "task_created" => ("task_created".to_string(), {
                 let mut p = payload;
-                rewrite_field(&mut p, "name", row.seq, &mut renumber, &mut report);
+                rewrite_field(&mut p, "name", row.seq, &mut renumber, report);
                 p.to_string()
             }),
             "task_claimed" => ("task_claimed".to_string(), payload.to_string()),
             "task_cancelled" | "task_reopened" => {
                 let mut p = payload;
-                rewrite_field(&mut p, "explanation", row.seq, &mut renumber, &mut report);
+                rewrite_field(&mut p, "explanation", row.seq, &mut renumber, report);
                 (row.kind.clone(), p.to_string())
             }
-            "commented" => rewrite_commented(row, payload, &walk, &mut renumber, &mut report)?,
+            "commented" => rewrite_commented(row, payload, &walk, &mut renumber, report)?,
             "comment_revised" => {
                 let mut p = payload;
-                rewrite_field(&mut p, "body", row.seq, &mut renumber, &mut report);
+                rewrite_field(&mut p, "body", row.seq, &mut renumber, report);
                 ("comment_revised".to_string(), p.to_string())
             }
             "comment_withdrawn" => {
                 let mut p = payload;
-                rewrite_field(&mut p, "note", row.seq, &mut renumber, &mut report);
+                rewrite_field(&mut p, "note", row.seq, &mut renumber, report);
                 ("comment_withdrawn".to_string(), p.to_string())
             }
             "use_bound" => ("use_bound".to_string(), payload.to_string()),
             "artifact_added" => {
                 let mut p = payload;
                 if let Some(artifact) = p.get_mut("artifact") {
-                    rewrite_field(artifact, "name", row.seq, &mut renumber, &mut report);
+                    rewrite_field(artifact, "name", row.seq, &mut renumber, report);
                 }
                 ("artifact_added".to_string(), p.to_string())
             }

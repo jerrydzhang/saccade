@@ -104,10 +104,8 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
                         .get(id)
                         .map(|ctx| ctx.references.len())
                         .unwrap_or(0);
-                    let unresolved = body.as_ref().and_then(|prose| {
-                        crate::markers::first_unresolved(prose.as_str(), mapped)
-                    });
-                    unresolved
+                    body.as_ref()
+                        .and_then(|prose| crate::markers::first_unresolved(prose.as_str(), mapped))
                 }
                 _ => None,
             };

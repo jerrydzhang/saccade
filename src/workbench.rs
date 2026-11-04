@@ -136,11 +136,7 @@ pub fn snapshot(
             .references
             .iter()
             .enumerate()
-            .filter_map(|(index, target)| {
-                matches!(target, RefTarget::Artifact { .. }).then(|| {
-                    json!({"index": index, "html": web::prose_html(&format!("[^{}]", index + 1), &line.references, store)})
-                })
-            })
+            .filter(|&(_index, target)| matches!(target, RefTarget::Artifact { .. })).map(|(index, _target)| json!({"index": index, "html": web::prose_html(&format!("[^{}]", index + 1), &line.references, store)}))
             .collect();
         comments.push(json!({
             "id": format!("c-{}", line.num), "num": line.num, "seq": line.seq,
@@ -283,6 +279,10 @@ fn activity_entry(
         Event::TaskClaimed { id, .. }
         | Event::TaskCancelled { id, .. }
         | Event::TaskReopened { id, .. } => (resolved(Some(id.0))?, None, None, None),
+        // the launch machinery's own facts ride no workbench row
+        Event::SavedSessionBound { .. } | Event::HostAddressAssigned { .. } => {
+            (resolved(None)?, None, None, None)
+        }
         Event::Commented { home, .. } => (
             resolved(Some(home.0))?,
             world.comment_num(CommentId(RecordId(row.seq))),
@@ -491,10 +491,12 @@ mod test {
                 Context::system(),
                 Event::IncarnationRegistered {
                     native_id: NativeSessionId::new("a1b2c3d4-evil".into()).unwrap(),
-                    saved_session: SessionLocator::new(
-                        "/home/story/.pi/sessions/a1b2c3d4.jsonl".into(),
-                    )
-                    .unwrap(),
+                    saved_session: Some(
+                        SessionLocator::new("/home/story/.pi/sessions/a1b2c3d4.jsonl".into())
+                            .unwrap(),
+                    ),
+                    address: None,
+                    adopted: false,
                 },
             ),
             (

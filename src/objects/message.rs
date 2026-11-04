@@ -85,8 +85,11 @@ mod tables {
             },
             Event::IncarnationRegistered {
                 native_id: crate::NativeSessionId::new("a1b2c3d4".into()).unwrap(),
-                saved_session: crate::SessionLocator::new("/sessions/a1b2c3d4.jsonl".into())
-                    .unwrap(),
+                saved_session: Some(
+                    crate::SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap(),
+                ),
+                address: None,
+                adopted: false,
             },
             Event::TaskClaimed {
                 id: TaskId(0),
