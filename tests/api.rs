@@ -5647,6 +5647,54 @@ fn a_send_to_a_finished_address_discloses_through_the_real_door() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+fn bind_next_ask(url: &str) -> std::thread::JoinHandle<()> {
+    let (_, body) = get_json(url, "/api/v1/records");
+    let rows = json_of(&body)["records"].as_array().unwrap().clone();
+    let after = rows.last().map(|r| r["seq"].as_u64().unwrap());
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (native_id, birth) = loop {
+            let (status, body) = get_json(&url, "/api/v1/records");
+            assert_eq!(status, 200, "{body}");
+            let rows = json_of(&body)["records"].as_array().unwrap().clone();
+            if let Some(row) = rows.iter().find(|row| {
+                row["kind"] == "incarnation_registered"
+                    && after.is_none_or(|cursor| row["seq"].as_u64().unwrap() > cursor)
+                    && row["payload"]["saved_session"].is_null()
+            }) {
+                break (
+                    row["payload"]["native_id"].as_str().unwrap().to_string(),
+                    row["seq"].as_u64().unwrap(),
+                );
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no launch birth: {body}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let (status, body) = get_json(&url, "/api/v1/records");
+        assert_eq!(status, 200, "{body}");
+        assert!(
+            !json_of(&body)["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| { row["kind"] == "message_sent" && row["payload"]["to"] == birth }),
+            "the initial question preceded native startup: {body}"
+        );
+        let (status, body) = post_json(
+            &url,
+            "/api/v1/native/attach",
+            &json!({"native_id": native_id, "session_file": format!("/sessions/{native_id}.jsonl")}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(json_of(&body)["incarnation"], birth);
+    })
+}
+
 #[test]
 fn the_ask_door_introduces_and_the_send_door_discloses() {
     let bin = env!("CARGO_BIN_EXE_sac");
@@ -5681,12 +5729,10 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
     );
     assert_eq!(status, 200, "{body}");
 
-    // the ask door: the launch births the newborn itself (identity and
-    // address exist at launch time), the question records first, and
-    // the sole writer submits it through the adapter at the newborn's
-    // recorded address - the host accepted, the reply says so
+    // The initial question waits for the new session's startup binding.
     let workspace = db.parent().unwrap().join("peer-workspace");
     std::fs::create_dir_all(&workspace).unwrap();
+    let binding = bind_next_ask(&base_url);
     let out = std::process::Command::new(bin)
         .args([
             "--server",
@@ -5706,6 +5752,7 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
         .env("SACCADE_TASK", "")
         .output()
         .expect("spawn sac");
+    binding.join().unwrap();
     let out_text = String::from_utf8_lossy(&out.stdout).into_owned();
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "stdout: {out_text}\nstderr: {err}");
@@ -5822,6 +5869,58 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(err.contains("SACCADE_INCARNATION_SEQ"), "{err}");
+
+    // An unbound launch remains recorded, but no initial question is recorded or sent.
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/incarnations/address",
+        &json!({"incarnation": 2, "address": "t2", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let send_log = hc.parent().unwrap().join("argv-send.log");
+    let sends_before = std::fs::read_to_string(&send_log).unwrap();
+    let started = std::time::Instant::now();
+    let (ok, out, err, timed_out) = bounded_sac(
+        bin,
+        &[
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.display().to_string(),
+            "launch".to_string(),
+            "--workspace".to_string(),
+            workspace.display().to_string(),
+            "--ask".to_string(),
+            "this question waits for startup".to_string(),
+        ],
+        &[
+            ("SACCADE_HERDR", hc.display().to_string()),
+            ("SACCADE_PI", pi.display().to_string()),
+            ("SACCADE_ACTOR", "creator".to_string()),
+            ("SACCADE_INCARNATION_SEQ", creator_birth.to_string()),
+        ],
+    );
+    assert!(!timed_out, "{out}{err}");
+    assert!(!ok, "an unbound startup was reported successful: {out}");
+    assert!(err.contains("i-3 was launched at address t1"), "{err}");
+    assert!(
+        err.contains("initial question was not recorded or sent"),
+        "{err}"
+    );
+    assert!(err.contains("within 30 seconds"), "{err}");
+    assert!(started.elapsed() >= std::time::Duration::from_secs(30));
+    assert_eq!(std::fs::read_to_string(send_log).unwrap(), sends_before);
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    assert_eq!(
+        json_of(&body)["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["kind"] == "message_sent")
+            .count(),
+        3,
+        "{body}"
+    );
 
     let _ = std::process::Command::new("kill")
         .arg(server_pid.id().to_string())
@@ -7473,9 +7572,8 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
         .collect();
     assert_eq!(stumbled.len(), 1, "{body}");
 
-    // the ask composition rides the same birth: a registered creator
-    // questions the newborn peer. The newborn claims its launch token
-    // by attaching, as the integration itself would
+    // A provisioned peer binds its native session before receiving the initial question.
+    let binding = bind_next_ask(&base_url);
     let ask_out = home.join("ask.out");
     let ask_err = home.join("ask.err");
     let ask_cli = std::thread::spawn({
@@ -7512,6 +7610,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
         }
     });
     assert!(ask_cli.join().unwrap().success());
+    binding.join().unwrap();
     let asked = json_of(&std::fs::read_to_string(&ask_out).unwrap());
     assert!(
         asked["provisioned"]["branch"]

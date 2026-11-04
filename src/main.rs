@@ -2469,6 +2469,36 @@ struct AskOutcome {
 /// origin on the record - never argv shaped into native human input.
 /// The newborn is the exact birth the launch composed - the (harness,
 /// native id) pair - never an address rediscovery.
+// Native startup binds after taking raw input; terminal creation alone does not.
+const ASK_BIND_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn wait_for_ask_binding(destination: &Destination, incarnation: IncarnationId) -> Result<(), Fail> {
+    let deadline = std::time::Instant::now() + ASK_BIND_BOUND;
+    loop {
+        let loadout = loadout_of(destination)?;
+        let LoadState::Full(world) = loadout.state else {
+            return Err(Fail::Degraded(
+                "launch --ask needs the world; the log will not fold".into(),
+            ));
+        };
+        let ctx = world
+            .incarnations
+            .get(&incarnation)
+            .ok_or(Fail::Reject(Reject::InvalidIncarnationId))?;
+        if ctx.incarnation.saved_session().is_some() {
+            return Ok(());
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(Fail::Usage(format!(
+                "native startup did not bind its saved-session locator within {} seconds",
+                ASK_BIND_BOUND.as_secs()
+            )));
+        }
+        std::thread::sleep(left.min(WAIT_POLL));
+    }
+}
+
 fn ask_run(
     cli: &Cli,
     destination: &Destination,
@@ -2555,6 +2585,12 @@ fn ask_run(
         .incarnation_num(newborn)
         .expect("the fold just resolved this incarnation");
     let birth = newborn.0.0;
+    wait_for_ask_binding(destination, newborn).map_err(|error| {
+        Fail::Usage(format!(
+            "i-{num} was launched at address {}; the initial question was not recorded or sent: {error}",
+            submitted.terminal,
+        ))
+    })?;
     // the question records first, then rides the same attempt as any
     // send: a refused or unacknowledged submission is disclosed here,
     // never retried behind the door
