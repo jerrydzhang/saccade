@@ -226,6 +226,13 @@
             # fresh home - an existing home keeps its own layout choice,
             # and switching once is the app's own documented act
             install -m 0444 "${mod}/layouts/saccade.json" "$home/layouts/saccade.json"
+            # the app never merges a mod's keys.json into the person's -
+            # the guide's install step 4 is the installer's job, and this
+            # wrapper is the installer; seeded only into a fresh home, so
+            # the person's own keys.json always wins over the deployment
+            if [ ! -f "$home/keys.json" ]; then
+              printf '{"global":{"ctrl-space":"tmux.prefix"}}' > "$home/keys.json"
+            fi
             if [ ! -f "$home/shared.json" ]; then
               printf '{"layout":"saccade"}' > "$home/shared.json"
             fi

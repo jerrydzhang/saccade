@@ -194,7 +194,9 @@
             {
               "id": "tmux-host",
               "type": "block",
-              "hidden": true,
+              "size": {
+                "px": 0
+              },
               "content": {
                 "mod": "tmux"
               }

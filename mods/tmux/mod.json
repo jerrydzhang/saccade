@@ -1,4 +1,4 @@
 {
-  "place": "overlay",
+  "place": "none",
   "title": "tmux prefix"
 }
