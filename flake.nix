@@ -166,7 +166,7 @@
     mkSaccadeSpacesMod = {pkgs}:
       pkgs.runCommand "saccade-spaces-mod-${saccadeModVersion}" {} ''
         mkdir -p $out/mods/saccade $out/layouts
-        for f in mod.json main.js plan.js config.json; do
+        for f in mod.json main.js plan.js; do
           ${pkgs.coreutils}/bin/install -m 0444 ${./mods/saccade}/$f $out/mods/saccade/$f
         done
         ${pkgs.coreutils}/bin/install -m 0444 ${./mods/saccade-layout.json} $out/layouts/saccade.json
@@ -195,12 +195,19 @@
           home=''${HERDR_APP_HOME:-''${XDG_CONFIG_HOME:-''${HOME:-/nonexistent}/.config}/herdr-app}
           mods=$home/mods
           stamp=$mods/saccade/.version
-          want=${saccadeModVersion}
-          if [ ! -f "$stamp" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
+          # the stamp is the mod package's store path - its content hash:
+          # a rebuilt mod re-seeds, a human-edited one whose stamp matches
+          # stays
+          want=${mod}
+          if [ "$stamp" != "$want" ]; then
             mkdir -p "$mods/saccade" "$home/layouts"
-            for f in mod.json main.js plan.js config.json; do
-              install -m 0444 "${mod}/mods/saccade/$f" "$mods/saccade/$f"
+            for f in mod.json main.js plan.js; do
+              rm -f "$mods/saccade/$f"
+              install -m 0644 "${mod}/mods/saccade/$f" "$mods/saccade/$f"
             done
+            # the deployment no longer ships a config override: a stale
+            # one from an older stamp would pin a wrong root
+            rm -f "$mods/saccade/config.json"
             printf '%s' "$want" > "$stamp"
             # the derived layout seeds always; the selection seeds only a
             # fresh home - an existing home keeps its own layout choice,
