@@ -7,6 +7,7 @@ pub mod completions;
 pub mod db;
 pub mod decide;
 pub mod events;
+pub mod harness;
 pub mod herdr;
 pub mod host;
 pub mod host_contract;
@@ -31,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 pub use decide::decide;
 pub use events::{Command, Event, RecordRef};
+pub use harness::Harness;
 pub use objects::comment::{
     Binding, Comment, CommentContext, CommentId, CommentKind, CommentState, Target, UseBinding,
 };

@@ -96,6 +96,7 @@ mod test {
         }
     }
     use crate::ContentHash;
+    use crate::harness::Harness;
     use crate::store::RecordId;
     use crate::types::artifact::Artifact;
     use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
@@ -233,6 +234,8 @@ mod test {
                 ),
                 address: None,
                 adopted: false,
+                // the kebab token rides the same round-trip as the name
+                harness: Harness::ClaudeCode,
             },
             Event::MessageSent {
                 from: IncarnationId(RecordId(16)),
@@ -275,6 +278,26 @@ mod test {
             tier_from("aliens"),
             Err(ParseFail::UnknownTier(t)) if t == "aliens"
         ));
+    }
+
+    // a registration born before the harness field existed folds as
+    // pi: the default lives on the payload, so old logs keep loading
+    #[test]
+    fn a_registration_without_a_harness_field_folds_as_pi() {
+        let payload = r#"{"native_id":"aaaa1111","saved_session":"/sessions/aaaa1111.jsonl","address":"/tty3","adopted":false}"#;
+        let event = assemble("incarnation_registered", payload).unwrap();
+        assert_eq!(
+            event,
+            Event::IncarnationRegistered {
+                native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
+                saved_session: Some(
+                    SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap()
+                ),
+                address: Some("/tty3".into()),
+                adopted: false,
+                harness: Harness::Pi,
+            }
+        );
     }
 
     #[test]

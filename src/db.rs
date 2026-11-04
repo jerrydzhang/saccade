@@ -905,6 +905,7 @@ mod test {
                 ),
                 address: Some("/tty3".into()),
                 adopted: false,
+                harness: crate::Harness::Pi,
             },
             33,
         )
@@ -917,6 +918,8 @@ mod test {
                 saved_session: None,
                 address: Some("/tty4".into()),
                 adopted: false,
+                // the other harness rides the same round-trip
+                harness: crate::Harness::ClaudeCode,
             },
             33,
         )
@@ -1291,6 +1294,7 @@ mod test {
                 ),
                 address: Some("/tty3".into()),
                 adopted: false,
+                harness: crate::Harness::Pi,
             }
         );
         // the door-birth's locator binds once and the address moves
@@ -1303,6 +1307,7 @@ mod test {
                 ),
                 address: Some("/tty9".into()),
                 adopted: false,
+                harness: crate::Harness::ClaudeCode,
             }
         );
         assert_eq!(world.messages.len(), 1);

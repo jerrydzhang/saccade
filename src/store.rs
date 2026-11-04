@@ -849,14 +849,17 @@ impl World {
                 ref saved_session,
                 ref address,
                 adopted,
+                harness,
             } => {
                 // registering an existing exact native session resolves
                 // at the effect; the fold refuses the second birth, and
-                // a reused id with a different locator never rebinds
-                let known = self
-                    .incarnations
-                    .values()
-                    .find(|ctx| ctx.incarnation.native_id() == Some(native_id));
+                // a reused id with a different locator never rebinds.
+                // Identity is interpreted within its harness: the same
+                // id under another harness is another session
+                let known = self.incarnations.values().find(|ctx| {
+                    ctx.incarnation.native_id() == Some(native_id)
+                        && ctx.incarnation.harness() == Some(harness)
+                });
                 match known {
                     Some(ctx) if ctx.incarnation.saved_session() == saved_session.as_ref() => {
                         return Err(Reason::DuplicateNativeSession);
@@ -874,6 +877,7 @@ impl World {
                             saved_session: saved_session.clone(),
                             address: address.clone(),
                             adopted,
+                            harness,
                         },
                         born_at: record.timestamp,
                     },
@@ -3255,6 +3259,7 @@ mod test {
 
     use crate::NativeSessionId;
     use crate::SessionLocator;
+    use crate::harness::Harness;
     use crate::objects::message::MessageState;
 
     fn registered(id: &str) -> Command {
@@ -3265,6 +3270,7 @@ mod test {
             ),
             address: None,
             adopted: false,
+            harness: Harness::Pi,
         }
     }
 
@@ -3313,6 +3319,7 @@ mod test {
                 ),
                 address: None,
                 adopted: false,
+                harness: Harness::Pi,
             }
         );
 
@@ -3329,6 +3336,7 @@ mod test {
             saved_session: Some(SessionLocator::new("/elsewhere/aaaa1111.jsonl".into()).unwrap()),
             address: None,
             adopted: false,
+            harness: Harness::Pi,
         };
         let refused = log.execute_system(relocated, 3);
         assert!(matches!(refused, Err(Reject::SavedSessionMismatch)));
@@ -3348,6 +3356,7 @@ mod test {
                 saved_session: None,
                 address: Some("/tty5".into()),
                 adopted: false,
+                harness: Harness::Pi,
             },
             3,
         )
@@ -3359,8 +3368,52 @@ mod test {
                 saved_session: None,
                 address: Some("/tty5".into()),
                 adopted: false,
+                harness: Harness::Pi,
             }
         );
+    }
+
+    /// Identity is interpreted within its harness: the same native id
+    /// under another harness is another session, and the exact
+    /// association - harness, id, locator - guards uniqueness per
+    /// harness.
+    #[test]
+    fn the_same_native_id_under_another_harness_is_another_session() {
+        let mut log = Log::new();
+        log.execute_system(registered("aaaa1111"), 1).unwrap();
+        let claude_code = Command::RegisterIncarnation {
+            native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
+            saved_session: Some(SessionLocator::new("/sessions/aaaa1111.jsonl".into()).unwrap()),
+            address: None,
+            adopted: false,
+            harness: Harness::ClaudeCode,
+        };
+        // the pi registration never matches a claude-code lookup: the
+        // same id births again under its own harness
+        log.execute_system(claude_code.clone(), 2).unwrap();
+        assert_eq!(log.world().incarnations.len(), 2);
+        assert_eq!(
+            log.world().incarnations[&IncarnationId(RecordId(1))]
+                .incarnation
+                .harness(),
+            Some(Harness::ClaudeCode)
+        );
+
+        // the exact claude-code association resolves once, never twice
+        let refused = log.execute_system(claude_code, 3);
+        assert!(matches!(refused, Err(Reject::DuplicateNativeSession)));
+
+        // a reused claude-code id with another locator never rebinds
+        let relocated = Command::RegisterIncarnation {
+            native_id: NativeSessionId::new("aaaa1111".into()).unwrap(),
+            saved_session: Some(SessionLocator::new("/elsewhere/aaaa1111.jsonl".into()).unwrap()),
+            address: None,
+            adopted: false,
+            harness: Harness::ClaudeCode,
+        };
+        let refused = log.execute_system(relocated, 3);
+        assert!(matches!(refused, Err(Reject::SavedSessionMismatch)));
+        assert_eq!(log.records().len(), 2);
     }
 
     /// The attach completes a door-birth exactly once: the locator
@@ -3376,6 +3429,7 @@ mod test {
                 saved_session: None,
                 address: Some("/tty5".into()),
                 adopted: false,
+                harness: Harness::Pi,
             },
             2,
         )

@@ -119,11 +119,13 @@ pub fn decide(command: Command) -> Vec<Event> {
             saved_session,
             address,
             adopted,
+            harness,
         } => vec![Event::IncarnationRegistered {
             native_id,
             saved_session,
             address,
             adopted,
+            harness,
         }],
         Command::BindSavedSession {
             incarnation,
@@ -161,6 +163,7 @@ pub fn decide(command: Command) -> Vec<Event> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::harness::Harness;
     use crate::objects::comment::{CommentId, CommentKind};
     use crate::objects::incarnation::IncarnationId;
     use crate::objects::message::MessageId;
@@ -364,6 +367,7 @@ mod test {
                     saved_session: Some(locator()),
                     address: Some("/tty5".into()),
                     adopted: false,
+                    harness: Harness::Pi,
                 },
                 Require(Tier::System),
             ),
@@ -494,6 +498,7 @@ mod test {
                 ),
                 address: None,
                 adopted: false,
+                harness: Harness::Pi,
             },
             Command::SendMessage {
                 from: IncarnationId(RecordId(0)),

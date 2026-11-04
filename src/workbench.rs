@@ -497,6 +497,7 @@ mod test {
                     ),
                     address: None,
                     adopted: false,
+                    harness: crate::Harness::Pi,
                 },
             ),
             (

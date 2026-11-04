@@ -8794,6 +8794,7 @@ fn completions_emit_scripts_and_the_candidate_doors_answer_the_fold() {
             ),
             address: None,
             adopted: false,
+            harness: saccade::Harness::Pi,
         },
     ];
     for command in commands {

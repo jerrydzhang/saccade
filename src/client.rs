@@ -751,14 +751,16 @@ pub fn reconcile_workspaces(url: &str, apply: bool) -> Result<ReconcileReply, Cl
 }
 
 /// The launch door's own birth: the pre-allocated native id and the
-/// opaque host address, recorded before pi's first save. The
+/// opaque host address, recorded before the harness's first save. The
 /// association exists at launch time - no correlation token, no
-/// attach wait.
+/// attach wait. The harness rides the birth: native identity is
+/// interpreted within it.
 pub fn register_incarnation(
     url: &str,
     native_id: &str,
     address: &str,
     adopted: bool,
+    harness: crate::Harness,
 ) -> Result<(), ClientFail> {
     post_json_unit(
         url,
@@ -767,6 +769,7 @@ pub fn register_incarnation(
             "native_id": native_id,
             "address": address,
             "adopted": adopted,
+            "harness": harness,
             "client": env!("CARGO_PKG_VERSION"),
         }),
     )

@@ -30,12 +30,15 @@ pub enum Incarnation {
     /// submission targets it, probes read it - and the address kind:
     /// launched (a terminal that dies with the session, so terminal
     /// liveness reads as session liveness) or adopted (the caller's
-    /// own pane, which outlives the session).
+    /// own pane, which outlives the session). The harness the session
+    /// runs under rides the birth; native identity is interpreted
+    /// within it, and births before the field existed fold as pi.
     Native {
         native_id: NativeSessionId,
         saved_session: Option<SessionLocator>,
         address: Option<String>,
         adopted: bool,
+        harness: crate::harness::Harness,
     },
 }
 
@@ -74,6 +77,15 @@ impl Incarnation {
         match self {
             Incarnation::Native { adopted, .. } => *adopted,
             Incarnation::Established { .. } => false,
+        }
+    }
+
+    /// The harness the native session runs under; historical
+    /// establishments carry none.
+    pub fn harness(&self) -> Option<crate::harness::Harness> {
+        match self {
+            Incarnation::Native { harness, .. } => Some(*harness),
+            Incarnation::Established { .. } => None,
         }
     }
 }

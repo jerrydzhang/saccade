@@ -906,6 +906,9 @@ async fn workbench_launch(
     if let Ok((_, Some((native_id, address)))) = &outcome {
         let birth = Command::RegisterIncarnation {
             adopted: false,
+            // pi pending the launch-selection refactor: this door
+            // composes the pinned pi only
+            harness: crate::Harness::Pi,
             native_id: match crate::NativeSessionId::new(native_id.clone()) {
                 Ok(id) => id,
                 Err(e) => {
@@ -2429,6 +2432,10 @@ pub struct AttachReply {
 struct AttachRequest {
     native_id: crate::NativeSessionId,
     session_file: crate::SessionLocator,
+    /// The harness the attaching session runs under; the pi
+    /// extension sends none and folds as pi.
+    #[serde(default)]
+    harness: crate::Harness,
     #[serde(default)]
     client: Option<String>,
 }
@@ -2437,6 +2444,7 @@ fn attach_operation(
     guard: &mut ServerState,
     native_id: &crate::NativeSessionId,
     saved_session: &crate::SessionLocator,
+    harness: crate::Harness,
 ) -> Result<AttachReply, ApiFail> {
     let ServerState::Ready(inner) = guard else {
         let ServerState::Degraded(reason, _) = guard else {
@@ -2450,12 +2458,12 @@ fn attach_operation(
         db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
     };
     // an existing exact native session is the same incarnation: the
-    // recorded association is native id AND saved locator; a reused
-    // id with a different file binds other history, it never resolves
-    let existing = world
-        .incarnations
-        .iter()
-        .find(|(_, ctx)| ctx.incarnation.native_id() == Some(native_id));
+    // recorded association is harness AND native id AND saved locator;
+    // a reused id under another harness, or with a different file,
+    // binds other history, it never resolves
+    let existing = world.incarnations.iter().find(|(_, ctx)| {
+        ctx.incarnation.native_id() == Some(native_id) && ctx.incarnation.harness() == Some(harness)
+    });
     if let Some((id, ctx)) = existing {
         match ctx.incarnation.saved_session() {
             // a launch-door birth precedes pi's first save: the attach
@@ -2517,6 +2525,7 @@ fn attach_operation(
             saved_session: Some(saved_session.clone()),
             address: None,
             adopted: false,
+            harness,
         },
         db::now_epoch(),
     )?;
@@ -2546,6 +2555,9 @@ struct IncarnationRegisterRequest {
     /// every other birth launches a new terminal.
     #[serde(default)]
     adopted: bool,
+    /// The harness the fresh session runs under; absent folds as pi.
+    #[serde(default)]
+    harness: crate::Harness,
     #[serde(default)]
     client: Option<String>,
 }
@@ -2568,6 +2580,7 @@ async fn incarnation_register(State(app): State<AppState>, body: Bytes) -> Respo
             request.native_id,
             request.address,
             request.adopted,
+            request.harness,
         ),
         ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
     };
@@ -2594,15 +2607,16 @@ fn incarnation_register_operation(
     native_id: crate::NativeSessionId,
     address: String,
     adopted: bool,
+    harness: crate::Harness,
 ) -> Result<(Vec<StoredRecord>, usize, bool), ApiFail> {
     let loadout = db::load(&inner.conn).map_err(|e| ApiFail::Db(e.to_string()))?;
     let db::LoadState::Full(world) = loadout.state else {
         return Err(ApiFail::Degraded("the log will not fold".into()));
     };
-    let known = world
-        .incarnations
-        .iter()
-        .find(|(_, ctx)| ctx.incarnation.native_id() == Some(&native_id));
+    let known = world.incarnations.iter().find(|(_, ctx)| {
+        ctx.incarnation.native_id() == Some(&native_id)
+            && ctx.incarnation.harness() == Some(harness)
+    });
     match known {
         Some((id, ctx))
             if ctx.incarnation.saved_session().is_some() && ctx.incarnation.address().is_none() =>
@@ -2626,6 +2640,7 @@ fn incarnation_register_operation(
                 saved_session: None,
                 address: Some(address),
                 adopted,
+                harness,
             };
             let (stored, _) = db::record(
                 &mut inner.conn,
@@ -2704,7 +2719,12 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
     };
     let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
-    let outcome = attach_operation(&mut guard, &request.native_id, &request.session_file);
+    let outcome = attach_operation(
+        &mut guard,
+        &request.native_id,
+        &request.session_file,
+        request.harness,
+    );
     integration_outcome(&app, &guard, None, &received, started, &outcome);
     match outcome {
         Ok(reply) => (

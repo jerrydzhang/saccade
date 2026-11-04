@@ -2184,7 +2184,10 @@ fn launch_here_run(
     // the door births the fresh identity itself; a resume records the
     // adopted address as the association's move
     if let Some(native_id) = &composed.native_id {
-        client::register_incarnation(&url, native_id, &adopted, true).map_err(Fail::Client)?;
+        // pi pending the launch-selection refactor: this door composes
+        // the pinned pi only
+        client::register_incarnation(&url, native_id, &adopted, true, saccade::Harness::Pi)
+            .map_err(Fail::Client)?;
     }
     if let Some(id) = composed.resume_id {
         client::assign_host_address(&url, id.0.0, &adopted, true).map_err(Fail::Client)?;
@@ -2460,7 +2463,9 @@ fn launch_native(
     // the door births the fresh identity itself, before pi's first
     // save; a resume carries its identity and records the address move
     if let Some(native_id) = composed.native_id {
-        client::register_incarnation(&url, &native_id, &host_address, false)
+        // pi pending the launch-selection refactor: this door composes
+        // the pinned pi only
+        client::register_incarnation(&url, &native_id, &host_address, false, saccade::Harness::Pi)
             .map_err(Fail::Client)?;
     }
     if let Some(id) = composed.resume_id {

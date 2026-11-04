@@ -409,6 +409,7 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             ),
             address: None,
             adopted: false,
+            harness: saccade::Harness::Pi,
         },
         // the launch machinery's own association facts, drawn against
         // whichever birth the sequence carries; unknown draws refuse

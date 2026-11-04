@@ -1,3 +1,4 @@
+use crate::harness::Harness;
 use crate::objects::comment::{CommentId, CommentKind};
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::message::MessageId;
@@ -142,6 +143,11 @@ pub enum Event {
         /// liveness only for the launched kind.
         #[serde(default)]
         adopted: bool,
+        /// The harness the session runs under; native identity is
+        /// interpreted within its harness, and registrations born
+        /// before the field existed fold as pi.
+        #[serde(default)]
+        harness: Harness,
     },
     /// The attach completes a door-birthed registration: pi's own
     /// saved-session locator, known at attach before the first save.
@@ -276,6 +282,9 @@ pub enum Command {
         address: Option<String>,
         #[serde(default)]
         adopted: bool,
+        /// The harness the session runs under; absent folds as pi.
+        #[serde(default)]
+        harness: Harness,
     },
     BindSavedSession {
         incarnation: IncarnationId,

@@ -90,6 +90,7 @@ mod tables {
                 ),
                 address: None,
                 adopted: false,
+                harness: crate::Harness::Pi,
             },
             Event::TaskClaimed {
                 id: TaskId(0),
