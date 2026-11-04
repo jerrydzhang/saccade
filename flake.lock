@@ -520,6 +520,32 @@
         "type": "github"
       }
     },
+    "claude-code-aarch64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 499162500,
+        "narHash": "sha256-srYR4KN735pj9fce52uVlWlCTQS8IXuKDUxVj0+ziss=",
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.318.tgz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.318.tgz"
+      }
+    },
+    "claude-code-x86_64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 499162500,
+        "narHash": "sha256-RUTn2MnXO6jGO5OVuQISn1XDAMTDBncfZ3DM3pHrtYk=",
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.318.tgz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.318.tgz"
+      }
+    },
     "crate2nix": {
       "flake": false,
       "locked": {
@@ -3210,6 +3236,8 @@
     },
     "root": {
       "inputs": {
+        "claude-code-aarch64-linux": "claude-code-aarch64-linux",
+        "claude-code-x86_64-linux": "claude-code-x86_64-linux",
         "devenv": "devenv",
         "herdr-app-aarch64-linux": "herdr-app-aarch64-linux",
         "herdr-app-x86_64-linux": "herdr-app-x86_64-linux",

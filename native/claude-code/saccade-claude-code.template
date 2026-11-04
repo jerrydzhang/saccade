@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# The composed Claude Code harness: the pinned binary with the packaged
+# per-launch settings injected ahead of the caller's argv, which passes
+# through untouched. Nothing here reads or writes Claude config; the
+# subscription login stays in the user's own home, outside the closure.
+
+set -o errexit
+set -o pipefail
+set -o nounset
+
+for arg in "$@"; do
+	case "$arg" in
+	--settings | --settings=*)
+		echo "saccade-claude-code: argv already carries --settings; the packaged session hooks would collide with it - drop your flag or run the pinned claude directly" >&2
+		exit 1
+		;;
+	esac
+done
+
+# jq and curl ride first so the SessionStart hook keeps its tools in
+# every launch environment, whatever PATH the caller had
+export PATH="@jq@/bin:@curl@/bin:$PATH"
+exec @claude@ --settings @settings@ "$@"

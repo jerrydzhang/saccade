@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# The SessionStart hook of the composed Claude Code harness: resolve or
+# register this session's incarnation, then hand the birth seq to the
+# session env channel. The hook is fail-closed on its own terms: every
+# failure exits 2, the blocking-error code Claude Code documents for
+# hooks that enforce a policy, with the reason on stderr, and success
+# means the server proved its version line AND recorded the attach AND
+# the env channel received the identity. A rerun invalidates the prior
+# export first, so a failed rebind never leaves a stale incarnation
+# live. Whether a blocked SessionStart stops the session is Claude
+# Code's own unverified behavior here, never claimed by this script;
+# the session continuing scope-less is the disclosed limitation.
+
+set -o errexit
+set -o pipefail
+set -o nounset
+
+fail() {
+	printf 'saccade: %s\n' "$1" >&2
+	if [ "$#" -gt 1 ]; then
+		printf 'saccade: %s\n' "$2" >&2
+	fi
+	exit 2
+}
+
+command -v jq >/dev/null 2>&1 ||
+	fail "jq is missing from PATH; the session stays unregistered"
+command -v curl >/dev/null 2>&1 ||
+	fail "curl is missing from PATH; the session stays unregistered"
+
+# a tty on stdin is misuse, not a hook invocation: refuse instead of
+# blocking on a terminal that will never close
+if [ -t 0 ]; then
+	fail "no SessionStart input on stdin; run as a Claude Code hook, not from a terminal"
+fi
+
+input="$(cat)"
+
+if ! printf '%s' "$input" | jq -e 'has("session_id") and has("transcript_path")' >/dev/null 2>&1; then
+	fail "the SessionStart input is not a hook payload; the session stays unregistered"
+fi
+
+field() {
+	printf '%s' "$input" | jq -r --arg k "$1" '.[$k] | if type == "string" then . else "" end'
+}
+
+session_id="$(field session_id)"
+transcript="$(field transcript_path)"
+hook_source="$(field source)"
+hook_cwd="$(field cwd)"
+
+# the failure-evidence line: what session failed, for the human who
+# reads the notice or the debug log
+context() {
+	printf 'session %s source %s cwd %s transcript %s' \
+		"$session_id" "$hook_source" "$hook_cwd" "$transcript"
+}
+
+[ -n "$session_id" ] ||
+	fail "the SessionStart input carries no session_id; the session stays unregistered"
+[ -n "$transcript" ] ||
+	fail "the SessionStart input carries no transcript_path; the session stays unregistered"
+case "$transcript" in
+	/*) ;;
+	*) fail "the SessionStart transcript_path is not absolute; the session stays unregistered" "$(context)" ;;
+esac
+
+# the identity channel is a precondition of the bind, not a bonus: an
+# attach without it would record an incarnation whose scope can never
+# reach the session's own commands
+[ -n "${CLAUDE_ENV_FILE:-}" ] ||
+	fail "CLAUDE_ENV_FILE is not set; no bind is attempted and the session stays unregistered"
+
+# a rerun (resume, clear, compact, fork) starts from no identity: the
+# empty export overrides the prior incarnation when the env file is
+# sourced, and the tracker itself reads an empty seq as no scope. The
+# numeric export lands only after the new bind succeeds
+if ! printf "export SACCADE_INCARNATION_SEQ=''\n" >>"$CLAUDE_ENV_FILE"; then
+	fail "CLAUDE_ENV_FILE could not be written; the prior identity stands invalidated and no bind is attempted" "$(context)"
+fi
+
+server="$(printf '%s' "${SACCADE_SERVER:-}" | jq -rR 'gsub("^\\s+|\\s+$"; "")')"
+[ -n "$server" ] ||
+	fail "no SACCADE_SERVER routing in this environment; the session stays unregistered"
+
+# the normal client rule, mirrored: the server proves its version line
+# before any mutation crosses, because a pre-harness server silently
+# drops the harness field and would record the wrong meaning
+if ! raw="$(curl -sS --max-time 10 \
+	-w '\n%{http_code}' \
+	"$server/api/v1/version" 2>&1)"; then
+	fail "the tracker version did not answer: ${raw##*$'\n'}" "$(context)"
+fi
+vcode="${raw##*$'\n'}"
+vpayload="${raw%$'\n'*}"
+if [ "$vcode" != "200" ]; then
+	fail "the tracker version is unproven: /api/v1/version answered http $vcode" "$(context)"
+fi
+version="$(printf '%s' "$vpayload" | jq -er '.version | strings' 2>/dev/null)" ||
+	fail "the tracker version is unproven: /api/v1/version carries no version string" "$(context)"
+if ! printf '%s' "$version" | jq -rR 'test("^[0-9]+\\.[0-9]+\\.[0-9]+$")' | grep -qx true; then
+	fail "the tracker version '$version' does not read as major.minor.patch; no bind is attempted" "$(context)"
+fi
+vmaj="${version%%.*}"
+vmin="${version#*.}"
+vmin="${vmin%%.*}"
+[ "$vmaj" = "@expectMajor@" ] ||
+	fail "the tracker reports version $version; this package expects major @expectMajor@ and no compatibility rule spans major lines" "$(context)"
+[ "$vmin" = "@expectMinor@" ] ||
+	fail "the tracker reports version $version; this package expects @expectMajor@.@expectMinor@.x, and a different minor on the same major line is a breaking wire" "$(context)"
+
+body="$(jq -n \
+	--arg native_id "$session_id" \
+	--arg session_file "$transcript" \
+	'{native_id: $native_id, session_file: $session_file, harness: "claude-code"}')"
+
+if ! raw="$(curl -sS --max-time 15 -X POST \
+	-H 'content-type: application/json' \
+	-d "$body" \
+	-w '\n%{http_code}' \
+	"$server/api/v1/native/attach" 2>&1)"; then
+	# curl still prints the code suffix on failure: 000 names a
+	# connection that never answered
+	fail "the tracker attach did not answer: ${raw##*$'\n'}" "$(context)"
+fi
+
+code="${raw##*$'\n'}"
+payload="${raw%$'\n'*}"
+
+if [ "$code" != "200" ]; then
+	code_name="$(printf '%s' "$payload" | jq -r '.error.code // ""' 2>/dev/null || true)"
+	detail="$(printf '%s' "$payload" | jq -r '.error.detail // ""' 2>/dev/null || true)"
+	if [ -n "$code_name" ]; then
+		fail "the tracker refused the attach: $code_name: $detail" "$(context)"
+	fi
+	fail "the tracker attach failed with http $code" "$(context)"
+fi
+
+incarnation="$(printf '%s' "$payload" | jq -er '.incarnation | numbers' 2>/dev/null)" ||
+	fail "the attach reply carries no incarnation; the session stays unregistered" "$(context)"
+num="$(printf '%s' "$payload" | jq -er '.num | numbers' 2>/dev/null)" ||
+	fail "the attach reply carries no incarnation number; the session stays unregistered" "$(context)"
+case "$incarnation" in
+	*[!0-9]*)
+		fail "the attach reply incarnation is not a record position; the session stays unregistered" "$(context)"
+		;;
+esac
+
+if ! printf "export SACCADE_INCARNATION_SEQ='%s'\n" "$incarnation" >>"$CLAUDE_ENV_FILE"; then
+	fail "the tracker recorded the session, but the identity export could not be written; it stays invalidated" "$(context)"
+fi
+
+jq -n --arg msg "saccade: attached as i-$num" '{systemMessage: $msg}'
