@@ -3571,6 +3571,16 @@ fn fake_hc(dir: &std::path::Path) -> std::path::PathBuf {
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 printf '%s
 ' "$@" >> "$here/argv-$1.log"
+if [ "$1" = run ] && [ -n "${FAKE_HC_RUN_WAITS:-}" ]; then
+  # the attach-before-register window: the host ask holds until the
+  # fixture's trigger file lands, so the newborn can attach while the
+  # door's host effect is still outside the writer lock
+  n=0
+  while [ ! -f "$here/attach-done" ] && [ "$n" -lt 200 ]; do
+    sleep 0.1
+    n=$((n+1))
+  done
+fi
 if [ "$1" = run ]; then
   printf '{"address":"t1","cwd":"x","state":"live","turn":0}
 '
@@ -7892,6 +7902,114 @@ async fn the_workbench_launch_selects_the_harness_the_request_names() {
         "malformed_request",
         "{body}"
     );
+
+    serve.kill().unwrap();
+    serve.wait().unwrap();
+    std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_workbench_launch_recovers_a_newborn_that_attaches_during_the_host_ask() {
+    let db = scratch_db("workbench-launch-race");
+    let (root, _first, _head) = scratch_repo(db.parent().unwrap());
+    let pi = stub_pi(db.parent().unwrap());
+    let hc = fake_hc(db.parent().unwrap());
+    // the fake host's run arm holds until this fixture says so, which
+    // is the attach-before-register window: the newborn can attach
+    // while the door's host effect is still outside the writer lock
+    let (base_url, mut serve) = spawn_serve_subprocess(
+        &db,
+        &root,
+        &[
+            ("SACCADE_HERDR", hc.display().to_string()),
+            ("SACCADE_PI", pi.display().to_string()),
+            ("FAKE_HC_RUN_WAITS", "1".to_string()),
+        ],
+    );
+
+    let workspace = db.parent().unwrap().join("race-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let launch = {
+        let base_url = base_url.clone();
+        let workspace = workspace.clone();
+        std::thread::spawn(move || {
+            post_json(
+                &base_url,
+                "/api/v1/workbench/launch",
+                &json!({"workspace": {"existing": workspace.to_str().unwrap()}}),
+            )
+        })
+    };
+
+    // the composed launch is on the host ask's argv: read the
+    // pre-allocated native id off the log and attach as the
+    // integration would, while the door still waits on the host
+    let bin_dir = db.parent().unwrap().join("hc-bin");
+    let run_log = bin_dir.join("argv-run.log");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let native_id = loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no composed launch: {run_log:?}"
+        );
+        if let Ok(log) = std::fs::read_to_string(&run_log) {
+            let words: Vec<&str> = log.lines().collect();
+            if let Some(at) = words.iter().position(|w| *w == "--session-id") {
+                break words[at + 1].to_string();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let saved = format!("/sessions/{native_id}.jsonl");
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": native_id, "session_file": saved}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let attach_birth = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // release the host ask: the door's birth now rides the recovery -
+    // the attach-born incarnation takes this launch's address instead
+    // of a second birth or a saved_session_mismatch refusal
+    std::fs::write(bin_dir.join("attach-done"), b"").unwrap();
+    let (status, body) = launch.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["submitted"], json!(true), "{body}");
+    assert_eq!(reply["harness"], json!("pi"), "{body}");
+    assert_eq!(reply["terminal"], json!("t1"), "{body}");
+
+    // one incarnation: the attach's birth, its locator bound by the
+    // attach, and the launch's returned address riding the recovery
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let fold = json_of(&body);
+    let rows = fold["records"].as_array().unwrap();
+    let births: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r["kind"] == "incarnation_registered")
+        .collect();
+    assert_eq!(births.len(), 1, "{fold}");
+    assert_eq!(births[0]["seq"], json!(attach_birth), "{fold}");
+    // the attach won the window, so its own birth carries the locator
+    // - there is no separate bind record to find
+    assert_eq!(
+        births[0]["payload"]["saved_session"],
+        json!(saved),
+        "{fold}"
+    );
+    assert_eq!(births[0]["payload"]["address"], Value::Null, "{fold}");
+    let moves: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r["kind"] == "host_address_assigned")
+        .collect();
+    assert_eq!(moves.len(), 1, "{fold}");
+    assert_eq!(
+        moves[0]["payload"]["incarnation"],
+        json!(attach_birth),
+        "{fold}"
+    );
+    assert_eq!(moves[0]["payload"]["address"], json!("t1"), "{fold}");
 
     serve.kill().unwrap();
     serve.wait().unwrap();

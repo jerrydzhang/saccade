@@ -909,24 +909,23 @@ async fn workbench_launch(
     .expect("the launch operation does not panic");
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     // the door-birthed incarnation lands under the writer lock, right
-    // after the address returns: identity and address exist at launch
+    // after the address returns: identity and address exist at launch.
+    // The birth rides the same resolve-or-recover the register
+    // endpoint uses - the newborn's own attach can win the unlocked
+    // host-effect window and bind the locator first, and the recovery
+    // folds that into one incarnation with this launch's address
     if let Ok((_, Some((native_id, address, harness)))) = &outcome {
-        let birth = Command::RegisterIncarnation {
-            adopted: false,
-            harness: *harness,
-            native_id: match crate::NativeSessionId::new(native_id.clone()) {
-                Ok(id) => id,
-                Err(e) => {
-                    return api_failure(ApiFail::Db(format!("{:?}", e)));
-                }
-            },
-            saved_session: None,
-            address: Some(address.clone()),
+        let native_id = match crate::NativeSessionId::new(native_id.clone()) {
+            Ok(id) => id,
+            Err(e) => {
+                return api_failure(ApiFail::Db(format!("{:?}", e)));
+            }
         };
         if let ServerState::Ready(inner) = &mut *guard
-            && let Err(e) = db::record(&mut inner.conn, &Context::system(), birth, db::now_epoch())
+            && let Err(e) =
+                incarnation_register_operation(inner, native_id, address.clone(), false, *harness)
         {
-            return api_failure(ApiFail::Db(e.to_string()));
+            return api_failure(e);
         }
     }
     integration_outcome(&app, &guard, None, &received, started, &outcome);
