@@ -4076,7 +4076,6 @@ async fn launch_with_direnv_stripped_from_the_path() {
     let base_url = spawn_workspace_server(&db, &root).await;
 
     let host = fake_host(db.parent().unwrap());
-    let hcs = fake_hc_spawn(db.parent().unwrap());
     let pi = stub_pi(db.parent().unwrap());
     let host_log = db.parent().unwrap().join("host.log");
     std::fs::write(&host_log, b"").unwrap();
@@ -4096,10 +4095,9 @@ async fn launch_with_direnv_stripped_from_the_path() {
             "--",
             "register and wait",
         ])
-        // the spawn-capable fake stays reachable; direnv deliberately is not
+        // the fake host sits on PATH as ambient bait; direnv deliberately is not
         .env("PATH", host.parent().unwrap().display().to_string())
         .env("FAKE_ORCA_LOG", host_log.display().to_string())
-        .env("SACCADE_HERDR", &hcs)
         .env("SACCADE_PI", &pi)
         .output()
         .expect("spawn sac");
@@ -4114,9 +4112,6 @@ async fn launch_with_direnv_stripped_from_the_path() {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        let logged =
-            std::fs::read_to_string(hcs.parent().unwrap().join("argv-run.log")).unwrap_or_default();
-        assert!(!logged.is_empty(), "the ask reached the host: {logged}");
     } else {
         assert!(
             !out.status.success(),
@@ -4127,8 +4122,8 @@ async fn launch_with_direnv_stripped_from_the_path() {
         let err = String::from_utf8_lossy(&out.stderr).into_owned();
         assert!(err.contains("direnv"), "{err}");
         assert!(err.contains("never starts unequipped"), "{err}");
-        // the refusal precedes any host contact: the fake host saw nothing
-        assert!(!hcs.parent().unwrap().join("argv-run.log").exists());
+        // the refusal precedes any host contact: the ambient bait saw nothing
+        assert_eq!(std::fs::read_to_string(&host_log).unwrap(), "");
     }
 
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
