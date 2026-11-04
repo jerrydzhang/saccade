@@ -167,11 +167,15 @@
     # layout (main plus the saccade panel), one seeding bundle
     mkSaccadeSpacesMod = {pkgs}:
       pkgs.runCommand "saccade-spaces-mod-${saccadeModVersion}" {} ''
-        mkdir -p $out/mods/saccade $out/layouts
+        mkdir -p $out/mods/saccade $out/mods/tmuxkeys $out/layouts
         for f in mod.json main.js plan.js; do
           ${pkgs.coreutils}/bin/install -m 0444 ${./mods/saccade}/$f $out/mods/saccade/$f
         done
+        for f in mod.json main.js keys.json; do
+          ${pkgs.coreutils}/bin/install -m 0444 ${./mods/tmuxkeys}/$f $out/mods/tmuxkeys/$f
+        done
         ${pkgs.coreutils}/bin/install -m 0444 ${./mods/saccade-layout.json} $out/layouts/saccade.json
+        ${pkgs.coreutils}/bin/install -m 0444 ${./mods/tmuxkeys-default-keys.json} $out/keys.json
         echo -n ${saccadeModVersion} > $out/mods/saccade/.version
       '';
     # the app with the mod: a first-run seeding wrapper, the app's own
@@ -202,10 +206,14 @@
           # stays
           want=${mod}
           if [ "$stamp" != "$want" ]; then
-            mkdir -p "$mods/saccade" "$home/layouts"
+            mkdir -p "$mods/saccade" "$mods/tmuxkeys" "$home/layouts"
             for f in mod.json main.js plan.js; do
               rm -f "$mods/saccade/$f"
               install -m 0644 "${mod}/mods/saccade/$f" "$mods/saccade/$f"
+            done
+            for f in mod.json main.js keys.json; do
+              rm -f "$mods/tmuxkeys/$f"
+              install -m 0644 "${mod}/mods/tmuxkeys/$f" "$mods/tmuxkeys/$f"
             done
             # the deployment no longer ships a config override: a stale
             # one from an older stamp would pin a wrong root
@@ -215,6 +223,11 @@
             # fresh home - an existing home keeps its own layout choice,
             # and switching once is the app's own documented act
             install -m 0444 "${mod}/layouts/saccade.json" "$home/layouts/saccade.json"
+            # personal keys seed only a fresh home: a person's keybinds
+            # are theirs, and deleting the file re-seeds on the next run
+            if [ ! -f "$home/keys.json" ]; then
+              install -m 0644 "${mod}/keys.json" "$home/keys.json"
+            fi
             if [ ! -f "$home/shared.json" ]; then
               printf '{"layout":"saccade"}' > "$home/shared.json"
             fi

@@ -1,0 +1,6 @@
+{
+  "ctrl-h": "tmux.go.left",
+  "ctrl-j": "tmux.go.down",
+  "ctrl-k": "tmux.go.up",
+  "ctrl-l": "tmux.go.right"
+}
