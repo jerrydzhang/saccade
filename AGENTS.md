@@ -268,6 +268,44 @@ Rules:
   creates another use. Use never creates acceptance, nor acceptance
   use.
 
+## Native host UI development
+
+- Agents can drive the desktop app on a headless development machine. This
+  is a mechanical development loop, not a substitute for testing the human's
+  actual client, remote-machine topology, and input behavior.
+- Build the pinned `herdr-app-saccade` and `herdr-core` flake packages with
+  `nix build .#herdr-app-saccade .#herdr-core --no-link --print-out-paths`.
+  The wrapper supplies the native runtime libraries and software Vulkan
+  fallback. Keep the binary fixed while iterating on live mod files.
+- Use a fresh sandbox: private `HERDR_APP_HOME`, `HC_SESSION`, and XDG
+  config/state/cache/data/runtime directories. Runtime must be private to the
+  user. Put the pinned core on the sandbox PATH as `hc`; clear inherited
+  terminal/parent bindings. Disable sound and telemetry. Never attach a
+  development app to the production core or automate the person's display.
+- For interactive tests, use headless Weston with Xwayland from the repo's
+  pinned nixpkgs: `--backend=headless --renderer=pixman --xwayland
+  --idle-time=0`, with a private socket and runtime directory. Discover its
+  allocated X display from its log; launch the app with that `DISPLAY` and
+  an empty `WAYLAND_DISPLAY`. Xvfb can supply rendering evidence, but a frame
+  or successful CLI command alone does not establish working input.
+- Read the installed `$HERDR_APP_HOME/AGENTS.md`, generated type declarations,
+  and `--skill` before writing mods. The app's upstream `scripts/sandbox`
+  and `scripts/sandbox-input.py` are reference harnesses, not tracker doors.
+  Inspect them before use: the launcher may build source even with a binary
+  override. Xwayland's virtual input device needs initialization; use the
+  supplied XTest helper's warm-up and sequencing rather than assuming bare
+  xdotool calls worked. Obtain its Python dependencies through Nix.
+- Keep the same sandbox environment for every `check`, `status`, `do`, and
+  `shot` invocation. After each mod edit, run `check`, inspect `status`, then
+  capture and actually inspect a `shot`. Verify input effects in the saved
+  data as well as the image. Native Markdown support does not imply math
+  rendering; exercise the actual content and record missing capabilities.
+- Preserve scripts, screenshots, results, and limitations on the work task.
+  Clean up only the sandbox app, core, compositor, and terminals you started;
+  close the app before stopping its private core and display. Never reuse or
+  stop another session's virtual display or server. The real-client gate
+  remains separate from headless evidence.
+
 ## Edit mechanics (scar tissue)
 
 - Re-read the exact lines immediately before every edit - files change live
