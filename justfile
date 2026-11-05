@@ -23,3 +23,10 @@ web-test:
 
 web-browser-test:
     cd web/harness && python3 run_tests.py
+
+[positional-arguments]
+herdr-ui *args:
+    nix run .#herdr-ui -- "$@"
+
+herdr-ui-test:
+    python3 -B dev/herdr_ui_test.py -v

@@ -203,6 +203,25 @@
           exec ${herdrApp}/bin/herdr-app "$@"
         '';
       };
+    mkHerdrUi = {
+      pkgs,
+      herdrApp,
+      herdrCore,
+    }: let
+      python = pkgs.python3.withPackages (ps: [ps.python-xlib]);
+      app = mkHerdrAppSaccade {inherit pkgs herdrApp;};
+    in
+      pkgs.writeShellApplication {
+        name = "herdr-ui";
+        runtimeInputs = [pkgs.weston pkgs.xwayland];
+        text = ''
+          exec ${python}/bin/python -B ${./dev/herdr_ui.py} \
+            --app ${app}/bin/herdr-app-saccade \
+            --core ${herdrCore}/bin/herdr-core \
+            --weston ${pkgs.weston}/bin/weston \
+            --xwayland ${pkgs.xwayland}/bin/Xwayland "$@"
+        '';
+      };
     herdrApp = system: pkgs: let
       pin = herdrAppPin.${system} or null;
     in
@@ -577,7 +596,27 @@
             herdrApp = devHerdrApp;
           };
         }
+        // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && devHerdrApp != null && devHerdrCore != null) {
+          herdr-ui = mkHerdrUi {
+            inherit pkgs;
+            herdrApp = devHerdrApp;
+            herdrCore = devHerdrCore;
+          };
+        }
     );
+
+    checks = forAllSystems (system: let
+      pkgs = nixpkgs.legacyPackages.${system};
+    in
+      lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        herdr-ui =
+          pkgs.runCommand "herdr-ui-contract" {
+            nativeBuildInputs = [pkgs.python3];
+          } ''
+            python -B ${./dev}/herdr_ui_test.py -v
+            touch $out
+          '';
+      });
 
     formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.alejandra);
   };
