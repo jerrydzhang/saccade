@@ -9,8 +9,11 @@ ordinary fast loop instead of the next review round.
 
 from __future__ import annotations
 
+import io
 import os
 import pathlib
+import signal
+import subprocess
 import sys
 import tempfile
 
@@ -61,7 +64,23 @@ def main() -> int:
         text,
     )
     check("lane inputs bind read-only", ["--ro-bind", "/abs/input", "/input"] == cmd[cmd.index("--ro-bind", cmd.index("--ro-bind") + 1) :][:3], text)
-    check("payload rides after the separator", cmd[cmd.index("--") + 1 : 3] is not None and "--" in cmd, text)
+    # exact payload tail: what the preflight lane assembles, verbatim
+    payload_cmd = isolation.build_command(
+        "/abs/bwrap",
+        run_root,
+        ["/abs/python", "/canary/containment_canary.py"],
+        [("/abs/canary", "/canary/containment_canary.py")],
+    )
+    check(
+        "preflight payload tail is exactly the pinned interpreter and the bound canary",
+        payload_cmd[payload_cmd.index("--") + 1 :] == ["/abs/python", "/canary/containment_canary.py"],
+        " ".join(payload_cmd),
+    )
+    check(
+        "the canary bind is the only lane ro-bind",
+        payload_cmd.count("--ro-bind") == 2,
+        " ".join(payload_cmd),
+    )
     env = isolation.env_allowlist(run_root)
     expected_env = {"PATH", "LANG", "HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"}
     check("env allowlist is exactly the private roots", set(env) == expected_env, str(sorted(env)))
@@ -145,6 +164,93 @@ def main() -> int:
         check("static preflight refuses a missing bwrap", False, "no refusal raised")
     except isolation.ContainmentRefused:
         check("static preflight refuses a missing bwrap", True)
+
+    # --- mocked supervisor call flow (no spawn) ---------------------------
+    class FakePopen:
+        instances: list["FakePopen"] = []
+
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+            self.kwargs = kwargs
+            self.pid = 4242
+            self.stdout = io.StringIO("")
+            self.wait_calls = 0
+            self.poll_results = [None, 0]
+            self.always_running = False
+            FakePopen.instances.append(self)
+
+        def poll(self):
+            if self.always_running:
+                return None
+            return self.poll_results.pop(0) if self.poll_results else 0
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            return 0
+
+    real_popen = subprocess.Popen
+    real_pidfd_open = os.pidfd_open
+    real_write = os.write
+    real_close = os.close
+    real_send = signal.pidfd_send_signal
+    subprocess.Popen = FakePopen  # type: ignore[assignment]
+    pidfd_calls: list[int] = []
+    writes: list[bytes] = []
+    closes: list[int] = []
+    sends: list[tuple[int, int]] = []
+    os.pidfd_open = lambda pid, flags=0: pidfd_calls.append(pid) or 999  # type: ignore[assignment]
+    os.write = lambda fd, data: writes.append(data)  # type: ignore[assignment]
+    os.close = lambda fd: closes.append(fd)  # type: ignore[assignment]
+    signal.pidfd_send_signal = lambda fd, sig: sends.append((fd, int(sig)))  # type: ignore[assignment]
+    try:
+        fresh_env = isolation.env_allowlist(run_root)
+        supervisor = isolation.PidfdSupervisor(["/abs/bwrap", "--version"], dict(fresh_env))
+        supervisor.start()
+        spawned = FakePopen.instances[-1]
+        check("gate argv wraps the sandbox command via the pinned interpreter", spawned.argv[:4] == [sys.executable, "-I", "-S", str(pathlib.Path(isolation.__file__).resolve())], " ".join(map(str, spawned.argv[:6])))
+        check("gate carries internal-gate, fd, token and separator", spawned.argv[4:8] == ["internal-gate", str(spawned.kwargs["pass_fds"][0]), isolation.RELEASE_BYTE.hex(), "--"], str(spawned.argv[4:9]))
+        check("gate tail is exactly the sandbox command", spawned.argv[8:] == ["/abs/bwrap", "--version"], str(spawned.argv[8:]))
+        check("only the read end is inherited (pass_fds)", len(spawned.kwargs["pass_fds"]) == 1, str(spawned.kwargs.get("pass_fds")))
+        check("no preexec_fn blocks the exec", "preexec_fn" not in spawned.kwargs, str(sorted(spawned.kwargs)))
+        check("pidfd acquired once for the spawned pid", pidfd_calls == [4242], str(pidfd_calls))
+        check("exactly one release byte written", writes == [isolation.RELEASE_BYTE], str(writes))
+        check("release write end closed after release", any(True for _ in closes), str(closes))
+        env_keys = set(spawned.kwargs["env"])
+        check(
+            "the chain env is exactly the fresh allowlist: no inherited host keys",
+            env_keys == set(fresh_env)
+            and not any(key.startswith(("SACCADE_", "HERDR_", "SSH_")) for key in env_keys),
+            str(sorted(env_keys)),
+        )
+
+        check("an already-exited supervisor gets no signals", sends == [], str(sends))
+        # a still-running supervisor gets the escalation: fresh supervisor,
+        # poll always running
+        sends.clear()
+        supervisor_running = isolation.PidfdSupervisor(["/abs/bwrap", "--version"], dict(fresh_env))
+        supervisor_running.start()
+        FakePopen.instances[-1].always_running = True
+        supervisor_running.stop(grace=0.05)
+        check("stop closes the pidfd after verified reaping", 999 in closes, str(closes))
+
+        # acquisition failure: nothing released, nothing written, refused
+        FakePopen.instances.clear()
+        writes.clear()
+        os.pidfd_open = lambda pid, flags=0: (_ for _ in ()).throw(OSError(3, "no such process"))  # type: ignore[assignment]
+        supervisor2 = isolation.PidfdSupervisor(["/abs/bwrap", "--version"], {})
+        try:
+            supervisor2.start()
+            check("pidfd acquisition failure raises a refusal", False, "no refusal raised")
+        except isolation.ContainmentRefused:
+            check("pidfd acquisition failure raises a refusal", True)
+        check("acquisition failure writes no release byte", writes == [], str(writes))
+        check("acquisition failure reaps the gated child", FakePopen.instances[-1].wait_calls == 1, str(FakePopen.instances[-1].wait_calls))
+    finally:
+        subprocess.Popen = real_popen  # type: ignore[assignment]
+        os.pidfd_open = real_pidfd_open  # type: ignore[assignment]
+        os.write = real_write  # type: ignore[assignment]
+        os.close = real_close  # type: ignore[assignment]
+        signal.pidfd_send_signal = real_send  # type: ignore[assignment]
 
     if FAILURES:
         print(f"[harness-checks] {len(FAILURES)} failure(s)", file=sys.stderr)

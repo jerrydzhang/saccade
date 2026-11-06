@@ -54,9 +54,11 @@ def parse_baselines() -> tuple[dict[str, str], list[str]]:
             failures.append(f"baseline malformed or empty: {pair!r} is refused")
             continue
         # A garbage value can never equal a real kernel id, so accepting
-        # it would make the comparison vacuous; require readlink form.
-        if not NS_VALUE.match(value):
-            failures.append(f"baseline not in kernel readlink form: {pair!r} is refused")
+        # it would make the comparison vacuous; require readlink form AND
+        # the value's kind prefix to equal its own key (pid=net:[1] is
+        # refused).
+        if not (value.startswith(f"{kind}:") and NS_VALUE.match(value)):
+            failures.append(f"baseline not in kernel readlink form for {kind}: {pair!r} is refused")
             continue
         expected[kind] = value
     for kind in REQUIRED_NAMESPACES:

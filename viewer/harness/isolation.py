@@ -41,7 +41,8 @@ import time
 
 RUNTIME_ROOT = "/var/tmp/saccade-board-viewer"
 PR_SET_PDEATHSIG = 1
-RELEASE_BYTE = b"go"
+# One byte: the gate's os.read(fd, 1) can only ever return one byte.
+RELEASE_BYTE = b"R"
 RELEASE_EXIT = 125
 
 NS_VALUE = re.compile(r"^[a-z_]+:\[\d+\]$")
@@ -169,11 +170,23 @@ def build_command(
     return cmd
 
 
-def _child_setup(parent_pid: int, release_fd: int) -> None:
-    """In-child, before exec: die with the parent (result checked; the
-    parent-death race re-signals SELF only), then wait for the parent's
-    handle acquisition on the release pipe. EOF or a wrong byte exits
-    without exec, so nothing ever runs unsupervised."""
+def internal_gate(argv: list[str]) -> None:
+    """The EXECUTED gate wrapper: the pinned python runs this as its
+    program, so Popen returns the moment this starts. Setup, then a
+    blocking one-byte read - only a correct token execs the real
+    command, in this same process (same PID), keeping the parent's
+    pidfd valid across the exec. EOF or a wrong byte self-exits, and
+    the parent closing the write end is what produces that EOF: no
+    numeric signal, nothing unsupervised, no preexec blocking."""
+    if len(argv) < 4 or argv[0] != "internal-gate":
+        print("gate usage: isolation.py internal-gate <fd> <token-hex> -- <command...>", file=sys.stderr)
+        os._exit(RELEASE_EXIT)
+    release_fd = int(argv[1])
+    token = bytes.fromhex(argv[2])
+    command = argv[4:] if argv[3] == "--" else argv[3:]
+    if not command:
+        os._exit(RELEASE_EXIT)
+    parent_pid = os.getppid()
     libc = ctypes.CDLL("libc.so.6", use_errno=True)
     if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
         os._exit(RELEASE_EXIT)
@@ -183,9 +196,14 @@ def _child_setup(parent_pid: int, release_fd: int) -> None:
         data = os.read(release_fd, 1)
     except OSError:
         os._exit(RELEASE_EXIT)
-    if data != RELEASE_BYTE:
+    if data != token:
         os._exit(RELEASE_EXIT)
     os.close(release_fd)
+    try:
+        os.execvpe(command[0], command, os.environ)
+    except OSError as error:
+        print(f"gate: exec failed: {error}", file=sys.stderr)
+        os._exit(RELEASE_EXIT)
 
 
 class PidfdSupervisor:
@@ -208,24 +226,36 @@ class PidfdSupervisor:
         usable, reason = supervision_apis_usable()
         if not usable:
             raise ContainmentRefused(f"supervision APIs unavailable: {reason}")
-        parent_pid = os.getpid()
         release_r, release_w = os.pipe()
+        # The gate wrapper is EXECUTED (pass_fds carries only the read
+        # end), so Popen returns right after exec; the wrapper then
+        # blocks on the release read while this parent acquires the
+        # pidfd and releases exactly one byte.
+        gate_cmd = [
+            sys.executable,
+            "-I",
+            "-S",
+            str(pathlib.Path(__file__).resolve()),
+            "internal-gate",
+            str(release_r),
+            RELEASE_BYTE.hex(),
+            "--",
+        ] + self._cmd
         try:
             self._proc = subprocess.Popen(
-                self._cmd,
+                gate_cmd,
                 env=self._env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                preexec_fn=lambda: _child_setup(parent_pid, release_r),
+                pass_fds=(release_r,),
             )
         finally:
-            os.close(release_r)  # parent keeps only the write end
+            os.close(release_r)  # the child holds the only read end now
         try:
             self._pidfd = os.pidfd_open(self._proc.pid)
         except OSError as error:
-            # The child is still gated on the pipe read: exiting the
-            # write end makes its read return EOF and it exits itself.
-            # No signal of any kind is used here.
+            # Closing the write end EOFs the gate and it self-exits:
+            # nothing runs unsupervised and no signal is used.
             os.close(release_w)
             self._proc.wait()
             raise ContainmentRefused(f"pidfd acquisition failed ({error}): nothing was allowed to run unsupervised") from error
