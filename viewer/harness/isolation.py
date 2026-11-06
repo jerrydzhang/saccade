@@ -170,28 +170,40 @@ def build_command(
     return cmd
 
 
+def _set_pdeathsig() -> bool:
+    """Checked prctl: True only when the kernel accepted the setting."""
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    return libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) == 0
+
+
 def internal_gate(argv: list[str]) -> None:
     """The EXECUTED gate wrapper: the pinned python runs this as its
-    program, so Popen returns the moment this starts. Setup, then a
-    blocking one-byte read - only a correct token execs the real
-    command, in this same process (same PID), keeping the parent's
-    pidfd valid across the exec. EOF or a wrong byte self-exits, and
-    the parent closing the write end is what produces that EOF: no
-    numeric signal, nothing unsupervised, no preexec blocking."""
-    if len(argv) < 4 or argv[0] != "internal-gate":
-        print("gate usage: isolation.py internal-gate <fd> <token-hex> -- <command...>", file=sys.stderr)
+    program (dispatch at module bottom), so Popen returns the moment
+    this starts. Setup, then a blocking one-byte read - only a correct
+    token from the ORIGINAL launcher parent (passed in argv, never
+    sampled here: a launcher death before setup would otherwise be
+    invisible to an adopted child) execs the real command, in this same
+    process (same PID), keeping the parent's pidfd valid across the
+    exec. EOF or a wrong byte self-exits, and the parent closing the
+    write end is what produces that EOF: no numeric signal against
+    anyone else, nothing unsupervised, no preexec blocking.
+
+    argv: parent_pid, release_fd, token_hex, "--", command...
+    """
+    if len(argv) < 5 or argv[3] != "--":
+        print("gate usage: internal-gate <parent-pid> <fd> <token-hex> -- <command...>", file=sys.stderr)
         os._exit(RELEASE_EXIT)
+    expected_parent = int(argv[0])
     release_fd = int(argv[1])
     token = bytes.fromhex(argv[2])
-    command = argv[4:] if argv[3] == "--" else argv[3:]
-    if not command:
+    command = argv[4:]
+    if not command or not _set_pdeathsig():
         os._exit(RELEASE_EXIT)
-    parent_pid = os.getppid()
-    libc = ctypes.CDLL("libc.so.6", use_errno=True)
-    if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
-        os._exit(RELEASE_EXIT)
-    if os.getppid() != parent_pid:
+    if os.getppid() != expected_parent:
+        # The launcher died before we could arm pdeathsig: we were
+        # adopted, so nothing it promised holds. Signal only ourselves.
         os.kill(os.getpid(), signal.SIGKILL)
+        os._exit(RELEASE_EXIT)
     try:
         data = os.read(release_fd, 1)
     except OSError:
@@ -227,6 +239,7 @@ class PidfdSupervisor:
         if not usable:
             raise ContainmentRefused(f"supervision APIs unavailable: {reason}")
         release_r, release_w = os.pipe()
+        parent_pid = os.getpid()  # sampled HERE, in the launcher
         # The gate wrapper is EXECUTED (pass_fds carries only the read
         # end), so Popen returns right after exec; the wrapper then
         # blocks on the release read while this parent acquires the
@@ -237,6 +250,7 @@ class PidfdSupervisor:
             "-S",
             str(pathlib.Path(__file__).resolve()),
             "internal-gate",
+            str(parent_pid),
             str(release_r),
             RELEASE_BYTE.hex(),
             "--",
@@ -326,3 +340,17 @@ def gate_or_exit(lane: str) -> None:
             file=sys.stderr,
         )
         sys.exit(2)
+
+
+def dispatch(argv: list[str]) -> int:
+    """Fail-closed CLI dispatch: this module is a library and its
+    internal gate, nothing else. Unknown invocations refuse."""
+    if len(argv) >= 2 and argv[1] == "internal-gate":
+        internal_gate(argv[2:])
+        return 0
+    print("isolation.py: unknown invocation; expected 'internal-gate'", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(dispatch(sys.argv))

@@ -165,6 +165,138 @@ def main() -> int:
     except isolation.ContainmentRefused:
         check("static preflight refuses a missing bwrap", True)
 
+    runtime_read_never = lambda fd, n: (_ for _ in ()).throw(AssertionError("read before its guard"))
+
+    # --- executed gate path (mocked read/prctl/exec/exit; no spawn) ------
+    # Every gate syscall is mocked all the time: recording defaults, never
+    # the real functions, so no scenario can crash or kill the checker.
+    real_exit = os._exit
+    real_getppid = os.getppid
+    real_kill = os.kill
+    real_read = os.read
+    real_execvpe = os.execvpe
+    real_close = os.close
+    real_setpdeath = isolation._set_pdeathsig
+
+    class GateStopped(Exception):
+        pass
+
+    def make_calls():
+        return {"read": [], "kill": [], "exit": [], "exec": [], "close": [], "pdeath": 0}
+
+    def install_gate(calls, *, read=b"", getppid=4242, pdeath_ok=True):
+        os._exit = lambda code: (calls["exit"].append(code), (_ for _ in ()).throw(GateStopped(code)))[1]  # type: ignore[assignment]
+        os.getppid = lambda: getppid  # type: ignore[assignment]
+        os.kill = lambda pid, sig: calls["kill"].append((pid, int(sig)))  # type: ignore[assignment]
+        os.read = lambda fd, n: read  # type: ignore[assignment]
+        os.execvpe = lambda path, args, env: calls["exec"].append((path, args, env))  # type: ignore[assignment]
+        os.close = lambda fd: calls["close"].append(fd)  # type: ignore[assignment]
+        isolation._set_pdeathsig = lambda: calls.__setitem__("pdeath", calls["pdeath"] + 1) or pdeath_ok  # type: ignore[assignment]
+
+    def restore_gate():
+        os._exit = real_exit  # type: ignore[assignment]
+        os.getppid = real_getppid  # type: ignore[assignment]
+        os.kill = real_kill  # type: ignore[assignment]
+        os.read = real_read  # type: ignore[assignment]
+        os.execvpe = real_execvpe  # type: ignore[assignment]
+        os.close = real_close  # type: ignore[assignment]
+        isolation._set_pdeathsig = real_setpdeath  # type: ignore[assignment]
+
+    def run_gate(calls, argv, **overrides):
+        install_gate(calls, **overrides)
+        stopped = None
+        try:
+            isolation.internal_gate(argv)
+        except GateStopped as stop:
+            stopped = stop.args[0]
+        finally:
+            restore_gate()
+        return stopped
+
+    gate_env = {"PATH": "/usr/bin:/bin"}
+    valid_argv = ["4242", "7", isolation.RELEASE_BYTE.hex(), "--", "/abs/bwrap", "--version"]
+
+    calls = make_calls()
+    stopped = run_gate(calls, valid_argv, read=isolation.RELEASE_BYTE)
+    check("gate execs the exact command after prctl, matching parent, valid token", stopped is None and calls["exec"] == [("/abs/bwrap", ["/abs/bwrap", "--version"], os.environ)] and calls["pdeath"] == 1, str(calls))
+    check("the happy gate never self-exits or signals", stopped is None and calls["exit"] == [] and calls["kill"] == [], str(calls))
+    check("gate closes the release fd before exec", calls["close"] == [7], str(calls))
+
+    calls = make_calls()
+    stopped = run_gate(calls, valid_argv)
+    install_gate(calls)  # EOF: the launcher closed the write end
+    os.read = lambda fd, n: b""  # type: ignore[assignment]
+    stopped_eof = None
+    try:
+        isolation.internal_gate(valid_argv)
+    except GateStopped as stop:
+        stopped_eof = stop.args[0]
+    finally:
+        restore_gate()
+    check("gate EOF self-exits without exec or signals", stopped_eof == isolation.RELEASE_EXIT and calls["exec"] == [] and calls["kill"] == [], str(calls))
+
+    calls = make_calls()
+    install_gate(calls, read=b"X")  # wrong token
+    stopped_bad = None
+    try:
+        isolation.internal_gate(valid_argv)
+    except GateStopped as stop:
+        stopped_bad = stop.args[0]
+    finally:
+        restore_gate()
+    check("wrong token self-exits without exec", stopped_bad == isolation.RELEASE_EXIT and calls["exec"] == [], str(calls))
+
+    calls = make_calls()
+    install_gate(calls, getppid=1, read=runtime_read_never)  # adopted launcher
+    stopped_adopted = None
+    try:
+        isolation.internal_gate(valid_argv)
+    except GateStopped as stop:
+        stopped_adopted = stop.args[0]
+    finally:
+        restore_gate()
+    check(
+        "mismatched parent self-signals and refuses before reading",
+        stopped_adopted == isolation.RELEASE_EXIT
+        and calls["kill"] == [(os.getpid(), int(signal.SIGKILL))]
+        and calls["read"] == []
+        and calls["exec"] == [],
+        str(calls),
+    )
+
+    calls = make_calls()
+    install_gate(calls, pdeath_ok=False, read=runtime_read_never)
+    stopped_prctl = None
+    try:
+        isolation.internal_gate(valid_argv)
+    except GateStopped as stop:
+        stopped_prctl = stop.args[0]
+    finally:
+        restore_gate()
+    check("failed prctl self-exits before the release read", stopped_prctl == isolation.RELEASE_EXIT and calls["read"] == [], str(calls))
+
+    # dispatch: fail-closed unknown invocation; gate routes
+    calls = make_calls()
+    install_gate(calls)
+    try:
+        code = isolation.dispatch(["isolation.py", "bogus"])
+        check("unknown invocation refuses with exit 2", code == 2, str(code))
+    except GateStopped:
+        check("unknown invocation refuses with exit 2", False, "reached the gate")
+    finally:
+        restore_gate()
+
+    calls = make_calls()
+    install_gate(calls, read=isolation.RELEASE_BYTE)
+    routed = None
+    try:
+        routed = isolation.dispatch(["isolation.py", "internal-gate"] + valid_argv)
+    except GateStopped:
+        pass
+    finally:
+        restore_gate()
+    check("dispatch routes internal-gate through the executed path", routed == 0 and len(calls["exec"]) == 1, f"{routed} {calls['exec']}")
+
     # --- mocked supervisor call flow (no spawn) ---------------------------
     class FakePopen:
         instances: list["FakePopen"] = []
@@ -207,9 +339,14 @@ def main() -> int:
         supervisor = isolation.PidfdSupervisor(["/abs/bwrap", "--version"], dict(fresh_env))
         supervisor.start()
         spawned = FakePopen.instances[-1]
-        check("gate argv wraps the sandbox command via the pinned interpreter", spawned.argv[:4] == [sys.executable, "-I", "-S", str(pathlib.Path(isolation.__file__).resolve())], " ".join(map(str, spawned.argv[:6])))
-        check("gate carries internal-gate, fd, token and separator", spawned.argv[4:8] == ["internal-gate", str(spawned.kwargs["pass_fds"][0]), isolation.RELEASE_BYTE.hex(), "--"], str(spawned.argv[4:9]))
-        check("gate tail is exactly the sandbox command", spawned.argv[8:] == ["/abs/bwrap", "--version"], str(spawned.argv[8:]))
+        gate_path = str(pathlib.Path(isolation.__file__).resolve())
+        check("gate argv wraps the sandbox command via the pinned interpreter", spawned.argv[:4] == [sys.executable, "-I", "-S", gate_path], " ".join(map(str, spawned.argv[:6])))
+        check(
+            "gate carries internal-gate, launcher pid, fd, token and separator",
+            spawned.argv[4:9] == ["internal-gate", str(os.getpid()), str(spawned.kwargs["pass_fds"][0]), isolation.RELEASE_BYTE.hex(), "--"],
+            str(spawned.argv[4:10]),
+        )
+        check("gate tail is exactly the sandbox command", spawned.argv[9:] == ["/abs/bwrap", "--version"], str(spawned.argv[9:]))
         check("only the read end is inherited (pass_fds)", len(spawned.kwargs["pass_fds"]) == 1, str(spawned.kwargs.get("pass_fds")))
         check("no preexec_fn blocks the exec", "preexec_fn" not in spawned.kwargs, str(sorted(spawned.kwargs)))
         check("pidfd acquired once for the spawned pid", pidfd_calls == [4242], str(pidfd_calls))
