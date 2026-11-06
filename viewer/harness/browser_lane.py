@@ -195,6 +195,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
         focus = page.evaluate("() => document.hasFocus()")
         page.evaluate("() => { window.__copy = {state: 'pending', focus: document.hasFocus()}; }")
         select_first_formula_paragraph()
+        start_clipboard_read()
         exec_result = page.evaluate("() => window.__exec")
         print(f"[browser] copy phase: focus={focus} execCommand={exec_result}", flush=True)
         ok, evidence = await_clipboard()
@@ -216,6 +217,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
         page.evaluate("() => window.__boardViewer.setCopyMode('plain')")
         page.evaluate("() => { window.__copy = {state: 'pending'}; }")
         select_first_formula_paragraph()
+        start_clipboard_read()
         ok, evidence = await_clipboard()
         if not ok:
             check("plain clipboard read reaches a terminal state (bounded)", False, evidence)

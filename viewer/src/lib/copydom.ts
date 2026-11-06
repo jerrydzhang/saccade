@@ -71,7 +71,7 @@ export function selectionSegments(): CopySegment[] {
       unitEl.closest("[data-block-id]")?.getAttribute("data-block-id") ?? "selection";
 
     const pushProse = (text: string): void => {
-      if (text.trim().length > 0) {
+      if (text.length > 0) {
         currentUnits.push({
           id: `prose${currentUnits.length}`,
           kind: "prose",
