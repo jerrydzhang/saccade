@@ -14,8 +14,10 @@ browser, compositor, server or SSH processes by hand.
 - `browser`: the gated browser lane (source present; runs only under a
   named authorization). Same supervisor, same canary-first order - see
   below for the exact shape.
-- `native`, `serve`: service lanes, not implemented; each arrives as
-  its own reviewed checkpoint.
+- `native`: the gated native/WebKitGTK lane (source present; runs only
+  under a named authorization). Same supervisor, same canary-first
+  order - see below for the exact shape.
+- `serve`: not implemented; its own reviewed checkpoint.
 
 Agents never spawn app, browser, compositor, server or SSH processes by
 hand; everything sandboxed goes through the harness.
@@ -163,6 +165,46 @@ Clipboard honesty: what the browser writes is Chromium's clipboard
 inside the sandbox - it is never the desktop's clipboard. Native
 clipboard fidelity is a real-client question for the actual-client
 gate and is never implied by this lane.
+
+## The native lane, exactly (source; runs only under authorization)
+
+```
+BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record> \
+nix develop .#board-viewer --command \
+  python3 -B viewer/harness/entry.py native \
+  --board <absolute board.yaml>
+```
+
+Time bound: 120 s, then the supervisor is stopped through the pidfd and
+the run is a refusal. No automatic retry.
+
+Order inside the one sandbox: (1) the containment canary in-process
+FIRST; (2) then a private headless Weston (pixman renderer, no GPU, no
+socket beyond the fresh private XDG_RUNTIME_DIR); (3) then the pinned
+Tauri application binary in the foreground, opened on the explicit
+board passed as its launch argument - the same foreground open a human
+client uses; (4) three bounded weston-screenshooter frame captures plus
+the app's own bridge stderr lines as outcome evidence; (5) owned
+teardown of the app and compositor children.
+
+Binds (read-only): the canary, the lane script, the pinned app binary
+and weston/weston-screenshooter binaries (all /nix/store paths covered
+by the store bind - stated explicitly for review), and the explicit
+board file. Env additions: WESTON_BIN/APP_BIN/SCREENSHOOTER_BIN,
+BOARD_FILE, FONTCONFIG_FILE (the pinned generated config), SHOTS_DIR,
+plus the usual baselines. No GPU, no display socket beyond the private
+XDG_RUNTIME_DIR, no host service contact.
+
+The board opened is an explicit path - the same foreground open
+operation a human client runs (`nix run .#board-viewer -- <board>`).
+No browser-fixture fallback disguises native failure: the app starts
+empty without a board path. The project/workspace/board selector and
+the real remote adapter remain later scope; nothing here invents a
+project registry or tracker change.
+
+Cold costs are reported separately: the native package build (WebKit,
+Tauri) is a one-time Nix build measured on first run; the lane itself
+prints its warm cost.
 
 Ownership: one PidfdSupervisor per run as everywhere else; the lane's
 own server child is stopped through its held handle before the

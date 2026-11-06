@@ -27,12 +27,12 @@ let readyPromise: Promise<Tex2Svg> | null = null;
 
 function configureBeforeLoad(): void {
   // The speech worker resolves against loader.paths.mathjax; the built
-  // dist carries the pinned sre assets at <origin>/sre, so the offline
-  // same-origin path keeps speech from fetching anything external.
-  const mathjaxRoot =
-    typeof location !== "undefined" && location.protocol.startsWith("http")
-      ? location.origin
-      : "";
+  // frontend carries the pinned sre assets at <origin>/sre, so the
+  // offline same-origin path keeps speech from fetching anything
+  // external. location.origin covers both the http browser lane and the
+  // Tauri protocol (tauri://localhost under WebKitGTK) - the native lane
+  // verifies this empirically rather than assuming it.
+  const mathjaxRoot = typeof location !== "undefined" ? location.origin : "";
   window.MathJax = {
     loader: { paths: { mathjax: mathjaxRoot } },
     tex: {

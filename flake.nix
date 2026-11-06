@@ -399,19 +399,81 @@
             '';
           }
           // extra);
-    in {
-      web = pkgs.buildNpmPackage (npm
+      webDist = pkgs.buildNpmPackage (npm
         // {
           installPhase = ''
             mkdir -p $out
             cp -r dist/. $out/
           '';
         });
+    in {
+      web = webDist;
       checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
         board-viewer-typecheck = npmCheck "typecheck" "npm run check" {};
         board-viewer-build = npmCheck "build" "npm run build" {};
         board-viewer-contracts = npmCheck "contracts" "npm run test" {};
       };
+
+      # the retained native app: the Tauri shell built against the
+      # bundled frontend dist, wrapped with its runtime libraries and the
+      # pinned fontconfig - a foreground binary a human runs with an
+      # explicit board path. No deployment, install or remote transfer.
+      app = let
+        webkitLibs = pkgs.lib.makeLibraryPath [
+          pkgs.webkitgtk_4_1
+          pkgs.gtk3
+          pkgs.cairo
+          pkgs.gdk-pixbuf
+          pkgs.glib
+          pkgs.pango
+          pkgs.dbus
+          pkgs.alsa-lib
+        ];
+        fontsConf = pkgs.makeFontsConf {
+          fontDirectories = [pkgs.dejavu_fonts];
+        };
+        cargoSrc = pkgs.lib.sourceByRegex ./viewer/src-tauri [
+          "^src$"
+          "^src/.*$"
+          "^Cargo\\.toml$"
+          "^Cargo\\.lock$"
+          "^build\\.rs$"
+          "^tauri\\.conf\\.json$"
+          "^icons$"
+          "^icons/.*$"
+        ];
+      in
+        pkgs.rustPlatform.buildRustPackage {
+          pname = "saccade-board-viewer-app";
+          version = "0.1.0";
+          src = cargoSrc;
+          cargoLock = {
+            lockFile = ./viewer/src-tauri/Cargo.lock;
+          };
+          nativeBuildInputs = [pkgs.pkg-config pkgs.makeWrapper];
+          buildInputs = [
+            pkgs.webkitgtk_4_1
+            pkgs.gtk3
+            pkgs.cairo
+            pkgs.gdk-pixbuf
+            pkgs.glib
+            pkgs.pango
+            pkgs.dbus
+          ];
+          # the embedded frontend: tauri.conf reads frontendDist
+          # ../dist, one level above the source root in the build tree
+          preBuild = ''
+            mkdir -p ../dist
+            cp -r ${webDist}/. ../dist/
+          '';
+          postInstall = ''
+            wrapProgram $out/bin/saccade-board-viewer \
+              --prefix LD_LIBRARY_PATH : ${webkitLibs} \
+              --set FONTCONFIG_FILE ${fontsConf} \
+              --set WEBKIT_DISABLE_COMPOSITING_MODE 1
+          '';
+          meta.mainProgram = "saccade-board-viewer";
+        };
     };
     saccadePiExtensions = ["native/saccade.ts"];
   in {
@@ -448,6 +510,7 @@
               pkgs.pkg-config
               (pkgs.python3.withPackages (ps: [ps.playwright]))
               pkgs.bubblewrap
+              pkgs.weston
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.webkitgtk_4_1
@@ -650,6 +713,7 @@
           saccade-web-assets = webAssets;
 
           board-viewer-web = (mkBoardViewer pkgs lib).web;
+          board-viewer = (mkBoardViewer pkgs lib).app;
 
           default = pkgs.symlinkJoin {
             name = "saccade";
@@ -691,6 +755,19 @@
           };
         }
     );
+
+    apps = forAllSystems (system: let
+      boardViewerApp = (mkBoardViewer nixpkgs.legacyPackages.${system} lib).app;
+    in {
+      board-viewer = {
+        type = "app";
+        program = "${boardViewerApp}/bin/saccade-board-viewer";
+      };
+      default = {
+        type = "app";
+        program = "${boardViewerApp}/bin/saccade-board-viewer";
+      };
+    });
 
     checks = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};

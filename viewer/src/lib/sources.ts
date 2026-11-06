@@ -109,7 +109,7 @@ interface TauriInvoke {
   (cmd: string, args?: Record<string, unknown>): Promise<unknown>;
 }
 
-function tauriInvoke(): TauriInvoke {
+export function tauriInvoke(): TauriInvoke {
   const w = window as unknown as { __TAURI_INTERNALS__?: { invoke: TauriInvoke } };
   const invoke = w.__TAURI_INTERNALS__?.invoke;
   if (!invoke) {

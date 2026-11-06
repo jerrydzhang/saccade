@@ -46,6 +46,7 @@ FAST_STEPS = [
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
 BROWSER_TIMEOUT_SECONDS = 180
+NATIVE_TIMEOUT_SECONDS = 120
 # The canary file is bound read-only into the sandbox at this path: the
 # interpreter inside must be able to read it without any host HOME or
 # worktree visibility.
@@ -55,6 +56,7 @@ CANARY_SANDBOX_PATH = "/canary/containment_canary.py"
 # need for any node bind; the lane script rides /lane.
 BROWSER_LANE_SANDBOX_PATH = "/lane/browser_lane.py"
 DIST_SANDBOX = "/app/dist"
+NATIVE_LANE_SANDBOX_PATH = "/lane/native_lane.py"
 tracker_db_arg = ""
 
 
@@ -291,9 +293,6 @@ def browser_lane() -> int:
     env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
     env["SHOTS_DIR"] = str(run_root / "shots")
     env["FONTCONFIG_FILE"] = fontconf
-    # Diagnostic-only: Playwright records the owned browser process's
-    # stderr and exit signal. No persistent telemetry, no new controller.
-    env["DEBUG"] = "pw:browser"
 
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),
@@ -332,6 +331,130 @@ def browser_lane() -> int:
             print(f"[browser] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
+def native_lane() -> int:
+    """Gated native/WebKitGTK lane. Same supervisor, same canary-first
+    order: the payload runs the containment canary in-process BEFORE the
+    private headless Weston or the app exists. One foreground app launch
+    on the explicit board argument (the same foreground open a human
+    client uses); bounded frame captures; owned teardown of the app and
+    compositor children.
+
+    Binds read-only: the canary, the lane script, the pinned app binary
+    (a /nix/store path, covered by the store bind), the weston binary,
+    the weston-screenshooter binary, and the explicit board file. Env
+    additions: WESTON_BIN/APP_BIN/SCREENSHOOTER_BIN (absolute pinned
+    paths), BOARD_FILE (absolute explicit board), FONTCONFIG_FILE (the
+    pinned generated config), SHOTS_DIR (run-root shots). No GPU, no
+    display socket beyond the fresh private XDG_RUNTIME_DIR, no host
+    service contact. 120s bound; pidfd-only cleanup.
+    """
+    sys.path.insert(0, str(HERE))
+    import isolation
+
+    isolation.gate_or_exit("native")
+
+    found = shutil.which("bwrap")
+    if found is None:
+        print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return 1
+    bwrap = str(pathlib.Path(found).resolve())
+    python = str(pathlib.Path(sys.executable).resolve())
+    canary = str((HERE / "containment_canary.py").resolve())
+    lane = str((HERE / "native_lane.py").resolve())
+
+    weston = shutil.which("weston")
+    shooter = shutil.which("weston-screenshooter")
+    if weston is None or shooter is None:
+        print(
+            "containment refusal: weston/weston-screenshooter are not in PATH (pinned devshell expected)",
+            file=sys.stderr,
+        )
+        return 1
+    weston_bin = str(pathlib.Path(weston).resolve())
+    shooter_bin = str(pathlib.Path(shooter).resolve())
+
+    app = os.environ.get("BOARD_VIEWER_APP_BIN", "")
+    if not app.startswith("/nix/store/") or not os.access(app, os.X_OK):
+        print(
+            "containment refusal: BOARD_VIEWER_APP_BIN must be an executable pinned app binary",
+            file=sys.stderr,
+        )
+        return 1
+
+    board = tracker_db_arg if tracker_db_arg.startswith("/") else ""
+    if not board or not os.path.isfile(board):
+        print(
+            "containment refusal: pass --board <absolute board.yaml> for the native lane",
+            file=sys.stderr,
+        )
+        return 1
+
+    fontconf = os.environ.get("FONTCONFIG_FILE", "")
+    usable, reason = verify_fontconfig_file(fontconf)
+    if not usable:
+        print(f"containment refusal: {reason}", file=sys.stderr)
+        return 1
+
+    try:
+        isolation.static_preflight(bwrap)
+    except isolation.ContainmentRefused as error:
+        print(f"containment refusal: {error}", file=sys.stderr)
+        return 1
+
+    run_root = isolation.make_run_root("native")
+    env = isolation.env_allowlist(run_root)
+    env["CONTAINMENT_HOST_NS_IDS"] = isolation.host_ns_ids()
+    env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home().resolve())
+    env["CONTAINMENT_HOST_UID"] = str(os.getuid())
+    env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
+    env["WESTON_BIN"] = weston_bin
+    env["APP_BIN"] = app
+    env["SCREENSHOOTER_BIN"] = shooter_bin
+    env["BOARD_FILE"] = board
+    env["FONTCONFIG_FILE"] = fontconf
+    env["SHOTS_DIR"] = str(run_root / "shots")
+    (run_root / "shots").mkdir(parents=True, exist_ok=True)
+
+    ro_binds = [
+        (canary, CANARY_SANDBOX_PATH),
+        (lane, NATIVE_LANE_SANDBOX_PATH),
+        (app, app),
+        (weston_bin, weston_bin),
+        (shooter_bin, shooter_bin),
+        (board, board),
+    ]
+    cmd = isolation.build_command(bwrap, run_root, [python, NATIVE_LANE_SANDBOX_PATH], ro_binds)
+
+    print("[native] gate command:", " ".join(cmd), flush=True)
+    print(f"[native] run root: {run_root}", flush=True)
+    supervisor = isolation.PidfdSupervisor(cmd, env)
+    log_path = run_root / "logs" / "native.log"
+    started = time.monotonic()
+    try:
+        supervisor.start()
+        try:
+            code = supervisor.wait(timeout=NATIVE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            print(f"[native] timeout after {NATIVE_TIMEOUT_SECONDS}s: stopping via pidfd", file=sys.stderr)
+            supervisor.stop()
+            log_path.write_text(supervisor.read_output())
+            print("containment refusal: native lane exceeded the time bound", file=sys.stderr)
+            return 1
+        output = supervisor.read_output()
+        log_path.write_text(output)
+        cost = time.monotonic() - started
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        print(f"[native] lane exit={code} in {cost:.1f}s; log: {log_path}", flush=True)
+        return code
+    except isolation.ContainmentRefused as error:
+        print(f"containment refusal: {error}", file=sys.stderr)
+        return 1
+    finally:
+        code = supervisor.stop()
+        if code != 0 and code is not None:
+            print(f"[native] supervisor exit after cleanup: {code}", file=sys.stderr)
+
+
 def gated_stub(lane: str) -> int:
     isolation_gate(lane)
     print(
@@ -354,14 +477,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="board viewer harness")
     parser.add_argument("lane", choices=["check-fast", "preflight", "browser", "native", "serve"])
     parser.add_argument("--tracker-db", help="absolute caller-side tracker db path for the preflight baseline")
+    parser.add_argument("--board", help="absolute board file for the native lane foreground open")
     args = parser.parse_args()
     tracker_db_arg = args.tracker_db or ""
+    tracker_db_arg = args.board or tracker_db_arg  # the native lane opens the board; reuse the baseline slot
     if args.lane == "check-fast":
         return check_fast()
     if args.lane == "preflight":
         return preflight()
     if args.lane == "browser":
         return browser_lane()
+    if args.lane == "native":
+        return native_lane()
     return gated_stub(args.lane)
 
 

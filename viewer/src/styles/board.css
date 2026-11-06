@@ -399,7 +399,7 @@ code.raw-html {
 .diagram-overlay {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
   z-index: 40;

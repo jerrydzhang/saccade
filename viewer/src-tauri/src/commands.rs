@@ -4,6 +4,19 @@
 //! prefix checking runs second so a guard bypass still cannot escape.
 
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+
+static INITIAL_BOARD: OnceLock<Option<String>> = OnceLock::new();
+
+pub fn set_initial_board(path: Option<String>) {
+    let _ = INITIAL_BOARD.set(path);
+}
+
+/// The explicit board path handed to the foreground launch, if any.
+#[tauri::command]
+pub fn initial_board() -> Option<String> {
+    INITIAL_BOARD.get().cloned().flatten()
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct DeclaredText {
@@ -66,6 +79,13 @@ fn canonical_prefix_holds(base: &std::path::Path, joined: &std::path::Path) -> b
     }
 }
 
+fn log_bridge(operation: &str, path: &str, outcome: &str) -> std::io::Result<()> {
+    // A useful outcome line on the app's own stderr: the human running
+    // the foreground app sees what the bridge actually read.
+    eprintln!("[bridge] {operation} {path}: {outcome}");
+    Ok(())
+}
+
 fn read_text_resolved(base: &str, relative: Option<&str>) -> Result<DeclaredText, BridgeError> {
     let base_path = std::path::Path::new(base);
     let target = match relative {
@@ -78,7 +98,15 @@ fn read_text_resolved(base: &str, relative: Option<&str>) -> Result<DeclaredText
     if !canonical_prefix_holds(base_path, &target) {
         return Err(deny("resolved path left the declaration directory"));
     }
-    let bytes = std::fs::read(&target).map_err(|_| missing(&target.to_string_lossy()))?;
+    let bytes = std::fs::read(&target).map_err(|_| {
+        let _ = log_bridge("read_declaration", &target.to_string_lossy(), "missing");
+        missing(&target.to_string_lossy())
+    })?;
+    let _ = log_bridge(
+        "read_declaration",
+        &target.to_string_lossy(),
+        &format!("{} bytes", bytes.len()),
+    );
     String::from_utf8(bytes)
         .map(|text| DeclaredText { text })
         .map_err(|_| BridgeError {
@@ -103,7 +131,16 @@ pub fn read_asset(base: String, relative: String) -> Result<Vec<u8>, BridgeError
     if !canonical_prefix_holds(base_path, &target) {
         return Err(deny("resolved path left the declaration directory"));
     }
-    std::fs::read(&target).map_err(|_| missing(&target.to_string_lossy()))
+    let bytes = std::fs::read(&target).map_err(|_| {
+        let _ = log_bridge("read_asset", &target.to_string_lossy(), "missing");
+        missing(&target.to_string_lossy())
+    })?;
+    let _ = log_bridge(
+        "read_asset",
+        &target.to_string_lossy(),
+        &format!("{} bytes", bytes.len()),
+    );
+    Ok(bytes)
 }
 
 /// A static identity statement for the machine-readable surface: what this
