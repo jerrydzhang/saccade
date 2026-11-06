@@ -331,7 +331,7 @@ def browser_lane() -> int:
             print(f"[browser] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
-def native_lane() -> int:
+def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     """Gated native/WebKitGTK lane. Same supervisor, same canary-first
     order: the payload runs the containment canary in-process BEFORE the
     private headless Weston or the app exists. One foreground app launch
@@ -381,12 +381,28 @@ def native_lane() -> int:
         )
         return 1
 
-    board = tracker_db_arg if tracker_db_arg.startswith("/") else ""
-    if not board or not os.path.isfile(board):
+    # the app's explicit board: an absolute host path whose parent
+    # DIRECTORY is bound read-only at the neutral sandbox path /board -
+    # never a host /home path, so the canary's host-visibility check
+    # holds and companion/relative assets resolve beside it
+    if not board_arg.startswith("/") or not os.path.isfile(board_arg):
         print(
             "containment refusal: pass --board <absolute board.yaml> for the native lane",
             file=sys.stderr,
         )
+        return 1
+    board_dir = pathlib.Path(board_arg).resolve().parent
+    board_name = pathlib.Path(board_arg).resolve().name
+    board_sandbox_path = f"/board/{board_name}"
+
+    tracker_db, refusal = caller_tracker_db(
+        os.environ.get("SACCADE_DB") or "", tracker_db_arg or ""
+    )
+    if tracker_db is None:
+        print(f"containment refusal: {refusal}", file=sys.stderr)
+        return 1
+    if not os.path.exists(tracker_db):
+        print(f"containment refusal: baseline tracker db does not exist on the caller side: {tracker_db}", file=sys.stderr)
         return 1
 
     fontconf = os.environ.get("FONTCONFIG_FILE", "")
@@ -410,9 +426,10 @@ def native_lane() -> int:
     env["WESTON_BIN"] = weston_bin
     env["APP_BIN"] = app
     env["SCREENSHOOTER_BIN"] = shooter_bin
-    env["BOARD_FILE"] = board
+    env["BOARD_FILE"] = board_sandbox_path
     env["FONTCONFIG_FILE"] = fontconf
     env["SHOTS_DIR"] = str(run_root / "shots")
+    env["WAYLAND_DISPLAY"] = f"wayland-{os.getpid() % 97}"
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
 
     ro_binds = [
@@ -421,7 +438,7 @@ def native_lane() -> int:
         (app, app),
         (weston_bin, weston_bin),
         (shooter_bin, shooter_bin),
-        (board, board),
+        (str(board_dir), "/board"),
     ]
     cmd = isolation.build_command(bwrap, run_root, [python, NATIVE_LANE_SANDBOX_PATH], ro_binds)
 
@@ -480,7 +497,7 @@ def main() -> int:
     parser.add_argument("--board", help="absolute board file for the native lane foreground open")
     args = parser.parse_args()
     tracker_db_arg = args.tracker_db or ""
-    tracker_db_arg = args.board or tracker_db_arg  # the native lane opens the board; reuse the baseline slot
+    board_arg = args.board or ""
     if args.lane == "check-fast":
         return check_fast()
     if args.lane == "preflight":
@@ -488,7 +505,7 @@ def main() -> int:
     if args.lane == "browser":
         return browser_lane()
     if args.lane == "native":
-        return native_lane()
+        return native_lane(board_arg, tracker_db_arg)
     return gated_stub(args.lane)
 
 

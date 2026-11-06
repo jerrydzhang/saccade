@@ -58,25 +58,24 @@ def run_canary_first() -> bool:
     return containment_canary.main() == 0
 
 
-def start_weston(weston_bin: str) -> subprocess.Popen[bytes] | None:
+def start_weston(weston_bin: str, logs: pathlib.Path) -> subprocess.Popen[bytes] | None:
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    wayland_name = f"wayland-{os.getpid() % 97}"
     try:
+        # weston 16: the screenshooter protocol is core, no module flag;
+        # output goes to a log FILE, never an undrained pipe
+        weston_log = open(logs / "weston.log", "wb")
         weston = subprocess.Popen(
-            [
-                weston_bin,
-                "--backend=headless",
-                f"--socket=wayland-{os.getpid() % 97}",
-                "--modules=screen-share",
-            ],
-            env={**os.environ, "WAYLAND_DISPLAY": f"wayland-{os.getpid() % 97}"},
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            [weston_bin, "--backend=headless", f"--socket={wayland_name}"],
+            env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
+            stdout=weston_log,
+            stderr=weston_log,
         )
     except OSError as error:
         print(f"containment refusal: weston could not start: {error}", file=sys.stderr)
         return None
     deadline = time.monotonic() + READY_SECONDS
-    wayland_socket = pathlib.Path(runtime) / f"wayland-{os.getpid() % 97}"
+    wayland_socket = pathlib.Path(runtime) / wayland_name
     while time.monotonic() < deadline:
         if weston.poll() is not None:
             print("containment refusal: weston exited during startup", file=sys.stderr)
@@ -98,22 +97,29 @@ def main() -> int:
     weston_bin = pinned("WESTON_BIN")
     app_bin = pinned("APP_BIN")
     board = pinned("BOARD_FILE")
+    shooter_bin = pinned("SCREENSHOOTER_BIN")
     shots = pathlib.Path(os.environ.get("SHOTS_DIR", ""))
+    logs = shots.parent / "logs"
+    logs.mkdir(exist_ok=True)
     if not shots.is_dir():
         print("containment refusal: SHOTS_DIR must be an existing run-root directory", file=sys.stderr)
         return 1
 
-    weston = start_weston(weston_bin)
+    weston = start_weston(weston_bin, logs)
     if weston is None:
         return 1
     print("[native] private headless weston up", flush=True)
 
+    # the app runs in the foreground with the compositor's display; its
+    # stderr (bridge outcome lines) goes to a log FILE
     app_env = dict(os.environ)
+    app_env["WAYLAND_DISPLAY"] = os.environ.get("WAYLAND_DISPLAY", "")
+    app_log_handle = open(logs / "app.log", "wb")
     app = subprocess.Popen(
         [app_bin, board],
         env=app_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=app_log,
+        stderr=app_log,
     )
     print(f"[native] app launched in foreground on {board}", flush=True)
     deadline = time.monotonic() + APP_READY_SECONDS
