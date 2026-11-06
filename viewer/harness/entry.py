@@ -42,6 +42,7 @@ FAST_STEPS = [
 ]
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
+tracker_db_arg = ""
 
 
 def check_fast() -> int:
@@ -59,21 +60,45 @@ def check_fast() -> int:
 def preflight() -> int:
     """Minimal containment verification, runnable exactly as reviewed.
 
-    1. Static reads: bwrap present in the pinned closure, user-namespace
+    1. Static reads: bwrap present (absolute pinned path), user-namespace
        sysctls positive. No unshare happens here.
     2. One sandbox: build_command with the canary as the sole payload,
-       fresh environment for the whole chain, full host baselines, the
-       recorded run root and logs. Bounded by PREFLIGHT_TIMEOUT_SECONDS;
-       cleanup is pidfd-only with verified reaping, on all paths.
+       fresh environment for the whole chain, absolute tool paths,
+       absolute caller baselines, the recorded run root and logs. Bounded
+       by PREFLIGHT_TIMEOUT_SECONDS; cleanup is pidfd-only with verified
+       reaping, on all paths.
     """
     sys.path.insert(0, str(HERE))
     import isolation
 
     isolation.gate_or_exit("preflight")
 
-    bwrap = shutil.which("bwrap")
-    if bwrap is None:
+    found = shutil.which("bwrap")
+    if found is None:
         print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return 1
+    bwrap = str(pathlib.Path(found).resolve())
+    python = str(pathlib.Path(sys.executable).resolve())  # absolute pinned tool path
+    canary = str((HERE / "containment_canary.py").resolve())
+
+    # The caller-baseline path must be an absolute path that exists on the
+    # caller side, so its invisibility inside the sandbox is a meaningful
+    # comparison. Explicit argument first, caller env second, refuse
+    # anything relative or missing.
+    tracker_db = ""
+    for candidate in (tracker_db_arg, os.environ.get("SACCADE_DB")):
+        if candidate:
+            tracker_db = str(pathlib.Path(candidate).resolve())
+            break
+    if not tracker_db or not tracker_db.startswith("/"):
+        print(
+            "containment refusal: no absolute caller tracker-db baseline; "
+            "pass --tracker-db <absolute path> or set SACCADE_DB",
+            file=sys.stderr,
+        )
+        return 1
+    if not os.path.exists(tracker_db):
+        print(f"containment refusal: baseline tracker db does not exist on the caller side: {tracker_db}", file=sys.stderr)
         return 1
 
     try:
@@ -86,12 +111,10 @@ def preflight() -> int:
     host_ns = isolation.host_ns_ids()
     env = isolation.env_allowlist(run_root)
     env["CONTAINMENT_HOST_NS_IDS"] = host_ns
-    env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home())
+    env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home().resolve())
     env["CONTAINMENT_HOST_UID"] = str(os.getuid())
-    env["CONTAINMENT_HOST_TRACKER_DB"] = "saccade.db"
+    env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
 
-    canary = str(HERE / "containment_canary.py")
-    python = sys.executable  # absolute path into the pinned closure
     cmd = isolation.build_command(bwrap, run_root, [python, canary], [])
 
     print("[preflight] command:", " ".join(cmd), flush=True)
@@ -146,9 +169,12 @@ def isolation_gate(lane: str) -> None:
 
 
 def main() -> int:
+    global tracker_db_arg
     parser = argparse.ArgumentParser(description="board viewer harness")
     parser.add_argument("lane", choices=["check-fast", "preflight", "browser", "native", "serve"])
+    parser.add_argument("--tracker-db", help="absolute caller-side tracker db path for the preflight baseline")
     args = parser.parse_args()
+    tracker_db_arg = args.tracker_db or ""
     if args.lane == "check-fast":
         return check_fast()
     if args.lane == "preflight":

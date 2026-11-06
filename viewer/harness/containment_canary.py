@@ -45,6 +45,11 @@ def parse_baselines() -> tuple[dict[str, str], list[str]]:
         if "=" not in pair:
             continue
         kind, value = pair.split("=", 1)
+        # An empty value is a missing baseline, not a comparable one:
+        # pid= would otherwise silently skip its own namespace check.
+        if not kind or not value:
+            failures.append(f"baseline malformed or empty: {pair!r} is refused")
+            continue
         expected[kind] = value
     for kind in REQUIRED_NAMESPACES:
         if kind not in expected:
@@ -54,8 +59,11 @@ def parse_baselines() -> tuple[dict[str, str], list[str]]:
         ("host UID", "CONTAINMENT_HOST_UID"),
         ("tracker DB", "CONTAINMENT_HOST_TRACKER_DB"),
     ]:
-        if not os.environ.get(var):
+        value = os.environ.get(var)
+        if not value:
             failures.append(f"baseline missing: {var} ({name}) is required")
+        elif not value.startswith("/"):
+            failures.append(f"baseline must be an absolute path: {var}={value!r}")
     return expected, failures
 
 

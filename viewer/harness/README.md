@@ -50,9 +50,11 @@ not certify isolation, and no nix-sandbox heuristic stands in for it.
 - **Mounts**: fresh tmpfs `/tmp`, `/run` (so the host's
   `/run/user/<uid>`, DBus and display sockets are simply absent),
   `/dev/shm`, and `--perms 0700 --tmpfs <runroot>/runtime` for
-  `XDG_RUNTIME_DIR`; fresh `--dev /dev`; read-only `/nix/store`; per-lane
-  read-only binds of explicit inputs; read-write bind of the run root
-  only. Host HOME is never mounted.
+  `XDG_RUNTIME_DIR` - mounted AFTER the run-root bind (ordered mounts:
+  a later mount covers an earlier one, so the tmpfs is never obscured
+  by the descendant bind); fresh `--dev /dev`; read-only `/nix/store`;
+  per-lane read-only binds of explicit inputs; read-write bind of the
+  run root only. Host HOME is never mounted.
 - **Environment**: a fresh dict for the whole chain - the bwrap process
   itself is spawned with it, and the same values are `--setenv` inside:
   PATH, LANG, the private roots. Lane additions (loopback tools, pinned
@@ -64,13 +66,14 @@ not certify isolation, and no nix-sandbox heuristic stands in for it.
   only, so loopback can be brought up (CAP_NET_ADMIN scoped to the
   sandbox's own net namespace). No host capability crosses the boundary.
 - **Canary before payload** (`containment_canary.py`): runs first in the
-  same sandbox and refuses unless every required baseline is present -
-  all six host namespace ids (pid, net, uts, ipc, mnt, user) plus host
-  HOME, UID and the tracker DB path - and namespaces differ, host paths
-  are invisible, `/tmp` and `XDG_RUNTIME_DIR` are private tmpfs, the
-  environment is scrubbed, and the network namespace has loopback only.
-  Partial baselines are a refusal. The canary is read-only enumeration;
-  it never opens listeners or connections and never signals.
+  same sandbox and refuses unless every required baseline is present,
+  absolute and non-empty - all six host namespace ids (pid, net, uts,
+  ipc, mnt, user) plus host HOME, UID and the tracker DB path - and
+  namespaces differ, host paths are invisible, `/tmp` and
+  `XDG_RUNTIME_DIR` are private tmpfs, the environment is scrubbed, and
+  the network namespace has loopback only. Partial, empty or relative
+  baselines are refusals. The canary is read-only enumeration; it never
+  opens listeners or connections and never signals.
 - **Ownership and cleanup** (`isolation.PidfdSupervisor`): the harness
   holds a pidfd for the supervisor. Cleanup TERM -> bounded grace ->
   KILL goes through `signal.pidfd_send_signal` only; reaping is verified
@@ -95,12 +98,17 @@ python3 viewer/harness/entry.py preflight
 # requires BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record>
 ```
 
-1. Static reads: bwrap found in the pinned devshell PATH, user-namespace
-   sysctls positive. No unshare happens during static reads.
+1. Static reads: bwrap found in the pinned devshell PATH (resolved to an
+   absolute path), user-namespace sysctls positive. No unshare happens
+   during static reads.
 2. One sandbox via `isolation.build_command` with the canary as the sole
-   payload: the exact command is printed before it runs.
-3. Host baselines recorded before the sandbox exists (six namespaces +
-   HOME + UID + tracker DB name) and passed as explicit env entries.
+   payload: the exact command is printed before it runs. Tool paths are
+   absolute pinned paths (bwrap, the canary's python interpreter).
+3. Host baselines recorded before the sandbox exists - six namespaces +
+   absolute HOME + UID + absolute caller tracker-db path (from
+   `--tracker-db` or `SACCADE_DB`; relative or missing is a refusal) -
+   and passed as explicit env entries. Empty or malformed baselines are
+   refusals.
 4. Bounded by 30 s; on timeout the supervisor is stopped through the
    pidfd and the run is a refusal.
 5. Canary output is preserved at `<runroot>/logs/canary.log`.

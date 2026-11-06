@@ -119,10 +119,6 @@ def build_command(bwrap: str, run_root: pathlib.Path, payload: list[str], ro_bin
         "/tmp",
         "--tmpfs",
         "/run",
-        "--perms",
-        "0700",
-        "--tmpfs",
-        str(run_root / "runtime"),
         "--ro-bind",
         "/nix/store",
         "/nix/store",
@@ -132,6 +128,11 @@ def build_command(bwrap: str, run_root: pathlib.Path, payload: list[str], ro_bin
     ]
     for src, dest in ro_binds:
         cmd += ["--ro-bind", src, dest]
+    # Ordered mounts: the runtime tmpfs targets a run-root descendant, so
+    # it mounts AFTER the run-root bind (and any lane binds) - a later
+    # mount covers an earlier one, and the ordering is explicit here
+    # rather than something the canary must catch.
+    cmd += ["--perms", "0700", "--tmpfs", str(run_root / "runtime")]
     for key, value in env_allowlist(run_root).items():
         cmd += ["--setenv", key, value]
     cmd += ["--"]
