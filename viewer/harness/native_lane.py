@@ -6,13 +6,16 @@ the app exists.
 Order, enforced here:
   1. containment canary (the reviewed module, invoked as main())
   2. a private headless Weston compositor (pixman renderer, no GPU, no
-     display socket beyond the fresh private XDG_RUNTIME_DIR)
+     display socket beyond the fresh private XDG_RUNTIME_DIR); the
+     screenshooter protocol is core in weston 16 - no module flags
   3. the pinned Tauri application binary in the foreground, opened on
-     the explicit board passed as its launch argument (the same
-     foreground open operation a human client uses)
-  4. bounded frame captures via weston-screenshooter at intervals, plus
-     the app's own bridge stderr lines as outcome evidence
-  5. owned teardown of the app and compositor children
+     the explicit board passed as its launch argument, sharing the
+     compositor's WAYLAND_DISPLAY (one name, computed here)
+  4. bounded frame captures: weston-screenshooter 16 takes no output
+     argument and writes wayland-screenshot-output-*.png to its CWD, so
+     captures run with cwd=SHOTS_DIR and the lane collects new files
+  5. owned teardown of the app and compositor children; app and weston
+     output go to log FILES in the run root, never undrained pipes
 
 Frames and logs land in the run root for actual inspection. This lane
 is verification evidence only; it is not the human client path and
@@ -38,11 +41,11 @@ FRAME_INTERVAL_SECONDS = 4
 APP_READY_SECONDS = 20
 
 RESULTS: list[tuple[bool, str, str]] = []
+started_at = 0.0
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
     RESULTS.append((bool(condition), name, detail))
-    stream = sys.stdout if condition else sys.stderr
     print(f"[native] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}", flush=True)
 
 
@@ -58,39 +61,40 @@ def run_canary_first() -> bool:
     return containment_canary.main() == 0
 
 
-def start_weston(weston_bin: str, logs: pathlib.Path) -> subprocess.Popen[bytes] | None:
+def start_weston(weston_bin: str, wayland_name: str, logs: pathlib.Path) -> subprocess.Popen[bytes] | None:
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    wayland_name = f"wayland-{os.getpid() % 97}"
+    weston_log_path = logs / "weston.log"
+    weston_log = open(weston_log_path, "wb")
     try:
-        # weston 16: the screenshooter protocol is core, no module flag;
-        # output goes to a log FILE, never an undrained pipe
-        weston_log = open(logs / "weston.log", "wb")
         weston = subprocess.Popen(
             [weston_bin, "--backend=headless", f"--socket={wayland_name}"],
             env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
             stdout=weston_log,
             stderr=weston_log,
         )
-    except OSError as error:
-        print(f"containment refusal: weston could not start: {error}", file=sys.stderr)
-        return None
+    finally:
+        weston_log.close()
     deadline = time.monotonic() + READY_SECONDS
     wayland_socket = pathlib.Path(runtime) / wayland_name
     while time.monotonic() < deadline:
         if weston.poll() is not None:
-            print("containment refusal: weston exited during startup", file=sys.stderr)
+            print(
+                f"containment refusal: weston exited during startup (log: {weston_log_path})",
+                file=sys.stderr,
+            )
             return None
         if wayland_socket.exists():
             return weston
         time.sleep(0.2)
-    print("containment refusal: weston socket never appeared", file=sys.stderr)
+    print(f"containment refusal: weston socket never appeared (log: {weston_log_path})", file=sys.stderr)
     weston.terminate()
     weston.wait(timeout=5)
     return None
 
 
 def main() -> int:
-    started = time.monotonic()
+    global started_at
+    started_at = time.monotonic()
     if not run_canary_first():
         return 1
 
@@ -98,52 +102,52 @@ def main() -> int:
     app_bin = pinned("APP_BIN")
     board = pinned("BOARD_FILE")
     shooter_bin = pinned("SCREENSHOOTER_BIN")
+    wayland_name = f"wayland-{os.getpid() % 97}"
     shots = pathlib.Path(os.environ.get("SHOTS_DIR", ""))
-    logs = shots.parent / "logs"
+    logs = pathlib.Path(os.environ.get("SHOTS_DIR", "")).parent / "logs"
     logs.mkdir(exist_ok=True)
     if not shots.is_dir():
         print("containment refusal: SHOTS_DIR must be an existing run-root directory", file=sys.stderr)
         return 1
 
-    weston = start_weston(weston_bin, logs)
+    weston = start_weston(weston_bin, wayland_name, logs)
     if weston is None:
         return 1
     print("[native] private headless weston up", flush=True)
 
-    # the app runs in the foreground with the compositor's display; its
-    # stderr (bridge outcome lines) goes to a log FILE
-    app_env = dict(os.environ)
-    app_env["WAYLAND_DISPLAY"] = os.environ.get("WAYLAND_DISPLAY", "")
-    app_log_handle = open(logs / "app.log", "wb")
-    app = subprocess.Popen(
-        [app_bin, board],
-        env=app_env,
-        stdout=app_log,
-        stderr=app_log,
-    )
+    # the app shares the compositor's display name; its stderr carries
+    # the bridge outcome lines, written to a log FILE
+    app_env = {**os.environ, "WAYLAND_DISPLAY": wayland_name}
+    app_log_path = logs / "app.log"
+    app_log = open(app_log_path, "wb")
+    app = subprocess.Popen([app_bin, board], env=app_env, stdout=app_log, stderr=app_log)
+    app_log.close()
     print(f"[native] app launched in foreground on {board}", flush=True)
-    deadline = time.monotonic() + APP_READY_SECONDS
+
     frame_paths: list[str] = []
     try:
         for index in range(1, FRAME_COUNT + 1):
             if app.poll() is not None:
                 break
-            remaining = deadline - time.monotonic()
+            remaining = (started_at + 120) - time.monotonic()
             if remaining <= 0:
                 break
             time.sleep(min(FRAME_INTERVAL_SECONDS, max(remaining, 0)))
-            frame = shots / f"native-frame-{index}.png"
+            before = set(shots.glob("wayland-screenshot-*.png"))
             result = subprocess.run(
-                ["weston-screenshooter", f"output={frame}"],
-                env={**os.environ},
+                [shooter_bin],
+                cwd=str(shots),
+                env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
                 capture_output=True,
                 timeout=10,
             )
-            if frame.exists() and frame.stat().st_size > 0:
-                frame_paths.append(str(frame))
-                check(f"frame {index} captured", True)
+            new_frames = sorted(set(shots.glob("wayland-screenshot-*.png")) - before)
+            if new_frames:
+                frame_paths.extend(str(f) for f in new_frames)
+                check(f"frame {index} captured", True, ", ".join(f.name for f in new_frames))
             else:
-                check(f"frame {index} captured", False, f"rc={result.returncode}")
+                detail = result.stderr.decode(errors="replace")[:120]
+                check(f"frame {index} captured", False, f"rc={result.returncode} {detail}")
     finally:
         if app.poll() is None:
             app.terminate()
@@ -152,12 +156,6 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 app.kill()
                 app.wait(timeout=5)
-        app_log = app.stdout.read().decode(errors="replace") if app.stdout else ""
-        if app_log.strip():
-            print("[native] app log (bridge outcome lines):", flush=True)
-            for line in app_log.splitlines():
-                if line.startswith("[bridge]"):
-                    print(f"[native]   {line}", flush=True)
         if weston.poll() is None:
             weston.terminate()
             try:
@@ -167,11 +165,16 @@ def main() -> int:
                 weston.wait(timeout=5)
 
     check("app stayed alive across frame captures", len(frame_paths) == FRAME_COUNT, str(frame_paths))
-    bridge_lines = app_log.count("[bridge]")
+    app_log_text = app_log_path.read_text(errors="replace")
+    bridge_lines = app_log_text.count("[bridge]")
     check("bridge produced outcome lines", bridge_lines > 0, f"{bridge_lines} lines")
+    for line in app_log_text.splitlines():
+        if line.startswith("[bridge]"):
+            print(f"[native]   {line}", flush=True)
 
-    cost = time.monotonic() - started
-    print(f"[native] {len(RESULTS) - sum(1 for ok, _, _ in RESULTS if not ok)}/{len(RESULTS)} checks passed in {cost:.1f}s", flush=True)
+    cost = time.monotonic() - started_at
+    passed = sum(1 for ok, _name, _detail in RESULTS if ok)
+    print(f"[native] {passed}/{len(RESULTS)} checks passed in {cost:.1f}s", flush=True)
     print(f"[native] frames under {shots} for inspection", flush=True)
     return 1 if any(not ok for ok, _name, _detail in RESULTS) else 0
 

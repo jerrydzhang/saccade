@@ -39,6 +39,7 @@ VIEWER = HERE.parent
 
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
+    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/native_lane.py", "harness/harness_checks.py"]),
     ("typecheck", ["npm", "run", "check"]),
     ("contracts", ["npm", "run", "test"]),
     ("build", ["npm", "run", "build"]),
@@ -429,7 +430,6 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     env["BOARD_FILE"] = board_sandbox_path
     env["FONTCONFIG_FILE"] = fontconf
     env["SHOTS_DIR"] = str(run_root / "shots")
-    env["WAYLAND_DISPLAY"] = f"wayland-{os.getpid() % 97}"
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
 
     ro_binds = [

@@ -49,7 +49,6 @@ RESULTS: list[tuple[bool, str, str]] = []
 
 def check(name: str, condition: bool, detail: str = "") -> None:
     RESULTS.append((bool(condition), name, detail))
-    stream = sys.stdout if condition else sys.stderr
     print(f"[browser] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}", flush=True)
 
 
@@ -112,15 +111,12 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
             pass
         page.screenshot(path=f"{shots_dir}/{name}")
 
-    phases: list[tuple[bool, str]] = []
-
     def phase(name: str, body) -> None:
         """One failed phase records its failure and never starves the
         remaining independent checks."""
         try:
             body()
         except Exception as error:  # playwright timeouts, navigation errors
-            phases.append((False, name))
             check(f"{name}", False, f"{type(error).__name__}: {str(error)[:160]}")
 
     # phase 1: the real migration board through the shared handler
@@ -368,7 +364,6 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
 
     phase("invalid and missing inputs", phase_invalid)
 
-    del phases
     return sum(1 for ok, _name, _detail in RESULTS if not ok)
 
 

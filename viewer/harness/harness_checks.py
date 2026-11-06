@@ -151,7 +151,6 @@ def main() -> int:
     check("all-empty baselines refuse every required entry", len(failures) >= 9, str(failures))
 
     # --- pinned playwright closure (pure file-existence check) -----------
-    calls_pw = {"mkdir": []}
     fake_env = pathlib.Path(tempfile.mkdtemp(prefix="pw-closure-"))
     pkg = fake_env / "lib" / "python3.14" / "site-packages" / "playwright"
     pkg.mkdir(parents=True)
@@ -359,7 +358,6 @@ def main() -> int:
             restore_gate()
         return stopped
 
-    gate_env = {"PATH": "/usr/bin:/bin"}
     valid_argv = ["4242", "7", isolation.RELEASE_BYTE.hex(), "--", "/abs/bwrap", "--version"]
 
     calls = make_calls()

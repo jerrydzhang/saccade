@@ -508,7 +508,7 @@
               rustToolchain
               pkgs.nodejs
               pkgs.pkg-config
-              (pkgs.python3.withPackages (ps: [ps.playwright]))
+              (pkgs.python3.withPackages (ps: [ps.playwright ps.pyflakes]))
               pkgs.bubblewrap
               pkgs.weston
             ]
@@ -552,7 +552,7 @@
               packages =
                 with pkgs; [
                   rustToolchain
-                  (pkgs.python3.withPackages (ps: [ps.playwright]))
+                  (pkgs.python3.withPackages (ps: [ps.playwright ps.pyflakes]))
                   prek
                   just
                   typescript
