@@ -63,17 +63,21 @@ pub struct Composition {
     pub session_argv: Vec<String>,
     pub fresh: Option<FreshBirth>,
     pub resume: Option<ResumeTarget>,
+    /// Whether the submit declares Herdr placement for the new
+    /// terminal. The --here arm declares nothing: its terminal stays
+    /// unplaced for explicit later attachment.
+    pub declare_placement: bool,
 }
 
 /// What a submitted launch produced: the workspace and terminal the
-/// host named, the placement the door declared at birth, the fresh
-/// birth facts for the door's registration, and the resume target for
-/// the address move.
+/// host named, the placement the door declared at birth - none for the
+/// --here arm - the fresh birth facts for the door's registration, and
+/// the resume target for the address move.
 pub struct Submitted {
     pub workspace: String,
     pub terminal: String,
-    pub space: String,
-    pub tab: String,
+    pub space: Option<String>,
+    pub tab: Option<String>,
     pub place_refusal: Option<String>,
     pub fresh: Option<FreshBirth>,
     pub resume: Option<ResumeTarget>,
@@ -124,6 +128,10 @@ pub struct LaunchRequest<'a> {
     pub url: String,
     pub exe: Option<PathBuf>,
     pub arm: LaunchArm<'a>,
+    /// Whether the submitted launch declares Herdr placement. True for
+    /// every door but --here: the invoking viewer's launch stays
+    /// unplaced, reachable by its own recorded host address.
+    pub declare_placement: bool,
 }
 
 /// Compose one launch: the routing line, the exact workspace and
@@ -138,6 +146,7 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
         url,
         exe,
         arm,
+        declare_placement,
     } = request;
     let (dir, session_argv, fresh, resume, label, launched_session) = match arm {
         LaunchArm::Fresh {
@@ -300,6 +309,7 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
         session_argv,
         fresh,
         resume,
+        declare_placement,
     })
 }
 
@@ -328,17 +338,25 @@ pub fn submit(composed: Composition) -> Result<Submitted, LaunchFail> {
         })?;
     // placement at birth: the author declares where the terminal
     // lives, before the door replies - the space is stable per
-    // workspace, and a standing space for the same identity keeps it
-    let placement = placement::for_dir(&host, &composed.dir);
-    let place_refusal = host
-        .place(&address, &placement.space, &placement.tab)
-        .err()
-        .map(|e| e.to_string());
+    // workspace, and a standing space for the same identity keeps it.
+    // The --here arm declares nothing: no lookup, no label ask, no
+    // placement claim - the terminal stays unplaced for explicit
+    // later attachment
+    let (space, tab, place_refusal) = if composed.declare_placement {
+        let placement = placement::for_dir(&host, &composed.dir);
+        let refusal = host
+            .place(&address, &placement.space, &placement.tab)
+            .err()
+            .map(|e| e.to_string());
+        (Some(placement.space), Some(placement.tab), refusal)
+    } else {
+        (None, None, None)
+    };
     Ok(Submitted {
         workspace: composed.dir.display().to_string(),
         terminal: address.0.clone(),
-        space: placement.space,
-        tab: placement.tab,
+        space,
+        tab,
         place_refusal,
         fresh: composed.fresh,
         resume: composed.resume,

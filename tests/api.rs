@@ -4334,6 +4334,32 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
         hc_argv(&db.parent().unwrap().join("hc-bin"), "attach"),
         vec!["t1".to_string()]
     );
+    // exactly one host run carried the launch, and placement was never
+    // consulted: no label ask, no terminal table, no candidate reads
+    // exactly one host run carried the launch, and placement was never
+    // consulted: no label ask, no terminal table, no candidate reads
+    // one ask per verb line: the fake logs each argument on its own
+    // line, and every ask starts with its verb
+    let asks = |verb: &str| {
+        std::fs::read_to_string(
+            db.parent()
+                .unwrap()
+                .join("hc-bin")
+                .join(format!("argv-{verb}.log")),
+        )
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| *line == verb)
+        .count()
+    };
+    assert_eq!(asks("run"), 1, "exactly one host run");
+    assert_eq!(asks("label"), 0);
+    assert_eq!(asks("ls"), 0);
+    assert_eq!(asks("get"), 0);
+    // the json face claims no placement: no space, no tab, no refusal
+    assert_eq!(launched.get("space"), None);
+    assert_eq!(launched.get("tab"), None);
+    assert_eq!(launched.get("place_refusal"), None);
     // the birth is a launched kind carrying its harness - never this
     // pane, never an adoption
     let (_, body) = get_json(&base_url, "/api/v1/records");
@@ -4361,6 +4387,70 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
     assert!(text.contains("the session keeps running"), "{text}");
     assert!(text.contains("hc attach t1"), "{text}");
 
+    // the resumed here face: the recorded address reads finished, the
+    // one host get is the liveness preflight, and the launch still
+    // consults no placement
+    let here_saved = db.parent().unwrap().join("hereres1.jsonl");
+    std::fs::write(
+        &here_saved,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"hereres001\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n{{\"type\":\"message\",\"id\":\"aa\",\"parentId\":null}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "hereres001", "session_file": here_saved.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let here_num = json_of(&body)["num"].as_u64().unwrap();
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/incarnations/address",
+        &json!({"incarnation": here_num, "address": "t1", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    std::fs::write(
+        db.parent().unwrap().join("hc-bin").join("state"),
+        b"finished",
+    )
+    .unwrap();
+    let gets_before = asks("get");
+    let runs_before = asks("run");
+    let resumed_args = vec![
+        "--server".to_string(),
+        base_url.clone(),
+        "--repo".to_string(),
+        root.to_str().unwrap().to_string(),
+        "launch".to_string(),
+        "--here".to_string(),
+        "--resume".to_string(),
+        format!("i-{here_num}"),
+        "--json".to_string(),
+    ];
+    let out = run_here_in_pty(bin, &resumed_args, &envs);
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    let json_at = text.find('{').expect("the json face answers");
+    let resumed_here: Value = serde_json::from_str(&text[json_at..]).unwrap();
+    assert_eq!(resumed_here["resumed"], json!(here_num), "{resumed_here}");
+    assert_eq!(resumed_here["terminal"], json!("t1"), "{resumed_here}");
+    assert_eq!(resumed_here.get("space"), None);
+    assert_eq!(resumed_here.get("tab"), None);
+    assert_eq!(asks("run"), runs_before + 1, "exactly one more run");
+    let gets = asks("get");
+    assert_eq!(gets, gets_before + 1, "one get: the liveness ask");
+    assert_eq!(asks("label"), 0);
+    assert_eq!(asks("ls"), 0);
+    assert_eq!(asks("attach"), 3, "one attach per here launch");
+
     // a refused attach discloses the standing launch: the address and
     // the by-hand command; the birth stands either way
     let mut failed_envs = envs.to_vec();
@@ -4378,7 +4468,7 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
             .iter()
             .filter(|r| r["kind"] == "incarnation_registered")
             .count(),
-        3,
+        4,
         "{body}"
     );
 

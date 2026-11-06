@@ -271,10 +271,11 @@ enum Cmd {
         /// a positional prompt and with --resume
         #[arg(long, conflicts_with = "resume")]
         ask: Option<String>,
-        /// Run the composed session in this terminal: a foreground
-        /// child of the invoking shell, no host terminal asked, and
-        /// the door returns when the session exits with its status as
-        /// this command's. Composes with --workspace and --resume
+        /// Ask the host for one independent terminal running the
+        /// composed session, unplaced (no Herdr space), then attach
+        /// this terminal as its viewer. Detaching (ctrl+\) ends the
+        /// attach and leaves the session running at its recorded host
+        /// address. Composes with --workspace and --resume
         #[arg(long)]
         here: bool,
         /// The harness a fresh launch runs: pi (the default, existing
@@ -2189,6 +2190,9 @@ fn submitted_launch(
         url: url.clone(),
         exe: std::env::current_exe().ok(),
         arm,
+        // the host and ask doors declare placement; only --here stays
+        // unplaced
+        declare_placement: true,
     })?;
     let submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
     // the door births the fresh identity itself, before the harness's
@@ -2240,12 +2244,12 @@ fn launch_arm<'a>(
 }
 
 /// The same-terminal launch door: an ordinary host launch - the same
-/// composition and submission the host door makes, address recorded -
-/// then the caller's terminal attaches to it in the foreground. No
-/// address is adopted: the session carries its own launched terminal,
-/// and detaching (ctrl+\) ends the attach and leaves the session
-/// running. The attach's own exit is the command's; the session's own
-/// ending is never invented from it.
+/// composition and submission the host door makes, address recorded,
+/// declared unplaced - then the caller's terminal attaches to it as a
+/// viewer. No address is adopted: the session carries its own launched
+/// terminal, and detaching (ctrl+\) ends the attach and leaves the
+/// session running. The attach's own exit is the command's; the
+/// session's own ending is never invented from it.
 fn launch_here_door(cli: &Cli) -> ExitCode {
     let Cmd::Launch {
         workspace,
@@ -2387,6 +2391,9 @@ fn launch_here_run(
         url: url.clone(),
         exe: std::env::current_exe().ok(),
         arm,
+        // the invoking viewer's launch declares no placement: the new
+        // terminal stays unplaced, reachable at its own host address
+        declare_placement: false,
     })?;
     // the attach inherits this terminal's stdin: a pipe or file
     // carries no attach, and the door refuses before any launch
@@ -2630,8 +2637,8 @@ fn ask_run(
     Ok(AskOutcome {
         workspace: submitted.workspace,
         terminal: submitted.terminal,
-        space: submitted.space,
-        tab: submitted.tab,
+        space: submitted.space.expect("the ask door declares placement"),
+        tab: submitted.tab.expect("the ask door declares placement"),
         place_refusal: submitted.place_refusal,
         birth,
         num,

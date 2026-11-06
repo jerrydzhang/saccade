@@ -1010,6 +1010,7 @@ fn launch_operation(
             prompt: &[],
             harness,
         },
+        declare_placement: true,
     })
     .map_err(launch_fail)?;
     let submitted = crate::launch::submit(composed).map_err(launch_fail)?;
@@ -1017,8 +1018,8 @@ fn launch_operation(
         submitted: true,
         workspace: submitted.workspace.clone(),
         terminal: submitted.terminal.clone(),
-        space: submitted.space,
-        tab: submitted.tab,
+        space: submitted.space.expect("the workbench declares placement"),
+        tab: submitted.tab.expect("the workbench declares placement"),
         place_refusal: submitted.place_refusal,
         harness,
     };
