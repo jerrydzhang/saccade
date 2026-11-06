@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
 """Enforced OS isolation for viewer harness lanes that launch processes.
 
-Contract (t-71, review records 2565 and the i-64 source review):
+Contract (t-71, review records 2565, 2613 and the i-64 pinned-source
+review of f53330d):
 
 - One supervisor root per run: bwrap. Inner payloads are never signaled
   individually; the private PID namespace tears down with the supervisor.
-- Ownership is kernel-verified, never numeric: the harness holds a pidfd
-  and signals only through it. If the pidfd cannot be created the run is
-  refused - there is no numeric-PID kill fallback. Reaping is verified by
-  waiting on the real child.
-- The exact bwrap flag list lives in build_command(); nothing is added at
-  runtime. XDG_RUNTIME_DIR is a fresh tmpfs (perms 0700) inside the run
-  root; host HOME is never mounted; /run is fresh so host sockets are
-  absent.
-- The bwrap process itself is spawned with the same fresh environment, so
-  nothing is inherited by anyone in the chain.
+- Ownership is kernel-verified, never numeric: supervision APIs are
+  checked BEFORE the spawn; a child is released into exec only after the
+  parent holds its pidfd, through a one-byte pipe gate. If the handle
+  cannot be acquired, the child exits itself and nothing runs
+  unsupervised. There is no numeric-PID signal fallback anywhere.
+- The child's setup (prctl result checked; parent-death re-check that
+  signals only itself) happens before it waits on the release gate.
+- The exact bwrap flag list lives in build_command(); nothing is added
+  at runtime. XDG_RUNTIME_DIR is a fresh 0700 tmpfs mounted AFTER the
+  run-root bind (ordered mounts); host HOME is never mounted; /run is
+  fresh so host sockets are absent.
+- The bwrap process itself is spawned with the same fresh environment,
+  so nothing is inherited by anyone in the chain.
 - Fail-closed: preflight refuses when bwrap or user namespaces are
   unavailable, or when the pidfd API is missing. There is no weaker
   fallback and no silent downgrade.
 - Runtime authorization is procedural: gated lanes refuse unless
   BOARD_VIEWER_RUNTIME_AUTHORIZED names the review record authorizing
-  this exact harness code. The gate is discipline; containment is the
-  security.
+  this exact harness code.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from __future__ import annotations
 import ctypes
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import sys
@@ -37,10 +41,29 @@ import time
 
 RUNTIME_ROOT = "/var/tmp/saccade-board-viewer"
 PR_SET_PDEATHSIG = 1
+RELEASE_BYTE = b"go"
+RELEASE_EXIT = 125
+
+NS_VALUE = re.compile(r"^[a-z_]+:\[\d+\]$")
 
 
 class ContainmentRefused(Exception):
     pass
+
+
+def supervision_apis_usable() -> tuple[bool, str]:
+    """Refuse unavailable APIs before any spawn. No numeric fallback."""
+    if not hasattr(os, "pidfd_open"):
+        return False, "os.pidfd_open is unavailable on this interpreter"
+    if not hasattr(signal, "pidfd_send_signal"):
+        return False, "signal.pidfd_send_signal is unavailable on this interpreter"
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        if not hasattr(libc, "prctl"):
+            return False, "libc prctl is unavailable"
+    except OSError as error:
+        return False, f"libc is unavailable: {error}"
+    return True, ""
 
 
 def static_preflight(bwrap: str) -> None:
@@ -48,6 +71,9 @@ def static_preflight(bwrap: str) -> None:
     preflight and runs solely under the authorization gate."""
     if not os.path.isfile(bwrap):
         raise ContainmentRefused(f"bwrap not found at {bwrap}")
+    usable, reason = supervision_apis_usable()
+    if not usable:
+        raise ContainmentRefused(f"supervision APIs unavailable: {reason}")
     for path in (pathlib.Path("/proc/sys/kernel/unprivileged_userns_clone"), pathlib.Path("/proc/sys/user/max_user_namespaces")):
         if not path.exists():
             continue
@@ -61,7 +87,7 @@ def static_preflight(bwrap: str) -> None:
 
 def host_ns_ids() -> str:
     """Recorded before any sandbox exists; the canary compares against
-    these. All six namespaces are required by the canary's input contract."""
+    these. All six namespaces are required, in kernel readlink form."""
     pairs = []
     for kind in ("pid", "net", "uts", "ipc", "mnt", "user"):
         pairs.append(f"{kind}={os.readlink(f'/proc/self/ns/{kind}')}")
@@ -84,7 +110,12 @@ def env_allowlist(run_root: pathlib.Path) -> dict[str, str]:
     }
 
 
-def build_command(bwrap: str, run_root: pathlib.Path, payload: list[str], ro_binds: list[tuple[str, str]]) -> list[str]:
+def build_command(
+    bwrap: str,
+    run_root: pathlib.Path,
+    payload: list[str],
+    ro_binds: list[tuple[str, str]],
+) -> list[str]:
     """The exact bwrap invocation. Reviewed spec, verbatim:
 
     namespaces: --unshare-all (user, pid, net - which also denies the
@@ -92,15 +123,17 @@ def build_command(bwrap: str, run_root: pathlib.Path, payload: list[str], ro_bin
     mounts: --proc /proc (private, pidns-scoped); --dev /dev (fresh);
     --tmpfs /dev/shm; --tmpfs /tmp; --tmpfs /run (so the host's
     /run/user/<uid>, DBus and display sockets are absent);
-    --perms 0700 --tmpfs <runroot>/runtime (private tmpfs for
-    XDG_RUNTIME_DIR). --ro-bind /nix/store. Per-lane explicit read-only
-    binds. Read-write bind of the run root only. Host HOME never mounted.
+    --ro-bind /nix/store; per-lane explicit read-only binds; read-write
+    bind of the run root only; then, AFTER the run-root bind, the
+    ordered mount --perms 0700 --tmpfs <runroot>/runtime for
+    XDG_RUNTIME_DIR (a later mount covers an earlier one, so the tmpfs
+    is never obscured by a descendant bind). Host HOME never mounted.
     caps: the default set inside the private user namespace only, so the
     payload can bring up loopback (CAP_NET_ADMIN scoped to the sandbox's
     own net namespace). No host capability crosses this line.
     lifecycle: --die-with-parent (pdeathsig chain), --new-session (no
     controlling terminal), --chdir <run_root>.
-    env: every variable below is --setenv from the fresh allowlist.
+    env: every allowlist variable is --setenv from the fresh dict.
     """
     cmd = [
         bwrap,
@@ -128,10 +161,6 @@ def build_command(bwrap: str, run_root: pathlib.Path, payload: list[str], ro_bin
     ]
     for src, dest in ro_binds:
         cmd += ["--ro-bind", src, dest]
-    # Ordered mounts: the runtime tmpfs targets a run-root descendant, so
-    # it mounts AFTER the run-root bind (and any lane binds) - a later
-    # mount covers an earlier one, and the ordering is explicit here
-    # rather than something the canary must catch.
     cmd += ["--perms", "0700", "--tmpfs", str(run_root / "runtime")]
     for key, value in env_allowlist(run_root).items():
         cmd += ["--setenv", key, value]
@@ -140,22 +169,32 @@ def build_command(bwrap: str, run_root: pathlib.Path, payload: list[str], ro_bin
     return cmd
 
 
-def _child_prepare(parent_pid: int) -> None:
-    """In-child: die with the parent. The getppid check closes the race
-    where the parent died between fork and prctl (signaling SELF, which
-    is owned, is the only numeric signal in this file)."""
+def _child_setup(parent_pid: int, release_fd: int) -> None:
+    """In-child, before exec: die with the parent (result checked; the
+    parent-death race re-signals SELF only), then wait for the parent's
+    handle acquisition on the release pipe. EOF or a wrong byte exits
+    without exec, so nothing ever runs unsupervised."""
     libc = ctypes.CDLL("libc.so.6", use_errno=True)
-    libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+    if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
+        os._exit(RELEASE_EXIT)
     if os.getppid() != parent_pid:
         os.kill(os.getpid(), signal.SIGKILL)
+    try:
+        data = os.read(release_fd, 1)
+    except OSError:
+        os._exit(RELEASE_EXIT)
+    if data != RELEASE_BYTE:
+        os._exit(RELEASE_EXIT)
+    os.close(release_fd)
 
 
 class PidfdSupervisor:
     """Holds one kernel-verified handle for the bwrap supervisor.
 
-    Cleanup signals only through the pidfd (PID reuse cannot redirect
-    it) and verifies reaping by waiting on the real child. If the pidfd
-    cannot be opened the run is refused: no numeric-PID fallback exists.
+    The release gate guarantees the child cannot exec before the parent
+    holds its pidfd: acquisition failure therefore cannot strand a
+    running payload, and no numeric-PID signal exists in this class.
+    Reaping is verified by waiting on the real child.
     """
 
     def __init__(self, cmd: list[str], env: dict[str, str]) -> None:
@@ -163,27 +202,36 @@ class PidfdSupervisor:
         self._env = env
         self._proc: subprocess.Popen[bytes] | None = None
         self._pidfd: int | None = None
-        self._refused = False
+        self._released = False
 
     def start(self) -> None:
+        usable, reason = supervision_apis_usable()
+        if not usable:
+            raise ContainmentRefused(f"supervision APIs unavailable: {reason}")
         parent_pid = os.getpid()
-        self._proc = subprocess.Popen(
-            self._cmd,
-            env=self._env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            preexec_fn=lambda: _child_prepare(parent_pid),
-        )
+        release_r, release_w = os.pipe()
+        try:
+            self._proc = subprocess.Popen(
+                self._cmd,
+                env=self._env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                preexec_fn=lambda: _child_setup(parent_pid, release_r),
+            )
+        finally:
+            os.close(release_r)  # parent keeps only the write end
         try:
             self._pidfd = os.pidfd_open(self._proc.pid)
-        except (AttributeError, OSError):
-            # API missing or child already exited before we could hold a
-            # handle. Reap if needed and refuse the run: no fallback.
-            if self._proc.poll() is None:
-                self._proc.kill()  # child of this process: direct kill is owned
+        except OSError as error:
+            # The child is still gated on the pipe read: exiting the
+            # write end makes its read return EOF and it exits itself.
+            # No signal of any kind is used here.
+            os.close(release_w)
             self._proc.wait()
-            self._refused = True
-            raise ContainmentRefused("pidfd unavailable: refusing to supervise without a kernel-verified handle")
+            raise ContainmentRefused(f"pidfd acquisition failed ({error}): nothing was allowed to run unsupervised") from error
+        os.write(release_w, RELEASE_BYTE)
+        os.close(release_w)
+        self._released = True
 
     def read_output(self) -> str:
         assert self._proc is not None and self._proc.stdout is not None
@@ -191,18 +239,17 @@ class PidfdSupervisor:
 
     def wait(self, timeout: float | None = None) -> int:
         assert self._proc is not None
-        try:
-            return self._proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            raise
+        return self._proc.wait(timeout=timeout)
 
     def stop(self, grace: float = 5.0) -> int:
         """TERM through the pidfd, bounded grace, then KILL through the
-        pidfd; verified reaping before returning. Safe on failure paths."""
-        if self._refused or self._proc is None:
+        pidfd; verified reaping before returning. Safe on failure paths:
+        without a pidfd there is nothing this class may signal."""
+        if self._proc is None:
             return 0
         if self._pidfd is None:
-            # start() refused; nothing to signal - just reap.
+            # Never released (start failed): the child exited itself on
+            # the gate; just reap.
             return self._proc.wait(timeout=grace)
         if self._proc.poll() is None:
             self._send(signal.SIGTERM)
@@ -231,7 +278,7 @@ def make_run_root(label: str) -> pathlib.Path:
     for sub in ("home", "tmp", "config", "data", "cache", "logs"):
         (root / sub).mkdir()
     # runtime is NOT a plain dir: build_command mounts a fresh 0700 tmpfs
-    # over this path for XDG_RUNTIME_DIR.
+    # over this path for XDG_RUNTIME_DIR, after the run-root bind.
     (root / "runtime").mkdir()
     return root
 

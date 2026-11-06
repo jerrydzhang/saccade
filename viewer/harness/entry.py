@@ -26,6 +26,7 @@ handle, verified reaping, no pattern kills, no numeric-PID fallback.
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import shutil
 import subprocess
@@ -36,12 +37,17 @@ HERE = pathlib.Path(__file__).resolve().parent
 VIEWER = HERE.parent
 
 FAST_STEPS = [
+    ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
     ("typecheck", ["npm", "run", "check"]),
     ("contracts", ["npm", "run", "test"]),
     ("build", ["npm", "run", "build"]),
 ]
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
+# The canary file is bound read-only into the sandbox at this path: the
+# interpreter inside must be able to read it without any host HOME or
+# worktree visibility.
+CANARY_SANDBOX_PATH = "/canary/containment_canary.py"
 tracker_db_arg = ""
 
 
@@ -55,6 +61,19 @@ def check_fast() -> int:
         if result.returncode != 0:
             failures += 1
     return 1 if failures else 0
+
+
+def caller_tracker_db(*candidates: str) -> tuple[str | None, str]:
+    """Pure resolution of the caller-side tracker-db baseline. The raw
+    candidate must be absolute as given: a relative candidate is a
+    refusal, never silently resolved against the caller's cwd."""
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if not candidate.startswith("/"):
+            return None, f"tracker-db baseline must be an absolute path as given: {candidate!r}"
+        return str(pathlib.Path(candidate).resolve()), ""
+    return None, "no absolute caller tracker-db baseline; pass --tracker-db <absolute path> or set SACCADE_DB"
 
 
 def preflight() -> int:
@@ -81,21 +100,12 @@ def preflight() -> int:
     python = str(pathlib.Path(sys.executable).resolve())  # absolute pinned tool path
     canary = str((HERE / "containment_canary.py").resolve())
 
-    # The caller-baseline path must be an absolute path that exists on the
-    # caller side, so its invisibility inside the sandbox is a meaningful
-    # comparison. Explicit argument first, caller env second, refuse
-    # anything relative or missing.
-    tracker_db = ""
-    for candidate in (tracker_db_arg, os.environ.get("SACCADE_DB")):
-        if candidate:
-            tracker_db = str(pathlib.Path(candidate).resolve())
-            break
-    if not tracker_db or not tracker_db.startswith("/"):
-        print(
-            "containment refusal: no absolute caller tracker-db baseline; "
-            "pass --tracker-db <absolute path> or set SACCADE_DB",
-            file=sys.stderr,
-        )
+    # The caller-baseline path must be absolute in its raw form: a
+    # relative candidate is refused as given, never silently resolved
+    # against the caller's cwd and then waved through.
+    tracker_db, refusal = caller_tracker_db(tracker_db_arg, os.environ.get("SACCADE_DB") or "")
+    if tracker_db is None:
+        print(f"containment refusal: {refusal}", file=sys.stderr)
         return 1
     if not os.path.exists(tracker_db):
         print(f"containment refusal: baseline tracker db does not exist on the caller side: {tracker_db}", file=sys.stderr)
@@ -115,7 +125,10 @@ def preflight() -> int:
     env["CONTAINMENT_HOST_UID"] = str(os.getuid())
     env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
 
-    cmd = isolation.build_command(bwrap, run_root, [python, canary], [])
+    # Bind only the canary file, read-only, at a fixed sandbox path: the
+    # payload needs no host HOME and no worktree visibility.
+    ro_binds = [(canary, CANARY_SANDBOX_PATH)]
+    cmd = isolation.build_command(bwrap, run_root, [python, CANARY_SANDBOX_PATH], ro_binds)
 
     print("[preflight] command:", " ".join(cmd), flush=True)
     print(f"[preflight] run root: {run_root}", flush=True)

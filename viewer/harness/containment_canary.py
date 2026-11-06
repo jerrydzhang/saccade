@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import sys
 
 REQUIRED_NAMESPACES = ("ipc", "mnt", "net", "pid", "user", "uts")
+# Kernel readlink form: readlink /proc/self/ns/<kind> -> "<kind>:[<id>]".
+NS_VALUE = re.compile(r"^[a-z_]+:\[\d+\]$")
 
 
 def is_tmpfs(path: str) -> bool:
@@ -50,19 +53,26 @@ def parse_baselines() -> tuple[dict[str, str], list[str]]:
         if not kind or not value:
             failures.append(f"baseline malformed or empty: {pair!r} is refused")
             continue
+        # A garbage value can never equal a real kernel id, so accepting
+        # it would make the comparison vacuous; require readlink form.
+        if not NS_VALUE.match(value):
+            failures.append(f"baseline not in kernel readlink form: {pair!r} is refused")
+            continue
         expected[kind] = value
     for kind in REQUIRED_NAMESPACES:
         if kind not in expected:
             failures.append(f"baseline missing for namespace {kind}: refusing to compare partially")
-    for name, var in [
-        ("host HOME", "CONTAINMENT_HOST_HOME"),
-        ("host UID", "CONTAINMENT_HOST_UID"),
-        ("tracker DB", "CONTAINMENT_HOST_TRACKER_DB"),
+    for name, var, rule in [
+        ("host HOME", "CONTAINMENT_HOST_HOME", "absolute path"),
+        ("host UID", "CONTAINMENT_HOST_UID", "numeric uid"),
+        ("tracker DB", "CONTAINMENT_HOST_TRACKER_DB", "absolute path"),
     ]:
         value = os.environ.get(var)
         if not value:
             failures.append(f"baseline missing: {var} ({name}) is required")
-        elif not value.startswith("/"):
+        elif rule == "numeric uid" and not value.isdigit():
+            failures.append(f"baseline must be a numeric uid: {var}={value!r}")
+        elif rule == "absolute path" and not value.startswith("/"):
             failures.append(f"baseline must be an absolute path: {var}={value!r}")
     return expected, failures
 
