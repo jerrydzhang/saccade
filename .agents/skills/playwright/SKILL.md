@@ -82,9 +82,11 @@ setsid nohup python3 server.py 7783 0.0.0.0 >log 2>&1 < /dev/null & disown
 
 - Plain `nohup ... &` gets reaped with the command's process group by some
   harnesses; `setsid` survives.
-- `pkill -f pattern` kills the *invoking shell too* if its own command line
-  contains the literal pattern anywhere (e.g. the relaunch in the same chain).
-  Use the bracket trick (`pkill -f 'serve_moc[k].py'`) **and** keep the pkill
-  in its own command, separate from anything mentioning the literal name.
+- Never clean up with `pkill`/`killall` or any name/pattern sweep: a pattern
+  can match processes you do not own (including the invoking shell itself,
+  since its command line carries the pattern). Record the handle of every
+  process you spawn, and stop only those recorded handles - TERM, a bounded
+  grace, then KILL - verifying each actually exited. A stale name match is
+  reported, never signaled. Unowned processes are not your cleanup job.
 - `grep -c` counts matching **lines**; a one-line join makes 614 events count
   as 1. Use `grep -o pat | wc -l` for occurrences.
