@@ -26,6 +26,7 @@ implied.
 from __future__ import annotations
 
 import functools
+import json
 import os
 import pathlib
 import sys
@@ -85,13 +86,14 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
         )
 
     def wait_rendered(kinds: tuple[str, ...]) -> list[dict]:
-        """Actual readiness: outcomes for the requested kinds exist, or a
-        bounded timeout says so - never a fixed sleep."""
-        kind_list = ", ".join(repr(kind) for kind in kinds)
+        """Actual readiness: every requested kind has a terminal outcome
+        (ok or a named failure) in this generation, or a bounded timeout
+        says so - never a fixed sleep, never just the first result."""
+        kind_list = json.dumps(list(kinds))
         page.wait_for_function(
             f"""() => {{
                 const outcomes = {viewer}.inspection().renderOutcomes;
-                return outcomes.some(o => {kind_list}.includes(o.kind));
+                return {kind_list}.every(kind => outcomes.some(o => o.kind === kind));
             }}"""
         )
         return page.evaluate(f"() => {viewer}.inspection().renderOutcomes")
@@ -125,18 +127,27 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
 
     # 3. copy semantics: exact bytes for a deterministic selection on the
     #    repeated-math fixture - the formula emitted once, authored bytes
-    #    in Source mode, TeX value in Plain mode. First evidence toward
-    #    full copy certification, not the certification itself.
+    #    in Source mode, TeX value in Plain mode. The selection starts at
+    #    the first text of the paragraph that CONTAINS the first math
+    #    expression and ends nine characters into the trailing text node
+    #    after it (" in this "), matching the expected span exactly.
+    #    First evidence toward full copy certification, not the
+    #    certification itself.
     open_board("repeated-math.yaml")
+    page.wait_for_function("() => document.querySelector('.block-text .math-inline mjx-container, .block-text .math-inline') !== null")
     page.evaluate("() => window.__boardViewer.setCopyMode('source')")
 
     def select_first_sentence_plus_math() -> None:
         page.evaluate("""() => {
-            const paragraph = document.querySelector('.block-text p');
-            const math = paragraph.querySelector('.math-inline');
+            const math = document.querySelector('.block-text .math-inline');
+            const paragraph = math.closest('p');
+            const children = Array.from(paragraph.children);
+            const mathIndex = children.indexOf(math.closest('.md-text') ?? math);
+            const startEl = children[0];
+            const endEl = children[mathIndex + 1];
             const range = document.createRange();
-            range.setStart(paragraph.firstChild, 0);
-            range.setEnd(math, 0);
+            range.setStart(startEl, 0);
+            range.setEnd(endEl.firstChild, 9);
             const selection = window.getSelection();
             selection.removeAllRanges();
             selection.addRange(range);
