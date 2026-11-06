@@ -47,6 +47,7 @@ pub fn for_dir(host: &HerdrCore, dir: &Path) -> Placement {
         .iter()
         .filter(|row| row.state == "live" && under(&canonical, &row.cwd))
         .collect();
+    // the host's launch cwd can be stale after a shell changes projects, so a candidate may lend another project's space
     candidates.sort_by(|a, b| a.address.cmp(&b.address));
     for row in candidates {
         if let Some(standing) = host.placement_of(&HostAddress(row.address.clone())) {
