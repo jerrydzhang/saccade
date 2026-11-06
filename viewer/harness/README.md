@@ -131,25 +131,30 @@ Time bound: 180 s, then the supervisor is stopped through the pidfd and
 the run is a refusal. No automatic retry.
 
 Order inside the one sandbox: (1) the containment canary runs
-in-process FIRST - a refusal ends the lane before any server or driver
-exists; (2) then, and only then, `vite preview` serves the built
-frontend on loopback inside the sandbox netns (the only listener this
-lane ever creates); (3) one reused headless Chromium session via the
-Nix-pinned Playwright driver (driver and browsers from the same
-nixpkgs revision; nothing downloaded or installed at runtime); (4) a
-bounded check list over the real frontend and real fixture boards -
-DOM and inspection state first, then screenshots saved under
-`<runroot>/shots/` for later human and agent inspection; (5) the lane
-tears down its own server child before the namespace tears down the
-rest.
+in-process FIRST (the reviewed module, invoked as main()) - a refusal
+ends the lane before any listener or driver exists; (2) then, and only
+then, a stdlib loopback static server thread serves the built frontend
+inside the sandbox netns (the only listener this lane ever creates; no
+child process, no framework); (3) one reused headless Chromium session
+via the Nix-pinned Playwright driver (driver and browsers from the
+same nixpkgs revision; nothing downloaded or installed at runtime);
+the page navigates to the server and waits for the shared viewer API
+before any action; (4) a bounded check list over the real frontend and
+real fixture boards - readiness waits on actual inspection outcomes
+(never fixed sleeps), DOM and inspection state first, then screenshots
+saved under `<runroot>/shots/` for later human and agent inspection;
+(5) the server thread shuts down before exit.
 
 Binds (all read-only): the canary at `/canary/`, the lane script at
-`/lane/`, `viewer/dist` at `/app/dist`, `viewer/node_modules` at
-`/app/node_modules`. Env additions beyond the fresh allowlist, all
-explicit absolute paths or baseline values: `NODE_BIN` (pinned node),
-`PLAYWRIGHT_BROWSERS_PATH` (pinned browser package), the six namespace
-baselines, host HOME/UID, tracker-db. Chromium runs headless with its
-own sandbox disabled; the enforced bwrap boundary is the containment.
+`/lane/`, `viewer/dist` at `/app/dist`. Env additions beyond the fresh
+allowlist, all explicit absolute paths or baseline values:
+`PLAYWRIGHT_BROWSERS_PATH` (pinned browser package), `SHOTS_DIR` (the
+run root's own shots directory), the six namespace baselines, host
+HOME/UID, tracker-db. The payload interpreter is the pinned
+withPackages python, its closure verified to contain the playwright
+module before any launch (the scrubbed env inherits no host
+PYTHONPATH). Chromium runs headless with its own sandbox disabled; the
+enforced bwrap boundary is the containment.
 
 Clipboard honesty: what the browser writes is Chromium's clipboard
 inside the sandbox - it is never the desktop's clipboard. Native

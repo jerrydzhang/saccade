@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import os
+import types
 import pathlib
 import signal
 import subprocess
@@ -20,6 +21,7 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import browser_lane  # noqa: E402
 import containment_canary  # noqa: E402
 import entry  # noqa: E402
 import isolation  # noqa: E402
@@ -147,6 +149,131 @@ def main() -> int:
     with_env({"CONTAINMENT_HOST_NS_IDS": "", "CONTAINMENT_HOST_HOME": "", "CONTAINMENT_HOST_UID": "", "CONTAINMENT_HOST_TRACKER_DB": ""})
     expected, failures = containment_canary.parse_baselines()
     check("all-empty baselines refuse every required entry", len(failures) >= 9, str(failures))
+
+    # --- pinned playwright closure (pure file-existence check) -----------
+    calls_pw = {"mkdir": []}
+    fake_env = pathlib.Path(tempfile.mkdtemp(prefix="pw-closure-"))
+    pkg = fake_env / "lib" / "python3.14" / "site-packages" / "playwright"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (fake_env / "bin").mkdir()
+    fake_python = fake_env / "bin" / "python3"
+    fake_python.write_text("#!/bin/sh\n")
+    usable, reason = entry.verify_playwright_closure(str(fake_python))
+    check("withPackages closure containing playwright verifies", usable and reason == "", reason)
+    empty_env = pathlib.Path(tempfile.mkdtemp(prefix="pw-empty-"))
+    (empty_env / "bin").mkdir()
+    (empty_env / "bin" / "python3").write_text("#!/bin/sh\n")
+    usable, reason = entry.verify_playwright_closure(str(empty_env / "bin" / "python3"))
+    check("closure without playwright refuses with the env root named", not usable and "playwright module not found" in reason, reason)
+    # --- browser lane wiring traversal (no spawn) -------------------------
+    lane_calls = {"canary": 0, "server": 0, "goto": [], "checks": 0, "shutdown": 0, "shots": []}
+
+    class FakeServer:
+        def shutdown(self):
+            lane_calls["shutdown"] += 1
+
+        def server_close(self):
+            lane_calls["shutdown"] += 10
+
+    class FakePage:
+        gotos: list[str] = []
+
+        def goto(self, url):
+            self.gotos.append(url)
+            lane_calls["goto"].append(url)
+
+        def set_default_timeout(self, ms):
+            pass
+
+        def wait_for_function(self, fn):
+            pass
+
+    class FakeContext:
+        def grant_permissions(self, *args, **kwargs):
+            pass
+
+        def new_page(self):
+            return FakePage()
+
+    class FakeBrowser:
+        def new_context(self, **kwargs):
+            return FakeContext()
+
+        def close(self):
+            pass
+
+    class FakeSyncContext:
+        def __enter__(self):
+            fake = type("FakePw", (), {})()
+            fake.chromium = type(
+                "FakeChromium",
+                (),
+                {"launch": staticmethod(lambda **kwargs: FakeBrowser())},
+            )()
+            return fake
+
+        def __exit__(self, *args):
+            return False
+
+    fake_api_module = types.ModuleType("playwright.sync_api")
+    fake_api_module.sync_playwright = lambda: FakeSyncContext()
+
+    real_canary_mod = browser_lane.containment_canary
+    real_start = browser_lane.start_server
+    real_checks = browser_lane.run_checks
+    real_shots = os.environ.get("SHOTS_DIR", "")
+
+    class FakeCanary:
+        code = 0
+
+        def main(self):
+            lane_calls["canary"] += 1
+            return FakeCanary.code
+
+    browser_lane.containment_canary = FakeCanary()
+    browser_lane.start_server = lambda: lane_calls.update(server=1) or FakeServer()
+    shots_dir = pathlib.Path(tempfile.mkdtemp(prefix="lane-shots-"))
+    os.environ["SHOTS_DIR"] = str(shots_dir)
+    sys.modules["playwright.sync_api"] = fake_api_module  # type: ignore[assignment]
+    sys.modules["playwright"] = types.ModuleType("playwright")  # type: ignore[assignment]
+    browser_lane.run_checks = lambda page, base_url, shots: lane_calls.update(checks=1) or 0  # type: ignore[assignment]
+    try:
+        # failure short-circuit: canary refusal ends the lane before any
+        # server exists
+        FakeCanary.code = 1
+        code = browser_lane.main()
+        check(
+            "canary refusal short-circuits before server and checks",
+            code == 1 and lane_calls["canary"] == 1 and lane_calls["server"] == 0 and lane_calls["checks"] == 0,
+            str(lane_calls),
+        )
+
+        # traversal: canary -> server -> navigate -> checks -> shutdown
+        FakeCanary.code = 0
+        code = browser_lane.main()
+        check(
+            "lane traverses canary, server, navigation, checks, shutdown in order",
+            code == 0
+            and lane_calls["canary"] == 2
+            and lane_calls["server"] == 1
+            and lane_calls["goto"] == [f"http://127.0.0.1:{browser_lane.SERVER_PORT}"]
+            and lane_calls["checks"] == 1
+            and lane_calls["shutdown"] >= 11
+            and FakePage.gotos == lane_calls["goto"],
+            str(lane_calls),
+        )
+        check("screenshots land under the run-root shots dir", lane_calls["shots"] == [] and shots_dir.is_dir(), str(shots_dir))
+    finally:
+        browser_lane.containment_canary = real_canary_mod
+        browser_lane.start_server = real_start
+        browser_lane.run_checks = real_checks
+        if real_shots:
+            os.environ["SHOTS_DIR"] = real_shots
+        else:
+            os.environ.pop("SHOTS_DIR", None)
+        sys.modules.pop("playwright.sync_api", None)
+        sys.modules.pop("playwright", None)
 
     # --- preflight argument resolution (pure) -----------------------------
     path, refusal = entry.caller_tracker_db("relative/board.db")

@@ -49,11 +49,11 @@ BROWSER_TIMEOUT_SECONDS = 180
 # interpreter inside must be able to read it without any host HOME or
 # worktree visibility.
 CANARY_SANDBOX_PATH = "/canary/containment_canary.py"
-# Browser-lane payload and binds: the built frontend and its bundled
-# dependencies are the only host bytes the lane reads, both read-only.
+# Browser-lane payload and binds: the built frontend is the only host
+# byte the lane reads, read-only. The stdlib loopback server removed the
+# need for any node bind; the lane script rides /lane.
 BROWSER_LANE_SANDBOX_PATH = "/lane/browser_lane.py"
 DIST_SANDBOX = "/app/dist"
-MODULES_SANDBOX = "/app/node_modules"
 tracker_db_arg = ""
 
 
@@ -170,6 +170,19 @@ def preflight() -> int:
             print(f"[preflight] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
+def verify_playwright_closure(python: str) -> tuple[bool, str]:
+    """Pure closure check: the pinned interpreter must belong to a
+    withPackages-style env whose site-packages contain the playwright
+    module, so the scrubbed-env launch can import it without inheriting
+    any host PYTHONPATH."""
+    bin_dir = pathlib.Path(python).resolve().parent
+    env_root = bin_dir.parent
+    matches = sorted(env_root.glob("lib/python3.*/site-packages/playwright/__init__.py"))
+    if not matches:
+        return False, f"playwright module not found in the pinned closure under {env_root}"
+    return True, ""
+
+
 def browser_lane() -> int:
     """Gated browser lane. Same supervisor, same canary-first order:
     the payload runs the containment canary in-process BEFORE it starts
@@ -179,12 +192,14 @@ def browser_lane() -> int:
     pidfd-only cleanup on all paths.
 
     Lane env additions beyond the fresh allowlist, all explicit and
-    absolute: NODE_BIN (pinned node for vite preview and the Playwright
-    driver), PLAYWRIGHT_BROWSERS_PATH (pinned browser package). The
-    lane binds read-only: viewer/dist at /app/dist, viewer/node_modules
-    at /app/node_modules, the canary and the lane script under /canary
-    and /lane. Chromium runs headless with its own sandbox disabled -
-    the enforced bwrap boundary is the containment.
+    absolute: PLAYWRIGHT_BROWSERS_PATH (pinned browser package),
+    SHOTS_DIR (the run root's own shots directory, already rw-bound).
+    The lane binds read-only: the canary at /canary, the lane script at
+    /lane, viewer/dist at /app/dist. The payload python is the pinned
+    withPackages interpreter, its closure verified to contain the
+    playwright module before any launch (the scrubbed env inherits no
+    host PYTHONPATH). Chromium runs headless with its own sandbox
+    disabled - the enforced bwrap boundary is the containment.
     """
     sys.path.insert(0, str(HERE))
     import isolation
@@ -200,22 +215,15 @@ def browser_lane() -> int:
     canary = str((HERE / "containment_canary.py").resolve())
     lane = str((HERE / "browser_lane.py").resolve())
 
-    node = shutil.which("node")
-    if node is None:
-        print("containment refusal: node is not in PATH (pinned devshell expected)", file=sys.stderr)
-        return 1
-    node_bin = str(pathlib.Path(node).resolve())
     browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
     if not browsers.startswith("/"):
         print("containment refusal: PLAYWRIGHT_BROWSERS_PATH must be an absolute pinned path", file=sys.stderr)
         return 1
 
     dist = (VIEWER / "dist").resolve()
-    modules = (VIEWER / "node_modules").resolve()
-    for label, path in (("viewer/dist", dist), ("viewer/node_modules", modules)):
-        if not path.is_dir():
-            print(f"containment refusal: {label} is missing; run check-fast first", file=sys.stderr)
-            return 1
+    if not dist.is_dir():
+        print("containment refusal: viewer/dist is missing; run check-fast first", file=sys.stderr)
+        return 1
 
     tracker_db, refusal = caller_tracker_db(tracker_db_arg, os.environ.get("SACCADE_DB") or "")
     if tracker_db is None:
@@ -231,20 +239,27 @@ def browser_lane() -> int:
         print(f"containment refusal: {error}", file=sys.stderr)
         return 1
 
+    # The pinned launch path must carry its own playwright closure: the
+    # scrubbed sandbox env inherits no host PYTHONPATH, so the module
+    # must exist inside the withPackages env the interpreter belongs to.
+    usable, reason = verify_playwright_closure(python)
+    if not usable:
+        print(f"containment refusal: {reason}", file=sys.stderr)
+        return 1
+
     run_root = isolation.make_run_root("browser")
     env = isolation.env_allowlist(run_root)
     env["CONTAINMENT_HOST_NS_IDS"] = isolation.host_ns_ids()
     env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home().resolve())
     env["CONTAINMENT_HOST_UID"] = str(os.getuid())
     env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
-    env["NODE_BIN"] = node_bin
     env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
+    env["SHOTS_DIR"] = str(run_root / "shots")
 
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),
         (lane, BROWSER_LANE_SANDBOX_PATH),
         (str(dist), DIST_SANDBOX),
-        (str(modules), MODULES_SANDBOX),
     ]
     cmd = isolation.build_command(bwrap, run_root, [python, BROWSER_LANE_SANDBOX_PATH], ro_binds)
 
