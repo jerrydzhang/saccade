@@ -101,3 +101,21 @@ test("normalizeQuery strips math delimiters from both ends", () => {
   assert.equal(normalizeQuery("plain"), "plain");
   assert.equal(normalizeQuery("$a + b$"), "a + b");
 });
+
+test("projection sources are exact authored bytes, not reconstructions", () => {
+  const board = boardOf([
+    "content:",
+    "  - text: |",
+    "      Mixed: $$ x $$ paragraph",
+    "  - text: |",
+    "      $$",
+    "      \\frac{a}{b}",
+    "      $$",
+  ].join("\n"));
+  const units = projectBoard(board);
+  const mixed = units.find((unit) => unit.kind === "math" && unit.text === "x");
+  const flow = units.find((unit) => unit.kind === "math" && unit.text.includes("frac"));
+  assert.equal(mixed?.source, "$$ x $$");
+  assert.ok(flow?.source.includes("\n"), "flow math source keeps the authored newlines");
+  assert.equal(flow?.source, "$$\n\\frac{a}{b}\n$$");
+});

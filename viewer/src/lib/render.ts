@@ -4,16 +4,33 @@
 // unit ids as data attributes.
 
 import type { Root, RootContent, PhrasingContent } from "mdast";
-import { parseMarkdown, docRange, promotedDisplayMath } from "./markdown.ts";
+import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice } from "./markdown.ts";
 import type { Diagnostic } from "./errors.ts";
 import type { Board, Block, FigureBlock } from "./model.ts";
 
 export type RenderHooks = {
   /** Document character offset -> projection unit id. */
   unitIndex: Map<number, string>;
+  /** Block-local character offset -> exact authored math bytes; built
+   * by renderMarkdown from the same parse the renderer walks. */
+  authoredMath?: Map<number, string>;
   /** Raw HTML and other render-time findings. */
   onDiagnostic: (diagnostic: Diagnostic) => void;
 };
+
+/**
+ * The exact authored bytes for a math node: sliced from the block
+ * source through the shared authoredMath map the parse stage builds.
+ * Reconstruction from the value would violate authored spelling.
+ */
+export function authoredMathOf(
+  hooks: RenderHooks,
+  node: { position?: { start?: { offset?: number | null } } },
+): string {
+  const offset = node.position?.start?.offset;
+  if (offset === null || offset === undefined) return "";
+  return hooks.authoredMath?.get(offset) ?? "";
+}
 
 type Attrs = Record<string, string | boolean | undefined>;
 
@@ -136,6 +153,27 @@ export function renderMarkdown(
   for (const diagnostic of parsed.diagnostics) {
     hooks.onDiagnostic(diagnostic);
   }
+  const authoredMath = new Map<number, string>();
+  const collectAuthored = (node: RootContent | void): void => {
+    if (!node) return;
+    if (node.type === "inlineMath" || node.type === "math") {
+      const start = node.position?.start?.offset;
+      if (start !== null && start !== undefined) {
+        authoredMath.set(start, authoredSlice(markdown, node.position));
+      }
+      return;
+    }
+    if ("children" in node && Array.isArray(node.children)) {
+      for (const child of node.children as RootContent[]) {
+        collectAuthored(child);
+      }
+    }
+  };
+  for (const child of parsed.root.children) {
+    collectAuthored(child);
+  }
+  hooks.authoredMath = authoredMath;
+
   const fragment = document.createDocumentFragment();
   for (const child of parsed.root.children) {
     const onlyChild = child.type === "paragraph" ? child.children[0] : undefined;
@@ -165,7 +203,7 @@ function renderDisplayMath(
       "data-unit-display": "true",
       ...(id ? { "data-unit-id": id } : {}),
       "data-unit-tex": node.value,
-      "data-unit-source": `$$${node.value}$$`,
+      "data-unit-source": authoredMathOf(hooks, node) || `$$${node.value}$$`,
       "data-pending": "math",
       ...(pos ? { "data-line": String(pos.start.line) } : {}),
     },
@@ -235,6 +273,9 @@ function renderNode(
       table.append(tbody);
       return table;
     }
+    case "math": {
+      return renderMathBlock(node, blockOffset, blockLine, hooks, blockId);
+    }
     case "code": {
       if (node.lang === "mermaid") {
         const range = pos;
@@ -274,6 +315,35 @@ function renderNode(
     default:
       return renderPhrasing(node as PhrasingContent, blockOffset, blockLine, hooks, blockId);
   }
+}
+
+/** Flow math (fenced $$ blocks) renders as the same display owner the
+ * promoted paragraphs use, so it is visible and copyable like any
+ * other display expression. */
+function renderMathBlock(
+  node: Extract<RootContent, { type: "math" }>,
+  blockOffset: number,
+  blockLine: number,
+  hooks: RenderHooks,
+  blockId: string,
+): HTMLElement {
+  const pos = docRange(node.position, blockOffset, blockLine);
+  const id = unitIdAt(hooks, pos?.start.offset);
+  return el(
+    "span",
+    {
+      class: "math-display",
+      "data-copy-unit": "math",
+      "data-unit-display": "true",
+      ...(id ? { "data-unit-id": id } : {}),
+      "data-unit-tex": node.value,
+      "data-unit-source": authoredMathOf(hooks, node),
+      "data-pending": "math",
+      "data-block-id": blockId,
+      ...(pos ? { "data-line": String(pos.start.line) } : {}),
+    },
+    node.value,
+  );
 }
 
 function renderChildren(
@@ -320,7 +390,7 @@ export function renderPhrasing(
           "data-unit-display": "false",
           ...(id ? { "data-unit-id": id } : {}),
           "data-unit-tex": node.value,
-          "data-unit-source": `$${node.value}$`,
+          "data-unit-source": authoredMathOf(hooks, node) || `$${node.value}$`,
           "data-pending": "math",
           ...lineAttr,
         },

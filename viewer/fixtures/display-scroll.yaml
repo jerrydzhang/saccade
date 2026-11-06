@@ -10,3 +10,9 @@ content:
       $$0 < a < b,\quad 0 < \eta < \tfrac{2}{b},\quad \lambda_{\max} = \max(1-a\eta,\; 1-b\eta),\quad \lambda_{\min} = \min(1-a\eta,\; 1-b\eta),\quad \text{so convergence is governed by } \max(\lambda_{\max}, |\lambda_{\min}|) < 1$$
 
       Prose below this equation wraps normally.
+
+      The same reading rules in fenced form:
+
+      $$
+      \frac{a}{b}
+      $$

@@ -53,3 +53,21 @@ test("positions map through block offset and line onto authored bytes", () => {
   assert.equal(doc.charAt(second.pos.start.offset), "$");
   assert.equal(second.pos.start.line, blockLine + 1);
 });
+
+test("authored slices retain exact spelling, spacing and newlines", () => {
+  const markdown = "Mixed: $$ x $$ paragraph\n\n$$\n\\frac{a}{b}\n$$\n";
+  const parsed = parseMarkdown(markdown, 0, 1);
+  const inline = parsed.mathNodes.find((node) => node.value === "x");
+  const flow = parsed.mathNodes.find((node) => node.type === "math" && node.value.includes("frac"));
+  assert.equal(inline?.authored, "$$ x $$");
+  assert.equal(flow?.authored, "$$\n\\frac{a}{b}\n$$");
+});
+
+test("flow math (fenced display) parses with value and authored fence", () => {
+  const markdown = "$$\nc = d\n$$\n";
+  const parsed = parseMarkdown(markdown, 0, 1);
+  const display = parsed.mathNodes[0];
+  assert.equal(display?.type, "math");
+  assert.equal(display?.value, "c = d");
+  assert.equal(display?.authored, "$$\nc = d\n$$");
+});

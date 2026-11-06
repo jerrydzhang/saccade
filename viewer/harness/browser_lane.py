@@ -98,138 +98,268 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
         )
         return page.evaluate(f"() => {viewer}.inspection().renderOutcomes")
 
-    # 1. the real migration board loads through the same handler the
-    #    header control uses
-    open_board("saccade-and-migration.yaml")
-    inspection = page.evaluate(f"() => {viewer}.inspection()")
-    check(
-        "real migration board loads",
-        inspection["resource"]["status"] == "loaded" and inspection["errors"] == [],
-        str(inspection["resource"]),
-    )
-    check(
-        "real board task metadata is authored-only",
-        inspection["identity"]["task"] == "saccade-current-system-and-migration",
-        str(inspection["identity"]),
-    )
+    def screenshot_at(selector: str, name: str) -> None:
+        """Capture at a reading position, not the page top."""
+        try:
+            page.evaluate(
+                f"""() => {{
+                    const el = document.querySelector({selector!r});
+                    if (el) el.scrollIntoView({{block: 'center'}});
+                }}"""
+            )
+            page.wait_for_timeout(150)
+        except Exception:
+            pass
+        page.screenshot(path=f"{shots_dir}/{name}")
 
-    # 2. actual rendering outcomes: math and diagrams hydrated
-    outcomes = wait_rendered(("math", "mermaid"))
-    math_ok = [o for o in outcomes if o["kind"] == "math" and o["status"] == "ok"]
-    mermaid_ok = [o for o in outcomes if o["kind"] == "mermaid" and o["status"] == "ok"]
-    math_bad = [o for o in outcomes if o["kind"] == "math" and o["status"] != "ok"]
-    mermaid_bad = [o for o in outcomes if o["kind"] == "mermaid" and o["status"] != "ok"]
-    check("migration board math renders (actual outcomes)", len(math_ok) > 0 and len(math_bad) == 0, str(outcomes[:4]))
-    check("migration board diagrams render (actual outcomes)", len(mermaid_ok) > 0 and len(mermaid_bad) == 0, str(outcomes[:4]))
-    containers = page.evaluate("() => document.querySelectorAll('mjx-container').length")
-    check("math is in the DOM as MathJax containers", containers > 0, str(containers))
-    page.screenshot(path=f"{shots_dir}/real-board.png")
+    phases: list[tuple[bool, str]] = []
 
-    # 3. copy semantics: exact bytes for a deterministic selection on the
-    #    repeated-math fixture - the formula emitted once, authored bytes
-    #    in Source mode, TeX value in Plain mode. The selection starts at
-    #    the first text of the paragraph that CONTAINS the first math
-    #    expression and ends nine characters into the trailing text node
-    #    after it (" in this "), matching the expected span exactly.
-    #    First evidence toward full copy certification, not the
-    #    certification itself.
-    open_board("repeated-math.yaml")
-    page.wait_for_function("() => document.querySelector('.block-text .math-inline mjx-container, .block-text .math-inline') !== null")
-    page.evaluate("() => window.__boardViewer.setCopyMode('source')")
+    def phase(name: str, body) -> None:
+        """One failed phase records its failure and never starves the
+        remaining independent checks."""
+        try:
+            body()
+        except Exception as error:  # playwright timeouts, navigation errors
+            phases.append((False, name))
+            check(f"{name}", False, f"{type(error).__name__}: {str(error)[:160]}")
 
-    def select_first_sentence_plus_math() -> None:
+    # phase 1: the real migration board through the shared handler
+    def phase_real_board() -> None:
+        open_board("saccade-and-migration.yaml")
+        inspection = page.evaluate(f"() => {viewer}.inspection()")
+        check(
+            "real migration board loads",
+            inspection["resource"]["status"] == "loaded" and inspection["errors"] == [],
+            str(inspection["resource"]),
+        )
+        check(
+            "real board task metadata is authored-only",
+            inspection["identity"]["task"] == "saccade-current-system-and-migration",
+            str(inspection["identity"]),
+        )
+        outcomes = wait_rendered(("math", "mermaid"))
+        math_ok = [o for o in outcomes if o["kind"] == "math" and o["status"] == "ok"]
+        mermaid_ok = [o for o in outcomes if o["kind"] == "mermaid" and o["status"] == "ok"]
+        math_bad = [o for o in outcomes if o["kind"] == "math" and o["status"] != "ok"]
+        mermaid_bad = [o for o in outcomes if o["kind"] == "mermaid" and o["status"] != "ok"]
+        check("migration board math renders (actual outcomes)", len(math_ok) > 0 and len(math_bad) == 0, str(outcomes[:4]))
+        check("migration board diagrams render (actual outcomes)", len(mermaid_ok) > 0 and len(mermaid_bad) == 0, str(outcomes[:4]))
+        containers = page.evaluate("() => document.querySelectorAll('mjx-container').length")
+        check("math is in the DOM as MathJax containers", containers > 0, str(containers))
+        screenshot_at("mjx-container", "real-board-math.png")
+        screenshot_at(".diagram-frame", "real-board-diagram.png")
+
+    phase("real board load and render", phase_real_board)
+
+    # phases 2-4: copy semantics, each step independent and bounded - a
+    # failed copy check records its failure and never starves the rest.
+    def start_clipboard_read() -> None:
+        page.evaluate("""() => {
+            window.__copy = {state: 'pending'};
+            navigator.clipboard.readText()
+                .then(t => { window.__copy = {state: 'done', text: t}; })
+                .catch(e => { window.__copy = {state: 'error', message: String(e)}; });
+        }""")
+
+    def await_clipboard() -> tuple[bool, str]:
+        timed_out = False
+        try:
+            page.wait_for_function("() => window.__copy && window.__copy.state !== 'pending'", timeout=8000)
+        except Exception:
+            timed_out = True
+        state = page.evaluate("() => window.__copy")
+        if timed_out or state.get("state") != "done":
+            return False, f"state={state} timed_out={timed_out}"
+        return True, state.get("text") or ""
+
+    def select_first_formula_paragraph() -> None:
         page.evaluate("""() => {
             const math = document.querySelector('.block-text .math-inline');
             const paragraph = math.closest('p');
             const children = Array.from(paragraph.children);
-            const mathIndex = children.indexOf(math.closest('.md-text') ?? math);
-            const startEl = children[0];
-            const endEl = children[mathIndex + 1];
+            const mathIndex = children.indexOf(math);
             const range = document.createRange();
-            range.setStart(startEl, 0);
-            range.setEnd(endEl.firstChild, 9);
+            range.setStart(children[0], 0);
+            range.setEnd(children[mathIndex + 1].firstChild, 9);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            const ok = document.execCommand('copy');
+            window.__exec = ok;
+        }""")
+
+    def phase_copy_source() -> None:
+        open_board("repeated-math.yaml")
+        page.wait_for_function("() => document.querySelector('.block-text .math-inline') !== null")
+        page.evaluate("() => window.__boardViewer.setCopyMode('source')")
+        focus = page.evaluate("() => document.hasFocus()")
+        page.evaluate("() => { window.__copy = {state: 'pending', focus: document.hasFocus()}; }")
+        select_first_formula_paragraph()
+        exec_result = page.evaluate("() => window.__exec")
+        print(f"[browser] copy phase: focus={focus} execCommand={exec_result}", flush=True)
+        ok, evidence = await_clipboard()
+        if not ok:
+            check("clipboard read reaches a terminal state (bounded)", False, evidence)
+            page.screenshot(path=f"{shots_dir}/copy-timeout.png")
+            return
+        source_copy = evidence
+        expected_source = "First occurrence: $0 < \\eta < 2/b$ in this "
+        check("Source copy emits the exact authored bytes once", source_copy == expected_source, repr(source_copy))
+        check("the formula appears exactly once in the Source copy", source_copy.count("$0 < \\eta < 2/b$") == 1, repr(source_copy))
+        screenshot_at(".block-text .math-inline", "copy-modes.png")
+
+    phase("copy source exact", phase_copy_source)
+
+    def phase_copy_plain() -> None:
+        open_board("repeated-math.yaml")
+        page.wait_for_function("() => document.querySelector('.block-text .math-inline') !== null")
+        page.evaluate("() => window.__boardViewer.setCopyMode('plain')")
+        page.evaluate("() => { window.__copy = {state: 'pending'}; }")
+        select_first_formula_paragraph()
+        ok, evidence = await_clipboard()
+        if not ok:
+            check("plain clipboard read reaches a terminal state (bounded)", False, evidence)
+            return
+        plain_copy = evidence
+        expected_plain = "First occurrence: 0 < \\eta < 2/b in this "
+        check("Plain copy emits the exact TeX value", plain_copy == expected_plain, repr(plain_copy))
+        screenshot_at(".block-text .math-inline", "copy-plain.png")
+
+    phase("copy plain exact", phase_copy_plain)
+
+    def phase_copy_multi_and_flow() -> None:
+        # multi-unit: from the first formula through the second, two math
+        # units with prose between - partial evidence: each authored
+        # formula exactly once and the connecting prose present
+        open_board("repeated-math.yaml")
+        page.wait_for_function("() => document.querySelectorAll('.block-text .math-inline').length >= 2")
+        page.evaluate("() => window.__boardViewer.setCopyMode('source')")
+        page.evaluate("() => { window.__copy = {state: 'pending'}; }")
+        page.evaluate("""() => {
+            const math = document.querySelectorAll('.block-text .math-inline');
+            const range = document.createRange();
+            range.setStartBefore(math[0]);
+            range.setEndAfter(math[1]);
             const selection = window.getSelection();
             selection.removeAllRanges();
             selection.addRange(range);
             document.execCommand('copy');
+            navigator.clipboard.readText()
+                .then(t => { window.__copy = {state: 'done', text: t}; })
+                .catch(e => { window.__copy = {state: 'error', message: String(e)}; });
         }""")
+        ok, evidence = await_clipboard()
+        if ok:
+            check(
+                "multi-unit copy keeps each formula exactly once",
+                evidence.count("$0 < \\eta < 2/b$") == 2 and "Second occurrence" in evidence,
+                repr(evidence[:120]),
+            )
+        else:
+            check("multi-unit copy keeps each formula exactly once", False, evidence)
 
-    def copied_text() -> str:
-        return page.evaluate("async () => navigator.clipboard.readText()")
+        # flow math: whole fenced display element -> exact authored bytes
+        open_board("display-scroll.yaml")
+        page.wait_for_function("() => document.querySelectorAll('.math-display').length >= 1")
+        page.evaluate("() => { window.__copy = {state: 'pending'}; }")
+        page.evaluate("""() => {
+            const display = document.querySelectorAll('.math-display')[1];
+            const range = document.createRange();
+            range.selectNodeContents(display);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            document.execCommand('copy');
+            navigator.clipboard.readText()
+                .then(t => { window.__copy = {state: 'done', text: t}; })
+                .catch(e => { window.__copy = {state: 'error', message: String(e)}; });
+        }""")
+        ok, evidence = await_clipboard()
+        check(
+            "flow math Source copy is the exact authored fence",
+            ok and evidence == "$$\n\\frac{a}{b}\n$$",
+            repr(evidence[:120]),
+        )
+        screenshot_at(".math-display", "flow-math-copy.png")
 
-    select_first_sentence_plus_math()
-    source_copy = copied_text()
-    expected_source = "First occurrence: $0 < \\eta < 2/b$ in this "
-    check("Source copy emits the exact authored bytes once", source_copy == expected_source, repr(source_copy))
-    check("the formula appears exactly once in the Source copy", source_copy.count("$0 < \\eta < 2/b$") == 1, repr(source_copy))
+    phase("copy multi-unit and flow math", phase_copy_multi_and_flow)
 
-    page.evaluate("() => window.__boardViewer.setCopyMode('plain')")
-    select_first_sentence_plus_math()
-    plain_copy = copied_text()
-    expected_plain = "First occurrence: 0 < \\eta < 2/b in this "
-    check("Plain copy emits the exact TeX value", plain_copy == expected_plain, repr(plain_copy))
-    page.screenshot(path=f"{shots_dir}/copy-modes.png")
+    # phase 3: duplicate-expression search, both occurrences reachable
+    def phase_search() -> None:
+        open_board("repeated-math.yaml")
+        page.fill("input[type=search]", "0 < \\eta < 2/b")
+        page.wait_for_function("() => (document.querySelector('.search-state')?.textContent ?? '').trim().startsWith('1 / 2')")
+        search_state = page.text_content(".search-state") or ""
+        check("duplicate expression search finds two occurrences", search_state.strip().startswith("1 / 2"), repr(search_state))
+        page.click("button[aria-label='next match']")
+        page.wait_for_function("() => (document.querySelector('.search-state')?.textContent ?? '').trim().startsWith('2 / 2')")
+        search_state = page.text_content(".search-state") or ""
+        check("next match reaches the second occurrence", search_state.strip().startswith("2 / 2"), repr(search_state))
+        screenshot_at(".block-text .math-inline", "search-occurrences.png")
 
-    # 4. duplicate-expression search: two occurrences, both reachable
-    page.fill("input[type=search]", "0 < \\eta < 2/b")
-    page.wait_for_function("() => (document.querySelector('.search-state')?.textContent ?? '').trim().startsWith('1 / 2')")
-    search_state = page.text_content(".search-state") or ""
-    check("duplicate expression search finds two occurrences", search_state.strip().startswith("1 / 2"), repr(search_state))
-    page.click("button[aria-label='next match']")
-    page.wait_for_function("() => (document.querySelector('.search-state')?.textContent ?? '').trim().startsWith('2 / 2')")
-    search_state = page.text_content(".search-state") or ""
-    check("next match reaches the second occurrence", search_state.strip().startswith("2 / 2"), repr(search_state))
+    phase("duplicate search", phase_search)
 
-    # 5. theme and narrow width
-    page.evaluate("() => window.__boardViewer.setTheme('dark')")
-    theme = page.evaluate("() => document.documentElement.dataset.theme")
-    check("dark theme applies to the document root", theme == "dark", str(theme))
-    page.set_viewport_size({"width": 520, "height": 800})
-    overflow = page.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
-    check("narrow window has no page-level horizontal overflow", overflow <= 0, str(overflow))
-    page.screenshot(path=f"{shots_dir}/dark-narrow.png")
+    # phase 4: theme and narrow width
+    def phase_theme() -> None:
+        page.evaluate("() => window.__boardViewer.setTheme('dark')")
+        theme = page.evaluate("() => document.documentElement.dataset.theme")
+        check("dark theme applies to the document root", theme == "dark", str(theme))
+        page.set_viewport_size({"width": 520, "height": 800})
+        overflow = page.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
+        check("narrow window has no page-level horizontal overflow", overflow <= 0, str(overflow))
+        screenshot_at(".block-text", "dark-narrow.png")
+        page.evaluate("() => window.__boardViewer.setTheme('system')")
+        page.set_viewport_size({"width": 1100, "height": 800})
 
-    # 6. expanded diagram controls and return
-    open_board("large-diagram.yaml")
-    page.wait_for_function("() => document.querySelector('.diagram-frame svg') !== null")
-    page.click(".diagram-frame")
-    page.wait_for_function("() => document.querySelector('.diagram-overlay') !== null")
-    check("diagram expands into the overlay", True)
-    page.click("[data-action='zoom-in']")
-    page.wait_for_function("() => (document.querySelector('.diagram-zoom-label')?.textContent ?? '').trim() !== '100%'")
-    zoom_label = page.text_content(".diagram-zoom-label") or ""
-    check("zoom control raises the scale", zoom_label.strip() != "100%", repr(zoom_label))
-    page.click("[data-action='reset']")
-    page.wait_for_function("() => (document.querySelector('.diagram-zoom-label')?.textContent ?? '').trim() === '100%'")
-    check("reset returns scale to 100%", True)
-    page.screenshot(path=f"{shots_dir}/diagram-expanded.png")
-    page.keyboard.press("Escape")
-    page.wait_for_function("() => document.querySelector('.diagram-overlay') === null")
-    check("closing returns to the board", True)
-    page.evaluate("() => window.__boardViewer.setTheme('system')")
+    phase("theme and width", phase_theme)
 
-    # 7. invalid and missing inputs keep source visible with outcomes
-    open_board("invalid.yaml")
-    inspection = page.evaluate(f"() => {viewer}.inspection()")
-    check(
-        "invalid board is a structured error, never a board",
-        inspection["resource"]["status"] == "invalid" and any(e["code"] == "yaml-syntax" for e in inspection["errors"]),
-        str(inspection["errors"])[:200],
-    )
-    error_visible = page.evaluate("() => document.querySelector('.errors .render-error') !== null")
-    check("invalid board error is rendered visibly", error_visible is True)
+    # phase 5: expanded diagram controls and return
+    def phase_diagram() -> None:
+        open_board("large-diagram.yaml")
+        page.wait_for_function("() => document.querySelector('.diagram-frame svg') !== null")
+        page.click(".diagram-frame")
+        page.wait_for_function("() => document.querySelector('.diagram-overlay') !== null")
+        check("diagram expands into the overlay", True)
+        page.click("[data-action='zoom-in']")
+        page.wait_for_function("() => (document.querySelector('.diagram-zoom-label')?.textContent ?? '').trim() !== '100%'")
+        zoom_label = page.text_content(".diagram-zoom-label") or ""
+        check("zoom control raises the scale", zoom_label.strip() != "100%", repr(zoom_label))
+        page.click("[data-action='reset']")
+        page.wait_for_function("() => (document.querySelector('.diagram-zoom-label')?.textContent ?? '').trim() === '100%'")
+        check("reset returns scale to 100%", True)
+        page.screenshot(path=f"{shots_dir}/diagram-expanded.png")
+        page.keyboard.press("Escape")
+        page.wait_for_function("() => document.querySelector('.diagram-overlay') === null")
+        check("closing returns to the board", True)
 
-    open_board("missing-asset.yaml")
-    page.wait_for_function(
-        f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'figure' && o.status === 'missing')"
-    )
-    outcomes = page.evaluate(f"() => {viewer}.inspection().renderOutcomes")
-    missing = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "missing"]
-    check("missing figure is an actual reported outcome", len(missing) == 1, str(outcomes))
-    missing_visible = page.evaluate("() => document.querySelector('.figure-frame.asset-missing .render-error') !== null")
-    check("missing figure error is rendered visibly", missing_visible is True)
-    page.screenshot(path=f"{shots_dir}/missing-asset.png")
+    phase("diagram expansion", phase_diagram)
 
+    # phase 6: invalid and missing inputs keep source visible with outcomes
+    def phase_invalid() -> None:
+        open_board("invalid.yaml")
+        inspection = page.evaluate(f"() => {viewer}.inspection()")
+        check(
+            "invalid board is a structured error, never a board",
+            inspection["resource"]["status"] == "invalid" and any(e["code"] == "yaml-syntax" for e in inspection["errors"]),
+            str(inspection["errors"])[:200],
+        )
+        error_visible = page.evaluate("() => document.querySelector('.errors .render-error') !== null")
+        check("invalid board error is rendered visibly", error_visible is True)
+
+        open_board("missing-asset.yaml")
+        page.wait_for_function(
+            f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'figure' && o.status === 'missing')"
+        )
+        outcomes = page.evaluate(f"() => {viewer}.inspection().renderOutcomes")
+        missing = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "missing"]
+        check("missing figure is an actual reported outcome", len(missing) == 1, str(outcomes))
+        missing_visible = page.evaluate("() => document.querySelector('.figure-frame.asset-missing .render-error') !== null")
+        check("missing figure error is rendered visibly", missing_visible is True)
+        screenshot_at(".figure-frame", "missing-asset.png")
+
+    phase("invalid and missing inputs", phase_invalid)
+
+    del phases
     return sum(1 for ok, _name, _detail in RESULTS if not ok)
 
 

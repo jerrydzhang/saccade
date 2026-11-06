@@ -4,7 +4,7 @@
 
 import type { SourceRange } from "./errors.ts";
 import type { Board } from "./model.ts";
-import { parseMarkdown, promotedDisplayMath } from "./markdown.ts";
+import { parseMarkdown, promotedDisplayMath, authoredSlice } from "./markdown.ts";
 
 export type ProjectionUnit = {
   id: string;
@@ -50,7 +50,7 @@ export function projectBoard(board: Board): ProjectionUnit[] {
           id: nextId(),
           kind: "math",
           text: onlyChild.value,
-          source: `$$${onlyChild.value}$$`,
+          source: authoredSlice(markdown, onlyChild.position),
           pos: range ?? zeroRange(),
           display: true,
           blockKind,
@@ -63,7 +63,7 @@ export function projectBoard(board: Board): ProjectionUnit[] {
           id: nextId(),
           kind: "math",
           text: node.value,
-          source: `$${node.value}$`,
+          source: authoredSlice(markdown, node.position),
           pos: range ?? zeroRange(),
           display: false,
           blockKind,
@@ -76,7 +76,7 @@ export function projectBoard(board: Board): ProjectionUnit[] {
           id: nextId(),
           kind: "math",
           text: node.value,
-          source: `$$${node.value}$$`,
+          source: authoredSlice(markdown, node.position),
           pos: range ?? zeroRange(),
           display: true,
           blockKind,

@@ -14,7 +14,26 @@ export type MathNode = {
   type: "inlineMath" | "math";
   value: string;
   pos: SourceRange;
+  /** The exact authored bytes of the expression, delimiters included:
+   * Source copy and the renderer use this, never a reconstruction. */
+  authored: string;
 };
+
+/**
+ * The exact authored bytes a node occupies in its own block source.
+ * Reconstructing delimiters from the value would violate authored
+ * spelling, spacing, Unicode and newlines.
+ */
+export function authoredSlice(
+  markdown: string,
+  position: { start?: { offset?: number | null }; end?: { offset?: number | null } } | null | undefined,
+): string {
+  const start = position?.start?.offset;
+  const end = position?.end?.offset;
+  if (start === null || start === undefined || end === null || end === undefined) return "";
+  if (end <= start) return "";
+  return markdown.slice(start, end);
+}
 
 export type ParsedMarkdown = {
   root: Root;
@@ -56,14 +75,24 @@ export function parseMarkdown(markdown: string, blockOffset: number, blockLine: 
     if (!node) return;
     const pos = docRange(node.position, blockOffset, blockLine);
     if (node.type === "inlineMath" || node.type === "math") {
-      mathNodes.push({ type: node.type, value: node.value, pos: pos ?? zeroRange() });
+      mathNodes.push({
+        type: node.type,
+        value: node.value,
+        pos: pos ?? zeroRange(),
+        authored: authoredSlice(markdown, node.position),
+      });
       return;
     }
     if (node.type === "paragraph") {
       const onlyChild = node.children[0];
       if (onlyChild && onlyChild.type === "inlineMath" && promotedDisplayMath(markdown, node, onlyChild)) {
         const mathPos = docRange(onlyChild.position, blockOffset, blockLine);
-        mathNodes.push({ type: "math", value: onlyChild.value, pos: mathPos ?? zeroRange() });
+        mathNodes.push({
+          type: "math",
+          value: onlyChild.value,
+          pos: mathPos ?? zeroRange(),
+          authored: authoredSlice(markdown, onlyChild.position),
+        });
         return;
       }
       for (const child of node.children as RootContent[]) {

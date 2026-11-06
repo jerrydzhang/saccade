@@ -8,6 +8,7 @@ import type { MathNode } from "./markdown.ts";
 type Tex2Svg = (tex: string, options?: { display?: boolean }) => HTMLElement;
 
 interface MathJaxGlobal {
+  loader?: { paths?: { mathjax?: string } };
   startup?: { promise?: Promise<unknown>; document?: unknown; typeset?: boolean };
   tex2svg?: Tex2Svg;
   typesetPromise?: () => Promise<void>;
@@ -25,7 +26,15 @@ declare global {
 let readyPromise: Promise<Tex2Svg> | null = null;
 
 function configureBeforeLoad(): void {
+  // The speech worker resolves against loader.paths.mathjax; the built
+  // dist carries the pinned sre assets at <origin>/sre, so the offline
+  // same-origin path keeps speech from fetching anything external.
+  const mathjaxRoot =
+    typeof location !== "undefined" && location.protocol.startsWith("http")
+      ? location.origin
+      : "";
   window.MathJax = {
+    loader: { paths: { mathjax: mathjaxRoot } },
     tex: {
       inlineMath: [["$", "$"]],
       displayMath: [["$$", "$$"]],

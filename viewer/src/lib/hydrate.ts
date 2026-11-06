@@ -53,7 +53,7 @@ export async function hydrate(
 async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promise<void> {
   const tex = span.dataset.unitTex ?? "";
   const line = span.dataset.line ? Number(span.dataset.line) : undefined;
-  const result = await renderMath({ type: span.dataset.unitDisplay === "true" ? "math" : "inlineMath", value: tex, pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } });
+  const result = await renderMath({ type: span.dataset.unitDisplay === "true" ? "math" : "inlineMath", value: tex, authored: span.dataset.unitSource ?? "", pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } });
   if (!result.ok) {
     span.classList.add("math-error");
     span.title = `math conversion failed: ${result.message}`;
