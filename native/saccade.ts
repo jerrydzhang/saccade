@@ -1029,9 +1029,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 		unpersistedSession = false;
 		const who = await attach(ctx);
 		if (!who) {
-			// ownership gates history: only the exact-session guard holder
-			// paints an attach entry (its outage record); a process that
-			// holds no guard never writes the history it could not claim
+			// a process holding no guard never writes the history it could not claim
 			if (attachError && heldGuard()) {
 				pi.appendEntry("saccade_attach", { error: attachError });
 			}
@@ -1039,8 +1037,7 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 			// itself above - unless an applicable exact-session guard is
 			// held: a guarded reload or reassociation retries lazily
 			if (!heldGuard() && !unpersistedSession) {
-				// stderr is the local refusal carrier: it reaches the
-				// human terminal without touching session history
+				// stderr carries the refusal locally even when a UI exists
 				process.stderr.write(`saccade: ${attachError}\n`);
 				ctx.shutdown();
 			}

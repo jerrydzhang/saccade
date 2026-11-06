@@ -917,8 +917,7 @@ test("a real second process refuses the attach and its death releases the lock",
 			dup.pi.shutdowns >= 1,
 			"the duplicate refusal requests exit (refusal and start-rule agree)",
 		);
-		// the refusal is local, never history: the duplicate holds no
-		// guard, so the session file gains no entry and stderr carries it
+		// the refusal stays local: no history write, stderr carries it
 		assert.equal(
 			dup.pi.appendEntries.length,
 			0,
