@@ -255,6 +255,9 @@ def browser_lane() -> int:
     env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
     env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
     env["SHOTS_DIR"] = str(run_root / "shots")
+    # Diagnostic-only: Playwright records the owned browser process's
+    # stderr and exit signal. No persistent telemetry, no new controller.
+    env["DEBUG"] = "pw:browser"
 
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),

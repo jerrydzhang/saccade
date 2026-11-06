@@ -176,6 +176,8 @@ def main() -> int:
         def server_close(self):
             lane_calls["shutdown"] += 10
 
+    lane_calls["events"] = []
+
     class FakePage:
         gotos: list[str] = []
 
@@ -189,6 +191,9 @@ def main() -> int:
         def wait_for_function(self, fn):
             pass
 
+        def on(self, event, handler):
+            lane_calls["events"].append(("page", event))
+
     class FakeContext:
         def grant_permissions(self, *args, **kwargs):
             pass
@@ -196,12 +201,18 @@ def main() -> int:
         def new_page(self):
             return FakePage()
 
+        def on(self, event, handler):
+            lane_calls["events"].append(("context", event))
+
     class FakeBrowser:
         def new_context(self, **kwargs):
             return FakeContext()
 
         def close(self):
             pass
+
+        def on(self, event, handler):
+            lane_calls["events"].append(("browser", event))
 
     class FakeSyncContext:
         def __enter__(self):
@@ -264,6 +275,14 @@ def main() -> int:
             str(lane_calls),
         )
         check("screenshots land under the run-root shots dir", lane_calls["shots"] == [] and shots_dir.is_dir(), str(shots_dir))
+        check(
+            "closure diagnostics are wired on browser, context and page",
+            ("browser", "disconnected") in lane_calls["events"]
+            and ("context", "close") in lane_calls["events"]
+            and ("page", "crash") in lane_calls["events"]
+            and ("page", "pageerror") in lane_calls["events"],
+            str(lane_calls["events"]),
+        )
     finally:
         browser_lane.containment_canary = real_canary_mod
         browser_lane.start_server = real_start

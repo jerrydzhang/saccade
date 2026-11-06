@@ -261,6 +261,13 @@ def main() -> int:
             # Chromium-internal clipboard only; never the desktop's.
             context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
             page = context.new_page()
+            # Closure diagnostics: record which owned target closed and
+            # any page-level error, with a timestamp, into the lane log.
+            stamp = lambda label: print(f"[browser-diag] {time.strftime('%H:%M:%S')} {label}", flush=True)
+            browser.on("disconnected", lambda _browser: stamp("browser disconnected"))
+            context.on("close", lambda _ctx: stamp("context closed"))
+            page.on("crash", lambda _page: stamp("page crashed"))
+            page.on("pageerror", lambda error: stamp(f"pageerror: {error}"))
             page.set_default_timeout(10000)
             page.goto(base_url)
             page.wait_for_function("() => window.__boardViewer !== undefined")
