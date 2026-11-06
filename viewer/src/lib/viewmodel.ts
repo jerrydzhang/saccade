@@ -85,7 +85,17 @@ export class ViewerModel {
    * the location on screen always names the board on screen. */
   async open(location: Location): Promise<void> {
     const token = ++this.generation;
-    this.set({ status: "loading", location, errors: [], laneMessage: null });
+    this.set({
+      status: "loading",
+      location,
+      board: null,
+      rawText: null,
+      errors: [],
+      diagnostics: [],
+      laneMessage: null,
+      renderOutcomes: [],
+      renderGeneration: null,
+    });
     let text: string;
     try {
       const loaded = await sourceFor(location.machine).loadText(location);

@@ -18,9 +18,9 @@
   // content mount deliberately depends only on the board/location slices:
   // a copy-mode or theme toggle must not rebuild the document or lose
   // selection and scroll position.
-  let view = $state(model.snapshot);
-  let board: Board | null = $state(model.snapshot.board);
-  let location: Location | null = $state(model.snapshot.location);
+  let view = $state.raw(model.snapshot);
+  let board: Board | null = $state.raw(model.snapshot.board);
+  let location: Location | null = $state.raw(model.snapshot.location);
   $effect(() => {
     const unsubscribe = model.subscribe((s) => {
       view = s;
@@ -47,9 +47,9 @@
     if (!contentHost) return;
     const currentBoard = board;
     const currentLocation = location;
+    contentHost.textContent = "";
     if (!currentBoard || !currentLocation) return;
     const generation = model.currentGeneration;
-    contentHost.textContent = "";
     const units = projectBoard(currentBoard);
     const unitIndex = new Map<number, string>();
     for (const unit of units) unitIndex.set(unit.pos.start.offset, unit.id);
@@ -62,7 +62,6 @@
     };
     const rendered = renderBoard(currentBoard, hooks);
     contentHost.append(rendered);
-    bindDiagramExpansion(contentHost);
     void hydrate(contentHost, model, currentLocation, generation, outcomes).then((all) => {
       model.setRenderOutcomes(generation, all);
     });
@@ -70,6 +69,10 @@
 
   $effect(() => {
     document.documentElement.dataset.theme = view.theme;
+  });
+
+  $effect(() => {
+    if (contentHost) bindDiagramExpansion(contentHost);
   });
 
   $effect(() => installCopyHandler(() => view.copyMode));

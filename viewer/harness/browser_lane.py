@@ -146,6 +146,8 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
         check("migration board diagrams render (actual outcomes)", len(mermaid_ok) > 0 and len(mermaid_bad) == 0, str(outcomes[:4]))
         containers = page.evaluate("() => document.querySelectorAll('mjx-container').length")
         check("math is in the DOM as MathJax containers", containers > 0, str(containers))
+        diagrams = page.locator(".mermaid-block .diagram-frame > svg").count()
+        check("successful diagrams remain mounted", diagrams == len(mermaid_ok) and diagrams > 0, str(diagrams))
         screenshot_at("mjx-container", "real-board-math.png")
         screenshot_at(".diagram-frame", "real-board-diagram.png")
 
@@ -191,7 +193,12 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
     def phase_copy_source() -> None:
         open_board("repeated-math.yaml")
         page.wait_for_function("() => document.querySelector('.block-text .math-inline') !== null")
+        mounted = page.query_selector(".block-text")
         page.evaluate("() => window.__boardViewer.setCopyMode('source')")
+        check(
+            "copy mode preserves the mounted document",
+            mounted is not None and mounted.evaluate("el => el.isConnected && el === document.querySelector('.block-text')"),
+        )
         focus = page.evaluate("() => document.hasFocus()")
         page.evaluate("() => { window.__copy = {state: 'pending', focus: document.hasFocus()}; }")
         select_first_formula_paragraph()
