@@ -3,7 +3,22 @@
 One entry point: `viewer/harness/entry.py`. Agents never spawn app,
 browser, compositor, server or SSH processes by hand.
 
-## Fast lane (runs today, no services)
+## Lanes and what they claim
+
+- `check-fast`: plain, uncontained tool runs (typecheck, pure contract
+  tests, build). They are ordinary build invocations. They make **no
+  isolation claim** of any kind.
+- `preflight`: the gated minimal containment verification described
+  below. It runs the containment canary inside one bwrap sandbox and
+  nothing else.
+- `browser`, `native`, `serve`: service lanes. These require the
+  enforced bwrap boundary with a passing canary first. Not implemented
+  in this change; each arrives as its own reviewed checkpoint.
+
+Agents never spawn app, browser, compositor, server or SSH processes by
+hand; everything sandboxed goes through the harness.
+
+## Fast lane (no services)
 
 ```sh
 python3 viewer/harness/entry.py check-fast
@@ -20,54 +35,52 @@ Measured warm cost on the dev host (2026-11 checkpoint): 9.3 s total
 (typecheck 1.7 s, contracts 0.3 s, build 7.2 s). Cold dependency fetches
 are one `npm install`, reported separately from the loop.
 
-## Gated lanes (source present, execution authorized by review only)
-
-`preflight`, `browser`, `native`, `serve` refuse unless
-`BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record>` is set. The gate records
-authorization discipline; the actual boundary is the containment below.
-Staging: source review first, then at most a minimal containment preflight
-(namespace/mount verification before any test payload, browser, core or
-network activity), then payload lanes.
-
 ## Containment contract (the reviewed spec)
+
+The enforced bwrap boundary exists for the service lanes and the
+preflight. It is not asserted anywhere else: the plain checks above do
+not certify isolation, and no nix-sandbox heuristic stands in for it.
 
 - **Supervisor**: one `bwrap` process per run. Payloads are its children
   in a private PID namespace. Inner processes are never signaled
   individually; the namespace tears down with the supervisor.
 - **Namespaces** (`--unshare-all`): user, PID (with fresh `--proc /proc`),
-  network (denies abstract Unix sockets of the host too), UTS, IPC, cgroup.
+  network (denies the host's abstract Unix sockets too), UTS, IPC,
+  cgroup. None retained.
 - **Mounts**: fresh tmpfs `/tmp`, `/run` (so the host's
   `/run/user/<uid>`, DBus and display sockets are simply absent),
-  `/dev/shm`; fresh `--dev /dev`; read-only `/nix/store`; per-lane
+  `/dev/shm`, and `--perms 0700 --tmpfs <runroot>/runtime` for
+  `XDG_RUNTIME_DIR`; fresh `--dev /dev`; read-only `/nix/store`; per-lane
   read-only binds of explicit inputs; read-write bind of the run root
   only. Host HOME is never mounted.
-- **Private XDG**: `HOME`, `TMPDIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
-  `XDG_CACHE_HOME`, `XDG_RUNTIME_DIR` all point inside the run root;
-  `XDG_RUNTIME_DIR` is a fresh tmpfs where a private Weston (native lane)
-  creates its own sockets.
-- **Environment allowlist**: a fresh dict - PATH, LANG, the six private
-  roots above, plus lane additions (loopback tools, pinned browser
-  driver paths, explicit canary comparison values). Nothing is inherited:
-  `SACCADE_*`, `HERDR_*`, `SSH_*`, `GPG_*`, `DBUS_*`, `XAUTHORITY`,
-  `DISPLAY`, `WAYLAND_*` and proxies are absent by construction.
+- **Environment**: a fresh dict for the whole chain - the bwrap process
+  itself is spawned with it, and the same values are `--setenv` inside:
+  PATH, LANG, the private roots. Lane additions (loopback tools, pinned
+  browser driver paths, explicit canary baselines) are explicit entries,
+  never inherited. `SACCADE_*`, `HERDR_*`, `SSH_*`, `GPG_*`, `DBUS_*`,
+  `XAUTHORITY`, `DISPLAY`, `WAYLAND_*` and proxies are absent by
+  construction.
 - **Capabilities**: the default set inside the private user namespace
   only, so loopback can be brought up (CAP_NET_ADMIN scoped to the
   sandbox's own net namespace). No host capability crosses the boundary.
-- **Canary before payload**: `containment_canary.py` runs first in the
-  same sandbox and refuses unless namespaces differ from the host's,
-  host paths are invisible, the environment is scrubbed, `/tmp` and
-  `XDG_RUNTIME_DIR` are private tmpfs, and the network namespace has
-  loopback only. The canary compares state; it never contacts production
-  and never opens external connections. Disposable in-sandbox listeners
-  are the only network checks, if any.
+- **Canary before payload** (`containment_canary.py`): runs first in the
+  same sandbox and refuses unless every required baseline is present -
+  all six host namespace ids (pid, net, uts, ipc, mnt, user) plus host
+  HOME, UID and the tracker DB path - and namespaces differ, host paths
+  are invisible, `/tmp` and `XDG_RUNTIME_DIR` are private tmpfs, the
+  environment is scrubbed, and the network namespace has loopback only.
+  Partial baselines are a refusal. The canary is read-only enumeration;
+  it never opens listeners or connections and never signals.
 - **Ownership and cleanup** (`isolation.PidfdSupervisor`): the harness
   holds a pidfd for the supervisor. Cleanup TERM -> bounded grace ->
-  KILL goes through the pidfd only (PID reuse cannot redirect it);
-  reaping is verified by waiting on the real child. `--die-with-parent`
-  plus `prctl(PR_SET_PDEATHSIG)` chains supervisor death to harness
-  death, and PID-namespace teardown covers the inner tree. Failure paths
-  run the same cleanup. No `pkill`, no `killall`, no pattern sweeps, no
-  signals to unowned handles, no automatic restarts.
+  KILL goes through `signal.pidfd_send_signal` only; reaping is verified
+  by waiting on the real child. If `os.pidfd_open` fails, the run is
+  refused - there is no numeric-PID fallback. The child carries
+  `PR_SET_PDEATHSIG` with a `getppid` re-check to close the parent-death
+  race (signaling only itself). `--die-with-parent` chains supervisor
+  death to harness death; PID-namespace teardown covers the inner tree.
+  Failure paths run the same cleanup. No `pkill`, no `killall`, no
+  pattern sweeps, no signals to unowned handles, no automatic restarts.
 - **Fail-closed fallback**: if user namespaces or bwrap are unavailable,
   the lane is refused with an explicit containment-refusal line. There
   is no weaker fallback. `systemd-run --user` is not equivalent
@@ -75,14 +88,25 @@ network activity), then payload lanes.
 - **Logs and artifacts** survive under the run root
   (`/var/tmp/saccade-board-viewer-<uid>/<run>/logs`).
 
-## Nix check lane containment
+## The preflight lane, exactly
 
-The flake's `board-viewer-contracts` check runs the same canary inside
-the nix build sandbox. It fails closed if the sandbox is off: no
-`__noChroot` or impure exceptions exist for these checks. A passing
-`checks.board-viewer-contracts` therefore carries its own containment
-evidence in the build log (canary output: namespaces, mounts, env,
-visibility).
+```
+python3 viewer/harness/entry.py preflight
+# requires BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record>
+```
+
+1. Static reads: bwrap found in the pinned devshell PATH, user-namespace
+   sysctls positive. No unshare happens during static reads.
+2. One sandbox via `isolation.build_command` with the canary as the sole
+   payload: the exact command is printed before it runs.
+3. Host baselines recorded before the sandbox exists (six namespaces +
+   HOME + UID + tracker DB name) and passed as explicit env entries.
+4. Bounded by 30 s; on timeout the supervisor is stopped through the
+   pidfd and the run is a refusal.
+5. Canary output is preserved at `<runroot>/logs/canary.log`.
+
+This lane never runs a test payload, browser, core, compositor or SSH
+activity; its payload is the read-only canary alone.
 
 ## What this harness is not
 

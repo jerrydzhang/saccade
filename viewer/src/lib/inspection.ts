@@ -27,6 +27,11 @@ export type Inspection = {
   errors: ViewerState["errors"];
   diagnostics: ViewerState["diagnostics"];
   laneMessage: string | null;
+  /** Actual rendering outcomes for the loaded generation: per math
+   * expression, diagram, figure and image - ok/error/denied/missing.
+   * A parsed board never masquerades as a rendered one. */
+  renderOutcomes: ViewerState["renderOutcomes"];
+  renderGeneration: ViewerState["renderGeneration"];
   copyMode: CopyMode;
   theme: ViewerState["theme"];
   outline: InspectionOutline[];
@@ -67,6 +72,8 @@ export function inspect(model: ViewerModel): Inspection {
     errors: state.errors,
     diagnostics: state.diagnostics,
     laneMessage: state.laneMessage,
+    renderOutcomes: state.renderOutcomes,
+    renderGeneration: state.renderGeneration,
     copyMode: state.copyMode,
     theme: state.theme,
     outline: state.board ? outlineOf(state.board.content) : [],

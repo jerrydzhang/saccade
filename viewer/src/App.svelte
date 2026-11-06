@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ViewerModel } from "./lib/viewmodel.ts";
-  import { fixtureNames, type Machine } from "./lib/sources.ts";
+  import { fixtureNames, type Machine, type Location } from "./lib/sources.ts";
   import { projectBoard, searchUnits, type SearchOccurrence } from "./lib/projection.ts";
   import { renderBoard } from "./lib/render.ts";
   import { hydrate } from "./lib/hydrate.ts";
@@ -8,14 +8,24 @@
   import { installCopyHandler } from "./lib/copydom.ts";
   import { inspect } from "./lib/inspection.ts";
   import type { CopyMode } from "./lib/copy.ts";
-  import type { ViewerState } from "./lib/viewmodel.ts";
+  import type { RenderOutcome, ViewerState } from "./lib/viewmodel.ts";
+  import type { Board } from "./lib/model.ts";
+  import type { Diagnostic } from "./lib/errors.ts";
 
   const model = new ViewerModel();
 
+  // The full state feeds the chrome (header, search, diagnostics). The
+  // content mount deliberately depends only on the board/location slices:
+  // a copy-mode or theme toggle must not rebuild the document or lose
+  // selection and scroll position.
   let view = $state(model.snapshot);
+  let board: Board | null = $state(model.snapshot.board);
+  let location: Location | null = $state(model.snapshot.location);
   $effect(() => {
     const unsubscribe = model.subscribe((s) => {
       view = s;
+      board = s.board;
+      location = s.location;
     });
     return unsubscribe;
   });
@@ -35,21 +45,27 @@
 
   $effect(() => {
     if (!contentHost) return;
+    const currentBoard = board;
+    const currentLocation = location;
+    if (!currentBoard || !currentLocation) return;
+    const generation = model.currentGeneration;
     contentHost.textContent = "";
-    if (!view.board) return;
-    const units = projectBoard(view.board);
+    const units = projectBoard(currentBoard);
     const unitIndex = new Map<number, string>();
     for (const unit of units) unitIndex.set(unit.pos.start.offset, unit.id);
-    if (view.location) {
-      const hooks = {
-        unitIndex,
-        onDiagnostic: () => {},
-      };
-      const rendered = renderBoard(view.board, hooks);
-      contentHost.append(rendered);
-      bindDiagramExpansion(contentHost);
-      void hydrate(contentHost, model, view.location);
-    }
+    const outcomes: RenderOutcome[] = [];
+    const hooks = {
+      unitIndex,
+      onDiagnostic: (diagnostic: Diagnostic) => {
+        outcomes.push({ kind: "html", status: "reported", message: diagnostic.message, line: diagnostic.line });
+      },
+    };
+    const rendered = renderBoard(currentBoard, hooks);
+    contentHost.append(rendered);
+    bindDiagramExpansion(contentHost);
+    void hydrate(contentHost, model, currentLocation, generation, outcomes).then((all) => {
+      model.setRenderOutcomes(generation, all);
+    });
   });
 
   $effect(() => {

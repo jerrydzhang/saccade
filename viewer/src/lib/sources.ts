@@ -37,11 +37,17 @@ export class SourceUnavailableError extends Error {
   }
 }
 
-// Fixture sources are bundled at build time as raw strings: the browser
-// lane needs no server and the bytes are exactly the committed fixture
-// files.
-const fixtureRaw = import.meta.glob<string>("/fixtures/**/*", {
+// Fixture boards and companions are bundled as raw text; binary assets
+// are bundled as URLs and fetched, so bytes reach the read model exactly
+// as committed - PNG/JPEG never pass through a UTF-8 decode.
+const fixtureRaw = import.meta.glob<string>("/fixtures/*.{yaml,md}", {
   query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
+const fixtureAssetUrls = import.meta.glob<string>("/fixtures/assets/*", {
+  query: "?url",
   import: "default",
   eager: true,
 }) as Record<string, string>;
@@ -83,10 +89,19 @@ export class FixtureSource implements BoardSource {
       throw new SourceUnavailableError(joined.failure.code, joined.failure.reason);
     }
     const key = joined.joined;
-    if (!(key in fixtureRaw)) {
+    const url = fixtureAssetUrls[key];
+    if (url === undefined) {
+      // A text asset referenced as a figure still comes through its
+      // bundled URL so bytes stay byte-exact.
+      if (!(key in fixtureRaw)) {
+        throw new SourceUnavailableError("asset-missing", `fixture asset not found: ${relative}`);
+      }
+    }
+    const response = await fetch(url ?? key);
+    if (!response.ok) {
       throw new SourceUnavailableError("asset-missing", `fixture asset not found: ${relative}`);
     }
-    return { bytes: new TextEncoder().encode(fixtureText(key)), path: relative };
+    return { bytes: new Uint8Array(await response.arrayBuffer()), path: relative };
   }
 }
 
@@ -137,7 +152,14 @@ export class HostFileSource implements BoardSource {
 
 export function sourceFor(machine: Machine): BoardSource {
   if (machine === "fixture") return new FixtureSource();
-  return new HostFileSource();
+  if (machine === "host") return new HostFileSource();
+  // Runtime callers can pass unknown machines despite the static type.
+  // Refuse loudly: reading the desktop for a remote target is exactly the
+  // silence this adapter refuses.
+  throw new SourceUnavailableError(
+    "lane-unavailable",
+    `unsupported machine: ${JSON.stringify(String(machine))}; expected "fixture" or "host"`,
+  );
 }
 
 export function fixtureNames(): string[] {

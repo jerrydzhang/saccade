@@ -364,8 +364,10 @@
     # the native integration the composed harness loads
     # the board viewer's own frontend and npm graph: separate sources,
     # lock and hash, never merged into the tracker crate or the workbench
-    # assets. Its checks run inside the nix build sandbox; the contracts
-    # check carries the containment canary as fail-closed evidence.
+    # assets. Its checks are plain tool runs (typecheck, build, contract
+    # tests); they claim nothing about service isolation - the enforced
+    # bwrap boundary is the harness's job and applies to the service
+    # lanes only.
     mkBoardViewer = pkgs: lib: let
       src = pkgs.lib.sourceByRegex ./viewer [
         "^src$"
@@ -408,12 +410,7 @@
       checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
         board-viewer-typecheck = npmCheck "typecheck" "npm run check" {};
         board-viewer-build = npmCheck "build" "npm run build" {};
-        board-viewer-contracts = npmCheck "contracts" ''
-          python3 ${./viewer/harness}/containment_canary.py --mode nix-sandbox
-          npm run test
-        '' {
-          nativeBuildInputs = [pkgs.python3];
-        };
+        board-viewer-contracts = npmCheck "contracts" "npm run test" {};
       };
     };
     saccadePiExtensions = ["native/saccade.ts"];
@@ -443,6 +440,7 @@
               pkgs.nodejs
               pkgs.pkg-config
               pkgs.python3
+              pkgs.bubblewrap
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.webkitgtk_4_1

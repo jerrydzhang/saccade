@@ -14,6 +14,9 @@ typecheck:
 viewer-check:
     python3 viewer/harness/entry.py check-fast
 
+viewer-native-check:
+    nix develop .#board-viewer -c bash -c 'cd viewer/src-tauri && cargo test'
+
 viewer-shell:
     nix develop .#board-viewer
 

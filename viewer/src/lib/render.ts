@@ -248,6 +248,7 @@ function renderNode(
             "data-unit-source": node.value,
             "data-pending": "mermaid",
             "data-block-id": blockId,
+            ...lineAttr,
           },
           el("pre", { class: "md-code", "aria-label": "mermaid source" }, el("code", {}, node.value)),
         );

@@ -45,9 +45,11 @@ fn guard_relative(relative: &str) -> Result<(), BridgeError> {
     if relative.starts_with('/') || relative.starts_with('~') {
         return Err(deny("absolute path"));
     }
-    if relative.split(':').count() > 1 && relative.chars().take(2).all(|c| c.is_ascii_alphabetic())
-    {
-        return Err(deny("windows-style absolute path"));
+    let mut chars = relative.chars();
+    if let (Some(first), Some(second)) = (chars.next(), chars.next()) {
+        if first.is_ascii_alphabetic() && second == ':' {
+            return Err(deny("windows-style absolute path"));
+        }
     }
     for segment in relative.split('/') {
         if segment == ".." {

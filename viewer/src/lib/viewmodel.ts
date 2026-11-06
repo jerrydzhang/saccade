@@ -11,6 +11,13 @@ import type { CopyMode } from "./copy.ts";
 
 export type ViewerStatus = "empty" | "loading" | "loaded" | "invalid";
 
+export type RenderOutcome = {
+  kind: "math" | "mermaid" | "figure" | "image" | "html" | "node";
+  status: "ok" | "error" | "denied" | "missing" | "reported";
+  message: string;
+  line?: number;
+};
+
 export type ViewerState = {
   status: ViewerStatus;
   location: Location | null;
@@ -19,6 +26,8 @@ export type ViewerState = {
   errors: StructuredIssue[];
   diagnostics: Diagnostic[];
   laneMessage: string | null;
+  renderOutcomes: RenderOutcome[];
+  renderGeneration: number | null;
   copyMode: CopyMode;
   theme: "system" | "light" | "dark";
 };
@@ -32,9 +41,15 @@ export class ViewerModel {
     errors: [],
     diagnostics: [],
     laneMessage: null,
+    renderOutcomes: [],
+    renderGeneration: null,
     copyMode: "source",
     theme: "system",
   };
+
+  /** Monotonic open generation: stale loads and hydrations are dropped
+   * at their await boundaries, never written over a newer selection. */
+  private generation = 0;
 
   private listeners = new Set<(state: ViewerState) => void>();
 
@@ -48,6 +63,12 @@ export class ViewerModel {
     return this.state;
   }
 
+  /** The current open generation; hydration and asset loads compare
+   * against it after every await and drop themselves when stale. */
+  get currentGeneration(): number {
+    return this.generation;
+  }
+
   private emit(): void {
     for (const listener of this.listeners) {
       listener(this.state);
@@ -59,14 +80,19 @@ export class ViewerModel {
     this.emit();
   }
 
-  /** Open an explicit location. Every lane and control funnels through here. */
+  /** Open an explicit location. Every lane and control funnels through here.
+   * Stale responses (a slow A arriving after B was selected) are dropped:
+   * the location on screen always names the board on screen. */
   async open(location: Location): Promise<void> {
+    const token = ++this.generation;
     this.set({ status: "loading", location, errors: [], laneMessage: null });
     let text: string;
     try {
       const loaded = await sourceFor(location.machine).loadText(location);
+      if (token !== this.generation) return;
       text = loaded.text;
     } catch (error) {
+      if (token !== this.generation) return;
       const message = error instanceof SourceUnavailableError ? error.message : String(error);
       this.set({
         status: "invalid",
@@ -78,6 +104,7 @@ export class ViewerModel {
       return;
     }
     const result = decodeBoard(text);
+    if (token !== this.generation) return;
     if (result.status === "invalid") {
       this.set({
         status: "invalid",
@@ -85,6 +112,8 @@ export class ViewerModel {
         rawText: text,
         errors: result.errors,
         diagnostics: result.diagnostics,
+        renderOutcomes: [],
+        renderGeneration: null,
       });
       return;
     }
@@ -94,20 +123,34 @@ export class ViewerModel {
       rawText: text,
       errors: [],
       diagnostics: result.board.diagnostics,
+      renderOutcomes: [],
+      renderGeneration: token,
     });
   }
 
   async loadFigureAsset(location: Location, block: FigureBlock): Promise<Uint8Array | string> {
+    const token = this.generation;
     try {
       const asset = await sourceFor(location.machine).loadAsset(location, block.path);
+      if (token !== this.generation) return "stale";
       return asset.bytes;
     } catch (error) {
+      if (token !== this.generation) return "stale";
       if (error instanceof SourceUnavailableError) {
         if (error.code === "asset-denied") return `denied: ${error.message}`;
         return `missing: ${error.message}`;
       }
       return `missing: ${String(error)}`;
     }
+  }
+
+  /** Actual rendering outcomes, generation-scoped: hydration reports what
+   * really happened per math expression, diagram, figure and image. The
+   * inspection projection reads this, so a parsed board never masquerades
+   * as a rendered one. */
+  setRenderOutcomes(generation: number, outcomes: RenderOutcome[]): void {
+    if (generation !== this.generation) return;
+    this.set({ renderOutcomes: outcomes, renderGeneration: generation });
   }
 
   setCopyMode(mode: CopyMode): void {
