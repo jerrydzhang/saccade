@@ -4334,12 +4334,8 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
         hc_argv(&db.parent().unwrap().join("hc-bin"), "attach"),
         vec!["t1".to_string()]
     );
-    // exactly one host run carried the launch, and placement was never
-    // consulted: no label ask, no terminal table, no candidate reads
-    // exactly one host run carried the launch, and placement was never
-    // consulted: no label ask, no terminal table, no candidate reads
-    // one ask per verb line: the fake logs each argument on its own
-    // line, and every ask starts with its verb
+    // exactly one host run carried the launch, and placement was never consulted
+    // the fake logs one word per line; every ask starts with its verb
     let asks = |verb: &str| {
         std::fs::read_to_string(
             db.parent()
@@ -4387,9 +4383,7 @@ async fn the_here_door_launches_through_the_host_then_attaches_this_terminal() {
     assert!(text.contains("the session keeps running"), "{text}");
     assert!(text.contains("hc attach t1"), "{text}");
 
-    // the resumed here face: the recorded address reads finished, the
-    // one host get is the liveness preflight, and the launch still
-    // consults no placement
+    // the resumed here face: one get is the liveness ask, no placement asks
     let here_saved = db.parent().unwrap().join("hereres1.jsonl");
     std::fs::write(
         &here_saved,
