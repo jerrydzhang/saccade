@@ -433,6 +433,10 @@
         # separate from the tracker devshell and the tracker crate. The
         # WebKitGTK/GTK build inputs here serve the viewer's Tauri crate
         # only; nothing here touches the tracker's build.
+        # the browser lane's fontconfig: a generated config over pinned
+        # DejaVu fonts, both pure store paths - the sandbox already binds
+        # /nix/store read-only, so no host /etc/fonts or font dirs are
+        # ever mounted
         board-viewer = pkgs.mkShell {
           # the pinned Playwright pair (python package and browser
           # package) from this same nixpkgs revision: no browser
@@ -452,8 +456,12 @@
               pkgs.gdk-pixbuf
               pkgs.glib
               pkgs.dbus
+              pkgs.dejavu_fonts
             ];
           env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+          env.FONTCONFIG_FILE = pkgs.makeFontsConf {
+            fontDirectories = [pkgs.dejavu_fonts];
+          };
         };
         default = devenv.lib.mkShell {
           inherit inputs pkgs;

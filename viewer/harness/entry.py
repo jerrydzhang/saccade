@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -170,6 +171,31 @@ def preflight() -> int:
             print(f"[preflight] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
+def verify_fontconfig_file(path: str) -> tuple[bool, str]:
+    """The pinned generated fontconfig: must be a store path as given,
+    readable, and reference at least one font directory inside the
+    store. Home-relative profile dirs the generator also emits simply do
+    not resolve in the sandbox; fontconfig skips absent dirs, so only a
+    store reference is required."""
+    if not path.startswith("/nix/store/"):
+        return False, f"FONTCONFIG_FILE must be a store path as given: {path!r}"
+    p = pathlib.Path(path)
+    if not p.is_file():
+        return False, f"FONTCONFIG_FILE does not exist or is not a file: {path}"
+    try:
+        text = p.read_text()
+    except OSError as error:
+        return False, f"FONTCONFIG_FILE unreadable: {error}"
+    return fontconfig_content_ok(text)
+
+
+def fontconfig_content_ok(text: str) -> tuple[bool, str]:
+    dirs = re.findall(r"<dir>([^<]+)</dir>", text)
+    if not any(d.startswith("/nix/store/") for d in dirs):
+        return False, f"fontconfig references no store font directories: {dirs}"
+    return True, ""
+
+
 def verify_playwright_closure(python: str) -> tuple[bool, str]:
     """Pure closure check: the pinned interpreter must belong to a
     withPackages-style env whose site-packages contain the playwright
@@ -220,6 +246,15 @@ def browser_lane() -> int:
         print("containment refusal: PLAYWRIGHT_BROWSERS_PATH must be an absolute pinned path", file=sys.stderr)
         return 1
 
+    # Chromium's font init is fatal without a fontconfig configuration
+    # (the diagnosed first-attempt failure): pass the pinned generated
+    # config through, never host /etc/fonts or font directories.
+    fontconf = os.environ.get("FONTCONFIG_FILE", "")
+    usable, reason = verify_fontconfig_file(fontconf)
+    if not usable:
+        print(f"containment refusal: {reason}", file=sys.stderr)
+        return 1
+
     dist = (VIEWER / "dist").resolve()
     if not dist.is_dir():
         print("containment refusal: viewer/dist is missing; run check-fast first", file=sys.stderr)
@@ -255,6 +290,7 @@ def browser_lane() -> int:
     env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
     env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
     env["SHOTS_DIR"] = str(run_root / "shots")
+    env["FONTCONFIG_FILE"] = fontconf
     # Diagnostic-only: Playwright records the owned browser process's
     # stderr and exit signal. No persistent telemetry, no new controller.
     env["DEBUG"] = "pw:browser"

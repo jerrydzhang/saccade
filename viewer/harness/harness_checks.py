@@ -294,6 +294,24 @@ def main() -> int:
         sys.modules.pop("playwright.sync_api", None)
         sys.modules.pop("playwright", None)
 
+    # --- pinned fontconfig validation (pure) ------------------------------
+    usable, reason = entry.verify_fontconfig_file("relative/fonts.conf")
+    check("relative fontconfig path is refused as given", not usable and "store path as given" in reason, reason)
+    usable, reason = entry.verify_fontconfig_file("/tmp/definitely-not-here.conf")
+    # the prefix rule fires before existence: non-store paths never get
+    # as far as a file lookup (existence itself is exercised by the real
+    # devshell path at lane start)
+    check("non-store fontconfig path is refused before file lookup", not usable and "store path as given" in reason, reason)
+
+    usable, reason = entry.fontconfig_content_ok("<fontconfig><dir>~/.nix-profile/share/fonts</dir></fontconfig>")
+    check("fontconfig without a store font dir is refused", not usable and "no store font directories" in reason, reason)
+
+    usable, reason = entry.fontconfig_content_ok(
+        "<fontconfig><dir>/nix/store/71mxn2pyq807r32qsd2mdszkajhlb39q-dejavu-fonts-2.37</dir>"
+        "<dir>~/.nix-profile/share/fonts</dir></fontconfig>"
+    )
+    check("fontconfig referencing the pinned store fonts verifies", usable and reason == "", reason)
+
     # --- preflight argument resolution (pure) -----------------------------
     path, refusal = entry.caller_tracker_db("relative/board.db")
     check("relative tracker-db candidate is refused as given", path is None and "absolute path as given" in refusal, refusal)

@@ -148,7 +148,10 @@ saved under `<runroot>/shots/` for later human and agent inspection;
 Binds (all read-only): the canary at `/canary/`, the lane script at
 `/lane/`, `viewer/dist` at `/app/dist`. Env additions beyond the fresh
 allowlist, all explicit absolute paths or baseline values:
-`PLAYWRIGHT_BROWSERS_PATH` (pinned browser package), `SHOTS_DIR` (the
+`PLAYWRIGHT_BROWSERS_PATH` (pinned browser package), `FONTCONFIG_FILE`
+(the pinned generated fontconfig - a store path over pinned DejaVu
+fonts; the existing /nix/store read-only bind covers it, so no host
+`/etc/fonts` or font directories are ever mounted), `SHOTS_DIR` (the
 run root's own shots directory), the six namespace baselines, host
 HOME/UID, tracker-db. The payload interpreter is the pinned
 withPackages python, its closure verified to contain the playwright
