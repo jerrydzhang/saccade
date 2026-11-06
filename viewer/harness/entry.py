@@ -44,10 +44,16 @@ FAST_STEPS = [
 ]
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
+BROWSER_TIMEOUT_SECONDS = 180
 # The canary file is bound read-only into the sandbox at this path: the
 # interpreter inside must be able to read it without any host HOME or
 # worktree visibility.
 CANARY_SANDBOX_PATH = "/canary/containment_canary.py"
+# Browser-lane payload and binds: the built frontend and its bundled
+# dependencies are the only host bytes the lane reads, both read-only.
+BROWSER_LANE_SANDBOX_PATH = "/lane/browser_lane.py"
+DIST_SANDBOX = "/app/dist"
+MODULES_SANDBOX = "/app/node_modules"
 tracker_db_arg = ""
 
 
@@ -164,6 +170,114 @@ def preflight() -> int:
             print(f"[preflight] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
+def browser_lane() -> int:
+    """Gated browser lane. Same supervisor, same canary-first order:
+    the payload runs the containment canary in-process BEFORE it starts
+    the loopback server or the Playwright driver. One reused headless
+    Chromium session over the built frontend; screenshots land in the
+    run root for later inspection. Bounded by BROWSER_TIMEOUT_SECONDS;
+    pidfd-only cleanup on all paths.
+
+    Lane env additions beyond the fresh allowlist, all explicit and
+    absolute: NODE_BIN (pinned node for vite preview and the Playwright
+    driver), PLAYWRIGHT_BROWSERS_PATH (pinned browser package). The
+    lane binds read-only: viewer/dist at /app/dist, viewer/node_modules
+    at /app/node_modules, the canary and the lane script under /canary
+    and /lane. Chromium runs headless with its own sandbox disabled -
+    the enforced bwrap boundary is the containment.
+    """
+    sys.path.insert(0, str(HERE))
+    import isolation
+
+    isolation.gate_or_exit("browser")
+
+    found = shutil.which("bwrap")
+    if found is None:
+        print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return 1
+    bwrap = str(pathlib.Path(found).resolve())
+    python = str(pathlib.Path(sys.executable).resolve())
+    canary = str((HERE / "containment_canary.py").resolve())
+    lane = str((HERE / "browser_lane.py").resolve())
+
+    node = shutil.which("node")
+    if node is None:
+        print("containment refusal: node is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return 1
+    node_bin = str(pathlib.Path(node).resolve())
+    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if not browsers.startswith("/"):
+        print("containment refusal: PLAYWRIGHT_BROWSERS_PATH must be an absolute pinned path", file=sys.stderr)
+        return 1
+
+    dist = (VIEWER / "dist").resolve()
+    modules = (VIEWER / "node_modules").resolve()
+    for label, path in (("viewer/dist", dist), ("viewer/node_modules", modules)):
+        if not path.is_dir():
+            print(f"containment refusal: {label} is missing; run check-fast first", file=sys.stderr)
+            return 1
+
+    tracker_db, refusal = caller_tracker_db(tracker_db_arg, os.environ.get("SACCADE_DB") or "")
+    if tracker_db is None:
+        print(f"containment refusal: {refusal}", file=sys.stderr)
+        return 1
+    if not os.path.exists(tracker_db):
+        print(f"containment refusal: baseline tracker db does not exist on the caller side: {tracker_db}", file=sys.stderr)
+        return 1
+
+    try:
+        isolation.static_preflight(bwrap)
+    except isolation.ContainmentRefused as error:
+        print(f"containment refusal: {error}", file=sys.stderr)
+        return 1
+
+    run_root = isolation.make_run_root("browser")
+    env = isolation.env_allowlist(run_root)
+    env["CONTAINMENT_HOST_NS_IDS"] = isolation.host_ns_ids()
+    env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home().resolve())
+    env["CONTAINMENT_HOST_UID"] = str(os.getuid())
+    env["CONTAINMENT_HOST_TRACKER_DB"] = tracker_db
+    env["NODE_BIN"] = node_bin
+    env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
+
+    ro_binds = [
+        (canary, CANARY_SANDBOX_PATH),
+        (lane, BROWSER_LANE_SANDBOX_PATH),
+        (str(dist), DIST_SANDBOX),
+        (str(modules), MODULES_SANDBOX),
+    ]
+    cmd = isolation.build_command(bwrap, run_root, [python, BROWSER_LANE_SANDBOX_PATH], ro_binds)
+
+    print("[browser] gate command:", " ".join(cmd), flush=True)
+    print(f"[browser] run root: {run_root}", flush=True)
+    supervisor = isolation.PidfdSupervisor(cmd, env)
+    log_path = run_root / "logs" / "browser.log"
+    started = time.monotonic()
+    try:
+        supervisor.start()
+        try:
+            code = supervisor.wait(timeout=BROWSER_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            print(f"[browser] timeout after {BROWSER_TIMEOUT_SECONDS}s: stopping via pidfd", file=sys.stderr)
+            supervisor.stop()
+            log_path.write_text(supervisor.read_output())
+            print("containment refusal: browser lane exceeded the time bound", file=sys.stderr)
+            return 1
+        output = supervisor.read_output()
+        log_path.write_text(output)
+        cost = time.monotonic() - started
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        print(f"[browser] lane exit={code} in {cost:.1f}s; log: {log_path}", flush=True)
+        return code
+    except isolation.ContainmentRefused as error:
+        print(f"containment refusal: {error}", file=sys.stderr)
+        return 1
+    finally:
+        code = supervisor.stop()
+        if code != 0 and code is not None:
+            print(f"[browser] supervisor exit after cleanup: {code}", file=sys.stderr)
+
+
 def gated_stub(lane: str) -> int:
     isolation_gate(lane)
     print(
@@ -192,6 +306,8 @@ def main() -> int:
         return check_fast()
     if args.lane == "preflight":
         return preflight()
+    if args.lane == "browser":
+        return browser_lane()
     return gated_stub(args.lane)
 
 

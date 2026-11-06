@@ -368,6 +368,14 @@ def main() -> int:
         supervisor_running.start()
         FakePopen.instances[-1].always_running = True
         supervisor_running.stop(grace=0.05)
+        # The escalation list, asserted at last (deferred in 8b8543b):
+        # a still-running supervisor receives TERM then KILL through the
+        # pidfd, in that order, and nothing else.
+        check(
+            "a running supervisor gets exactly TERM then KILL through the pidfd",
+            sends == [(999, int(signal.SIGTERM)), (999, int(signal.SIGKILL))],
+            str(sends),
+        )
         check("stop closes the pidfd after verified reaping", 999 in closes, str(closes))
 
         # acquisition failure: nothing released, nothing written, refused

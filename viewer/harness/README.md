@@ -11,9 +11,11 @@ browser, compositor, server or SSH processes by hand.
 - `preflight`: the gated minimal containment verification described
   below. It runs the containment canary inside one bwrap sandbox and
   nothing else.
-- `browser`, `native`, `serve`: service lanes. These require the
-  enforced bwrap boundary with a passing canary first. Not implemented
-  in this change; each arrives as its own reviewed checkpoint.
+- `browser`: the gated browser lane (source present; runs only under a
+  named authorization). Same supervisor, same canary-first order - see
+  below for the exact shape.
+- `native`, `serve`: service lanes, not implemented; each arrives as
+  its own reviewed checkpoint.
 
 Agents never spawn app, browser, compositor, server or SSH processes by
 hand; everything sandboxed goes through the harness.
@@ -115,6 +117,52 @@ python3 viewer/harness/entry.py preflight
 
 This lane never runs a test payload, browser, core, compositor or SSH
 activity; its payload is the read-only canary alone.
+
+## The browser lane, exactly (source; runs only under authorization)
+
+```
+BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record> \
+nix develop .#board-viewer --command \
+  python3 -B viewer/harness/entry.py browser \
+  [--tracker-db <absolute path>]
+```
+
+Time bound: 180 s, then the supervisor is stopped through the pidfd and
+the run is a refusal. No automatic retry.
+
+Order inside the one sandbox: (1) the containment canary runs
+in-process FIRST - a refusal ends the lane before any server or driver
+exists; (2) then, and only then, `vite preview` serves the built
+frontend on loopback inside the sandbox netns (the only listener this
+lane ever creates); (3) one reused headless Chromium session via the
+Nix-pinned Playwright driver (driver and browsers from the same
+nixpkgs revision; nothing downloaded or installed at runtime); (4) a
+bounded check list over the real frontend and real fixture boards -
+DOM and inspection state first, then screenshots saved under
+`<runroot>/shots/` for later human and agent inspection; (5) the lane
+tears down its own server child before the namespace tears down the
+rest.
+
+Binds (all read-only): the canary at `/canary/`, the lane script at
+`/lane/`, `viewer/dist` at `/app/dist`, `viewer/node_modules` at
+`/app/node_modules`. Env additions beyond the fresh allowlist, all
+explicit absolute paths or baseline values: `NODE_BIN` (pinned node),
+`PLAYWRIGHT_BROWSERS_PATH` (pinned browser package), the six namespace
+baselines, host HOME/UID, tracker-db. Chromium runs headless with its
+own sandbox disabled; the enforced bwrap boundary is the containment.
+
+Clipboard honesty: what the browser writes is Chromium's clipboard
+inside the sandbox - it is never the desktop's clipboard. Native
+clipboard fidelity is a real-client question for the actual-client
+gate and is never implied by this lane.
+
+Ownership: one PidfdSupervisor per run as everywhere else; the lane's
+own server child is stopped through its held handle before the
+namespace teardown; logs and screenshots survive under the run root.
+
+Cold costs are reported separately from the warm loop: the browser
+lane's own warm cost is measured per run and printed; cold devshell
+build (playwright pair) is a one-time devshell cost.
 
 ## What this harness is not
 

@@ -434,12 +434,15 @@
         # WebKitGTK/GTK build inputs here serve the viewer's Tauri crate
         # only; nothing here touches the tracker's build.
         board-viewer = pkgs.mkShell {
+          # the pinned Playwright pair (python package and browser
+          # package) from this same nixpkgs revision: no browser
+          # install or download anywhere
           packages =
             [
               rustToolchain
               pkgs.nodejs
               pkgs.pkg-config
-              pkgs.python3
+              (pkgs.python3.withPackages (ps: [ps.playwright]))
               pkgs.bubblewrap
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
@@ -450,6 +453,7 @@
               pkgs.glib
               pkgs.dbus
             ];
+          env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
         };
         default = devenv.lib.mkShell {
           inherit inputs pkgs;
