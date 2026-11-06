@@ -521,12 +521,24 @@ export default function saccadeIntegration(pi: ExtensionAPI) {
 				sessionFile,
 			});
 		}
+		// the presented terminal is host disclosure plus door
+		// provenance: the pinned host dialect injects the running
+		// terminal's own address (HC_TERMINAL_ID), and the launch word
+		// names this exact session only when the door launched it - a
+		// nested manually started session inherits both and still reads
+		// adopted, because its own id names another session
+		const disclosed = process.env.HC_TERMINAL_ID;
+		const launchedFor = process.env.SACCADE_LAUNCHED_SESSION;
+		const terminal = disclosed
+			? { address: disclosed, adopted: launchedFor !== sessionId }
+			: undefined;
 		try {
 			const reply = await tracker<AttachReply>("/api/v1/native/attach", {
 				method: "POST",
 				body: JSON.stringify({
 					native_id: sessionId,
 					session_file: sessionFile,
+					...(terminal ? { terminal } : {}),
 				}),
 			});
 			association = {

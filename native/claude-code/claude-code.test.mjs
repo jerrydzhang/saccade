@@ -118,6 +118,35 @@ function fakeTracker({ version = [200, versionReply], attach = [200, attachReply
 
 const INVAL = "export SACCADE_INCARNATION_SEQ=''\n";
 
+test("the hook presents the host-injected terminal pair with session-scoped provenance", async () => {
+	// the pair mirrors the pi face: adopted is false only when the
+	// launch word names this exact session - a nested session in the
+	// same pane inherits the word and still reads adopted
+	const cases = [
+		{ word: sessionStartInput.session_id, adopted: false },
+		{ word: "older9999", adopted: true },
+	];
+	for (const c of cases) {
+		const tracker = await fakeTracker();
+		const dir = scratch();
+		const hook = buildHook(dir);
+		const envFile = join(dir, "env");
+		const run = await runHook(hook, sessionStartInput, {
+			SACCADE_SERVER: tracker.url,
+			CLAUDE_ENV_FILE: envFile,
+			HC_TERMINAL_ID: "t7",
+			SACCADE_LAUNCHED_SESSION: c.word,
+		});
+		assert.equal(run.status, 0, run.stderr);
+		assert.deepEqual(tracker.attachRequests()[0].body.terminal, {
+			address: "t7",
+			adopted: c.adopted,
+		});
+		await tracker.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 // spawn, never spawnSync: the fake tracker answers on this same
 // event loop, which a synchronous wait would block forever
 function runHook(hook, input, env) {
@@ -145,6 +174,8 @@ test("a proven server gets the version request then the attach, and the env chan
 	const run = await runHook(hook, sessionStartInput, {
 		SACCADE_SERVER: tracker.url,
 		CLAUDE_ENV_FILE: envFile,
+		// the pair is presenter-controlled: bare means no host disclosure
+		HC_TERMINAL_ID: "",
 	});
 	assert.equal(run.status, 0, run.stderr);
 	assert.deepEqual(tracker.requests.map((r) => [r.method, r.url]), [

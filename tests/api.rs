@@ -4521,6 +4521,115 @@ async fn a_resume_runs_its_recorded_harness_and_an_explicit_mismatch_refuses() {
     let run_log = hc_argv(&db.parent().unwrap().join("hc-bin"), "run").join(" ");
     assert!(run_log.contains("--session resumee01"), "{run_log}");
 
+    // the reassignment moved to the attach face: the submitted resume
+    // records no address move at all
+    let (_, body) = get_json(&base_url, "/api/v1/records");
+    let fold = json_of(&body);
+    let rows = fold["records"].as_array().unwrap();
+    assert!(
+        rows.iter().all(|r| r["kind"] != "host_address_assigned"),
+        "a submitted resume moves no address: {fold}"
+    );
+
+    // the presented pair moves the association at attach evidence
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "resumee01", "session_file": saved.to_str().unwrap(),
+                "terminal": {"address": "t1", "adopted": false}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
+    assert_eq!(records.len(), 1, "{body}");
+    assert_eq!(records[0]["kind"], "host_address_assigned", "{body}");
+    assert_eq!(records[0]["payload"]["address"], "t1", "{body}");
+    assert_eq!(records[0]["payload"]["adopted"], false, "{body}");
+
+    // the equal pair is silent: reload storms re-attach, not re-move
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "resumee01", "session_file": saved.to_str().unwrap(),
+                "terminal": {"address": "t1", "adopted": false}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        json_of(&body)["records"].as_array().unwrap().is_empty(),
+        "{body}"
+    );
+
+    // the mode rides the pair: an adopted pane is the recorded kind
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "resumee01", "session_file": saved.to_str().unwrap(),
+                "terminal": {"address": "t5", "adopted": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
+    assert_eq!(records[0]["payload"]["address"], "t5", "{body}");
+    assert_eq!(records[0]["payload"]["adopted"], true, "{body}");
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log will not fold"),
+    };
+    let resolved = world
+        .incarnations
+        .values()
+        .find(|ctx| ctx.incarnation.native_id().map(|n| n.as_str()) == Some("resumee01"))
+        .unwrap();
+    assert_eq!(resolved.incarnation.address(), Some("t5"), "{resolved:?}");
+    assert!(resolved.incarnation.adopted());
+
+    // a fresh birth keeps its launch-time address: the same-session
+    // attach presenting the equal pair binds the locator, moves nothing
+    let (ok, out, err, timed_out) = bounded_sac(
+        bin,
+        &[
+            "--server".to_string(),
+            base_url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "launch".to_string(),
+            "--workspace".to_string(),
+            workspace.display().to_string(),
+            "--json".to_string(),
+        ],
+        &envs,
+    );
+    assert!(ok, "{out}{err}");
+    assert!(!timed_out, "{err}");
+    let fresh_id = json_of(&out)["native_id"].as_str().unwrap().to_string();
+    let fresh_saved = format!("/sessions/{fresh_id}.jsonl");
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": fresh_id, "session_file": fresh_saved,
+                "terminal": {"address": "t1", "adopted": false}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
+    assert_eq!(records.len(), 1, "{body}");
+    assert_eq!(records[0]["kind"], "saved_session_bound", "{body}");
+
+    // the claude-code face presents the same pair through its own
+    // harness: the wire carries it, the birth lands addressed
+    let (status, body) = post_json(
+        &base_url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "hookcc001", "session_file": "/sessions/hookcc001.jsonl",
+                "harness": "claude-code",
+                "terminal": {"address": "t8", "adopted": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["registered"], true, "{body}");
+    let records = reply["records"].as_array().unwrap();
+    assert_eq!(records[0]["kind"], "incarnation_registered", "{body}");
+    assert_eq!(records[0]["payload"]["address"], "t8", "{body}");
+    assert_eq!(records[0]["payload"]["adopted"], true, "{body}");
+
     std::fs::remove_dir_all(db.parent().unwrap()).unwrap();
 }
 
@@ -5066,8 +5175,9 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
     // catch moved to the resumed session's own attach, and the pre-B
     // migration story is exit + resume. The same launch is the
     // corrected door: the adapter's synchronous ask returns the
-    // address, the door records the address move, nothing waits on a
-    // guard handoff - hc run is synchronous, attach is the harness's
+    // terminal, the association waits for the attach face, nothing
+    // waits on a guard handoff - hc run is synchronous, attach is
+    // the harness's
     let held = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -5152,8 +5262,8 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
     );
     assert!(!dump.contains("SACCADE_INCARNATION_SEQ="), "{dump}");
 
-    // the address move is recorded: the same incarnation, the new host
-    // terminal
+    // the address move waits for the attach face: a submitted resume
+    // records no move, and the presented pair lands it at evidence
     let conn = saccade::db::open_read(&db).unwrap();
     let world = match saccade::db::load(&conn).unwrap().state {
         saccade::db::LoadState::Full(world) => world,
@@ -5163,9 +5273,20 @@ fn the_real_resume_door_submits_without_a_guard_consult() {
         world.incarnations[&saccade::IncarnationId(RecordId(0))]
             .incarnation
             .address(),
-        Some("t9"),
-        "the resume assigns the new address"
+        None,
+        "a submitted resume moves no address"
     );
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "resumee01", "session_file": saved.to_str().unwrap(),
+                "terminal": {"address": "t9", "adopted": false}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
+    assert_eq!(records.len(), 1, "{body}");
+    assert_eq!(records[0]["kind"], "host_address_assigned", "{body}");
+    assert_eq!(records[0]["payload"]["address"], "t9", "{body}");
     stop_holder(&fx.pidfile, &guard);
 
     // a live recorded address refuses the resume
@@ -5267,8 +5388,9 @@ fn switch_resume_runs_through_the_real_door() {
     assert!(err.contains("carries no host address"), "{err}");
     assert!(err.contains("exit + resume"), "{err}");
 
-    // the migration itself: a plain resume assigns the host address
-    // and flips the kind to launched; the harness holds the guard
+    // the migration itself: a plain resume submits without moving the
+    // address, the presented pair lands it at attach evidence, and the
+    // harness holds the guard
     let (ok, _out, err, timed_out) = bounded_sac(
         bin,
         &[
@@ -5290,6 +5412,16 @@ fn switch_resume_runs_through_the_real_door() {
         "the resumed harness never took the guard"
     );
     stop_holder(&fx.pidfile, &guard);
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "rover0001", "session_file": saved.to_str().unwrap(),
+                "terminal": {"address": "t9", "adopted": false}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let records = json_of(&body)["records"].as_array().unwrap().to_vec();
+    assert_eq!(records.len(), 1, "{body}");
+    assert_eq!(records[0]["kind"], "host_address_assigned", "{body}");
 
     // the composed door: the change lands, then the same native id
     // resumes through the real submission

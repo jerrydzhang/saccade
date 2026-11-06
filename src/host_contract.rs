@@ -117,6 +117,14 @@ impl std::fmt::Display for AttachRefusal {
 
 /// The five verbs. dyn-compatible: doors hold the dialect behind the
 /// interface, never a host type.
+/// The host contract's verbs are the entire host boundary. One
+/// dialect disclosure is named beside them: the pinned herdr core
+/// injects into each terminal process the address of the terminal it
+/// runs in (HC_TERMINAL_ID), on launched and adopted panes alike, so
+/// a native attach can present where the process honestly runs.
+/// Disclosure-grade machine evidence from the deployment's own host -
+/// never proof of which launch spawned a process, and a dialect
+/// without the injection simply presents nothing.
 pub trait HostContract: Sync {
     /// One persistent session running argv in cwd; the adapter never
     /// supervises what it launched, and every launch passes the

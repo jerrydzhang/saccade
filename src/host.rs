@@ -173,6 +173,8 @@ pub fn composed_launch_argv(
         "SACCADE_CLI".to_string(),
         "-u".to_string(),
         "SACCADE_TEST_CONTEXT".to_string(),
+        "-u".to_string(),
+        "SACCADE_LAUNCHED_SESSION".to_string(),
     ];
     argv.extend(routing.iter().cloned());
     argv.extend(session_argv.iter().cloned());

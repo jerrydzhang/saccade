@@ -139,7 +139,7 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
         exe,
         arm,
     } = request;
-    let (dir, session_argv, fresh, resume, label) = match arm {
+    let (dir, session_argv, fresh, resume, label, launched_session) = match arm {
         LaunchArm::Fresh {
             workspace,
             prompt,
@@ -163,9 +163,13 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
             (
                 dir,
                 session_argv,
-                Some(FreshBirth { native_id, harness }),
+                Some(FreshBirth {
+                    native_id: native_id.clone(),
+                    harness,
+                }),
                 None,
                 host::command_label(&bin.display().to_string()),
+                native_id,
             )
         }
         LaunchArm::Resume {
@@ -286,11 +290,12 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
                         .display()
                         .to_string(),
                 ),
+                native_id.as_str().to_string(),
             )
         }
     };
     Ok(Composition {
-        routing: routing(url, repo, exe, label),
+        routing: routing(url, repo, exe, label, launched_session.as_str()),
         dir,
         session_argv,
         fresh,
@@ -343,11 +348,22 @@ pub fn submit(composed: Composition) -> Result<Submitted, LaunchFail> {
 /// The routing environment words: the acting label (the harness's own
 /// binary name), the tracker URL, the repo, and the CLI path when the
 /// door knows its own. The words are env assignments, never shell.
-fn routing(url: String, repo: &Path, exe: Option<PathBuf>, label: String) -> Vec<String> {
+fn routing(
+    url: String,
+    repo: &Path,
+    exe: Option<PathBuf>,
+    label: String,
+    launched_session: &str,
+) -> Vec<String> {
     let mut routing = vec![
         format!("SACCADE_ACTOR={label}"),
         format!("SACCADE_SERVER={url}"),
         format!("SACCADE_REPO={}", repo.display()),
+        // launch provenance scoped to the exact native identity: a
+        // nested manually started session inherits this word but its
+        // own session id names another session, so it never reads as
+        // the launched one
+        format!("SACCADE_LAUNCHED_SESSION={launched_session}"),
     ];
     if let Some(exe) = exe {
         routing.push(format!("SACCADE_CLI={}", exe.display()));
@@ -445,6 +461,7 @@ mod test {
             Path::new("/repo/wt"),
             Some(PathBuf::from("/usr/bin/sac")),
             "wrapped-pi".into(),
+            "aaaa1111",
         );
         assert_eq!(
             routing,
@@ -452,6 +469,7 @@ mod test {
                 "SACCADE_ACTOR=wrapped-pi".to_string(),
                 "SACCADE_SERVER=http://127.0.0.1:1".to_string(),
                 "SACCADE_REPO=/repo/wt".to_string(),
+                "SACCADE_LAUNCHED_SESSION=aaaa1111".to_string(),
                 "SACCADE_CLI=/usr/bin/sac".to_string(),
             ]
         );
@@ -461,8 +479,9 @@ mod test {
             Path::new("/repo/wt"),
             None,
             "pi".into(),
+            "aaaa1111",
         );
-        assert_eq!(plain.len(), 3);
+        assert_eq!(plain.len(), 4);
         assert!(plain.iter().all(|w| !w.starts_with("SACCADE_CLI=")));
     }
 }

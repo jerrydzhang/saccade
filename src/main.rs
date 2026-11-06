@@ -2117,8 +2117,15 @@ fn launch_door(
     if cli.json {
         return Ok(serde_json::to_string_pretty(&launch_face).expect("plain data"));
     }
+    // the resume's association moves when the session attaches; a
+    // fresh birth carries its address from registration itself
+    let association = if submitted.resume.is_some() {
+        "  the association moves when the session attaches; `sac messages` reads the session's mailbox once it has one"
+    } else {
+        "  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one"
+    };
     Ok(format!(
-        "integrated {h} launching at {ws} - address {t}\n{place}\n  the launch is recorded with its host address; `sac messages` reads the session's mailbox once it has one",
+        "integrated {h} launching at {ws} - address {t}\n{place}\n{association}",
         h = launch_harness_name(&submitted),
         ws = submitted.workspace,
         t = submitted.terminal,
@@ -2185,7 +2192,8 @@ fn submitted_launch(
     })?;
     let submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
     // the door births the fresh identity itself, before the harness's
-    // first save; a resume records the address move
+    // first save; a resume's association moves when the session
+    // attaches
     if let Some(fresh) = &submitted.fresh {
         client::register_incarnation(
             &url,
@@ -2195,10 +2203,6 @@ fn submitted_launch(
             fresh.harness,
         )
         .map_err(Fail::Client)?;
-    }
-    if let Some(resumed) = &submitted.resume {
-        client::assign_host_address(&url, resumed.id.0.0, &submitted.terminal, false)
-            .map_err(Fail::Client)?;
     }
     Ok(submitted)
 }
@@ -2393,8 +2397,8 @@ fn launch_here_run(
     }
     let submitted = saccade::launch::submit(composed).map_err(Fail::from)?;
     // the door births the fresh identity itself, before the harness's
-    // first save; a resume records the address move - a launched
-    // terminal either way, never this pane
+    // first save; a resume's association moves when the session
+    // attaches - a launched terminal either way, never this pane
     if let Some(fresh) = &submitted.fresh {
         client::register_incarnation(
             &url,
@@ -2404,10 +2408,6 @@ fn launch_here_run(
             fresh.harness,
         )
         .map_err(Fail::Client)?;
-    }
-    if let Some(resumed) = &submitted.resume {
-        client::assign_host_address(&url, resumed.id.0.0, &submitted.terminal, false)
-            .map_err(Fail::Client)?;
     }
     // the foreground attach: this terminal views the launched session
     // until detach; the launch stands regardless of the attach's fate

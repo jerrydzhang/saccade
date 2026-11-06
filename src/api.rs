@@ -2377,6 +2377,18 @@ pub struct AttachReply {
     pub records: Vec<StoredRecord>,
 }
 
+/// The attaching process's presented terminal: the host-injected
+/// self-address of the terminal it runs in, with launched-versus-
+/// adopted provenance from the door's session-scoped launch word.
+/// Machine-supplied disclosure at the contract boundary - honest
+/// deployment evidence of where the process runs, never proof of
+/// which launch spawned it; identity rides the exact resolution.
+#[derive(Deserialize)]
+struct PresentedTerminal {
+    address: String,
+    adopted: bool,
+}
+
 #[derive(Deserialize)]
 struct AttachRequest {
     native_id: crate::NativeSessionId,
@@ -2386,7 +2398,42 @@ struct AttachRequest {
     #[serde(default)]
     harness: crate::Harness,
     #[serde(default)]
+    terminal: Option<PresentedTerminal>,
+    #[serde(default)]
     client: Option<String>,
+}
+
+/// Move the recorded (address, adopted) pair to what the attaching
+/// process presents, through the association's own command; an equal
+/// pair is silent. The emitted event is the existing
+/// HostAddressAssigned - reassignment happens here, at attach
+/// evidence, never at launch submission.
+fn present_terminal(
+    inner: &mut Inner,
+    world: &World,
+    incarnation: crate::IncarnationId,
+    terminal: &PresentedTerminal,
+) -> Result<Vec<StoredRecord>, ApiFail> {
+    let ctx = world
+        .incarnations
+        .get(&incarnation)
+        .ok_or(ApiFail::Reject(crate::Reject::InvalidIncarnationId, None))?;
+    let moved = ctx.incarnation.address() != Some(terminal.address.as_str())
+        || ctx.incarnation.adopted() != terminal.adopted;
+    if !moved {
+        return Ok(Vec::new());
+    }
+    let (stored, _) = db::record(
+        &mut inner.conn,
+        &Context::system(),
+        Command::AssignHostAddress {
+            incarnation,
+            address: Some(terminal.address.clone()),
+            adopted: terminal.adopted,
+        },
+        db::now_epoch(),
+    )?;
+    Ok(stored)
 }
 
 fn attach_operation(
@@ -2394,6 +2441,7 @@ fn attach_operation(
     native_id: &crate::NativeSessionId,
     saved_session: &crate::SessionLocator,
     harness: crate::Harness,
+    terminal: Option<&PresentedTerminal>,
 ) -> Result<AttachReply, ApiFail> {
     let ServerState::Ready(inner) = guard else {
         let ServerState::Degraded(reason, _) = guard else {
@@ -2428,13 +2476,21 @@ fn attach_operation(
                     command,
                     db::now_epoch(),
                 )?;
+                // the presented terminal rides the completed birth: a
+                // fresh birth already carries the door's address, so
+                // this is silent for the ordinary launch; the record
+                // exists for attach-born sessions presenting a pair
+                let mut records = bound;
+                if let Some(presented) = terminal {
+                    records.extend(present_terminal(inner, &world, *id, presented)?);
+                }
                 return Ok(AttachReply {
                     registered: false,
                     incarnation: id.0.0,
                     num: world
                         .incarnation_num(*id)
                         .expect("a resident incarnation holds a number"),
-                    records: bound,
+                    records,
                 });
             }
             Some(bound) if bound == saved_session => {}
@@ -2457,23 +2513,36 @@ fn attach_operation(
                 ));
             }
         }
+        // the association's reassignment lands here, on exact attach
+        // evidence, never at launch submission: a presented pair that
+        // differs from the record moves it, an equal pair stays silent
+        let records = match terminal {
+            Some(presented) => present_terminal(inner, &world, *id, presented)?,
+            None => Vec::new(),
+        };
         return Ok(AttachReply {
             registered: false,
             incarnation: id.0.0,
             num: world
                 .incarnation_num(*id)
                 .expect("a resident incarnation holds a number"),
-            records: Vec::new(),
+            records,
         });
     }
+    // a self-registered birth carries the presented pair as its
+    // association: the same attach evidence the resolve arm trusts
+    let (address, adopted) = match terminal {
+        Some(presented) => (Some(presented.address.clone()), presented.adopted),
+        None => (None, false),
+    };
     let (stored, _) = db::record(
         &mut inner.conn,
         &Context::system(),
         Command::RegisterIncarnation {
             native_id: native_id.clone(),
             saved_session: Some(saved_session.clone()),
-            address: None,
-            adopted: false,
+            address,
+            adopted,
             harness,
         },
         db::now_epoch(),
@@ -2666,6 +2735,13 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
         client: request.client,
         raw,
     };
+    if let Some(presented) = &request.terminal
+        && presented.address.is_empty()
+    {
+        return api_failure(ApiFail::Malformed(
+            "the presented terminal address is empty".into(),
+        ));
+    }
     let started = Instant::now();
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = attach_operation(
@@ -2673,6 +2749,7 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
         &request.native_id,
         &request.session_file,
         request.harness,
+        request.terminal.as_ref(),
     );
     integration_outcome(&app, &guard, None, &received, started, &outcome);
     match outcome {

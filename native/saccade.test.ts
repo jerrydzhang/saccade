@@ -903,6 +903,7 @@ test("a real second process refuses the attach and its death releases the lock",
 		assert.equal(probeHeld(guard), true, "the second process holds the lock");
 		const dup = harness("crossproc0", "/sessions/crossproc.jsonl", "pi", shared);
 		const dupErr: string[] = [];
+		const bodiesBefore = shared.attachBodies.length;
 		const originalErr = process.stderr.write.bind(process.stderr);
 		process.stderr.write = ((chunk: string | Uint8Array) => {
 			dupErr.push(String(chunk));
@@ -927,6 +928,12 @@ test("a real second process refuses the attach and its death releases the lock",
 			dupErr.join(""),
 			/duplicate/,
 			"the refusal names the held guard on stderr",
+		);
+		// the guard-refused duplicate posts nothing: no attach, no reassignment
+		assert.equal(
+			shared.attachBodies.length,
+			bodiesBefore,
+			"a refused duplicate posts no attach",
 		);
 		const identity = dup.tools("saccade_identity");
 		const text = resultText(
@@ -1112,6 +1119,47 @@ test("a headless unverifiable start explains on stderr before exiting", async ()
 	);
 	await stop(h);
 	rmSync(shim, { recursive: true, force: true });
+});
+
+test("the presented terminal pairs host disclosure with session-scoped launch provenance", async () => {
+	const saved = [process.env.HC_TERMINAL_ID, process.env.SACCADE_LAUNCHED_SESSION];
+	const cases = [
+		// the door's own word: launched
+		{ id: "presenter0001", word: "presenter0001", adopted: false },
+		// no launch word: a manual start in a host pane reads adopted
+		{ id: "presenter0002", word: undefined, adopted: true },
+		// a word naming another session: a nested start reads adopted
+		{ id: "presenter0003", word: "older9999", adopted: true },
+	];
+	try {
+		for (const c of cases) {
+			process.env.HC_TERMINAL_ID = "t9";
+			if (c.word === undefined) delete process.env.SACCADE_LAUNCHED_SESSION;
+			else process.env.SACCADE_LAUNCHED_SESSION = c.word;
+			const h = harness(c.id, `/sessions/${c.id}.jsonl`, "pi");
+			await h.pi.emit("session_start");
+			const body = h.tracker.attachBodies[h.tracker.attachBodies.length - 1];
+			assert.deepEqual(
+				body.terminal,
+				{ address: "t9", adopted: c.adopted },
+				`the pair rides the attach for ${c.id}`,
+			);
+			await stop(h);
+		}
+		// no injected address presents nothing: outside the host, the
+		// association stays as the record holds it
+		process.env.HC_TERMINAL_ID = "";
+		const h = harness("presenter0004", "/sessions/presenter0004.jsonl", "pi");
+		await h.pi.emit("session_start");
+		const body = h.tracker.attachBodies[h.tracker.attachBodies.length - 1];
+		assert.equal(body.terminal, undefined, "no disclosure sends no pair");
+		await stop(h);
+	} finally {
+		if (saved[0] === undefined) delete process.env.HC_TERMINAL_ID;
+		else process.env.HC_TERMINAL_ID = saved[0];
+		if (saved[1] === undefined) delete process.env.SACCADE_LAUNCHED_SESSION;
+		else process.env.SACCADE_LAUNCHED_SESSION = saved[1];
+	}
 });
 
 // -- the explicit own-session workspace handoff ------------------------------

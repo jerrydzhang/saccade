@@ -109,10 +109,26 @@ vmin="${vmin%%.*}"
 [ "$vmin" = "@expectMinor@" ] ||
 	fail "the tracker reports version $version; this package expects @expectMajor@.@expectMinor@.x, and a different minor on the same major line is a breaking wire" "$(context)"
 
+# the presented terminal is host disclosure plus door provenance,
+# identical to the pi face: the host injects the running terminal's
+# own address (HC_TERMINAL_ID), and the launch word names this exact
+# session only when the door launched it - a nested manually started
+# session inherits both and still reads adopted
+terminal_json="null"
+if [ -n "${HC_TERMINAL_ID:-}" ]; then
+	if [ "${SACCADE_LAUNCHED_SESSION:-}" = "$session_id" ]; then
+		terminal_json="$(jq -cn --arg address "$HC_TERMINAL_ID" '{address: $address, adopted: false}')"
+	else
+		terminal_json="$(jq -cn --arg address "$HC_TERMINAL_ID" '{address: $address, adopted: true}')"
+	fi
+fi
+
 body="$(jq -n \
 	--arg native_id "$session_id" \
 	--arg session_file "$transcript" \
-	'{native_id: $native_id, session_file: $session_file, harness: "claude-code"}')"
+	--argjson terminal "$terminal_json" \
+	'{native_id: $native_id, session_file: $session_file, harness: "claude-code"} +
+		(if $terminal == null then {} else {terminal: $terminal} end)')"
 
 if ! raw="$(curl -sS --max-time 15 -X POST \
 	-H 'content-type: application/json' \
