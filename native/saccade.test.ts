@@ -902,10 +902,32 @@ test("a real second process refuses the attach and its death releases the lock",
 		while (!probeHeld(guard) && Date.now() < deadline) await tick();
 		assert.equal(probeHeld(guard), true, "the second process holds the lock");
 		const dup = harness("crossproc0", "/sessions/crossproc.jsonl", "pi", shared);
-		await dup.pi.emit("session_start");
+		const dupErr: string[] = [];
+		const originalErr = process.stderr.write.bind(process.stderr);
+		process.stderr.write = ((chunk: string | Uint8Array) => {
+			dupErr.push(String(chunk));
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			await dup.pi.emit("session_start");
+		} finally {
+			process.stderr.write = originalErr;
+		}
 		assert.ok(
 			dup.pi.shutdowns >= 1,
 			"the duplicate refusal requests exit (refusal and start-rule agree)",
+		);
+		// the refusal is local, never history: the duplicate holds no
+		// guard, so the session file gains no entry and stderr carries it
+		assert.equal(
+			dup.pi.appendEntries.length,
+			0,
+			"a refused duplicate writes no history",
+		);
+		assert.match(
+			dupErr.join(""),
+			/duplicate/,
+			"the refusal names the held guard on stderr",
 		);
 		const identity = dup.tools("saccade_identity");
 		const text = resultText(
@@ -995,6 +1017,12 @@ test("an unknown guard take refuses the association and shuts the session down",
 			h.pi.shutdowns >= 1,
 			"the unverified session requests exit (refusal and start-rule agree)",
 		);
+		// an unprobed guard owns nothing: the refusal writes no history
+		assert.equal(
+			h.pi.appendEntries.length,
+			0,
+			"an unverified refusal writes no history",
+		);
 		// still inside the broken-flock window: a retried attach meets
 		// the same unknown and refuses again - never a live association
 		const identity = h.tools("saccade_identity");
@@ -1035,6 +1063,8 @@ test("an in-memory helper start stays alive, unregistered, parent env cleared", 
 	);
 	assert.equal(h.pi.shutdowns, 0, "a healthy tracker does not kill the helper");
 	assert.equal(shared.attachments.size, 0, "nothing registered without a session");
+	// an in-memory helper owns no saved history to write
+	assert.equal(h.pi.appendEntries.length, 0, "the helper writes no history");
 	const identity = h.tools("saccade_identity");
 	const text = resultText(
 		await identity.execute(
