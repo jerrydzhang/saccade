@@ -25,6 +25,7 @@ test("every committed fixture is ASCII bytes", () => {
     "long-code.yaml",
     "large-diagram.yaml",
     "saccade-and-migration.yaml",
+    "saccade-and-migration-sources.md",
   ];
   for (const name of names) {
     const bytes = readFileSync(`${fixturesDir}${name}`);
