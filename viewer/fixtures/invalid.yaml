@@ -1,0 +1,6 @@
+task: broken-declaration
+content:
+  - text: |
+      This declaration is structurally broken: the list below never closes.
+  - group:
+      title: [unclosed

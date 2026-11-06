@@ -1,0 +1,14 @@
+task: repeated-math
+content:
+  - text: |
+      The same formula appears at two distinct source locations:
+
+      First occurrence: $0 < \eta < 2/b$ in this paragraph.
+
+      Second occurrence: $0 < \eta < 2/b$ in another paragraph.
+
+      Each is a distinct search and copy occurrence; a selection touching
+      either emits it once, as authored bytes in Source mode or its TeX
+      value in Plain mode.
+  - text: |
+      A third mention, with different content: $\eta = 0.01$.

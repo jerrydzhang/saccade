@@ -1,0 +1,14 @@
+task: long-code
+content:
+  - text: |
+      ## A long fence
+
+      Ordinary code wraps; nothing here executes.
+
+      ```
+      0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789
+      key = value ; key = value ; key = value ; key = value ; key = value ; key = value ; key = value ; key = value
+      short line
+      indented:
+          nested line that is also fairly long but wraps like the rest of the fence content does
+      ```

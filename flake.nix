@@ -362,6 +362,60 @@
           attachHook = "${mkAttachHook {inherit pkgs;}}/bin/saccade-cc-attach";
         };
     # the native integration the composed harness loads
+    # the board viewer's own frontend and npm graph: separate sources,
+    # lock and hash, never merged into the tracker crate or the workbench
+    # assets. Its checks run inside the nix build sandbox; the contracts
+    # check carries the containment canary as fail-closed evidence.
+    mkBoardViewer = pkgs: lib: let
+      src = pkgs.lib.sourceByRegex ./viewer [
+        "^src$"
+        "^src/.*$"
+        "^tests$"
+        "^tests/.*$"
+        "^fixtures$"
+        "^fixtures/.*$"
+        "^package\\.json$"
+        "^package-lock\\.json$"
+        "^index\\.html$"
+        "^svelte\\.config\\.js$"
+        "^vite\\.config\\.ts$"
+        "^tsconfig\\.json$"
+      ];
+      npm = {
+        pname = "saccade-board-viewer";
+        version = "0.1.0";
+        inherit src;
+        npmDepsHash = "sha256-v7PrzqHrGOLwK5xyq4AQvhMb8Va0MomRzI1zjaOEpcM=";
+      };
+      npmCheck = name: command: extra:
+        pkgs.buildNpmPackage (npm
+          // {
+            pname = "board-viewer-${name}";
+            buildPhase = command;
+            installPhase = ''
+              touch $out
+            '';
+          }
+          // extra);
+    in {
+      web = pkgs.buildNpmPackage (npm
+        // {
+          installPhase = ''
+            mkdir -p $out
+            cp -r dist/. $out/
+          '';
+        });
+      checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        board-viewer-typecheck = npmCheck "typecheck" "npm run check" {};
+        board-viewer-build = npmCheck "build" "npm run build" {};
+        board-viewer-contracts = npmCheck "contracts" ''
+          python3 ${./viewer/harness}/containment_canary.py --mode nix-sandbox
+          npm run test
+        '' {
+          nativeBuildInputs = [pkgs.python3];
+        };
+      };
+    };
     saccadePiExtensions = ["native/saccade.ts"];
   in {
 
@@ -378,6 +432,27 @@
           ];
         };
       in {
+        # the board viewer's native dev shell: its own dependency graph,
+        # separate from the tracker devshell and the tracker crate. The
+        # WebKitGTK/GTK build inputs here serve the viewer's Tauri crate
+        # only; nothing here touches the tracker's build.
+        board-viewer = pkgs.mkShell {
+          packages =
+            [
+              rustToolchain
+              pkgs.nodejs
+              pkgs.pkg-config
+              pkgs.python3
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              pkgs.webkitgtk_4_1
+              pkgs.gtk3
+              pkgs.cairo
+              pkgs.gdk-pixbuf
+              pkgs.glib
+              pkgs.dbus
+            ];
+        };
         default = devenv.lib.mkShell {
           inherit inputs pkgs;
           modules = [
@@ -564,6 +639,8 @@
 
           saccade-web-assets = webAssets;
 
+          board-viewer-web = (mkBoardViewer pkgs lib).web;
+
           default = pkgs.symlinkJoin {
             name = "saccade";
             paths =
@@ -608,7 +685,8 @@
     checks = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
     in
-      lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+      (mkBoardViewer nixpkgs.legacyPackages.${system} lib).checks
+      // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
         herdr-ui =
           pkgs.runCommand "herdr-ui-contract" {
             nativeBuildInputs = [pkgs.python3];

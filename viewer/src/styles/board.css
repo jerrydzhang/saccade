@@ -1,0 +1,454 @@
+/* Board viewer shared CSS: one central stylesheet, token-driven, readable
+   prose first. Themes ride [data-theme] on the document root; "system"
+   follows prefers-color-scheme. */
+
+:root {
+  --fg: #1a1d21;
+  --fg-soft: #55595e;
+  --bg: #fbfbf9;
+  --panel: #f1f2ef;
+  --line: #d8d9d4;
+  --accent: #3556a8;
+  --error-fg: #8a1f1f;
+  --error-bg: #f7e6e6;
+  --anno-fg: #5a4a12;
+  --anno-bg: #f6efdc;
+  --mono: ui-monospace, "DejaVu Sans Mono", monospace;
+  --prose: "DejaVu Serif", Georgia, serif;
+  --sans: system-ui, "DejaVu Sans", sans-serif;
+}
+
+:root[data-theme="dark"] {
+  --fg: #dcdde0;
+  --fg-soft: #9a9ea3;
+  --bg: #16181b;
+  --panel: #1e2125;
+  --line: #34383d;
+  --accent: #8fb0f0;
+  --error-fg: #f0a5a5;
+  --error-bg: #3a2323;
+  --anno-fg: #e3cf92;
+  --anno-bg: #2a2519;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --fg: #dcdde0;
+    --fg-soft: #9a9ea3;
+    --bg: #16181b;
+    --panel: #1e2125;
+    --line: #34383d;
+    --accent: #8fb0f0;
+    --error-fg: #f0a5a5;
+    --error-bg: #3a2323;
+    --anno-fg: #e3cf92;
+    --anno-bg: #2a2519;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.identity {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.location-path {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 30ch;
+}
+
+.task-meta {
+  color: var(--fg-soft);
+  font-size: 0.85rem;
+}
+
+.status {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--line);
+}
+
+.status-loaded { color: var(--fg); border-color: var(--accent); }
+.status-invalid { color: var(--error-fg); border-color: var(--error-fg); }
+.status-empty, .status-loading { color: var(--fg-soft); }
+
+.controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.control {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--fg-soft);
+}
+
+.control input[type="text"] {
+  width: 24ch;
+}
+
+button,
+select,
+input {
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  padding: 0.15rem 0.5rem;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.copy-toggle button,
+.theme-toggle button {
+  border-radius: 0;
+}
+
+.copy-toggle button.active,
+.theme-toggle button.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.search-bar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.35rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.search-bar input[type="search"] {
+  flex: 1;
+  max-width: 34rem;
+  font-family: var(--mono);
+}
+
+.search-state {
+  color: var(--fg-soft);
+  font-size: 0.85rem;
+  min-width: 10ch;
+}
+
+.errors,
+.diagnostics {
+  margin: 0;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--error-bg);
+  color: var(--error-fg);
+}
+
+.diagnostics {
+  background: var(--panel);
+  color: var(--fg-soft);
+}
+
+.diagnostics h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.9rem;
+}
+
+.diagnostics p {
+  margin: 0.15rem 0;
+  font-size: 0.85rem;
+}
+
+.render-error {
+  margin: 0.25rem 0;
+  font-size: 0.9rem;
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: 1.25rem 1.5rem 3rem;
+}
+
+.board {
+  max-width: 52rem;
+  margin: 0 auto;
+}
+
+.block {
+  margin: 1.1rem 0;
+}
+
+.block-annotation {
+  border-left: 3px solid var(--anno-fg);
+  background: var(--anno-bg);
+  padding: 0.5rem 0.9rem;
+}
+
+.annotation-label {
+  margin: 0 0 0.2rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--anno-fg);
+}
+
+.block-group {
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  padding: 0.4rem 1rem 0.6rem;
+  margin: 1.3rem 0;
+}
+
+.block-group[data-relation] .group-title::after {
+  content: " (" attr(data-relation) ")";
+  color: var(--fg-soft);
+  font-size: 0.8rem;
+  font-weight: normal;
+}
+
+.group-title {
+  margin: 0.3rem 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.block-incorporation {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.9rem;
+}
+
+.provenance {
+  font-size: 0.82rem;
+  color: var(--fg-soft);
+}
+
+.provenance code {
+  font-family: var(--mono);
+}
+
+.md-heading {
+  margin: 0.6rem 0 0.3rem;
+}
+
+.block-figure {
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  padding: 0.6rem;
+  text-align: center;
+}
+
+.figure-frame img,
+.md-img {
+  max-width: 100%;
+  height: auto;
+}
+
+.figure-frame.asset-missing,
+.figure-frame.asset-denied {
+  background: var(--error-bg);
+}
+
+figure figcaption {
+  color: var(--fg-soft);
+  font-size: 0.85rem;
+  margin-top: 0.4rem;
+}
+
+pre.md-code {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  /* ordinary code wraps; a fence that cannot wrap still scrolls its own box */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+code.md-inline-code,
+code.raw-html {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.2rem;
+  padding: 0 0.25rem;
+}
+
+code.raw-html {
+  color: var(--error-fg);
+}
+
+/* Math: natural size, glyphs inherit text color. Display math that is too
+   wide scrolls in its own area; inline math overflows naturally (the one
+   ratified exception) with no inline scrolling. */
+
+.math-inline {
+  white-space: nowrap;
+}
+
+.math-display {
+  display: block;
+  margin: 0.6rem 0;
+}
+
+.math-display mjx-container {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+.math-inline mjx-container {
+  overflow: visible;
+}
+
+.math-error {
+  color: var(--error-fg);
+  background: var(--error-bg);
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.mermaid-block {
+  margin: 0.8rem 0;
+}
+
+.mermaid-block.mermaid-error pre.md-code {
+  border-color: var(--error-fg);
+}
+
+.render-error {
+  color: var(--error-fg);
+}
+
+.diagram-frame {
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+  padding: 0.4rem;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.diagram-svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.diagram-caption {
+  color: var(--fg-soft);
+  font-size: 0.8rem;
+  margin: 0.3rem 0 0;
+  text-align: center;
+}
+
+.diagram-overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  display: flex;
+  flex-direction: column;
+  z-index: 40;
+}
+
+.diagram-controls {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.diagram-zoom-label {
+  font-size: 0.85rem;
+  color: var(--fg-soft);
+  min-width: 4ch;
+  text-align: center;
+}
+
+.diagram-stage {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  touch-action: none;
+}
+
+.diagram-stage svg {
+  max-width: 100%;
+  max-height: 100%;
+  transform-origin: center;
+}
+
+.flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+a.md-link {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: default;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}

@@ -1,0 +1,33 @@
+task: large-diagram
+content:
+  - text: |
+      ## A large diagram
+
+      The flowchart below has enough nodes to overflow a narrow window
+      when embedded. Embedded, it fits the available width and never
+      captures gestures; activating it expands into the available viewing
+      space where zoom, pan, fit and reset live.
+
+      ```mermaid
+      flowchart TD
+        n00[records] --> n01[fold]
+        n01 --> n02[world]
+        n02 --> n03[views]
+        n03 --> n04[console]
+        n01 --> n05[store]
+        n05 --> n06[guards]
+        n05 --> n07[effects]
+        n07 --> n08[git]
+        n07 --> n09[server]
+        n09 --> n10[api]
+        n10 --> n11[cli]
+        n10 --> n12[web assets]
+        n02 --> n13[identity]
+        n13 --> n14[incarnations]
+        n13 --> n15[workspaces]
+        n13 --> n16[messages]
+        n16 --> n17[delivery]
+        n17 --> n18[hosts]
+        n18 --> n19[terminals]
+        n19 --> n20[harnesses]
+      ```

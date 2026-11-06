@@ -11,6 +11,12 @@ test:
 typecheck:
     native/typecheck.sh
 
+viewer-check:
+    python3 viewer/harness/entry.py check-fast
+
+viewer-shell:
+    nix develop .#board-viewer
+
 native-test: typecheck
     node --experimental-strip-types --test native/saccade.test.ts
     node --test native/claude-code/claude-code.test.mjs

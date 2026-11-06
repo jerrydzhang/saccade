@@ -1,0 +1,12 @@
+task: display-scroll
+content:
+  - text: |
+      ## An over-wide display expression
+
+      The display equation below is deliberately wider than the column.
+      It gets its own horizontal scroll area; the page itself never
+      scrolls sideways.
+
+      $$0 < a < b,\quad 0 < \eta < \tfrac{2}{b},\quad \lambda_{\max} = \max(1-a\eta,\; 1-b\eta),\quad \lambda_{\min} = \min(1-a\eta,\; 1-b\eta),\quad \text{so convergence is governed by } \max(\lambda_{\max}, |\lambda_{\min}|) < 1$$
+
+      Prose below this equation wraps normally.

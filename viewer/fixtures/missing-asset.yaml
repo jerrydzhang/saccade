@@ -1,0 +1,9 @@
+task: missing-asset
+content:
+  - text: |
+      The figure below points at a file that does not exist on this
+      machine. The viewer shows an explicit, addressed error instead of
+      manufacturing a valid board.
+  - figure:
+      path: assets/absent-figure.svg
+      caption: Declared but absent on purpose.

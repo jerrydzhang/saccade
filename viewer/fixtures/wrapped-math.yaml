@@ -1,0 +1,17 @@
+task: wrapped-math
+content:
+  - text: |
+      ## Long inline expressions
+
+      A truly indivisible inline expression may overflow its component or
+      viewport naturally; the human explicitly accepts resizing or
+      revising unusually long inline content. There is no inline
+      scrolling and no placeholder. For example
+      $0 < a < b \Rightarrow \eta < 2/b \Rightarrow \frac{1}{1-a\eta}, \frac{1}{1-b\eta} \to \text{decay without oscillation}$
+      sits in the sentence above and may poke past the column edge. The
+      prose around it wraps normally.
+  - text: |
+      ## Wrapping prose around short math
+
+      Short expressions like $\eta$ and $0.99$ sit inline and the
+      surrounding sentence wraps across lines like any other prose.

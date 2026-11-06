@@ -1,0 +1,347 @@
+task: saccade-current-system-and-migration
+content:
+  - text: |
+      # Saccade now, and the migration ahead
+
+      This board explains what Saccade is today, which foundations do not
+      move, what the ratified tracker and client changes are, and what
+      remains undecided. It was authored against main 6821415 (crate
+      0.18.0). It is an explanatory aid for
+      conversation: not a task account, not a second source of authority,
+      and it records no acceptance anywhere.
+  - annotation: |
+      Reading contract: "current" means observed behavior at main 6821415;
+      "planned" means human-ratified direction, not yet implemented; "open"
+      means the human has not decided. Every factual claim carries a source
+      pointer here or in the companion file saccade-and-migration-sources.md.
+      If this board and the record disagree, the record wins - report the
+      conflict rather than trusting the board.
+  - text: |
+      ## 1. The current system
+
+      Saccade is one Rust binary, `sac`, over an append-only SQLite event
+      log. The world is a fold of that log: the faces people read - task
+      threads, standings, search, the mailbox - are record-derived view
+      statements over the folded world, not independently stored state.
+      A command is pure syntax: it is exactly its events, with no world
+      of its own. Not everything is fold-derived: artifact bytes live
+      outside the record (records hold pointers), the served workbench
+      is an embedded asset set with its own doors, the server publishes
+      a runtime address hint beside the database, judged-write attempts
+      land in a side log, and host liveness is probed at runtime. What
+      the fold derives are the statements - tasks, comments,
+      incarnations, messages, workspaces - and their render shapes.
+
+      ```mermaid
+      flowchart LR
+        cli["sac CLI"] --> api["/api/v1"]
+        agent["agent session"] --> api
+        web["web workbench"] --> wb["workbench doors"]
+        wb --> ex
+        api --> ex["store::execute"]
+        ex --> dec["decide: command = its events"]
+        dec --> gate["tier gate, ingress checks, fold guards"]
+        gate --> db[(append-only event log)]
+        db --> fold["fold: World"]
+        fold --> views["views: render statements"]
+        views --> out["CLI output, workbench, API reads"]
+      ```
+
+      The write path runs in exactly this order inside `store::execute`:
+      the command is first translated into its events, the tier gate
+      applies to those events, command-ingress checks follow, and the
+      fold's guards and transition tables stage the events for the
+      append. The property test pins one real agreement - the world a
+      write returns equals a full replay of the stored records and a
+      reload through the stored-format codec (the persistence layer,
+      distinct from the HTTP wire); it pins write/replay/persistence
+      agreement, not that every pipeline choice is necessary
+      (tests/proptest_harness.rs).
+  - group:
+      title: Identity and authority (current)
+      content:
+        - text: |
+            Identity follows reference, and no birth event carries its
+            own id - but the kinds differ in what their identity is. A
+            task id is a dense fold push position: the fold appends one
+            entry per task birth and the position is the id; it is not a
+            log row number. Comments, incarnations, and messages are
+            identified by their birth record, and their public numbers
+            (`c-N`, `i-N`, `m-N`) are dense positions the fold derives
+            among births of the same kind, so `c-41` names the 42nd
+            comment ever born, not log row 41; the raw `seq` stays
+            provenance and is never a public number. A workspace's
+            identity is its birth-record reference, with no public
+            per-kind number at all.
+        - text: |
+            As notation, for comments, incarnations, and messages - the
+            kinds whose public numbers exist: with $B_k$ the birth
+            records of kind $k$ in log order, the public
+            number of $b \in B_k$ is its 0-based index among them,
+
+            $$n(b) = \big|\{\, b' \in B_k : b' < b \,\}\big|.$$
+
+            These numbers are fold-derived - never competing persisted
+            counters - and task positions derive from the same fold, so
+            nothing stored needs renumbering when presentation changes.
+        - text: |
+            Authority is tier, never identity. Tier is possessed, never
+            passed: a set `SACCADE_ACTOR` makes the caller agent tier,
+            its absence is the human. Human-only judgment acts are
+            cancellation and reopening, each with a required explanation;
+            machinery verbs (workspace establishment and lifecycle facts,
+            registration, message submission) are gated to the system
+            tier - the machinery role, not an actor name - and cleanup or
+            restoration lands only after the effect verified. The one
+            identity-flavored exception: an agent whose
+            environment-declared task scope covers the offered task
+            cannot accept it (self-acceptance) - the scope is disclosure
+            riding the record, never proof of ownership.
+        - text: |
+            Ownership is separate from state. Tasks move
+            open -> offered -> concluded, with cancelled as the human's
+            stop; a claim transfers whole-task responsibility, accumulates
+            as history, and gates nothing. Work concludes through accounts
+            and decisions, all comments: an offer (the whole-task closing
+            account, titled at birth), an accept (bodyless, naming the
+            current offer), a reject (grounds, back to open), and a use -
+            the consuming task's declared reliance on a fixed source task,
+            bound with grounds to that task's current offered or concluded
+            account. A concluded task never reopens; corrections belong in
+            new tasks.
+  - text: |
+      ### Faces and storage (current)
+
+      The human read path is the CLI and the served web workbench: one
+      embedded single page at `/` with `/t/N` and `/c/N` deep links,
+      artifact bytes at `/a/<hash>`, writes through its own workbench
+      doors, and one line per judged write attempt in an attempts log
+      beside the database. Agents use the same record through `/api/v1`
+      and the CLI; there is no separate agent briefing surface. Persistent
+      sessions live outside the tracker: the host contract's verbs are the
+      entire host boundary, and the tracker records facts - it supervises
+      no process. The database carries an identity stamp and a schema
+      version: a file stamped by a newer binary refuses by name, an
+      unmigrated older log refuses naming the migration, and a foreign
+      stamp is not a Saccade database.
+  - text: |
+      ## 2. What does not move
+
+      The migration changes storage and workflow shapes, not the beliefs
+      the system stands on. Axiom A: the record is the only durable
+      memory - agent knowledge is consumable, so orientation, claims, and
+      attribution come from the record alone, and no document is a second
+      source of truth. The telos (chosen, not believed): understanding is
+      the limiting resource - the record extends the domain where the
+      human guides at full confidence. Scope fact: one human is served.
+
+      Standing law that binds both the current system and whatever comes
+      next: judgment acts stay human-only; no LLM calls in any read path;
+      pointers, never payloads - artifact bytes live outside records;
+      rendering is descriptive, never persuasive; identity follows
+      reference, numbers derive from the fold; every capability that
+      reduces contact must add record in the same change. Axiom A
+      requires a durable record; it does not require SQLite, or
+      append-only storage, forever.
+  - text: |
+      ## 3. The ratified direction: task blackboards (planned)
+
+      A task's account becomes a blackboard: a declarative document in a
+      deliberately bounded grammar - widgets and semantic relationships,
+      not physical layout - plus its captured inputs. The declaration and
+      captured inputs are authoritative; the renderer owns arrangement;
+      authored grouping, order, comparisons, captions, and annotations
+      are content. The goal is signal: recover goal, specification,
+      attempts, outcomes, and dependencies without re-synthesizing a
+      whole thread (t-56 c-875).
+
+      Two write shapes, one lifecycle:
+
+  - group:
+      title: Checkpoints versus commits (planned, c-884)
+      relation: comparison
+      content:
+        - text: |
+            **Checkpoint** - cheap preservation of mutable working
+            progress; may be incomplete or structurally invalid. Adding
+            an annotation lands as one immediately, without forcing other
+            working edits through commit validation.
+        - text: |
+            **Commit** - a coherent, structurally validated whole-board
+            revision, eligible for acceptance; requires a self-contained
+            captured snapshot. Validity is structural, never a claim of
+            semantic correctness or completeness.
+  - text: |
+      Incorporation is a normal declaration edit: an explicit structured
+      source reference (a fixed revision plus structural selections) with
+      substantive receiving text that may adapt or challenge the source;
+      commit detects it - no separate incorporation command or event kind
+      exists in this model (c-880). Retiring an incorporation requires
+      explicit grounds. Provenance tooling must be the ergonomic normal
+      path, because agents paraphrasing without incorporation is the
+      primary reliability risk (c-876).
+
+      Acceptance is settled (c-883), not an open choice: acceptance names
+      the current published task revision and refuses if the revision
+      changes before the acceptance is recorded; to choose earlier
+      content, restore it as a new current revision first. Acceptance
+      freezes the account, and it finalizes the current intended
+      committed state: newer checkpointed work cannot be silently
+      omitted - it must be committed or explicitly set aside or restored
+      (c-884); later correction belongs in a new task. Stacked work is
+      allowed during authoring - a task may incorporate a fixed
+      published revision of another open task - but accepting a consumer
+      requires each active incorporation to select an accepted source
+      result.
+  - group:
+      title: Acceptance today versus planned
+      relation: comparison
+      content:
+        - text: |
+            **Current.** Acceptance is a bodyless comment naming the
+            current offer; the task moves open -> offered -> concluded. A
+            use binds, with grounds, to a source task's current offered
+            or concluded account. Authority: any tier offers; the
+            self-acceptance scope guard refuses a task-scoped producer
+            accepting its own conclusion.
+        - text: |
+            **Planned.** Acceptance targets an exact retained Git
+            revision of the task's board and freezes it. The authority
+            model is retained (c-881): edit/check/commit are not
+            owner-gated; the self-acceptance guard stays; cancel and
+            reopen stay human-only with explanation. Removing the
+            offered stage is already agreed direction (c-876, c-881);
+            what stays open is the exact replacement - how the existing
+            comment kinds (offer/accept/reject/use) map onto boards
+            (c-879).
+  - text: |
+      Rationale lives in the account itself, not only in commit messages
+      (c-884). Authored asides and qualifications are ordinary text -
+      there is no separate widget for authored asides (c-881). Review annotations
+      are the declaration's review comments: they live inside the
+      declaration, ride commits, diffs, and history, and carry no
+      resolved/unresolved lifecycle and no review stage (c-881).
+      Explanatory boards - like this one - are simply rendered
+      declarations with no task, no acceptance ceremony, no lifecycle
+      (c-914); capturing one into an account later is an explicit act.
+
+      ### Storage and cutover (planned, pragmatic - not axiom)
+
+      Boards are Git-backed: Git supplies revision, worktree, diff,
+      conflict, and compare-and-swap mechanics (probe evidence c-877);
+      authoritative acceptance remains a tracker fact naming retained Git
+      content, never merely a Git ref (c-878). The operational event log
+      is retained for now as the existing append-only machinery - a
+      pragmatic ratified choice (c-883), not an axiom; whether mutable
+      operational tables should ever replace it stays undecided, to be
+      evaluated against concrete failure traces (c-882). Minimal proposed
+      tracker facts: task creation, published checkpoint advance,
+      acceptance of the current revision; payloads and guards still need
+      approval (c-883).
+
+      Cutover is a bounded agent-curated reset, not backward
+      compatibility (c-878): preserve a read-only snapshot of the old
+      tracker; agents seed new boards from it with archive references and
+      explicit uncertainty; no automatic acceptance and no fabricated
+      board history; no destructive cutover without an explicit
+      operational plan. One named boundary is unresolved: what the reset
+      means for incarnation, message, workspace, and saved-session
+      records and for live identities (c-879).
+  - text: |
+      ## 4. The client direction (ratified)
+
+      The first blackboard viewer is a useful, retained, read-only proof
+      of concept (record 2512): Tauri 2 with Svelte 5, TypeScript, Vite,
+      shared CSS (c-997, c-1020), as an ordinary independent desktop
+      window composed by the user's window manager. Components may opt in
+      to view coordination; view navigation never mutates an agent's
+      execution, identity, or task ownership (c-1005). No app fork and no
+      upstream contribution sits on the critical path (c-978). The
+      renderer must do real math - natural size, inheriting surrounding
+      text color, over-wide display equations scroll locally, a wrapped
+      formula stays one copy/search unit - and real Mermaid diagrams as
+      ordinary Markdown fences: never executed, source preserved on
+      failure (c-924, t-64 c-943, t-65 c-963, c-974, c-980). Opening is
+      an explicit project -> workspace -> board selector, transitional
+      until other components can supply context (c-968, c-1020).
+
+      Deliberately not pre-decided: focused-inspection fields and
+      transport follow concrete implementation needs (record 2520), and
+      launch, PATH, and distribution conveniences are deferred to plain
+      Nix tooling for now (records 2524 through 2529). Headless,
+      agent-friendly development with fast routine checks is a hard
+      requirement of the foundation (c-1007, c-1018). Implementation is
+      in progress on t-71 in an independent worktree (c-1030, c-1033).
+  - text: |
+      ## 5. Migration mechanics that already exist (current)
+
+      Stored-format migrations are bounded version-to-version steps in
+      code, run before serving, with transactional validation and
+      recovery safeguards. The offline `sac migrate` reads a schema-3 or
+      schema-4 source, chains every step in order, and refuses to write
+      anything if the rewritten log cannot fold; the source is never
+      touched; record positions and timestamps carry over unchanged.
+
+      ```mermaid
+      flowchart LR
+        v3["schema 3 (0.13.0)"] -->|"step: renumber prose onto public numbering"| v4["schema 4"]
+        v4 -->|"step: backfill authored titles"| v5["schema 5 (current)"]
+      ```
+
+      The proven example is t-9 (0.12.0 -> 0.13.0): task parent/child
+      relationships were removed by stripping the historical parent links
+      from birth payloads without renumbering any record, with the old
+      binary refusing a migrated log and the new binary refusing an
+      unmigrated one, both by name. Versioning is 0.x semver with the
+      minor position breaking: a minor bump may break log loading, the
+      wire, or CLI verbs and demands binaries move in step; the promise
+      that old logs always load begins at external adoption or painful
+      volume, whichever comes first (standing law).
+  - text: |
+      ## 6. Open decisions and honest uncertainty
+
+      Human-owned and undecided - not gaps this board fills:
+
+      - The final stored grammar for boards (the exercise YAML is an
+        explicitly provisional adapter, not a ratified schema), the exact
+        incorporation syntax and selection ergonomics, and where
+        retirement metadata lives (c-876, c-885).
+      - What replaces the comment/Use/Bind contribution model when boards
+        arrive (c-879).
+      - The new model's operational event payloads and guards (c-883).
+      - Checkpoint storage, retention, and publication details (c-884).
+      - Git repository topology (task-owned boards favored; the
+        shared-collection alternative is not ratified) and the
+        Git-versus-Jujutsu comparison (c-878, c-884).
+      - Reset scope at cutover: identity-bearing records and live
+        identities (c-879).
+      - Whether mutable operational tables ever replace the append-only
+        log (c-882).
+      - General math line-breaking conventions and display-equation
+        splitting (t-65; kept open by the viewer brief).
+
+      Deferred to implementation rather than pre-decided: focused
+      inspection fields and transport, launch and PATH conveniences,
+      Mermaid and browser package pins, the web UI's task sorting and
+      search, and board discovery (record 2520, records 2524 through
+      2529, c-878).
+
+      One authoring constraint this board itself obeys: authored files in
+      this repository are ASCII, enforced over every tracked text file,
+      while record content - messages, comments, board data - stays
+      Unicode-capable. The ASCII rule reaches authored text only.
+  - text: |
+      ## 7. Sources
+
+      Inspected for this board: repository main 6821415 - src/store.rs,
+      src/decide.rs, src/events.rs, src/objects/, src/db.rs,
+      src/migrate.rs, src/host_contract.rs, src/serve.rs, src/api.rs,
+      prek.toml, AGENTS.md, AXIOMS.md, the saccade skill; record threads
+      t-56 (c-875 through c-1029), t-9, t-62, t-64, t-65, t-66, t-67,
+      t-68, t-69, t-70, t-71, t-72; the r4 viewer brief (artifact record
+      2522); the provisional authoring grammar and its retained fixture.
+      The companion file saccade-and-migration-sources.md names the exact
+      claim-to-source pairs and records the two wording conflicts found
+      during research (a stale verb count in the host-contract module
+      header; the trip-wire phrase "authority always precedes it" versus
+      the actual decide-first call order in store::execute).
