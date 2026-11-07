@@ -45,6 +45,8 @@ APP_READY_SECONDS = 45
 CORE_SOCKET_SECONDS = 15
 CONNECT_WAIT_SECONDS = 20
 MACHINE_CALL_SECONDS = 30
+FIGURE_OUTCOME_SECONDS = 20
+SURVIVOR_SETTLE_SECONDS = 10
 MACHINE_NAME = "b"
 VIA_SCRIPT_SANDBOX_PATH = "/pin/via_b.py"
 REAL_FIGURE_PATH = "assets/figure.png"
@@ -265,11 +267,12 @@ SURVIVOR_COMMS = {
 }
 
 
-def survivor_pids() -> list[int]:
+def survivor_pids() -> list[tuple[int, str]]:
     """Read-only scan of the sandbox's own PID namespace; nothing here
-    is signaled. Any surviving chain or mesh process is recorded, never
-    killed by pattern - the namespace teardown ends them."""
-    found: list[int] = []
+    is signaled. Any surviving chain or mesh process is recorded with
+    its comm, never killed by pattern - the namespace teardown ends
+    them."""
+    found: list[tuple[int, str]] = []
     for entry in pathlib.Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
@@ -278,7 +281,7 @@ def survivor_pids() -> list[int]:
         except OSError:
             continue
         if comm in SURVIVOR_COMMS:
-            found.append(int(entry.name))
+            found.append((int(entry.name), comm))
     return sorted(found)
 
 
@@ -310,8 +313,16 @@ def teardown(state: LaneState) -> None:
             except subprocess.TimeoutExpired:
                 handle.kill()
                 handle.wait(timeout=5)
+    # subprocesses end at their own pace once their parents are gone;
+    # the scan settles briefly, then records whatever remains with its
+    # comm - the namespace teardown stays the backstop
+    deadline = time.monotonic() + SURVIVOR_SETTLE_SECONDS
     survivors = survivor_pids()
-    check("driver chain, mesh and compositor fully torn down", not survivors, f"survivor pids: {survivors}")
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.5)
+        survivors = survivor_pids()
+    detail = ", ".join(f"{pid}:{comm}" for pid, comm in survivors)
+    check("driver chain, mesh and compositor fully torn down", not survivors, detail)
 
 
 def main() -> int:
