@@ -618,6 +618,8 @@
         });
       in
         {
+          sac = sac;
+
           saccade-pi = saccadePi;
 
           # the app the client runs: built against nixpkgs-client, the
