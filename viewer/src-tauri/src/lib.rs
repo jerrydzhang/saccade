@@ -32,7 +32,6 @@ pub fn run() {
             commands::read_asset,
             commands::viewer_identity,
             commands::initial_board,
-            commands::lane_console_enabled,
         ])
         .setup(move |app| {
             if console_requested {

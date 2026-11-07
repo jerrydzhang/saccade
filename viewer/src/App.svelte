@@ -48,10 +48,6 @@
     }
     try {
       console.log("[viewer] startup: bridge present");
-      const laneConsole = (await invoke("lane_console_enabled")) as boolean;
-      if (laneConsole) {
-        (window as unknown as { __BOARD_VIEWER_DIAG__?: boolean }).__BOARD_VIEWER_DIAG__ = true;
-      }
       const path = (await invoke("initial_board")) as string | null;
       if (!path) {
         console.log("[viewer] no initial board; starting empty");

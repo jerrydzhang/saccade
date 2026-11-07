@@ -187,12 +187,3 @@ mod tests {
         assert!(guard_relative("a\0b").is_err());
     }
 }
-
-/// The lane sets BOARD_VIEWER_WEBVIEW_CONSOLE to turn webview console
-/// output on; the frontend asks for this signal explicitly so its
-/// diagnostic logging exists only where the lane will actually read
-/// it. A human run never sets the variable.
-#[tauri::command]
-pub fn lane_console_enabled() -> bool {
-    std::env::var("BOARD_VIEWER_WEBVIEW_CONSOLE").is_ok()
-}
