@@ -78,7 +78,7 @@ def start_weston(weston_bin: str, wayland_name: str, logs: pathlib.Path) -> subp
                 f"--socket={wayland_name}",
                 "--renderer=pixman",
                 "--width=1024",
-                "--height=640",
+                "--height=1280",
                 "--scale=1",
                 "--fake-seat",
                 "--debug",
