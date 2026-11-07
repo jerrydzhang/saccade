@@ -24,7 +24,10 @@ async function loadMermaid(): Promise<MermaidRenderFn> {
     startOnLoad: false,
     securityLevel: "strict",
     htmlLabels: false,
-    fontFamily: "sans-serif",
+    // a family the pinned fontconfig actually provides: the probe in
+    // the lane evidence showed generic resolution is not trustworthy
+    // under WebKitGTK's SVG text
+    fontFamily: "'DejaVu Sans', sans-serif",
     flowchart: { htmlLabels: false },
     class: { htmlLabels: false },
   });
@@ -46,8 +49,10 @@ function engine(): Promise<MermaidRenderFn> {
 // present but empty, absent entirely, or font resolution). Gated by
 // the same env var the shell reads for console observability.
 function logSvgDiagnostics(id: string, svg: string): void {
-  const gated = (window as unknown as { __BOARD_VIEWER_DIAG__?: boolean }).__BOARD_VIEWER_DIAG__;
-  if (!gated) return;
+  // shell-scoped evidence: only the native shell carries the bridge,
+  // and only the lane turns its console to stdout
+  const inShell = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  if (!inShell) return;
   const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
   const texts = doc.querySelectorAll("text");
   const first = texts[0];
