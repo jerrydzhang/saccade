@@ -558,6 +558,23 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     }
 }
 
+/// Every answer carries the permissive origin header: the viewer and
+/// the components are separate origins by construction (the Tauri
+/// shell, a browser page), and this server is a loopback single writer.
+/// Reads only ever cross here; a writing component adds the preflight
+/// half when one exists.
+async fn allow_any_origin(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "access-control-allow-origin",
+        axum::http::HeaderValue::from_static("*"),
+    );
+    response
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/command", post(command))
@@ -583,6 +600,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/boards/discard", post(board_discard))
         .route("/api/v1/boards/update", post(board_update))
         .route("/api/v1/version", get(version))
+        .layer(axum::middleware::from_fn(allow_any_origin))
 }
 
 // -- the task-free workspace controller ----------------------------------

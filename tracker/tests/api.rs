@@ -1874,6 +1874,19 @@ fn board_wire_routes_hold_their_contracts() {
     // the tracker's name for tracker-named locations: the repo's
     // directory basename; the fixture repo directory is "project"
     assert_eq!(body["tracker"], json!("project"));
+    // the viewer and components are separate origins by construction:
+    // every answer carries the permissive origin header
+    let cors = ureq::get(&format!("{url}/api/v1/version"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    assert_eq!(
+        cors.header("access-control-allow-origin").unwrap(),
+        "*",
+        "the viewer reads cross-origin",
+    );
 
     // the path route refuses a task with no board, and a bad task id
     let created = ureq::post(&format!("{url}/api/v1/command"))
