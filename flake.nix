@@ -3,6 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # the client nixpkgs: the revision the human's system flake is
+    # built from. The board-viewer package and app build against it so
+    # the build agents test is the build the client runs; the tracker's
+    # own packages, checks, and devshells stay on nixpkgs.
+    nixpkgs-client.url = "github:NixOS/nixpkgs/c59305bab2065cfecc4944690d9eedbb56f3a9fa";
     rust-overlay.url = "github:oxalica/rust-overlay";
     saccade = {
       url = "github:jerrydzhang/saccade";
@@ -57,6 +62,7 @@
 
   outputs = {
     nixpkgs,
+    nixpkgs-client,
     rust-overlay,
     saccade,
     wrapped-pi,
@@ -383,6 +389,7 @@
           inherit system;
           overlays = rustOverlays;
         };
+        clientPkgs = nixpkgs-client.legacyPackages.${system};
 
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
@@ -425,12 +432,16 @@
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               (boardViewer pkgs).driver
-              pkgs.webkitgtk_4_1
-              pkgs.gtk3
-              pkgs.cairo
-              pkgs.gdk-pixbuf
-              pkgs.glib
-              pkgs.dbus
+              # the Tauri/GTK block rides nixpkgs-client so the shell's
+              # WebKitWebDriver matches the packaged app's WebKitGTK
+              # (the two pins carry different webkitgtk releases);
+              # the lane tools above stay on nixpkgs
+              clientPkgs.webkitgtk_4_1
+              clientPkgs.gtk3
+              clientPkgs.cairo
+              clientPkgs.gdk-pixbuf
+              clientPkgs.glib
+              clientPkgs.dbus
               pkgs.dejavu_fonts
             ];
           env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
@@ -530,6 +541,7 @@
           inherit system;
           overlays = rustOverlays;
         };
+        clientPkgs = nixpkgs-client.legacyPackages.${system};
         devHerdrCore = herdrCore system pkgs;
         devHerdrPin = herdrDev system pkgs;
         devHerdrApp = herdrApp system pkgs;
@@ -631,8 +643,10 @@
 
           saccade-web-assets = webAssets;
 
+          # the app the client runs: built against nixpkgs-client, the
+          # revision the human's system flake is built from
+          board-viewer = (boardViewer clientPkgs).app;
           board-viewer-web = (boardViewer pkgs).web;
-          board-viewer = (boardViewer pkgs).app;
           board-viewer-tauri-driver = (boardViewer pkgs).driver;
 
           default = pkgs.symlinkJoin {
@@ -677,7 +691,7 @@
     );
 
     apps = forAllSystems (system: let
-      boardViewerApp = (boardViewer nixpkgs.legacyPackages.${system}).app;
+      boardViewerApp = (boardViewer nixpkgs-client.legacyPackages.${system}).app;
     in {
       board-viewer = {
         type = "app";
