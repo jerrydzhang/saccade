@@ -1,11 +1,14 @@
-# The in-sandbox remote integration lane (DESIGN - for boundary review)
+# The in-sandbox remote integration lane (reviewed design; implemented)
 
-Status: design only, not implemented, nothing runs. This is a boundary
-change (it launches herdr-core processes and routes viewer reads through
-a real two-core mesh), so it takes review before any run. It extends the
-reviewed containment contract in `harness/README.md` - same supervisor,
-same canary-first order, same fail-closed rules; every host fact below
-is stated exactly for that review.
+Status: the reviewed design is implemented - `entry.py` verb `remote`,
+the payload `remote_lane.py`, the via program `via_b.py`, the fixture
+tree `remote_fixture/`. Nothing has been run: the lane executes only
+under a named runtime authorization (a run budget the coordinator
+issues separately). One implementation note over the text below: the
+viewer's render outcomes carry the figure PATH as their message, not a
+line, so the assertions address outcomes by path (`figure_status`,
+`figure_denial` in remote_lane.py) instead of by authored line; the
+pure contract for every shape runs in check-fast (harness_checks).
 
 ## What it proves
 
@@ -119,11 +122,11 @@ bounded with the failure recorded, never retried:
 7. assertions, via W3C execute (INSPECT_SCRIPT), bounded:
    a. resource.status == "loaded", resource.machine == "b",
       resource.path == "/board/real.yaml"
-   b. renderOutcomes: kind figure, status ok, at the real figure's
-      authored line
-   c. renderOutcomes: kind figure, status denied, at the escape's
-      authored line, message contains "resolved outside the
-      declaration directory"
+   b. the real figure's outcome: kind figure, status ok, message
+      assets/figure.png
+   c. the escape's outcome: kind figure, status denied, message
+      starting "denied:" and quoting both the path and the containment
+      refusal
    d. errors: empty
 8. one weston-screenshooter frame as visual evidence (the native
    lane's capture facts)

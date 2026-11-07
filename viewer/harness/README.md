@@ -37,6 +37,12 @@ coordinator first.
   tears the chain down in owned order. `checks` runs the scripted
   check sequence as a series of those commands under one supervisor.
   See below for the exact shape.
+- `remote`: the gated remote mesh lane, implemented in
+  `harness/remote-lane.md`'s reviewed shape and running only under a
+  named authorization: two private herdr-core instances and the
+  headless viewer opening a machine-named location through them. The
+  containment contract is the session lane's, with the mesh's env and
+  binds on top.
 - `serve`: not implemented; its own reviewed checkpoint.
 
 Agents never spawn app, browser, compositor, server or SSH processes by

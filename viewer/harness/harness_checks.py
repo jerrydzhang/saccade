@@ -29,6 +29,8 @@ import browser_lane  # noqa: E402
 import containment_canary  # noqa: E402
 import entry  # noqa: E402
 import isolation  # noqa: E402
+import remote_lane  # noqa: E402
+import via_b  # noqa: E402
 import webdriver_client  # noqa: E402
 import webdriver_session  # noqa: E402
 
@@ -155,6 +157,120 @@ def main() -> int:
     with_env({"CONTAINMENT_HOST_NS_IDS": "", "CONTAINMENT_HOST_HOME": "", "CONTAINMENT_HOST_UID": "", "CONTAINMENT_HOST_TRACKER_DB": ""})
     expected, failures = containment_canary.parse_baselines()
     check("all-empty baselines refuse every required entry", len(failures) >= 9, str(failures))
+
+    # --- remote mesh lane: the via program and argv shapes (pure) -------
+    via_env = {"HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a", "PATH": "/usr/bin"}
+    argv, child_env = via_b.resolve_line("hc connect", via_env)
+    check("via rewrites hc to the pinned binary by path", argv == ["/pin/core/bin/herdr-core", "connect"], str(argv))
+    check(
+        "via forces session b over the inherited a without touching the caller env",
+        child_env["HC_SESSION"] == "b" and via_env["HC_SESSION"] == "a",
+        str(child_env),
+    )
+    argv, _child_env = via_b.resolve_line("hc connect --session b", via_env)
+    check("via keeps the line's own arguments", argv[1:] == ["connect", "--session", "b"], str(argv))
+    for bad_line in ["ls /", "", "hcc connect", "/bin/hc connect", "HC connect", 'hc "unclosed']:
+        try:
+            via_b.resolve_line(bad_line, via_env)
+            check("via refuses a non-connect line", False, repr(bad_line))
+        except via_b.ViaRefused as refusal:
+            check(
+                "via refuses a non-connect line with the line quoted",
+                repr(bad_line) in str(refusal),
+                str(refusal),
+            )
+    try:
+        via_b.resolve_line("hc\0connect", via_env)
+        check("via refuses a NUL byte in the line", False, "no refusal raised")
+    except via_b.ViaRefused:
+        check("via refuses a NUL byte in the line", True)
+    try:
+        via_b.resolve_line("hc connect", {"HC_SESSION": "a"})
+        check("via refuses a missing core pin", False, "no refusal raised")
+    except via_b.ViaRefused as refusal:
+        check("via refuses a missing core pin", "HERDR_CORE_BIN" in str(refusal), str(refusal))
+    try:
+        via_b.resolve_line("hc connect", {"HERDR_CORE_BIN": "relative/hc"})
+        check("via refuses a relative core pin", False, "no refusal raised")
+    except via_b.ViaRefused:
+        check("via refuses a relative core pin", True)
+
+    check(
+        "the add request carries the via command, the name, session b and json",
+        remote_lane.machine_add_argv("/pin/core/bin/herdr-core", "/pin/python /pin/via_b.py")
+        == [
+            "/pin/core/bin/herdr-core",
+            "machine",
+            "add",
+            "--via",
+            "/pin/python /pin/via_b.py",
+            "--name",
+            "b",
+            "--session",
+            "b",
+            "--json",
+        ],
+        "argv mismatch",
+    )
+    check(
+        "the listing request is one json call",
+        remote_lane.machine_ls_argv("/pin/core/bin/herdr-core") == ["/pin/core/bin/herdr-core", "machine", "ls", "--json"],
+        "argv mismatch",
+    )
+    check(
+        "the via command is the pinned python and the bound program",
+        remote_lane.via_command("/pin/python") == "/pin/python /pin/via_b.py",
+        remote_lane.via_command("/pin/python"),
+    )
+
+    fixture_dir = HERE / "remote_fixture"
+    board_text = (fixture_dir / "real.yaml").read_text()
+    check(
+        "the fixture declares the real figure then the escape, in order",
+        remote_lane.figure_paths(board_text) == ["assets/figure.png", "escaped.png"],
+        str(remote_lane.figure_paths(board_text)),
+    )
+    escape_link = fixture_dir / "escaped.png"
+    check(
+        "the escape is a symlink to the sandbox-only session module",
+        escape_link.is_symlink() and os.readlink(escape_link) == "/lane/webdriver_session.py",
+        os.readlink(escape_link) if escape_link.is_symlink() else "not a symlink",
+    )
+    figure_bytes = (fixture_dir / "assets" / "figure.png").read_bytes()
+    check(
+        "the real figure is real PNG bytes, not a placeholder",
+        figure_bytes[:8] == b"\x89PNG\r\n\x1a\n" and len(figure_bytes) > 0,
+        str(len(figure_bytes)),
+    )
+
+    inspection = {
+        "renderOutcomes": [
+            {"kind": "figure", "status": "ok", "message": "assets/figure.png"},
+            {
+                "kind": "figure",
+                "status": "denied",
+                "message": 'denied: "escaped.png" resolved outside the declaration directory on machine "b"',
+            },
+            {"kind": "math", "status": "ok", "message": "x"},
+        ]
+    }
+    check(
+        "a real figure outcome matches by its bare path",
+        remote_lane.figure_status(inspection, "assets/figure.png") == "ok",
+        str(inspection),
+    )
+    denial = remote_lane.figure_denial(inspection, "escaped.png")
+    check(
+        "an escape outcome reads as denied and quotes the containment refusal",
+        denial is not None and "resolved outside the declaration directory" in denial,
+        str(denial),
+    )
+    check("an absent outcome matches nothing", remote_lane.figure_status(inspection, "nope.png") is None, "")
+    check(
+        "a non-figure outcome never matches a figure path",
+        remote_lane.figure_status({"renderOutcomes": [{"kind": "math", "status": "ok", "message": "assets/figure.png"}]}, "assets/figure.png") is None,
+        "",
+    )
 
     # --- pinned playwright closure (pure file-existence check) -----------
     fake_env = pathlib.Path(tempfile.mkdtemp(prefix="pw-closure-"))

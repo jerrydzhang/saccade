@@ -15,6 +15,12 @@ Lanes:
                preflight passes.
   native       GATED. The Tauri/WebKitGTK application under a private
                headless Weston inside an enforced sandbox.
+  remote       GATED. The remote mesh lane: two private herdr-core
+               instances and the headless viewer opening a machine-
+               named location through them (harness/remote-lane.md);
+               assertions on the render, the figure bytes and the
+               remote containment refusal. Runs only under a named
+               runtime authorization.
   session      GATED. The interactive WebDriver session tool: up holds
                one sandbox with the private compositor, the tauri-driver
                -> WebKitWebDriver chain and the packaged app for an
@@ -49,7 +55,7 @@ VIEWER = HERE.parent
 
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
-    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/harness_checks.py"]),
+    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py"]),
     ("typecheck", ["npm", "run", "check"]),
     ("contracts", ["npm", "run", "test"]),
     # the read-only herdr-core client is a pure crate: its contract
@@ -81,6 +87,13 @@ DIST_SANDBOX = "/app/dist"
 NATIVE_LANE_SANDBOX_PATH = "/lane/native_lane.py"
 SESSION_PAYLOAD_SANDBOX_PATH = "/lane/webdriver_session.py"
 SESSION_CLIENT_SANDBOX_PATH = "/lane/webdriver_client.py"
+REMOTE_LANE_SANDBOX_PATH = "/lane/remote_lane.py"
+VIA_PROGRAM_SANDBOX_PATH = "/pin/via_b.py"
+REMOTE_TIMEOUT_SECONDS = 180
+# the escape fixture's target doubles as the imported session module;
+# its presence inside the sandbox is what makes the containment
+# refusal a denial rather than a missing-file result
+REMOTE_HERDR_PIN = "hc 0.1.17"
 # the control socket and ready marker live in the run root, which is
 # bind-mounted read-write at the identical path: the host reaches the
 # payload over a private Unix socket inside a 0700 tree, never a port
@@ -538,6 +551,246 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
         code = supervisor.stop()
         if code != 0 and code is not None:
             print(f"[native] supervisor exit after cleanup: {code}", file=sys.stderr)
+
+
+# --- remote lane: the two-core mesh under the headless viewer ------------
+
+REMOTE_LOCATION = "b:/board/real.yaml"
+
+
+def remote_resolved(tracker_db_candidate: str) -> dict | None:
+    """Every pinned path the remote mesh lane consumes: the session
+    lane's refusals verbatim, plus the herdr-core pin (an executable
+    store binary whose --version reads exactly the pinned release) and
+    the checked-in fixture tree. Returns None after printing a
+    refusal."""
+    sys.path.insert(0, str(HERE))
+    import isolation
+
+    found = shutil.which("bwrap")
+    if found is None:
+        print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return None
+    bwrap = str(pathlib.Path(found).resolve())
+    python = str(pathlib.Path(sys.executable).resolve())
+    canary = str((HERE / "containment_canary.py").resolve())
+    lane_py = str((HERE / "remote_lane.py").resolve())
+    via_py = str((HERE / "via_b.py").resolve())
+    session_py = str((HERE / "webdriver_session.py").resolve())
+    client_py = str((HERE / "webdriver_client.py").resolve())
+    fixture_dir = HERE / "remote_fixture"
+    if not fixture_dir.is_dir() or not (fixture_dir / "real.yaml").is_file():
+        print("containment refusal: harness/remote_fixture with real.yaml is missing", file=sys.stderr)
+        return None
+
+    tools: dict[str, str | None] = {}
+    for name, binary in (
+        ("weston", "weston"),
+        ("shooter", "weston-screenshooter"),
+        ("tauri_driver", "tauri-driver"),
+        ("webkit_driver", "WebKitWebDriver"),
+    ):
+        located = shutil.which(binary)
+        tools[name] = str(pathlib.Path(located).resolve()) if located else None
+    missing = sorted(name for name, path in tools.items() if path is None)
+    if missing:
+        print(
+            f"containment refusal: not in PATH (pinned devshell expected): {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        return None
+
+    app = os.environ.get("BOARD_VIEWER_APP_BIN", "")
+    if not app.startswith("/nix/store/") or not os.access(app, os.X_OK):
+        print(
+            "containment refusal: BOARD_VIEWER_APP_BIN must be an executable pinned app binary",
+            file=sys.stderr,
+        )
+        return None
+
+    core = os.environ.get("BOARD_VIEWER_HERDR_CORE_BIN", "")
+    if not core.startswith("/nix/store/") or not os.access(core, os.X_OK):
+        print(
+            "containment refusal: BOARD_VIEWER_HERDR_CORE_BIN must be an executable pinned herdr-core binary",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        version = subprocess.run([core, "--version"], capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        print("containment refusal: herdr-core --version timed out", file=sys.stderr)
+        return None
+    said = version.stdout.decode(errors="replace").strip()
+    if version.returncode != 0 or said != REMOTE_HERDR_PIN:
+        print(
+            f"containment refusal: the pinned herdr-core must report {REMOTE_HERDR_PIN!r}; it reported {said!r}",
+            file=sys.stderr,
+        )
+        return None
+
+    mesa_dir = os.environ.get("BOARD_VIEWER_MESA_EGL_VENDOR_DIR", "")
+    if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
+        print(
+            "containment refusal: BOARD_VIEWER_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
+            file=sys.stderr,
+        )
+        return None
+
+    tracker_db, refusal = caller_tracker_db(os.environ.get("SACCADE_DB") or "", tracker_db_candidate or "")
+    if tracker_db is None:
+        print(f"containment refusal: {refusal}", file=sys.stderr)
+        return None
+    if not os.path.exists(tracker_db):
+        print("containment refusal: baseline tracker db does not exist on the caller side", file=sys.stderr)
+        return None
+
+    fontconf = os.environ.get("FONTCONFIG_FILE", "")
+    usable, reason = verify_fontconfig_file(fontconf)
+    if not usable:
+        print(f"containment refusal: {reason}", file=sys.stderr)
+        return None
+
+    try:
+        isolation.static_preflight(bwrap)
+    except isolation.ContainmentRefused as error:
+        print(f"containment refusal: {error}", file=sys.stderr)
+        return None
+
+    return {
+        "bwrap": bwrap,
+        "python": python,
+        "canary": canary,
+        "lane_py": lane_py,
+        "via_py": via_py,
+        "session_py": session_py,
+        "client_py": client_py,
+        "weston": tools["weston"],
+        "shooter": tools["shooter"],
+        "tauri_driver": tools["tauri_driver"],
+        "webkit_driver": tools["webkit_driver"],
+        "app": app,
+        "herdr_core": core,
+        "fixture_dir": str(fixture_dir),
+        "tracker_db": tracker_db,
+        "fontconf": fontconf,
+        "mesa_dir": mesa_dir,
+    }
+
+
+def remote_env(resolved: dict, run_root: pathlib.Path) -> dict[str, str]:
+    """The fresh allowlist plus the session lane's pins, and the mesh's
+    own: the pinned core binary, the via interpreter, session a for the
+    whole chain (the app's bridge resolves a.sock exactly as on a real
+    client device), and the fixed machine-named location."""
+    sys.path.insert(0, str(HERE))
+    import isolation
+
+    env = isolation.env_allowlist(run_root)
+    env["CONTAINMENT_HOST_NS_IDS"] = isolation.host_ns_ids()
+    env["CONTAINMENT_HOST_HOME"] = str(pathlib.Path.home().resolve())
+    env["CONTAINMENT_HOST_UID"] = str(os.getuid())
+    env["CONTAINMENT_HOST_TRACKER_DB"] = resolved["tracker_db"]
+    env["WESTON_BIN"] = resolved["weston"]
+    env["SCREENSHOOTER_BIN"] = resolved["shooter"]
+    env["TAURI_DRIVER_BIN"] = resolved["tauri_driver"]
+    env["WEBKIT_DRIVER_BIN"] = resolved["webkit_driver"]
+    env["APP_BIN"] = resolved["app"]
+    env["FONTCONFIG_FILE"] = resolved["fontconf"]
+    env["SHOTS_DIR"] = str(run_root / "shots")
+    env["__EGL_VENDOR_LIBRARY_DIRS"] = resolved["mesa_dir"]
+    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    env["BOARD_VIEWER_WEBVIEW_CONSOLE"] = "1"
+    env["GDK_SCALE"] = "1"
+    env["GDK_DPI_SCALE"] = "1"
+    env["HERDR_CORE_BIN"] = resolved["herdr_core"]
+    env["HERDR_VIA_PY"] = resolved["python"]
+    env["HC_SESSION"] = "a"
+    env["BOARD_LOCATION"] = REMOTE_LOCATION
+    (run_root / "shots").mkdir(parents=True, exist_ok=True)
+    return env
+
+
+def remote_binds(resolved: dict) -> list[tuple[str, str]]:
+    """Read-only binds: the canary, the lane modules, the via program,
+    the pinned binaries (covered by the /nix/store bind - stated
+    explicitly for review) and the B-side fixture tree at the neutral
+    board path. The session module's bind does double duty: the lane
+    imports its helpers from it, and it is the escape fixture's
+    existing, readable, outside-the-board target."""
+    return [
+        (resolved["canary"], CANARY_SANDBOX_PATH),
+        (resolved["lane_py"], REMOTE_LANE_SANDBOX_PATH),
+        (resolved["via_py"], VIA_PROGRAM_SANDBOX_PATH),
+        (resolved["client_py"], SESSION_CLIENT_SANDBOX_PATH),
+        (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
+        (resolved["fixture_dir"], "/board"),
+        (resolved["app"], resolved["app"]),
+        (resolved["weston"], resolved["weston"]),
+        (resolved["shooter"], resolved["shooter"]),
+        (resolved["tauri_driver"], resolved["tauri_driver"]),
+        (resolved["webkit_driver"], resolved["webkit_driver"]),
+        (resolved["herdr_core"], resolved["herdr_core"]),
+    ]
+
+
+def remote_lane() -> int:
+    """Gated remote mesh lane, exactly harness/remote-lane.md's
+    reviewed shape: same supervisor, same canary-first order, one
+    bound. The payload stands up two private cores, joins b to a's list
+    through the via program, opens the machine-named location in the
+    headless viewer and asserts the render, the figure bytes and the
+    remote containment refusal. pidfd-only cleanup; 180s bound."""
+    sys.path.insert(0, str(HERE))
+    import isolation
+
+    isolation.gate_or_exit("remote")
+
+    found = shutil.which("bwrap")
+    if found is None:
+        print("containment refusal: bwrap is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return 1
+    bwrap = str(pathlib.Path(found).resolve())
+    python = str(pathlib.Path(sys.executable).resolve())
+    resolved = remote_resolved(tracker_db_arg)
+    if resolved is None:
+        return 1
+    if resolved["bwrap"] != bwrap or resolved["python"] != python:
+        print("containment refusal: resolved tools drifted between resolution and spawn", file=sys.stderr)
+        return 1
+
+    run_root = isolation.make_run_root("remote")
+    env = remote_env(resolved, run_root)
+    ro_binds = remote_binds(resolved)
+    cmd = isolation.build_command(bwrap, run_root, [python, REMOTE_LANE_SANDBOX_PATH], ro_binds)
+
+    print("[remote] gate command:", " ".join(cmd), flush=True)
+    print(f"[remote] run root: {run_root}", flush=True)
+    supervisor = isolation.PidfdSupervisor(cmd, env)
+    log_path = run_root / "logs" / "remote.log"
+    started = time.monotonic()
+    try:
+        supervisor.start()
+        try:
+            code = supervisor.wait(timeout=REMOTE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            print(f"[remote] timeout after {REMOTE_TIMEOUT_SECONDS}s: stopping via pidfd", file=sys.stderr)
+            supervisor.stop()
+            log_path.write_text(supervisor.read_output())
+            print("containment refusal: remote lane exceeded the time bound", file=sys.stderr)
+            return 1
+        output = supervisor.read_output()
+        log_path.write_text(output)
+        cost = time.monotonic() - started
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        print(f"[remote] lane exit={code} in {cost:.1f}s; log: {log_path}", flush=True)
+        return code
+    except isolation.ContainmentRefused as error:
+        print(f"containment refusal: {error}", file=sys.stderr)
+        return 1
+    finally:
+        code = supervisor.stop()
+        if code != 0 and code is not None:
+            print(f"[remote] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
 # --- session lane: the interactive WebDriver tool ------------------------
@@ -1696,7 +1949,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="board viewer harness")
     parser.add_argument(
         "lane",
-        choices=["check-fast", "preflight", "browser", "native", "session", "serve"],
+        choices=["check-fast", "preflight", "browser", "native", "session", "remote", "serve"],
     )
     parser.add_argument("--tracker-db", help="absolute caller-side tracker db path for the preflight baseline")
     parser.add_argument("--board", help="absolute board file for the native and session lanes")
@@ -1714,6 +1967,8 @@ def main() -> int:
         return native_lane(board_arg, tracker_db_arg)
     if args.lane == "session":
         return session_main(args.session_args, board_arg)
+    if args.lane == "remote":
+        return remote_lane()
     return gated_stub(args.lane)
 
 
