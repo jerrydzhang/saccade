@@ -578,15 +578,21 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
     via_py = str((HERE / "via_b.py").resolve())
     session_py = str((HERE / "webdriver_session.py").resolve())
     client_py = str((HERE / "webdriver_client.py").resolve())
-    # the sandbox has no /bin; a pinned bash binds there so whatever
-    # composition the core uses for the via line can run at all. The
-    # via program itself never spawns a shell; this is insurance for
-    # the core's own composition, read-only and store-pinned.
+    # the sandbox has no /bin; the pinned bash binds there because the
+    # via program IS the remote shell for the mesh: it runs the core's
+    # handover line under /bin/sh -c, read-only, store-pinned
     bash = shutil.which("bash")
     if bash is None:
         print("containment refusal: bash is not in PATH (pinned devshell expected)", file=sys.stderr)
         return None
     bash_bin = str(pathlib.Path(bash).resolve())
+    if not bash_bin.startswith("/nix/store/"):
+        print(
+            "containment refusal: the /bin/sh bind must be a pinned store bash; "
+            f"resolved {bash_bin!r}",
+            file=sys.stderr,
+        )
+        return None
     fixture_dir = HERE / "remote_fixture"
     if not fixture_dir.is_dir() or not (fixture_dir / "real.yaml").is_file():
         print("containment refusal: harness/remote_fixture with real.yaml is missing", file=sys.stderr)

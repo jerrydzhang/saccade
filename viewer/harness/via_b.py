@@ -9,8 +9,9 @@ The program is therefore the sandbox's faithful remote shell: it runs
 the line whole under the pinned /bin/sh - which the lane binds - with
 the pinned core's bin directory first on PATH, so the line's
 `command -v herdr-core` resolves to exactly the tested bytes. Nothing
-is second-guessed and no shell is spawned by this program: the line is
-the contract, and the sandbox is the containment.
+is second-guessed: the line is the contract, the sandbox is the
+containment. The one shell this program ever runs is that pinned
+/bin/sh, for exactly the handed-over line.
 
 Runs inside the sandbox as
 [<BOARD_VIEWER_VIA_PY>, /pin/via_b.py, <line words...>]. The decision
