@@ -546,6 +546,51 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("invalid and missing inputs", phase_invalid)
 
+    # phase 7: the grammar version range over the real frontend - the
+    # supported range is the viewer's declared claim, an unknown kind
+    # renders as raw source, an unknown major version and a board with
+    # no grammar field refuse under their own codes
+    def phase_grammar() -> None:
+        inspection = page.evaluate(f"() => {viewer}.inspection()")
+        check(
+            "the viewer declares exactly grammar 1",
+            inspection["identity"]["supportedGrammarVersions"] == [1],
+            str(inspection["identity"]),
+        )
+
+        open_board("unknown-kind.yaml")
+        inspection = page.evaluate(f"() => {viewer}.inspection()")
+        check(
+            "an unknown kind loads the board with a diagnostic",
+            inspection["resource"]["status"] == "loaded"
+            and inspection["identity"]["grammar"] == 1
+            and any(d["code"] == "unknown-kind" for d in inspection["diagnostics"]),
+            str(inspection["diagnostics"])[:200],
+        )
+        raw_visible = page.evaluate("() => document.querySelector('.block-unknown pre.md-code') !== null")
+        check("the unknown component renders as raw source", raw_visible is True)
+        screenshot_at(".block-unknown", "unknown-kind.png")
+
+        open_board("grammar-2.yaml")
+        inspection = page.evaluate(f"() => {viewer}.inspection()")
+        check(
+            "an unknown major version refuses under its own code",
+            inspection["resource"]["status"] == "invalid"
+            and any(e["code"] == "grammar-version" for e in inspection["errors"]),
+            str(inspection["errors"])[:200],
+        )
+
+        open_board("missing-grammar.yaml")
+        inspection = page.evaluate(f"() => {viewer}.inspection()")
+        check(
+            "a board with no grammar field refuses, not legacy",
+            inspection["resource"]["status"] == "invalid"
+            and any(e["code"] == "missing-key" for e in inspection["errors"]),
+            str(inspection["errors"])[:200],
+        )
+
+    phase("grammar version range", phase_grammar)
+
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 
 
