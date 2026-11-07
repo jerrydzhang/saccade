@@ -1871,6 +1871,9 @@ fn board_wire_routes_hold_their_contracts() {
         .unwrap();
     assert_eq!(body["board_grammar"]["min"], json!(1));
     assert_eq!(body["board_grammar"]["max"], json!(1));
+    // the tracker's name for tracker-named locations: the repo's
+    // directory basename; the fixture repo directory is "project"
+    assert_eq!(body["tracker"], json!("project"));
 
     // the path route refuses a task with no board, and a bad task id
     let created = ureq::post(&format!("{url}/api/v1/command"))

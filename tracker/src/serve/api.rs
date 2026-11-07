@@ -2776,6 +2776,10 @@ async fn board_path(
 async fn version(State(app): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
+        // the tracker's name for tracker-named locations: the serving
+        // repo's directory basename; a --db server without a repo
+        // names nothing
+        "tracker": app.repo_root().map(crate::paths::repo_basename),
         "board_grammar": {
             "min": *board_grammar::SUPPORTED_GRAMMAR_VERSIONS.start(),
             "max": *board_grammar::SUPPORTED_GRAMMAR_VERSIONS.end(),

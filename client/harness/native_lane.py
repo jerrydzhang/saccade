@@ -32,8 +32,10 @@ import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, "/canary")
+sys.path.insert(0, "/mock")
 
 import containment_canary  # noqa: E402
+import tracker_mock  # noqa: E402
 
 READY_SECONDS = 15
 FRAME_COUNT = 3
@@ -132,62 +134,66 @@ def main() -> int:
     print("[native] private headless weston up", flush=True)
 
     # the app shares the compositor's display name; its stderr carries
-    # the bridge outcome lines, written to a log FILE
+    # the bridge outcome lines and the webview console, written to log
+    # FILES
     app_env = {**os.environ, "WAYLAND_DISPLAY": wayland_name}
-    app_log_path = logs / "app.log"
-    app_log = open(app_log_path, "wb")
-    app = subprocess.Popen([app_bin, board], env=app_env, stdout=app_log, stderr=app_log)
-    app_log.close()
-    print(f"[native] app launched in foreground on {board}", flush=True)
 
-    frame_paths: list[str] = []
-    alive_at_start = app.poll() is None
-    exit_code: int | None = None
-    try:
-        for index in range(1, FRAME_COUNT + 1):
-            if app.poll() is not None:
-                break
-            remaining = (started_at + 120) - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(FRAME_INTERVAL_SECONDS, max(remaining, 0)))
-            before = set(shots.glob("wayland-screenshot-*.png"))
-            try:
-                result = subprocess.run(
-                    [shooter_bin],
-                    cwd=str(shots),
-                    env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
-                    capture_output=True,
-                    timeout=10,
-                )
-            except subprocess.TimeoutExpired:
-                # a hung capture is a recorded failed check, never a lane
-                # crash - teardown and the remaining evidence still run
-                check(f"frame {index} captured", False, "screenshooter timed out after 10s")
-                continue
-            new_frames = sorted(set(shots.glob("wayland-screenshot-*.png")) - before)
-            if new_frames:
-                frame_paths.extend(str(f) for f in new_frames)
-                check(f"frame {index} captured", True, ", ".join(f.name for f in new_frames))
-            else:
-                detail = result.stderr.decode(errors="replace")[:120]
-                check(f"frame {index} captured", False, f"rc={result.returncode} {detail}")
-    finally:
-        exit_code = app.poll()
-        if app.poll() is None:
-            app.terminate()
-            try:
-                app.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                app.kill()
-                app.wait(timeout=5)
-        if weston.poll() is None:
-            weston.terminate()
-            try:
-                weston.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                weston.kill()
-                weston.wait(timeout=5)
+    def run_app(board_arg: str, log_name: str) -> tuple[str, list[str], bool, int | None]:
+        """One foreground launch with bounded captures, then owned
+        teardown of the app alone: the log text, the frames, the
+        liveness at capture start, and the exit code read BEFORE our
+        teardown."""
+        log_path = logs / log_name
+        log = open(log_path, "wb")
+        child = subprocess.Popen([app_bin, board_arg], env=app_env, stdout=log, stderr=log)
+        log.close()
+        print(f"[native] app launched in foreground on {board_arg}", flush=True)
+        frames: list[str] = []
+        alive = child.poll() is None
+        code: int | None = None
+        try:
+            for index in range(1, FRAME_COUNT + 1):
+                if child.poll() is not None:
+                    break
+                remaining = (started_at + 240) - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(FRAME_INTERVAL_SECONDS, max(remaining, 0)))
+                before = set(shots.glob("wayland-screenshot-*.png"))
+                try:
+                    result = subprocess.run(
+                        [shooter_bin],
+                        cwd=str(shots),
+                        env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
+                        capture_output=True,
+                        timeout=10,
+                    )
+                except subprocess.TimeoutExpired:
+                    # a hung capture is a recorded failed check, never a
+                    # lane crash - teardown and evidence still run
+                    check(f"frame {index} captured ({log_name})", False, "screenshooter timed out after 10s")
+                    continue
+                new_frames = sorted(set(shots.glob("wayland-screenshot-*.png")) - before)
+                if new_frames:
+                    frames.extend(str(f) for f in new_frames)
+                    check(f"frame {index} captured ({log_name})", True, ", ".join(f.name for f in new_frames))
+                else:
+                    detail = result.stderr.decode(errors="replace")[:120]
+                    check(f"frame {index} captured ({log_name})", False, f"rc={result.returncode} {detail}")
+        finally:
+            code = child.poll()
+            if child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=5)
+        return log_path.read_text(errors="replace"), frames, alive, code
+
+    # launch 1: the file board through the bridge, the lane's standing
+    # contract
+    app_log_text, frame_paths, alive_at_start, exit_code = run_app(board, "app.log")
 
     # liveness is recorded separately from the frame count: poll state
     # at capture start, the exit code read BEFORE our teardown, then the
@@ -197,7 +203,6 @@ def main() -> int:
     check("app alive when captures began", alive_at_start, f"poll={alive_at_start}")
     check("app alive at teardown", exit_code is None, f"exit={exit_code}")
     check("frames captured", len(frame_paths) == FRAME_COUNT, str(frame_paths))
-    app_log_text = app_log_path.read_text(errors="replace")
     check(
         "webview frontend executed",
         "[viewer] startup" in app_log_text,
@@ -211,6 +216,48 @@ def main() -> int:
     for line in app_log_text.splitlines():
         if line.startswith("[bridge]"):
             print(f"[native]   {line}", flush=True)
+
+    # launch 2: a tracker location. The tracker server is the lane's own
+    # contract stand-in on the sandbox's loopback. Without input
+    # injection this lane cannot pre-seed the server setting, so the
+    # pinned behavior is the teaching refusal plus the boundary fact the
+    # location form must hold everywhere: the tracker form never touches
+    # the file bridge - no read_declaration, no state-directory read.
+    mock = tracker_mock.TrackerMock("smoke")
+    mock.start()
+    try:
+        tracker_log, tracker_frames, tracker_alive, tracker_exit = run_app("smoke/t-0", "app-tracker.log")
+        check("tracker app alive when captures began", tracker_alive, f"poll={tracker_alive}")
+        check("tracker app alive at teardown", tracker_exit is None, f"exit={tracker_exit}")
+        check("tracker frames captured", len(tracker_frames) == FRAME_COUNT, str(tracker_frames))
+        check(
+            "tracker webview frontend executed",
+            "[viewer] startup" in tracker_log,
+            "[viewer] startup marker absent",
+        )
+        check(
+            "tracker location opens no file through the bridge",
+            "[bridge] read_declaration" not in tracker_log,
+            "the tracker form read a file path",
+        )
+        check(
+            "the unset server refuses with the teaching line",
+            "[viewer] initial board FAILED" in tracker_log
+            and "no tracker server set" in tracker_log,
+            tracker_log[-400:],
+        )
+        for line in tracker_log.splitlines():
+            if "[viewer] initial board" in line:
+                print(f"[native]   {line}", flush=True)
+    finally:
+        mock.stop()
+        if weston.poll() is None:
+            weston.terminate()
+            try:
+                weston.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                weston.kill()
+                weston.wait(timeout=5)
 
     cost = time.monotonic() - started_at
     passed = sum(1 for ok, _name, _detail in RESULTS if ok)

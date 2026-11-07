@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseLocation } from "../src/lib/location.ts";
+import { parseLocation, parseTaskSpec, trackerLocation } from "../src/lib/location.ts";
 
 test("a plain absolute path is the machine this viewer runs on", () => {
   assert.deepEqual(parseLocation("/srv/boards/first.yaml"), {
@@ -63,4 +63,27 @@ test("the composed launch form round-trips", () => {
   const parsed = parseLocation(composed);
   assert.ok(parsed);
   assert.equal(`${parsed.machine}:${parsed.path}`, composed);
+});
+
+test("a tracker location names the tracker and the task spec", () => {
+  assert.deepEqual(trackerLocation("saccade/t-56"), { machine: "tracker:saccade", path: "t-56" });
+  assert.deepEqual(trackerLocation("saccade/t-56@r3"), { machine: "tracker:saccade", path: "t-56@r3" });
+  assert.equal(trackerLocation("/saccade/t-56"), null, "a leading slash is a host path");
+  assert.equal(trackerLocation("host:/saccade/t-56"), null, "a machine path keeps its colon form");
+  assert.equal(trackerLocation("saccade/t-56/extra"), null);
+  assert.deepEqual(parseLocation("saccade/t-56"), trackerLocation("saccade/t-56"));
+  assert.equal(
+    parseLocation("saccade/t-56")?.machine,
+    "tracker:saccade",
+    "the folded parser answers the tracker form",
+  );
+  assert.equal(parseLocation("machine:/path.yaml")?.machine, "machine", "the machine form survives");
+});
+
+test("a task spec parses the bare and revisioned forms", () => {
+  assert.deepEqual(parseTaskSpec("t-5"), { task: 5, revision: null });
+  assert.deepEqual(parseTaskSpec("t-5@r3"), { task: 5, revision: 3 });
+  assert.equal(parseTaskSpec("t-"), null);
+  assert.equal(parseTaskSpec("5"), null);
+  assert.equal(parseTaskSpec("t-5/r2"), null);
 });

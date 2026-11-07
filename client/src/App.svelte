@@ -11,6 +11,7 @@
   import type { RenderOutcome, ViewerState } from "./lib/board/viewmodel.ts";
   import type { Board } from "./lib/board/model.ts";
   import type { Diagnostic } from "./lib/board/errors.ts";
+  import { serverHost, setServerHost } from "./lib/tracker.ts";
 
   const model = new ViewerModel();
 
@@ -190,6 +191,14 @@
     if (hostPath) await model.openInput(hostPath);
   }
 
+  // The one tracker setting: the server host, the address the tracker
+  // publishes beside its database. Set once; every tracker location
+  // rides it.
+  let serverInput = $state(serverHost() ?? "");
+  function saveServer(): void {
+    setServerHost(serverInput);
+  }
+
   function jumpToMatch(occurrence: SearchOccurrence): void {
     const elById = document.querySelector<HTMLElement>(`[data-unit-id="${occurrence.unit.id}"]`);
     if (elById) {
@@ -244,9 +253,13 @@
     </span>
     <span class="controls">
       <label class="control">location
-        <input type="text" bind:value={hostPath} placeholder="/local/path.yaml or machine:/remote/path.yaml" aria-label="board location" data-control="open:host-path" />
+        <input type="text" bind:value={hostPath} placeholder="/local/path.yaml, machine:/path, or tracker/t-N" aria-label="board location" data-control="open:host-path" />
       </label>
       <button type="button" data-control="open:host" onclick={() => void openHost()}>open</button>
+      <label class="control">tracker server
+        <input type="text" bind:value={serverInput} placeholder="127.0.0.1:8811" aria-label="tracker server host" data-control="server:host" />
+      </label>
+      <button type="button" data-control="server:save" onclick={saveServer}>save</button>
     </span>
   </header>
 

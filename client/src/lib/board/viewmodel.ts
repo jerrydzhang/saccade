@@ -198,7 +198,7 @@ export class ViewerModel {
     const parsed = parseLocation(raw);
     if (!parsed) {
       const message =
-        `not a location: ${JSON.stringify(raw)}; use /absolute/path or machine:/absolute/path`;
+        `not a location: ${JSON.stringify(raw)}; use /absolute/path, machine:/absolute/path, or tracker/t-N`;
       this.set({
         status: "invalid",
         board: null,

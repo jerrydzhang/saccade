@@ -46,6 +46,7 @@ export type StructuredIssue = {
     | "grammar-version"
     | "wrong-type"
     | "bad-revision"
+    | "bad-task"
     | "bad-figure-path"
     | "bad-select-path"
     | "empty-select"

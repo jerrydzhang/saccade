@@ -104,14 +104,25 @@ export function renderBlock(block: Block, blockId: string, hooks: RenderHooks): 
     case "incorporation": {
       const div = el("div", { class: "block block-incorporation", "data-block-id": blockId });
       const select = block.source.select ? ` select ${block.source.select.join("/")}` : "";
+      // The citation names its source as t-N; hydration resolves the
+      // dense revision through the tracker and turns it into a link to
+      // that revision. Off the tracker lane the authored claim and the
+      // hash stand unlinked - a provenance fact, never a guess.
       div.append(
         el(
           "p",
           { class: "provenance" },
-          "declared source (unvalidated claim): ",
-          el("code", {}, block.source.task),
-          " revision ",
-          el("code", {}, block.source.revision),
+          "incorporates ",
+          el(
+            "span",
+            {
+              class: "citation",
+              "data-cite-task": block.source.task,
+              "data-cite-commit": block.source.revision,
+            },
+            block.source.task,
+          ),
+          el("span", { class: "provenance-hash" }, ` (revision ${block.source.revision})`),
           ...(select ? [el("span", {}, select)] : []),
         ),
       );

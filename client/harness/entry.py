@@ -55,7 +55,7 @@ VIEWER = HERE.parent
 
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
-    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py"]),
+    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/tracker_mock.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py"]),
     ("typecheck", ["npm", "run", "check"]),
     ("contracts", ["npm", "run", "test"]),
     # the read-only herdr-core client is a pure crate: its contract
@@ -83,6 +83,7 @@ CANARY_SANDBOX_PATH = "/canary/containment_canary.py"
 # byte the lane reads, read-only. The stdlib loopback server removed the
 # need for any node bind; the lane script rides /lane.
 BROWSER_LANE_SANDBOX_PATH = "/lane/browser_lane.py"
+TRACKER_MOCK_SANDBOX_PATH = "/mock/tracker_mock.py"
 DIST_SANDBOX = "/app/dist"
 NATIVE_LANE_SANDBOX_PATH = "/lane/native_lane.py"
 SESSION_PAYLOAD_SANDBOX_PATH = "/lane/webdriver_session.py"
@@ -361,6 +362,7 @@ def browser_lane() -> int:
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),
         (lane, BROWSER_LANE_SANDBOX_PATH),
+        (str((HERE / "tracker_mock.py").resolve()), TRACKER_MOCK_SANDBOX_PATH),
         (str(dist), DIST_SANDBOX),
     ]
     cmd = isolation.build_command(bwrap, run_root, [python, BROWSER_LANE_SANDBOX_PATH], ro_binds)
@@ -516,6 +518,7 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),
         (lane, NATIVE_LANE_SANDBOX_PATH),
+        (str((HERE / "tracker_mock.py").resolve()), TRACKER_MOCK_SANDBOX_PATH),
         (app, app),
         (weston_bin, weston_bin),
         (shooter_bin, shooter_bin),

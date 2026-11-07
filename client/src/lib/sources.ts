@@ -6,6 +6,7 @@
 // adapter swapping.
 
 import { resolveRelative } from "./resolve.ts";
+import { TrackerSource } from "./tracker.ts";
 import { LANE_CODES, type LaneCode } from "./board/errors.ts";
 
 // "fixture" and "host" are this viewer's own machines; any other
@@ -176,7 +177,11 @@ export class HostFileSource implements BoardSource {
 // machines, logging in or updating cores is the human's own host setup;
 // every machine state arrives here as a structured error, never a retry.
 export class RemoteSource implements BoardSource {
-  constructor(readonly machine: string) {}
+  readonly machine: string;
+
+  constructor(machine: string) {
+    this.machine = machine;
+  }
 
   async loadText(location: Location): Promise<LoadedText> {
     const invoke = tauriInvoke();
@@ -214,6 +219,8 @@ export class RemoteSource implements BoardSource {
 export function sourceFor(machine: Machine): BoardSource {
   if (machine === "fixture") return new FixtureSource();
   if (machine === "host") return new HostFileSource();
+  // A tracker-named board rides that tracker's own HTTP API.
+  if (machine.startsWith("tracker:")) return new TrackerSource(machine.slice("tracker:".length));
   // Runtime callers can pass unknown machines despite the static type.
   // An empty name is a refusal; anything else is a core machine name.
   if (machine.length === 0) {

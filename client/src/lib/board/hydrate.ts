@@ -11,7 +11,8 @@
 import { renderMath } from "../mathjax.ts";
 import { renderMermaid } from "../mermaid.ts";
 import type { ViewerModel, RenderOutcome } from "./viewmodel.ts";
-import type { Location } from "../sources.ts";
+import { sourceFor, type Location } from "../sources.ts";
+import { TrackerSource } from "../tracker.ts";
 import { el } from "../render.ts";
 
 export async function hydrate(
@@ -47,7 +48,49 @@ export async function hydrate(
     if (stale()) return collected;
   }
 
+  await hydrateCitations(container, model, location);
+  if (stale()) return collected;
+
   return collected;
+}
+
+/** The incorporation citations: on the tracker lane the dense revision
+ * resolves through the tracker's own history and the citation becomes a
+ * link to that revision; anywhere else the authored claim and the hash
+ * stay as rendered - a provenance fact, never a guessed number. */
+async function hydrateCitations(
+  container: HTMLElement,
+  model: ViewerModel,
+  location: Location,
+): Promise<void> {
+  if (!location.machine.startsWith("tracker:")) return;
+  const source = sourceFor(location.machine);
+  if (!(source instanceof TrackerSource)) return;
+  const spans = Array.from(container.querySelectorAll<HTMLElement>(".citation[data-cite-task]"));
+  for (const span of spans) {
+    const task = span.dataset.citeTask ?? "";
+    const commit = span.dataset.citeCommit ?? "";
+    const resolved = await source.citationLabel(task, commit).catch(() => null);
+    if (resolved) {
+      const link = el(
+        "a",
+        {
+          class: "citation-link",
+          href: "#",
+          "data-control": "board:open-citation",
+          "data-open-path": resolved.path,
+        },
+        resolved.label,
+      );
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        void model.open({ machine: location.machine, path: resolved.path });
+      });
+      span.replaceChildren(link);
+    } else {
+      span.append(el("span", { class: "citation-unresolved" }, ` (${commit.slice(0, 8)})`));
+    }
+  }
 }
 
 async function hydrateMath(span: HTMLElement, outcomes: RenderOutcome[]): Promise<void> {

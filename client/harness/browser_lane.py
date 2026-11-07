@@ -49,8 +49,10 @@ HERE = pathlib.Path(__file__).resolve().parent
 # The canary rides its own read-only bind; import it from there, never
 # from this lane's directory.
 sys.path.insert(0, "/canary")
+sys.path.insert(0, "/mock")
 
 import containment_canary  # noqa: E402
+import tracker_mock  # noqa: E402
 
 SERVER_PORT = 1421
 DIST_SANDBOX = "/app/dist"
@@ -590,6 +592,95 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         )
 
     phase("grammar version range", phase_grammar)
+
+    # phase 8: tracker-named locations over the tracker contract stand-in
+    # (harness/tracker_mock.py): the one server setting, the version
+    # handshake, the unknown-kind lenient render, the unsupported major,
+    # the wrong-tracker refusal, and the citation link navigating to the
+    # cited revision. The real wire is pinned on the server side by the
+    # cargo api tests; this phase pins the viewer's half.
+    def phase_tracker() -> None:
+        tracker = tracker_mock.TrackerMock("smoke")
+        tracker.start()
+        future = tracker_mock.TrackerMock("future", min_version=2, max_version=2)
+        future.start()
+        try:
+            save_server = lambda value: (  # noqa: E731
+                page.fill('[data-control="server:host"]', value),
+                page.click('[data-control="server:save"]'),
+            )
+
+            def open_location(spec: str) -> dict:
+                page.fill('[data-control="open:host-path"]', spec)
+                page.click('[data-control="open:host"]')
+                page.wait_for_function(
+                    f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
+                )
+                return page.evaluate(f"() => {viewer}.inspection()")
+
+            save_server(f"127.0.0.1:{tracker.port}")
+            inspection = open_location("smoke/t-0")
+            check(
+                "a tracker location loads through the server",
+                inspection["resource"]["status"] == "loaded"
+                and inspection["identity"]["task"] == "t-0"
+                and inspection["resource"]["machine"] == "tracker:smoke",
+                str(inspection["resource"]),
+            )
+
+            page.wait_for_selector('[data-control="board:open-citation"]')
+            label = page.text_content('[data-control="board:open-citation"]')
+            check(
+                "the incorporation citation resolves to t-1@r1",
+                label == "t-1@r1",
+                str(label),
+            )
+            page.click('[data-control="board:open-citation"]')
+            page.wait_for_function(
+                f"() => {viewer}.inspection().resource.path === 't-1'"
+            )
+            cited = page.evaluate(f"() => {viewer}.inspection()")
+            check(
+                "the citation link opens the cited revision",
+                cited["resource"]["status"] == "loaded"
+                and cited["identity"]["task"] == "t-1"
+                and any(d["code"] == "unknown-kind" for d in cited["diagnostics"]),
+                str(cited["resource"]),
+            )
+            raw_visible = page.evaluate("() => document.querySelector('.block-unknown pre.md-code') !== null")
+            check("the cited unknown kind renders as raw source", raw_visible is True)
+            screenshot_at(".block-unknown", "tracker-cited-unknown-kind.png")
+
+            inspection = open_location("smoke/t-2")
+            check(
+                "an unsupported major version refuses with its range named",
+                inspection["resource"]["status"] == "invalid"
+                and any(e["code"] == "grammar-version" for e in inspection["errors"]),
+                str(inspection["errors"])[:200],
+            )
+
+            inspection = open_location("other/t-0")
+            check(
+                "a wrong tracker name refuses at the version handshake",
+                inspection["resource"]["status"] == "invalid"
+                and any("serves tracker 'smoke'" in e["message"] for e in inspection["errors"]),
+                str(inspection["errors"])[:200],
+            )
+
+            save_server(f"127.0.0.1:{future.port}")
+            inspection = open_location("future/t-0")
+            check(
+                "a server range excluding the viewer refuses before any board read",
+                inspection["resource"]["status"] == "invalid"
+                and any("move the binaries in step" in e["message"] for e in inspection["errors"]),
+                str(inspection["errors"])[:200],
+            )
+            save_server(f"127.0.0.1:{tracker.port}")
+        finally:
+            tracker.stop()
+            future.stop()
+
+    phase("tracker locations", phase_tracker)
 
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 
