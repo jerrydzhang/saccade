@@ -1986,7 +1986,7 @@ fn board_wire_routes_hold_their_contracts() {
     let body: Value = page.body_mut().read_to_string().unwrap().parse().unwrap();
     assert_eq!(body["error"]["code"], json!("origin_forbidden"));
 
-    let mut shell = header(("origin", "tauri://localhost"));
+    let shell = header(("origin", "tauri://localhost"));
     assert_eq!(shell.status().as_u16(), 200, "the shell origin reads");
     assert_eq!(
         shell
@@ -2033,7 +2033,7 @@ fn board_wire_routes_hold_their_contracts() {
     let body: Value = form.body_mut().read_to_string().unwrap().parse().unwrap();
     assert_eq!(body["error"]["code"], json!("content_type_required"));
 
-    let mut stranger_post = ureq::post(&format!("{url}/api/v1/command"))
+    let stranger_post = ureq::post(&format!("{url}/api/v1/command"))
         .config()
         .http_status_as_error(false)
         .build()

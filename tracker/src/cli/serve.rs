@@ -5,6 +5,7 @@ pub(super) fn serve_door(
     bind: &str,
     port: &u16,
     allow_origin: &[String],
+    allow_host: &[String],
 ) -> Result<String, Fail> {
     if cli.server.is_some() {
         return Err(Fail::Usage(
@@ -43,6 +44,7 @@ pub(super) fn serve_door(
         bind,
         *port,
         allow_origin.to_vec(),
+        allow_host.to_vec(),
     )) {
         Err(e) => Err(Fail::Usage(e)),
         Ok(infallible) => match infallible {},

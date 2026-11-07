@@ -98,6 +98,10 @@ pub struct AppState {
     /// serve time. A request naming another origin refuses; a request
     /// naming none (the CLI, curl) never did come from a page.
     pub(crate) allowed_origins: Arc<[String]>,
+    /// The extra Host headers a request may name, configured at serve
+    /// time: loopback names and the bind address are always accepted,
+    /// anything else is a rebound name and refuses before routing.
+    pub(crate) allowed_hosts: Arc<[String]>,
 }
 
 /// The shells the viewer ships in; their origins are fixed by the
@@ -178,6 +182,7 @@ impl AppState {
                 .iter()
                 .map(|origin| origin.to_string())
                 .collect(),
+            allowed_hosts: Arc::from([]),
         })
     }
 
@@ -197,6 +202,14 @@ impl AppState {
         let mut allowed = self.allowed_origins.to_vec();
         allowed.extend(origins);
         self.allowed_origins = allowed.into();
+        self
+    }
+
+    /// Name the extra hosts a request may name (serve-time entries).
+    pub fn with_allowed_hosts(mut self, hosts: Vec<String>) -> Self {
+        let mut allowed = self.allowed_hosts.to_vec();
+        allowed.extend(hosts);
+        self.allowed_hosts = allowed.into();
         self
     }
 
@@ -591,31 +604,71 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
 /// back, never a wildcard. A POST also names its body as JSON: the one
 /// content type a cross-site form cannot claim. A request with no
 /// Origin header never came from a page; the CLI and scripts walk in.
+/// The Host names this server answers to, beyond its loopback names:
+/// the bind address at the serving port, plus serve-time entries.
+#[derive(Clone, Default)]
+pub struct Hosts {
+    pub bind: Option<String>,
+    pub extra: Arc<[String]>,
+}
+
 pub(crate) async fn origin_policy(
     axum::Extension(allowed): axum::Extension<Arc<[String]>>,
+    axum::Extension(hosts): axum::Extension<Hosts>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let origin = request
+    // the DNS-rebinding guard: a page on an attacker's domain resolves
+    // that domain to this server and sends its own name as Host.
+    // Loopback names and the bind address are this server's own faces;
+    // anything else refuses before routing.
+    if let Some(host) = request
         .headers()
-        .get(axum::http::header::ORIGIN)
+        .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    if let Some(origin) = &origin {
-        if !allowed.iter().any(|candidate| candidate == origin) {
+    {
+        let name = host
+            .rsplit_once(':')
+            .map(|(before, _)| before)
+            .unwrap_or(host);
+        let loopback = matches!(name, "127.0.0.1" | "localhost" | "[::1]" | "::1");
+        let bound = hosts.bind.as_deref() == Some(host);
+        let listed = hosts.extra.iter().any(|allowed| allowed == host);
+        if !loopback && !bound && !listed {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({
                     "error": {
-                        "code": "origin_forbidden",
+                        "code": "host_forbidden",
                         "detail": format!(
-                            "origin '{origin}' is not allowed here; the server allows its shells and the origins configured at serve time"
+                            "host '{host}' is not this server; call it by its loopback name or the bind address, or allow the host at serve time"
                         ),
                     }
                 })),
             )
                 .into_response();
         }
+    }
+    let origin = request
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    if let Some(origin) = &origin
+        && !allowed.iter().any(|candidate| candidate == origin)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": {
+                    "code": "origin_forbidden",
+                    "detail": format!(
+                        "origin '{origin}' is not allowed here; the server allows its shells and the origins configured at serve time"
+                    ),
+                }
+            })),
+        )
+            .into_response();
     }
     if request.method() == axum::http::Method::POST {
         let json = request
@@ -643,15 +696,14 @@ pub(crate) async fn origin_policy(
     let mut response = next.run(request).await;
     if let Some(origin) = &origin
         && is_read
+        && let Ok(value) = axum::http::HeaderValue::from_str(origin)
     {
-        if let Ok(value) = axum::http::HeaderValue::from_str(origin) {
-            response
-                .headers_mut()
-                .insert("access-control-allow-origin", value);
-            response
-                .headers_mut()
-                .append("vary", axum::http::HeaderValue::from_static("Origin"));
-        }
+        response
+            .headers_mut()
+            .insert("access-control-allow-origin", value);
+        response
+            .headers_mut()
+            .append("vary", axum::http::HeaderValue::from_static("Origin"));
     }
     response
 }

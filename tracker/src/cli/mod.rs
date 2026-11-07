@@ -179,6 +179,11 @@ enum Cmd {
         /// repeatable, on top of the shells' own origins
         #[arg(long = "allow-origin")]
         allow_origin: Vec<String>,
+        /// An extra Host header this server answers to (a host:port
+        /// pair a component reaches it by); loopback names and the
+        /// bind address always answer; repeatable
+        #[arg(long = "allow-host")]
+        allow_host: Vec<String>,
     },
     /// Launch the composed native Pi in an explicit existing
     /// workspace, task-free: a fresh session registers itself as a new
@@ -896,9 +901,10 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         bind,
         port,
         allow_origin,
+        allow_host,
     } = &cli.command
     {
-        return serve_door(cli, bind, port, allow_origin);
+        return serve_door(cli, bind, port, allow_origin, allow_host);
     }
     let destination = resolve_destination(cli)?;
     let command = match &cli.command {

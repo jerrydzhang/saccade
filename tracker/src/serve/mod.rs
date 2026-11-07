@@ -15,6 +15,7 @@ pub async fn run(
     bind: &str,
     port: u16,
     allow_origins: Vec<String>,
+    allow_hosts: Vec<String>,
 ) -> Result<std::convert::Infallible, String> {
     let addr = format!("{bind}:{port}");
     let mut state = AppState::open(db_path)?.with_allowed_origins(allow_origins);
@@ -44,6 +45,10 @@ pub async fn run(
     let bound = listener.local_addr().map_err(|e| e.to_string())?;
     let url = published_url(&bound);
     state = state.with_server_url(url.clone());
+    let hosts = crate::api::Hosts {
+        bind: Some(bound.to_string()),
+        extra: allow_hosts.into(),
+    };
     publish_address(db_path, &url)?;
     if !matches!(bind, "127.0.0.1" | "localhost" | "::1" | "[::1]") {
         eprintln!(
@@ -51,7 +56,7 @@ pub async fn run(
         );
     }
     info!(%addr, "serving http");
-    let router = router(state);
+    let router = router_with_hosts(state, hosts);
     axum::serve(listener, router)
         .await
         .expect("axum serves until killed");
@@ -83,10 +88,17 @@ fn published_url(bound: &std::net::SocketAddr) -> String {
 /// The whole HTTP surface: the versioned API. The origin allowlist
 /// rides an extension and the policy middleware wraps every route.
 pub fn router(state: AppState) -> axum::Router {
+    router_with_hosts(state, crate::api::Hosts::default())
+}
+
+/// The router with explicit hosts: the serving binary names the bind
+/// address at its port; tests and embedders name what they serve.
+pub fn router_with_hosts(state: AppState, hosts: crate::api::Hosts) -> axum::Router {
     // the extension wraps the policy: the middleware reads the
     // allowlist from the request the extension has already enriched
     crate::api::routes()
         .layer(axum::middleware::from_fn(crate::api::origin_policy))
         .layer(axum::Extension(state.allowed_origins.clone()))
+        .layer(axum::Extension(hosts))
         .with_state(state)
 }

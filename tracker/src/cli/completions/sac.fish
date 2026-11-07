@@ -22,7 +22,7 @@ function __saccade_positions
             continue
         end
         switch $t
-            case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --history --within
+            case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --allow-host --history --within
                 set prev_value 1
                 continue
             case '-*'
@@ -75,7 +75,7 @@ function __saccade_prev_value_flag
     # cursor is completing that value, no id belongs there
     set -l tokens (commandline -opc)
     switch $tokens[-1]
-        case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --history --within
+        case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --allow-origin --allow-host --history --within
             return 0
     end
     return 1
@@ -178,6 +178,7 @@ complete -c sac -n '__saccade_verb board; and __fish_seen_subcommand_from get di
 complete -c sac -n '__saccade_verb serve' -l bind -r -f -d 'the address to bind'
 complete -c sac -n '__saccade_verb serve' -l port -r -f -d 'the port to serve on'
 complete -c sac -n '__saccade_verb serve' -l allow-origin -r -f -d 'an extra origin whose browser pages may read this server'
+complete -c sac -n '__saccade_verb serve' -l allow-host -r -f -d 'an extra Host header this server answers to'
 complete -c sac -n '__saccade_verb launch' -l workspace -r -f -d 'the workspace directory to work in' -a '(__saccade_candidates workspaces)' -k
 complete -c sac -n '__saccade_verb launch' -l workspace -r -f -a '(__fish_complete_directories)'
 complete -c sac -n '__saccade_verb launch' -l resume -r -f -d 'continue this saved incarnation (i-N)' -a '(__saccade_candidates incarnations)'
