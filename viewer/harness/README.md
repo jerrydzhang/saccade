@@ -304,7 +304,7 @@ BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record> \
 BOARD_VIEWER_APP_BIN=<pinned packaged wrapper> \
 nix develop .#board-viewer --command \
   python3 -B viewer/harness/entry.py --board <absolute board.yaml> session up \
-  [--max-lifetime <seconds, default 3600>] [--tracker-db <absolute path>]
+  [--max-lifetime <seconds, default 1800>] [--tracker-db <absolute path>]
 ```
 
 `up` resolves every pin (bwrap, weston, weston-screenshooter,
@@ -327,7 +327,7 @@ ceiling), waits until the projection reports the board loaded, and
 serves commands.
 
 The bound is explicit: the payload tears itself down at
-`--max-lifetime` (capped at 24 h), the holder stops the supervisor
+`--max-lifetime` (capped at 4 h), the holder stops the supervisor
 through the pidfd as the backstop, and every verb refuses at the same
 authorization gate.
 

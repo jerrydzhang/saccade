@@ -466,9 +466,9 @@ def main() -> int:
     shots = pathlib.Path(pinned("SHOTS_DIR"))
     socket_path = pinned("SESSION_CONTROL_SOCKET")
     ready_file = pinned("SESSION_READY_FILE")
-    lifetime = float(os.environ.get("SESSION_LIFETIME_SECONDS", "3600"))
-    if lifetime <= 0 or lifetime > 24 * 3600:
-        print("containment refusal: SESSION_LIFETIME_SECONDS must be within (0, 24h]", file=sys.stderr)
+    lifetime = float(os.environ.get("SESSION_LIFETIME_SECONDS", "1800"))
+    if lifetime <= 0 or lifetime > 4 * 3600:
+        print("containment refusal: SESSION_LIFETIME_SECONDS must be within (0, 4h]", file=sys.stderr)
         return 1
     if not shots.is_dir():
         print("containment refusal: SHOTS_DIR must be an existing run-root directory", file=sys.stderr)

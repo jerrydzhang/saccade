@@ -62,7 +62,7 @@ BROWSER_TIMEOUT_SECONDS = 180
 NATIVE_TIMEOUT_SECONDS = 120
 SESSION_UP_TIMEOUT_SECONDS = 90
 SESSION_DOWN_TIMEOUT_SECONDS = 30
-SESSION_DEFAULT_LIFETIME_SECONDS = 3600
+SESSION_DEFAULT_LIFETIME_SECONDS = 1800
 # the scripted check sequence under one supervisor
 SESSION_CHECKS_TIMEOUT_SECONDS = 300
 # The canary file is bound read-only into the sandbox at this path: the
@@ -593,36 +593,60 @@ def process_env_value(pid: int, name: str) -> str | None:
     return None
 
 
-def pid_alive(pid: int) -> bool:
-    return os.path.isdir(f"/proc/{pid}")
-
-
-def signal_verified_pid(pid: int, token: str, sig: signal.Signals) -> bool:
-    """One pidfd signal against a process whose environment still
-    carries the session token: ownership verified before anything is
-    sent, no numeric-PID fallback, no pattern kills."""
-    if process_env_value(pid, "BOARD_VIEWER_SESSION_TOKEN") != token:
-        return False
+def open_verified_pidfd(pid: int, token: str) -> int | None:
+    """Pin the process FIRST - a held pidfd cannot be recycled - then
+    verify the token on the pinned process and confirm it is alive
+    through the same fd. There is no window in which a recycled PID
+    inherits another process's verdict."""
     try:
         fd = os.pidfd_open(pid)
     except OSError:
+        return None
+    try:
+        if process_env_value(pid, "BOARD_VIEWER_SESSION_TOKEN") != token:
+            os.close(fd)
+            return None
+        signal.pidfd_send_signal(fd, 0)  # alive probe through the pin
+        return fd
+    except (OSError, ProcessLookupError):
+        os.close(fd)
+        return None
+
+
+def signal_verified_pid(pid: int, token: str, sig: signal.Signals) -> bool:
+    """One signal through a token-verified pidfd: ownership verified on
+    the pinned process, no numeric-PID fallback, no pattern kills."""
+    fd = open_verified_pidfd(pid, token)
+    if fd is None:
         return False
     try:
         signal.pidfd_send_signal(fd, sig)
         return True
-    except OSError:
+    except (OSError, ProcessLookupError):
         return False
     finally:
         os.close(fd)
 
 
 def wait_pid_gone(pid: int, timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not pid_alive(pid):
-            return True
-        time.sleep(0.1)
-    return not pid_alive(pid)
+    """Poll the held pidfd, never the numeric /proc entry: the fd pins
+    the exact process we verified, and only the kernel's release of it
+    (ESRCH) counts as gone."""
+    try:
+        fd = os.pidfd_open(pid)
+    except OSError:
+        return True
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                signal.pidfd_send_signal(fd, 0)
+            except ProcessLookupError:
+                return True
+            time.sleep(0.1)
+        return False
+    finally:
+        os.close(fd)
 
 
 def escalate_verified_pid(pid: object, token: str) -> None:
@@ -944,8 +968,8 @@ def session_up(board_arg: str, lifetime: float) -> int:
     resolved = session_resolved(board_arg, tracker_db_arg)
     if resolved is None:
         return 1
-    if lifetime <= 0 or lifetime > 24 * 3600:
-        print("containment refusal: --max-lifetime must be within (0, 24h]", file=sys.stderr)
+    if lifetime <= 0 or lifetime > 4 * 3600:
+        print("containment refusal: --max-lifetime must be within (0, 4h]", file=sys.stderr)
         return 1
 
     existing = load_session_record()

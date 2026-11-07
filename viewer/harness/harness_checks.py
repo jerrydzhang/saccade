@@ -775,6 +775,37 @@ def main() -> int:
         entry.session_state_path = real_state_path
         entry.process_env_value = real_environ_reader
 
+    # pidfd ownership ordering, exercised against this checker process:
+    # the fd is pinned before the token is read, and the alive probe
+    # runs on the same fd the signal would use - no PID-reuse window.
+    # The environ reader is mocked because /proc/self/environ shows the
+    # exec-time block, never later putenv writes.
+    real_environ_reader = entry.process_env_value
+    entry.process_env_value = (
+        lambda pid, name: "tok-self"
+        if pid == os.getpid() and name == "BOARD_VIEWER_SESSION_TOKEN"
+        else None
+    )
+    try:
+        fd = entry.open_verified_pidfd(os.getpid(), "tok-self")
+        check("a pinned pidfd verifies its own token", fd is not None)
+        if fd is not None:
+            os.close(fd)
+        check("a foreign token never verifies", entry.open_verified_pidfd(os.getpid(), "other") is None)
+        check(
+            "a verified signal goes through the held pidfd",
+            entry.signal_verified_pid(os.getpid(), "tok-self", signal.SIGCHLD) is True,
+        )
+        check(
+            "a foreign-token signal is refused outright",
+            entry.signal_verified_pid(os.getpid(), "other", signal.SIGCHLD) is False,
+        )
+        check("a gone pid refuses verification outright", entry.signal_verified_pid(4194304 + 100, "tok-self", signal.SIGCHLD) is False)
+        check("waiting on a live self through the pidfd times out", entry.wait_pid_gone(os.getpid(), 0.2) is False)
+        check("waiting on a gone pid is immediately true", entry.wait_pid_gone(4194304 + 100, 0.2) is True)
+    finally:
+        entry.process_env_value = real_environ_reader
+
     # the payload's target addressing: stable data-control ids only
     check(
         "target ids compile to a data-control selector",
