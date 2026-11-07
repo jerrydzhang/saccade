@@ -636,9 +636,13 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 str(label),
             )
             page.click('[data-control="board:open-citation"]')
-            page.wait_for_function(
-                f"() => {viewer}.inspection().resource.path === 't-1'"
-            )
+            try:
+                page.wait_for_function(
+                    f"() => {viewer}.inspection().resource.path === 't-1@r1'", timeout=5000
+                )
+            except Exception:
+                state = page.evaluate(f"() => {viewer}.inspection()")
+                raise AssertionError(f"the citation click did not open the cited revision: {state}")
             cited = page.evaluate(f"() => {viewer}.inspection()")
             check(
                 "the citation link opens the cited revision",
