@@ -178,6 +178,14 @@ def perform_input(client: WebDriver, request: dict) -> dict:
     live center plus optional offsets; key acts on the focused element;
     coords is the explicit raw-coordinate escape hatch."""
     kind = request.get("kind")
+    if kind == "hotkey":
+        keys = request.get("keys")
+        if not isinstance(keys, list) or len(keys) < 2 or not all(isinstance(k, str) and k for k in keys):
+            raise WebDriverError("invalid argument", "hotkey input needs keys: [modifier..., key]")
+        downs = [{"type": "keyDown", "value": webdriver_client.key_codepoint(name)} for name in keys]
+        ups = [{"type": "keyUp", "value": webdriver_client.key_codepoint(name)} for name in reversed(keys)]
+        client.perform_actions([{"type": "key", "id": "keyboard", "actions": downs + ups}])
+        return {"kind": "hotkey", "keys": keys}
     if kind == "key":
         keys = request.get("keys")
         if not isinstance(keys, list) or not keys or not all(isinstance(k, str) and k for k in keys):
@@ -234,14 +242,6 @@ def perform_input(client: WebDriver, request: dict) -> dict:
         x, y = element_center(client, target)
         client.perform_actions(webdriver_client.pointer_drag_actions(x, y, dx, dy))
         return {"kind": "drag", "target": target, "dx": dx, "dy": dy}
-    if kind == "hotkey":
-        keys = request.get("keys")
-        if not isinstance(keys, list) or len(keys) < 2 or not all(isinstance(k, str) and k for k in keys):
-            raise WebDriverError("invalid argument", "hotkey input needs keys: [modifier..., key]")
-        downs = [{"type": "keyDown", "value": webdriver_client.key_codepoint(name)} for name in keys]
-        ups = [{"type": "keyUp", "value": webdriver_client.key_codepoint(name)} for name in reversed(keys)]
-        client.perform_actions([{"type": "key", "id": "keyboard", "actions": downs + ups}])
-        return {"kind": "hotkey", "keys": keys}
     raise WebDriverError("invalid argument", f"unknown input kind: {kind!r}")
 
 
