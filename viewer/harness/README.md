@@ -18,8 +18,8 @@ coordinator first.
 ## Lanes and what they claim
 
 - `check-fast`: plain, uncontained tool runs (typecheck, pure contract
-  tests, build). They are ordinary build invocations. They make **no
-  isolation claim** of any kind.
+  tests, the bridge crate's contract tests, build). They are ordinary
+  build invocations. They make **no isolation claim** of any kind.
 - `preflight`: the gated minimal containment verification described
   below. It runs the containment canary inside one bwrap sandbox and
   nothing else.
@@ -50,14 +50,24 @@ python3 viewer/harness/entry.py check-fast
 
 Runs, in order, with measured warm cost printed per step:
 
-1. `npm run check` - svelte-check over every TS/Svelte source (real
+1. `harness/harness_checks.py` - pure contract checks over the harness
+   itself (command assembly, baselines, supervision APIs; no spawn).
+2. `pyflakes` over the harness payloads.
+3. `npm run check` - svelte-check over every TS/Svelte source (real
    typechecking; transpilation is not typechecking).
-2. `npm run test` - pure contract tests via `node --test` (no browser).
-3. `npm run build` - the production frontend build.
+4. `npm run test` - pure contract tests via `node --test` (no browser).
+5. `cargo test` in `src-tauri/core-client` - the read-only herdr-core
+   client's contract tests (request shapes, error mapping, truncation
+   refusal, remote containment over a fake transport, socket framing
+   against a local test socket). A pure Rust crate; no GUI libraries,
+   no services.
+6. `npm run build` - the production frontend build.
 
 Measured warm cost on the dev host (2026-11 checkpoint): 9.3 s total
-(typecheck 1.7 s, contracts 0.3 s, build 7.2 s). Cold dependency fetches
-are one `npm install`, reported separately from the loop.
+for the npm steps (typecheck 1.7 s, contracts 0.3 s, build 7.2 s), with
+the harness checks and bridge contracts printing their own per-step
+cost on every run. Cold dependency fetches are one `npm install`,
+reported separately from the loop.
 
 ## Containment contract (the reviewed spec)
 

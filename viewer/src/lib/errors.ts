@@ -6,6 +6,30 @@ export type Pos = { line: number; column: number; offset: number };
 
 export type SourceRange = { start: Pos; end: Pos };
 
+// The closed list of load-lane failure codes the host bridge can send.
+// Both sides ship from this repository, so an unknown code is a bug, not
+// a case to handle - but the renderer never trusts the wire blindly.
+export const LANE_CODES = [
+  "asset-missing",
+  "asset-denied",
+  "lane-unavailable",
+  "core-unavailable",
+  "core-protocol",
+  "bridge-invalid",
+  "machine-unknown",
+  "machine-unavailable",
+  "machine-needs-login",
+  "machine-unreachable",
+  "machine-needs-update",
+  "read-failed",
+  "exec-timeout",
+  "exec-spawn-failed",
+  "asset-too-large",
+  "text-truncated",
+] as const;
+
+export type LaneCode = (typeof LANE_CODES)[number];
+
 export type StructuredIssue = {
   code:
     | "yaml-syntax"
@@ -15,8 +39,7 @@ export type StructuredIssue = {
     | "missing-key"
     | "wrong-type"
     | "empty-board"
-    | "asset-missing"
-    | "asset-denied";
+    | LaneCode;
   message: string;
   /** Path into the declaration, e.g. ["content", 2, "group", "title"]. */
   path?: (string | number)[];

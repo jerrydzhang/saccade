@@ -7,6 +7,7 @@ import type { Diagnostic, StructuredIssue } from "./errors.ts";
 import { decodeBoard } from "./decode.ts";
 import type { Board, FigureBlock } from "./model.ts";
 import { sourceFor, SourceUnavailableError, type Location, type Machine } from "./sources.ts";
+import { parseLocation } from "./location.ts";
 import type { CopyMode } from "./copy.ts";
 
 export type ViewerStatus = "empty" | "loading" | "loaded" | "invalid";
@@ -138,6 +139,28 @@ export class ViewerModel {
     });
   }
 
+  /** Parse an explicit location string and open it; a string that is
+   * not a location is a loud structured refusal, never a guess. */
+  async openInput(raw: string): Promise<void> {
+    const parsed = parseLocation(raw);
+    if (!parsed) {
+      const message =
+        `not a location: ${JSON.stringify(raw)}; use /absolute/path or machine:/absolute/path`;
+      this.set({
+        status: "invalid",
+        board: null,
+        rawText: null,
+        errors: [{ code: "asset-denied", message }],
+        diagnostics: [],
+        laneMessage: message,
+        renderOutcomes: [],
+        renderGeneration: null,
+      });
+      return;
+    }
+    await this.open(parsed);
+  }
+
   async loadFigureAsset(location: Location, block: FigureBlock): Promise<Uint8Array | string> {
     const token = this.generation;
     try {
@@ -173,5 +196,5 @@ export class ViewerModel {
 }
 
 export function machineLabel(machine: Machine): string {
-  return machine === "fixture" ? "fixture" : "host";
+  return machine === "fixture" ? "fixture" : machine;
 }

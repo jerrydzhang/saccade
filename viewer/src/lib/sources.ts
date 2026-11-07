@@ -1,11 +1,16 @@
 // Board sources: one interface, explicit machine + path. The fixture
 // adapter serves the deterministic development fixtures; the host adapter
-// reads through the narrow Tauri file commands in the native shell and
-// refuses (loudly) anywhere else. No silent adapter swapping.
+// reads through the narrow Tauri file commands in the native shell; the
+// remote adapter reads a machine-named location through the local
+// herdr-core's read-only face; anywhere else refuses loudly. No silent
+// adapter swapping.
 
 import { resolveRelative } from "./resolve.ts";
+import { LANE_CODES, type LaneCode } from "./errors.ts";
 
-export type Machine = "fixture" | "host";
+// "fixture" and "host" are this viewer's own machines; any other
+// non-empty name is a machine from the local core's list.
+export type Machine = string;
 
 export type Location = {
   machine: Machine;
@@ -30,8 +35,8 @@ export interface BoardSource {
 }
 
 export class SourceUnavailableError extends Error {
-  readonly code: "asset-missing" | "asset-denied" | "lane-unavailable";
-  constructor(code: "asset-missing" | "asset-denied" | "lane-unavailable", message: string) {
+  readonly code: LaneCode;
+  constructor(code: LaneCode, message: string) {
     super(message);
     this.code = code;
   }
@@ -121,6 +126,21 @@ export function tauriInvoke(): TauriInvoke {
   return invoke;
 }
 
+// The bridge rejects with its BridgeError {code, message}; keep the
+// structured code and human message instead of flattening them into a
+// string. An unknown code is a bridge bug, surfaced as one.
+function bridgeFailure(error: unknown): SourceUnavailableError {
+  if (typeof error === "object" && error !== null) {
+    const candidate = error as { code?: unknown; message?: unknown };
+    if (typeof candidate.code === "string" && typeof candidate.message === "string") {
+      const known = (LANE_CODES as readonly string[]).includes(candidate.code);
+      const code = known ? (candidate.code as LaneCode) : "bridge-invalid";
+      return new SourceUnavailableError(code, candidate.message);
+    }
+  }
+  return new SourceUnavailableError("read-failed", String(error));
+}
+
 export class HostFileSource implements BoardSource {
   readonly machine = "host" as const;
 
@@ -130,7 +150,7 @@ export class HostFileSource implements BoardSource {
       const result = (await invoke("read_declaration", { path: location.path })) as { text: string };
       return { text: result.text, location };
     } catch (error) {
-      throw new SourceUnavailableError("asset-missing", String(error));
+      throw bridgeFailure(error);
     }
   }
 
@@ -145,7 +165,48 @@ export class HostFileSource implements BoardSource {
       const bytes = (await invoke("read_asset", { base: baseDir, relative })) as number[];
       return { bytes: new Uint8Array(bytes), path: relative };
     } catch (error) {
-      throw new SourceUnavailableError("asset-missing", String(error));
+      throw bridgeFailure(error);
+    }
+  }
+}
+
+// A machine-named board: every read rides the LOCAL core's read-only
+// face (file.read for text, fixed-argv exec for bytes and remote path
+// resolution), and containment is proven on the remote side. Adding
+// machines, logging in or updating cores is the human's own host setup;
+// every machine state arrives here as a structured error, never a retry.
+export class RemoteSource implements BoardSource {
+  constructor(readonly machine: string) {}
+
+  async loadText(location: Location): Promise<LoadedText> {
+    const invoke = tauriInvoke();
+    try {
+      const result = (await invoke("read_declaration", {
+        path: location.path,
+        on: this.machine,
+      })) as { text: string };
+      return { text: result.text, location };
+    } catch (error) {
+      throw bridgeFailure(error);
+    }
+  }
+
+  async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
+    const invoke = tauriInvoke();
+    const baseDir = location.path.replace(/\/[^/]*$/, "");
+    const resolved = resolveRelative(baseDir, relative);
+    if (!resolved.ok) {
+      throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
+    }
+    try {
+      const bytes = (await invoke("read_asset", {
+        base: baseDir,
+        relative,
+        on: this.machine,
+      })) as number[];
+      return { bytes: new Uint8Array(bytes), path: relative };
+    } catch (error) {
+      throw bridgeFailure(error);
     }
   }
 }
@@ -154,12 +215,11 @@ export function sourceFor(machine: Machine): BoardSource {
   if (machine === "fixture") return new FixtureSource();
   if (machine === "host") return new HostFileSource();
   // Runtime callers can pass unknown machines despite the static type.
-  // Refuse loudly: reading the desktop for a remote target is exactly the
-  // silence this adapter refuses.
-  throw new SourceUnavailableError(
-    "lane-unavailable",
-    `unsupported machine: ${JSON.stringify(String(machine))}; expected "fixture" or "host"`,
-  );
+  // An empty name is a refusal; anything else is a core machine name.
+  if (machine.length === 0) {
+    throw new SourceUnavailableError("lane-unavailable", "empty machine name");
+  }
+  return new RemoteSource(machine);
 }
 
 export function fixtureNames(): string[] {

@@ -2,7 +2,16 @@
 //! resolve rules exactly: relative segments only, no parent traversal, no
 //! backslash separators, no absolute paths, no NUL bytes. Canonicalized
 //! prefix checking runs second so a guard bypass still cannot escape.
+//!
+//! Local locations read through std::fs exactly as before. A location
+//! that names a machine reads through the LOCAL herdr-core's read-only
+//! face instead (file.read for text; fixed-argv exec for bytes and
+//! remote path resolution), with containment proven on the remote side
+//! and every machine state surfacing as a structured error. The core
+//! socket is the only door here, and it opens read-only calls; the
+//! renderer gets no socket, no shell and no machine management.
 
+use board_viewer_core::{CoreClient, CoreFail, SocketTransport, guard_relative};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -12,7 +21,9 @@ pub fn set_initial_board(path: Option<String>) {
     let _ = INITIAL_BOARD.set(path);
 }
 
-/// The explicit board path handed to the foreground launch, if any.
+/// The explicit board location handed to the foreground launch, if any:
+/// `/path/to/board.yaml` or `machine:/path/to/board.yaml`. Never a
+/// registry, never a fallback - without it the app starts empty.
 #[tauri::command]
 pub fn initial_board() -> Option<String> {
     eprintln!(
@@ -47,35 +58,25 @@ fn missing(path: &str) -> BridgeError {
     }
 }
 
-/// The frontend already applied these rules; repeat them here so the host
-/// boundary holds even against a tampered renderer.
-fn guard_relative(relative: &str) -> Result<(), BridgeError> {
-    if relative.is_empty() {
-        return Err(deny("empty path"));
+fn core_failure(fail: CoreFail) -> BridgeError {
+    BridgeError {
+        code: fail.code().into(),
+        message: fail.to_string(),
     }
-    if relative.contains('\0') {
-        return Err(deny("NUL byte in path"));
-    }
-    if relative.contains('\\') {
-        return Err(deny("backslash is not a separator"));
-    }
-    if relative.starts_with('/') || relative.starts_with('~') {
-        return Err(deny("absolute path"));
-    }
-    let mut chars = relative.chars();
-    if let (Some(first), Some(second)) = (chars.next(), chars.next()) {
-        if first.is_ascii_alphabetic() && second == ':' {
-            return Err(deny("windows-style absolute path"));
-        }
-    }
-    for segment in relative.split('/') {
-        if segment == ".." {
-            return Err(deny("parent traversal"));
-        }
-    }
-    Ok(())
 }
 
+fn core_client() -> Result<CoreClient<SocketTransport>, BridgeError> {
+    let path = SocketTransport::default_path().map_err(core_failure)?;
+    Ok(CoreClient::new(SocketTransport::new(path)))
+}
+
+/// The machine argument of a command, present and non-empty.
+fn machine_of(on: &Option<String>) -> Option<&str> {
+    on.as_deref().filter(|machine| !machine.is_empty())
+}
+
+/// The frontend already applied these rules; repeat them here so the
+/// host boundary holds even against a tampered renderer.
 fn canonical_prefix_holds(base: &std::path::Path, joined: &std::path::Path) -> bool {
     match (base.canonicalize(), joined.canonicalize()) {
         (Ok(base), Ok(joined)) => joined.starts_with(base),
@@ -95,7 +96,7 @@ fn read_text_resolved(base: &str, relative: Option<&str>) -> Result<DeclaredText
     let target = match relative {
         None => base_path.to_path_buf(),
         Some(rel) => {
-            guard_relative(rel)?;
+            guard_relative(rel).map_err(deny)?;
             base_path.join(rel)
         }
     };
@@ -119,32 +120,80 @@ fn read_text_resolved(base: &str, relative: Option<&str>) -> Result<DeclaredText
         })
 }
 
-#[tauri::command]
-pub fn read_declaration(path: String) -> Result<DeclaredText, BridgeError> {
-    if path.is_empty() {
-        return Err(deny("empty path"));
+fn read_declaration_remote(machine: &str, path: &str) -> Result<DeclaredText, BridgeError> {
+    if !path.starts_with('/') {
+        return Err(deny("remote declaration path must be absolute"));
     }
-    read_text_resolved(&path, None)
+    if path.contains('\0') {
+        return Err(deny("NUL byte in path"));
+    }
+    let client = core_client()?;
+    let text = client.read_text(machine, path).map_err(core_failure)?;
+    let _ = log_bridge(
+        "read_declaration",
+        &format!("{machine}:{path}"),
+        &format!("{} bytes", text.len()),
+    );
+    Ok(DeclaredText { text })
 }
 
 #[tauri::command]
-pub fn read_asset(base: String, relative: String) -> Result<Vec<u8>, BridgeError> {
-    guard_relative(&relative)?;
-    let base_path = std::path::Path::new(&base);
-    let target = base_path.join(&relative);
-    if !canonical_prefix_holds(base_path, &target) {
-        return Err(deny("resolved path left the declaration directory"));
+pub fn read_declaration(path: String, on: Option<String>) -> Result<DeclaredText, BridgeError> {
+    if path.is_empty() {
+        return Err(deny("empty path"));
     }
-    let bytes = std::fs::read(&target).map_err(|_| {
-        let _ = log_bridge("read_asset", &target.to_string_lossy(), "missing");
-        missing(&target.to_string_lossy())
-    })?;
+    match machine_of(&on) {
+        Some(machine) => read_declaration_remote(machine, &path),
+        None => read_text_resolved(&path, None),
+    }
+}
+
+fn read_asset_remote(machine: &str, base: &str, relative: &str) -> Result<Vec<u8>, BridgeError> {
+    if !base.starts_with('/') {
+        return Err(deny("remote base path must be absolute"));
+    }
+    if base.contains('\0') {
+        return Err(deny("NUL byte in path"));
+    }
+    let client = core_client()?;
+    let bytes = client
+        .asset_bytes(machine, base, relative)
+        .map_err(core_failure)?;
     let _ = log_bridge(
         "read_asset",
-        &target.to_string_lossy(),
+        &format!("{machine}:{base}/{relative}"),
         &format!("{} bytes", bytes.len()),
     );
     Ok(bytes)
+}
+
+#[tauri::command]
+pub fn read_asset(
+    base: String,
+    relative: String,
+    on: Option<String>,
+) -> Result<Vec<u8>, BridgeError> {
+    guard_relative(&relative).map_err(deny)?;
+    match machine_of(&on) {
+        Some(machine) => read_asset_remote(machine, &base, &relative),
+        None => {
+            let base_path = std::path::Path::new(&base);
+            let target = base_path.join(&relative);
+            if !canonical_prefix_holds(base_path, &target) {
+                return Err(deny("resolved path left the declaration directory"));
+            }
+            let bytes = std::fs::read(&target).map_err(|_| {
+                let _ = log_bridge("read_asset", &target.to_string_lossy(), "missing");
+                missing(&target.to_string_lossy())
+            })?;
+            let _ = log_bridge(
+                "read_asset",
+                &target.to_string_lossy(),
+                &format!("{} bytes", bytes.len()),
+            );
+            Ok(bytes)
+        }
+    }
 }
 
 /// A static identity statement for the machine-readable surface: what this
@@ -160,7 +209,7 @@ pub fn viewer_identity() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::guard_relative;
+    use board_viewer_core::guard_relative;
 
     #[test]
     fn parent_traversal_is_denied() {

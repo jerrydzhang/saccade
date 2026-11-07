@@ -143,6 +143,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "board-viewer-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "brotli"
 version = "9.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2490,6 +2497,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "saccade-board-viewer"
 version = "0.1.0"
 dependencies = [
+ "board-viewer-core",
  "gtk",
  "serde",
  "serde_json",

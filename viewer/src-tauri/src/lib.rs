@@ -1,19 +1,36 @@
 //! The narrow native bridge. Read-only file operations with structural
-//! path guards, structured errors, no shell, no eval, no network, no
-//! generic filesystem surface. The frontend stays renderer-hostile to
-//! everything else.
+//! path guards, structured errors, no shell, no eval, no generic
+//! filesystem surface. The one local door beyond std::fs is the local
+//! herdr-core's read-only socket face for machine-named locations; the
+//! frontend stays renderer-hostile to everything else.
 
 pub mod commands;
 
 pub fn run() {
-    // The explicit board path handed to the foreground launch, if any:
-    // `saccade-board-viewer <board.yaml>`. Never a registry, never a
-    // fallback - without it the app starts empty.
+    // The explicit board location handed to the foreground launch, if
+    // any: `saccade-board-viewer <board.yaml>` or
+    // `saccade-board-viewer --on <machine> <board.yaml>`. The composed
+    // location string is the same grammar the open control parses. Never
+    // a registry, never a fallback - without it the app starts empty.
     let mut args = std::env::args().skip(1);
-    let board = args
-        .find(|arg| !arg.starts_with('-'))
-        .filter(|arg| !arg.is_empty());
-    commands::set_initial_board(board);
+    let mut on: Option<String> = None;
+    let mut board: Option<String> = None;
+    while let Some(arg) = args.next() {
+        if arg == "--on" {
+            match args.next() {
+                Some(machine) if !machine.is_empty() => on = Some(machine),
+                _ => break, // malformed launch: never guess a location
+            }
+        } else if !arg.starts_with('-') && !arg.is_empty() {
+            board = Some(arg);
+            break;
+        }
+    }
+    let location = board.map(|path| match &on {
+        Some(machine) => format!("{machine}:{path}"),
+        None => path,
+    });
+    commands::set_initial_board(location);
 
     // Webview console observability is opt-in per environment: only the
     // native lane sets BOARD_VIEWER_WEBVIEW_CONSOLE, so a human run's

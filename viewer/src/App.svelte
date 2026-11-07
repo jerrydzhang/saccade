@@ -54,7 +54,7 @@
         return;
       }
       console.log(`[viewer] initial board requested: ${path}`);
-      await model.open({ machine: "host", path });
+      await model.openInput(path);
       const snap = model.snapshot;
       if (snap.board) {
         console.log(`[viewer] initial board opened: ${snap.board.content.length} blocks`);
@@ -187,7 +187,7 @@
   });
 
   async function openHost(): Promise<void> {
-    if (hostPath) await model.open({ machine: "host", path: hostPath });
+    if (hostPath) await model.openInput(hostPath);
   }
 
   function jumpToMatch(occurrence: SearchOccurrence): void {
@@ -244,7 +244,7 @@
     </span>
     <span class="controls">
       <label class="control">location
-        <input type="text" bind:value={hostPath} placeholder="/path/to/board.yaml" aria-label="host declaration path" data-control="open:host-path" />
+        <input type="text" bind:value={hostPath} placeholder="/local/path.yaml or machine:/remote/path.yaml" aria-label="board location" data-control="open:host-path" />
       </label>
       <button type="button" data-control="open:host" onclick={() => void openHost()}>open</button>
     </span>

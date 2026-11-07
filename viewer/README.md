@@ -8,7 +8,8 @@ authored metadata, not a tracker association.
 ## Run
 
 ```sh
-# the fast development loop: typecheck, pure contract tests, build
+# the fast development loop: typecheck, pure contract tests, the
+# bridge crate's contract tests, build
 python3 harness/entry.py check-fast
 
 # the native client's own guard tests (Tauri shell, no UI start)
@@ -23,7 +24,11 @@ through `harness/entry.py` under enforced OS isolation - see
 ## Reading a board
 
 The standing control is the header location field: give an explicit
-board path and open it. Fixtures live in `fixtures/` and remain a
+location and open it. A location is `/absolute/path` (the machine this
+viewer runs on) or `machine:/absolute/path` (a machine from the local
+herdr-core's list, as `hc machine ls` shows); the same grammar is the
+launch argument, `board-viewer /path/b.yaml` or `board-viewer --on
+machine /path/b.yaml`. Fixtures live in `fixtures/` and remain a
 dev/test path (the browser lane and the tests address them through the
 inspection surface, not the human UI).
 
@@ -35,7 +40,19 @@ Keys:
   copies the selection in the current mode (a formula is copied whole
   in its current mode whatever fraction of it is selected)
 
-Contracts this reader holds (pinned by `tests/`):
+A machine-named board reads through the local core's read-only face:
+`file.read` for declaration text, fixed-argv `exec` (`realpath -e`, then
+`cat`) for figure bytes over base64 - no shell strings anywhere. The
+viewer never adds machines, logs in, updates a core or writes a file;
+those are the human's own host setup. Machine states are structured,
+human-actionable errors with the machine's own reason (`needs_login`,
+`unreachable`, `needs_update`, unknown name) and no retries. Because the
+remote host enforces no path containment, the asset's canonical prefix
+check runs on the remote side: one `realpath -e -- <base> <candidate>`
+answers with both canonical forms, the prefix relation is checked
+there, and the read itself uses the canonical path. Bytes over the 8 MB
+exec cap, or flagged `truncated`, and text reads that stopped inside
+the file, are refused with an error - never partially rendered.
 
 Contracts this reader holds (pinned by `tests/`):
 
@@ -70,7 +87,10 @@ Contracts this reader holds (pinned by `tests/`):
 - `src/styles/board.css` - the centrally shared stylesheet
 - `src-tauri/` - the narrow Tauri 2 shell: read-only declaration and
   asset commands with mirrored path guards; no shell, no eval, no
-  network, no plugins
+  generic filesystem surface, no plugins. `src-tauri/core-client/` is
+  the pure read-only herdr-core client (JSON-RPC over the local core's
+  socket, machine-named reads, remote containment), contract-tested in
+  the fast loop against fakes
 - `fixtures/` - deterministic boards and assets (ASCII bytes; Unicode
   data is exercised at runtime with escapes in tests)
 - `tests/` - pure contract tests (node --test)

@@ -91,6 +91,8 @@ in {
     cargoSrc = lib.sourceByRegex ./src-tauri [
       "^src$"
       "^src/.*$"
+      "^core-client$"
+      "^core-client/.*$"
       "^Cargo\\.toml$"
       "^Cargo\\.lock$"
       "^build\\.rs$"
