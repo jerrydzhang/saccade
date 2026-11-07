@@ -36,7 +36,7 @@ const REFUSED_FIXTURES: Array<[string, string]> = [
 ];
 
 test("every committed fixture is ASCII bytes", () => {
-  const names = [...VALID_FIXTURES, ...REFUSED_FIXTURES.map(([name]) => name), "saccade-and-migration-sources.md"];
+  const names = [...VALID_FIXTURES, ...REFUSED_FIXTURES.map(([name]) => name)];
   for (const name of names) {
     const bytes = readFileSync(`${fixturesDir}${name}`);
     for (const byte of bytes) {
@@ -135,7 +135,7 @@ test("the large-diagram fixture carries one big mermaid fence", () => {
   assert.ok(diagrams[0] && diagrams[0].text.split("\n").length > 15, "the diagram is genuinely large");
 });
 
-const MIGRATION_BOARD_SHA256 = "9c0109e0beba5c62ce255f9f74b42b86494146fe6c5a2994ff3cf972852eb38f";
+const MIGRATION_BOARD_SHA256 = "93aedd4f1dcdf90f16e7f36f149b49dcd98089d53000ed4c630e20fd90e883e1";
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -164,14 +164,6 @@ test("the migration board decodes under grammar 1", () => {
   assert.ok(units.some((unit) => unit.kind === "mermaid"), "the board carries diagrams");
   assert.ok(units.some((unit) => unit.kind === "code"), "the board carries code");
   assert.ok(units.length > 40, "the board is substantial");
-});
-
-test("the source-map companion decodes nothing and stays plain prose", () => {
-  const sources = readFileSync(`${fixturesDir}saccade-and-migration-sources.md`, "utf8");
-  assert.match(sources, /sources/);
-  // it is a companion document, not a board: decoding it as YAML must not
-  // be attempted by the fixture adapter (no .yaml extension)
-  assert.ok(!sources.trimStart().startsWith("grammar:"));
 });
 
 function decodeOk(text: string) {

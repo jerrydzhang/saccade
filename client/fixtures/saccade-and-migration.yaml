@@ -13,10 +13,10 @@ content:
   - annotation: |
       Reading contract: "current" means observed behavior at main 6821415;
       "planned" means human-ratified direction, not yet implemented; "open"
-      means the human has not decided. Every factual claim carries a source
-      pointer here or in the companion file saccade-and-migration-sources.md.
-      If this board and the record disagree, the record wins - report the
-      conflict rather than trusting the board.
+      means the human has not decided. Every factual claim carries its
+      source pointer beside it. If this board and the record disagree,
+      the record wins - report the conflict rather than trusting the
+      board.
   - text: |
       ## 1. The current system
 
@@ -339,8 +339,8 @@ content:
       t-56 (c-875 through c-1029), t-9, t-62, t-64, t-65, t-66, t-67,
       t-68, t-69, t-70, t-71, t-72; the r4 viewer brief (artifact record
       2522); the provisional authoring grammar and its retained fixture.
-      The companion file saccade-and-migration-sources.md names the exact
-      claim-to-source pairs and records the two wording conflicts found
-      during research (a stale verb count in the host-contract module
+      The claim-to-source pairs were researched against main 6821415;
+      two wording conflicts found during research are recorded on the
+      task's thread (a stale verb count in the host-contract module
       header; the trip-wire phrase "authority always precedes it" versus
       the actual decide-first call order in store::execute).

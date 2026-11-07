@@ -17,9 +17,9 @@ nix develop .#board-viewer -c bash -c 'cd src-tauri && cargo test'
 ```
 
 Measured warm cost of the fast loop: about 9 seconds. Service lanes
-(browser, native, serve, any SSH) are separate, gated, and launched only
-through `harness/entry.py` under enforced OS isolation - see
-`harness/README.md`.
+(browser, native, remote, session) are separate, gated, and launched only
+through `harness/entry.py` under enforced OS isolation - the harness
+section below is their contract.
 
 ## Reading a board
 
@@ -114,3 +114,130 @@ suite):
   data is exercised at runtime with escapes in tests)
 - `tests/` - pure contract tests (node --test)
 - `harness/` - the single entry point and the containment contract
+  (the section below)
+
+## The test harness
+
+One entry point: `python3 client/harness/entry.py <lane>`. Agents never
+spawn the app, a browser, a compositor, a server or SSH processes by
+hand; everything sandboxed goes through the harness.
+
+Standing authorization: routine lane and session runs use the standing
+authorization recorded on t-71 (`BOARD_VIEWER_RUNTIME_AUTHORIZED=3030`
+or its successor record), with no per-run check-in, while its
+conditions hold: a committed clean HEAD, the frozen containment
+boundary, run roots kept, sessions end with an explicit `down`.
+Excluded forever without a fresh boundary decision: GPU access, the
+host display, SSH to real machines, any outside network, other
+machines, and any capability outside the frozen boundary. Boundary
+changes and new capabilities still go to the coordinator first.
+
+Lanes:
+
+- `check-fast` - plain, uncontained tool runs (typecheck, pure contract
+  tests, the bridge crate's contract tests, build). No isolation claim.
+- `preflight` - the containment canary inside one bwrap sandbox,
+  nothing else.
+- `browser` - the gated WebKit check list over the real frontend and
+  fixture boards (Chromium triage behind an explicit flag, never
+  gating), plus the tracker-location contract over a wire stand-in.
+- `native` - the gated native/WebKitGTK lane: the packaged app in the
+  foreground on an explicit board, private headless Weston, bounded
+  frame captures, bridge log evidence.
+- `session` - the gated interactive WebDriver tool: `up` holds one
+  sandbox with the private compositor, the tauri-driver ->
+  WebKitWebDriver chain and the packaged app for an explicit max
+  lifetime; `inspect`/`input`/`observe`/`shot` act and observe over a
+  private run-root Unix socket; `down` tears the chain down in owned
+  order; `checks` runs the scripted sequence.
+- `remote` - the gated remote mesh lane: two private herdr-core
+  instances and the headless viewer opening a machine-named location
+  through them, the session lane's containment with the mesh's binds
+  on top.
+
+Containment, one reviewed shape for every gated lane: bwrap with
+`--unshare-all` (user, pid, net, uts, ipc, mnt, cgroup - loopback is
+raised inside the private netns), private `/proc`, fresh `/dev`,
+tmpfs `/dev/shm`, `/tmp`, `/run`, `/nix/store` read-only, per-lane
+explicit read-only binds, a run-root read-write bind with a 0700
+runtime tmpfs, fresh scrubbed environment, default capabilities inside
+the private user namespace only. The containment canary runs in the
+same sandbox before any payload and refuses unless every host
+baseline is present and every private fact holds. One pidfd
+supervisor per run: cleanup is TERM -> bounded grace -> KILL through
+`pidfd_send_signal` only, reaping verified by waiting on the real
+child, `PR_SET_PDEATHSIG` plus a `getppid` re-check, `--die-with-parent`.
+A missing capability is a refusal; there is no weaker fallback. Logs
+and screenshots survive under the run root
+(`/var/tmp/saccade-board-viewer-<uid>/<run>/`).
+
+Invocations (each bounded; on timeout the supervisor is stopped and
+the run is a refusal; no automatic retry):
+
+```sh
+BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<absolute db> \
+nix develop .#board-viewer -c python3 client/harness/entry.py preflight
+
+BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<absolute db> \
+nix develop .#board-viewer -c python3 client/harness/entry.py browser
+
+BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 BOARD_VIEWER_APP_BIN=<pinned app> \
+SACCADE_DB=<absolute db> nix develop .#board-viewer -c \
+python3 client/harness/entry.py native --board <absolute board.yaml>
+
+BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 BOARD_VIEWER_APP_BIN=<pinned app> \
+SACCADE_DB=<absolute db> nix develop .#board-viewer -c \
+python3 client/harness/entry.py remote
+
+BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 BOARD_VIEWER_APP_BIN=<pinned app> \
+SACCADE_DB=<absolute db> nix develop .#board-viewer -c \
+python3 client/harness/entry.py --board <absolute board.yaml> session up
+```
+
+Session commands ride the run-root socket from the last `up`:
+`session status | inspect | input click|type|key|wheel|drag |
+coords | observe | shot | checks | down`. Acting is real WebDriver
+input only, addressed semantically through the inspection
+projection's `targets` (stable `data-control` ids); raw coordinates
+are an explicit escape hatch. Open happens only the ways a real user
+opens: the launch `--board` or the UI's own open controls.
+
+The remote lane's fixture board and its escape symlink live in
+`harness/remote_fixture/`; the tracker-location wire stand-in lives
+in `harness/tracker_mock.py` and speaks exactly the `/api/v1` routes
+the real server pins on the server side.
+
+What this harness is not: no production probes, no host socket or
+status calls, no tracker database access, no SSH to real machines, no
+automatic restarts, no supervision beyond one run's lifetime.
+
+## Packaging and the real-client run path
+
+The viewer's packaging lives in `nix/board-viewer.nix`: one
+callPackage-able file whose dependencies come from the pkgs it is
+called on. The flake builds `packages.board-viewer`,
+`packages.board-viewer-web`, the flake checks, and the
+`apps.board-viewer` entry through that one derivation, and exposes
+the same app as `overlays.default`. `packages.board-viewer` and
+`apps.board-viewer` build against the `nixpkgs-client` input, the
+nixpkgs revision the human's system flake is built from, so the build
+agents test is the build the client runs; the devshell's WebKitGTK
+block rides the same input so its `WebKitWebDriver` matches the
+packaged app's WebKitGTK. The other outputs and the devshell's lane
+tools stay on the flake's own `nixpkgs` pin. Why the overlay: a
+binary built against a nixpkgs revision foreign to the host links a
+foreign libglvnd/mesa stack and cannot use the host's
+`/run/opengl-driver` EGL vendors - the packaged app aborts at
+startup. Building against the consumer's own nixpkgs keeps the
+WebKitGTK/GL stack on the revision the host system was built from.
+
+Consumer (NixOS configuration):
+
+```nix
+nixpkgs.overlays = [ inputs.saccade.overlays.default ];
+```
+
+then `pkgs.saccade-board-viewer` is the packaged app (main program
+`saccade-board-viewer`, opened on an explicit board path). The
+board-viewer devshell's lane runs use the packaged wrapper from
+`nix build .#board-viewer` as `BOARD_VIEWER_APP_BIN`.

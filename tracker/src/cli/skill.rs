@@ -87,12 +87,8 @@ pub const DIFFERS: &str = ".agents/skills/saccade differs from this binary's ski
 pub(super) const VERSION_KEY: &str = "x-saccade-version:";
 
 /// The embedded curriculum: file names as they deploy, bytes as compiled.
-pub fn embedded() -> [(&'static str, &'static str); 3] {
-    [
-        ("SKILL.md", include_str!("../../skill/SKILL.md")),
-        ("errors.md", include_str!("../../skill/errors.md")),
-        ("diagnosing.md", include_str!("../../skill/diagnosing.md")),
-    ]
+pub fn embedded() -> [(&'static str, &'static str); 1] {
+    [("SKILL.md", include_str!("../../skill/SKILL.md"))]
 }
 
 /// The frontmatter block: the keys between the fences, and the text
@@ -180,7 +176,7 @@ pub fn check(cwd: &Path) -> Verdict {
 
 /// What `skill install` did.
 pub enum Deployed {
-    /// The three files landed, SKILL.md stamped with this binary's version.
+    /// The skill landed, stamped with this binary's version.
     Wrote,
     /// A byte-identical copy already stood; nothing was touched.
     Untouched,
