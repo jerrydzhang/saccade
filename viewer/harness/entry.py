@@ -46,7 +46,10 @@ FAST_STEPS = [
 ]
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
-BROWSER_TIMEOUT_SECONDS = 180
+# two engine passes (Chromium, then Playwright WebKit) over one check
+# list: the bound is wall time for the whole lane, so it doubles with
+# the second engine
+BROWSER_TIMEOUT_SECONDS = 360
 NATIVE_TIMEOUT_SECONDS = 120
 # The canary file is bound read-only into the sandbox at this path: the
 # interpreter inside must be able to read it without any host HOME or
@@ -216,9 +219,10 @@ def browser_lane() -> int:
     """Gated browser lane. Same supervisor, same canary-first order:
     the payload runs the containment canary in-process BEFORE it starts
     the loopback server or the Playwright driver. One reused headless
-    Chromium session over the built frontend; screenshots land in the
-    run root for later inspection. Bounded by BROWSER_TIMEOUT_SECONDS;
-    pidfd-only cleanup on all paths.
+    browser per engine - Chromium first, then Playwright WebKit - each
+    running the same check list over the built frontend; screenshots
+    land in the run root for later inspection. Bounded by
+    BROWSER_TIMEOUT_SECONDS; pidfd-only cleanup on all paths.
 
     Lane env additions beyond the fresh allowlist, all explicit and
     absolute: PLAYWRIGHT_BROWSERS_PATH (pinned browser package),

@@ -8,13 +8,18 @@ Order, enforced here:
   2. a stdlib loopback static file server for the built frontend (the
      only listener this lane ever creates; no child process, no
      framework)
-  3. one reused headless Chromium session via the Nix-pinned Playwright
-     driver (driver and browser from the same nixpkgs revision; nothing
-     downloaded at runtime); the page navigates to the server and waits
-     for the shared viewer API before any action
-  4. a bounded check list over the real frontend and the real fixture
+  3. two engine passes through the SAME check list, one reused headless
+     browser per engine over the Nix-pinned Playwright driver (driver
+     and browsers from the same nixpkgs revision; the pinned browsers
+     store path carries WebKit; nothing downloaded at runtime):
+     Chromium first, then Playwright WebKit - a second engine on
+     identical checks so a Chromium-only pass cannot ship a
+     WebKit-only defect again; the page navigates to the server and
+     waits for the shared viewer API before any action
+  4. per-engine outcomes over the real frontend and the real fixture
      boards: DOM and inspection outcomes with actual readiness waits,
-     screenshots saved under the run root for later inspection
+     screenshots saved under the run root for later inspection, names
+     prefixed by engine
   5. owned teardown: the server thread shuts down before exit
 
 Everything here is inside the sandbox: the clipboard a browser writes
@@ -47,7 +52,7 @@ READY_SECONDS = 20
 RESULTS: list[tuple[bool, str, str]] = []
 
 
-def check(name: str, condition: bool, detail: str = "") -> None:
+def record_check(name: str, condition: bool, detail: str = "") -> None:
     RESULTS.append((bool(condition), name, detail))
     print(f"[browser] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}", flush=True)
 
@@ -74,8 +79,12 @@ def start_server() -> ThreadingHTTPServer | None:
     return server
 
 
-def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
+def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int:
+    started_records = len(RESULTS)
     viewer = "window.__boardViewer"
+
+    def check(name: str, condition: bool, detail: str = "") -> None:
+        record_check(f"[{engine}] {name}", condition, detail)
 
     def open_board(name: str) -> None:
         page.evaluate(f"() => {viewer}.open('fixture', {name!r})")
@@ -109,7 +118,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
             page.wait_for_timeout(150)
         except Exception:
             pass
-        page.screenshot(path=f"{shots_dir}/{name}")
+        page.screenshot(path=f"{shots_dir}/{engine}-{name}")
 
     def phase(name: str, body) -> None:
         """One failed phase records its failure and never starves the
@@ -204,7 +213,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
         ok, evidence = await_clipboard()
         if not ok:
             check("clipboard read reaches a terminal state (bounded)", False, evidence)
-            page.screenshot(path=f"{shots_dir}/copy-timeout.png")
+            page.screenshot(path=f"{shots_dir}/{engine}-copy-timeout.png")
             return
         source_copy = evidence
         expected_source = "First occurrence: $0 < \\eta < 2/b$ in this "
@@ -325,14 +334,73 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
         page.click(".diagram-frame")
         page.wait_for_function("() => document.querySelector('.diagram-overlay') !== null")
         check("diagram expands into the overlay", True)
+
+        def rendered() -> dict:
+            # the rendered truth of the expanded diagram: its painted
+            # bounding box and the computed CSS transform - the zoom
+            # label alone hid the WebKit-ignored outer-svg transform
+            return page.evaluate(
+                """() => {
+                    const svg = document.querySelector('.diagram-stage svg');
+                    const rect = svg.getBoundingClientRect();
+                    const style = getComputedStyle(svg).transform;
+                    const m = new DOMMatrixReadOnly(style === 'none' ? '' : style);
+                    return {x: rect.x, y: rect.y, width: rect.width, height: rect.height, scale: m.a, tx: m.m41};
+                }"""
+            )
+
+        baseline = rendered()
         page.click("[data-action='zoom-in']")
         page.wait_for_function("() => (document.querySelector('.diagram-zoom-label')?.textContent ?? '').trim() !== '100%'")
         zoom_label = page.text_content(".diagram-zoom-label") or ""
         check("zoom control raises the scale", zoom_label.strip() != "100%", repr(zoom_label))
+        zoomed = rendered()
+        check(
+            "zoom-in changes the rendered diagram geometry, not just the label",
+            abs(zoomed["width"] - baseline["width"] * 1.25) <= baseline["width"] * 0.02
+            and abs(zoomed["height"] - baseline["height"] * 1.25) <= baseline["height"] * 0.02,
+            f"baseline={baseline} zoomed={zoomed}",
+        )
+        check(
+            "zoom-in computes a real CSS transform on the expanded diagram",
+            zoomed["scale"] is not None and abs(zoomed["scale"] - 1.25) < 0.02,
+            str(zoomed),
+        )
+
+        # a real drag must move the painted diagram; the drag distance
+        # lands on the computed matrix divided by the zoom scale
+        stage = page.locator(".diagram-stage").bounding_box()
+        cx = stage["x"] + stage["width"] / 2
+        cy = stage["y"] + stage["height"] / 2
+        page.mouse.move(cx, cy)
+        page.mouse.down()
+        page.mouse.move(cx + 80, cy + 60, steps=4)
+        page.mouse.up()
+        panned = rendered()
+        check(
+            "pan moves the rendered diagram",
+            abs(panned["x"] - zoomed["x"]) > 20 and abs(panned["y"] - zoomed["y"]) > 20,
+            f"zoomed={zoomed} panned={panned}",
+        )
+        check(
+            "pan keeps the zoom and lands on the computed transform",
+            panned["scale"] is not None
+            and abs(panned["scale"] - 1.25) < 0.02
+            and abs(panned["tx"] - zoomed["tx"] - 64) < 8,
+            f"zoomed={zoomed} panned={panned}",
+        )
+
         page.click("[data-action='reset']")
         page.wait_for_function("() => (document.querySelector('.diagram-zoom-label')?.textContent ?? '').trim() === '100%'")
         check("reset returns scale to 100%", True)
-        page.screenshot(path=f"{shots_dir}/diagram-expanded.png")
+        reset_geo = rendered()
+        check(
+            "reset restores the rendered geometry",
+            abs(reset_geo["width"] - baseline["width"]) <= baseline["width"] * 0.02
+            and abs(reset_geo["height"] - baseline["height"]) <= baseline["height"] * 0.02,
+            f"baseline={baseline} reset={reset_geo}",
+        )
+        page.screenshot(path=f"{shots_dir}/{engine}-diagram-expanded.png")
         page.keyboard.press("Escape")
         page.wait_for_function("() => document.querySelector('.diagram-overlay') === null")
         check("closing returns to the board", True)
@@ -364,7 +432,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path) -> int:
 
     phase("invalid and missing inputs", phase_invalid)
 
-    return sum(1 for ok, _name, _detail in RESULTS if not ok)
+    return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 
 
 def main() -> int:
@@ -385,21 +453,41 @@ def main() -> int:
     base_url = f"http://127.0.0.1:{SERVER_PORT}"
     print(f"[browser] serving {DIST_SANDBOX} on {base_url}", flush=True)
 
-    failures: int
+    failures = 0
     try:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True, chromium_sandbox=False)
-            context = browser.new_context(viewport={"width": 1100, "height": 800})
-            # Chromium-internal clipboard only; never the desktop's.
-            context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
-            page = context.new_page()
-            page.set_default_timeout(10000)
-            page.goto(base_url)
-            page.wait_for_function("() => window.__boardViewer !== undefined")
-            failures = run_checks(page, base_url, shots_dir)
-            browser.close()
+            # one reused browser per engine; the identical check list
+            # runs under each - engine differences are the evidence
+            for engine in ("chromium", "webkit"):
+                try:
+                    if engine == "chromium":
+                        browser = playwright.chromium.launch(headless=True, chromium_sandbox=False)
+                    else:
+                        browser = playwright.webkit.launch(headless=True)
+                except Exception as error:
+                    record_check(
+                        f"[{engine}] headless browser launches from the pinned driver",
+                        False,
+                        f"{type(error).__name__}: {str(error)[:160]}",
+                    )
+                    continue
+                context = browser.new_context(viewport={"width": 1100, "height": 800})
+                try:
+                    # Engine-internal clipboard only; never the desktop's.
+                    # An engine that cannot grant these lets the copy
+                    # checks measure what it actually does - masking the
+                    # grant would defeat the parity pass.
+                    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
+                except Exception as error:
+                    print(f"[browser] {engine}: clipboard permission grant unavailable: {type(error).__name__}: {str(error)[:120]}", flush=True)
+                page = context.new_page()
+                page.set_default_timeout(10000)
+                page.goto(base_url)
+                page.wait_for_function("() => window.__boardViewer !== undefined")
+                failures += run_checks(page, base_url, shots_dir, engine)
+                browser.close()
     finally:
         server.shutdown()
         server.server_close()

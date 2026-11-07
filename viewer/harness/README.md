@@ -129,7 +129,7 @@ nix develop .#board-viewer --command \
   [--tracker-db <absolute path>]
 ```
 
-Time bound: 180 s, then the supervisor is stopped through the pidfd and
+Time bound: 360 s, then the supervisor is stopped through the pidfd and
 the run is a refusal. No automatic retry.
 
 Order inside the one sandbox: (1) the containment canary runs
@@ -137,15 +137,18 @@ in-process FIRST (the reviewed module, invoked as main()) - a refusal
 ends the lane before any listener or driver exists; (2) then, and only
 then, a stdlib loopback static server thread serves the built frontend
 inside the sandbox netns (the only listener this lane ever creates; no
-child process, no framework); (3) one reused headless Chromium session
+child process, no framework); (3) two engine passes, one reused
+headless browser per engine - Chromium first, then Playwright WebKit -
 via the Nix-pinned Playwright driver (driver and browsers from the
-same nixpkgs revision; nothing downloaded or installed at runtime);
-the page navigates to the server and waits for the shared viewer API
-before any action; (4) a bounded check list over the real frontend and
+same nixpkgs revision; the pinned browsers store path carries WebKit;
+nothing downloaded or installed at runtime); the page navigates to the
+server and waits for the shared viewer API before any action; (4) the
+same bounded check list under each engine over the real frontend and
 real fixture boards - readiness waits on actual inspection outcomes
 (never fixed sleeps), DOM and inspection state first, then screenshots
-saved under `<runroot>/shots/` for later human and agent inspection;
-(5) the server thread shuts down before exit.
+saved under `<runroot>/shots/` with engine-prefixed names for later
+human and agent inspection; (5) the server thread shuts down before
+exit.
 
 Binds (all read-only): the canary at `/canary/`, the lane script at
 `/lane/`, `viewer/dist` at `/app/dist`. Env additions beyond the fresh
@@ -158,13 +161,14 @@ run root's own shots directory), the six namespace baselines, host
 HOME/UID, tracker-db. The payload interpreter is the pinned
 withPackages python, its closure verified to contain the playwright
 module before any launch (the scrubbed env inherits no host
-PYTHONPATH). Chromium runs headless with its own sandbox disabled; the
-enforced bwrap boundary is the containment.
+PYTHONPATH). Chromium runs headless with its own sandbox disabled and
+WebKit runs its pinned headless WPE build; the enforced bwrap boundary
+is the containment.
 
-Clipboard honesty: what the browser writes is Chromium's clipboard
-inside the sandbox - it is never the desktop's clipboard. Native
-clipboard fidelity is a real-client question for the actual-client
-gate and is never implied by this lane.
+Clipboard honesty: what the browser writes is the engine's own
+clipboard inside the sandbox - it is never the desktop's clipboard.
+Native clipboard fidelity is a real-client question for the
+actual-client gate and is never implied by this lane.
 
 ## The native lane, exactly (source; runs only under authorization)
 

@@ -166,7 +166,7 @@ def main() -> int:
     usable, reason = entry.verify_playwright_closure(str(empty_env / "bin" / "python3"))
     check("closure without playwright refuses with the env root named", not usable and "playwright module not found" in reason, reason)
     # --- browser lane wiring traversal (no spawn) -------------------------
-    lane_calls = {"canary": 0, "server": 0, "goto": [], "checks": 0, "shutdown": 0, "shots": []}
+    lane_calls = {"canary": 0, "server": 0, "goto": [], "checks": 0, "engines": [], "shutdown": 0, "shots": []}
 
     class FakeServer:
         def shutdown(self):
@@ -210,6 +210,11 @@ def main() -> int:
                 (),
                 {"launch": staticmethod(lambda **kwargs: FakeBrowser())},
             )()
+            fake.webkit = type(
+                "FakeWebkit",
+                (),
+                {"launch": staticmethod(lambda **kwargs: FakeBrowser())},
+            )()
             return fake
 
         def __exit__(self, *args):
@@ -236,7 +241,12 @@ def main() -> int:
     os.environ["SHOTS_DIR"] = str(shots_dir)
     sys.modules["playwright.sync_api"] = fake_api_module  # type: ignore[assignment]
     sys.modules["playwright"] = types.ModuleType("playwright")  # type: ignore[assignment]
-    browser_lane.run_checks = lambda page, base_url, shots: lane_calls.update(checks=1) or 0  # type: ignore[assignment]
+    def fake_run_checks(page, base_url, shots, engine):
+        lane_calls["checks"] += 1
+        lane_calls["engines"].append(engine)
+        return 0
+
+    browser_lane.run_checks = fake_run_checks  # type: ignore[assignment]
     try:
         # failure short-circuit: canary refusal ends the lane before any
         # server exists
@@ -248,7 +258,8 @@ def main() -> int:
             str(lane_calls),
         )
 
-        # traversal: canary -> server -> navigate -> checks -> shutdown
+        # traversal: canary -> server -> navigate -> checks under each
+        # engine (chromium, then webkit) -> shutdown
         FakeCanary.code = 0
         code = browser_lane.main()
         check(
@@ -256,8 +267,9 @@ def main() -> int:
             code == 0
             and lane_calls["canary"] == 2
             and lane_calls["server"] == 1
-            and lane_calls["goto"] == [f"http://127.0.0.1:{browser_lane.SERVER_PORT}"]
-            and lane_calls["checks"] == 1
+            and lane_calls["goto"] == [f"http://127.0.0.1:{browser_lane.SERVER_PORT}"] * 2
+            and lane_calls["checks"] == 2
+            and lane_calls["engines"] == ["chromium", "webkit"]
             and lane_calls["shutdown"] >= 11
             and FakePage.gotos == lane_calls["goto"],
             str(lane_calls),
