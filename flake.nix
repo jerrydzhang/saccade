@@ -511,6 +511,7 @@
               (pkgs.python3.withPackages (ps: [ps.playwright ps.pyflakes]))
               pkgs.bubblewrap
               pkgs.weston
+              pkgs.mesa
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.webkitgtk_4_1
@@ -525,6 +526,10 @@
           env.FONTCONFIG_FILE = pkgs.makeFontsConf {
             fontDirectories = [pkgs.dejavu_fonts];
           };
+          # the native lane's software-GL pin: glvnd vendor dir whose
+          # 50_mesa.json carries the absolute store path of
+          # libEGL_mesa.so.0 (llvmpipe/swrast live in the same output)
+          env.BOARD_VIEWER_MESA_EGL_VENDOR_DIR = "${pkgs.mesa}/share/glvnd/egl_vendor.d";
         };
         default = devenv.lib.mkShell {
           inherit inputs pkgs;

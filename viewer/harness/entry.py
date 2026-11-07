@@ -382,6 +382,19 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
         )
         return 1
 
+    # the lane's software-GL path: the packaged app's glvnd libEGL finds
+    # no vendor inside the sandbox (its closure carries mesa-libgbm only,
+    # and the compiled-in /usr paths do not exist), so the lane pins
+    # mesa's egl_vendor.d - llvmpipe/swrast, never /run/opengl-driver,
+    # never /dev/dri, never a host GPU path
+    mesa_dir = os.environ.get("BOARD_VIEWER_MESA_EGL_VENDOR_DIR", "")
+    if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
+        print(
+            "containment refusal: BOARD_VIEWER_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
+            file=sys.stderr,
+        )
+        return 1
+
     # the app's explicit board: an absolute host path whose parent
     # DIRECTORY is bound read-only at the neutral sandbox path /board -
     # never a host /home path, so the canary's host-visibility check
@@ -430,6 +443,8 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     env["BOARD_FILE"] = board_sandbox_path
     env["FONTCONFIG_FILE"] = fontconf
     env["SHOTS_DIR"] = str(run_root / "shots")
+    env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
+    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
 
     ro_binds = [

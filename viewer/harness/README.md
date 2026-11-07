@@ -170,9 +170,10 @@ gate and is never implied by this lane.
 
 ```
 BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record> \
+BOARD_VIEWER_APP_BIN=<pinned packaged wrapper> \
 nix develop .#board-viewer --command \
   python3 -B viewer/harness/entry.py native \
-  --board <absolute board.yaml>
+  --tracker-db <baseline db> --board <absolute board.yaml>
 ```
 
 Time bound: 120 s, then the supervisor is stopped through the pidfd and
@@ -180,12 +181,21 @@ the run is a refusal. No automatic retry.
 
 Order inside the one sandbox: (1) the containment canary in-process
 FIRST; (2) then a private headless Weston (pixman renderer, no GPU, no
-socket beyond the fresh private XDG_RUNTIME_DIR); (3) then the pinned
-Tauri application binary in the foreground, opened on the explicit
-board passed as its launch argument - the same foreground open a human
-client uses; (4) three bounded weston-screenshooter frame captures plus
-the app's own bridge stderr lines as outcome evidence; (5) owned
-teardown of the app and compositor children.
+socket beyond the fresh private XDG_RUNTIME_DIR); weston runs with
+--debug (weston(1): only then is the weston-output-capture interface
+exposed for weston-screenshooter) and kiosk-shell (the app fills the
+output; no desktop-shell helper clients) - both private-sandbox facts;
+(3) then the pinned Tauri application binary in the foreground, opened
+on the explicit board passed as its launch argument - the same
+foreground open a human client uses; the lane env pins mesa's
+egl_vendor.d through __EGL_VENDOR_LIBRARY_DIRS with
+LIBGL_ALWAYS_SOFTWARE=1 (glvnd doc: vendor JSON dirs override the
+compiled-in /usr paths absent in the sandbox; Mesa doc: always software
+rendering - llvmpipe/swrast from the pinned mesa drivers output, no
+/dev/dri, no host /run, no GPU); (4) three bounded weston-screenshooter
+frame captures (a hung capture is a recorded failed check, not a lane
+crash) plus the app's own bridge stderr lines as outcome evidence;
+(5) owned teardown of the app and compositor children.
 
 Binds (read-only): the canary, the lane script, the pinned app binary
 and weston/weston-screenshooter binaries (all /nix/store paths covered

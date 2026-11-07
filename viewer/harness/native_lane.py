@@ -65,9 +65,20 @@ def start_weston(weston_bin: str, wayland_name: str, logs: pathlib.Path) -> subp
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
     weston_log_path = logs / "weston.log"
     weston_log = open(weston_log_path, "wb")
+    # --debug exposes weston-output-capture (weston(1): only with it does
+    # weston-screenshooter get capture authority); kiosk-shell makes the
+    # app fill the headless output and drops the desktop-shell helper
+    # clients. Both are private-sandbox facts: private compositor,
+    # private XDG_RUNTIME_DIR, only this lane's own app as client.
     try:
         weston = subprocess.Popen(
-            [weston_bin, "--backend=headless", f"--socket={wayland_name}"],
+            [
+                weston_bin,
+                "--backend=headless",
+                f"--socket={wayland_name}",
+                "--debug",
+                "--shell=kiosk-shell.so",
+            ],
             env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
             stdout=weston_log,
             stderr=weston_log,
@@ -134,13 +145,19 @@ def main() -> int:
                 break
             time.sleep(min(FRAME_INTERVAL_SECONDS, max(remaining, 0)))
             before = set(shots.glob("wayland-screenshot-*.png"))
-            result = subprocess.run(
-                [shooter_bin],
-                cwd=str(shots),
-                env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
-                capture_output=True,
-                timeout=10,
-            )
+            try:
+                result = subprocess.run(
+                    [shooter_bin],
+                    cwd=str(shots),
+                    env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
+                    capture_output=True,
+                    timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                # a hung capture is a recorded failed check, never a lane
+                # crash - teardown and the remaining evidence still run
+                check(f"frame {index} captured", False, "screenshooter timed out after 10s")
+                continue
             new_frames = sorted(set(shots.glob("wayland-screenshot-*.png")) - before)
             if new_frames:
                 frame_paths.extend(str(f) for f in new_frames)
