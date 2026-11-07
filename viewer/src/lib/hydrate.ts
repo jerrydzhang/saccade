@@ -84,7 +84,19 @@ async function hydrateMermaid(div: HTMLElement, outcomes: RenderOutcome[]): Prom
     return;
   }
   if (pre) pre.remove();
-  const figure = el("div", { class: "diagram-frame", "data-diagram-source": source, role: "button", tabindex: "0", "aria-label": "diagram, activate to expand" });
+  const figure = el(
+    "div",
+    {
+      class: "diagram-frame",
+      "data-diagram-source": source,
+      role: "button",
+      tabindex: "0",
+      "aria-label": "diagram, activate to expand",
+      // stable target id: the frame is addressed through its unit, so
+      // the projection lists the same id the rendered document carries
+      ...(div.dataset.unitId ? { "data-control": `diagram:${div.dataset.unitId}` } : {}),
+    },
+  );
   figure.innerHTML = result.svg;
   const svg = figure.querySelector("svg");
   if (svg) {

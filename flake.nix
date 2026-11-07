@@ -424,6 +424,7 @@
               pkgs.mesa
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              (boardViewer pkgs).driver
               pkgs.webkitgtk_4_1
               pkgs.gtk3
               pkgs.cairo
@@ -632,6 +633,7 @@
 
           board-viewer-web = (boardViewer pkgs).web;
           board-viewer = (boardViewer pkgs).app;
+          board-viewer-tauri-driver = (boardViewer pkgs).driver;
 
           default = pkgs.symlinkJoin {
             name = "saccade";

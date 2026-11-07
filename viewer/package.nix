@@ -10,6 +10,7 @@
   stdenv,
   buildNpmPackage,
   rustPlatform,
+  fetchCrate,
   pkg-config,
   makeWrapper,
   webkitgtk_4_1,
@@ -130,4 +131,22 @@ in {
       '';
       meta.mainProgram = "saccade-board-viewer";
     };
+
+  # the WebDriver intermediary node for the native interaction lane:
+  # nixpkgs does not package tauri-driver at this pin, so it builds
+  # from the crates.io crate with the upstream Cargo.lock committed
+  # beside it (tauri-driver/). Pure Rust (hyper/tokio; no GUI
+  # libraries), binds 127.0.0.1 only, and proxies to the
+  # WebKitWebDriver already inside the app's webkitgtk closure.
+  driver = rustPlatform.buildRustPackage {
+    pname = "tauri-driver";
+    version = "2.1.0";
+    src = fetchCrate {
+      pname = "tauri-driver";
+      version = "2.1.0";
+      hash = "sha256-Ttik3t/IUnze3SHcpH9zPS1UwW9B/V70Wvel+eBHhOE=";
+    };
+    cargoLock.lockFile = ./tauri-driver/Cargo.lock;
+    meta.mainProgram = "tauri-driver";
+  };
 }

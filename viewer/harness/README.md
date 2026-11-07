@@ -17,6 +17,14 @@ browser, compositor, server or SSH processes by hand.
 - `native`: the gated native/WebKitGTK lane (source present; runs only
   under a named authorization). Same supervisor, same canary-first
   order - see below for the exact shape.
+- `session`: the gated interactive WebDriver session tool: `up` holds
+  one sandbox with the private compositor, the tauri-driver ->
+  WebKitWebDriver chain and the packaged app for an explicit max
+  lifetime; `inspect`/`input`/`observe`/`shot` act and observe over a
+  private run-root Unix socket (never a host-visible port); `down`
+  tears the chain down in owned order. `checks` runs the scripted
+  check sequence as a series of those commands under one supervisor.
+  See below for the exact shape.
 - `serve`: not implemented; its own reviewed checkpoint.
 
 Agents never spawn app, browser, compositor, server or SSH processes by
@@ -284,6 +292,118 @@ nix run --override-input nixpkgs github:NixOS/nixpkgs/<client system rev> \
 The flake's own `packages.board-viewer` remains the dev-host build and
 the native lane's binary source; neither replaces a real-client
 review.
+## The session lane, exactly (source; runs only under authorization)
+
+The interactive tool an agent uses to open the packaged app, act on it
+and read it, inside the same enforced boundary - the shape of
+`just herdr-ui`, but acting through real WebDriver input instead of
+compositor-level synthetic coordinates.
+
+```sh
+BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record> \
+BOARD_VIEWER_APP_BIN=<pinned packaged wrapper> \
+nix develop .#board-viewer --command \
+  python3 -B viewer/harness/entry.py --board <absolute board.yaml> session up \
+  [--max-lifetime <seconds, default 3600>] [--tracker-db <absolute path>]
+```
+
+`up` resolves every pin (bwrap, weston, weston-screenshooter,
+tauri-driver, WebKitWebDriver, the app wrapper, the board directory,
+fontconfig, mesa's egl_vendor.d), forks a daemonized supervisor
+holder, and returns once the payload's control socket answers. Inside
+the one sandbox, in order: (1) the containment canary; (2) the private
+headless Weston (pixman, --fake-seat, --debug, kiosk-shell - the
+native lane's compositor facts); (3) tauri-driver (the pinned
+crates.io crate 2.1.0, built from viewer/tauri-driver/Cargo.lock)
+listening on 127.0.0.1:4444, which spawns WebKitWebDriver (pinned
+webkitgtk_4_1) on 127.0.0.1:4445 with TAURI_AUTOMATION and
+TAURI_WEBVIEW_AUTOMATION in its environment; (4) WebKitWebDriver
+spawns the packaged wrapper as `tauri:options.application` with the
+board path as its single argument; the wrapper carries LD_LIBRARY_PATH
+and the lane's env (FONTCONFIG_FILE, the software-GL pins) reaches the
+app through the launcher's env inheritance; (5) the payload
+creates one WebDriver session (the first webview is the automation
+ceiling), waits until the projection reports the board loaded, and
+serves commands.
+
+The bound is explicit: the payload tears itself down at
+`--max-lifetime` (capped at 24 h), the holder stops the supervisor
+through the pidfd as the backstop, and every verb refuses at the same
+authorization gate.
+
+Commands (all against the record from the last `up`; control rides the
+run-root socket `control.sock`, one JSON request per connection, in a
+0700 tree - never a host-visible port):
+
+```sh
+... session status                        # chain liveness, expiry, board
+... session inspect                       # the projection: state + targets
+... session input click target=diagram:u12
+... session input type target=search '0 < \\eta < 2/b'
+... session input key Escape
+... session input wheel target=diagram-stage dy=-120
+... session input drag target=diagram-stage dx=140 dy=40
+... session input coords 512 320          # explicit raw-coordinate hatch
+... session observe target=diagram-svg    # rect, computed transform, text
+... session shot 01-board-open            # WebDriver shot + weston frame
+... session down                          # owned teardown, idempotent
+```
+
+Acting is real WebDriver input only (click/type are element commands;
+key/wheel/drag are actions-API sequences anchored at the element's
+live center). Addressing is semantic: the inspection projection
+reports the rendered controls and diagram frames as `targets` with
+stable `data-control` ids, enabled state and bounds, and commands take
+such a target id. Open happens only the ways a real user opens: the
+launch `--board`, or the UI's own open controls (the `open:host-path`
+text input plus the `open:host` button, or the fixture select). Raw
+coordinates are an explicit escape hatch, never the default.
+
+`checks` runs the scripted sequence (board opens, header path, diagram
+projection, click-expand, '+' geometry change, drag pan, close,
+search, next match, a WebDriver shot plus a weston frame per state)
+entirely as such commands under one supervisor, then downs:
+
+```sh
+BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record> \
+BOARD_VIEWER_APP_BIN=<pinned packaged wrapper> \
+nix develop .#board-viewer --command \
+  python3 -B viewer/harness/entry.py --board <absolute board.yaml> \
+  session checks [--search-query <text>]
+```
+
+Binds (read-only): the canary, the two lane modules
+(webdriver_session.py, webdriver_client.py), the pinned app, weston,
+weston-screenshooter, tauri-driver and WebKitWebDriver binaries (all
+/nix/store paths, covered by the store bind - stated explicitly for
+review), and the board's parent directory at /board. Env additions
+beyond the fresh allowlist: WESTON_BIN, SCREENSHOOTER_BIN,
+TAURI_DRIVER_BIN, WEBKIT_DRIVER_BIN, APP_BIN, BOARD_FILE,
+FONTCONFIG_FILE, SHOTS_DIR, __EGL_VENDOR_LIBRARY_DIRS,
+LIBGL_ALWAYS_SOFTWARE, BOARD_VIEWER_WEBVIEW_CONSOLE, GDK_SCALE,
+GDK_DPI_SCALE, SESSION_CONTROL_SOCKET, SESSION_READY_FILE,
+SESSION_LIFETIME_SECONDS, BOARD_VIEWER_SESSION_TOKEN (the ownership
+token the host later verifies in /proc environ before any pidfd
+signal), plus the usual containment baselines.
+
+Ports: 127.0.0.1:4444 (tauri-driver), 127.0.0.1:4445
+(WebKitWebDriver), one ephemeral 127.0.0.1 inspector port for the app
+- all inside the sandbox netns, where bwrap has already raised
+loopback.
+
+Teardown order, owned handles only: (1) the WebDriver session is
+deleted (WebKitWebDriver ends the app it spawned); (2) tauri-driver is
+terminated through its handle (its signal handler kills
+WebKitWebDriver); (3) a /proc scan records any surviving chain
+process as a failed check - nothing is ever killed by pattern; (4)
+Weston is terminated through its handle, TERM -> bounded grace ->
+KILL. The bwrap PID-namespace teardown remains the backstop on every
+path, and the host escalates only through token-verified pidfds
+(daemon first, then bwrap).
+
+Session state lives in `<runtime root>/session.json`; one session at
+a time. A stale record (no token-verified process alive) is cleared
+by `up`, never adopted; logs, shots and the run root survive `down`.
 
 ## What this harness is not
 

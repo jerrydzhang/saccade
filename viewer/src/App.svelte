@@ -180,7 +180,7 @@
     <span class="identity">
       {#if view.location}
         <strong>{view.location.machine}</strong>
-        <code class="location-path">{view.location.path}</code>
+        <code class="location-path" data-control="board:location">{view.location.path}</code>
         <span class="status status-{view.status}">{view.status}</span>
         {#if view.board?.task}
           <span class="task-meta">task: <code>{view.board.task}</code> (authored metadata)</span>
@@ -191,28 +191,28 @@
     </span>
     <span class="controls">
       <label class="control">fixture
-        <select bind:value={fixturePath} aria-label="fixture board">
+        <select bind:value={fixturePath} aria-label="fixture board" data-control="open:fixture-name">
           {#each fixtures as name}
             <option value={name}>{name}</option>
           {/each}
         </select>
       </label>
-      <button type="button" onclick={() => void openFixture()}>open fixture</button>
+      <button type="button" data-control="open:fixture" onclick={() => void openFixture()}>open fixture</button>
       <label class="control">host path
-        <input type="text" bind:value={hostPath} placeholder="/path/to/board.yaml" aria-label="host declaration path" />
+        <input type="text" bind:value={hostPath} placeholder="/path/to/board.yaml" aria-label="host declaration path" data-control="open:host-path" />
       </label>
-      <button type="button" onclick={() => void openHost()}>open host path</button>
+      <button type="button" data-control="open:host" onclick={() => void openHost()}>open host path</button>
       <span class="control-sep" aria-hidden="true"></span>
       <span class="copy-toggle" role="group" aria-label="copy mode">
-        <button type="button" class:active={view.copyMode === "source"} onclick={() => model.setCopyMode("source")}>source</button>
-        <button type="button" class:active={view.copyMode === "plain"} onclick={() => model.setCopyMode("plain")}>plain</button>
+        <button type="button" data-control="copy:source" class:active={view.copyMode === "source"} onclick={() => model.setCopyMode("source")}>source</button>
+        <button type="button" data-control="copy:plain" class:active={view.copyMode === "plain"} onclick={() => model.setCopyMode("plain")}>plain</button>
       </span>
       <span class="theme-toggle" role="group" aria-label="theme">
         {#each ["system", "light", "dark"] as theme}
-          <button type="button" class:active={view.theme === theme} onclick={() => model.setTheme(theme as "system" | "light" | "dark")}>{theme}</button>
+          <button type="button" data-control={`theme:${theme}`} class:active={view.theme === theme} onclick={() => model.setTheme(theme as "system" | "light" | "dark")}>{theme}</button>
         {/each}
       </span>
-      <button type="button" aria-pressed={showDiagnostics} onclick={() => (showDiagnostics = !showDiagnostics)}>diagnostics</button>
+      <button type="button" data-control="diagnostics" aria-pressed={showDiagnostics} onclick={() => (showDiagnostics = !showDiagnostics)}>diagnostics</button>
     </span>
   </header>
 
@@ -221,12 +221,13 @@
       type="search"
       placeholder="search prose and math"
       aria-label="search"
+      data-control="search"
       bind:value={query}
       onkeydown={(event) => {
         if (event.key === "Enter") nextMatch(event.shiftKey ? -1 : 1);
       }}
     />
-    <span class="search-state">
+    <span class="search-state" data-control="search:state">
       {#if query.trim().length === 0}
         type to search
       {:else if occurrences.length === 0}
@@ -235,8 +236,8 @@
         {activeMatch + 1} / {occurrences.length}
       {/if}
     </span>
-    <button type="button" onclick={() => nextMatch(-1)} aria-label="previous match">prev</button>
-    <button type="button" onclick={() => nextMatch(1)} aria-label="next match">next</button>
+    <button type="button" data-control="search:prev" onclick={() => nextMatch(-1)} aria-label="previous match">prev</button>
+    <button type="button" data-control="search:next" onclick={() => nextMatch(1)} aria-label="next match">next</button>
   </div>
 
   {#if view.errors.length > 0}

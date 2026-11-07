@@ -21,8 +21,9 @@ export function expandDiagram(frame: HTMLElement): void {
   if (!svg) return;
   const cloned = svg.cloneNode(true) as SVGElement;
   cloned.setAttribute("class", "diagram-svg expanded");
+  cloned.setAttribute("data-control", "diagram-svg");
 
-  const stage = el("div", { class: "diagram-stage" });
+  const stage = el("div", { class: "diagram-stage", "data-control": "diagram-stage" });
   stage.append(cloned);
 
   const zoomLabel = el("span", { class: "diagram-zoom-label" }, "100%");
@@ -47,12 +48,12 @@ export function expandDiagram(frame: HTMLElement): void {
   const controls = el(
     "div",
     { class: "diagram-controls" },
-    el("button", { type: "button", "data-action": "zoom-in" }, "+"),
-    el("button", { type: "button", "data-action": "zoom-out" }, "-"),
-    el("button", { type: "button", "data-action": "fit" }, "fit"),
-    el("button", { type: "button", "data-action": "reset" }, "reset"),
+    el("button", { type: "button", "data-action": "zoom-in", "data-control": "overlay:zoom-in" }, "+"),
+    el("button", { type: "button", "data-action": "zoom-out", "data-control": "overlay:zoom-out" }, "-"),
+    el("button", { type: "button", "data-action": "fit", "data-control": "overlay:fit" }, "fit"),
+    el("button", { type: "button", "data-action": "reset", "data-control": "overlay:reset" }, "reset"),
     zoomLabel,
-    el("button", { type: "button", "data-action": "close" }, "close"),
+    el("button", { type: "button", "data-action": "close", "data-control": "overlay:close" }, "close"),
   );
 
   const dialog = el(

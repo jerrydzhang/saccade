@@ -10,13 +10,17 @@ ordinary fast loop instead of the next review round.
 from __future__ import annotations
 
 import io
+import json
 import os
+import socket
+import time
 import types
 import pathlib
 import signal
 import subprocess
 import sys
 import tempfile
+import urllib.error
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -25,6 +29,8 @@ import browser_lane  # noqa: E402
 import containment_canary  # noqa: E402
 import entry  # noqa: E402
 import isolation  # noqa: E402
+import webdriver_client  # noqa: E402
+import webdriver_session  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -623,6 +629,305 @@ def main() -> int:
         os.write = real_write  # type: ignore[assignment]
         os.close = real_close  # type: ignore[assignment]
         signal.pidfd_send_signal = real_send  # type: ignore[assignment]
+
+    # --- webdriver session tool: pure contracts ---------------------------
+    # capabilities: the packaged wrapper is the application and the board
+    # path its single argument, verbatim
+    caps = webdriver_client.session_capabilities("/nix/store/app/bin/wrapped", ["/board/real.yaml"])
+    always = caps["capabilities"]["alwaysMatch"]
+    check(
+        "session capabilities carry the application and board args verbatim",
+        always["tauri:options"] == {"application": "/nix/store/app/bin/wrapped", "args": ["/board/real.yaml"]},
+        str(caps),
+    )
+
+    # the W3C envelope: value unwrapping and error mapping over a fake
+    # transport, never a socket
+    real_urlopen = webdriver_client.urllib.request.urlopen
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = json.dumps(payload).encode("utf-8")
+
+        def read(self):
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_urlopen_success(req, timeout=None):
+        calls.append((req.get_method(), req.full_url))
+        if req.get_method() == "POST" and req.full_url.endswith("/session"):
+            return FakeResponse({"value": {"sessionId": "sid-1", "capabilities": {}}})
+        return FakeResponse({"value": {"ok": True}})
+
+    webdriver_client.urllib.request.urlopen = fake_urlopen_success
+    try:
+        client = webdriver_client.WebDriver(4444)
+        session_id = client.new_session("/app", ["/board/x.yaml"])
+        check("session create unwraps the W3C sessionId", session_id == "sid-1" and client.session == "sid-1", str(calls))
+        check("session create posts the tauri capabilities", calls[-1] == ("POST", "http://127.0.0.1:4444/session"), str(calls))
+    finally:
+        webdriver_client.urllib.request.urlopen = real_urlopen
+
+    def fake_urlopen_error(req, timeout=None):
+        import io
+
+        error = urllib.error.HTTPError(req.full_url, 500, "boom", {}, io.BytesIO(json.dumps({"value": {"error": "session not created", "message": "no browser"}}).encode("utf-8")))
+        raise error
+
+    webdriver_client.urllib.request.urlopen = fake_urlopen_error
+    try:
+        client = webdriver_client.WebDriver(4444)
+        try:
+            client.new_session("/app", [])
+            check("an error value raises WebDriverError", False, "no refusal raised")
+        except webdriver_client.WebDriverError as error:
+            check(
+                "an error value raises WebDriverError with the W3C fields",
+                error.error == "session not created" and error.message == "no browser",
+                str(error),
+            )
+    finally:
+        webdriver_client.urllib.request.urlopen = real_urlopen
+
+    # input builders: real codepoints on the wire, pointer and wheel
+    # sequences shaped for the actions endpoint
+    check("named keys map to the W3C codepoints", webdriver_client.key_codepoint("escape") == chr(0xE00C) and webdriver_client.key_codepoint("return") == chr(0xE006), repr(webdriver_client.key_codepoint("escape")))
+    check("single characters pass through as themselves", webdriver_client.key_codepoint("a") == "a", "")
+    try:
+        webdriver_client.key_codepoint("notakey")
+        check("unknown key names refuse", False, "no refusal raised")
+    except webdriver_client.WebDriverError:
+        check("unknown key names refuse", True)
+    keys_actions = webdriver_client.key_press_actions(["Escape", "a"])
+    check(
+        "key actions are keyDown/keyUp pairs in order",
+        keys_actions[0]["type"] == "key"
+        and [step["type"] for step in keys_actions[0]["actions"]] == ["keyDown", "keyUp", "keyDown", "keyUp"]
+        and keys_actions[0]["actions"][0]["value"] == chr(0xE00C)
+        and keys_actions[0]["actions"][2]["value"] == "a",
+        str(keys_actions),
+    )
+    drag = webdriver_client.pointer_drag_actions(100.0, 100.0, 40.0, 20.0, steps=2)
+    steps = drag[0]["actions"]
+    check(
+        "drag actions press at the element and release at the offset",
+        steps[1] == {"type": "pointerDown", "button": 0}
+        and steps[-1] == {"type": "pointerUp", "button": 0}
+        and steps[2]["x"] == 120
+        and steps[2]["y"] == 110
+        and steps[2]["origin"] == "viewport"
+        and steps[3]["x"] == 140
+        and steps[3]["y"] == 120,
+        str(steps),
+    )
+    wheel = webdriver_client.wheel_scroll_actions(5.0, 6.0, 0.0, -120.0)
+    check(
+        "wheel actions scroll at the resolved point",
+        wheel[0]["type"] == "wheel" and wheel[0]["actions"][0] == {"type": "scroll", "x": 5, "y": 6, "deltaX": 0, "deltaY": -120, "duration": 80, "origin": "viewport"},
+        str(wheel),
+    )
+    send = webdriver_client.send_keys_value("\\eta")
+    check("send keys carry text plus the per-character array", send == {"text": "\\eta", "value": ["\\", "e", "t", "a"]}, str(send))
+
+    # session verb translation: the whole CLI surface compiles to one
+    # request vocabulary, refused loudly on junk
+    fields, bare = entry.parse_verb_fields(["target=search", "0 < x < 2"], {"target", "text"})
+    check("verb fields split keys from bare values", fields == {"target": "search"} and bare == ["0 < x < 2"], f"{fields} {bare}")
+    request = entry.build_input_request(["type", "target=search", "0 < \\eta < 2/b"])
+    check("type input targets the search control with the text", request == {"cmd": "input", "kind": "type", "text": "0 < \\eta < 2/b", "target": "search"}, str(request))
+    request = entry.build_input_request(["click", "target=overlay:zoom-in"])
+    check("click input carries the stable target id", request == {"cmd": "input", "kind": "click", "target": "overlay:zoom-in"}, str(request))
+    request = entry.build_input_request(["key", "Escape"])
+    check("key input carries the named keys", request == {"cmd": "input", "kind": "key", "keys": ["Escape"]}, str(request))
+    request = entry.build_input_request(["drag", "target=diagram-stage", "dx=140", "dy=40"])
+    check("drag input carries target and offsets", request == {"cmd": "input", "kind": "drag", "target": "diagram-stage", "dx": 140.0, "dy": 40.0}, str(request))
+    request = entry.build_input_request(["wheel", "target=diagram-stage", "dy=-120"])
+    check("wheel input carries target and deltas", request == {"cmd": "input", "kind": "wheel", "target": "diagram-stage", "dy": -120.0}, str(request))
+    request = entry.build_input_request(["coords", "10", "20"])
+    check("raw coords is the explicit escape hatch", request == {"cmd": "input", "kind": "coords", "x": 10.0, "y": 20.0}, str(request))
+
+    # session record lifecycle: token-guarded clear, stale records are
+    # never alive, foreign tokens never delete
+    record_path = pathlib.Path(tempfile.mkdtemp(prefix="session-record-")) / "session.json"
+    real_state_path = entry.session_state_path
+    entry.session_state_path = lambda: record_path
+    real_environ_reader = entry.process_env_value
+    try:
+        entry.write_session_record({"token": "tok-1", "daemon_pid": 1})
+        loaded = entry.load_session_record()
+        check("a written session record loads back", loaded is not None and loaded["token"] == "tok-1", str(loaded))
+        entry.process_env_value = lambda pid, name: None
+        check("a record with dead pids is not alive", entry.record_alive(loaded) is False)
+        check("clearing with a foreign token keeps the record", entry.load_session_record() is not None)
+        check("clearing with the own token deletes", entry.clear_session_record("tok-1") is True and entry.load_session_record() is None)
+        check("clearing an absent record is a clean no", entry.clear_session_record("tok-1") is False)
+        entry.process_env_value = lambda pid, name: "tok-1" if name == "BOARD_VIEWER_SESSION_TOKEN" else None
+        check("a record whose pid carries the token is alive", entry.record_alive({"token": "tok-1", "daemon_pid": 7}) is True)
+        check("a record with a foreign token is not alive", entry.record_alive({"token": "zzz", "daemon_pid": 7}) is False)
+    finally:
+        entry.session_state_path = real_state_path
+        entry.process_env_value = real_environ_reader
+
+    # the payload's target addressing: stable data-control ids only
+    check(
+        "target ids compile to a data-control selector",
+        webdriver_session.target_selector("diagram:u12") == '[data-control="diagram:u12"]',
+        "",
+    )
+    try:
+        webdriver_session.target_selector('x"[data-leak]')
+        check("target ids with selector metacharacters refuse", False, "no refusal raised")
+    except webdriver_client.WebDriverError:
+        check("target ids with selector metacharacters refuse", True)
+
+    # payload traversal over fakes: canary -> weston -> driver chain ->
+    # one session -> serve -> down -> teardown in owned order, with no
+    # real process, port or driver anywhere
+    real_canary = webdriver_session.containment_canary
+    real_start_weston = webdriver_session.start_weston
+    real_popen = webdriver_session.subprocess.Popen
+    real_wait_listening = webdriver_session.wait_listening
+    real_client = webdriver_session.WebDriver
+    traversal_env = {
+        "WESTON_BIN": "/traversal/weston",
+        "SCREENSHOOTER_BIN": "/traversal/shooter",
+        "TAURI_DRIVER_BIN": "/traversal/tauri-driver",
+        "WEBKIT_DRIVER_BIN": "/traversal/WebKitWebDriver",
+        "APP_BIN": "/traversal/app",
+        "BOARD_FILE": "/traversal/board.yaml",
+        "SHOTS_DIR": str(pathlib.Path(tempfile.mkdtemp(prefix="traversal-shots-"))),
+        "SESSION_CONTROL_SOCKET": str(pathlib.Path(tempfile.mkdtemp(prefix="traversal-ctl-")) / "control.sock"),
+        "SESSION_READY_FILE": str(pathlib.Path(tempfile.mkdtemp(prefix="traversal-ready-")) / "ready.json"),
+        "SESSION_LIFETIME_SECONDS": "10",
+    }
+    events: list[str] = []
+
+    class TraversalCanary:
+        def main(self):
+            events.append("canary")
+            return 0
+
+    class TraversalHandle:
+        def __init__(self, role):
+            self.role = role
+            self.terminated = False
+            self.killed = False
+
+        def poll(self):
+            return None if not (self.terminated or self.killed) else 0
+
+        def terminate(self):
+            self.terminated = True
+            events.append(f"terminate:{self.role}")
+
+        def kill(self):
+            self.killed = True
+            events.append(f"kill:{self.role}")
+
+        def wait(self, timeout=None):
+            return 0
+
+    weston_handle = TraversalHandle("weston")
+
+    def fake_start_weston(_bin, _name, _logs):
+        events.append("weston")
+        return weston_handle
+
+    def fake_popen(argv, **_kwargs):
+        events.append("spawn:" + pathlib.Path(argv[0]).name)
+        return TraversalHandle("tauri-driver")
+
+    class TraversalClient:
+        def __init__(self, port, timeout=None):
+            self.session = ""
+
+        def new_session(self, application, args):
+            events.append("session")
+            self.session = "traversal-session"
+            return self.session
+
+        def delete_session(self):
+            events.append("delete-session")
+            self.session = ""
+
+        def execute(self, script, args=None):
+            return {"resource": {"status": "loaded"}}
+
+    webdriver_session.containment_canary = TraversalCanary()
+    webdriver_session.start_weston = fake_start_weston
+    webdriver_session.subprocess.Popen = fake_popen
+    webdriver_session.wait_listening = lambda port, timeout: events.append("listen") or True
+    webdriver_session.WebDriver = TraversalClient
+    saved_env = {key: os.environ.get(key) for key in traversal_env}
+    os.environ.update(traversal_env)
+    try:
+        import threading
+
+        outcome: dict = {}
+
+        def run_payload():
+            outcome["code"] = webdriver_session.main()
+
+        payload_thread = threading.Thread(target=run_payload, daemon=True)
+        payload_thread.start()
+        # wait for the control socket, then take the session down the way
+        # the host verb does: one JSON request, one response line
+        control_path = traversal_env["SESSION_CONTROL_SOCKET"]
+        deadline = time.monotonic() + 20.0
+        response = None
+        while time.monotonic() < deadline and response is None:
+            if pathlib.Path(control_path).exists():
+                try:
+                    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    conn.settimeout(5.0)
+                    conn.connect(control_path)
+                    conn.sendall(b'{"cmd": "down"}\n')
+                    response = conn.makefile("rb").readline()
+                    conn.close()
+                except OSError:
+                    time.sleep(0.2)
+            else:
+                time.sleep(0.2)
+        payload_thread.join(timeout=30.0)
+        check("the down request is acknowledged", response is not None and b'"stopping": true' in response, str(response))
+        check("payload traversal exits clean on down", outcome.get("code") == 0, str(outcome))
+        check(
+            "payload traversal order: canary, weston, driver, listen, session",
+            events[:5] == ["canary", "weston", "spawn:tauri-driver", "listen", "session"],
+            str(events),
+        )
+        check(
+            "teardown owns the chain in dependency order",
+            "delete-session" in events
+            and events.index("delete-session") < events.index("terminate:tauri-driver")
+            and events.index("terminate:tauri-driver") < events.index("terminate:weston"),
+            str(events),
+        )
+        check(
+            "payload session checks all pass on the clean traversal",
+            webdriver_session.RESULTS and all(ok for ok, _name, _detail in webdriver_session.RESULTS),
+            str(webdriver_session.RESULTS),
+        )
+        control = pathlib.Path(traversal_env["SESSION_CONTROL_SOCKET"])
+        check("the control socket is removed at teardown", not control.exists(), str(control))
+    finally:
+        webdriver_session.containment_canary = real_canary
+        webdriver_session.start_weston = real_start_weston
+        webdriver_session.subprocess.Popen = real_popen
+        webdriver_session.wait_listening = real_wait_listening
+        webdriver_session.WebDriver = real_client
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     if FAILURES:
         print(f"[harness-checks] {len(FAILURES)} failure(s)", file=sys.stderr)
