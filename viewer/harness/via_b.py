@@ -6,7 +6,7 @@ executed against session b, overriding the inherited session a. The
 stdin/stdout pipe to A's core is the transport; no shell is ever
 spawned, nothing asks, nothing retries.
 
-Runs inside the sandbox as [<HERDR_VIA_PY>, /pin/via_b.py, <line>].
+Runs inside the sandbox as [<BOARD_VIEWER_VIA_PY>, /pin/via_b.py, <line>].
 The decision lives in resolve_line so the contract runs against fakes
 in the fast check loop.
 """
@@ -33,9 +33,9 @@ def resolve_line(line: str, env: dict[str, str]) -> tuple[list[str], dict[str, s
         raise ViaRefused(f"via: unparseable line {line!r}: {error}") from error
     if not argv or argv[0] != "hc":
         raise ViaRefused(f"via: refusing line whose head is not hc: {line!r}")
-    core = env.get("HERDR_CORE_BIN", "")
+    core = env.get("BOARD_VIEWER_HERDR_CORE_BIN", "")
     if not core.startswith("/"):
-        raise ViaRefused("via: HERDR_CORE_BIN must be an absolute pinned path")
+        raise ViaRefused("via: BOARD_VIEWER_HERDR_CORE_BIN must be an absolute pinned path")
     rewritten = [core, *argv[1:]]
     child_env = dict(env)
     child_env["HC_SESSION"] = "b"

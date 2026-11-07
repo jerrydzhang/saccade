@@ -84,9 +84,9 @@ unchanged:  CONTAINMENT_HOST_* baselines, WESTON_BIN, SCREENSHOOTER_BIN,
             FONTCONFIG_FILE, SHOTS_DIR, __EGL_VENDOR_LIBRARY_DIRS,
             LIBGL_ALWAYS_SOFTWARE, BOARD_VIEWER_WEBVIEW_CONSOLE,
             GDK_SCALE, GDK_DPI_SCALE
-new:        HERDR_CORE_BIN   the pinned herdr-core path
+new:        BOARD_VIEWER_HERDR_CORE_BIN   the pinned herdr-core path
             BOARD_LOCATION   b:/board/real.yaml
-            HERDR_VIA_PY     the pinned python absolute path (the via
+            BOARD_VIEWER_VIA_PY     the pinned python absolute path (the via
                              string's interpreter)
 new value:  HC_SESSION=a     chain-wide: core A serves this session, the
                              lane's CLI calls target it, and the app's
@@ -104,15 +104,15 @@ bounded with the failure recorded, never retried:
 
 ```
 1. containment canary, in-process          unchanged module, main()
-2. core A:  [HERDR_CORE_BIN, "serve"]      env HC_SESSION=a
+2. core A:  [BOARD_VIEWER_HERDR_CORE_BIN, "serve"]      env HC_SESSION=a
            wait for $XDG_RUNTIME_DIR/herdr-core/a.sock (15 s)
-3. core B:  [HERDR_CORE_BIN, "serve"]      env HC_SESSION=b
+3. core B:  [BOARD_VIEWER_HERDR_CORE_BIN, "serve"]      env HC_SESSION=b
            wait for b.sock (15 s)
-4. add:     [HERDR_CORE_BIN, "machine", "add",
-             "--via", "<HERDR_VIA_PY> /pin/via_b.py",
+4. add:     [BOARD_VIEWER_HERDR_CORE_BIN, "machine", "add",
+             "--via", "<BOARD_VIEWER_VIA_PY> /pin/via_b.py",
              "--name", "b", "--session", "b", "--json"]
            env HC_SESSION=a, stdin=/dev/null, cwd=run root
-5. confirm: poll [HERDR_CORE_BIN, "machine", "ls", "--json"]
+5. confirm: poll [BOARD_VIEWER_HERDR_CORE_BIN, "machine", "ls", "--json"]
            until b is state=connected (20 s); a stuck state is read
            with its `why` and fails the lane, nothing is re-dialed
 6. weston, tauri-driver -> WebKitWebDriver -> app
@@ -141,7 +141,7 @@ machine.add carries the same fields: via, name, session). A's core
 therefore runs, for the connect and for any later probe:
 
 ```
-[<HERDR_VIA_PY>, "/pin/via_b.py", "<line>"]
+[<BOARD_VIEWER_VIA_PY>, "/pin/via_b.py", "<line>"]
 ```
 
 The program never spawns a shell:
@@ -151,7 +151,7 @@ line = sys.argv[-1]
 argv = shlex.split(line)
 if not argv or argv[0] != "hc":
     print(f"via: refusing line {line!r}", file=sys.stderr); sys.exit(2)
-argv[0] = os.environ["HERDR_CORE_BIN"]      # the pinned binary, by path
+argv[0] = os.environ["BOARD_VIEWER_HERDR_CORE_BIN"]      # the pinned binary, by path
 env = {**os.environ, "HC_SESSION": "b"}     # B's session, overriding A's
 os.execve(argv[0], argv, env)
 ```

@@ -159,7 +159,7 @@ def main() -> int:
     check("all-empty baselines refuse every required entry", len(failures) >= 9, str(failures))
 
     # --- remote mesh lane: the via program and argv shapes (pure) -------
-    via_env = {"HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a", "PATH": "/usr/bin"}
+    via_env = {"BOARD_VIEWER_HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a", "PATH": "/usr/bin"}
     argv, child_env = via_b.resolve_line("hc connect", via_env)
     check("via rewrites hc to the pinned binary by path", argv == ["/pin/core/bin/herdr-core", "connect"], str(argv))
     check(
@@ -188,9 +188,9 @@ def main() -> int:
         via_b.resolve_line("hc connect", {"HC_SESSION": "a"})
         check("via refuses a missing core pin", False, "no refusal raised")
     except via_b.ViaRefused as refusal:
-        check("via refuses a missing core pin", "HERDR_CORE_BIN" in str(refusal), str(refusal))
+        check("via refuses a missing core pin", "BOARD_VIEWER_HERDR_CORE_BIN" in str(refusal), str(refusal))
     try:
-        via_b.resolve_line("hc connect", {"HERDR_CORE_BIN": "relative/hc"})
+        via_b.resolve_line("hc connect", {"BOARD_VIEWER_HERDR_CORE_BIN": "relative/hc"})
         check("via refuses a relative core pin", False, "no refusal raised")
     except via_b.ViaRefused:
         check("via refuses a relative core pin", True)

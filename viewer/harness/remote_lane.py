@@ -318,13 +318,13 @@ def main() -> int:
     if not run_canary_first():
         return 1
 
-    core_bin = pinned("HERDR_CORE_BIN")
+    core_bin = pinned("BOARD_VIEWER_HERDR_CORE_BIN")
     weston_bin = pinned("WESTON_BIN")
     shooter_bin = pinned("SCREENSHOOTER_BIN")
     tauri_driver_bin = pinned("TAURI_DRIVER_BIN")
     webkit_driver_bin = pinned("WEBKIT_DRIVER_BIN")
     app_bin = pinned("APP_BIN")
-    via_py = pinned("HERDR_VIA_PY")
+    via_py = pinned("BOARD_VIEWER_VIA_PY")
     shots = pathlib.Path(pinned("SHOTS_DIR"))
     location = os.environ.get("BOARD_LOCATION", "")
     if not location.startswith(f"{MACHINE_NAME}:/") or "\0" in location:

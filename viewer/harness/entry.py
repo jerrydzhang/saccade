@@ -702,8 +702,8 @@ def remote_env(resolved: dict, run_root: pathlib.Path) -> dict[str, str]:
     env["BOARD_VIEWER_WEBVIEW_CONSOLE"] = "1"
     env["GDK_SCALE"] = "1"
     env["GDK_DPI_SCALE"] = "1"
-    env["HERDR_CORE_BIN"] = resolved["herdr_core"]
-    env["HERDR_VIA_PY"] = resolved["python"]
+    env["BOARD_VIEWER_HERDR_CORE_BIN"] = resolved["herdr_core"]
+    env["BOARD_VIEWER_VIA_PY"] = resolved["python"]
     env["HC_SESSION"] = "a"
     env["BOARD_LOCATION"] = REMOTE_LOCATION
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
