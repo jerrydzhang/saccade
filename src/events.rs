@@ -34,6 +34,34 @@ pub enum Event {
         id: TaskId,
         explanation: Prose,
     },
+    /// A published board revision: the commit the boards effects
+    /// wrote, the parent it was cut from (absent for the first), and
+    /// the declared incorporations as (source task, source commit)
+    /// pairs. Changes no stage; the fold appends the task's commit
+    /// list and derives the dense revision numbering from it.
+    TaskCommitted {
+        task: TaskId,
+        commit: GitCommit,
+        parent: Option<GitCommit>,
+        incorporations: Vec<(TaskId, GitCommit)>,
+    },
+    /// The task's board stands offered at its current commit.
+    TaskOffered {
+        task: TaskId,
+        commit: GitCommit,
+    },
+    /// The human-side ask to reconsider an offered board, with the
+    /// grounds that reopen the task.
+    TaskRejected {
+        task: TaskId,
+        grounds: Prose,
+    },
+    /// The offered board is accepted: a truthful final state,
+    /// whatever the outcome. Every incorporation in the offered
+    /// commit cites exactly its source's accepted commit.
+    TaskAccepted {
+        task: TaskId,
+    },
     // Workspace events: the establishment is the machinery verb,
     // System-authored by role; the checkpoint is the exception any
     // tier may record
@@ -171,6 +199,28 @@ pub enum Command {
     ReopenTask {
         id: TaskId,
         explanation: Prose,
+    },
+    /// Record a published board revision the effects produced: the
+    /// commit, the parent it named, and the declared incorporations.
+    CommitBoard {
+        task: TaskId,
+        commit: GitCommit,
+        parent: Option<GitCommit>,
+        incorporations: Vec<(TaskId, GitCommit)>,
+    },
+    /// Offer the task's board at its current commit.
+    OfferBoard {
+        task: TaskId,
+        commit: GitCommit,
+    },
+    /// Ask reconsideration of an offered board, with grounds.
+    RejectBoard {
+        task: TaskId,
+        grounds: Prose,
+    },
+    /// Accept an offered board.
+    AcceptBoard {
+        task: TaskId,
     },
     // Machinery verbs: System authorship comes from the role, never input
     EstablishWorkspace {

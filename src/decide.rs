@@ -13,6 +13,10 @@ fn required_tier(event: &Event) -> Authority {
     match event {
         Event::TaskCreated { .. }
         | Event::TaskClaimed { .. }
+        | Event::TaskCommitted { .. }
+        | Event::TaskOffered { .. }
+        | Event::TaskRejected { .. }
+        | Event::TaskAccepted { .. }
         | Event::TaskWorkspaceCheckpointed { .. }
         | Event::MessageSent { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
@@ -59,6 +63,20 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::ClaimTask { id, incarnation } => vec![Event::TaskClaimed { id, incarnation }],
         Command::CancelTask { id, explanation } => vec![Event::TaskCancelled { id, explanation }],
         Command::ReopenTask { id, explanation } => vec![Event::TaskReopened { id, explanation }],
+        Command::CommitBoard {
+            task,
+            commit,
+            parent,
+            incorporations,
+        } => vec![Event::TaskCommitted {
+            task,
+            commit,
+            parent,
+            incorporations,
+        }],
+        Command::OfferBoard { task, commit } => vec![Event::TaskOffered { task, commit }],
+        Command::RejectBoard { task, grounds } => vec![Event::TaskRejected { task, grounds }],
+        Command::AcceptBoard { task } => vec![Event::TaskAccepted { task }],
         Command::EstablishWorkspace {
             task_id,
             base,
@@ -185,7 +203,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 17] = [
+        let events: [(Event, Authority); 21] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -216,6 +234,30 @@ mod test {
                 Require(Tier::Human),
             ),
             (Event::RootSpaceCleared {}, Require(Tier::Human)),
+            (
+                Event::TaskCommitted {
+                    task: TaskId(0),
+                    commit: GitCommit::new("a".repeat(40)).unwrap(),
+                    parent: None,
+                    incorporations: Vec::new(),
+                },
+                AnyTier,
+            ),
+            (
+                Event::TaskOffered {
+                    task: TaskId(0),
+                    commit: GitCommit::new("a".repeat(40)).unwrap(),
+                },
+                AnyTier,
+            ),
+            (
+                Event::TaskRejected {
+                    task: TaskId(0),
+                    grounds: prose(),
+                },
+                AnyTier,
+            ),
+            (Event::TaskAccepted { task: TaskId(0) }, AnyTier),
             // Provisioning stays machine-authored; checkpoint is the exception.
             (
                 Event::WorkspaceEstablished {
@@ -348,6 +390,21 @@ mod test {
                 id: TaskId(0),
                 explanation: prose(),
             },
+            Command::CommitBoard {
+                task: TaskId(0),
+                commit: GitCommit::new("a".repeat(40)).unwrap(),
+                parent: None,
+                incorporations: Vec::new(),
+            },
+            Command::OfferBoard {
+                task: TaskId(0),
+                commit: GitCommit::new("a".repeat(40)).unwrap(),
+            },
+            Command::RejectBoard {
+                task: TaskId(0),
+                grounds: prose(),
+            },
+            Command::AcceptBoard { task: TaskId(0) },
             Command::EstablishWorkspace {
                 task_id: TaskId(0),
                 base: GitCommit::new("abc123".into()).unwrap(),

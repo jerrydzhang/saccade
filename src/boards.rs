@@ -18,7 +18,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use board_grammar::{Board, parse};
+use board_grammar::{Board, Component, SelectPath, parse};
+use board_grammar::{ErrorKind, ParseError, Where as GrammarWhere};
+
+use crate::objects::task::TaskId as FoldTaskId;
+use crate::store::World;
 
 /// The largest figure a commit or checkpoint accepts: 8 MiB.
 pub const MAX_FIGURE_BYTES: u64 = 8 * 1024 * 1024;
@@ -29,6 +33,8 @@ pub const BASE_FILE: &str = ".saccade-board.json";
 
 pub const COMMIT_REF_PREFIX: &str = "refs/saccade/tasks";
 const BOARD_FILE: &str = "board.yaml";
+const BOARD_AUTHOR_NAME: &str = "saccade boards";
+const BOARD_AUTHOR_EMAIL: &str = "boards@saccade.invalid";
 
 /// An effect-layer refusal: operation codes, never fold refusals.
 #[derive(Debug)]
@@ -51,6 +57,12 @@ pub enum BoardsFail {
     InvalidKey { key: String },
     /// The working directory's board.yaml is unreadable.
     WorkingBoard { path: PathBuf, detail: String },
+    /// An incorporation names a source task the fold does not hold.
+    UnknownSourceTask { name: String },
+    /// The store refused the TaskCommitted the publish attempted.
+    Record(String),
+    /// An acceptance was attempted while checkpoints stood unsaved.
+    UnsavedCheckpoints { actors: Vec<String> },
     /// A git command failed; the detail is its stderr.
     Git(String),
     /// A filesystem effect failed.
@@ -68,6 +80,9 @@ impl BoardsFail {
             BoardsFail::MissingBase { .. } => "boards_base_unrecorded",
             BoardsFail::BadBase { .. } => "boards_base_unreadable",
             BoardsFail::InvalidKey { .. } => "boards_invalid_key",
+            BoardsFail::UnknownSourceTask { .. } => "boards_unknown_source_task",
+            BoardsFail::Record(_) => "boards_record_refused",
+            BoardsFail::UnsavedCheckpoints { .. } => "boards_unsaved_checkpoints",
             BoardsFail::WorkingBoard { .. } => "boards_working_board_unreadable",
             BoardsFail::Git(_) => "boards_effect",
             BoardsFail::Io { .. } => "boards_io",
@@ -109,6 +124,14 @@ impl BoardsFail {
                     "'{key}' is not a safe ref path component; task keys and actors are single names without slashes"
                 )
             }
+            BoardsFail::UnknownSourceTask { name } => format!(
+                "the incorporation cites source task '{name}', which no task in this tracker bears; create it or correct the citation"
+            ),
+            BoardsFail::Record(detail) => detail.clone(),
+            BoardsFail::UnsavedCheckpoints { actors } => format!(
+                "checkpoints by {} stand unsaved for this task; discard them or commit first - acceptance certifies the recorded revisions alone",
+                actors.join(", ")
+            ),
             BoardsFail::WorkingBoard { path, detail } => {
                 format!("could not read {}: {detail}", path.display())
             }
@@ -151,6 +174,10 @@ impl Boards {
             })?;
             run_ok(&repo, &["init", "--bare", "--quiet", "."], None)?;
             run_ok(&repo, &["config", "gc.auto", "0"], None)?;
+            // the object store carries its own author: commits must not
+            // depend on the ambient machine identity
+            run_ok(&repo, &["config", "user.name", BOARD_AUTHOR_NAME], None)?;
+            run_ok(&repo, &["config", "user.email", BOARD_AUTHOR_EMAIL], None)?;
         }
         Ok(Boards {
             repo,
@@ -419,6 +446,111 @@ impl Boards {
             let _ = std::fs::remove_dir_all(self.checkouts.join(old));
         }
         Ok(())
+    }
+
+    /// The D7 publish sequence for a board commit: the objects land
+    /// first, every incorporation selector resolves against its cited
+    /// source revision, the caller's `record` closure lands the
+    /// TaskCommitted (its guards run under the write lock), and only
+    /// then do the ref and the checkout move. A refusal at any stage
+    /// leaves the caches untouched; orphaned objects are the
+    /// crash-window cost the repair law already absorbs.
+    ///
+    /// The world resolves the incorporation source names to fold tasks
+    /// and hands the current commit as the parent; the store re-checks
+    /// both under its locks.
+    pub fn publish_board(
+        &self,
+        task: FoldTaskId,
+        ref_key: &str,
+        world: &World,
+        workdir: &Path,
+        message: &str,
+        mut record: impl FnMut(crate::events::Command) -> Result<(), String>,
+    ) -> Result<String, BoardsFail> {
+        let board = read_working_board(workdir)?;
+        let declared = incorporation_sources(&board);
+        let parent = world
+            .tasks
+            .get(task.0)
+            .and_then(|ctx| ctx.commits.last().map(|c| c.commit.clone()));
+        let landed = self.commit(
+            ref_key,
+            workdir,
+            parent.as_ref().map(|c| c.as_str()),
+            message,
+        )?;
+        // selector verification against each cited revision
+        for (name, revision, selects) in &declared {
+            let source_board = match self.read_board_at(revision) {
+                Ok(board) => board,
+                Err(error) => {
+                    return Err(BoardsFail::BoardInvalid(selector_refusal(
+                        name,
+                        revision,
+                        "",
+                        &ParseError {
+                            kind: ErrorKind::NoReceivingText,
+                            at: GrammarWhere::Path(revision.to_string()),
+                            message: error.detail(),
+                        },
+                    )));
+                }
+            };
+            for select in selects {
+                if let Err(error) = board_grammar::select(&source_board, select) {
+                    return Err(BoardsFail::BoardInvalid(selector_refusal(
+                        name,
+                        revision,
+                        &select.to_string(),
+                        &ParseError {
+                            kind: ErrorKind::BadSelectPath,
+                            at: GrammarWhere::Path(select.to_string()),
+                            message: format!("{error}"),
+                        },
+                    )));
+                }
+            }
+        }
+        // source names resolve to fold tasks; an unknown name refuses
+        // before the record is attempted
+        let mut pairs = Vec::with_capacity(declared.len());
+        for (name, revision, _) in &declared {
+            let source = world
+                .tasks
+                .iter()
+                .find(|ctx| ctx.task.name.as_str() == name)
+                .map(|ctx| FoldTaskId(ctx.birth.0))
+                .ok_or_else(|| BoardsFail::UnknownSourceTask { name: name.clone() })?;
+            let cited =
+                crate::types::pointers::GitCommit::new(revision.clone()).map_err(|error| {
+                    BoardsFail::Git(format!("the cited revision {revision}: {error:?}"))
+                })?;
+            pairs.push((source, cited));
+        }
+        let commit = crate::types::pointers::GitCommit::new(landed.commit.clone())
+            .map_err(|error| BoardsFail::Git(format!("the landed commit: {error:?}")))?;
+        record(crate::events::Command::CommitBoard {
+            task,
+            commit: commit.clone(),
+            parent: parent.clone(),
+            incorporations: pairs,
+        })
+        .map_err(BoardsFail::Record)?;
+        self.advance_commit(ref_key, &landed.commit)?;
+        self.materialize(ref_key, &landed.commit)?;
+        Ok(landed.commit)
+    }
+
+    /// The accept door's effect: no actor of the task may hold
+    /// unsaved checkpoints when the acceptance records.
+    pub fn accept_guard(&self, task: &str) -> Result<(), BoardsFail> {
+        let actors = self.unsaved_checkpoints(task)?;
+        if actors.is_empty() {
+            Ok(())
+        } else {
+            Err(BoardsFail::UnsavedCheckpoints { actors })
+        }
     }
 
     /// Set every commit ref and materialized checkout to what the log
@@ -718,6 +850,46 @@ fn figures_in(board_text: &str) -> std::collections::BTreeSet<String> {
     }
 }
 
+/// Every incorporation's citation from a parsed board: the source
+/// task's name, the pinned revision, and the selectors it takes.
+fn incorporation_sources(board: &Board) -> Vec<(String, String, Vec<SelectPath>)> {
+    let mut found = Vec::new();
+    walk_board(&board.content, &mut |component| {
+        if let Component::Incorporation { source, .. } = component {
+            found.push((
+                source.task.clone(),
+                source.revision.clone(),
+                source.select.clone(),
+            ));
+        }
+    });
+    found
+}
+
+fn walk_board(content: &[Component], visit: &mut impl FnMut(&Component)) {
+    for component in content {
+        visit(component);
+        match component {
+            Component::Group { content, .. } | Component::Incorporation { content, .. } => {
+                walk_board(content, visit)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A selector's refusal, taught with the citation it rode in on.
+fn selector_refusal(name: &str, revision: &str, select: &str, cause: &ParseError) -> ParseError {
+    ParseError {
+        kind: cause.kind.clone(),
+        at: cause.at.clone(),
+        message: format!(
+            "the incorporation citing {name} at {revision} selects {select}: {}",
+            cause.message
+        ),
+    }
+}
+
 fn read_working_board(workdir: &Path) -> Result<Board, BoardsFail> {
     let path = workdir.join(BOARD_FILE);
     let text = std::fs::read_to_string(&path).map_err(|error| BoardsFail::WorkingBoard {
@@ -894,6 +1066,19 @@ content:
 
     const ORIGINAL_DRAWING: &[u8] = b"first section drawing";
     const REVISED_DRAWING: &[u8] = b"revised section drawing";
+
+    fn record(
+        seq: usize,
+        context: &crate::store::Context,
+        event: crate::events::Event,
+    ) -> crate::store::Record {
+        crate::store::Record {
+            id: crate::store::RecordId(seq),
+            timestamp: seq as u64,
+            context: context.clone(),
+            event,
+        }
+    }
 
     fn write(dir: &Path, name: &str, bytes: &[u8]) {
         let file = dir.join(name);
@@ -1549,6 +1734,128 @@ content:
         write(&dir, BASE_FILE, b"not json");
         let error = recorded_base(&dir).expect_err("the corrupted record refuses");
         assert_eq!(error.code(), "boards_base_unreadable");
+    }
+
+    // the publish wiring runs the D7 order: the record lands before
+    // the ref moves, and a store refusal leaves the caches untouched
+    #[test]
+    fn publish_wires_the_record_between_the_objects_and_the_ref() {
+        let tag = "publish";
+        let store = boards(tag);
+        let dir = workdir(tag, "finding");
+        write(&dir, BOARD_FILE, LEDGER_FINDING.as_bytes());
+        let mut world = crate::store::World::new();
+        world = world
+            .apply(record(
+                0,
+                &crate::store::Context {
+                    actor: crate::types::actor::ActorName::new("human person".into()).unwrap(),
+                    tier: crate::store::Tier::Human,
+                    scope: None,
+                },
+                crate::events::Event::TaskCreated {
+                    name: crate::types::prose::Prose::new("implement foo".into()).unwrap(),
+                },
+            ))
+            .expect("the seed world folds");
+        let task = crate::objects::task::TaskId(0);
+
+        // a store refusal (the closure declines) leaves the ref and the
+        // checkout untouched, the objects already written
+        let refused =
+            store.publish_board(task, "0", &world, &dir, "the declined publication", |_| {
+                Err("the store refused".to_string())
+            });
+        assert!(refused.is_err(), "the declined record surfaces");
+        assert_eq!(
+            store
+                .read_ref(&format!("{COMMIT_REF_PREFIX}/0/commit"))
+                .expect("the ref reads"),
+            None,
+            "the ref never moved past the refused record"
+        );
+        assert!(!store.checkouts.join("0").exists());
+
+        // the real record lands, and the caches follow it
+        let landed = store
+            .publish_board(
+                task,
+                "0",
+                &world,
+                &dir,
+                "the published account",
+                |command| {
+                    assert!(matches!(
+                        command,
+                        crate::events::Command::CommitBoard { .. }
+                    ));
+                    Ok(())
+                },
+            )
+            .expect("the publish lands");
+        assert_eq!(
+            store
+                .read_ref(&format!("{COMMIT_REF_PREFIX}/0/commit"))
+                .expect("the ref reads"),
+            Some(landed.clone())
+        );
+        assert!(
+            store.checkouts.join("0").join(BOARD_FILE).exists(),
+            "the checkout materializes"
+        );
+    }
+
+    // a selector the cited source revision does not hold refuses the
+    // publish before the record is attempted
+    #[test]
+    fn a_selector_outside_its_cited_revision_refuses_the_publish() {
+        let tag = "selector";
+        let store = boards(tag);
+        // seed the source revision: a two-text board at revision X
+        let source = workdir(tag, "source");
+        write(&source, BOARD_FILE, LEDGER_FINDING.as_bytes());
+        store
+            .commit("0", &source, None, "the source account")
+            .expect("the source commit lands");
+        let source_commit = {
+            let log = std::process::Command::new("git")
+                .args(["-C", store.repo.to_str().unwrap(), "rev-parse", "HEAD"])
+                .output()
+                .expect("git runs");
+            String::from_utf8_lossy(&log.stdout).trim().to_string()
+        };
+
+        // the citing board selects /content/9, which the source lacks
+        let dir = workdir(tag, "citing");
+        write(
+            &dir,
+            BOARD_FILE,
+            format!(
+                r#"grammar: 1
+task: floop-index-backfill
+content:
+  - incorporation:
+      source:
+        task: implement foo
+        revision: {source_commit}
+        select: [/content/9]
+      content:
+        - text: |
+            The receiving text explains what this board takes.
+"#
+            )
+            .as_bytes(),
+        );
+        let world = crate::store::World::new();
+        let refused = store.publish_board(
+            crate::objects::task::TaskId(0),
+            "0",
+            &world,
+            &dir,
+            "the citing account",
+            |_| Ok(()),
+        );
+        assert!(refused.is_err(), "the out-of-bounds selector refuses");
     }
 
     #[test]

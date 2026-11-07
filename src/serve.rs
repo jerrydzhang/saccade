@@ -14,6 +14,23 @@ pub async fn run(
     let mut state = AppState::open(db_path)?;
     if let Some(root) = &repo_root {
         state = state.with_repo_root(root.clone());
+        // the boards caches repair from the fold before the doors open
+        // (D7); a logged commit missing from the repository refuses to
+        // serve, never serves a partial history
+        let boards = crate::boards::Boards::open(&crate::paths::state_dir(root))
+            .map_err(|e| format!("boards repository: {}", e.detail()))?;
+        let conn = crate::db::open_read(db_path).map_err(|e| format!("database: {e}"))?;
+        match crate::db::load(&conn)
+            .map_err(|e| format!("database: {e}"))?
+            .state
+        {
+            crate::db::LoadState::Full(world) => boards
+                .repair(&world.boards_current())
+                .map_err(|e| format!("boards repair refused to serve: {}", e.detail()))?,
+            // a degraded log carries no fold to repair from; the doors
+            // degrade with it
+            crate::db::LoadState::Degraded(_) => {}
+        }
     }
     let listener = tokio::net::TcpListener::bind(&addr)
         .await

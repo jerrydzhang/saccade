@@ -85,7 +85,11 @@ pub fn wait_matches(
         }
         Event::TaskClaimed { id, .. }
         | Event::TaskCancelled { id, .. }
-        | Event::TaskReopened { id, .. } => *target == Target::Task(*id),
+        | Event::TaskReopened { id, .. }
+        | Event::TaskCommitted { task: id, .. }
+        | Event::TaskOffered { task: id, .. }
+        | Event::TaskRejected { task: id, .. }
+        | Event::TaskAccepted { task: id } => *target == Target::Task(*id),
         Event::WorkspaceEstablished { task_id, .. }
         | Event::TaskWorkspaceCheckpointed { task_id, .. } => *target == Target::Task(*task_id),
         // the root destination acts, the registrations, the relaunch
@@ -620,6 +624,7 @@ mod test {
             birth: RecordId(0),
             last_record_at: 0,
             ownership: Vec::new(),
+            commits: Vec::new(),
             birth_actor: ActorName::new("human person".into()).unwrap(),
             workspace: None,
         }

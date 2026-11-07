@@ -27,12 +27,53 @@ pub fn teach(world: &World, command: &Command, reject: &Reject) -> Option<String
         Reject::InvalidIncarnationId => {
             Some("no incarnation the record birthed carries that reference; a claim names one by its public number i-N, never by task scope alone".into())
         }
+        Reject::SelfAcceptance => {
+            let id = command_task(command)?;
+            Some(format!(
+                "the declared task scope covers t-{}: a task-bound producer cannot accept its own board - acceptance is an outside consumer's act",
+                id.0
+            ))
+        }
+        Reject::NotCurrentParent { expected } => {
+            let id = command_task(command)?.0;
+            let stands = match expected {
+                Some(commit) => format!("its current commit is {commit}"),
+                None => "it holds no commit yet".to_string(),
+            };
+            Some(format!("t-{id} is not at that parent; {stands} - commit onto what stands"))
+        }
+        Reject::UnrecordedSourceCommit { .. } => Some(
+            "an incorporation cites a recorded revision of its source task; commit the source first, or cite a commit its record already carries".into(),
+        ),
+        Reject::NotCurrentCommit { current } => {
+            let id = command_task(command)?.0;
+            let stands = match current {
+                Some(commit) => format!("its current commit is {commit}"),
+                None => "it holds no commit yet".to_string(),
+            };
+            Some(format!("t-{id} is not at that commit; {stands}"))
+        }
+        Reject::SourceNotAccepted { .. } => Some(
+            "acceptance cites exactly each source's accepted commit; commit and accept the source first, or cite the commit its acceptance carries".into(),
+        ),
         Reject::InvalidStateTransition => match command {
             Command::CancelTask { id, .. } => {
                 need(world, *id, "a cancellation stops an open or offered task")
             }
             Command::ReopenTask { id, .. } => {
                 need(world, *id, "only a cancelled task reopens")
+            }
+            Command::CommitBoard { task, .. } => {
+                need(world, *task, "a commit publishes on an open task")
+            }
+            Command::OfferBoard { task, .. } => {
+                need(world, *task, "an offer needs an open task at its current commit")
+            }
+            Command::RejectBoard { task, .. } => {
+                need(world, *task, "a reject needs a task standing offered")
+            }
+            Command::AcceptBoard { task, .. } => {
+                need(world, *task, "an accept needs a task standing offered")
             }
             _ => None,
         },
@@ -48,6 +89,10 @@ fn command_task(command: &Command) -> Option<TaskId> {
         Command::ClaimTask { id, .. }
         | Command::CancelTask { id, .. }
         | Command::ReopenTask { id, .. }
+        | Command::CommitBoard { task: id, .. }
+        | Command::OfferBoard { task: id, .. }
+        | Command::RejectBoard { task: id, .. }
+        | Command::AcceptBoard { task: id }
         | Command::EstablishWorkspace { task_id: id, .. }
         | Command::CheckpointWorkspace { task_id: id, .. } => Some(*id),
         _ => None,

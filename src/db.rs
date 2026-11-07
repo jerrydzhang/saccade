@@ -818,6 +818,96 @@ mod test {
         )
         .unwrap();
 
+        // the board family rides the same round-trip: the design task's
+        // commit, offer, reject, recommit, acceptance, and the
+        // consumer task stacking on the accepted revision
+        record(
+            &mut conn,
+            &agent(),
+            Command::CommitBoard {
+                task: TaskId(0),
+                commit: crate::GitCommit::new("aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
+                    .unwrap(),
+                parent: None,
+                incorporations: Vec::new(),
+            },
+            34,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::OfferBoard {
+                task: TaskId(0),
+                commit: crate::GitCommit::new("aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
+                    .unwrap(),
+            },
+            35,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &human(),
+            Command::RejectBoard {
+                task: TaskId(0),
+                grounds: prose("the edge case still fails"),
+            },
+            36,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::CommitBoard {
+                task: TaskId(0),
+                commit: crate::GitCommit::new("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
+                    .unwrap(),
+                parent: Some(
+                    crate::GitCommit::new("aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
+                        .unwrap(),
+                ),
+                incorporations: Vec::new(),
+            },
+            37,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::OfferBoard {
+                task: TaskId(0),
+                commit: crate::GitCommit::new("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
+                    .unwrap(),
+            },
+            38,
+        )
+        .unwrap();
+        record(
+            &mut conn,
+            &human(),
+            Command::AcceptBoard { task: TaskId(0) },
+            39,
+        )
+        .unwrap();
+        record(&mut conn, &human(), create("adopt the accounts"), 39).unwrap();
+        record(
+            &mut conn,
+            &agent(),
+            Command::CommitBoard {
+                task: TaskId(4),
+                commit: crate::GitCommit::new("cccc3333cccccccccccccccccccccccccccccccc".into())
+                    .unwrap(),
+                parent: None,
+                incorporations: vec![(
+                    TaskId(0),
+                    crate::GitCommit::new("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
+                        .unwrap(),
+                )],
+            },
+            40,
+        )
+        .unwrap();
+
         // asserted after the last write of the story
         let (_, returned) = record(
             &mut conn,
@@ -826,7 +916,7 @@ mod test {
                 task_id: TaskId(0),
                 checkpoint: GitCommit::new("def456".into()).unwrap(),
             },
-            34,
+            41,
         )
         .unwrap();
 
@@ -835,7 +925,7 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 26);
+        assert_eq!(loadout.rows.len(), 34);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
@@ -933,6 +1023,40 @@ mod test {
         assert_eq!(loadout.rows[18].tier, "system");
         assert!(loadout.rows[18].payload.contains("\"workspace\":16"));
         assert_eq!(loadout.rows[19].kind, "workspace_restored");
+        // the board family rode its own kinds with the declared pairs:
+        // the eight rows before the closing checkpoint
+        let board = |back: usize| &loadout.rows[loadout.rows.len() - 9 + back];
+        assert_eq!(board(0).kind, "task_committed");
+        assert!(
+            board(0)
+                .payload
+                .contains("aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(board(1).kind, "task_offered");
+        assert_eq!(board(2).kind, "task_rejected");
+        assert!(board(2).payload.contains("the edge case still fails"));
+        assert_eq!(board(3).kind, "task_committed");
+        assert!(
+            board(3)
+                .payload
+                .contains("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert!(board(3).payload.contains("\"parent\":"));
+        assert_eq!(board(4).kind, "task_offered");
+        assert_eq!(board(5).kind, "task_accepted");
+        assert_eq!(board(6).kind, "task_created");
+        assert_eq!(board(7).kind, "task_committed");
+        assert!(
+            board(7)
+                .payload
+                .contains("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+        assert!(
+            board(7)
+                .payload
+                .contains("\"incorporations\":[[0,\"bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"]]")
+        );
+
         assert_eq!(world.provenance[&RecordId(18)], None);
         assert_eq!(world.provenance[&RecordId(19)], None);
         assert_eq!(
@@ -983,9 +1107,36 @@ mod test {
         let mctx = &world.messages[&crate::MessageId(RecordId(14))];
         assert_eq!(mctx.state, crate::MessageState::Submitted);
         assert_eq!(mctx.message.task, Some(TaskId(0)));
+        // the board family folded: dense revisions, the accepted
+        // final state, and the consumer's declared citation
+        assert_eq!(world.tasks[0].commits.len(), 2);
+        assert_eq!(
+            world.tasks[0].commits[0].commit.as_str(),
+            "aaaa1111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(
+            world.tasks[0].commits[1].commit.as_str(),
+            "bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(
+            world.tasks[0].revision_of(world.tasks[0].commits[0].record),
+            Some(1)
+        );
+        assert_eq!(
+            world.tasks[0].revision_of(world.tasks[0].commits[1].record),
+            Some(2)
+        );
+        assert!(matches!(world.tasks[0].task.state, TaskState::Concluded));
+        assert_eq!(
+            world.tasks[4].commits.last().unwrap().incorporations,
+            vec![(
+                TaskId(0),
+                crate::GitCommit::new("bbbb2222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),).unwrap()
+            )]
+        );
+
         // the world folded the full story
-        assert_eq!(world.tasks.len(), 4);
-        assert!(matches!(world.tasks[0].task.state, TaskState::Open));
+        assert_eq!(world.tasks.len(), 5);
         assert!(matches!(world.tasks[1].task.state, TaskState::Open));
         assert!(matches!(world.tasks[2].task.state, TaskState::Open));
         assert!(matches!(world.tasks[3].task.state, TaskState::Open));

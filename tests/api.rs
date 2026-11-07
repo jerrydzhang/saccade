@@ -7563,3 +7563,132 @@ fn the_root_destination_binds_through_the_cli_door_and_places_the_root_launch() 
     std::fs::remove_dir_all(dir).unwrap();
     let _ = serve.kill();
 }
+
+#[test]
+fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let dir = std::env::temp_dir().join(format!("sac-api-startup-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let db = saccade::paths::state_dir(&repo).join("saccade.db");
+
+    // a log whose fold carries a board commit the repository must hold
+    let boards = saccade::boards::Boards::open(&saccade::paths::state_dir(&repo))
+        .expect("the boards repository opens");
+    let work = dir.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(
+        work.join("board.yaml"),
+        "grammar: 1\ntask: implement foo\ncontent: []\n",
+    )
+    .unwrap();
+    let landed = boards
+        .commit("0", &work, None, "the recorded account")
+        .expect("the objects land");
+    let commit = saccade::GitCommit::new(landed.commit.clone()).unwrap();
+
+    let mut conn = saccade::db::open(&db).unwrap();
+    saccade::db::record(
+        &mut conn,
+        &saccade::store::Context {
+            actor: saccade::types::actor::ActorName::new("pi".into()).unwrap(),
+            tier: saccade::store::Tier::Agent,
+            scope: None,
+        },
+        saccade::Command::CreateTask {
+            name: saccade::Prose::new("implement foo".into()).unwrap(),
+        },
+        1,
+    )
+    .unwrap();
+    saccade::db::record(
+        &mut conn,
+        &saccade::store::Context {
+            actor: saccade::types::actor::ActorName::new("pi".into()).unwrap(),
+            tier: saccade::store::Tier::Agent,
+            scope: None,
+        },
+        saccade::Command::CommitBoard {
+            task: saccade::TaskId(0),
+            commit: commit.clone(),
+            parent: None,
+            incorporations: Vec::new(),
+        },
+        2,
+    )
+    .unwrap();
+    drop(conn);
+    let _ = boards.repair(&[("0".to_string(), commit.as_str().to_string())]);
+    assert_eq!(
+        landed.commit,
+        commit.as_str(),
+        "the test seeds the exact commit the log carries"
+    );
+    let _ = boards.repair(&[("0".to_string(), commit.as_str().to_string())]);
+
+    let log = std::fs::File::create(dir.join("serve.log")).unwrap();
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args([
+        "--db",
+        db.to_str().unwrap(),
+        "--repo",
+        repo.to_str().unwrap(),
+        "serve",
+        "--bind",
+        "127.0.0.1",
+        "--port",
+        "0",
+    ])
+    .stdout(log.try_clone().unwrap())
+    .stderr(log);
+    let mut serve = cmd.spawn().expect("serve spawns");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(
+        serve.try_wait().unwrap().is_none(),
+        "serve stays up when the repository holds every logged commit"
+    );
+    let _ = serve.kill();
+    let _ = serve.wait();
+
+    // a logged commit missing from the repository refuses to serve
+    std::fs::remove_dir_all(saccade::paths::state_dir(&repo).join("boards.git")).unwrap();
+    let log2 = std::fs::File::create(dir.join("serve2.log")).unwrap();
+    let mut cmd2 = std::process::Command::new(bin);
+    cmd2.args([
+        "--db",
+        db.to_str().unwrap(),
+        "--repo",
+        repo.to_str().unwrap(),
+        "serve",
+        "--bind",
+        "127.0.0.1",
+        "--port",
+        "0",
+    ])
+    .stdout(log2.try_clone().unwrap())
+    .stderr(log2);
+    let mut serve2 = cmd2.spawn().expect("serve spawns again");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match serve2.try_wait().expect("poll serve") {
+            Some(status) => {
+                assert!(!status.success(), "the refusal is a failure exit");
+                break;
+            }
+            None if std::time::Instant::now() >= deadline => {
+                let _ = serve2.kill();
+                panic!("serve stayed up past a missing logged commit");
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+    let stderr = std::fs::read_to_string(dir.join("serve2.log")).unwrap();
+    assert!(
+        stderr.contains("boards repair refused to serve"),
+        "{stderr}"
+    );
+    let _ = serve2.wait();
+    std::fs::remove_dir_all(&dir).unwrap();
+}

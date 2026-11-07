@@ -24,6 +24,25 @@ enum Action {
         /// Draws that name the task's live incarnation when one is born
         incarnation: u8,
     },
+    /// A board commit onto the drawn task, parented on whatever the
+    /// task holds (near-miss draws refuse at the parent guard)
+    Commit {
+        task: u8,
+        incorporation: u8,
+    },
+    /// An offer at the task's commit list draw (near-miss refuses)
+    Offer {
+        task: u8,
+        commit: u8,
+    },
+    Reject {
+        task: u8,
+        human: bool,
+    },
+    Accept {
+        task: u8,
+        human: bool,
+    },
     Cancel {
         task: u8,
         human: bool,
@@ -75,7 +94,10 @@ impl Action {
             Action::Create { human, .. }
             | Action::Claim { human, .. }
             | Action::Cancel { human, .. }
-            | Action::Reopen { human, .. } => *human,
+            | Action::Reopen { human, .. }
+            | Action::Reject { human, .. }
+            | Action::Accept { human, .. } => *human,
+            Action::Commit { .. } | Action::Offer { .. } => false,
             Action::Establish { .. }
             | Action::CreateWorkspace { .. }
             | Action::ChangeWorkspace { .. }
@@ -94,6 +116,10 @@ impl Action {
             Action::Claim { task, .. }
             | Action::Cancel { task, .. }
             | Action::Reopen { task, .. }
+            | Action::Commit { task, .. }
+            | Action::Offer { task, .. }
+            | Action::Reject { task, .. }
+            | Action::Accept { task, .. }
             | Action::Establish { task, .. }
                 if role == "task" =>
             {
@@ -109,6 +135,38 @@ impl Action {
 /// draws on small worlds) exercise the reject paths.
 fn task_at(world: &World, n: u8) -> TaskId {
     TaskId(n as usize % (world.tasks.len() + 1))
+}
+
+/// A commit from the drawn task's list, or a guaranteed-absent hash:
+/// the near-miss draw keeps the parent and offer guards exercised.
+fn commit_at(world: &World, task: TaskId, n: u8) -> saccade::GitCommit {
+    let garbage = || saccade::GitCommit::new("0".repeat(40)).unwrap();
+    world
+        .tasks
+        .get(task.0)
+        .and_then(|ctx| ctx.commits.last())
+        .map(|c| c.commit.clone())
+        .filter(|_| n % 4 != 3)
+        .unwrap_or_else(garbage)
+}
+
+/// An incorporation pairing the drawn source task with its last
+/// commit, or a source past the id space: the unrecorded-citation
+/// draw keeps the store guard exercised.
+fn incorporation_at(world: &World, _task: u8, n: u8) -> Option<(TaskId, saccade::GitCommit)> {
+    let source = TaskId(n as usize % (world.tasks.len() + 1));
+    if source.0 == world.tasks.len() {
+        return Some((TaskId(usize::MAX), garbage_commit()));
+    }
+    let last = world.tasks.get(source.0)?.commits.last()?;
+    if n % 4 == 3 {
+        return Some((source, garbage_commit()));
+    }
+    Some((source, last.commit.clone()))
+}
+
+fn garbage_commit() -> saccade::GitCommit {
+    saccade::GitCommit::new("f".repeat(40)).unwrap()
 }
 
 /// Any record position the log already holds - births and record
@@ -184,6 +242,57 @@ fn command_of(action: &Action, world: &World, records: usize) -> Command {
             id: task,
             explanation: Prose::new("generated explanation".into()).unwrap(),
         },
+        Action::Commit { incorporation, .. } => {
+            let incorporations = match incorporation % 3 {
+                // a two-incorporation draw exercises the plural guard,
+                // including the near-miss source and citation draws
+                0 => [
+                    incorporation_at(world, *incorporation, *incorporation),
+                    incorporation_at(world, incorporation.wrapping_add(1), *incorporation),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+                // a single citing draw: the sentinel source and the
+                // garbage cite refuse as unrecorded, the real pair lands
+                1 => incorporation_at(world, *incorporation, *incorporation)
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            };
+            Command::CommitBoard {
+                task,
+                commit: saccade::GitCommit::new(format!("c{:02}{}", task.0, "a".repeat(36)))
+                    .unwrap(),
+                // the near-miss draw keeps the parent guard exercised
+                parent: (incorporation % 4 != 3)
+                    .then(|| {
+                        world
+                            .tasks
+                            .get(task.0)
+                            .and_then(|t| t.commits.last().map(|c| c.commit.clone()))
+                    })
+                    .flatten()
+                    .or_else(|| {
+                        // a wrong-parent draw: another task's current commit
+                        let other = task_at(world, incorporation.wrapping_add(2));
+                        world
+                            .tasks
+                            .get(other.0)
+                            .and_then(|t| t.commits.last().map(|c| c.commit.clone()))
+                    }),
+                incorporations,
+            }
+        }
+        Action::Offer { task, commit } => Command::OfferBoard {
+            task: task_at(world, *task),
+            commit: commit_at(world, task_at(world, *task), *commit),
+        },
+        Action::Reject { .. } => Command::RejectBoard {
+            task,
+            grounds: Prose::new("generated grounds".into()).unwrap(),
+        },
+        Action::Accept { .. } => Command::AcceptBoard { task },
         Action::Establish { .. } => Command::EstablishWorkspace {
             task_id: task,
             base: saccade::GitCommit::new(format!("abc{:03}", task.0)).unwrap(),
@@ -327,6 +436,12 @@ fn action_strategy() -> BoxedStrategy<Action> {
         }),
         2 => id(|task, human| Action::Cancel { task, human }),
         2 => id(|task, human| Action::Reopen { task, human }),
+        3 => (any::<u8>(), any::<u8>()).prop_map(|(task, incorporation)| {
+            Action::Commit { task, incorporation }
+        }),
+        2 => (any::<u8>(), any::<u8>()).prop_map(|(task, commit)| Action::Offer { task, commit }),
+        2 => id(|task, human| Action::Reject { task, human }),
+        2 => id(|task, human| Action::Accept { task, human }),
         2 => any::<u8>().prop_map(|task| Action::Establish { task }),
         2 => any::<u8>().prop_map(|draw| Action::CreateWorkspace { draw }),
         2 => (any::<u8>(), any::<u8>()).prop_map(|(incarnation, dir)| Action::ChangeWorkspace {
@@ -461,6 +576,26 @@ fn generator_reaches_deep_states() {
                         Action::Claim { .. } => {
                             *milestones.entry("claim").or_default() += 1;
                         }
+                        Action::Commit { .. } => {
+                            if last.kind == "task_committed" {
+                                *milestones.entry("board commit").or_default() += 1;
+                            }
+                        }
+                        Action::Offer { .. } => {
+                            if last.kind == "task_offered" {
+                                *milestones.entry("board offer").or_default() += 1;
+                            }
+                        }
+                        Action::Reject { .. } => {
+                            if last.kind == "task_rejected" {
+                                *milestones.entry("board reject").or_default() += 1;
+                            }
+                        }
+                        Action::Accept { human: true, .. } => {
+                            if last.kind == "task_accepted" {
+                                *milestones.entry("board accept").or_default() += 1;
+                            }
+                        }
                         Action::Establish { .. } => {
                             if last.kind == "workspace_established" {
                                 *milestones.entry("workspace established").or_default() += 1;
@@ -507,6 +642,11 @@ fn generator_reaches_deep_states() {
                     let kind = match r {
                         saccade::Reject::HumanOnly => "HumanOnly",
                         saccade::Reject::InvalidTaskId => "InvalidTaskId",
+                        saccade::Reject::NotCurrentParent { .. } => "NotCurrentParent",
+                        saccade::Reject::UnrecordedSourceCommit { .. } => "UnrecordedSourceCommit",
+                        saccade::Reject::NotCurrentCommit { .. } => "NotCurrentCommit",
+                        saccade::Reject::SourceNotAccepted { .. } => "SourceNotAccepted",
+                        saccade::Reject::SelfAcceptance => "SelfAcceptance",
                         saccade::Reject::InvalidStateTransition => "InvalidStateTransition",
                         saccade::Reject::InvalidIncarnationId => "InvalidIncarnationId",
                         saccade::Reject::DuplicateNativeSession => "DuplicateNativeSession",
@@ -541,6 +681,10 @@ fn generator_reaches_deep_states() {
         ("reopen", 0.005),
         ("claim", 0.10),
         ("cancelled task", 0.15),
+        ("board commit", 0.08),
+        ("board offer", 0.04),
+        ("board reject", 0.002),
+        ("board accept", 0.002),
         ("native registered", 0.15),
         ("message sent", 0.01),
         ("message submitted", 0.005),
@@ -558,6 +702,9 @@ fn generator_reaches_deep_states() {
     for kind in [
         "HumanOnly",
         "InvalidTaskId",
+        "NotCurrentParent",
+        "NotCurrentCommit",
+        "UnrecordedSourceCommit",
         "InvalidStateTransition",
         "InvalidIncarnationId",
     ] {

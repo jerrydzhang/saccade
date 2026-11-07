@@ -54,6 +54,16 @@ pub enum Reject {
     // Task
     #[error("no such task")]
     InvalidTaskId,
+    #[error(
+        "the commit's parent is not this task's current commit: revisions chain onto what stands"
+    )]
+    NotCurrentParent { expected: Option<String> },
+    #[error("the incorporation cites a source commit that is not recorded")]
+    UnrecordedSourceCommit { source_task: TaskId, cited: String },
+    #[error("the offered commit is not this task's current commit")]
+    NotCurrentCommit { current: Option<String> },
+    #[error("the incorporation cites a source that is not accepted at that commit")]
+    SourceNotAccepted { source_task: TaskId, cited: String },
     #[error("no such incarnation")]
     InvalidIncarnationId,
     #[error("an incarnation already carries this native session")]
@@ -68,6 +78,10 @@ pub enum Reject {
     LocatorAlreadyBound,
     #[error("no such message for this recipient")]
     InvalidMessageId,
+    #[error(
+        "the declared task scope covers this task: a task-bound producer cannot accept its own board"
+    )]
+    SelfAcceptance,
     // Permissions
     #[error("human-only act")]
     HumanOnly,
@@ -97,6 +111,11 @@ impl Reject {
     pub fn code(&self) -> &'static str {
         match self {
             Reject::InvalidTaskId => "invalid_task_id",
+            Reject::NotCurrentParent { .. } => "not_current_parent",
+            Reject::UnrecordedSourceCommit { .. } => "unrecorded_source_commit",
+            Reject::NotCurrentCommit { .. } => "not_current_commit",
+            Reject::SourceNotAccepted { .. } => "source_not_accepted",
+            Reject::SelfAcceptance => "self_acceptance",
             Reject::InvalidIncarnationId => "invalid_incarnation_id",
             Reject::DuplicateNativeSession => "duplicate_native_session",
             Reject::SavedSessionMismatch => "saved_session_mismatch",
@@ -125,6 +144,17 @@ mod test {
     fn refusal_codes_match_the_wire_names() {
         let every = [
             Reject::InvalidTaskId,
+            Reject::NotCurrentParent { expected: None },
+            Reject::UnrecordedSourceCommit {
+                source_task: crate::TaskId(0),
+                cited: "a".repeat(40),
+            },
+            Reject::NotCurrentCommit { current: None },
+            Reject::SourceNotAccepted {
+                source_task: crate::TaskId(0),
+                cited: "a".repeat(40),
+            },
+            Reject::SelfAcceptance,
             Reject::InvalidIncarnationId,
             Reject::DuplicateNativeSession,
             Reject::SavedSessionMismatch,
@@ -142,11 +172,17 @@ mod test {
         ];
         for reject in every {
             let wire = serde_json::to_value(&reject).unwrap();
-            assert_eq!(
-                wire.as_str().unwrap(),
-                reject.code(),
-                "the code and the wire name disagree for {wire}"
-            );
+            // unit variants carry the code as the whole wire value;
+            // payload variants carry it as the single object key
+            let name = match wire.as_str() {
+                Some(name) => name.to_string(),
+                None => {
+                    let object = wire.as_object().expect("plain data");
+                    assert_eq!(object.len(), 1, "{object:?}");
+                    object.keys().next().unwrap().to_string()
+                }
+            };
+            assert_eq!(name, reject.code(), "the code and the wire name disagree");
         }
     }
 }

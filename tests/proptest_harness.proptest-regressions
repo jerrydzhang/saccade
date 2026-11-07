@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5b9d375ea2be2fa5d2d858116f5cb44aebdb6c237bfadfaa641c7345d65a462f # shrinks to actions = [Create { human: true }, Create { human: true }, Commit { task: 15, incorporation: 0 }]
+cc 55197afa58fe501f528788ee261abceb3a2bc380dfd2ac37d548f7b1240a59de # shrinks to actions = [Create { human: true }, Accept { task: 216, human: true }]
