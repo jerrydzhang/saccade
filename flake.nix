@@ -397,6 +397,7 @@
             "rust-analyzer"
           ];
         };
+        devHerdrCore = herdrCore system pkgs;
       in {
         # the board viewer's native dev shell: its own dependency graph,
         # separate from the tracker devshell and the tracker crate. The
@@ -454,6 +455,9 @@
           # 50_mesa.json carries the absolute store path of
           # libEGL_mesa.so.0 (llvmpipe/swrast live in the same output)
           env.BOARD_VIEWER_MESA_EGL_VENDOR_DIR = "${pkgs.mesa}/share/glvnd/egl_vendor.d";
+          # the remote lane's pinned core: the flake's 0.1.17 binary,
+          # sha-checked at build; the lane verifies --version again
+          env.BOARD_VIEWER_HERDR_CORE_BIN = "${devHerdrCore}/bin/herdr-core";
         };
         default = devenv.lib.mkShell {
           inherit inputs pkgs;
