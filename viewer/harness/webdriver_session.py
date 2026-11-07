@@ -234,6 +234,14 @@ def perform_input(client: WebDriver, request: dict) -> dict:
         x, y = element_center(client, target)
         client.perform_actions(webdriver_client.pointer_drag_actions(x, y, dx, dy))
         return {"kind": "drag", "target": target, "dx": dx, "dy": dy}
+    if kind == "hotkey":
+        keys = request.get("keys")
+        if not isinstance(keys, list) or len(keys) < 2 or not all(isinstance(k, str) and k for k in keys):
+            raise WebDriverError("invalid argument", "hotkey input needs keys: [modifier..., key]")
+        downs = [{"type": "keyDown", "value": webdriver_client.key_codepoint(name)} for name in keys]
+        ups = [{"type": "keyUp", "value": webdriver_client.key_codepoint(name)} for name in reversed(keys)]
+        client.perform_actions([{"type": "key", "id": "keyboard", "actions": downs + ups}])
+        return {"kind": "hotkey", "keys": keys}
     raise WebDriverError("invalid argument", f"unknown input kind: {kind!r}")
 
 
@@ -382,6 +390,16 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
     if command == "input":
         assert state.client is not None
         return {"ok": True, "input": perform_input(state.client, request)}, False
+    if command == "evaluate":
+        assert state.client is not None
+        script = request.get("script")
+        if not isinstance(script, str) or not script.strip():
+            raise WebDriverError("invalid argument", "evaluate needs a script")
+        args = request.get("args")
+        if args is not None and not (isinstance(args, list) and all(isinstance(a, (str, int, float)) for a in args)):
+            raise WebDriverError("invalid argument", "evaluate args must be scalars")
+        value = state.client.execute(script, args or [])
+        return {"ok": True, "value": value}, False
     if command == "selection":
         assert state.client is not None
         chosen = state.client.execute("return String(window.getSelection())")

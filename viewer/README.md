@@ -22,11 +22,20 @@ through `harness/entry.py` under enforced OS isolation - see
 
 ## Reading a board
 
-The first input is a transitional explicit selector: pick a fixture board
-or give an explicit host path in the app header. Fixtures live in
-`fixtures/` and include the real migration board
-(`saccade-and-migration.yaml`, byte-pinned from the tracker's artifact
-store by test) and its source-map companion.
+The standing control is the header location field: give an explicit
+board path and open it. Fixtures live in `fixtures/` and remain a
+dev/test path (the browser lane and the tests address them through the
+inspection surface, not the human UI).
+
+Keys:
+
+- `Ctrl+F` opens the search bar; `Escape` closes it; `Enter` and
+  `Shift+Enter` walk the matches
+- copy is Source by default; `Ctrl+Shift+C` toggles Plain; `Ctrl+C`
+  copies the selection in the current mode (a formula is copied whole
+  in its current mode whatever fraction of it is selected)
+
+Contracts this reader holds (pinned by `tests/`):
 
 Contracts this reader holds (pinned by `tests/`):
 

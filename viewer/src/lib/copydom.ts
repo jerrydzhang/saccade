@@ -142,17 +142,46 @@ function unitIndexInParent(el: HTMLElement): number {
   return index;
 }
 
-export function installCopyHandler(getMode: () => CopyMode): () => void {
-  const handler = (event: ClipboardEvent): void => {
+export type CopyHandlerOptions = {
+  /** When present, Ctrl+C writes the payload through the native shell
+   * bridge and suppresses the engine's copy command - the native
+   * WebKitGTK never dispatches the copy event (execCommand copy is
+   * false there), so the bridge is the only working write path. */
+  bridgeWrite?: (text: string) => Promise<boolean>;
+  /** Observes every handled copy, in product order. */
+  onHandled?: (mode: CopyMode, text: string) => void;
+};
+
+export function installCopyHandler(getMode: () => CopyMode, options: CopyHandlerOptions = {}): () => void {
+  const payload = (): string => {
     const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return "";
     const segments = selectionSegments();
-    if (segments.length === 0) return;
-    const text = serializeSelection(segments, getMode());
+    if (segments.length === 0) return "";
+    return serializeSelection(segments, getMode());
+  };
+  const handler = (event: ClipboardEvent): void => {
+    const text = payload();
     if (text.length === 0) return;
     event.clipboardData?.setData("text/plain", text);
     event.preventDefault();
+    options.onHandled?.(getMode(), text);
   };
   document.addEventListener("copy", handler);
-  return () => document.removeEventListener("copy", handler);
+  const keydown = (event: KeyboardEvent): void => {
+    if (!options.bridgeWrite) return;
+    if (!(event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "c")) return;
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    const text = payload();
+    if (text.length === 0) return;
+    event.preventDefault();
+    options.onHandled?.(getMode(), text);
+    void options.bridgeWrite(text);
+  };
+  if (options.bridgeWrite) window.addEventListener("keydown", keydown);
+  return () => {
+    document.removeEventListener("copy", handler);
+    if (options.bridgeWrite) window.removeEventListener("keydown", keydown);
+  };
 }

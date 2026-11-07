@@ -187,3 +187,39 @@ mod tests {
         assert!(guard_relative("a\0b").is_err());
     }
 }
+
+/// The system clipboard write, through the app's own GTK display
+/// connection. The webview's copy event never dispatches under the
+/// native WebKitGTK (execCommand copy returns false even for plain
+/// prose selections), so the frontend routes its copy payload here on
+/// Ctrl+C and suppresses the native command.
+#[tauri::command]
+pub fn write_clipboard(window: tauri::Window, text: String) -> Result<usize, String> {
+    use gtk::prelude::*;
+    use gtk::traits::WidgetExt;
+    let display = window
+        .gtk_window()
+        .map_err(|_| "no gtk window".to_string())?
+        .display();
+    let selection = gtk::gdk::Atom::from("CLIPBOARD");
+    let clipboard = gtk::Clipboard::for_display(&display, &selection);
+    clipboard.set_text(&text);
+    eprintln!("[bridge] clipboard set: {} chars", text.chars().count());
+    Ok(text.chars().count())
+}
+
+/// The clipboard's current text, read back through the same GTK
+/// clipboard. Verification surface for the session checks; the human
+/// pastes through their own client.
+#[tauri::command]
+pub fn read_clipboard(window: tauri::Window) -> Result<String, String> {
+    use gtk::prelude::*;
+    use gtk::traits::WidgetExt;
+    let display = window
+        .gtk_window()
+        .map_err(|_| "no gtk window".to_string())?
+        .display();
+    let selection = gtk::gdk::Atom::from("CLIPBOARD");
+    let clipboard = gtk::Clipboard::for_display(&display, &selection);
+    Ok(clipboard.wait_for_text().unwrap_or_default().to_string())
+}

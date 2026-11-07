@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ViewerModel } from "./lib/viewmodel.ts";
-  import { fixtureNames, tauriInvoke, SourceUnavailableError, type Machine, type Location } from "./lib/sources.ts";
+  import { tauriInvoke, SourceUnavailableError, type Machine, type Location } from "./lib/sources.ts";
   import { projectBoard, searchUnits, type SearchOccurrence } from "./lib/projection.ts";
   import { renderBoard } from "./lib/render.ts";
   import { hydrate } from "./lib/hydrate.ts";
@@ -68,13 +68,65 @@
   }
   void openInitialBoard();
 
-  const fixtures = fixtureNames();
-  let fixturePath = $state(fixtures[0] ?? "");
   let hostPath = $state("");
   let query = $state("");
   let activeMatch = $state(0);
-  let showDiagnostics = $state(false);
+  let searchOpen = $state(false);
+  let searchInput: HTMLInputElement | undefined = $state(undefined);
   let contentHost: HTMLElement | undefined = $state(undefined);
+
+  function openSearch(): void {
+    searchOpen = true;
+    window.requestAnimationFrame(() => searchInput?.focus());
+  }
+
+  function closeSearch(): void {
+    searchOpen = false;
+  }
+
+  // Key-driven chrome: Ctrl+F opens the search, Escape closes it,
+  // Ctrl+Shift+C switches between Source and Plain copy. No visible
+  // mode buttons: Source is the default and Plain is one keystroke.
+  function onWindowKey(event: KeyboardEvent): void {
+    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      openSearch();
+      return;
+    }
+    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "c") {
+      event.preventDefault();
+      model.setCopyMode(view.copyMode === "plain" ? "source" : "plain");
+      return;
+    }
+    if (event.key === "Escape" && searchOpen) {
+      event.preventDefault();
+      closeSearch();
+    }
+  }
+
+  $effect(() => {
+    window.addEventListener("keydown", onWindowKey);
+    return () => window.removeEventListener("keydown", onWindowKey);
+  });
+
+  async function bridgeWrite(text: string): Promise<boolean> {
+    try {
+      const invoke = tauriInvoke();
+      await invoke("write_clipboard", { text });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  const bridgePresent = (() => {
+    try {
+      tauriInvoke();
+      return true;
+    } catch (error) {
+      return error instanceof SourceUnavailableError ? false : true;
+    }
+  })();
 
   let occurrences: SearchOccurrence[] = $derived.by(() => {
     if (!view.board || query.trim().length === 0) return [];
@@ -113,7 +165,16 @@
     if (contentHost) bindDiagramExpansion(contentHost);
   });
 
-  $effect(() => installCopyHandler(() => view.copyMode));
+  $effect(() =>
+    installCopyHandler(() => view.copyMode, {
+      // the bridge write exists only inside the native shell; the
+      // browser keeps the engine's copy event path
+      bridgeWrite: bridgePresent ? (text) => bridgeWrite(text) : undefined,
+      onHandled: (mode, text) => {
+        (window as unknown as { __lastCopy?: { mode: CopyMode; text: string } }).__lastCopy = { mode, text };
+      },
+    }),
+  );
 
   $effect(() => {
     const w = window as unknown as Record<string, unknown>;
@@ -124,10 +185,6 @@
       setTheme: (theme: ViewerState["theme"]) => model.setTheme(theme),
     };
   });
-
-  async function openFixture(): Promise<void> {
-    if (fixturePath) await model.open({ machine: "fixture", path: fixturePath });
-  }
 
   async function openHost(): Promise<void> {
     if (hostPath) await model.open({ machine: "host", path: hostPath });
@@ -186,38 +243,21 @@
       {/if}
     </span>
     <span class="controls">
-      <label class="control">fixture
-        <select bind:value={fixturePath} aria-label="fixture board" data-control="open:fixture-name">
-          {#each fixtures as name}
-            <option value={name}>{name}</option>
-          {/each}
-        </select>
-      </label>
-      <button type="button" data-control="open:fixture" onclick={() => void openFixture()}>open fixture</button>
-      <label class="control">host path
+      <label class="control">location
         <input type="text" bind:value={hostPath} placeholder="/path/to/board.yaml" aria-label="host declaration path" data-control="open:host-path" />
       </label>
-      <button type="button" data-control="open:host" onclick={() => void openHost()}>open host path</button>
-      <span class="control-sep" aria-hidden="true"></span>
-      <span class="copy-toggle" role="group" aria-label="copy mode">
-        <button type="button" data-control="copy:source" class:active={view.copyMode === "source"} onclick={() => model.setCopyMode("source")}>source</button>
-        <button type="button" data-control="copy:plain" class:active={view.copyMode === "plain"} onclick={() => model.setCopyMode("plain")}>plain</button>
-      </span>
-      <span class="theme-toggle" role="group" aria-label="theme">
-        {#each ["system", "light", "dark"] as theme}
-          <button type="button" data-control={`theme:${theme}`} class:active={view.theme === theme} onclick={() => model.setTheme(theme as "system" | "light" | "dark")}>{theme}</button>
-        {/each}
-      </span>
-      <button type="button" data-control="diagnostics" aria-pressed={showDiagnostics} onclick={() => (showDiagnostics = !showDiagnostics)}>diagnostics</button>
+      <button type="button" data-control="open:host" onclick={() => void openHost()}>open</button>
     </span>
   </header>
 
+  {#if searchOpen}
   <div class="search-bar" role="search">
     <input
       type="search"
       placeholder="search prose and math"
       aria-label="search"
       data-control="search"
+      bind:this={searchInput}
       bind:value={query}
       onkeydown={(event) => {
         if (event.key === "Enter") nextMatch(event.shiftKey ? -1 : 1);
@@ -235,6 +275,7 @@
     <button type="button" data-control="search:prev" onclick={() => nextMatch(-1)} aria-label="previous match">prev</button>
     <button type="button" data-control="search:next" onclick={() => nextMatch(1)} aria-label="next match">next</button>
   </div>
+  {/if}
 
   {#if view.errors.length > 0}
     <section class="errors" aria-label="load errors">
@@ -243,19 +284,6 @@
       {/each}
       {#if view.laneMessage}
         <p class="render-error">{view.laneMessage}</p>
-      {/if}
-    </section>
-  {/if}
-
-  {#if showDiagnostics}
-    <section class="diagnostics" aria-label="diagnostics">
-      <h3>diagnostics</h3>
-      {#if view.diagnostics.length === 0}
-        <p>none</p>
-      {:else}
-        {#each view.diagnostics as issue}
-          <p><strong>{issue.code}</strong> {issue.message}{#if issue.line !== undefined} (line {issue.line}){/if}</p>
-        {/each}
       {/if}
     </section>
   {/if}

@@ -1424,7 +1424,18 @@ def run_session_checks(socket_path: str, resolved: dict, query: str, log_path: s
     )
     check("closing returns to the board", closed is not None, "overlay targets persisted")
 
-    # 7: search finds an occurrence
+    # 7: Ctrl+F opens the on-demand search, then a match is found
+    try:
+        hotkey = session_request(socket_path, {"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "f"]}, timeout=30.0)
+        check("ctrl+f accepted", bool(hotkey.get("ok")), json.dumps(hotkey)[:160])
+    except (OSError, RuntimeError, ValueError) as error:
+        check("ctrl+f accepted", False, str(error))
+    search_open = wait_response(
+        {"cmd": "inspect"},
+        lambda r: "search" in target_ids(inspection_of(r)),
+        15.0,
+    )
+    check("search opens on demand", search_open is not None, "search target absent")
     try:
         typed = session_request(socket_path, {"cmd": "input", "kind": "type", "target": "search", "text": query}, timeout=30.0)
         check("search input accepted", bool(typed.get("ok")), json.dumps(typed)[:160])
@@ -1455,6 +1466,61 @@ def run_session_checks(socket_path: str, resolved: dict, query: str, log_path: s
         check("next match reaches the second occurrence", advanced is not None, search_text)
     else:
         check("next match reaches the second occurrence", False, f"query {query!r} had fewer than two occurrences")
+
+    # 8: the native copy path - a formula-plus-prose selection copied
+    # with Ctrl+C reaches the bridge with the Plain TeX bytes (the
+    # engine's own copy command never dispatches natively)
+    try:
+        session_request(socket_path, {"cmd": "input", "kind": "hotkey", "keys": ["escape"]}, timeout=30.0)
+        time.sleep(0.3)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    try:
+        selection_result = session_request(
+            socket_path,
+            {
+                "cmd": "evaluate",
+                "script": (
+                    "const math = document.querySelector('.block-text .math-inline');"
+                    "if (!math) return 'no math';"
+                    "const paragraph = math.closest('p');"
+                    "const children = Array.from(paragraph.children);"
+                    "const mathIndex = children.indexOf(math);"
+                    "const range = document.createRange();"
+                    "range.setStart(children[0], 0);"
+                    "range.setEnd(children[mathIndex + 1].firstChild, 9);"
+                    "const selection = window.getSelection();"
+                    "selection.removeAllRanges();"
+                    "selection.addRange(range);"
+                    "return JSON.stringify(String(selection));"
+                ),
+            },
+            timeout=30.0,
+        )
+        check(
+            "formula-plus-prose selection is set",
+            bool(selection_result.get("ok")) and "B_k" not in (selection_result.get("value") or "null"),
+            json.dumps(selection_result)[:200],
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        check("formula-plus-prose selection is set", False, str(error))
+    try:
+        session_request(socket_path, {"cmd": "input", "kind": "hotkey", "keys": ["ctrl", "c"]}, timeout=30.0)
+        time.sleep(0.8)
+        last = session_request(
+            socket_path,
+            {"cmd": "evaluate", "script": "return JSON.stringify(window.__lastCopy || null);"},
+            timeout=30.0,
+        )
+        last_copy = json.loads(last.get("value") or "null")
+        ok = (
+            isinstance(last_copy, dict)
+            and last_copy.get("mode") == "plain"
+            and "B_k" in (last_copy.get("text") or "")
+        )
+        check("plain copy reaches the bridge with the TeX bytes", ok, json.dumps(last_copy)[:200])
+    except (OSError, RuntimeError, ValueError) as error:
+        check("plain copy reaches the bridge with the TeX bytes", False, str(error))
 
     return failures
 

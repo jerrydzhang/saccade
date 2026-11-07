@@ -32,6 +32,8 @@ pub fn run() {
             commands::read_asset,
             commands::viewer_identity,
             commands::initial_board,
+            commands::write_clipboard,
+            commands::read_clipboard,
         ])
         .setup(move |app| {
             if console_requested {
