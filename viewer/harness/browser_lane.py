@@ -12,8 +12,10 @@ Order, enforced here:
      browser per engine over the Nix-pinned Playwright driver (driver
      and browsers from the same nixpkgs revision; the pinned browsers
      store path carries WebKit; nothing downloaded at runtime):
-     Chromium first, then Playwright WebKit - a second engine on
-     identical checks so a Chromium-only pass cannot ship a
+     Chromium first, then Playwright WebKit - the pinned WebKit
+     launches its MiniBrowser directly because pw_run.sh needs PATH
+     tools the fresh sandbox PATH deliberately does not carry; a second
+     engine on identical checks so a Chromium-only pass cannot ship a
      WebKit-only defect again; the page navigates to the server and
      waits for the shared viewer API before any action
   4. per-engine outcomes over the real frontend and the real fixture
@@ -55,6 +57,23 @@ RESULTS: list[tuple[bool, str, str]] = []
 def record_check(name: str, condition: bool, detail: str = "") -> None:
     RESULTS.append((bool(condition), name, detail))
     print(f"[browser] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}", flush=True)
+
+
+def pinned_webkit_executable() -> str:
+    """The pinned driver resolves WebKit through pw_run.sh, which needs
+    PATH tools (dirname, uname) the fresh sandbox PATH deliberately does
+    not carry. The nix-built browsers dir ships the same MiniBrowser the
+    script would exec in its zip-layout arm, so the lane launches it
+    directly. Exactly one webkit-* directory under the pinned browsers
+    path is the pinned contract - zero or several is a refusal, never a
+    guess."""
+    browsers = pathlib.Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
+    matches = sorted(browsers.glob("webkit-*/minibrowser-wpe/bin/MiniBrowser"))
+    if len(matches) != 1:
+        raise FileNotFoundError(
+            f"expected exactly one pinned webkit MiniBrowser under {browsers}, found {len(matches)}"
+        )
+    return str(matches[0])
 
 
 def run_canary_first() -> bool:
@@ -464,7 +483,16 @@ def main() -> int:
                     if engine == "chromium":
                         browser = playwright.chromium.launch(headless=True, chromium_sandbox=False)
                     else:
-                        browser = playwright.webkit.launch(headless=True)
+                        # env replaces the inherited environment, so the
+                        # pinned complex-text flag rides a merged copy;
+                        # pw_run.sh sets the same one before its exec
+                        launch_env = dict(os.environ)
+                        launch_env["WEBKIT_FORCE_COMPLEX_TEXT"] = "1"
+                        browser = playwright.webkit.launch(
+                            headless=True,
+                            executable_path=pinned_webkit_executable(),
+                            env=launch_env,
+                        )
                 except Exception as error:
                     # the browser's own stderr is the evidence a dead
                     # launch leaves; a truncated detail once hid the

@@ -162,8 +162,9 @@ HOME/UID, tracker-db. The payload interpreter is the pinned
 withPackages python, its closure verified to contain the playwright
 module before any launch (the scrubbed env inherits no host
 PYTHONPATH). Chromium runs headless with its own sandbox disabled and
-WebKit runs its pinned headless WPE build; the enforced bwrap boundary
-is the containment.
+WebKit launches its pinned headless WPE MiniBrowser directly (the
+driver's pw_run.sh needs PATH tools the fresh sandbox PATH deliberately
+does not carry); the enforced bwrap boundary is the containment.
 
 Clipboard honesty: what the browser writes is the engine's own
 clipboard inside the sandbox - it is never the desktop's clipboard.
