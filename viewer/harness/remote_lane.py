@@ -116,15 +116,10 @@ def figure_paths(board_text: str) -> list[str]:
 def figure_status(inspection: dict, path: str) -> str | None:
     """'ok' when the figure's bytes arrived, 'denied' when a refusal
     quoting the path landed, None when no outcome addresses it."""
-    for outcome in inspection.get("renderOutcomes") or []:
-        if outcome.get("kind") != "figure":
-            continue
-        message = str(outcome.get("message", ""))
-        if outcome.get("status") == "ok" and message == path:
-            return "ok"
-        if outcome.get("status") == "denied" and message.startswith("denied:") and path in message:
-            return "denied"
-    return None
+    outcome = figure_outcome(inspection, path)
+    if outcome is None:
+        return None
+    return "ok" if outcome.get("status") == "ok" else "denied"
 
 
 def figure_denial(inspection: dict, path: str) -> str | None:
@@ -135,6 +130,24 @@ def figure_denial(inspection: dict, path: str) -> str | None:
         message = str(outcome.get("message", ""))
         if message.startswith("denied:") and path in message:
             return message
+    return None
+
+
+def figure_outcome(inspection: dict, path: str) -> dict | None:
+    """The figure outcome for a path, in any terminal state: ok
+    carries the bare path as its message; denials and misses quote it
+    after their prefix. Hydration publishes the whole outcome list only
+    once every read has landed, so a present-but-not-ok outcome is
+    itself evidence the read was attempted and refused or failed."""
+    for outcome in inspection.get("renderOutcomes") or []:
+        if outcome.get("kind") != "figure":
+            continue
+        status = outcome.get("status")
+        message = str(outcome.get("message", ""))
+        if status == "ok" and message == path:
+            return outcome
+        if status in ("denied", "missing") and message.startswith(("denied:", "missing:")) and path in message:
+            return outcome
     return None
 
 
@@ -471,25 +484,35 @@ def main() -> int:
         check("no load errors", not errors, str(errors)[:200])
 
         # figure outcomes are the product of real asset reads that land
-        # after the board is loaded; poll for them, bounded, and assert
-        # on what arrives - no sleep-and-hope
+        # when the whole hydration resolves; poll until each figure has
+        # ANY outcome (a miss is itself an outcome), bounded, and assert
+        # on what arrived
         outcomes_deadline = time.monotonic() + FIGURE_OUTCOME_SECONDS
-        arrived = figure_status(inspection, REAL_FIGURE_PATH)
-        denial = figure_denial(inspection, ESCAPED_FIGURE_PATH)
-        while (arrived is None or denial is None) and time.monotonic() < outcomes_deadline:
+        real_outcome = figure_outcome(inspection, REAL_FIGURE_PATH)
+        escape_outcome = figure_outcome(inspection, ESCAPED_FIGURE_PATH)
+        while (
+            (real_outcome is None or escape_outcome is None)
+            and time.monotonic() < outcomes_deadline
+        ):
             time.sleep(0.5)
             try:
                 inspection = client.execute(INSPECT_SCRIPT) or {}
             except WebDriverError as error:
                 last_detail = str(error)[:120]
                 continue
-            arrived = figure_status(inspection, REAL_FIGURE_PATH)
-            denial = figure_denial(inspection, ESCAPED_FIGURE_PATH)
-        check("the real figure's bytes arrived through the mesh", arrived == "ok", f"status={arrived!r}")
+            real_outcome = figure_outcome(inspection, REAL_FIGURE_PATH)
+            escape_outcome = figure_outcome(inspection, ESCAPED_FIGURE_PATH)
+        arrived = figure_status(inspection, REAL_FIGURE_PATH)
+        check(
+            "the real figure's bytes arrived through the mesh",
+            arrived == "ok",
+            f"status={arrived!r} outcome={json.dumps(real_outcome)[:200]}",
+        )
+        denial = figure_denial(inspection, ESCAPED_FIGURE_PATH)
         check(
             "the escape is refused by remote containment",
             denial is not None and CONTAINMENT_MESSAGE in denial,
-            denial or f"no denial outcome after the wait ({last_detail})",
+            denial or f"outcome={json.dumps(escape_outcome)[:200]}",
         )
 
         frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote")

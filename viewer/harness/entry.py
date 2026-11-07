@@ -593,6 +593,31 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
             file=sys.stderr,
         )
         return None
+    # the mesh's fixed-argv reads resolve names through the exec'd
+    # process's PATH, and the sandbox's /bin carries no coreutils: the
+    # two readers bind at the names the adapter argv uses, store-pinned
+    tools_missing = []
+    readers: dict[str, str] = {}
+    for name in ("realpath", "cat"):
+        located = shutil.which(name)
+        if located is None:
+            tools_missing.append(name)
+            continue
+        resolved_reader = str(pathlib.Path(located).resolve())
+        if not resolved_reader.startswith("/nix/store/"):
+            print(
+                f"containment refusal: the /bin/{name} bind must be a pinned store binary; "
+                f"resolved {resolved_reader!r}",
+                file=sys.stderr,
+            )
+            return None
+        readers[name] = resolved_reader
+    if tools_missing:
+        print(
+            f"containment refusal: not in PATH (pinned devshell expected): {', '.join(tools_missing)}",
+            file=sys.stderr,
+        )
+        return None
     fixture_dir = HERE / "remote_fixture"
     if not fixture_dir.is_dir() or not (fixture_dir / "real.yaml").is_file():
         print("containment refusal: harness/remote_fixture with real.yaml is missing", file=sys.stderr)
@@ -680,6 +705,8 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
         "session_py": session_py,
         "client_py": client_py,
         "bash_bin": bash_bin,
+        "realpath_bin": readers["realpath"],
+        "cat_bin": readers["cat"],
         "weston": tools["weston"],
         "shooter": tools["shooter"],
         "tauri_driver": tools["tauri_driver"],
@@ -744,6 +771,8 @@ def remote_binds(resolved: dict) -> list[tuple[str, str]]:
         (resolved["client_py"], SESSION_CLIENT_SANDBOX_PATH),
         (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
         (resolved["bash_bin"], "/bin/sh"),
+        (resolved["realpath_bin"], "/bin/realpath"),
+        (resolved["cat_bin"], "/bin/cat"),
         (resolved["fixture_dir"], "/board"),
         (resolved["app"], resolved["app"]),
         (resolved["weston"], resolved["weston"]),

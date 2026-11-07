@@ -128,7 +128,17 @@ fn read_declaration_remote(machine: &str, path: &str) -> Result<DeclaredText, Br
         return Err(deny("NUL byte in path"));
     }
     let client = core_client()?;
-    let text = client.read_text(machine, path).map_err(core_failure)?;
+    let text = match client.read_text(machine, path) {
+        Ok(text) => text,
+        Err(fail) => {
+            let _ = log_bridge(
+                "read_declaration",
+                &format!("{machine}:{path}"),
+                &format!("failed: {}", fail.code()),
+            );
+            return Err(core_failure(fail));
+        }
+    };
     let _ = log_bridge(
         "read_declaration",
         &format!("{machine}:{path}"),
@@ -156,9 +166,17 @@ fn read_asset_remote(machine: &str, base: &str, relative: &str) -> Result<Vec<u8
         return Err(deny("NUL byte in path"));
     }
     let client = core_client()?;
-    let bytes = client
-        .asset_bytes(machine, base, relative)
-        .map_err(core_failure)?;
+    let bytes = match client.asset_bytes(machine, base, relative) {
+        Ok(bytes) => bytes,
+        Err(fail) => {
+            let _ = log_bridge(
+                "read_asset",
+                &format!("{machine}:{base}/{relative}"),
+                &format!("failed: {}", fail.code()),
+            );
+            return Err(core_failure(fail));
+        }
+    };
     let _ = log_bridge(
         "read_asset",
         &format!("{machine}:{base}/{relative}"),

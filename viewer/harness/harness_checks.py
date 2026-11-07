@@ -296,6 +296,21 @@ def main() -> int:
         remote_lane.figure_status({"renderOutcomes": [{"kind": "math", "status": "ok", "message": "assets/figure.png"}]}, "assets/figure.png") is None,
         "",
     )
+    missing = {
+        "renderOutcomes": [
+            {
+                "kind": "figure",
+                "status": "missing",
+                "message": "missing: the machine could not start the read: spawn_failed",
+            }
+        ]
+    }
+    check(
+        "a failed read is still an outcome the poll can stop on",
+        remote_lane.figure_outcome(missing, "escaped.png") is not None
+        and remote_lane.figure_status(missing, "escaped.png") is None,
+        str(missing),
+    )
 
     # --- pinned playwright closure (pure file-existence check) -----------
     fake_env = pathlib.Path(tempfile.mkdtemp(prefix="pw-closure-"))
