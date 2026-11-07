@@ -564,28 +564,6 @@
             exec ${pi}/bin/wrapped-pi "$@"
           '';
         };
-        # the workbench frontend, built once from the committed sources
-        # and lock; the binary embeds these three files through the
-        # SACCADE_WEB_ASSETS build interface
-        webAssets = pkgs.buildNpmPackage {
-          pname = "saccade-workbench-web";
-          version = "0.16.2";
-          src = pkgs.lib.sourceByRegex ./web [
-            "^src$"
-            "^src/.*\\.mjs$"
-            "^package\\.json$"
-            "^package-lock\\.json$"
-            "^index\\.html$"
-            "^style\\.css$"
-            "^ascii\\.mjs$"
-            "^copy-assets\\.mjs$"
-          ];
-          npmDepsHash = "sha256-vtELfcqrPnAcODazFjmSQCx0gjcp/JzABR+hcTiOFjI=";
-          installPhase = ''
-            mkdir -p $out
-            cp dist/index.html dist/app.js dist/style.css $out/
-          '';
-        };
         sac = pkgs.rustPlatform.buildRustPackage ({
           name = "saccade";
           src = ./.;
@@ -605,9 +583,6 @@
           # baked store path is both the resolution and the closure edge,
           # never a runtime override
           SACCADE_DIRENV = "${pkgs.direnv}/bin/direnv";
-          # the embedded workbench assets ride the build interface,
-          # never a runtime path
-          SACCADE_WEB_ASSETS = webAssets;
           # the fish script the binary itself emits installs as a vendor
           # completion, so fish picks it up with zero user config and it
           # updates atomically with the binary; the script invokes sac
@@ -644,8 +619,6 @@
       in
         {
           saccade-pi = saccadePi;
-
-          saccade-web-assets = webAssets;
 
           # the app the client runs: built against nixpkgs-client, the
           # revision the human's system flake is built from
