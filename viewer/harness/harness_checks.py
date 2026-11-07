@@ -297,7 +297,7 @@ def main() -> int:
         remote_lane.figure_status(inspection, "assets/figure.png") == "ok",
         str(inspection),
     )
-    denial = remote_lane.figure_denial(inspection, "escaped.png")
+    denial = remote_lane.figure_denial_at(inspection, 1)
     check(
         "an escape outcome reads as denied and quotes the containment refusal",
         denial is not None and "resolved outside the declaration directory" in denial,
@@ -319,9 +319,19 @@ def main() -> int:
         ]
     }
     check(
-        "a failed read is still an outcome the poll can stop on",
-        remote_lane.figure_outcome(missing, "escaped.png") is not None
-        and remote_lane.figure_status(missing, "escaped.png") is None,
+        "figure outcomes list in authored order, whatever their status",
+        [o.get("status") for o in remote_lane.figure_outcomes(missing)] == ["missing"],
+        str(missing),
+    )
+    check(
+        "a position with no outcome answers None",
+        remote_lane.figure_outcome_at(missing, 1) is None
+        and remote_lane.figure_outcome_at(missing, 0) is not None,
+        str(missing),
+    )
+    check(
+        "a miss is not a denial",
+        remote_lane.figure_denial_at(missing, 0) is None,
         str(missing),
     )
 

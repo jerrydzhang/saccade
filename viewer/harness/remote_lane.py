@@ -113,6 +113,20 @@ def figure_paths(board_text: str) -> list[str]:
     return paths
 
 
+def figure_outcomes(inspection: dict) -> list[dict]:
+    """Figure outcomes in authored order: hydration resolves the reads
+    sequentially, so the Nth figure outcome addresses the Nth authored
+    figure path. The message under a miss is the bridge's failure line
+    and may not name the path at all - position is the address that
+    always exists."""
+    return [o for o in inspection.get("renderOutcomes") or [] if o.get("kind") == "figure"]
+
+
+def figure_outcome_at(inspection: dict, index: int) -> dict | None:
+    outcomes = figure_outcomes(inspection)
+    return outcomes[index] if index < len(outcomes) else None
+
+
 def figure_status(inspection: dict, path: str) -> str | None:
     """'ok' when the figure's bytes arrived, 'denied' when a refusal
     quoting the path landed, None when no outcome addresses it."""
@@ -122,14 +136,12 @@ def figure_status(inspection: dict, path: str) -> str | None:
     return "ok" if outcome.get("status") == "ok" else "denied"
 
 
-def figure_denial(inspection: dict, path: str) -> str | None:
-    """The refusal message for a path, for the check's detail line."""
-    for outcome in inspection.get("renderOutcomes") or []:
-        if outcome.get("kind") != "figure" or outcome.get("status") != "denied":
-            continue
-        message = str(outcome.get("message", ""))
-        if message.startswith("denied:") and path in message:
-            return message
+def figure_denial_at(inspection: dict, index: int) -> str | None:
+    """The refusal message at a figure position, or None when that
+    position has no denial."""
+    outcome = figure_outcome_at(inspection, index)
+    if outcome is not None and outcome.get("status") == "denied":
+        return str(outcome.get("message", ""))
     return None
 
 
@@ -484,12 +496,14 @@ def main() -> int:
         check("no load errors", not errors, str(errors)[:200])
 
         # figure outcomes are the product of real asset reads that land
-        # when the whole hydration resolves; poll until each figure has
-        # ANY outcome (a miss is itself an outcome), bounded, and assert
-        # on what arrived
+        # when the whole hydration resolves, in authored order; poll
+        # until both positions have outcomes (a miss is itself an
+        # outcome), bounded, and assert on what arrived - addressed by
+        # position, because a miss's message is the bridge's failure
+        # line and may not name the path at all
         outcomes_deadline = time.monotonic() + FIGURE_OUTCOME_SECONDS
-        real_outcome = figure_outcome(inspection, REAL_FIGURE_PATH)
-        escape_outcome = figure_outcome(inspection, ESCAPED_FIGURE_PATH)
+        real_outcome = figure_outcome_at(inspection, 0)
+        escape_outcome = figure_outcome_at(inspection, 1)
         while (
             (real_outcome is None or escape_outcome is None)
             and time.monotonic() < outcomes_deadline
@@ -500,15 +514,17 @@ def main() -> int:
             except WebDriverError as error:
                 last_detail = str(error)[:120]
                 continue
-            real_outcome = figure_outcome(inspection, REAL_FIGURE_PATH)
-            escape_outcome = figure_outcome(inspection, ESCAPED_FIGURE_PATH)
-        arrived = figure_status(inspection, REAL_FIGURE_PATH)
+            real_outcome = figure_outcome_at(inspection, 0)
+            escape_outcome = figure_outcome_at(inspection, 1)
+        arrived = real_outcome
         check(
             "the real figure's bytes arrived through the mesh",
-            arrived == "ok",
-            f"status={arrived!r} outcome={json.dumps(real_outcome)[:200]}",
+            arrived is not None
+            and arrived.get("status") == "ok"
+            and arrived.get("message") == REAL_FIGURE_PATH,
+            f"outcome={json.dumps(arrived)[:200]}",
         )
-        denial = figure_denial(inspection, ESCAPED_FIGURE_PATH)
+        denial = figure_denial_at(inspection, 1)
         check(
             "the escape is refused by remote containment",
             denial is not None and CONTAINMENT_MESSAGE in denial,
