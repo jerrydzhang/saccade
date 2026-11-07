@@ -469,13 +469,27 @@ def main() -> int:
         )
         errors = inspection.get("errors") or []
         check("no load errors", not errors, str(errors)[:200])
+
+        # figure outcomes are the product of real asset reads that land
+        # after the board is loaded; poll for them, bounded, and assert
+        # on what arrives - no sleep-and-hope
+        outcomes_deadline = time.monotonic() + FIGURE_OUTCOME_SECONDS
         arrived = figure_status(inspection, REAL_FIGURE_PATH)
-        check("the real figure's bytes arrived through the mesh", arrived == "ok", f"status={arrived!r}")
         denial = figure_denial(inspection, ESCAPED_FIGURE_PATH)
+        while (arrived is None or denial is None) and time.monotonic() < outcomes_deadline:
+            time.sleep(0.5)
+            try:
+                inspection = client.execute(INSPECT_SCRIPT) or {}
+            except WebDriverError as error:
+                last_detail = str(error)[:120]
+                continue
+            arrived = figure_status(inspection, REAL_FIGURE_PATH)
+            denial = figure_denial(inspection, ESCAPED_FIGURE_PATH)
+        check("the real figure's bytes arrived through the mesh", arrived == "ok", f"status={arrived!r}")
         check(
             "the escape is refused by remote containment",
             denial is not None and CONTAINMENT_MESSAGE in denial,
-            denial or "no denial outcome",
+            denial or f"no denial outcome after the wait ({last_detail})",
         )
 
         frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote")
