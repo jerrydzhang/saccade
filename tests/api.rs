@@ -9894,7 +9894,7 @@ fn the_root_destination_binds_through_the_cli_door_and_places_the_root_launch() 
     let fake = fake_dir.join("hc");
     std::fs::write(
         &fake,
-        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-$1.log\"\nif [ \"$1\" = get ]; then\n  if [ \"$2\" = tc1 ]; then\n    printf '{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaManual\",\"herdr.tab\":\"tbManual\"}}\\n'\n    exit 0\n  fi\n  printf '{\"state\":\"live\"}\\n'\n  exit 0\nfi\nif [ \"$1\" = label ]; then\n  exit 0\nfi\nprintf '{\"address\":\"t7\",\"cwd\":\"x\",\"state\":\"live\",\"turn\":0}\\n'\n",
+        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-$1.log\"\nif [ \"$1\" = get ]; then\n  if [ \"$2\" = tc1 ]; then\n    printf '{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaManual\",\"herdr.tab\":\"tbManual\"}}\\n'\n    exit 0\n  fi\n  if [ \"$2\" = tc3 ]; then\n    printf '{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaSecond\",\"herdr.tab\":\"tbSecond\"}}\\n'\n    exit 0\n  fi\n  printf '{\"state\":\"live\"}\\n'\n  exit 0\nfi\nif [ \"$1\" = label ]; then\n  exit 0\nfi\nprintf '{\"address\":\"t7\",\"cwd\":\"x\",\"state\":\"live\",\"turn\":0}\\n'\n",
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -9961,6 +9961,172 @@ fn the_root_destination_binds_through_the_cli_door_and_places_the_root_launch() 
         "the bind asked the pane's terminal: {gets}"
     );
 
+    // the human binds for real through the disposable pty harness: the
+    // unpossessed write rides the terminal-attached gate with a named
+    // actor, the exact pair lands, and the record is human-authored.
+    // The harness scrubs every tracker routing, scope, and pane key
+    // itself; the fake host is named explicitly
+    let fake_herdr = fake.to_str().unwrap().to_string();
+    let pty_envs = vec![
+        ("HC_TERMINAL_ID", "tc1".to_string()),
+        ("SACCADE_HERDR", fake_herdr.clone()),
+        ("SACCADE_PI", pi.to_str().unwrap().to_string()),
+    ];
+    let out = run_here_in_pty(
+        bin,
+        &[
+            "--server".to_string(),
+            url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "--json".to_string(),
+            "workspace".to_string(),
+            "root".to_string(),
+            "bind".to_string(),
+            "--actor".to_string(),
+            "jerry".to_string(),
+        ],
+        &pty_envs,
+    );
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reply: Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("the bind face is json");
+    assert_eq!(reply["bound"], true, "{}", reply);
+    assert_eq!(reply["space"], "spaManual", "{}", reply);
+    assert_eq!(reply["tab"], "tbManual", "{}", reply);
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log will not fold"),
+    };
+    assert_eq!(
+        world
+            .root_space
+            .as_ref()
+            .map(|b| (b.space.as_str(), b.tab.as_str())),
+        Some(("spaManual", "tbManual"))
+    );
+    let (_, records_json) = get_json(&url, "/api/v1/records");
+    let records = json_of(&records_json);
+    let bound = records["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "root_space_bound")
+        .expect("the bind record landed");
+    assert_eq!(bound["actor"], "jerry", "{bound}");
+    assert_eq!(bound["tier"], "human", "{bound}");
+
+    // a human rebind from another space's terminal replaces the pair
+    let out = run_here_in_pty(
+        bin,
+        &[
+            "--server".to_string(),
+            url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "workspace".to_string(),
+            "root".to_string(),
+            "bind".to_string(),
+            "--actor".to_string(),
+            "jerry".to_string(),
+        ],
+        &[
+            ("HC_TERMINAL_ID", "tc3".to_string()),
+            ("SACCADE_HERDR", fake_herdr.clone()),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("root space bound - spaSecond / tbSecond"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log will not fold"),
+    };
+    assert_eq!(
+        world
+            .root_space
+            .as_ref()
+            .map(|b| (b.space.as_str(), b.tab.as_str())),
+        Some(("spaSecond", "tbSecond"))
+    );
+
+    // the human clears; root launches go back to unplaced
+    let out = run_here_in_pty(
+        bin,
+        &[
+            "--server".to_string(),
+            url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "workspace".to_string(),
+            "root".to_string(),
+            "clear".to_string(),
+            "--actor".to_string(),
+            "jerry".to_string(),
+        ],
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let conn = saccade::db::open_read(&db).unwrap();
+    let world = match saccade::db::load(&conn).unwrap().state {
+        saccade::db::LoadState::Full(world) => world,
+        _ => panic!("the log will not fold"),
+    };
+    assert!(world.root_space.is_none());
+    let (_, records_json) = get_json(&url, "/api/v1/records");
+    let records = json_of(&records_json);
+    let cleared: Vec<&Value> = records["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "root_space_cleared")
+        .collect();
+    assert_eq!(cleared.len(), 1);
+    assert_eq!(cleared[0]["tier"], "human", "{}", cleared[0]);
+
+    // rebind for the placed-launch pins below: the human binds once more
+    let out = run_here_in_pty(
+        bin,
+        &[
+            "--server".to_string(),
+            url.clone(),
+            "--repo".to_string(),
+            root.to_str().unwrap().to_string(),
+            "workspace".to_string(),
+            "root".to_string(),
+            "bind".to_string(),
+            "--actor".to_string(),
+            "jerry".to_string(),
+        ],
+        &pty_envs,
+    );
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
     // the human binds through the wire: the store holds the tier, the
     // record lands, and show reads it back - a read, no host ask
     let (status, body) = post_command(
@@ -9972,6 +10138,8 @@ fn the_root_destination_binds_through_the_cli_door_and_places_the_root_launch() 
         ),
     );
     assert_eq!(status, 200, "{body}");
+    let gets_before_show =
+        std::fs::read_to_string(fake_dir.join("argv-get.log")).unwrap_or_default();
     let out = base(&[])
         .args(["workspace", "root", "show"])
         .output()
@@ -9981,8 +10149,7 @@ fn the_root_destination_binds_through_the_cli_door_and_places_the_root_launch() 
     assert!(text.contains("spaManual / tbManual"), "{text}");
     let gets_after = std::fs::read_to_string(fake_dir.join("argv-get.log")).unwrap_or_default();
     assert_eq!(
-        gets_after.matches("get").count(),
-        gets.matches("get").count(),
+        gets_after, gets_before_show,
         "the show asked the host nothing"
     );
 

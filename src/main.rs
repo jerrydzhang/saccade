@@ -2926,6 +2926,7 @@ fn root_bind_door(cli: &Cli, destination: &Destination) -> Result<String, Fail> 
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "bound": true,
             "space": placed.space,
+            "tab": tab,
             "records": record_seq.records,
         }))
         .expect("plain data"));
