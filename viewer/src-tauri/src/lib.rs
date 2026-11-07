@@ -66,15 +66,6 @@ pub fn run() {
                                         eprintln!("[bridge] gtk-xft-dpi set: 98304 (96 dpi)");
                                     }
                                 }
-                                eprintln!(
-                                    "[bridge] webview zoom_level was: {}",
-                                    inner.zoom_level()
-                                );
-                                inner.set_zoom_level(1.0);
-                                eprintln!(
-                                    "[bridge] webview zoom_level set: {}",
-                                    inner.zoom_level()
-                                );
                             }
                         })
                         .expect("webview console setting failed");

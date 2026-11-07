@@ -17,42 +17,15 @@ interface MermaidGlobal {
 let renderFn: Promise<MermaidRenderFn> | null = null;
 let renderCount = 0;
 
-// The native lane's WebKitGTK reports impossible geometry (device
-// pixel ratio -1/96, negative viewports), and SVG text measurement
-// inherits it: getComputedTextLength returns lengths scaled by about
-// -96x, so mermaid's label width checks wrap every line to nothing.
-// The shim passes sane values through untouched and substitutes a
-// conservative character estimate only when the reported length is
-// clearly impossible; Chromium and healthy WebKitGTK never hit the
-// substitution.
-function installMeasurementShim(): void {
-  const proto = (window as unknown as { SVGTextContentElement?: typeof SVGTextContentElement })
-    .SVGTextContentElement?.prototype;
-  if (!proto || Object.hasOwn(proto, "__viewerShim")) return;
-  const original = proto.getComputedTextLength;
-  Object.defineProperty(proto, "__viewerShim", { value: true });
-  proto.getComputedTextLength = function (this: SVGTextContentElement): number {
-    const reported = original.call(this);
-    if (reported >= 0 && reported <= 2000) return reported;
-    const text = this.textContent ?? "";
-    const fontSize = Number.parseFloat(getComputedStyle(this).fontSize) || 16;
-    return text.length * fontSize * 0.6;
-  };
-}
-
 async function loadMermaid(): Promise<MermaidRenderFn> {
-  installMeasurementShim();
   const mod = (await import("mermaid")) as { default: MermaidGlobal };
   const mermaid = mod.default;
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",
     htmlLabels: false,
-    // a family the pinned fontconfig actually provides: the probe in
-    // the lane evidence showed generic resolution is not trustworthy
-    // under WebKitGTK's SVG text
-    fontFamily: "'DejaVu Sans', sans-serif",
-    flowchart: { htmlLabels: false, wrappingWidth: 200 },
+    fontFamily: "sans-serif",
+    flowchart: { htmlLabels: false },
     class: { htmlLabels: false },
   });
   return (id: string, code: string) => mermaid.render(id, code);
