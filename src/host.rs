@@ -1,6 +1,6 @@
 //! The host launch construction: the composed native Pi command line,
 //! the direnv equip, and the host terminal submission. One mechanics
-//! module for every entrance - the CLI doors and the workbench launch
+//! module for every entrance - the CLI launch doors
 //! door compose and submit identically, so no face can grow its own
 //! launch dialect. Nothing here touches the record; a submission's
 //! success is the host's answer, never a claim that a session runs.
@@ -146,7 +146,7 @@ impl ChildExit {
 /// live probe stays honest. The env program carries the scrub and the
 /// routing words, exactly as the shell line did; the workspace is the
 /// caller's canonical directory. One mechanics form for every
-/// entrance: the CLI doors and the workbench launch door compose
+/// entrance: the CLI launch doors compose
 /// identically, so no face grows its own launch dialect.
 pub fn composed_launch_argv(
     workspace: &std::path::Path,

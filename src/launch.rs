@@ -1,7 +1,7 @@
 //! The shared launch composition: one construction and one host
-//! submission for every entrance - the CLI host door, the CLI here
-//! door, and the workbench door compose and submit identically, so no
-//! face can grow its own launch dialect. The composition selects the
+//! submission for every entrance - the CLI host door and the CLI here
+//! door compose and submit identically, so no face can grow its own
+//! launch dialect. The composition selects the
 //! explicit workspace or the saved session, names the harness, and
 //! carries the fresh birth facts; nothing here touches the record -
 //! the calling door registers the birth or moves the address, because
@@ -88,8 +88,7 @@ pub struct Submitted {
 /// A launch construction or host-submission refusal. `Refused` carries
 /// the wire code beside the prose, so the CLI prints the detail and
 /// the serving edge answers with its own status; `Usage` is a
-/// door-shaped refusal with no wire consumer (the workbench never
-/// resumes).
+/// door-shaped refusal with no wire consumer.
 #[derive(Debug)]
 pub enum LaunchFail {
     Refused { code: &'static str, detail: String },

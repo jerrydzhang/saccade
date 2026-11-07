@@ -1,9 +1,7 @@
 use crate::harness::Harness;
-use crate::objects::comment::{CommentId, CommentKind};
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::message::MessageId;
 use crate::objects::task::TaskId;
-use crate::types::artifact::Artifact;
 use crate::types::pointers::{GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath};
 use crate::types::prose::Prose;
 use serde::{Deserialize, Serialize};
@@ -35,51 +33,6 @@ pub enum Event {
     TaskReopened {
         id: TaskId,
         explanation: Prose,
-    },
-    // Comment events
-    /// The payload is its variant, title and body included on the
-    /// deposits; Accept carries neither. Every comment names its one
-    /// home task and carries its citation mapping: marker k names
-    /// references[k-1].
-    Commented {
-        home: TaskId,
-        kind: CommentKind,
-        references: Vec<RecordRef>,
-    },
-    /// A presentation repair, not a transition: the fold swaps the
-    /// variant's prose and/or its title - each independently, at
-    /// least one required - and points at the latest revision record.
-    /// The original bytes stay in their birth event, references never
-    /// change, and no other variant takes a title.
-    CommentRevised {
-        id: CommentId,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<Prose>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        body: Option<Prose>,
-    },
-    /// The standing-error repair: the deposit's implicit claim - this
-    /// is reached, this earns residency - was false. The body leaves
-    /// the fold's presentation, a tombstone stays; the log is
-    /// untouched. Note deposits only.
-    CommentWithdrawn {
-        id: CommentId,
-        note: Prose,
-    },
-    /// A use's explicit selection of a conclusion: the offer named
-    /// with required grounds. Binding a prospective use and rebinding
-    /// a bound one are the same record; the log keeps every earlier
-    /// selection.
-    UseBound {
-        id: CommentId,
-        offer: CommentId,
-        grounds: Prose,
-    },
-    /// A thread holding an artifact: name and content identity, the
-    /// bytes stay in the store. Authored like a comment, any tier.
-    ArtifactAdded {
-        root: TaskId,
-        artifact: Artifact,
     },
     // Workspace events: the establishment is the machinery verb,
     // System-authored by role; the checkpoint is the exception any
@@ -218,34 +171,6 @@ pub enum Command {
     ReopenTask {
         id: TaskId,
         explanation: Prose,
-    },
-    // Comment commands
-    Comment {
-        home: TaskId,
-        kind: CommentKind,
-        references: Vec<RecordRef>,
-    },
-    ReviseComment {
-        id: CommentId,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<Prose>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        body: Option<Prose>,
-    },
-    WithdrawComment {
-        id: CommentId,
-        note: Prose,
-    },
-    /// Select a conclusion for a use: binding a prospective use,
-    /// rebinding a bound one.
-    BindUse {
-        id: CommentId,
-        offer: CommentId,
-        grounds: Prose,
-    },
-    Artifact {
-        root: TaskId,
-        artifact: Artifact,
     },
     // Machinery verbs: System authorship comes from the role, never input
     EstablishWorkspace {

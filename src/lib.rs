@@ -14,7 +14,6 @@ pub mod host;
 pub mod host_contract;
 pub mod launch;
 pub mod markers;
-pub mod migrate;
 pub mod objects;
 pub mod paths;
 pub mod pi_session;
@@ -25,9 +24,8 @@ pub mod skill;
 pub mod store;
 pub mod types;
 pub mod views;
-pub mod web;
+pub use views::Target;
 pub mod wire;
-pub mod workbench;
 pub mod workspace;
 
 use serde::{Deserialize, Serialize};
@@ -38,9 +36,6 @@ pub use harness::Harness;
 pub use launch::{
     Composition, FreshBirth, LaunchArm, LaunchFail, LaunchRequest, ResumeTarget, Submitted,
 };
-pub use objects::comment::{
-    Binding, Comment, CommentContext, CommentId, CommentKind, CommentState, Target, UseBinding,
-};
 pub use objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
 pub use objects::message::{Message, MessageContext, MessageId, MessageState};
 pub use objects::task::{Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
@@ -50,7 +45,6 @@ pub use objects::workspace::{
 };
 pub use store::{Context, Record, RecordId, Scope, Tier, World};
 pub use types::actor::ActorName;
-pub use types::artifact::{Artifact, ContentHash};
 pub use types::pointers::{GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath};
 pub use types::prose::Prose;
 
@@ -60,18 +54,6 @@ pub enum Reject {
     // Task
     #[error("no such task")]
     InvalidTaskId,
-    #[error("no comment with that id")]
-    InvalidCommentId,
-    #[error("the referenced comment is not an offer")]
-    NotAnOffer,
-    #[error("that offer is not the task's standing Offered or Concluded account")]
-    NotCurrentOffer,
-    #[error("a task cannot rely on its own conclusion")]
-    SelfReliance,
-    #[error(
-        "the declared task scope covers this task: a task-bound producer cannot accept its own conclusion"
-    )]
-    SelfAcceptance,
     #[error("no such incarnation")]
     InvalidIncarnationId,
     #[error("an incarnation already carries this native session")]
@@ -84,10 +66,6 @@ pub enum Reject {
         "this incarnation already carries its saved session; the attach binds a launch-door birth's locator once"
     )]
     LocatorAlreadyBound,
-    #[error(
-        "a citation does not resolve: its target is no earlier record, or its marker has no reference"
-    )]
-    InvalidReference,
     #[error("no such message for this recipient")]
     InvalidMessageId,
     // Permissions
@@ -119,16 +97,10 @@ impl Reject {
     pub fn code(&self) -> &'static str {
         match self {
             Reject::InvalidTaskId => "invalid_task_id",
-            Reject::InvalidCommentId => "invalid_comment_id",
-            Reject::NotAnOffer => "not_an_offer",
-            Reject::NotCurrentOffer => "not_current_offer",
-            Reject::SelfReliance => "self_reliance",
-            Reject::SelfAcceptance => "self_acceptance",
             Reject::InvalidIncarnationId => "invalid_incarnation_id",
             Reject::DuplicateNativeSession => "duplicate_native_session",
             Reject::SavedSessionMismatch => "saved_session_mismatch",
             Reject::LocatorAlreadyBound => "locator_already_bound",
-            Reject::InvalidReference => "invalid_reference",
             Reject::InvalidMessageId => "invalid_message_id",
             Reject::HumanOnly => "human_only",
             Reject::WorkspaceAlreadyExists => "workspace_already_exists",
@@ -153,16 +125,10 @@ mod test {
     fn refusal_codes_match_the_wire_names() {
         let every = [
             Reject::InvalidTaskId,
-            Reject::InvalidCommentId,
-            Reject::NotAnOffer,
-            Reject::NotCurrentOffer,
-            Reject::SelfReliance,
-            Reject::SelfAcceptance,
             Reject::InvalidIncarnationId,
             Reject::DuplicateNativeSession,
             Reject::SavedSessionMismatch,
             Reject::LocatorAlreadyBound,
-            Reject::InvalidReference,
             Reject::InvalidMessageId,
             Reject::HumanOnly,
             Reject::WorkspaceAlreadyExists,

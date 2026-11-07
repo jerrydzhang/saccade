@@ -1,6 +1,6 @@
-//! State homes: the tracker's records and the executor's artifacts live
-//! outside any repository, under one per-repo state root. The repo keeps
-//! only what git tracks; nothing runtime accrues in the working tree.
+//! State homes: the tracker's records live outside any repository,
+//! under one per-repo state root. The repo keeps only what git tracks;
+//! nothing runtime accrues in the working tree.
 
 use std::path::{Path, PathBuf};
 
@@ -106,13 +106,6 @@ pub fn address_at(db_path: &Path) -> PathBuf {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "saccade.db".into());
     db_path.with_file_name(format!("{name}.addr"))
-}
-
-/// The artifact store: content-addressed bytes under the state root,
-/// one home per repo. The writer parks `<sha256>` files here; the read
-/// door serves them. Lifetime is store-wide, never per task.
-pub fn artifacts_at(repo_root: &Path) -> PathBuf {
-    state_dir(repo_root).join("artifacts")
 }
 
 #[cfg(test)]

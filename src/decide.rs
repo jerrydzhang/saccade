@@ -13,9 +13,6 @@ fn required_tier(event: &Event) -> Authority {
     match event {
         Event::TaskCreated { .. }
         | Event::TaskClaimed { .. }
-        | Event::Commented { .. }
-        | Event::UseBound { .. }
-        | Event::ArtifactAdded { .. }
         | Event::TaskWorkspaceCheckpointed { .. }
         | Event::MessageSent { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
@@ -25,8 +22,6 @@ fn required_tier(event: &Event) -> Authority {
         Event::RootSpaceBound { .. } | Event::RootSpaceCleared {} => {
             Authority::Require(Tier::Human)
         }
-        // a presentation repair may come from any judgment tier
-        Event::CommentRevised { .. } | Event::CommentWithdrawn { .. } => Authority::AnyTier,
         // provisioning by role: the machinery's establishment and
         // creation, the native registration, and the recipient's
         // delivery record. The confirmed change is machinery's act too:
@@ -64,21 +59,6 @@ pub fn decide(command: Command) -> Vec<Event> {
         Command::ClaimTask { id, incarnation } => vec![Event::TaskClaimed { id, incarnation }],
         Command::CancelTask { id, explanation } => vec![Event::TaskCancelled { id, explanation }],
         Command::ReopenTask { id, explanation } => vec![Event::TaskReopened { id, explanation }],
-        Command::Comment {
-            home,
-            kind,
-            references,
-        } => vec![Event::Commented {
-            home,
-            kind,
-            references,
-        }],
-        Command::ReviseComment { id, title, body } => {
-            vec![Event::CommentRevised { id, title, body }]
-        }
-        Command::WithdrawComment { id, note } => vec![Event::CommentWithdrawn { id, note }],
-        Command::BindUse { id, offer, grounds } => vec![Event::UseBound { id, offer, grounds }],
-        Command::Artifact { root, artifact } => vec![Event::ArtifactAdded { root, artifact }],
         Command::EstablishWorkspace {
             task_id,
             base,
@@ -171,15 +151,13 @@ pub fn decide(command: Command) -> Vec<Event> {
 mod test {
     use super::*;
     use crate::harness::Harness;
-    use crate::objects::comment::{CommentId, CommentKind};
     use crate::objects::incarnation::IncarnationId;
     use crate::objects::message::MessageId;
     use crate::types::actor::ActorName;
-    use crate::types::artifact::Artifact;
     use crate::types::pointers::{
         GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath,
     };
-    use crate::{ContentHash, Prose, RecordId, TaskId};
+    use crate::{Prose, RecordId, TaskId};
 
     fn agent() -> Context {
         Context {
@@ -207,7 +185,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 26] = [
+        let events: [(Event, Authority); 17] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -238,94 +216,6 @@ mod test {
                 Require(Tier::Human),
             ),
             (Event::RootSpaceCleared {}, Require(Tier::Human)),
-            (
-                Event::Commented {
-                    home: TaskId(0),
-                    kind: CommentKind::Note {
-                        title: prose(),
-                        body: prose(),
-                    },
-                    references: Vec::new(),
-                },
-                AnyTier,
-            ),
-            (
-                Event::Commented {
-                    home: TaskId(0),
-                    kind: CommentKind::Offer {
-                        title: prose(),
-                        body: prose(),
-                    },
-                    references: Vec::new(),
-                },
-                AnyTier,
-            ),
-            (
-                Event::Commented {
-                    home: TaskId(0),
-                    kind: CommentKind::Accept {
-                        offer: CommentId(RecordId(0)),
-                    },
-                    references: Vec::new(),
-                },
-                AnyTier,
-            ),
-            (
-                Event::Commented {
-                    home: TaskId(0),
-                    kind: CommentKind::Reject {
-                        offer: CommentId(RecordId(0)),
-                        grounds: prose(),
-                    },
-                    references: Vec::new(),
-                },
-                AnyTier,
-            ),
-            (
-                Event::Commented {
-                    home: TaskId(0),
-                    kind: CommentKind::Use {
-                        source: TaskId(1),
-                        reason: prose(),
-                        bound: None,
-                    },
-                    references: Vec::new(),
-                },
-                AnyTier,
-            ),
-            (
-                Event::UseBound {
-                    id: CommentId(RecordId(0)),
-                    offer: CommentId(RecordId(1)),
-                    grounds: prose(),
-                },
-                AnyTier,
-            ),
-            (
-                Event::CommentRevised {
-                    id: CommentId(RecordId(0)),
-                    title: Some(prose()),
-                    body: Some(prose()),
-                },
-                AnyTier,
-            ),
-            (
-                Event::CommentWithdrawn {
-                    id: CommentId(RecordId(0)),
-                    note: prose(),
-                },
-                AnyTier,
-            ),
-            (
-                Event::ArtifactAdded {
-                    root: TaskId(0),
-                    artifact: Artifact {
-                        name: prose(),
-                        hash: ContentHash::of(b"bytes"),
-                    },
-                },
-                AnyTier,
-            ),
             // Provisioning stays machine-authored; checkpoint is the exception.
             (
                 Event::WorkspaceEstablished {
@@ -457,35 +347,6 @@ mod test {
             Command::ReopenTask {
                 id: TaskId(0),
                 explanation: prose(),
-            },
-            Command::Comment {
-                home: TaskId(0),
-                kind: CommentKind::Offer {
-                    title: prose(),
-                    body: prose(),
-                },
-                references: vec![RecordId(0)],
-            },
-            Command::ReviseComment {
-                id: CommentId(RecordId(0)),
-                title: Some(prose()),
-                body: Some(prose()),
-            },
-            Command::WithdrawComment {
-                id: CommentId(RecordId(0)),
-                note: prose(),
-            },
-            Command::BindUse {
-                id: CommentId(RecordId(0)),
-                offer: CommentId(RecordId(1)),
-                grounds: prose(),
-            },
-            Command::Artifact {
-                root: TaskId(0),
-                artifact: Artifact {
-                    name: prose(),
-                    hash: ContentHash::of(b"bytes"),
-                },
             },
             Command::EstablishWorkspace {
                 task_id: TaskId(0),

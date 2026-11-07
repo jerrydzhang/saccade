@@ -161,8 +161,6 @@ fn collapse(text: &str) -> String {
 mod test {
     use super::*;
     use crate::events::Event;
-    use crate::objects::comment::CommentKind;
-    use crate::objects::task::TaskId;
     use crate::store::{Context, Record, Tier};
     use crate::types::actor::ActorName;
     use crate::types::pointers::{
@@ -243,25 +241,10 @@ mod test {
 
     #[test]
     fn task_lines_carry_id_name_and_state() {
-        let (mut world, mut rows) = world_with_records();
-        let offer = record(
-            5,
-            &ctx("pi"),
-            Event::Commented {
-                home: TaskId(0),
-                kind: CommentKind::Offer {
-                    title: Prose::new("floop closes".into()).unwrap(),
-                    body: Prose::new("done".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-        );
-        world = world.apply(offer).unwrap();
-        rows.push(stored(5, "pi"));
-
+        let (world, rows) = world_with_records();
         assert_eq!(
             Kind::Tasks.candidates(&world, &rows),
-            "t-0\timplement floop (offered)\nt-1\tmigrate gloom (open)"
+            "t-0\timplement floop (open)\nt-1\tmigrate gloom (open)"
         );
     }
 

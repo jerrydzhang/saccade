@@ -22,7 +22,7 @@ function __saccade_positions
             continue
         end
         switch $t
-            case --db --repo --server --actor --at --title --body-file --ref --explanation --grounds --reason --note --name --to --reply --task --source --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
+            case --db --repo --server --actor --at --explanation --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
                 set prev_value 1
                 continue
             case '-*'
@@ -75,7 +75,7 @@ function __saccade_prev_value_flag
     # cursor is completing that value, no id belongs there
     set -l tokens (commandline -opc)
     switch $tokens[-1]
-        case --db --repo --server --actor --at --title --body-file --ref --explanation --grounds --reason --note --name --to --reply --task --source --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
+        case --db --repo --server --actor --at --explanation --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
             return 0
     end
     return 1
@@ -86,16 +86,8 @@ function __saccade_verbs
     printf 'claim\tTake whole-task responsibility; a transfer, never a state change\n'
     printf 'cancel\tHuman-only: stop an unfinished undertaking, explaining why\n'
     printf 'reopen\tHuman-only: resume a cancelled undertaking, explaining why\n'
-    printf 'comment\tAttach a note to a task, or reply to a comment\n'
     printf 'send\tSend a durable addressed message\n'
     printf 'messages\tShow the messages an incarnation participates in\n'
-    printf 'offer\tOffer the whole-task closing account\n'
-    printf 'accept\tAccept an offered conclusion: the offer it accepts\n'
-    printf 'reject\tReject an offered conclusion with grounds\n'
-    printf 'use\tDeclare a consuming task reliance on a source task\n'
-    printf 'bind\tBind the selection a use rests on\n'
-    printf 'revise\tRevise a comment presentation: title and/or body\n'
-    printf 'withdraw\tWithdraw a note comment: the body leaves the fold\n'
     printf 'list\tList objects (world projection)\n'
     printf 'log\tPrint raw event records\n'
     printf 'show\tEverything about tasks and records, many at once\n'
@@ -104,10 +96,8 @@ function __saccade_verbs
     printf 'launch\tLaunch the composed native Pi in a workspace\n'
     printf 'workspace\tThe task-free workspace controller\n'
     printf 'identity\tReport this session declared identity and routing\n'
-    printf 'migrate\tMigrate a schema-3 or schema-4 tracker into a fresh one\n'
     printf 'clone\tClone the log prefix through a storage seq into a fresh tracker\n'
     printf 'skill\tDeploy this binary embedded skill, or verify the copy\n'
-    printf 'artifact\tPark an artifact on a task thread\n'
     printf 'wait\tBlock until a matching record lands on the target\n'
     printf 'completions\tEmit a shell completion script\n'
 end
@@ -156,10 +146,6 @@ complete -c sac -n '__saccade_verb completions; and test (__saccade_npos) = 1; a
 complete -c sac -n '__saccade_verb cancel; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb reopen; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb claim; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb comment; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb offer; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb use; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb artifact; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb wait; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb show; and test (__saccade_npos) -ge 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb workspace clean; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_candidates workspaces-clean)'
@@ -173,25 +159,12 @@ complete -c sac -n '__saccade_verb workspace restore; and test (__saccade_npos) 
 # so the value-bearing candidates hang off the same lines.
 complete -c sac -n '__saccade_verb cancel' -l explanation -r -f -d 'the human explanation the record keeps'
 complete -c sac -n '__saccade_verb reopen' -l explanation -r -f -d 'the human explanation the record keeps'
-complete -c sac -n '__saccade_verb comment' -l title -r -f -d 'the authored title: the concise whole-contribution description'
-complete -c sac -n '__saccade_verb comment' -l ref -r -f -d 'a citation the mapping carries; repeatable'
 complete -c sac -n '__saccade_verb send' -l to -r -f -d 'the recipient (i-N)' -a '(__saccade_candidates incarnations)'
 complete -c sac -n '__saccade_verb send' -l reply -r -f -d 'the message this one answers (m-N)'
 complete -c sac -n '__saccade_verb send' -l task -r -f -d 'task context riding the exchange (t-N)' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb send' -l stdin -d 'read the body from stdin instead of an argument'
-complete -c sac -n '__saccade_verb offer' -l title -r -f -d 'the authored title: the concise whole-account description'
-complete -c sac -n '__saccade_verb reject' -l grounds -r -f -d 'the grounds for reconsideration'
-complete -c sac -n '__saccade_verb use' -l source -r -f -d 'the source task (t-N)' -a '(__saccade_candidates tasks)'
-complete -c sac -n '__saccade_verb use' -l reason -r -f -d 'the reason for the reliance'
-complete -c sac -n '__saccade_verb bind' -l grounds -r -f -d 'the grounds for the selection'
-complete -c sac -n '__saccade_verb revise' -l title -r -f -d 'the revised title'
-complete -c sac -n '__saccade_verb revise' -l stdin -d 'read the revised prose from stdin'
-complete -c sac -n '__saccade_verb revise' -l body-file -r -f -d 'read the revised prose from a file'
-complete -c sac -n '__saccade_verb withdraw' -l note -r -f -d 'the withdrawal note'
 complete -c sac -n '__saccade_verb show' -l stdin -d 'read one id per line from stdin'
-complete -c sac -n '__saccade_verb show' -l withdrawn -d 'show withdrawn comment bodies beside their tombstones'
 complete -c sac -n '__saccade_verb search' -s C -l context -r -f -d 'one id term plus N records before and after'
-complete -c sac -n '__saccade_verb search' -l withdrawn -d 'match withdrawn comment bodies too'
 complete -c sac -n '__saccade_verb serve' -l bind -r -f -d 'the address to bind'
 complete -c sac -n '__saccade_verb serve' -l port -r -f -d 'the port to serve on'
 complete -c sac -n '__saccade_verb launch' -l workspace -r -f -d 'the workspace directory to work in' -a '(__saccade_candidates workspaces)' -k
@@ -211,7 +184,6 @@ complete -c sac -n '__saccade_verb workspace reconcile' -l apply -d 'record the 
 complete -c sac -n '__saccade_verb migrate' -l out -r -f -d 'the fresh tracker to write; must not exist'
 complete -c sac -n '__saccade_verb clone' -l at -r -f -d 'the storage seq to copy through, inclusive'
 complete -c sac -n '__saccade_verb clone' -l out -r -f -d 'the fresh tracker to write; must not exist'
-complete -c sac -n '__saccade_verb artifact' -l name -r -f -d 'the artifact name; defaults to the file basename'
 complete -c sac -n '__saccade_verb wait' -l after -r -f -d 'the global position matched strictly after'
 complete -c sac -n '__saccade_verb wait' -l until -r -f -a 'activity'
-complete -c sac -n '__saccade_verb wait' -l until -r -f -a 'offer'
+complete -c sac -n '__saccade_verb wait' -l until -r -f -a 'activity'

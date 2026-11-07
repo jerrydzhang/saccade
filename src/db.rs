@@ -510,14 +510,11 @@ pub fn now_epoch() -> u64 {
 mod test {
     use super::*;
     use crate::events::{Command, Event};
-    use crate::objects::comment::CommentKind;
-    use crate::objects::comment::{CommentState, Revision, Withdrawal};
     use crate::objects::incarnation::IncarnationId;
     use crate::objects::task::{TaskId, TaskState};
     use crate::store::Tier;
-    use crate::types::artifact::Artifact;
     use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
-    use crate::{CommentId, ContentHash, Prose, RecordId, Scope};
+    use crate::{Prose, RecordId, Scope};
 
     fn memory_db() -> Connection {
         let conn = Connection::open_in_memory().expect("open memory db");
@@ -562,51 +559,8 @@ mod test {
         }
     }
 
-    fn offer(task: usize, title: &str, body: &str) -> Command {
-        Command::Comment {
-            home: TaskId(task),
-            kind: CommentKind::Offer {
-                title: Prose::new(title.into()).unwrap(),
-                body: Prose::new(body.into()).unwrap(),
-            },
-            references: Vec::new(),
-        }
-    }
-
-    fn accept_on(home: usize, seq: usize) -> Command {
-        Command::Comment {
-            home: TaskId(home),
-            kind: CommentKind::Accept {
-                offer: CommentId(RecordId(seq)),
-            },
-            references: Vec::new(),
-        }
-    }
-
-    fn reject_on(home: usize, seq: usize, grounds: &str) -> Command {
-        Command::Comment {
-            home: TaskId(home),
-            kind: CommentKind::Reject {
-                offer: CommentId(RecordId(seq)),
-                grounds: Prose::new(grounds.into()).unwrap(),
-            },
-            references: Vec::new(),
-        }
-    }
-
     fn prose(text: &str) -> Prose {
         Prose::new(text.into()).unwrap()
-    }
-
-    fn note(title: &str, body: &str) -> Command {
-        Command::Comment {
-            home: TaskId(0),
-            kind: CommentKind::Note {
-                title: Prose::new(title.into()).unwrap(),
-                body: Prose::new(body.into()).unwrap(),
-            },
-            references: Vec::new(),
-        }
     }
 
     #[test]
@@ -626,42 +580,15 @@ mod test {
         record(
             &mut conn,
             &scoped_agent(),
-            note("the mid-flight finding", "mid-flight finding"),
+            Command::ClaimTask {
+                id: TaskId(0),
+                incarnation: None,
+            },
             11,
         )
         .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            offer(0, "suite green", "suite green, 55 tests"),
-            12,
-        )
-        .unwrap();
-        record(&mut conn, &human(), accept_on(0, 3), 12).unwrap();
         record(&mut conn, &human(), create("fix bar"), 13).unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            offer(1, "bar fixed", "bar fixed the quick way"),
-            14,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &human(),
-            reject_on(1, 6, "the edge case still fails"),
-            15,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            offer(1, "edge case held", "edge case held"),
-            16,
-        )
-        .unwrap();
-        record(&mut conn, &human(), accept_on(1, 8), 16).unwrap();
-        record(&mut conn, &human(), create("migrate floop"), 17).unwrap();
+        record(&mut conn, &human(), create("migrate floop"), 14).unwrap();
         record(
             &mut conn,
             &human(),
@@ -669,7 +596,7 @@ mod test {
                 id: TaskId(2),
                 explanation: prose("no longer wanted"),
             },
-            18,
+            15,
         )
         .unwrap();
         record(
@@ -679,55 +606,7 @@ mod test {
                 id: TaskId(2),
                 explanation: prose("the blocker cleared"),
             },
-            19,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            note("the migration parked", "the migration waits on a decision"),
-            20,
-        )
-        .unwrap();
-        record(&mut conn, &human(), create("adopt foo's account"), 21).unwrap();
-        // the prospective use names its source; the binding is its own record
-        record(
-            &mut conn,
-            &agent(),
-            Command::Comment {
-                home: TaskId(3),
-                kind: CommentKind::Use {
-                    source: TaskId(0),
-                    reason: prose("builds on the landed account"),
-                    bound: None,
-                },
-                references: Vec::new(),
-            },
-            21,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::BindUse {
-                id: CommentId(RecordId(15)),
-                offer: CommentId(RecordId(3)),
-                grounds: prose("foo's accepted account is the one that landed"),
-            },
-            22,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::Artifact {
-                root: TaskId(0),
-                artifact: Artifact {
-                    name: Prose::new("sweep figure".into()).unwrap(),
-                    hash: ContentHash::of(b"figure bytes"),
-                },
-            },
-            23,
+            16,
         )
         .unwrap();
         let system = Context::system();
@@ -740,7 +619,7 @@ mod test {
                 branch: GitBranch::new("saccade/t-0".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
             },
-            22,
+            17,
         )
         .unwrap();
         record(
@@ -750,7 +629,7 @@ mod test {
                 task_id: TaskId(0),
                 checkpoint: GitCommit::new("def456".into()).unwrap(),
             },
-            22,
+            18,
         )
         .unwrap();
         record(
@@ -758,9 +637,9 @@ mod test {
             &agent(),
             Command::ClaimTask {
                 id: TaskId(0),
-                incarnation: Some(IncarnationId(RecordId(18))),
+                incarnation: Some(IncarnationId(RecordId(7))),
             },
-            22,
+            19,
         )
         .unwrap();
         let batch = AtomicBatch {
@@ -774,127 +653,14 @@ mod test {
                 RecordDraft {
                     context: human(),
                     event: Event::TaskClaimed {
-                        id: TaskId(4),
+                        id: TaskId(3),
                         incarnation: None,
                     },
                 },
             ],
         };
-        let batched = execute_batch(&mut conn, batch, 24).unwrap();
+        let batched = execute_batch(&mut conn, batch, 20).unwrap();
         assert_eq!(batched.len(), 2);
-        record(
-            &mut conn,
-            &agent(),
-            note("the post-fold receipt", "post-fold receipt"),
-            25,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::ReviseComment {
-                id: CommentId(RecordId(23)),
-                title: None,
-                body: Some(prose("post-fold receipt, corrected")),
-            },
-            26,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            note("parked mid-flight", "parked mid-flight"),
-            27,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &human(),
-            Command::WithdrawComment {
-                id: CommentId(RecordId(25)),
-                note: prose("the parking was premature"),
-            },
-            27,
-        )
-        .unwrap();
-        // a second source, replaced and rebound: the rebind family rides
-        record(&mut conn, &human(), create("rewrite bar properly"), 28).unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            offer(5, "the deeper fix", "the deeper fix"),
-            28,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::Comment {
-                home: TaskId(3),
-                kind: CommentKind::Use {
-                    source: TaskId(5),
-                    reason: prose("bar's rework is the real foundation"),
-                    bound: None,
-                },
-                references: Vec::new(),
-            },
-            29,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::BindUse {
-                id: CommentId(RecordId(29)),
-                offer: CommentId(RecordId(28)),
-                grounds: prose("the standing account"),
-            },
-            29,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &human(),
-            reject_on(5, 28, "the fix misses the index"),
-            30,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            offer(5, "the fix that holds", "the fix that holds"),
-            30,
-        )
-        .unwrap();
-        record(
-            &mut conn,
-            &agent(),
-            Command::BindUse {
-                id: CommentId(RecordId(29)),
-                offer: CommentId(RecordId(32)),
-                grounds: prose("the replacement held under review"),
-            },
-            31,
-        )
-        .unwrap();
-        // a citation rides its mapping through the wire
-        let _ = record(
-            &mut conn,
-            &agent(),
-            Command::Comment {
-                home: TaskId(3),
-                kind: CommentKind::Note {
-                    title: prose("the adoption rests on foo"),
-                    body: prose("rests on the conclusion above [^1], again [^1]"),
-                },
-                references: vec![RecordId(3)],
-            },
-            32,
-        )
-        .unwrap();
-
-        // the native families ride the same round-trip: registration,
-        // an addressed message, the recipient's submission
         record(
             &mut conn,
             &system,
@@ -907,7 +673,7 @@ mod test {
                 adopted: false,
                 harness: crate::Harness::Pi,
             },
-            33,
+            21,
         )
         .unwrap();
         record(
@@ -921,7 +687,7 @@ mod test {
                 // the other harness rides the same round-trip
                 harness: crate::Harness::ClaudeCode,
             },
-            33,
+            22,
         )
         .unwrap();
         let sender = Context {
@@ -929,7 +695,7 @@ mod test {
             tier: Tier::Agent,
             scope: Some(Scope {
                 task: None,
-                incarnation: Some(IncarnationId(RecordId(35))),
+                incarnation: Some(IncarnationId(RecordId(12))),
                 workspace: None,
             }),
         };
@@ -937,25 +703,25 @@ mod test {
             &mut conn,
             &sender,
             Command::SendMessage {
-                from: IncarnationId(RecordId(35)),
-                to: IncarnationId(RecordId(36)),
+                from: IncarnationId(RecordId(12)),
+                to: IncarnationId(RecordId(13)),
                 reply_to: None,
                 task: Some(TaskId(0)),
                 body: prose(
                     "please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix",
                 ),
             },
-            34,
+            23,
         )
         .unwrap();
         record(
             &mut conn,
             &system,
             Command::SubmitMessage {
-                id: crate::MessageId(RecordId(37)),
-                by: IncarnationId(RecordId(36)),
+                id: crate::MessageId(RecordId(14)),
+                by: IncarnationId(RecordId(13)),
             },
-            35,
+            24,
         )
         .unwrap();
         // the task-free workspace families ride the same round-trip:
@@ -969,30 +735,17 @@ mod test {
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
             },
-            36,
+            25,
         )
         .unwrap();
         record(
             &mut conn,
             &system,
             Command::ChangeWorkspace {
-                incarnation: IncarnationId(RecordId(35)),
+                incarnation: IncarnationId(RecordId(12)),
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
             },
-            36,
-        )
-        .unwrap();
-        // the title repairs independently of the body: its revision
-        // rides the same family, the body it left stands
-        record(
-            &mut conn,
-            &agent(),
-            Command::ReviseComment {
-                id: CommentId(RecordId(23)),
-                title: Some(prose("the receipt, re-titled")),
-                body: None,
-            },
-            36,
+            26,
         )
         .unwrap();
         // the workspace lifecycle rides the same round-trip: the
@@ -1002,18 +755,18 @@ mod test {
             &mut conn,
             &system,
             Command::CleanWorkspace {
-                workspace: RecordId(39),
+                workspace: RecordId(16),
             },
-            36,
+            27,
         )
         .unwrap();
         record(
             &mut conn,
             &system,
             Command::RestoreWorkspace {
-                workspace: RecordId(39),
+                workspace: RecordId(16),
             },
-            36,
+            28,
         )
         .unwrap();
         // the write path's world is the one a full reload produces,
@@ -1023,22 +776,22 @@ mod test {
             &mut conn,
             &system,
             Command::BindSavedSession {
-                incarnation: IncarnationId(RecordId(36)),
+                incarnation: IncarnationId(RecordId(13)),
                 saved_session: crate::SessionLocator::new("/sessions/bbbb2222-bound.jsonl".into())
                     .unwrap(),
             },
-            36,
+            29,
         )
         .unwrap();
         record(
             &mut conn,
             &system,
             Command::AssignHostAddress {
-                incarnation: IncarnationId(RecordId(36)),
+                incarnation: IncarnationId(RecordId(13)),
                 address: Some("/tty9".into()),
                 adopted: false,
             },
-            36,
+            30,
         )
         .unwrap();
         // the human's root destination rides the same round-trip:
@@ -1050,10 +803,10 @@ mod test {
                 space: "spaRoot".into(),
                 tab: "tbRoot".into(),
             },
-            36,
+            31,
         )
         .unwrap();
-        record(&mut conn, &human(), Command::ClearRootSpace {}, 36).unwrap();
+        record(&mut conn, &human(), Command::ClearRootSpace {}, 32).unwrap();
         record(
             &mut conn,
             &human(),
@@ -1061,7 +814,7 @@ mod test {
                 space: "spaSecond".into(),
                 tab: "tbSecond".into(),
             },
-            36,
+            33,
         )
         .unwrap();
 
@@ -1073,7 +826,7 @@ mod test {
                 task_id: TaskId(0),
                 checkpoint: GitCommit::new("def456".into()).unwrap(),
             },
-            36,
+            34,
         )
         .unwrap();
 
@@ -1082,21 +835,21 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 50);
+        assert_eq!(loadout.rows.len(), 26);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
-        assert_eq!(loadout.rows[11].kind, "task_cancelled");
-        assert_eq!(loadout.rows[12].kind, "task_reopened");
-        assert_eq!(loadout.rows[21].kind, "task_created");
-        assert_eq!(loadout.rows[22].kind, "task_claimed");
+        assert_eq!(loadout.rows[5].kind, "task_cancelled");
+        assert_eq!(loadout.rows[6].kind, "task_reopened");
+        assert_eq!(loadout.rows[4].kind, "task_created");
+        assert_eq!(loadout.rows[9].kind, "task_claimed");
         // the workspace establishment is machinery-authored and births
         // the shared identity the claim names
-        assert_eq!(loadout.rows[18].kind, "workspace_established");
-        assert_eq!(loadout.rows[19].kind, "task_workspace_checkpointed");
-        assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[7].kind, "workspace_established");
+        assert_eq!(loadout.rows[8].kind, "task_workspace_checkpointed");
+        assert_eq!(loadout.rows[7].actor.as_str(), "saccade");
         assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(18))].incarnation,
+            world.incarnations[&IncarnationId(RecordId(7))].incarnation,
             crate::Incarnation::Established {
                 task: TaskId(0),
                 workspace: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
@@ -1104,7 +857,7 @@ mod test {
         );
         assert_eq!(
             world.tasks[0].workspace.as_ref().unwrap().birth,
-            RecordId(18)
+            RecordId(7)
         );
         // the scoped record carries its declared scope; unscoped rows none
         assert!(
@@ -1116,165 +869,45 @@ mod test {
             loadout.rows[2].scope.clone().unwrap_or_default()
         );
         assert_eq!(loadout.rows[0].scope, None);
-        assert_eq!(
-            world.comments[&CommentId(RecordId(2))].scope,
-            scoped_agent().scope
-        );
-        // the comment families ride the commented kind with their
-        // variant payloads
-        for (seq, variant) in [
-            (3, "offer"),
-            (4, "accept"),
-            (7, "reject"),
-            (13, "note"),
-            (15, "use"),
-        ] {
-            assert_eq!(loadout.rows[seq].kind, "commented");
-            assert!(
-                loadout.rows[seq].payload.contains(variant),
-                "seq {seq}: {}",
-                loadout.rows[seq].payload
-            );
-        }
-        assert!(
-            loadout.rows[7]
-                .payload
-                .contains("the edge case still fails")
-        );
-        // a prospective use names its source task, never an offer
-        assert!(loadout.rows[15].payload.contains("\"source\":0"));
-        // the binding family: the use, the selected offer, the grounds
-        for seq in [16, 33] {
-            assert_eq!(loadout.rows[seq].kind, "use_bound", "seq {seq}");
-            assert!(
-                loadout.rows[seq].payload.contains("grounds"),
-                "seq {seq}: {}",
-                loadout.rows[seq].payload
-            );
-        }
-        // the world folds the bindings: the state carries the
-        // selection, the context its attribution - foo's account,
-        // then the replacement
-        assert_eq!(
-            world.comments[&CommentId(RecordId(15))]
-                .comment
-                .state
-                .payload_offer(),
-            Some(CommentId(RecordId(3)))
-        );
-        assert_eq!(
-            world.comments[&CommentId(RecordId(29))]
-                .binding
-                .as_ref()
-                .map(|b| b.record),
-            Some(RecordId(33))
-        );
-        assert_eq!(
-            world.comments[&CommentId(RecordId(29))]
-                .comment
-                .state
-                .payload_offer(),
-            Some(CommentId(RecordId(32)))
-        );
-        // the citation mapping rides the birth payload whole
-        assert!(loadout.rows[34].payload.contains("\"references\":[3]"));
-        // the revision family: pointer only, the fold presents the swap
-        assert_eq!(loadout.rows[24].kind, "comment_revised");
-        assert!(
-            loadout.rows[24]
-                .payload
-                .contains("post-fold receipt, corrected")
-        );
-        assert_eq!(
-            world.comments[&CommentId(RecordId(23))]
-                .comment
-                .kind
-                .prose()
-                .unwrap()
-                .as_str(),
-            "post-fold receipt, corrected"
-        );
-        // the title-only revision is the same family: the body stands,
-        // the description swaps, the pointer names the latest record
-        assert_eq!(loadout.rows[41].kind, "comment_revised");
-        assert!(
-            loadout.rows[41].payload.contains("the receipt, re-titled"),
-            "{}",
-            loadout.rows[41].payload
-        );
-        assert_eq!(
-            world.comments[&CommentId(RecordId(23))]
-                .comment
-                .kind
-                .title()
-                .unwrap()
-                .as_str(),
-            "the receipt, re-titled"
-        );
-        assert_eq!(
-            world.comments[&CommentId(RecordId(23))].revised,
-            Some(Revision {
-                record: RecordId(41),
-                reviser: agent().actor,
-            })
-        );
-        assert!(loadout.rows[23].payload.contains("post-fold receipt"));
-        // the birth payload carries its own authored title, byte-exact
-        assert!(loadout.rows[23].payload.contains("the post-fold receipt"));
-        // the withdrawal family: the note and the tombstone's pointer
-        assert_eq!(loadout.rows[26].kind, "comment_withdrawn");
-        assert!(
-            loadout.rows[26]
-                .payload
-                .contains("the parking was premature")
-        );
-        assert_eq!(
-            world.comments[&CommentId(RecordId(25))].withdrawn,
-            Some(Withdrawal {
-                record: RecordId(26),
-                withdrawer: human().actor,
-            })
-        );
-        assert!(matches!(
-            world.comments[&CommentId(RecordId(25))].comment.state,
-            CommentState::Withdrawn(_)
-        ));
-        assert!(loadout.rows[25].payload.contains("parked mid-flight"));
+        // the batch lands both drafts or neither
+        assert_eq!(loadout.rows[10].kind, "task_created");
+        assert_eq!(loadout.rows[11].kind, "task_claimed");
+        assert!(loadout.rows[10].payload.contains("batchwork"));
         // the native families: machinery registration, the addressed
         // message from its scoped sender, the recipient's submission
-        assert_eq!(loadout.rows[35].kind, "incarnation_registered");
-        assert_eq!(loadout.rows[36].kind, "incarnation_registered");
-        assert_eq!(loadout.rows[35].actor.as_str(), "saccade");
-        assert_eq!(loadout.rows[37].kind, "message_sent");
+        assert_eq!(loadout.rows[12].kind, "incarnation_registered");
+        assert_eq!(loadout.rows[13].kind, "incarnation_registered");
+        assert_eq!(loadout.rows[12].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[14].kind, "message_sent");
         // real Unicode user data rides storage and the fold byte-exact, by escape
         assert!(
-            loadout.rows[37]
+            loadout.rows[14]
                 .payload
                 .contains("please look at the failing edge case: caf\u{e9} floop, na\u{ef}ve fix")
         );
         assert!(
-            loadout.rows[37]
+            loadout.rows[14]
                 .scope
                 .as_deref()
-                .is_some_and(|s| s.contains("35"))
+                .is_some_and(|s| s.contains("12"))
         );
         assert_eq!(
-            loadout.rows[37].scope.as_deref(),
+            loadout.rows[14].scope.as_deref(),
             sender
                 .scope
                 .as_ref()
                 .map(|s| serde_json::to_string(s).unwrap())
                 .as_deref()
         );
-        assert_eq!(loadout.rows[38].kind, "message_submitted");
+        assert_eq!(loadout.rows[15].kind, "message_submitted");
         // the created workspace births no task, no incarnation, no
         // numbering: its identity is its own record position
-        assert_eq!(loadout.rows[39].kind, "workspace_created");
-        assert_eq!(loadout.rows[39].actor.as_str(), "saccade");
-        assert_eq!(loadout.rows[39].tier, "system");
-        assert_eq!(loadout.rows[40].kind, "workspace_changed");
+        assert_eq!(loadout.rows[16].kind, "workspace_created");
+        assert_eq!(loadout.rows[16].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[16].tier, "system");
+        assert_eq!(loadout.rows[17].kind, "workspace_changed");
         assert_eq!(
-            world.workspaces[&crate::WorkspaceId(RecordId(39))].workspace,
+            world.workspaces[&crate::WorkspaceId(RecordId(16))].workspace,
             crate::CreatedWorkspace {
                 base: GitCommit::new("abc123".into()).unwrap(),
                 branch: GitBranch::new("feature-abc123ab".into()).unwrap(),
@@ -1282,34 +915,34 @@ mod test {
                 stage: crate::WorkspaceStage::Available,
             }
         );
-        assert_eq!(world.provenance[&RecordId(39)], None);
+        assert_eq!(world.provenance[&RecordId(16)], None);
         assert_eq!(
-            world.workspace_changes[&IncarnationId(RecordId(35))],
+            world.workspace_changes[&IncarnationId(RecordId(12))],
             crate::WorkspaceChange {
                 worktree: WorktreePath::new("/repo/wt/feature-abc123ab".into()).unwrap(),
-                record: RecordId(40),
-                at: 36,
+                record: RecordId(17),
+                at: 26,
             }
         );
-        assert_eq!(world.provenance[&RecordId(40)], None);
+        assert_eq!(world.provenance[&RecordId(17)], None);
         assert_eq!(world.incarnations.len(), 3, "creation advanced no i-N");
         // the lifecycle facts: reference-only payloads, machinery
         // authorship, and the stage the fold carries after both
-        assert_eq!(loadout.rows[42].kind, "workspace_cleaned");
-        assert_eq!(loadout.rows[42].actor.as_str(), "saccade");
-        assert_eq!(loadout.rows[42].tier, "system");
-        assert!(loadout.rows[42].payload.contains("\"workspace\":39"));
-        assert_eq!(loadout.rows[43].kind, "workspace_restored");
-        assert_eq!(world.provenance[&RecordId(42)], None);
-        assert_eq!(world.provenance[&RecordId(43)], None);
+        assert_eq!(loadout.rows[18].kind, "workspace_cleaned");
+        assert_eq!(loadout.rows[18].actor.as_str(), "saccade");
+        assert_eq!(loadout.rows[18].tier, "system");
+        assert!(loadout.rows[18].payload.contains("\"workspace\":16"));
+        assert_eq!(loadout.rows[19].kind, "workspace_restored");
+        assert_eq!(world.provenance[&RecordId(18)], None);
+        assert_eq!(world.provenance[&RecordId(19)], None);
         assert_eq!(
-            world.workspace_stage(RecordId(39)),
+            world.workspace_stage(RecordId(16)),
             Some(crate::WorkspaceStage::Available)
         );
         // the registration births a native identity; the message
         // answers by reference and the submission reads submitted
         assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(35))].incarnation,
+            world.incarnations[&IncarnationId(RecordId(12))].incarnation,
             crate::Incarnation::Native {
                 native_id: crate::NativeSessionId::new("aaaa1111".into()).unwrap(),
                 saved_session: Some(
@@ -1322,7 +955,7 @@ mod test {
         );
         // the door-birth's locator binds once and the address moves
         assert_eq!(
-            world.incarnations[&IncarnationId(RecordId(36))].incarnation,
+            world.incarnations[&IncarnationId(RecordId(13))].incarnation,
             crate::Incarnation::Native {
                 native_id: crate::NativeSessionId::new("bbbb2222".into()).unwrap(),
                 saved_session: Some(
@@ -1336,9 +969,9 @@ mod test {
         // the human's root destination: both kinds ride the round-trip,
         // the final bind is the standing choice; the closing checkpoint
         // follows them
-        assert_eq!(loadout.rows[46].kind, "root_space_bound");
-        assert_eq!(loadout.rows[47].kind, "root_space_cleared");
-        assert_eq!(loadout.rows[48].kind, "root_space_bound");
+        assert_eq!(loadout.rows[22].kind, "root_space_bound");
+        assert_eq!(loadout.rows[23].kind, "root_space_cleared");
+        assert_eq!(loadout.rows[24].kind, "root_space_bound");
         assert_eq!(
             world
                 .root_space
@@ -1347,37 +980,15 @@ mod test {
             Some(("spaSecond", "tbSecond"))
         );
         assert_eq!(world.messages.len(), 1);
-        let mctx = &world.messages[&crate::MessageId(RecordId(37))];
+        let mctx = &world.messages[&crate::MessageId(RecordId(14))];
         assert_eq!(mctx.state, crate::MessageState::Submitted);
         assert_eq!(mctx.message.task, Some(TaskId(0)));
-        // the artifact family: pointer only
-        assert_eq!(loadout.rows[17].kind, "artifact_added");
-        assert!(loadout.rows[17].payload.contains("sweep figure"));
-        assert!(
-            loadout.rows[17]
-                .payload
-                .contains(ContentHash::of(b"figure bytes").as_str())
-        );
-        assert_eq!(
-            world.tasks[0].artifacts,
-            vec![(
-                RecordId(17),
-                Artifact {
-                    name: Prose::new("sweep figure".into()).unwrap(),
-                    hash: ContentHash::of(b"figure bytes"),
-                }
-            )]
-        );
         // the world folded the full story
-        assert_eq!(world.tasks.len(), 6);
-        assert!(matches!(world.tasks[0].task.state, TaskState::Concluded));
-        assert!(matches!(world.tasks[1].task.state, TaskState::Concluded));
+        assert_eq!(world.tasks.len(), 4);
+        assert!(matches!(world.tasks[0].task.state, TaskState::Open));
+        assert!(matches!(world.tasks[1].task.state, TaskState::Open));
         assert!(matches!(world.tasks[2].task.state, TaskState::Open));
         assert!(matches!(world.tasks[3].task.state, TaskState::Open));
-        assert!(matches!(world.tasks[5].task.state, TaskState::Offered));
-        assert_eq!(world.tasks[0].current_offer, Some(CommentId(RecordId(3))));
-        assert_eq!(world.tasks[1].current_offer, Some(CommentId(RecordId(8))));
-        assert_eq!(world.tasks[2].current_offer, None);
         assert!(matches!(
             world.tasks[0]
                 .workspace
@@ -1403,11 +1014,13 @@ mod test {
             record(
                 &mut conn,
                 &agent(),
-                offer(0, "suite green", "suite green"),
+                Command::ClaimTask {
+                    id: TaskId(0),
+                    incarnation: None,
+                },
                 11,
             )
             .unwrap();
-            record(&mut conn, &human(), accept_on(0, 1), 12).unwrap();
         } // connection dropped: WAL checkpoints back into the main file
 
         // reopen runs the full open path: pragmas, header-stamp verify
@@ -1416,13 +1029,13 @@ mod test {
         let LoadState::Full(world) = loadout.state else {
             panic!("expected a full load after reopen");
         };
-        assert_eq!(loadout.rows.len(), 3);
+        assert_eq!(loadout.rows.len(), 2);
         assert_eq!(world.tasks.len(), 1);
-        assert!(matches!(world.tasks[0].task.state, TaskState::Concluded));
+        assert!(matches!(world.tasks[0].task.state, TaskState::Open));
 
         // the read-only path sees the same file
         let ro = open_read(&path).expect("read-only open of a real file");
-        assert_eq!(load(&ro).unwrap().rows.len(), 3);
+        assert_eq!(load(&ro).unwrap().rows.len(), 2);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));

@@ -13,9 +13,8 @@ use crate::types::prose::Prose;
 pub struct MessageId(pub RecordId);
 
 /// A durable addressed communication between incarnations. Never a
-/// comment variant, never a task-thread publication: the optional
-/// task rides as context without publication, and no home task
-/// exists.
+/// task-thread publication: the optional task rides as context
+/// without publication, and no home task exists.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
     /// The sending session's registered identity
@@ -95,11 +94,6 @@ mod tables {
             Event::TaskClaimed {
                 id: TaskId(0),
                 incarnation: None,
-            },
-            Event::CommentRevised {
-                id: crate::CommentId(RecordId(0)),
-                title: None,
-                body: Some(Prose::new("filler".into()).unwrap()),
             },
         ]
     }

@@ -2,14 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::RecordId;
 use crate::events::Event;
-use crate::objects::comment::{CommentId, CommentKind};
 use crate::objects::incarnation::IncarnationId;
 use crate::objects::workspace::WorkspaceContext;
 use crate::types::actor::ActorName;
-use crate::types::artifact::Artifact;
 use crate::types::prose::Prose;
 
-#[derive(Debug, PartialEq, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
 pub struct TaskId(pub usize);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -20,37 +18,15 @@ pub enum TaskState {
     Offered,
     Concluded,
     /// The human's explanation of why the undertaking stopped rides
-    /// the state, the way a verdict's grounds ride its comment
+    /// the state
     Cancelled(Prose),
 }
 
 impl TaskState {
     /// The state machine table, all state transitions must go through
-    /// this. The store's reference checks decide whether an Accept or
-    /// Reject names the current offer; this table admits the cell.
+    /// this.
     pub fn transition(&self, event: &Event) -> Option<TaskState> {
         match (self, event) {
-            (
-                TaskState::Open,
-                Event::Commented {
-                    kind: CommentKind::Offer { .. },
-                    ..
-                },
-            ) => Some(TaskState::Offered),
-            (
-                TaskState::Offered,
-                Event::Commented {
-                    kind: CommentKind::Accept { .. },
-                    ..
-                },
-            ) => Some(TaskState::Concluded),
-            (
-                TaskState::Offered,
-                Event::Commented {
-                    kind: CommentKind::Reject { .. },
-                    ..
-                },
-            ) => Some(TaskState::Open),
             (TaskState::Open | TaskState::Offered, Event::TaskCancelled { explanation, .. }) => {
                 Some(TaskState::Cancelled(explanation.clone()))
             }
@@ -74,18 +50,9 @@ pub struct TaskContext {
     pub last_updated: RecordId,
     /// Event time of the most recent record that moved this task
     pub last_record_at: u64,
-    /// Event time the standing offer landed, present while one stands
-    /// or the concluded one holds
-    pub offered_at: Option<u64>,
     /// The ownership ledger, earliest first: whole-task responsibility,
     /// transferred by claim, history preserved
     pub ownership: Vec<OwnerEntry>,
-    /// The offer now standing, present while offered and after the
-    /// accept that concluded; a reject clears it
-    pub current_offer: Option<CommentId>,
-    pub thread: Vec<CommentId>,
-    /// Artifacts the thread holds, in record order
-    pub artifacts: Vec<(RecordId, Artifact)>,
     /// The attribution that birthed the task, from the birth record
     pub birth_actor: ActorName,
     /// The task's workspace lineage, present once registered
@@ -116,50 +83,10 @@ pub struct OwnerEntry {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::CommentKind;
     use crate::types::prose::Prose;
 
-    fn note() -> Event {
-        Event::Commented {
-            home: TaskId(0),
-            kind: CommentKind::Note {
-                title: Prose::new("a filler title".into()).unwrap(),
-                body: Prose::new("filler".into()).unwrap(),
-            },
-            references: Vec::new(),
-        }
-    }
-
-    fn offer() -> Event {
-        Event::Commented {
-            home: TaskId(0),
-            kind: CommentKind::Offer {
-                title: Prose::new("a filler title".into()).unwrap(),
-                body: Prose::new("filler".into()).unwrap(),
-            },
-            references: Vec::new(),
-        }
-    }
-
-    fn accept() -> Event {
-        Event::Commented {
-            home: TaskId(0),
-            kind: CommentKind::Accept {
-                offer: CommentId(RecordId(1)),
-            },
-            references: Vec::new(),
-        }
-    }
-
-    fn reject() -> Event {
-        Event::Commented {
-            home: TaskId(0),
-            kind: CommentKind::Reject {
-                offer: CommentId(RecordId(1)),
-                grounds: Prose::new("filler".into()).unwrap(),
-            },
-            references: Vec::new(),
-        }
+    fn filler() -> Prose {
+        Prose::new("filler".into()).unwrap()
     }
 
     #[test]
@@ -168,52 +95,28 @@ mod test {
             TaskState::Open,
             TaskState::Offered,
             TaskState::Concluded,
-            TaskState::Cancelled(Prose::new("filler".into()).unwrap()),
+            TaskState::Cancelled(filler()),
         ];
         let events = [
-            Event::TaskCreated {
-                name: Prose::new("filler".into()).unwrap(),
-            },
+            Event::TaskCreated { name: filler() },
             Event::TaskClaimed {
                 id: TaskId(0),
                 incarnation: None,
             },
             Event::TaskCancelled {
                 id: TaskId(0),
-                explanation: Prose::new("filler".into()).unwrap(),
+                explanation: filler(),
             },
             Event::TaskReopened {
                 id: TaskId(0),
-                explanation: Prose::new("filler".into()).unwrap(),
+                explanation: filler(),
             },
-            note(),
-            offer(),
-            accept(),
-            reject(),
         ];
 
         let legal = |state: &TaskState, event: &Event| {
             matches!(
                 (state, event),
                 (
-                    TaskState::Open,
-                    Event::Commented {
-                        kind: CommentKind::Offer { .. },
-                        ..
-                    }
-                ) | (
-                    TaskState::Offered,
-                    Event::Commented {
-                        kind: CommentKind::Accept { .. },
-                        ..
-                    }
-                ) | (
-                    TaskState::Offered,
-                    Event::Commented {
-                        kind: CommentKind::Reject { .. },
-                        ..
-                    }
-                ) | (
                     TaskState::Open | TaskState::Offered,
                     Event::TaskCancelled { .. }
                 ) | (TaskState::Cancelled(_), Event::TaskReopened { .. })

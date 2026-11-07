@@ -26,16 +26,11 @@ pub fn tier_from(s: &str) -> Result<Tier, ParseFail> {
 }
 
 /// Known kinds, anything else in a row is version skew, not corruption
-const KINDS: [&str; 22] = [
+const KINDS: [&str; 17] = [
     "task_created",
     "task_claimed",
     "task_cancelled",
     "task_reopened",
-    "commented",
-    "comment_revised",
-    "comment_withdrawn",
-    "use_bound",
-    "artifact_added",
     "workspace_established",
     "task_workspace_checkpointed",
     "workspace_created",
@@ -84,7 +79,6 @@ fn malformed(kind: &str, err: serde_json::Error) -> ParseFail {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::objects::comment::{CommentId, CommentKind};
     use crate::objects::incarnation::IncarnationId;
     use crate::objects::message::MessageId;
     use crate::objects::task::TaskId;
@@ -97,10 +91,8 @@ mod test {
             assert_eq!(tier_from(tier_of(&tier)).unwrap(), tier);
         }
     }
-    use crate::ContentHash;
     use crate::harness::Harness;
     use crate::store::RecordId;
-    use crate::types::artifact::Artifact;
     use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
     #[test]
@@ -119,89 +111,6 @@ mod test {
             Event::TaskReopened {
                 id: TaskId(0),
                 explanation: prose(),
-            },
-            Event::Commented {
-                home: TaskId(0),
-                kind: CommentKind::Note {
-                    title: Prose::new("the leaning sections, owner jerry".into()).unwrap(),
-                    body: Prose::new("leaning sections, owner: jerry".into()).unwrap(),
-                },
-                references: vec![RecordId(3)],
-            },
-            Event::Commented {
-                home: TaskId(0),
-                kind: CommentKind::Offer {
-                    title: Prose::new("foo done, suite green".into()).unwrap(),
-                    body: Prose::new("suite green, 55 tests".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-            Event::Commented {
-                home: TaskId(1),
-                kind: CommentKind::Accept {
-                    offer: CommentId(RecordId(6)),
-                },
-                references: Vec::new(),
-            },
-            Event::Commented {
-                home: TaskId(1),
-                kind: CommentKind::Reject {
-                    offer: CommentId(RecordId(6)),
-                    grounds: Prose::new("the edge case still fails".into()).unwrap(),
-                },
-                references: Vec::new(),
-            },
-            Event::Commented {
-                home: TaskId(0),
-                kind: CommentKind::Use {
-                    source: TaskId(1),
-                    reason: Prose::new("builds on the landed account".into()).unwrap(),
-                    bound: None,
-                },
-                references: Vec::new(),
-            },
-            Event::Commented {
-                home: TaskId(0),
-                kind: CommentKind::Use {
-                    source: TaskId(1),
-                    reason: Prose::new("builds on the landed account".into()).unwrap(),
-                    bound: Some(crate::objects::comment::UseBinding {
-                        offer: CommentId(RecordId(6)),
-                        grounds: Prose::new("the account that landed".into()).unwrap(),
-                    }),
-                },
-                references: Vec::new(),
-            },
-            Event::UseBound {
-                id: CommentId(RecordId(7)),
-                offer: CommentId(RecordId(6)),
-                grounds: Prose::new("the selected account holds".into()).unwrap(),
-            },
-            Event::CommentRevised {
-                id: CommentId(RecordId(6)),
-                title: Some(Prose::new("which way the question asks, exactly".into()).unwrap()),
-                body: Some(Prose::new("which way do you want it, exactly?".into()).unwrap()),
-            },
-            Event::CommentRevised {
-                id: CommentId(RecordId(6)),
-                title: None,
-                body: Some(Prose::new("the account, reworded".into()).unwrap()),
-            },
-            Event::CommentRevised {
-                id: CommentId(RecordId(6)),
-                title: Some(Prose::new("the account, retitled".into()).unwrap()),
-                body: None,
-            },
-            Event::CommentWithdrawn {
-                id: CommentId(RecordId(6)),
-                note: Prose::new("parked in the wrong place".into()).unwrap(),
-            },
-            Event::ArtifactAdded {
-                root: TaskId(0),
-                artifact: Artifact {
-                    name: Prose::new("sweep figure".into()).unwrap(),
-                    hash: ContentHash::of(b"figure bytes"),
-                },
             },
             Event::WorkspaceEstablished {
                 task_id: TaskId(0),
