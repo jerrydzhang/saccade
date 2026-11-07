@@ -5,6 +5,27 @@ This is the normative statement of board grammar version 1. The
 what this file describes and refuses everything else, with an error that
 says what to do, not only what failed.
 
+## Versions
+
+The grammar number is a breaking-change boundary and nothing more. The
+number changes only when a kind is removed or a kind's meaning is
+reinterpreted; new kinds join without a number change, each admitted by
+ratification.
+
+Within one supported number there are two postures:
+
+- Authoring validation - the tracker's commit and check, and this
+  crate's `parse` - is strict: it refuses unknown kinds and every other
+  shape this file does not describe.
+- Reading - the viewer and other reader components - is lenient inside
+  the numbers it supports: a component naming a kind the build does not
+  know renders as its raw authored source beside a diagnostic, and never
+  refuses the board. A board whose grammar number sits outside the
+  reader's supported range still refuses.
+
+The viewer's bridge verdicts (`Ok` / `UnknownKind` / `Refused`) carry
+exactly this split.
+
 ## The board
 
 A board is a single YAML document: one mapping with exactly the fields
