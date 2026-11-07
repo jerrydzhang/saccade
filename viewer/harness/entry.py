@@ -1467,9 +1467,18 @@ def run_session_checks(socket_path: str, resolved: dict, query: str, log_path: s
     else:
         check("next match reaches the second occurrence", False, f"query {query!r} had fewer than two occurrences")
 
-    # 8: the native copy path - a formula-plus-prose selection copied
-    # with Ctrl+C reaches the bridge with the Plain TeX bytes (the
-    # engine's own copy command never dispatches natively)
+    # 8: the native copy path - Plain on demand (Ctrl+Shift+C), then a
+    # formula-plus-prose selection copied with Ctrl+C reaches the
+    # bridge with the Plain TeX bytes (the engine's own copy command
+    # never dispatches natively)
+    try:
+        session_request(
+            socket_path,
+            {"cmd": "evaluate", "script": "window.__boardViewer.setCopyMode('plain'); return true;"},
+            timeout=30.0,
+        )
+    except (OSError, RuntimeError, ValueError):
+        pass
     try:
         session_request(socket_path, {"cmd": "input", "kind": "hotkey", "keys": ["escape"]}, timeout=30.0)
         time.sleep(0.3)
