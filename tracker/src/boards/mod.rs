@@ -59,6 +59,11 @@ pub enum BoardsFail {
     WorkingBoard { path: PathBuf, detail: String },
     /// An incorporation names a source task the fold does not hold.
     UnknownSourceTask { name: String },
+    /// The board's task field does not name the committing task.
+    TaskMismatch {
+        board_task: String,
+        expected: String,
+    },
     /// The store refused the TaskCommitted the publish attempted.
     Record(String),
     /// An acceptance was attempted while checkpoints stood unsaved.
@@ -81,6 +86,7 @@ impl BoardsFail {
             BoardsFail::BadBase { .. } => "boards_base_unreadable",
             BoardsFail::InvalidKey { .. } => "boards_invalid_key",
             BoardsFail::UnknownSourceTask { .. } => "boards_unknown_source_task",
+            BoardsFail::TaskMismatch { .. } => "boards_task_mismatch",
             BoardsFail::Record(_) => "boards_record_refused",
             BoardsFail::UnsavedCheckpoints { .. } => "boards_unsaved_checkpoints",
             BoardsFail::WorkingBoard { .. } => "boards_working_board_unreadable",
@@ -125,7 +131,13 @@ impl BoardsFail {
                 )
             }
             BoardsFail::UnknownSourceTask { name } => format!(
-                "the incorporation cites source task '{name}', which no task in this tracker bears; create it or correct the citation"
+                "the incorporation cites '{name}', which no task in this tracker bears; incorporations cite tasks as t-N, and the task must exist"
+            ),
+            BoardsFail::TaskMismatch {
+                board_task,
+                expected,
+            } => format!(
+                "the board names {board_task}, but this account belongs to {expected}; the board's task field must carry the committing task"
             ),
             BoardsFail::Record(detail) => detail.clone(),
             BoardsFail::UnsavedCheckpoints { actors } => format!(
@@ -480,6 +492,13 @@ impl Boards {
         mut record: impl FnMut(crate::events::Command) -> Result<(), String>,
     ) -> Result<String, BoardsFail> {
         let board = read_working_board(workdir)?;
+        let expected = format!("t-{}", task.0);
+        if board.task != expected {
+            return Err(BoardsFail::TaskMismatch {
+                board_task: board.task.clone(),
+                expected,
+            });
+        }
         let declared = incorporation_sources(&board);
         let parent = world
             .tasks
@@ -523,16 +542,16 @@ impl Boards {
                 }
             }
         }
-        // source names resolve to fold tasks; an unknown name refuses
-        // before the record is attempted
+        // source tasks arrive as t-N and resolve to fold tasks; an
+        // unknown t-N refuses before the record is attempted
         let mut pairs = Vec::with_capacity(declared.len());
         for (name, revision, _) in &declared {
-            let source = world
-                .tasks
-                .iter()
-                .find(|ctx| ctx.task.name.as_str() == name)
-                .map(|ctx| FoldTaskId(ctx.birth.0))
+            let position = name
+                .strip_prefix("t-")
+                .and_then(|digits| digits.parse::<usize>().ok())
+                .filter(|n| world.tasks.get(*n).is_some())
                 .ok_or_else(|| BoardsFail::UnknownSourceTask { name: name.clone() })?;
+            let source = FoldTaskId(position);
             let cited =
                 crate::types::pointers::GitCommit::new(revision.clone()).map_err(|error| {
                     BoardsFail::Git(format!("the cited revision {revision}: {error:?}"))
@@ -1066,7 +1085,7 @@ mod test {
     }
 
     const LEDGER_FINDING: &str = r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - text: |
       The backfill rebuilt the floop index from the recorded ledger and
@@ -1074,11 +1093,11 @@ content:
 "#;
 
     const LEDGER_CITED: &str = r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
         select: [/content/1]
       content:
@@ -1099,7 +1118,7 @@ content:
         let pivot = "The arm rides the damped pivot.";
         format!(
             r#"grammar: 1
-task: tone-arm-resonance
+task: t-4
 content:
   - text: |
       {first_line}
@@ -1247,7 +1266,7 @@ content:
             landed.incorporations,
             vec![
                 (
-                    "source-model".to_string(),
+                    "t-1".to_string(),
                     "647de6e6d2b90c507bf2d05dacc32740558e0bfc".to_string()
                 ),
                 (
@@ -1400,7 +1419,7 @@ content:
         let board = store
             .read_board_at(&landed.commit)
             .expect("the stored board reads");
-        assert_eq!(board.task, "floop-index-backfill");
+        assert_eq!(board.task, "t-0");
         let error = store
             .read_board_at(ABSENT)
             .expect_err("a commit the repository lacks refuses");
@@ -1593,11 +1612,7 @@ content:
             &plinth_board("The sweep found the peak at 7 Hz.", "The mat was on."),
         );
         let dir = workdir(tag, "mid-edit");
-        write(
-            &dir,
-            BOARD_FILE,
-            b"grammar: 2\ntask: tone-arm-resonance\ncontent: []\n",
-        );
+        write(&dir, BOARD_FILE, b"grammar: 2\ntask: t-4\ncontent: []\n");
         let saved = store
             .checkpoint(
                 "tone-arm-resonance",
@@ -1851,6 +1866,77 @@ content:
             store.checkouts.join("0").join(BOARD_FILE).exists(),
             "the checkout materializes"
         );
+
+        // the refusal pins, folded beside the publish contract: the
+        // board's task field must name the committing task, and an
+        // incorporation cites an existing t-N
+        write(
+            &dir,
+            BOARD_FILE,
+            r#"grammar: 1
+task: t-9
+content:
+  - text: somebody else's account
+"#
+            .as_bytes(),
+        );
+        let mismatched = store.publish_board(
+            crate::objects::task::TaskId(3),
+            "3",
+            &world,
+            &dir,
+            "somebody else's account",
+            |_| Ok(()),
+        );
+        let error = mismatched.expect_err("the mismatch refuses");
+        assert_eq!(error.code(), "boards_task_mismatch");
+        assert!(
+            error.detail().contains("t-9") && error.detail().contains("t-3"),
+            "the refusal names both tasks: {}",
+            error.detail()
+        );
+        let source_commit = {
+            let source = workdir(tag, "source");
+            write(&source, BOARD_FILE, LEDGER_FINDING.as_bytes());
+            store
+                .commit("0", &source, None, "the source account")
+                .expect("the source commit lands")
+                .commit
+        };
+        write(
+            &dir,
+            BOARD_FILE,
+            format!(
+                r#"grammar: 1
+task: t-0
+content:
+  - incorporation:
+      source:
+        task: t-9
+        revision: {source_commit}
+        select: [/content/0]
+      content:
+        - text: |
+            The receiving text explains what this board takes.
+"#
+            )
+            .as_bytes(),
+        );
+        let unknown = store.publish_board(
+            crate::objects::task::TaskId(0),
+            "0",
+            &world,
+            &dir,
+            "the citing account",
+            |_| Ok(()),
+        );
+        let error = unknown.expect_err("the unknown source refuses");
+        assert_eq!(error.code(), "boards_unknown_source_task");
+        assert!(
+            error.detail().contains("t-9"),
+            "the refusal names the citation: {}",
+            error.detail()
+        );
     }
 
     // a selector the cited source revision does not hold refuses the
@@ -1865,13 +1951,10 @@ content:
         store
             .commit("0", &source, None, "the source account")
             .expect("the source commit lands");
-        let source_commit = {
-            let log = std::process::Command::new("git")
-                .args(["-C", store.repo.to_str().unwrap(), "rev-parse", "HEAD"])
-                .output()
-                .expect("git runs");
-            String::from_utf8_lossy(&log.stdout).trim().to_string()
-        };
+        let source_commit = store
+            .commit("0", &source, None, "the source account")
+            .expect("the source commit lands")
+            .commit;
 
         // the citing board selects /content/9, which the source lacks
         let dir = workdir(tag, "citing");
@@ -1880,11 +1963,11 @@ content:
             BOARD_FILE,
             format!(
                 r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:
-        task: implement foo
+        task: t-0
         revision: {source_commit}
         select: [/content/9]
       content:

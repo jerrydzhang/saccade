@@ -33,7 +33,9 @@ A board is a single YAML document: one mapping with exactly the fields
 
 - `grammar` is the integer 1. The crate declares the versions it parses in
   `SUPPORTED_GRAMMAR_VERSIONS`; today that is exactly 1.
-- `task` is the name of the task the board accounts for, as text.
+- `task` names the task the board accounts for, as the tracker addresses
+  it: `t-N`, dense, no leading zeros. The committing task must match: the
+  tracker refuses a board whose task field names another task.
 - `content` is a list of components. The list may be empty.
 
 No other fields are allowed at the top level. The file holds exactly one
@@ -71,7 +73,7 @@ optional `title` (text). No other fields; layout hints do not exist here.
 `incorporation` is a mapping with required `source` and `content`.
 
 - `source` is a mapping with exactly `task`, `revision`, and `select`.
-  `task` is the source task's name as text. `revision` is the full
+  `task` names the source task as `t-N`. `revision` is the full
   40-character lowercase hex commit hash of the pinned source revision.
   `select` is a non-empty list of select paths (below) naming whole
   components in that revision.
@@ -108,6 +110,8 @@ slash and carry no empty steps.
 - YAML anchors and aliases
 - duplicate keys in any mapping
 - a missing `grammar`, `task`, or `content` field
+- a `task` field (board top or incorporation source) that does not read
+  as `t-N`
 - unknown fields in the board mapping, a component, or an incorporation source
 - unknown component kinds, or an item naming no kind or several kinds
 - a grammar version outside `SUPPORTED_GRAMMAR_VERSIONS`, or a `grammar`

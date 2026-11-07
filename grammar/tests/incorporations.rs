@@ -8,7 +8,7 @@ fn the_pairs_come_back_in_document_order_with_nesting() {
     assert_eq!(
         incorporations(&board),
         vec![(
-            "cartridge-compliance-notes".to_string(),
+            "t-3".to_string(),
             "4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f".to_string()
         )]
     );
@@ -17,11 +17,11 @@ fn the_pairs_come_back_in_document_order_with_nesting() {
         incorporations(&board),
         vec![
             (
-                "source-model".to_string(),
+                "t-1".to_string(),
                 "647de6e6d2b90c507bf2d05dacc32740558e0bfc".to_string()
             ),
             (
-                "source-model".to_string(),
+                "t-1".to_string(),
                 "647de6e6d2b90c507bf2d05dacc32740558e0bfc".to_string()
             ),
         ]
@@ -38,7 +38,7 @@ fn a_board_without_incorporations_lists_none() {
 fn nested_incorporations_are_listed_after_their_containers() {
     let board = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:

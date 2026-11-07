@@ -1,5 +1,5 @@
 grammar: 1
-task: gd-quadratic-a1-b100
+task: t-2
 content:
   - text: |
       ## Answer
@@ -11,7 +11,7 @@ content:
       convergence nor evidence of it.
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
         select: [/content/1]
       content:

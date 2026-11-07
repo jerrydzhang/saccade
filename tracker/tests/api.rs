@@ -1571,7 +1571,7 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     assert!(src.join("board.yaml").exists(), "the template landed");
     std::fs::write(
         src.join("board.yaml"),
-        "grammar: 1\ntask: prove the loop\ncontent:\n  - text: the loop holds for every input\n",
+        "grammar: 1\ntask: t-0\ncontent:\n  - text: the loop holds for every input\n",
     )
     .unwrap();
     let (ok, out, _) = sac(&["board", "check", src.to_str().unwrap()]);
@@ -1594,7 +1594,7 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     std::fs::write(
         con.join("board.yaml"),
         format!(
-            "grammar: 1\ntask: use the proof\ncontent:\n  - incorporation:\n      source:\n        task: prove the loop\n        revision: {r1}\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
+            "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: {r1}\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
         ),
     )
     .unwrap();
@@ -1661,7 +1661,7 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     );
     std::fs::write(
         src.join("board.yaml"),
-        "grammar: 1\ntask: prove the loop\ncontent:\n  - text: the loop holds for every input\n  - annotation: the boundary case is covered in the appendix\n",
+        "grammar: 1\ntask: t-0\ncontent:\n  - text: the loop holds for every input\n  - annotation: the boundary case is covered in the appendix\n",
     )
     .unwrap();
     let reply = sac_json(&[
@@ -1694,7 +1694,7 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     std::fs::write(
         con.join("board.yaml"),
         format!(
-            "grammar: 1\ntask: use the proof\ncontent:\n  - incorporation:\n      source:\n        task: prove the loop\n        revision: {r2}\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
+            "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: {r2}\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
         ),
     )
     .unwrap();
@@ -1774,8 +1774,8 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     assert!(ok, "{out}");
     assert!(out.contains("t-0@r2"), "{out}");
     assert!(
-        out.contains("t-1@r2"),
-        "the consumer cites the loop by name: {out}"
+        !out.contains("t-1"),
+        "the consumer board names no loop: {out}"
     );
     let (ok, out, _) = sac(&["search", "relying"]);
     assert!(ok, "{out}");
@@ -7965,7 +7965,7 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
     std::fs::create_dir_all(&work).unwrap();
     std::fs::write(
         work.join("board.yaml"),
-        "grammar: 1\ntask: implement foo\ncontent: []\n",
+        "grammar: 1\ntask: t-0\ncontent: []\n",
     )
     .unwrap();
     let landed = boards

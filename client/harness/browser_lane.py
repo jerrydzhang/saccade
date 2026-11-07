@@ -265,7 +265,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         )
         check(
             "real board task metadata is authored-only",
-            inspection["identity"]["task"] == "saccade-current-system-and-migration",
+            inspection["identity"]["task"] == "t-18",
             str(inspection["identity"]),
         )
         outcomes = wait_rendered(("math", "mermaid"))

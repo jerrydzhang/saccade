@@ -2765,7 +2765,7 @@ async fn board_path(
             ));
         }
     };
-    let path = boards.materialized_path(&task.to_string());
+    let path = boards.materialized_path(&context.birth.0.to_string());
     (
         StatusCode::OK,
         Json(json!({"task": format!("t-{task}"), "path": path.display().to_string()})),
@@ -2850,6 +2850,7 @@ fn boards_status(fail: &crate::boards::BoardsFail) -> StatusCode {
         | BoardsFail::BadBase { .. }
         | BoardsFail::InvalidKey { .. }
         | BoardsFail::UnknownSourceTask { .. }
+        | BoardsFail::TaskMismatch { .. }
         | BoardsFail::WorkingBoard { .. } => StatusCode::BAD_REQUEST,
         BoardsFail::MissingCommit { .. }
         | BoardsFail::UnsavedCheckpoints { .. }
@@ -2989,9 +2990,14 @@ fn board_commit_operation(
     let conn = &mut inner.conn;
     let mut stored: Option<Vec<StoredRecord>> = None;
     let mut revision: Option<usize> = None;
+    let ref_key = world
+        .tasks
+        .get(request.task)
+        .map(|ctx| ctx.birth.0.to_string())
+        .expect("the task resolved before the publish");
     let landed = boards.publish_board(
         task_id,
-        &request.task.to_string(),
+        &ref_key,
         &world,
         &workdir,
         &request.message,
@@ -3163,7 +3169,7 @@ async fn board_edit(
             None => BoardFiles {
                 files: vec![encode_board_file(
                     "board.yaml",
-                    crate::serve::board_wire::fresh_board_text(ctx.task.name.as_str()).as_bytes(),
+                    crate::serve::board_wire::fresh_board_text(query.task).as_bytes(),
                 )?],
             },
         };
@@ -3171,7 +3177,7 @@ async fn board_edit(
             files,
             base: current,
             commit: chosen,
-            task_name: ctx.task.name.as_str().to_string(),
+            task: format!("t-{}", query.task),
         })
     })();
     match outcome {

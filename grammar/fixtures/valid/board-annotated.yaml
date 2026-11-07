@@ -1,5 +1,5 @@
 grammar: 1
-task: gd-quadratic-a1-b100
+task: t-2
 content:
   - text: |
       ## Goal
@@ -7,7 +7,7 @@ content:
       for $a=1$, $b=100$ at step sizes $\eta=0.01$ and $\eta=0.019$.
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
         select: [/content/1]
       content:
@@ -20,7 +20,7 @@ content:
             $y_{k+1}=(1-100\eta)y_k$.
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
         select: [/content/2]
       content:

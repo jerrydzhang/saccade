@@ -23,9 +23,9 @@ fn converted_exercise_boards_keep_their_declared_references() {
     let annotated = common::parse_fixture("valid/board-annotated.yaml");
     let after = common::parse_fixture("valid/board-after.yaml");
     for board in [&before, &annotated, &after] {
-        assert_eq!(board.task, "gd-quadratic-a1-b100");
+        assert_eq!(board.task, "t-2");
         for (task, revision) in board_grammar::incorporations(board) {
-            assert_eq!(task, "source-model");
+            assert_eq!(task, "t-1");
             assert_eq!(revision, "647de6e6d2b90c507bf2d05dacc32740558e0bfc");
         }
     }
@@ -64,6 +64,7 @@ fn every_invalid_fixture_refuses_with_its_declared_kind() {
             "malformed-yaml" => ErrorKind::YamlSyntax,
             "multiple-documents" => ErrorKind::MultipleDocuments,
             "content-not-list" => ErrorKind::WrongType,
+            "task-not-a-reference" => ErrorKind::BadTask,
             "component-no-kind" => ErrorKind::WrongType,
             "component-two-kinds" => ErrorKind::WrongType,
             "too-deep" => ErrorKind::TooDeep,
@@ -95,11 +96,11 @@ fn every_invalid_fixture_refuses_with_its_declared_kind() {
 fn refusal_messages_carry_their_next_step() {
     let no_text = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
         select: [/content/0]
       content: []
@@ -112,7 +113,7 @@ content:
     );
     let unknown = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - table:
       columns: []
@@ -128,11 +129,11 @@ content:
     );
     let revision = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e
         select: [/content/0]
       content:
@@ -150,7 +151,7 @@ content:
     );
     let figure = board_grammar::parse(
         r#"grammar: 1
-task: tone-arm-resonance
+task: t-4
 content:
   - figure:
       input: /assets/plinth.png
@@ -165,7 +166,7 @@ content:
         "{}",
         figure.message
     );
-    let version = board_grammar::parse("grammar: 2\ntask: floop-index-backfill\ncontent: []\n")
+    let version = board_grammar::parse("grammar: 2\ntask: t-0\ncontent: []\n")
         .expect_err("grammar 2 is refused");
     assert!(
         version.message.contains("write the board in grammar 1"),
@@ -178,7 +179,7 @@ content:
 fn nested_duplicate_keys_are_refused() {
     let error = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - group:
       title: A
@@ -195,7 +196,7 @@ content:
 #[test]
 fn quoted_and_plain_duplicate_keys_are_refused() {
     let error = board_grammar::parse(
-        "grammar: 1\n\"task\": floop-index-backfill\ntask: source-model\ncontent: []\n",
+        "grammar: 1\n\"task\": floop-index-backfill\ntask: t-1\ncontent: []\n",
     )
     .expect_err("the quoted and plain task keys are one key twice");
     assert_eq!(error.kind, ErrorKind::DuplicateKey);
@@ -205,7 +206,7 @@ fn quoted_and_plain_duplicate_keys_are_refused() {
 fn anchors_are_refused_even_without_an_alias() {
     let error = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - group: &setup
       content:
@@ -221,11 +222,11 @@ content:
 fn blank_receiving_text_is_not_substantive() {
     let error = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
         select: [/content/0]
       content:
@@ -250,11 +251,11 @@ fn nested_incorporation_text_does_not_satisfy_the_outer_receiving_rule() {
 fn receiving_text_nested_in_a_group_counts() {
     let board = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
         select: [/content/0]
       content:
@@ -272,11 +273,11 @@ content:
 fn uppercase_revisions_are_refused() {
     let error = board_grammar::parse(
         r#"grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647DE6E6D2B90C507BF2D05DACC32740558E0BFC
         select: [/content/0]
       content:
@@ -293,22 +294,19 @@ fn the_supported_range_is_exactly_one() {
     assert_eq!(*SUPPORTED_GRAMMAR_VERSIONS.start(), 1);
     assert_eq!(*SUPPORTED_GRAMMAR_VERSIONS.end(), 1);
     for version in [0, 2, -1] {
-        let error = board_grammar::parse(&format!(
-            "grammar: {version}\ntask: floop-index-backfill\ncontent: []\n"
-        ))
-        .expect_err("the version outside the range is refused");
+        let error = board_grammar::parse(&format!("grammar: {version}\ntask: t-0\ncontent: []\n"))
+            .expect_err("the version outside the range is refused");
         assert_eq!(error.kind, ErrorKind::GrammarVersion);
     }
 }
 
 #[test]
 fn empty_content_and_empty_text_still_parse() {
-    let board = board_grammar::parse("grammar: 1\ntask: floop-index-backfill\ncontent: []\n")
+    let board = board_grammar::parse("grammar: 1\ntask: t-0\ncontent: []\n")
         .expect("the empty content list passes");
     assert!(board.content.is_empty());
-    let board =
-        board_grammar::parse("grammar: 1\ntask: floop-index-backfill\ncontent:\n  - text: \"\"\n")
-            .expect("the empty text component passes");
+    let board = board_grammar::parse("grammar: 1\ntask: t-0\ncontent:\n  - text: \"\"\n")
+        .expect("the empty text component passes");
     assert_eq!(
         board.content[0],
         Component::Text {
@@ -319,7 +317,7 @@ fn empty_content_and_empty_text_still_parse() {
 
 fn nesting(depth: usize) -> String {
     let spaces = |count: usize| " ".repeat(count);
-    let mut text = String::from("grammar: 1\ntask: floop-index-backfill\ncontent:\n");
+    let mut text = String::from("grammar: 1\ntask: t-0\ncontent:\n");
     let mut pad = 2usize;
     for _ in 0..depth {
         text.push_str(&format!(
@@ -342,7 +340,7 @@ fn nesting_at_the_depth_cap_passes_and_one_deeper_refuses() {
     // the chain counts its components: 99 groups plus the innermost text is 100 deep
     let deep = nesting(board_grammar::MAX_NESTING_DEPTH - 1);
     let board = board_grammar::parse(&deep).expect("the board at the depth cap passes");
-    assert_eq!(board.task, "floop-index-backfill");
+    assert_eq!(board.task, "t-0");
     let deeper = nesting(board_grammar::MAX_NESTING_DEPTH);
     let error =
         board_grammar::parse(&deeper).expect_err("the board one deeper than the cap is refused");
@@ -369,7 +367,7 @@ fn all_kinds_fixture_shapes_match_the_model() {
         }
     );
     let expected_source = Source {
-        task: "cartridge-compliance-notes".into(),
+        task: "t-3".into(),
         revision: "4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f".into(),
         select: vec![
             board_grammar::SelectPath::parse("/content/1").expect("the path parses"),

@@ -12,7 +12,7 @@ fn figure_paths_come_back_in_document_order() {
 fn repeated_references_list_once() {
     let board = board_grammar::parse(
         r#"grammar: 1
-task: tone-arm-resonance
+task: t-4
 content:
   - group:
       content:

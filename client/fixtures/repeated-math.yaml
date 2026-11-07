@@ -1,5 +1,5 @@
 grammar: 1
-task: repeated-math
+task: t-13
 content:
   - text: |
       The same formula appears at two distinct source locations:

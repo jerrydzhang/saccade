@@ -1,9 +1,9 @@
 grammar: 1
-task: floop-index-backfill
+task: t-0
 content:
   - incorporation:
       source:
-        task: source-model
+        task: t-1
         revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
         select: ["/content"]
       content:

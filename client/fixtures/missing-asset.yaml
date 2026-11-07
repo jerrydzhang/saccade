@@ -1,5 +1,5 @@
 grammar: 1
-task: missing-asset
+task: t-10
 content:
   - text: |
       The figure below points at a file that does not exist on this

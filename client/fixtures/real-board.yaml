@@ -1,5 +1,5 @@
 grammar: 1
-task: first-board-explanation
+task: t-12
 content:
   - text: |
       # The board viewer, explained on itself
@@ -25,7 +25,7 @@ content:
       support would be a law change, not a surprise.
   - incorporation:
       source:
-        task: saccade-axioms
+        task: t-17
         revision: a015b6e7c8d940f2a1b2c3d4e5f60718293a4b5c
         select: [/content/0]
       content:

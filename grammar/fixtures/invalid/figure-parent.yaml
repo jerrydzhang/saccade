@@ -1,5 +1,5 @@
 grammar: 1
-task: tone-arm-resonance
+task: t-4
 content:
   - figure:
       input: ../shared/plinth-section.png

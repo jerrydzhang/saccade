@@ -1,5 +1,5 @@
 grammar: 1
-task: wrapped-math
+task: t-16
 content:
   - text: |
       ## Long inline expressions

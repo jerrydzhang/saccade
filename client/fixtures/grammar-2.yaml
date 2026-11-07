@@ -1,5 +1,5 @@
 grammar: 2
-task: future-grammar
+task: t-6
 content:
   - text: |
       This board declares a grammar major this viewer does not support.

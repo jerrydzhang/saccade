@@ -236,7 +236,7 @@
         <code class="location-path" data-control="board:location">{view.location.path}</code>
         <span class="status status-{view.status}">{view.status}</span>
         {#if view.board?.task}
-          <span class="task-meta">task: <code>{view.board.task}</code> (authored metadata)</span>
+          <span class="task-meta">task: <code>{view.board.task}</code> (authored reference)</span>
         {/if}
       {:else}
         <span class="status status-empty">no board open</span>

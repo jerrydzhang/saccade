@@ -1,5 +1,5 @@
 grammar: 1
-task: tone-arm-resonance
+task: t-1
 content:
   - text: |
       ## Question
@@ -20,7 +20,7 @@ content:
       content:
         - incorporation:
             source:
-              task: cartridge-compliance-notes
+              task: t-3
               revision: 4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f
               select: [/content/1, /content/2/group/content/0]
             content:

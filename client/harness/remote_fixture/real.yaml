@@ -1,4 +1,4 @@
-task: remote-mesh
+task: t-0
 content:
   - text: |
       This board is served by a second private core inside the

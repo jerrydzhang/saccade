@@ -1,8 +1,8 @@
 // The read model for board grammar 1. The shapes here mirror the
 // board-grammar crate's Board and Component one for one, plus the source
 // positions rendering needs; loading a declaration never establishes a
-// tracker task association, and the `task` string stays authored
-// metadata.
+// tracker task association, and the `task` reference stays authored
+// content - the viewer trusts no board's claim of which task it names.
 
 import type { Diagnostic, SourceRange } from "./errors.ts";
 

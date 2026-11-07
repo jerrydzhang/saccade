@@ -1,5 +1,5 @@
 grammar: 1
-task: large-diagram
+task: t-8
 content:
   - text: |
       ## A large diagram

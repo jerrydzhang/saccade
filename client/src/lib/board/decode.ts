@@ -227,7 +227,18 @@ export function decodeBoard(text: string): DecodeResult {
       issueAt(
         {
           code: "wrong-type",
-          message: `the board's 'task' is the task's name as text; found ${describe(taskPair.value)}`,
+          message: `the board's 'task' names the task as t-N; found ${describe(taskPair.value)}`,
+          path: ["task"],
+        },
+        rangeOf(text, taskPair.value),
+      ),
+    );
+  } else if (!/^t\-(0|[1-9][0-9]*)$/.test(taskPair.value.value)) {
+    errors.push(
+      issueAt(
+        {
+          code: "bad-task",
+          message: `the board's 'task' is '${taskPair.value.value}'; name the task as t-N, the tracker's own address`,
           path: ["task"],
         },
         rangeOf(text, taskPair.value),

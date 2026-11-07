@@ -1,5 +1,5 @@
 grammar: 1
-task: unknown-kind-demo
+task: t-15
 content:
   - text: |
       This board carries a component kind this build does not know. The

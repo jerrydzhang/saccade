@@ -50,6 +50,35 @@ fn scan_error_to_parse_error(error: ScanError) -> ParseError {
     syntax_error(error)
 }
 
+// the board names its task the way the tracker addresses it: t-N,
+// dense, no leading zeros - the identity the fold derives
+fn valid_task(task: String) -> Result<String, ParseError> {
+    let number = task
+        .strip_prefix("t-")
+        .ok_or_else(|| bad_task(&task))
+        .and_then(|digits| {
+            if digits.is_empty() || (digits.len() > 1 && digits.starts_with('0')) {
+                Err(bad_task(&task))
+            } else {
+                digits
+                    .parse::<usize>()
+                    .map(|_| ())
+                    .map_err(|_| bad_task(&task))
+            }
+        });
+    number.map(|_| task)
+}
+
+fn bad_task(task: &str) -> ParseError {
+    ParseError {
+        kind: ErrorKind::BadTask,
+        at: Where::Board,
+        message: format!(
+            "the board's 'task' is '{task}'; name the task as t-N, the tracker's own address"
+        ),
+    }
+}
+
 fn multiple_documents(at: &Where) -> ParseError {
     ParseError {
         kind: ErrorKind::MultipleDocuments,
@@ -218,14 +247,14 @@ fn build_board(root: &Yaml) -> Result<Board, ParseError> {
     let task = task.ok_or_else(|| ParseError {
         kind: ErrorKind::MissingField,
         at: Where::Board,
-        message: "the board does not name its task; add 'task: <task name>' to the top mapping"
-            .into(),
+        message: "the board does not name its task; add 'task: t-<n>' to the top mapping".into(),
     })?;
     let task = plain_string(
         task,
         Where::Board,
-        "the board's 'task' is the task's name as text",
+        "the board's 'task' names the task as t-N",
     )?;
+    let task = valid_task(task)?;
     let content = content.ok_or_else(|| ParseError {
         kind: ErrorKind::MissingField,
         at: Where::Board,

@@ -29,10 +29,11 @@ pub struct BoardFiles {
     pub files: Vec<BoardFile>,
 }
 
-/// The board content a first edit starts from: the task's name, the
-/// grammar this build speaks, and no components yet.
-pub fn fresh_board_text(task_name: &str) -> String {
-    format!("grammar: 1\ntask: {task_name}\ncontent: []\n")
+/// The board content a first edit starts from: the task named as the
+/// tracker addresses it, the grammar this build speaks, and no
+/// components yet.
+pub fn fresh_board_text(task: usize) -> String {
+    format!("grammar: 1\ntask: t-{task}\ncontent: []\n")
 }
 
 impl BoardFiles {
@@ -222,7 +223,8 @@ pub struct EditReply {
     pub files: BoardFiles,
     pub base: Option<String>,
     pub commit: Option<String>,
-    pub task_name: String,
+    /// The committing task, named as the board's task field must
+    pub task: String,
 }
 
 #[derive(Deserialize, Serialize)]

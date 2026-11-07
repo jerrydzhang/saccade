@@ -5,7 +5,7 @@ import { decodeBoard, MAX_NESTING_DEPTH, SUPPORTED_GRAMMAR_VERSIONS } from "../s
 const VALID_REVISION = "647de6e6d2b90c507bf2d05dacc32740558e0bfc";
 
 function validBoard(...content: string[]): string {
-  return ["grammar: 1", "task: investigate-step-size", "content:", ...content].join("\n");
+  return ["grammar: 1", "task: t-0", "content:", ...content].join("\n");
 }
 
 test("the supported grammar range is exactly version 1", () => {
@@ -28,7 +28,7 @@ test("a grammar 1 board decodes with authored task metadata", () => {
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
   assert.equal(result.board.grammar, 1);
-  assert.equal(result.board.task, "investigate-step-size");
+  assert.equal(result.board.task, "t-0");
   assert.equal(result.board.content.length, 2);
   const group = result.board.content[1];
   if (!group || group.kind !== "group") throw new Error("second block is a group");
@@ -37,7 +37,7 @@ test("a grammar 1 board decodes with authored task metadata", () => {
 });
 
 test("a board without a grammar field is refused, not treated as legacy", () => {
-  const text = ["task: pre-grammar", "content:", "  - text: body"].join("\n");
+  const text = ["task: t-0", "content:", "  - text: body"].join("\n");
   const result = decodeBoard(text);
   assert.equal(result.status, "invalid");
   if (result.status !== "invalid") return;
@@ -80,7 +80,7 @@ test("malformed YAML is a structured error, never a board", () => {
 });
 
 test("duplicate keys are refused, not silently last-wins", () => {
-  const text = ["grammar: 1", "task: one", "task: two", "content:", "  - text: body"].join("\n");
+  const text = ["grammar: 1", "task: t-1", "task: t-2", "content:", "  - text: body"].join("\n");
   const result = decodeBoard(text);
   assert.equal(result.status, "invalid");
   if (result.status !== "invalid") return;
@@ -104,7 +104,7 @@ test("YAML anchors and aliases are refused", () => {
 });
 
 test("an unknown field at the board top is a refusal, matching the crate", () => {
-  const text = ["grammar: 1", "task: demo", "retirement: retired", "content:", "  - text: body"].join("\n");
+  const text = ["grammar: 1", "task: t-2", "retirement: retired", "content:", "  - text: body"].join("\n");
   const result = decodeBoard(text);
   assert.equal(result.status, "invalid");
   if (result.status !== "invalid") return;
@@ -150,7 +150,7 @@ test("an incorporation keeps its claimed task, revision and select paths", () =>
   const text = validBoard(
     "  - incorporation:",
     "      source:",
-    "        task: source-model",
+    "        task: t-1",
     `        revision: ${VALID_REVISION}`,
     "        select: [/content/1/group/content/0]",
     "      content:",
@@ -162,7 +162,7 @@ test("an incorporation keeps its claimed task, revision and select paths", () =>
   if (result.status !== "ok") return;
   const block = result.board.content[0];
   if (!block || block.kind !== "incorporation") throw new Error("first block is an incorporation");
-  assert.equal(block.source.task, "source-model");
+  assert.equal(block.source.task, "t-1");
   assert.equal(block.source.revision, VALID_REVISION);
   assert.deepEqual(block.source.select, ["/content/1/group/content/0"]);
   assert.equal(block.content.length, 1);
@@ -182,7 +182,7 @@ test("a source revision must be the full lowercase hex commit", () => {
     const text = validBoard(
       "  - incorporation:",
       "      source:",
-      "        task: source-model",
+      "        task: t-1",
       `        revision: ${revision}`,
       "        select: [/content/0]",
       "      content:",
@@ -200,7 +200,7 @@ test("a select path must be positional and name whole components", () => {
     const text = validBoard(
       "  - incorporation:",
       "      source:",
-      "        task: source-model",
+      "        task: t-1",
       `        revision: ${VALID_REVISION}`,
       `        select: [${path}]`,
       "      content:",
@@ -217,7 +217,7 @@ test("an incorporation selects at least one path", () => {
   const text = validBoard(
     "  - incorporation:",
     "      source:",
-    "        task: source-model",
+    "        task: t-1",
     `        revision: ${VALID_REVISION}`,
     "        select: []",
     "      content:",
@@ -233,7 +233,7 @@ test("an incorporation carries receiving text of its own", () => {
   const withoutText = validBoard(
     "  - incorporation:",
     "      source:",
-    "        task: source-model",
+    "        task: t-1",
     `        revision: ${VALID_REVISION}`,
     "        select: [/content/0]",
     "      content:",
@@ -249,7 +249,7 @@ test("an incorporation carries receiving text of its own", () => {
   const throughGroup = validBoard(
     "  - incorporation:",
     "      source:",
-    "        task: source-model",
+    "        task: t-1",
     `        revision: ${VALID_REVISION}`,
     "        select: [/content/0]",
     "      content:",
@@ -262,13 +262,13 @@ test("an incorporation carries receiving text of its own", () => {
   const onlyNested = validBoard(
     "  - incorporation:",
     "      source:",
-    "        task: source-model",
+    "        task: t-1",
     `        revision: ${VALID_REVISION}`,
     "        select: [/content/0]",
     "      content:",
     "        - incorporation:",
     "            source:",
-    "              task: inner-source",
+    "              task: t-2",
     "              revision: " + VALID_REVISION,
     "              select: [/content/0]",
     "            content:",
@@ -303,7 +303,7 @@ test("a figure input stays inside the board tree", () => {
 });
 
 test("an empty content list decodes; grammar 1 allows an empty board", () => {
-  const text = ["grammar: 1", "task: empty-demo", "content: []"].join("\n");
+  const text = ["grammar: 1", "task: t-2", "content: []"].join("\n");
   const result = decodeBoard(text);
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
@@ -322,7 +322,7 @@ test("an annotation decodes as its own block kind", () => {
 
 test("nesting past the depth cap refuses, matching the crate", () => {
   const depth = MAX_NESTING_DEPTH + 1;
-  const lines = ["grammar: 1", "task: too-deep", "content:"];
+  const lines = ["grammar: 1", "task: t-2", "content:"];
   for (let level = 0; level < depth; level++) {
     lines.push("  ".repeat(1 + 2 * level) + "- group:");
     lines.push("  ".repeat(3 + 2 * level) + "content:");

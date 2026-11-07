@@ -135,7 +135,7 @@ test("the large-diagram fixture carries one big mermaid fence", () => {
   assert.ok(diagrams[0] && diagrams[0].text.split("\n").length > 15, "the diagram is genuinely large");
 });
 
-const MIGRATION_BOARD_SHA256 = "5007898b238802b1e0bca6e6f1b6df26f2015a16dac15d505b51302964ce46e1";
+const MIGRATION_BOARD_SHA256 = "9c0109e0beba5c62ce255f9f74b42b86494146fe6c5a2994ff3cf972852eb38f";
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -154,7 +154,7 @@ test("the migration board decodes under grammar 1", () => {
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
   assert.equal(result.board.grammar, 1);
-  assert.equal(result.board.task, "saccade-current-system-and-migration");
+  assert.equal(result.board.task, "t-18");
   assert.equal(result.board.diagnostics.length, 0, "no stray keys in the converted board");
   const kinds = new Set(result.board.content.map((block) => block.kind));
   assert.ok(kinds.has("text"));

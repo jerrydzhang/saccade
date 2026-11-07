@@ -38,6 +38,8 @@ pub enum ErrorKind {
     BadFigurePath,
     /// A select path does not match the positional path language.
     BadSelectPath,
+    /// The board's task field does not name a task as t-N.
+    BadTask,
     /// An incorporation selects no component.
     EmptySelect,
     /// An incorporation carries no non-blank receiving text.
