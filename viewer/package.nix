@@ -20,8 +20,6 @@
   pango,
   dbus,
   alsa-lib,
-  dejavu_fonts,
-  makeFontsConf,
 }: let
   # the viewer's own frontend and npm graph: separate sources,
   # lock and hash, never merged into the tracker crate or the workbench
@@ -75,9 +73,9 @@ in {
   };
 
   # the retained native app: the Tauri shell built against the
-  # bundled frontend dist, wrapped with its runtime libraries and the
-  # pinned fontconfig - a foreground binary a human runs with an
-  # explicit board path. No deployment, install or remote transfer.
+  # bundled frontend dist, wrapped with its runtime libraries - a
+  # foreground binary a human runs with an explicit board path. No
+  # deployment, install or remote transfer.
   app = let
     webkitLibs = lib.makeLibraryPath [
       webkitgtk_4_1
@@ -89,9 +87,6 @@ in {
       dbus
       alsa-lib
     ];
-    fontsConf = makeFontsConf {
-      fontDirectories = [dejavu_fonts];
-    };
     cargoSrc = lib.sourceByRegex ./src-tauri [
       "^src$"
       "^src/.*$"
@@ -131,8 +126,7 @@ in {
       '';
       postInstall = ''
         wrapProgram $out/bin/saccade-board-viewer \
-          --prefix LD_LIBRARY_PATH : ${webkitLibs} \
-          --set FONTCONFIG_FILE ${fontsConf} \
+          --prefix LD_LIBRARY_PATH : ${webkitLibs}
       '';
       meta.mainProgram = "saccade-board-viewer";
     };
