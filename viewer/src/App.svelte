@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ViewerModel } from "./lib/viewmodel.ts";
-  import { fixtureNames, type Machine, type Location } from "./lib/sources.ts";
+  import { fixtureNames, tauriInvoke, SourceUnavailableError, type Machine, type Location } from "./lib/sources.ts";
   import { projectBoard, searchUnits, type SearchOccurrence } from "./lib/projection.ts";
   import { renderBoard } from "./lib/render.ts";
   import { hydrate } from "./lib/hydrate.ts";
@@ -29,6 +29,44 @@
     });
     return unsubscribe;
   });
+
+  // Foreground explicit-board open: the shell hands the launch argument
+  // over the bridge and the app opens it through the host lane - the
+  // same handlers the controls use. Each step logs a marker so the
+  // native evidence can tell "webview never loaded" (no startup line),
+  // "invoke failed", and "open failed" apart.
+  async function openInitialBoard(): Promise<void> {
+    let invoke: ReturnType<typeof tauriInvoke>;
+    try {
+      invoke = tauriInvoke();
+    } catch (error) {
+      if (error instanceof SourceUnavailableError) {
+        console.log("[viewer] startup: no bridge; explicit controls only");
+        return;
+      }
+      throw error;
+    }
+    try {
+      console.log("[viewer] startup: bridge present");
+      const path = (await invoke("initial_board")) as string | null;
+      if (!path) {
+        console.log("[viewer] no initial board; starting empty");
+        return;
+      }
+      console.log(`[viewer] initial board requested: ${path}`);
+      await model.open({ machine: "host", path });
+      const snap = model.snapshot;
+      if (snap.board) {
+        console.log(`[viewer] initial board opened: ${snap.board.content.length} blocks`);
+      } else {
+        const detail = snap.laneMessage ?? snap.errors.map((e) => e.message).join("; ");
+        console.error(`[viewer] initial board FAILED: ${detail || "no board"}`);
+      }
+    } catch (error) {
+      console.error(`[viewer] initial board FAILED: ${String(error)}`);
+    }
+  }
+  void openInitialBoard();
 
   const fixtures = fixtureNames();
   let fixturePath = $state(fixtures[0] ?? "");

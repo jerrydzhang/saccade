@@ -76,6 +76,7 @@ def start_weston(weston_bin: str, wayland_name: str, logs: pathlib.Path) -> subp
                 weston_bin,
                 "--backend=headless",
                 f"--socket={wayland_name}",
+                "--renderer=pixman",
                 "--debug",
                 "--shell=kiosk-shell.so",
             ],
@@ -136,6 +137,7 @@ def main() -> int:
     print(f"[native] app launched in foreground on {board}", flush=True)
 
     frame_paths: list[str] = []
+    alive_at_start = app.poll() is None
     try:
         for index in range(1, FRAME_COUNT + 1):
             if app.poll() is not None:
@@ -181,7 +183,12 @@ def main() -> int:
                 weston.kill()
                 weston.wait(timeout=5)
 
-    check("app stayed alive across frame captures", len(frame_paths) == FRAME_COUNT, str(frame_paths))
+    # liveness is recorded separately from the frame count: poll state
+    # at capture start, the exit code at teardown, then the frames
+    exit_code = app.poll()
+    check("app alive when captures began", alive_at_start, f"poll={app.poll()}")
+    check("app alive after captures", exit_code is None, f"exit={exit_code}")
+    check("frames captured", len(frame_paths) == FRAME_COUNT, str(frame_paths))
     app_log_text = app_log_path.read_text(errors="replace")
     bridge_lines = app_log_text.count("[bridge]")
     check("bridge produced outcome lines", bridge_lines > 0, f"{bridge_lines} lines")
