@@ -1882,11 +1882,11 @@ fn board_wire_routes_hold_their_contracts() {
         .build()
         .call()
         .unwrap();
-    assert_eq!(
-        cors.header("access-control-allow-origin").unwrap(),
-        "*",
-        "the viewer reads cross-origin",
-    );
+    let origin = cors
+        .headers()
+        .get("access-control-allow-origin")
+        .and_then(|value| value.to_str().ok());
+    assert_eq!(origin, Some("*"), "the viewer reads cross-origin");
 
     // the path route refuses a task with no board, and a bad task id
     let created = ureq::post(&format!("{url}/api/v1/command"))
