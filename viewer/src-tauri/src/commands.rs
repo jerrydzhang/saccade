@@ -15,6 +15,10 @@ pub fn set_initial_board(path: Option<String>) {
 /// The explicit board path handed to the foreground launch, if any.
 #[tauri::command]
 pub fn initial_board() -> Option<String> {
+    eprintln!(
+        "[bridge] initial_board invoked: {:?}",
+        INITIAL_BOARD.get().cloned().flatten()
+    );
     INITIAL_BOARD.get().cloned().flatten()
 }
 

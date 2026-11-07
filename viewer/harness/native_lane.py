@@ -77,6 +77,7 @@ def start_weston(weston_bin: str, wayland_name: str, logs: pathlib.Path) -> subp
                 "--backend=headless",
                 f"--socket={wayland_name}",
                 "--renderer=pixman",
+                "--fake-seat",
                 "--debug",
                 "--shell=kiosk-shell.so",
             ],
@@ -138,6 +139,7 @@ def main() -> int:
 
     frame_paths: list[str] = []
     alive_at_start = app.poll() is None
+    exit_code: int | None = None
     try:
         for index in range(1, FRAME_COUNT + 1):
             if app.poll() is not None:
@@ -168,6 +170,7 @@ def main() -> int:
                 detail = result.stderr.decode(errors="replace")[:120]
                 check(f"frame {index} captured", False, f"rc={result.returncode} {detail}")
     finally:
+        exit_code = app.poll()
         if app.poll() is None:
             app.terminate()
             try:
@@ -184,14 +187,24 @@ def main() -> int:
                 weston.wait(timeout=5)
 
     # liveness is recorded separately from the frame count: poll state
-    # at capture start, the exit code at teardown, then the frames
-    exit_code = app.poll()
-    check("app alive when captures began", alive_at_start, f"poll={app.poll()}")
-    check("app alive after captures", exit_code is None, f"exit={exit_code}")
+    # at capture start, the exit code read BEFORE our teardown, then the
+    # frames. Evidence checks demand the real markers: the webview's
+    # startup line (frontend executed) and a read_declaration outcome
+    # (the board actually opened) - not just any [bridge] line.
+    check("app alive when captures began", alive_at_start, f"poll={alive_at_start}")
+    check("app alive at teardown", exit_code is None, f"exit={exit_code}")
     check("frames captured", len(frame_paths) == FRAME_COUNT, str(frame_paths))
     app_log_text = app_log_path.read_text(errors="replace")
-    bridge_lines = app_log_text.count("[bridge]")
-    check("bridge produced outcome lines", bridge_lines > 0, f"{bridge_lines} lines")
+    check(
+        "webview frontend executed",
+        "[viewer] startup" in app_log_text,
+        "[viewer] startup marker absent",
+    )
+    check(
+        "board open through the bridge",
+        "[bridge] read_declaration" in app_log_text,
+        "no read_declaration outcome",
+    )
     for line in app_log_text.splitlines():
         if line.startswith("[bridge]"):
             print(f"[native]   {line}", flush=True)

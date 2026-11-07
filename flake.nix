@@ -450,6 +450,9 @@
           cargoLock = {
             lockFile = ./viewer/src-tauri/Cargo.lock;
           };
+          # without tauri's custom-protocol feature the release binary
+          # dials the dev server instead of serving the embedded dist
+          buildFeatures = "custom-protocol";
           nativeBuildInputs = [pkgs.pkg-config pkgs.makeWrapper];
           buildInputs = [
             pkgs.webkitgtk_4_1
