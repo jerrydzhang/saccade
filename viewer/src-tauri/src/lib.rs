@@ -33,7 +33,6 @@ pub fn run() {
             commands::viewer_identity,
             commands::initial_board,
             commands::write_clipboard,
-            commands::read_clipboard,
         ])
         .setup(move |app| {
             if console_requested {
@@ -48,6 +47,14 @@ pub fn run() {
                                 if let Some(settings) = WebViewExt::settings(&inner) {
                                     settings.set_enable_write_console_messages_to_stdout(true);
                                 }
+                                // the engine's context menu carries a Copy
+                                // entry that runs the engine copy command -
+                                // which loses math natively (no copy event
+                                // dispatches); copying is Ctrl+C through the
+                                // bridge, so the menu is suppressed wholesale
+                                inner.connect_context_menu(|_webview, _menu, _event, _hit_test| {
+                                    true
+                                });
                                 eprintln!(
                                     "[bridge] FONTCONFIG_FILE: {}",
                                     std::env::var("FONTCONFIG_FILE")
