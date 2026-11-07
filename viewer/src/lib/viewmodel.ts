@@ -6,6 +6,7 @@
 import type { Diagnostic, StructuredIssue } from "./errors.ts";
 import { decodeBoard } from "./decode.ts";
 import type { Board, FigureBlock } from "./model.ts";
+import { crateVerdict } from "./validate.ts";
 import { sourceFor, SourceUnavailableError, type Location, type Machine } from "./sources.ts";
 import { parseLocation } from "./location.ts";
 import type { CopyMode } from "./copy.ts";
@@ -114,9 +115,48 @@ export class ViewerModel {
       });
       return;
     }
+    const verdict = await this.validate(text);
+    if (token !== this.generation) return;
     const result = decodeBoard(text);
     if (token !== this.generation) return;
+
+    // The crate's refusal is final in the native lanes; the presentation
+    // decoder never overrides it.
+    if (verdict && verdict.verdict === "refused") {
+      const issue: StructuredIssue = { code: "board-refused", message: verdict.message };
+      if (verdict.line !== undefined) {
+        issue.line = verdict.line;
+        issue.column = verdict.column ?? 0;
+      }
+      this.set({
+        status: "invalid",
+        board: null,
+        rawText: text,
+        errors: [issue],
+        diagnostics: [],
+        renderOutcomes: [],
+        renderGeneration: null,
+      });
+      return;
+    }
     if (result.status === "invalid") {
+      if (verdict && verdict.verdict === "ok") {
+        // The mirror refused text the crate accepted: a decoder bug.
+        // Never render an unvalidated board; refuse with both accounts.
+        const first = result.errors[0];
+        const message = `decoder disagreement: the grammar validator accepted the board, the presentation decoder refused it (${first?.code}: ${first?.message})`;
+        this.set({
+          status: "invalid",
+          board: null,
+          rawText: text,
+          errors: [{ code: "decoder-mismatch", message }, ...result.errors],
+          diagnostics: [],
+          renderOutcomes: [],
+          renderGeneration: null,
+          laneMessage: message,
+        });
+        return;
+      }
       this.set({
         status: "invalid",
         board: null,
@@ -137,6 +177,19 @@ export class ViewerModel {
       renderOutcomes: [],
       renderGeneration: token,
     });
+  }
+
+  /** The native gate: admission through the shared board-grammar crate.
+   * Null in the browser lane, where the mirror decoder alone decides. A
+   * bridge that fails to answer refuses the board loudly; it never
+   * degrades silently to mirror-only admission. */
+  private async validate(text: string): Promise<Awaited<ReturnType<typeof crateVerdict>>> {
+    try {
+      return await crateVerdict(text);
+    } catch (error) {
+      const message = error instanceof SourceUnavailableError ? error.message : String(error);
+      return { verdict: "refused", kind: "bridge-invalid", message };
+    }
   }
 
   /** Parse an explicit location string and open it; a string that is
@@ -164,7 +217,7 @@ export class ViewerModel {
   async loadFigureAsset(location: Location, block: FigureBlock): Promise<Uint8Array | string> {
     const token = this.generation;
     try {
-      const asset = await sourceFor(location.machine).loadAsset(location, block.path);
+      const asset = await sourceFor(location.machine).loadAsset(location, block.input);
       if (token !== this.generation) return "stale";
       return asset.bytes;
     } catch (error) {

@@ -4,6 +4,7 @@
 //! herdr-core's read-only socket face for machine-named locations; the
 //! frontend stays renderer-hostile to everything else.
 
+pub mod board_validate;
 pub mod commands;
 
 pub fn run() {
@@ -50,6 +51,7 @@ pub fn run() {
             commands::viewer_identity,
             commands::initial_board,
             commands::write_clipboard,
+            board_validate::validate_board,
         ])
         .setup(move |app| {
             if console_requested {

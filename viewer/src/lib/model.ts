@@ -1,7 +1,8 @@
-// The provisional board read model. The YAML grammar is an explicitly
-// provisional input adapter (t-71 scope), not a ratified stored schema:
-// loading a declaration never establishes a tracker task association, and
-// the `task` string stays authored metadata.
+// The read model for board grammar 1. The shapes here mirror the
+// board-grammar crate's Board and Component one for one, plus the source
+// positions rendering needs; loading a declaration never establishes a
+// tracker task association, and the `task` string stays authored
+// metadata.
 
 import type { Diagnostic, SourceRange } from "./errors.ts";
 
@@ -10,7 +11,8 @@ export type Block =
   | GroupBlock
   | AnnotationBlock
   | IncorporationBlock
-  | FigureBlock;
+  | FigureBlock
+  | UnknownBlock;
 
 export type TextBlock = {
   kind: "text";
@@ -27,40 +29,53 @@ export type AnnotationBlock = {
 export type GroupBlock = {
   kind: "group";
   title?: string;
-  relation?: string;
   content: Block[];
   pos: SourceRange;
 };
 
 export type IncorporationBlock = {
   kind: "incorporation";
-  id: string;
   source: IncorporationSource;
   content: Block[];
   pos: SourceRange;
 };
 
 /**
- * A declared incorporation claim. Rendering it validates nothing: the task,
- * revision and select path are displayed exactly as authored.
+ * A declared incorporation claim. Rendering it validates nothing: the
+ * task, revision and select paths are displayed exactly as authored.
  */
 export type IncorporationSource = {
   task: string;
   revision: string;
-  select?: string[];
+  select: string[];
 };
 
 export type FigureBlock = {
   kind: "figure";
-  /** Declaration-relative path, resolved on the declaration's machine. */
-  path: string;
-  caption?: string;
+  /** Board-tree-relative path, resolved on the declaration's machine. */
+  input: string;
+  caption: string;
+  pos: SourceRange;
+};
+
+/**
+ * A component whose kind this build does not know: a kind admitted by a
+ * newer minor revision of the supported grammar. It never refuses the
+ * board; it renders as its raw authored source beside a diagnostic.
+ */
+export type UnknownBlock = {
+  kind: "unknown";
+  name: string;
+  source: string;
   pos: SourceRange;
 };
 
 export type Board = {
+  /** The grammar version the board declares; decode accepts only the
+   * supported versions, so this is always one of them. */
+  grammar: number;
   /** Authored metadata only; never a tracker association. */
-  task: string | null;
+  task: string;
   content: Block[];
   diagnostics: Diagnostic[];
 };

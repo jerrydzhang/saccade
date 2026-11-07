@@ -1,0 +1,15 @@
+grammar: 1
+task: unknown-kind-demo
+content:
+  - text: |
+      This board carries a component kind this build does not know. The
+      viewer refuses nothing here: it reports the unknown component as a
+      diagnostic and renders it below as its raw source, the way the
+      earlier unknown-keys fixture kept stray keys visible. A new kind is
+      admitted only by ratification.
+  - changelog:
+      added:
+        - the changelog kind, admitted in some future minor grammar
+  - text: |
+      The component above renders from its authored bytes; it is never
+      silently dropped and never manufactured into a known shape.

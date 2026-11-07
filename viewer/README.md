@@ -32,6 +32,22 @@ machine /path/b.yaml`. Fixtures live in `fixtures/` and remain a
 dev/test path (the browser lane and the tests address them through the
 inspection surface, not the human UI).
 
+Grammar versions: the viewer declares the versions it renders - exactly
+1 today, the same range the shared `board-grammar` crate parses. A board
+declaring no grammar version, or an unknown major version, refuses with
+a message that names the supported versions; there is no legacy
+interpretation. A component kind the build does not know (a newer minor
+grammar's admission) never refuses the board: it renders as its raw
+authored source beside a diagnostic.
+
+The validation split: admission is the shared crate's job on the Tauri
+side (`validate_board`, a path dependency), and the native lanes refuse
+on its verdict; the frontend keeps only the presentation decoder, which
+mirrors the crate's contract exactly so the browser lane (no bridge)
+behaves identically. Parity over the shared fixture corpus is pinned by
+tests on both sides: this repository's node tests and the
+`viewer-native-check` cargo suite read the same `fixtures/` files.
+
 Keys:
 
 - `Ctrl+F` opens the search bar; `Escape` closes it; `Enter` and
@@ -54,10 +70,12 @@ there, and the read itself uses the canonical path. Bytes over the 8 MB
 exec cap, or flagged `truncated`, and text reads that stopped inside
 the file, are refused with an error - never partially rendered.
 
-Contracts this reader holds (pinned by `tests/`):
+Contracts this reader holds (pinned by `tests/` and the bridge's cargo
+suite):
 
-- malformed input is a structured, positional error, never a manufactured
-  board; unknown keys are surfaced diagnostics, not silently dropped
+- malformed input is a structured, positional error, never a
+  manufactured board; unknown keys and fields refuse, exactly as the
+  crate refuses them, and unknown component kinds render as source
 - one source-positioned Markdown pipeline: math spans, mermaid fences and
   ordinary inert code all come from the same parse; raw HTML in authored
   content is reported, never rendered
@@ -86,7 +104,8 @@ Contracts this reader holds (pinned by `tests/`):
   handler
 - `src/styles/board.css` - the centrally shared stylesheet
 - `src-tauri/` - the narrow Tauri 2 shell: read-only declaration and
-  asset commands with mirrored path guards; no shell, no eval, no
+  asset commands with mirrored path guards; board admission through the
+  shared `board-grammar` crate (`validate_board`); no shell, no eval, no
   generic filesystem surface, no plugins. `src-tauri/core-client/` is
   the pure read-only herdr-core client (JSON-RPC over the local core's
   socket, machine-named reads, remote containment), contract-tested in

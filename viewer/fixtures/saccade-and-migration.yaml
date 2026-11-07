@@ -1,3 +1,4 @@
+grammar: 1
 task: saccade-current-system-and-migration
 content:
   - text: |
@@ -159,7 +160,6 @@ content:
 
   - group:
       title: Checkpoints versus commits (planned, c-884)
-      relation: comparison
       content:
         - text: |
             **Checkpoint** - cheap preservation of mutable working
@@ -195,7 +195,6 @@ content:
       result.
   - group:
       title: Acceptance today versus planned
-      relation: comparison
       content:
         - text: |
             **Current.** Acceptance is a bodyless comment naming the

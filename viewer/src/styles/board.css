@@ -249,13 +249,6 @@ input:focus-visible,
   margin: 1.3rem 0;
 }
 
-.block-group[data-relation] .group-title::after {
-  content: " (" attr(data-relation) ")";
-  color: var(--fg-soft);
-  font-size: 0.8rem;
-  font-weight: normal;
-}
-
 .group-title {
   margin: 0.3rem 0 0.5rem;
   font-size: 1.15rem;
@@ -284,6 +277,21 @@ input:focus-visible,
   border-radius: 0.35rem;
   padding: 0.6rem;
   text-align: center;
+}
+
+.block-unknown {
+  border: 1px dashed var(--line);
+  border-radius: 0.35rem;
+  padding: 0.4rem 0.8rem 0.6rem;
+  margin: 1.3rem 0;
+}
+
+.unknown-label {
+  margin: 0.2rem 0 0.5rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-soft);
 }
 
 .figure-frame img,

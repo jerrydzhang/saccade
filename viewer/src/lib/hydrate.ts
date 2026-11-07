@@ -110,8 +110,8 @@ async function hydrateMermaid(div: HTMLElement, outcomes: RenderOutcome[]): Prom
 
 async function hydrateFigure(frame: HTMLElement, model: ViewerModel, location: Location, outcomes: RenderOutcome[]): Promise<void> {
   const figureEl = frame.closest<HTMLElement>(".block-figure");
-  const path = figureEl?.dataset.figurePath ?? "";
-  const block = { kind: "figure", path, pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } } as const;
+  const input = figureEl?.dataset.figureInput ?? "";
+  const block = { kind: "figure", input, caption: "", pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } } as const;
   const outcome = await model.loadFigureAsset(location, block);
   if (outcome === "stale") return;
   frame.textContent = "";
@@ -122,16 +122,16 @@ async function hydrateFigure(frame: HTMLElement, model: ViewerModel, location: L
     outcomes.push({ kind: "figure", status: denied ? "denied" : "missing", message: outcome });
     return;
   }
-  const mime = path.endsWith(".svg") ? "image/svg+xml" : "image/png";
+  const mime = input.endsWith(".svg") ? "image/svg+xml" : "image/png";
   const b64 = bytesToBase64(outcome);
-  const img = el("img", { class: "figure-img", alt: path, src: `data:${mime};base64,${b64}` });
+  const img = el("img", { class: "figure-img", alt: input, src: `data:${mime};base64,${b64}` });
   frame.append(img);
-  outcomes.push({ kind: "figure", status: "ok", message: path });
+  outcomes.push({ kind: "figure", status: "ok", message: input });
 }
 
 async function hydrateImage(span: HTMLElement, model: ViewerModel, location: Location, outcomes: RenderOutcome[]): Promise<void> {
   const src = span.dataset.imageSrc ?? "";
-  const outcome = await model.loadFigureAsset(location, { kind: "figure", path: src, pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } });
+  const outcome = await model.loadFigureAsset(location, { kind: "figure", input: src, caption: "", pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } });
   if (outcome === "stale") return;
   span.textContent = "";
   if (typeof outcome === "string") {

@@ -167,14 +167,23 @@ export function projectBoard(board: Board): ProjectionUnit[] {
         }
         projectBlocks(block.content);
       } else if (block.kind === "figure") {
-        const caption = block.caption ?? "";
+        const caption = block.caption;
         units.push({
           id: nextId(),
           kind: "prose",
-          text: caption || block.path,
-          source: caption || block.path,
+          text: caption.length > 0 ? caption : block.input,
+          source: caption.length > 0 ? caption : block.input,
           pos: block.pos,
           blockKind: "figure",
+        });
+      } else if (block.kind === "unknown") {
+        units.push({
+          id: nextId(),
+          kind: "code",
+          text: block.source,
+          source: block.source,
+          pos: block.pos,
+          blockKind: "unknown",
         });
       }
     }

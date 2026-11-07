@@ -21,6 +21,11 @@
   pango,
   dbus,
   alsa-lib,
+  # the repository root, passed in by every call site: the app's cargo
+  # tree spans viewer/src-tauri and the shared grammar crate, and a
+  # relative climb out of viewer/ would stay an unnormalized ".."
+  # path inside flake evaluation
+  repoRoot,
 }: let
   # the viewer's own frontend and npm graph: separate sources,
   # lock and hash, never merged into the tracker crate or the workbench
@@ -88,23 +93,43 @@ in {
       dbus
       alsa-lib
     ];
-    cargoSrc = lib.sourceByRegex ./src-tauri [
-      "^src$"
-      "^src/.*$"
-      "^core-client$"
-      "^core-client/.*$"
-      "^Cargo\\.toml$"
-      "^Cargo\\.lock$"
-      "^build\\.rs$"
-      "^tauri\\.conf\\.json$"
-      "^icons$"
-      "^icons/.*$"
+    # the app's cargo tree: viewer/src-tauri plus the shared board-grammar
+    # crate it validates through, kept at their real tree shape so the
+    # path dependency "../../grammar" resolves exactly as in the working
+    # copy. The fixture corpus rides along because the packaged build
+    # runs the crate's parity tests over it; no nested lock files.
+    cargoSrc = lib.sourceByRegex repoRoot [
+      "^viewer$"
+      "^viewer/src-tauri$"
+      "^viewer/src-tauri/Cargo\.toml$"
+      "^viewer/src-tauri/Cargo\.lock$"
+      "^viewer/src-tauri/build\.rs$"
+      "^viewer/src-tauri/tauri\.conf\.json$"
+      "^viewer/src-tauri/src$"
+      "^viewer/src-tauri/src/.*$"
+      "^viewer/src-tauri/core-client$"
+      "^viewer/src-tauri/core-client/Cargo\\.toml$"
+      "^viewer/src-tauri/core-client/src$"
+      "^viewer/src-tauri/core-client/src/.*$"
+      "^viewer/src-tauri/icons$"
+      "^viewer/src-tauri/icons/.*$"
+      "^viewer/fixtures$"
+      "^viewer/fixtures/.*$"
+      "^grammar$"
+      "^grammar/Cargo\.toml$"
+      "^grammar/src$"
+      "^grammar/src/.*$"
     ];
   in
     rustPlatform.buildRustPackage {
       pname = "saccade-board-viewer-app";
       version = "0.1.0";
       src = cargoSrc;
+      # cargoRoot names the manifest for the lockfile check and vendor
+      # paths; buildAndTestSubdir is what moves cargo into it for the
+      # build itself in this nixpkgs
+      cargoRoot = "viewer/src-tauri";
+      buildAndTestSubdir = "viewer/src-tauri";
       cargoLock = {
         lockFile = ./src-tauri/Cargo.lock;
       };
@@ -122,10 +147,11 @@ in {
         dbus
       ];
       # the embedded frontend: tauri.conf reads frontendDist
-      # ../dist, one level above the source root in the build tree
+      # ../dist, one level above the manifest, and preBuild runs from
+      # the source root before the build hook enters the manifest dir
       preBuild = ''
-        mkdir -p ../dist
-        cp -r ${webDist}/. ../dist/
+        mkdir -p viewer/dist
+        cp -r ${webDist}/. viewer/dist/
       '';
       postInstall = ''
         wrapProgram $out/bin/saccade-board-viewer \

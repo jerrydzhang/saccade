@@ -30,15 +30,29 @@ export const LANE_CODES = [
 
 export type LaneCode = (typeof LANE_CODES)[number];
 
+// The decode codes mirror the board-grammar crate's ErrorKind families
+// one for one, plus the two bridge verdict codes (board-refused for a
+// crate refusal, decoder-mismatch for the never-expected case where the
+// mirror refuses text the crate accepted).
 export type StructuredIssue = {
   code:
     | "yaml-syntax"
+    | "multiple-documents"
+    | "anchor-alias"
     | "duplicate-key"
-    | "unknown-key"
-    | "unknown-block"
     | "missing-key"
+    | "unknown-key"
+    | "unknown-kind"
+    | "grammar-version"
     | "wrong-type"
-    | "empty-board"
+    | "bad-revision"
+    | "bad-figure-path"
+    | "bad-select-path"
+    | "empty-select"
+    | "no-receiving-text"
+    | "too-deep"
+    | "board-refused"
+    | "decoder-mismatch"
     | LaneCode;
   message: string;
   /** Path into the declaration, e.g. ["content", 2, "group", "title"]. */

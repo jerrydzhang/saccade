@@ -1,3 +1,4 @@
+grammar: 1
 task: first-board-explanation
 content:
   - text: |
@@ -23,11 +24,10 @@ content:
       limiting resource the system serves. There is one human; multi-human
       support would be a law change, not a surprise.
   - incorporation:
-      id: axioms
       source:
         task: saccade-axioms
         revision: a015b6e7c8d940f2a1b2c3d4e5f60718293a4b5c
-        select: [/content/0/text]
+        select: [/content/0]
       content:
         - text: |
             The paragraph above restates two axioms in ordinary language.
@@ -37,7 +37,6 @@ content:
             displayed honestly or not at all.
   - group:
       title: Ratified content behavior
-      relation: comparison
       content:
         - text: |
             **Math is core.** Inline math like $0 < a < b$ and display math:
@@ -84,5 +83,5 @@ content:
       unit; copy in Source mode keeps authored bytes, Plain mode gives
       the TeX value.
   - figure:
-      path: assets/loop-figure.svg
+      input: assets/loop-figure.svg
       caption: A small retained figure resolved relative to this declaration.

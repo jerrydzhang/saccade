@@ -1,3 +1,4 @@
+grammar: 1
 task: missing-asset
 content:
   - text: |
@@ -5,5 +6,5 @@ content:
       machine. The viewer shows an explicit, addressed error instead of
       manufacturing a valid board.
   - figure:
-      path: assets/absent-figure.svg
+      input: assets/absent-figure.svg
       caption: Declared but absent on purpose.

@@ -13,20 +13,30 @@ function load(name: string): string {
   return readFileSync(`${fixturesDir}${name}`, "utf8");
 }
 
+// the viewer's grammar corpus: every supported-version board, the soft
+// unknown-kind board, and the refused boundary boards, with the verdicts
+// pinned here and pinned again on the Rust side over the same files
+const VALID_FIXTURES = [
+  "real-board.yaml",
+  "unknown-kind.yaml",
+  "missing-asset.yaml",
+  "wrapped-math.yaml",
+  "display-scroll.yaml",
+  "repeated-math.yaml",
+  "long-code.yaml",
+  "large-diagram.yaml",
+  "saccade-and-migration.yaml",
+];
+
+const REFUSED_FIXTURES: Array<[string, string]> = [
+  ["grammar-2.yaml", "grammar-version"],
+  ["missing-grammar.yaml", "missing-key"],
+  ["too-deep.yaml", "too-deep"],
+  ["invalid.yaml", "yaml-syntax"],
+];
+
 test("every committed fixture is ASCII bytes", () => {
-  const names = [
-    "real-board.yaml",
-    "invalid.yaml",
-    "unknown-keys.yaml",
-    "missing-asset.yaml",
-    "wrapped-math.yaml",
-    "display-scroll.yaml",
-    "repeated-math.yaml",
-    "long-code.yaml",
-    "large-diagram.yaml",
-    "saccade-and-migration.yaml",
-    "saccade-and-migration-sources.md",
-  ];
+  const names = [...VALID_FIXTURES, ...REFUSED_FIXTURES.map(([name]) => name), "saccade-and-migration-sources.md"];
   for (const name of names) {
     const bytes = readFileSync(`${fixturesDir}${name}`);
     for (const byte of bytes) {
@@ -35,7 +45,30 @@ test("every committed fixture is ASCII bytes", () => {
   }
 });
 
-test("the real board decodes with every ratified feature present", () => {
+test("every supported-version fixture decodes under grammar 1 with no diagnostics", () => {
+  for (const name of VALID_FIXTURES) {
+    if (name === "unknown-kind.yaml") continue; // the soft case, pinned below
+    const result = decodeBoard(load(name));
+    assert.equal(result.status, "ok", `${name} must decode`);
+    if (result.status !== "ok") return;
+    assert.equal(result.board.grammar, 1, `${name} declares grammar 1`);
+    assert.equal(result.board.diagnostics.length, 0, `${name} carries no stray keys`);
+  }
+});
+
+test("the refused fixtures refuse under their pinned family", () => {
+  for (const [name, code] of REFUSED_FIXTURES) {
+    const result = decodeBoard(load(name));
+    assert.equal(result.status, "invalid", `${name} must refuse`);
+    if (result.status !== "invalid") return;
+    assert.ok(
+      result.errors.some((issue) => issue.code === code),
+      `${name} refuses as ${code}`,
+    );
+  }
+});
+
+test("the real board carries every ratified kind", () => {
   const result = decodeBoard(load("real-board.yaml"));
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
@@ -51,21 +84,25 @@ test("the real board decodes with every ratified feature present", () => {
   assert.ok(units.some((unit) => unit.kind === "code"));
 });
 
-test("the invalid fixture produces structured errors with a position", () => {
-  const result = decodeBoard(load("invalid.yaml"));
-  assert.equal(result.status, "invalid");
-  if (result.status !== "invalid") return;
-  assert.ok(result.errors.length > 0);
-  assert.ok(typeof result.errors[0]?.line === "number");
+test("the figure fixture's asset exists beside its declaration", () => {
+  const bytes = readFileSync(`${fixturesDir}assets/loop-figure.svg`, "utf8");
+  assert.match(bytes, /<svg/);
 });
 
-test("the unknown-keys fixture decodes with diagnostics for every stray key", () => {
-  const result = decodeBoard(load("unknown-keys.yaml"));
+test("the unknown-kind fixture renders its unknown component as raw source", () => {
+  const result = decodeBoard(load("unknown-kind.yaml"));
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
-  const messages = result.board.diagnostics.map((diagnostic) => diagnostic.message);
-  assert.ok(messages.some((message) => message.includes("retirement")));
-  assert.ok(messages.some((message) => message.includes("layout")));
+  assert.equal(result.board.diagnostics.length, 1);
+  const diagnostic = result.board.diagnostics[0];
+  assert.equal(diagnostic?.code, "unknown-kind");
+  assert.match(diagnostic?.message ?? "", /changelog/);
+  const unknown = result.board.content.find((block) => block.kind === "unknown");
+  if (!unknown || unknown.kind !== "unknown") throw new Error("the unknown block decoded");
+  assert.equal(unknown.name, "changelog");
+  assert.ok(unknown.source.includes("added"), "the raw source is the authored bytes");
+  const units = projectBoard(result.board);
+  assert.ok(units.some((unit) => unit.blockKind === "unknown" && unit.kind === "code"), "the raw source stays searchable");
 });
 
 test("the missing-asset fixture references a file that truly is absent", () => {
@@ -98,28 +135,27 @@ test("the large-diagram fixture carries one big mermaid fence", () => {
   assert.ok(diagrams[0] && diagrams[0].text.split("\n").length > 15, "the diagram is genuinely large");
 });
 
-test("the real board's figure asset exists beside its declaration", () => {
-  const bytes = readFileSync(`${fixturesDir}assets/loop-figure.svg`, "utf8");
-  assert.match(bytes, /<svg/);
-});
-
-const REAL_BOARD_SHA256 = "ef65496fe48510d44367dac0ae187cf270d2fa2b184b35e312ce9ade78ce3104";
+const MIGRATION_BOARD_SHA256 = "5007898b238802b1e0bca6e6f1b6df26f2015a16dac15d505b51302964ce46e1";
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-test("the copied migration board keeps the published bytes bit for bit", () => {
+test("the migration board's grammar 1 conversion is pinned byte for byte", () => {
+  // the published pre-grammar bytes were converted to grammar 1 in the
+  // viewer's grammar change; the converted fixture is the pinned copy
+  // from here on, and the conversion is visible in the pinned hash
   const bytes = readFileSync(`${fixturesDir}saccade-and-migration.yaml`);
-  assert.equal(sha256Hex(bytes), REAL_BOARD_SHA256);
+  assert.equal(sha256Hex(bytes), MIGRATION_BOARD_SHA256);
 });
 
-test("the real migration board decodes under the provisional grammar", () => {
+test("the migration board decodes under grammar 1", () => {
   const result = decodeBoard(readFileSync(`${fixturesDir}saccade-and-migration.yaml`, "utf8"));
   assert.equal(result.status, "ok");
   if (result.status !== "ok") return;
+  assert.equal(result.board.grammar, 1);
   assert.equal(result.board.task, "saccade-current-system-and-migration");
-  assert.ok(result.board.diagnostics.length === 0, "no stray keys in the published board");
+  assert.equal(result.board.diagnostics.length, 0, "no stray keys in the converted board");
   const kinds = new Set(result.board.content.map((block) => block.kind));
   assert.ok(kinds.has("text"));
   assert.ok(kinds.has("annotation"));
@@ -135,7 +171,7 @@ test("the source-map companion decodes nothing and stays plain prose", () => {
   assert.match(sources, /sources/);
   // it is a companion document, not a board: decoding it as YAML must not
   // be attempted by the fixture adapter (no .yaml extension)
-  assert.ok(!sources.trimStart().startsWith("task:"));
+  assert.ok(!sources.trimStart().startsWith("grammar:"));
 });
 
 function decodeOk(text: string) {

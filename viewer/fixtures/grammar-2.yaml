@@ -1,0 +1,7 @@
+grammar: 2
+task: future-grammar
+content:
+  - text: |
+      This board declares a grammar major this viewer does not support.
+      The viewer refuses it with a message naming the versions it
+      renders; it never guesses at the newer grammar's shape.

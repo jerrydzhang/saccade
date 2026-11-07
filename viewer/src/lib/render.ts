@@ -6,7 +6,7 @@
 import type { Root, RootContent, PhrasingContent } from "mdast";
 import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice } from "./markdown.ts";
 import type { Diagnostic } from "./errors.ts";
-import type { Board, Block, FigureBlock } from "./model.ts";
+import type { Board, Block, FigureBlock, UnknownBlock } from "./model.ts";
 
 export type RenderHooks = {
   /** Document character offset -> projection unit id. */
@@ -91,7 +91,6 @@ export function renderBlock(block: Block, blockId: string, hooks: RenderHooks): 
       const section = el("section", {
         class: "block block-group",
         "data-block-id": blockId,
-        ...(block.relation ? { "data-relation": block.relation } : {}),
       });
       if (block.title) {
         section.append(el("h2", { class: "group-title" }, block.title));
@@ -125,21 +124,52 @@ export function renderBlock(block: Block, blockId: string, hooks: RenderHooks): 
     case "figure": {
       return renderFigureBlock(block, blockId);
     }
+    case "unknown": {
+      return renderUnknownBlock(block, blockId);
+    }
   }
 }
 
 export function renderFigureBlock(block: FigureBlock, blockId: string): HTMLElement {
   const figure = el(
     "figure",
-    { class: "block block-figure", "data-block-id": blockId, "data-figure-path": block.path },
+    { class: "block block-figure", "data-block-id": blockId, "data-figure-input": block.input },
   );
   const frame = el("div", { class: "figure-frame", "data-pending": "figure" });
-  frame.append(el("p", { class: "figure-placeholder" }, `figure: ${block.path}`));
+  frame.append(el("p", { class: "figure-placeholder" }, `figure: ${block.input}`));
   figure.append(frame);
-  if (block.caption) {
-    figure.append(el("figcaption", {}, block.caption));
-  }
+  figure.append(el("figcaption", {}, block.caption));
   return figure;
+}
+
+/** An unknown kind (a newer minor grammar's admission) keeps its place in
+ * the document but renders as its raw authored source, never silently
+ * dropped and never manufactured into a known shape. */
+export function renderUnknownBlock(block: UnknownBlock, blockId: string): HTMLElement {
+  const article = el(
+    "article",
+    {
+      class: "block block-unknown",
+      "data-block-id": blockId,
+      "data-unknown-kind": block.name,
+      "aria-label": `unknown component kind ${block.name}, rendered as source`,
+    },
+    el("p", { class: "unknown-label" }, `unknown component kind '${block.name}' - rendered as its raw source`),
+  );
+  article.append(
+    el(
+      "pre",
+      {
+        class: "md-code",
+        "data-copy-unit": "code",
+        "data-unit-source": block.source,
+        "data-block-id": blockId,
+        "data-line": String(block.pos.start.line),
+      },
+      el("code", {}, block.source),
+    ),
+  );
+  return article;
 }
 
 export function renderMarkdown(

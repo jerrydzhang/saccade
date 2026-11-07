@@ -4,7 +4,7 @@ import { decodeBoard } from "../src/lib/decode.ts";
 import { projectBoard, searchUnits, normalizeQuery } from "../src/lib/projection.ts";
 
 function boardOf(text: string) {
-  const result = decodeBoard(text);
+  const result = decodeBoard("grammar: 1\ntask: projection-demo\n" + text);
   assert.equal(result.status, "ok");
   if (result.status !== "ok") throw new Error("fixture must decode");
   return result.board;

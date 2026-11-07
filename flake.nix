@@ -373,14 +373,19 @@
     # callPackage-able file taking every dependency from the pkgs it
     # is called on, so overlays.default can build it against a
     # consumer's own nixpkgs - the packaged binary then shares the
-    # host's GL stack instead of this flake's pin
-    boardViewer = pkgs: pkgs.callPackage ./viewer/package.nix {};
+    # host's GL stack instead of this flake's pin. The repo root rides
+    # in explicitly: the app's cargo tree spans viewer/src-tauri and
+    # the shared grammar crate, and a relative climb out of viewer/
+    # would stay an unnormalized ".." path inside flake evaluation.
+    boardViewer =
+      pkgs: root:
+        pkgs.callPackage ./viewer/package.nix {repoRoot = root;};
   in {
     # the consumer-facing overlay: a NixOS configuration sets
     # nixpkgs.overlays = [ inputs.saccade.overlays.default ] and gets
     # pkgs.saccade-board-viewer built against its own nixpkgs
     overlays.default = final: prev: {
-      saccade-board-viewer = (final.callPackage ./viewer/package.nix {}).app;
+      saccade-board-viewer = (final.callPackage ./viewer/package.nix {repoRoot = ./.;}).app;
     };
 
     devShells = forAllSystems (
@@ -432,7 +437,7 @@
               pkgs.mesa
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-              (boardViewer pkgs).driver
+              (boardViewer pkgs ./.).driver
               # the Tauri/GTK block rides nixpkgs-client so the shell's
               # WebKitWebDriver matches the packaged app's WebKitGTK
               # (the two pins carry different webkitgtk releases);
@@ -624,9 +629,9 @@
 
           # the app the client runs: built against nixpkgs-client, the
           # revision the human's system flake is built from
-          board-viewer = (boardViewer clientPkgs).app;
-          board-viewer-web = (boardViewer pkgs).web;
-          board-viewer-tauri-driver = (boardViewer pkgs).driver;
+          board-viewer = (boardViewer clientPkgs ./.).app;
+          board-viewer-web = (boardViewer pkgs ./.).web;
+          board-viewer-tauri-driver = (boardViewer pkgs ./.).driver;
 
           default = pkgs.symlinkJoin {
             name = "saccade";
@@ -670,7 +675,7 @@
     );
 
     apps = forAllSystems (system: let
-      boardViewerApp = (boardViewer nixpkgs-client.legacyPackages.${system}).app;
+      boardViewerApp = (boardViewer nixpkgs-client.legacyPackages.${system} ./.).app;
     in {
       board-viewer = {
         type = "app";
@@ -685,7 +690,7 @@
     checks = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
     in
-      (boardViewer nixpkgs.legacyPackages.${system}).checks
+      (boardViewer nixpkgs.legacyPackages.${system} ./.).checks
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
         herdr-ui =
           pkgs.runCommand "herdr-ui-contract" {

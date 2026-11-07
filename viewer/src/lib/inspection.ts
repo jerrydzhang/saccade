@@ -4,6 +4,7 @@
 
 import type { ViewerModel, ViewerState } from "./viewmodel.ts";
 import type { Block } from "./model.ts";
+import { SUPPORTED_GRAMMAR_VERSIONS } from "./decode.ts";
 import type { CopyMode } from "./copy.ts";
 
 export type InspectionOutline = {
@@ -34,6 +35,12 @@ export type Inspection = {
   identity: {
     /** Authored metadata; never a tracker association. */
     task: string | null;
+    /** The grammar version the open board declares; decode accepted it,
+     * so it is always inside the supported range. */
+    grammar: number | null;
+    /** The grammar versions this viewer decodes; a tested claim pinned
+     * against the shared crate's range over the shared fixtures. */
+    supportedGrammarVersions: number[];
     rawLength: number | null;
   };
   errors: ViewerState["errors"];
@@ -87,14 +94,15 @@ function outlineOf(blocks: Block[]): InspectionOutline[] {
       return {
         kind: block.kind,
         ...(block.kind === "group" && block.title ? { title: block.title } : {}),
-        ...(block.kind === "incorporation" ? { title: block.id } : {}),
+        ...(block.kind === "incorporation" ? { title: block.source.task } : {}),
         source: { line: block.pos.start.line, column: block.pos.start.column },
         children: outlineOf(block.content),
       };
     }
     return {
       kind: block.kind,
-      ...(block.kind === "figure" ? { title: block.path } : {}),
+      ...(block.kind === "figure" ? { title: block.input } : {}),
+      ...(block.kind === "unknown" ? { title: block.name } : {}),
       source: { line: block.pos.start.line, column: block.pos.start.column },
     };
   });
@@ -110,6 +118,8 @@ export function inspect(model: ViewerModel): Inspection {
     },
     identity: {
       task: state.board?.task ?? null,
+      grammar: state.board?.grammar ?? null,
+      supportedGrammarVersions: [...SUPPORTED_GRAMMAR_VERSIONS],
       rawLength: state.rawText?.length ?? null,
     },
     errors: state.errors,

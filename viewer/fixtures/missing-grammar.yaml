@@ -1,0 +1,7 @@
+task: pre-grammar-board
+content:
+  - text: |
+      This board predates the grammar field: it carries task and content
+      but declares no version. The viewer refuses it and teaches the fix;
+      a legacy interpretation would be a second validator, and there is
+      exactly one.
