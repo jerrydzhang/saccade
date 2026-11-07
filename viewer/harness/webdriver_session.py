@@ -144,7 +144,7 @@ def target_selector(target: str) -> str:
 
 def element_center(client: WebDriver, target: str) -> tuple[float, float]:
     rect = client.execute(
-        "const el = document.querySelector(selector);"
+        "const el = document.querySelector(arguments[0]);"
         " if (!el) return null; const r = el.getBoundingClientRect();"
         " return {x: r.x, y: r.y, width: r.width, height: r.height};",
         [target_selector(target)],
@@ -158,8 +158,9 @@ def element_center(client: WebDriver, target: str) -> tuple[float, float]:
 # with return, never a function expression (WebKit wraps the body and
 # discards a bare arrow function, which reads as undefined)
 OBSERVE_SCRIPT = (
-    "const el = document.querySelector(selector);"
+    "const el = document.querySelector(arguments[0]);"
     " if (!el) return null;"
+    " const props = arguments[1];"
     " const r = el.getBoundingClientRect();"
     " const cs = getComputedStyle(el);"
     " const style = {};"
