@@ -380,7 +380,8 @@
     devShells = forAllSystems (
       system: let
         pkgs = import nixpkgs {
-          inherit system rustOverlays;
+          inherit system;
+          overlays = rustOverlays;
         };
 
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
@@ -525,7 +526,8 @@
     packages = forAllSystems (
       system: let
         pkgs = import nixpkgs {
-          inherit system rustOverlays;
+          inherit system;
+          overlays = rustOverlays;
         };
         devHerdrCore = herdrCore system pkgs;
         devHerdrPin = herdrDev system pkgs;
