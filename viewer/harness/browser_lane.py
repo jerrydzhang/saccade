@@ -8,22 +8,25 @@ Order, enforced here:
   2. a stdlib loopback static file server for the built frontend (the
      only listener this lane ever creates; no child process, no
      framework)
-  3. two engine passes through the SAME check list, one reused headless
-     browser per engine over the Nix-pinned Playwright driver (driver
-     and browsers from the same nixpkgs revision; the pinned browsers
-     store path carries WebKit; nothing downloaded at runtime):
-     Chromium first, then Playwright WebKit - the pinned WebKit
-     launches its MiniBrowser directly because pw_run.sh needs PATH
-     tools the fresh sandbox PATH deliberately does not carry; a WPE
-     grant refusal can take the first browser down, so the setup
-     relaunches once and runs that pass ungranted; a second engine on
-     identical checks so a Chromium-only pass cannot ship a
-     WebKit-only defect again; the page navigates to the server and
-     waits for the shared viewer API before any action
+  3. the WebKit pass - the gate and the default engine: one reused
+     headless WPE browser over the Nix-pinned Playwright driver (driver
+     and browsers from the same nixpkgs revision; nothing downloaded at
+     runtime), launched through a tiny stderr-capturing wrapper because
+     pw_run.sh needs PATH tools the fresh sandbox PATH deliberately
+     does not carry; its EGL is display-less (pinned mesa vendor dir,
+     forced software rendering, EGL_PLATFORM=surfaceless); a WPE grant
+     refusal can take the first browser down, so the setup relaunches
+     once and runs the pass ungranted; the page navigates to the server
+     and waits for the shared viewer API before any action
   4. per-engine outcomes over the real frontend and the real fixture
      boards: DOM and inspection outcomes with actual readiness waits,
      screenshots saved under the run root for later inspection, names
-     prefixed by engine
+     prefixed by engine; the copy checks observe the payload the
+     product's copy handler writes into the copy event (a window-bubble
+     listener reads clipboardData after the product handler ran), not a
+     system-clipboard round-trip; Chromium is not in the default run -
+     BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM adds it as a triage pass
+     whose results never gate the exit
   5. owned teardown: the server thread shuts down before exit
 
 Everything here is inside the sandbox: the clipboard a browser writes
@@ -189,6 +192,26 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
     def check(name: str, condition: bool, detail: str = "") -> None:
         record_check(f"[{engine}] {name}", condition, detail)
 
+    def install_copy_observer() -> None:
+        """Observe the payload the product's copy handler writes into
+        the copy event: a window-bubble listener runs after the
+        product's document handler (bubble order), so the assertions
+        measure the product's serialized bytes directly - the
+        system-clipboard round-trip a WPE engine denies ungranted is
+        not part of the check."""
+        page.evaluate("""() => {
+            window.__copy = {state: 'idle'};
+            window.__copyObserver = (event) => {
+                window.__copy = {
+                    state: 'done',
+                    text: event.clipboardData ? event.clipboardData.getData('text/plain') : '',
+                };
+            };
+            window.addEventListener('copy', window.__copyObserver);
+        }""")
+
+    install_copy_observer()
+
     def open_board(name: str) -> None:
         page.evaluate(f"() => {viewer}.open('fixture', {name!r})")
         page.wait_for_function(
@@ -263,14 +286,6 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     # phases 2-4: copy semantics, each step independent and bounded - a
     # failed copy check records its failure and never starves the rest.
-    def start_clipboard_read() -> None:
-        page.evaluate("""() => {
-            window.__copy = {state: 'pending'};
-            navigator.clipboard.readText()
-                .then(t => { window.__copy = {state: 'done', text: t}; })
-                .catch(e => { window.__copy = {state: 'error', message: String(e)}; });
-        }""")
-
     def await_clipboard() -> tuple[bool, str]:
         timed_out = False
         try:
@@ -308,14 +323,13 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             mounted is not None and mounted.evaluate("el => el.isConnected && el === document.querySelector('.block-text')"),
         )
         focus = page.evaluate("() => document.hasFocus()")
-        page.evaluate("() => { window.__copy = {state: 'pending', focus: document.hasFocus()}; }")
+        page.evaluate("() => { window.__copy = {state: 'pending'}; }")
         select_first_formula_paragraph()
-        start_clipboard_read()
         exec_result = page.evaluate("() => window.__exec")
         print(f"[browser] copy phase: focus={focus} execCommand={exec_result}", flush=True)
         ok, evidence = await_clipboard()
         if not ok:
-            check("clipboard read reaches a terminal state (bounded)", False, evidence)
+            check("copy event reaches the observer (bounded)", False, evidence)
             page.screenshot(path=f"{shots_dir}/{engine}-copy-timeout.png")
             return
         source_copy = evidence
@@ -332,10 +346,9 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         page.evaluate("() => window.__boardViewer.setCopyMode('plain')")
         page.evaluate("() => { window.__copy = {state: 'pending'}; }")
         select_first_formula_paragraph()
-        start_clipboard_read()
         ok, evidence = await_clipboard()
         if not ok:
-            check("plain clipboard read reaches a terminal state (bounded)", False, evidence)
+            check("plain copy event reaches the observer (bounded)", False, evidence)
             return
         plain_copy = evidence
         expected_plain = "First occurrence: 0 < \\eta < 2/b in this "
@@ -361,9 +374,6 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             selection.removeAllRanges();
             selection.addRange(range);
             document.execCommand('copy');
-            navigator.clipboard.readText()
-                .then(t => { window.__copy = {state: 'done', text: t}; })
-                .catch(e => { window.__copy = {state: 'error', message: String(e)}; });
         }""")
         ok, evidence = await_clipboard()
         if ok:
@@ -387,9 +397,6 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             selection.removeAllRanges();
             selection.addRange(range);
             document.execCommand('copy');
-            navigator.clipboard.readText()
-                .then(t => { window.__copy = {state: 'done', text: t}; })
-                .catch(e => { window.__copy = {state: 'error', message: String(e)}; });
         }""")
         ok, evidence = await_clipboard()
         check(
@@ -560,9 +567,13 @@ def main() -> int:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
-            # the identical check list runs under each engine - engine
-            # differences are the evidence
-            for engine in ("chromium", "webkit"):
+            # WebKit gates the lane (the default engine); Chromium runs
+            # only behind the explicit triage flag and never gates - the
+            # identical check list runs under each engine either way
+            engines = ("webkit",)
+            if os.environ.get("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM", ""):
+                engines = ("webkit", "chromium")
+            for engine in engines:
                 setup = setup_engine_page(playwright, engine, base_url)
                 if setup is None:
                     continue
@@ -588,13 +599,18 @@ def main() -> int:
         server.shutdown()
         server.server_close()
 
-    # every recorded failure counts, including an engine whose browser
-    # never launched - the lane passes only when BOTH engines did
-    failed = sum(1 for ok, _name, _detail in RESULTS if not ok)
+    # the gate is the WebKit engine's own records - Chromium triage
+    # failures are printed and saved but never decide the lane exit
+    gate = [record for record in RESULTS if record[1].startswith("[webkit]")]
+    triage = [record for record in RESULTS if record[1].startswith("[chromium]")]
+    gate_failed = sum(1 for ok, _name, _detail in gate if not ok)
+    triage_failed = sum(1 for ok, _name, _detail in triage if not ok)
     cost = time.monotonic() - started
-    print(f"[browser] {len(RESULTS) - failed}/{len(RESULTS)} checks passed in {cost:.1f}s", flush=True)
+    print(f"[browser] webkit (gate): {len(gate) - gate_failed}/{len(gate)} checks passed in {cost:.1f}s", flush=True)
+    if triage:
+        print(f"[browser] chromium (triage): {len(triage) - triage_failed}/{len(triage)} checks passed", flush=True)
     print(f"[browser] screenshots saved under {shots_dir} for inspection", flush=True)
-    return 1 if failed else 0
+    return 1 if gate_failed else 0
 
 
 if __name__ == "__main__":

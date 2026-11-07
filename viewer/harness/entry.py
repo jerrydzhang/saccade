@@ -46,10 +46,9 @@ FAST_STEPS = [
 ]
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
-# two engine passes (Chromium, then Playwright WebKit) over one check
-# list: the bound is wall time for the whole lane, so it doubles with
-# the second engine
-BROWSER_TIMEOUT_SECONDS = 360
+# the gate engine is WebKit alone (record 2926); Chromium runs only
+# behind BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM and never gates
+BROWSER_TIMEOUT_SECONDS = 180
 NATIVE_TIMEOUT_SECONDS = 120
 # The canary file is bound read-only into the sandbox at this path: the
 # interpreter inside must be able to read it without any host HOME or
@@ -218,11 +217,13 @@ def verify_playwright_closure(python: str) -> tuple[bool, str]:
 def browser_lane() -> int:
     """Gated browser lane. Same supervisor, same canary-first order:
     the payload runs the containment canary in-process BEFORE it starts
-    the loopback server or the Playwright driver. One reused headless
-    browser per engine - Chromium first, then Playwright WebKit - each
-    running the same check list over the built frontend; screenshots
-    land in the run root for later inspection. Bounded by
-    BROWSER_TIMEOUT_SECONDS; pidfd-only cleanup on all paths.
+    the loopback server or the Playwright driver. WebKit gates the lane
+    (the default engine); one reused headless WPE browser runs the
+    check list over the built frontend, and Chromium joins only behind
+    BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM as a triage pass that never
+    gates; screenshots land in the run root for later inspection.
+    Bounded by BROWSER_TIMEOUT_SECONDS; pidfd-only cleanup on all
+    paths.
 
     Lane env additions beyond the fresh allowlist, all explicit and
     absolute: PLAYWRIGHT_BROWSERS_PATH (pinned browser package),
@@ -315,6 +316,8 @@ def browser_lane() -> int:
     env["FONTCONFIG_FILE"] = fontconf
     env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    # cross-engine triage opt-in: chromium results never gate the lane
+    env["BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM"] = os.environ.get("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM", "")
 
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),

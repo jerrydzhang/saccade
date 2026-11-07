@@ -129,7 +129,7 @@ nix develop .#board-viewer --command \
   [--tracker-db <absolute path>]
 ```
 
-Time bound: 360 s, then the supervisor is stopped through the pidfd and
+Time bound: 180 s, then the supervisor is stopped through the pidfd and
 the run is a refusal. No automatic retry.
 
 Order inside the one sandbox: (1) the containment canary runs
@@ -137,18 +137,28 @@ in-process FIRST (the reviewed module, invoked as main()) - a refusal
 ends the lane before any listener or driver exists; (2) then, and only
 then, a stdlib loopback static server thread serves the built frontend
 inside the sandbox netns (the only listener this lane ever creates; no
-child process, no framework); (3) two engine passes, one reused
-headless browser per engine - Chromium first, then Playwright WebKit -
-via the Nix-pinned Playwright driver (driver and browsers from the
-same nixpkgs revision; the pinned browsers store path carries WebKit;
-nothing downloaded or installed at runtime); the page navigates to the
-server and waits for the shared viewer API before any action; (4) the
-same bounded check list under each engine over the real frontend and
-real fixture boards - readiness waits on actual inspection outcomes
-(never fixed sleeps), DOM and inspection state first, then screenshots
-saved under `<runroot>/shots/` with engine-prefixed names for later
-human and agent inspection; (5) the server thread shuts down before
-exit.
+child process, no framework); (3) the WebKit pass - the gate and the
+default engine (record 2926; Chromium sits behind the explicit
+`BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM` flag for cross-engine triage
+only, and its results never enter the default pass/fail) - one reused
+headless WPE browser via the Nix-pinned Playwright driver (driver and
+browsers from the same nixpkgs revision; the pinned browsers store
+path carries WebKit; nothing downloaded or installed at runtime),
+launched through a tiny wrapper that captures the browser stderr;
+its EGL is display-less: pinned mesa vendor dir plus forced software
+rendering plus `EGL_PLATFORM=surfaceless`; a WPE clipboard-grant
+refusal can take the first browser down, so the setup relaunches once
+and runs that pass ungranted; the page navigates to the server and
+waits for the shared viewer API before any action; (4) the bounded
+check list over the real frontend and real fixture boards - readiness
+waits on actual inspection outcomes (never fixed sleeps), DOM and
+inspection state first, then screenshots saved under
+`<runroot>/shots/` with engine-prefixed names for later human and
+agent inspection; the copy checks observe the payload the product's
+copy handler writes into the copy event (a window-bubble listener
+reads `clipboardData.getData('text/plain')` after the product handler
+ran), not a system-clipboard round-trip; (5) the server thread shuts
+down before exit.
 
 Binds (all read-only): the canary at `/canary/`, the lane script at
 `/lane/`, `viewer/dist` at `/app/dist`. Env additions beyond the fresh
@@ -168,10 +178,13 @@ WebKit launches its pinned headless WPE MiniBrowser directly (the
 driver's pw_run.sh needs PATH tools the fresh sandbox PATH deliberately
 does not carry); the enforced bwrap boundary is the containment.
 
-Clipboard honesty: what the browser writes is the engine's own
-clipboard inside the sandbox - it is never the desktop's clipboard.
-Native clipboard fidelity is a real-client question for the
-actual-client gate and is never implied by this lane.
+Clipboard honesty: the copy checks observe the product's copy-event
+payload directly (the serialized Source/Plain bytes the handler writes
+into `clipboardData`), in every engine. The system-clipboard
+round-trip is a native/real-client concern - it is never the
+desktop's clipboard inside this lane, and native clipboard fidelity
+is a real-client question for the actual-client gate, never implied
+by this lane.
 
 ## The native lane, exactly (source; runs only under authorization)
 

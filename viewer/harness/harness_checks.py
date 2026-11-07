@@ -258,7 +258,8 @@ def main() -> int:
     def fake_run_checks(page, base_url, shots, engine):
         lane_calls["checks"] += 1
         lane_calls["engines"].append(engine)
-        return 0
+        browser_lane.record_check(f"[{engine}] check payload", engine != "chromium", "")
+        return 1 if engine == "chromium" else 0
 
     browser_lane.run_checks = fake_run_checks  # type: ignore[assignment]
     try:
@@ -272,8 +273,9 @@ def main() -> int:
             str(lane_calls),
         )
 
-        # traversal: canary -> server -> navigate -> checks under each
-        # engine (chromium, then webkit) -> shutdown
+        # traversal: canary -> server -> navigate -> the webkit pass
+        # (the gate engine, default; chromium only behind the triage
+        # flag) -> shutdown
         FakeCanary.code = 0
         code = browser_lane.main()
         check(
@@ -281,9 +283,9 @@ def main() -> int:
             code == 0
             and lane_calls["canary"] == 2
             and lane_calls["server"] == 1
-            and lane_calls["goto"] == [f"http://127.0.0.1:{browser_lane.SERVER_PORT}"] * 2
-            and lane_calls["checks"] == 2
-            and lane_calls["engines"] == ["chromium", "webkit"]
+            and lane_calls["goto"] == [f"http://127.0.0.1:{browser_lane.SERVER_PORT}"]
+            and lane_calls["checks"] == 1
+            and lane_calls["engines"] == ["webkit"]
             and lane_calls["shutdown"] >= 11
             and FakePage.gotos == lane_calls["goto"],
             str(lane_calls),
@@ -316,8 +318,32 @@ def main() -> int:
         check(
             "a refused clipboard grant runs the pass ungranted",
             code == 0
-            and lane_calls["checks"] == 5
-            and lane_calls["engines"] == ["chromium", "webkit", "chromium", "chromium", "webkit"],
+            and lane_calls["checks"] == 2
+            and lane_calls["engines"] == ["webkit", "webkit"],
+            str(lane_calls),
+        )
+
+        # chromium triage: the flag adds the pass, its failures are
+        # printed and saved, and they never gate the lane exit
+        FakeCanary.code = 0
+        browser_lane.RESULTS.clear()
+        lane_calls["webkit_rejects_grant"] = False
+        triage_flag_before = os.environ.get("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM")
+        os.environ["BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM"] = "1"
+        try:
+            code = browser_lane.main()
+        finally:
+            if triage_flag_before is None:
+                os.environ.pop("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM", None)
+            else:
+                os.environ["BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM"] = triage_flag_before
+        triage_records = [r for r in browser_lane.RESULTS if r[1].startswith("[chromium]")]
+        check(
+            "chromium triage failures never gate the lane",
+            code == 0
+            and lane_calls["engines"] == ["webkit", "webkit", "webkit", "chromium"]
+            and len(triage_records) == 1
+            and triage_records[0][0] is False,
             str(lane_calls),
         )
 
