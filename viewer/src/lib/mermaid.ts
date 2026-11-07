@@ -28,7 +28,16 @@ async function loadMermaid(): Promise<MermaidRenderFn> {
     // the lane evidence showed generic resolution is not trustworthy
     // under WebKitGTK's SVG text
     fontFamily: "'DejaVu Sans', sans-serif",
-    flowchart: { htmlLabels: false },
+    flowchart: {
+      htmlLabels: false,
+      // mermaid 11.17.2 createFormattedText keeps a label line only when
+      // its getComputedTextLength fits wrappingWidth (default 200); with
+      // the headless geometry bug that length is garbage, so every line
+      // recursed into width-splitting until empty. An infinite width
+      // makes the check always true: whole lines stay, the wrapping
+      // recursion - the only DOM-measurement dependence - never runs.
+      wrappingWidth: Number.POSITIVE_INFINITY,
+    },
     class: { htmlLabels: false },
   });
   return (id: string, code: string) => mermaid.render(id, code);
