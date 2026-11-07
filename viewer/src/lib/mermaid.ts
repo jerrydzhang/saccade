@@ -17,7 +17,31 @@ interface MermaidGlobal {
 let renderFn: Promise<MermaidRenderFn> | null = null;
 let renderCount = 0;
 
+// The native lane's WebKitGTK reports impossible geometry (device
+// pixel ratio -1/96, negative viewports), and SVG text measurement
+// inherits it: getComputedTextLength returns lengths scaled by about
+// -96x, so mermaid's label width checks wrap every line to nothing.
+// The shim passes sane values through untouched and substitutes a
+// conservative character estimate only when the reported length is
+// clearly impossible; Chromium and healthy WebKitGTK never hit the
+// substitution.
+function installMeasurementShim(): void {
+  const proto = (window as unknown as { SVGTextContentElement?: typeof SVGTextContentElement })
+    .SVGTextContentElement?.prototype;
+  if (!proto || Object.hasOwn(proto, "__viewerShim")) return;
+  const original = proto.getComputedTextLength;
+  Object.defineProperty(proto, "__viewerShim", { value: true });
+  proto.getComputedTextLength = function (this: SVGTextContentElement): number {
+    const reported = original.call(this);
+    if (reported >= 0 && reported <= 2000) return reported;
+    const text = this.textContent ?? "";
+    const fontSize = Number.parseFloat(getComputedStyle(this).fontSize) || 16;
+    return text.length * fontSize * 0.6;
+  };
+}
+
 async function loadMermaid(): Promise<MermaidRenderFn> {
+  installMeasurementShim();
   const mod = (await import("mermaid")) as { default: MermaidGlobal };
   const mermaid = mod.default;
   mermaid.initialize({
@@ -30,13 +54,7 @@ async function loadMermaid(): Promise<MermaidRenderFn> {
     fontFamily: "'DejaVu Sans', sans-serif",
     flowchart: {
       htmlLabels: false,
-      // mermaid 11.17.2 createFormattedText keeps a label line only when
-      // its getComputedTextLength fits wrappingWidth (default 200); with
-      // the headless geometry bug that length is garbage, so every line
-      // recursed into width-splitting until empty. An infinite width
-      // makes the check always true: whole lines stay, the wrapping
-      // recursion - the only DOM-measurement dependence - never runs.
-      wrappingWidth: Number.POSITIVE_INFINITY,
+      wrappingWidth: 200,
     },
     class: { htmlLabels: false },
   });
