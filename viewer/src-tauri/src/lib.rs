@@ -47,6 +47,11 @@ pub fn run() {
                                 if let Some(settings) = WebViewExt::settings(&inner) {
                                     settings.set_enable_write_console_messages_to_stdout(true);
                                 }
+                                eprintln!(
+                                    "[bridge] FONTCONFIG_FILE: {}",
+                                    std::env::var("FONTCONFIG_FILE")
+                                        .unwrap_or_else(|_| "unset".into())
+                                );
                                 // WebKitGTK derives the page scale from the
                                 // GTK gtk-xft-dpi setting (WebKit PR 28691:
                                 // scale = dpi/96). Without a desktop

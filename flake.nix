@@ -429,9 +429,6 @@
           pkgs.dbus
           pkgs.alsa-lib
         ];
-        fontsConf = pkgs.makeFontsConf {
-          fontDirectories = [pkgs.dejavu_fonts];
-        };
         cargoSrc = pkgs.lib.sourceByRegex ./viewer/src-tauri [
           "^src$"
           "^src/.*$"
@@ -472,7 +469,6 @@
           postInstall = ''
             wrapProgram $out/bin/saccade-board-viewer \
               --prefix LD_LIBRARY_PATH : ${webkitLibs} \
-              --set FONTCONFIG_FILE ${fontsConf} \
           '';
           meta.mainProgram = "saccade-board-viewer";
         };
