@@ -86,11 +86,33 @@ function logSvgDiagnostics(id: string, svg: string): void {
   const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
   const texts = doc.querySelectorAll("text");
   const first = texts[0];
+  const nonEmpty = [...texts].filter((t) => (t.textContent ?? "").length > 0).length;
   console.log(
-    `[viewer-diag] ${id}: svg=${svg.length}b textNodes=${texts.length} ` +
+    `[viewer-diag] ${id}: svg=${svg.length}b textNodes=${texts.length} nonEmpty=${nonEmpty} ` +
       `firstText=${JSON.stringify(first ? first.textContent : null)} ` +
       `firstFont=${JSON.stringify(first ? first.getAttribute("font-family") : null)}`,
   );
+  if (first) {
+    console.log(`[viewer-diag] ${id}: firstText.outerHTML=${JSON.stringify(first.outerHTML.slice(0, 300))}`);
+  }
+  // the raw measurement facts under the broken geometry, with the shim
+  // state visible: does the prototype carry the viewer marker, and what
+  // does an isolated text element actually report?
+  const proto = (window as unknown as { SVGTextContentElement?: { prototype: Record<string, unknown> } })
+    .SVGTextContentElement?.prototype;
+  console.log(`[viewer-diag] ${id}: shimInstalled=${proto ? Object.hasOwn(proto, "__viewerShim") : "no-proto"}`);
+  try {
+    const probeSvg = `<svg xmlns="http://www.w3.org/2000/svg"><text x="0" y="0">sac CLI</text></svg>`;
+    const probeDoc = new DOMParser().parseFromString(probeSvg, "image/svg+xml");
+    const probeText = probeDoc.querySelector("text");
+    document.body.appendChild(probeDoc.documentElement);
+    const raw = (probeText as SVGTextContentElement).getComputedTextLength();
+    const rect = probeText!.getBoundingClientRect();
+    probeDoc.documentElement.remove();
+    console.log(`[viewer-diag] ${id}: isolated probe length=${raw} rect=${rect.width}`);
+  } catch (error) {
+    console.log(`[viewer-diag] ${id}: isolated probe FAILED: ${String(error)}`);
+  }
   const live = document.querySelector(`#${id} text, #${id} span`);
   if (live) {
     const style = getComputedStyle(live);
