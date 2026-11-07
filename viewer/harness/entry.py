@@ -1489,6 +1489,11 @@ def session_checks(board_arg: str, tracker_db_candidate: str, query: str, lifeti
                 up = None
         if not isinstance(up, dict) or not up.get("ok"):
             print("[webdriver] the session never came up", file=sys.stderr)
+            if supervisor._proc.poll() is not None:
+                # the payload already exited: its captured stdout is the
+                # diagnosis (EOF is reached, so the read cannot block)
+                output = supervisor.read_output()
+                print(output, end="" if output.endswith("\n") else "\n", file=sys.stderr, flush=True)
             return 1
         failures = run_session_checks(socket_path, resolved, query)
         try:

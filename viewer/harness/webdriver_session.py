@@ -504,7 +504,11 @@ def main() -> int:
                     "--native-driver",
                     webkit_driver_bin,
                 ],
-                env={**os.environ},
+                # the app is spawned by WebKitWebDriver, not by us: its
+                # display name must ride the chain env (launcher
+                # inheritance), the way the native lane hands it to the
+                # app directly
+                env={**os.environ, "WAYLAND_DISPLAY": state.wayland_name},
                 stdout=driver_log,
                 stderr=driver_log,
             )
