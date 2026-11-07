@@ -733,15 +733,13 @@ fn nested_content(
     Ok(Some(content))
 }
 
+// the receiving text is the author's own prose: content inside a nested
+// incorporation belongs to that incorporation's inner source and does not count here
 fn has_substantive_text(content: &[Component]) -> bool {
     for component in content {
         match component {
             Component::Text { text } if !text.trim().is_empty() => return true,
-            Component::Group { content, .. } | Component::Incorporation { content, .. }
-                if has_substantive_text(content) =>
-            {
-                return true;
-            }
+            Component::Group { content, .. } if has_substantive_text(content) => return true,
             _ => {}
         }
     }

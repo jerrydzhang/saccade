@@ -53,6 +53,7 @@ fn every_invalid_fixture_refuses_with_its_declared_kind() {
             "grammar-not-integer" => ErrorKind::GrammarVersion,
             "incorporation-no-text" => ErrorKind::NoReceivingText,
             "incorporation-empty-content" => ErrorKind::NoReceivingText,
+            "incorporation-no-own-text" => ErrorKind::NoReceivingText,
             "revision-short" => ErrorKind::BadRevision,
             "revision-not-hex" => ErrorKind::BadRevision,
             "figure-absolute" => ErrorKind::BadFigurePath,
@@ -233,6 +234,16 @@ content:
     )
     .expect_err("the blank receiving text is refused");
     assert_eq!(error.kind, ErrorKind::NoReceivingText);
+}
+
+// text sitting only inside a nested incorporation belongs to the inner source,
+// so the outer incorporation still lacks its own receiving text
+#[test]
+fn nested_incorporation_text_does_not_satisfy_the_outer_receiving_rule() {
+    let error = board_grammar::parse(&common::fixture("invalid/incorporation-no-own-text.yaml"))
+        .expect_err("the outer incorporation without own text is refused");
+    assert_eq!(error.kind, ErrorKind::NoReceivingText);
+    assert_eq!(error.at, board_grammar::Where::Path("/content/0".into()));
 }
 
 #[test]

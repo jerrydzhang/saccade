@@ -55,8 +55,10 @@ optional `title` (text). No other fields; layout hints do not exist here.
   `select` is a non-empty list of select paths (below) naming whole
   components in that revision.
 - `content` is a list of components and must include at least one `text`
-  component with non-blank text, at any depth: the receiving text that
-  says what is taken from the source.
+  component with non-blank text, at any depth through groups: the receiving
+  text that says what is taken from the source. Text inside a nested
+  `incorporation` belongs to that incorporation's own source and does not
+  count toward the outer one.
 
 ### annotation
 
