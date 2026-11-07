@@ -6,6 +6,3 @@ description = "The task board grammar, version 1: parse, select, and declared re
 
 [dependencies]
 yaml-rust2 = "0.13"
-
-# standalone workspace root: the crate is not wired into the tracker build yet
-[workspace]

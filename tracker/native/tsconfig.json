@@ -1,0 +1,21 @@
+// Compile contract for the native extension sources against the
+// PINNED SDK's own types. Run tracker/native/typecheck.sh - it resolves the
+// pinned SDK through the SACCADE_PI chain and generates
+// tsconfig.local.json (gitignored) with the real store paths; plain
+// tsc against this base fails by design until it has run.
+{
+	"compilerOptions": {
+		"strict": true,
+		"noEmit": true,
+		"target": "es2022",
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		// declaration files of unrelated dependencies are not the
+		// contract; this source is still checked against the pinned
+		// SDK's own types through the generated paths
+		"skipLibCheck": true,
+		"types": []
+	},
+	"include": ["*.ts", "*.d.ts"]
+}

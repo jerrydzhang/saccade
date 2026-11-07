@@ -35,12 +35,15 @@ rustc-ice-*.txt
 .devenv/
 
 # the web workbench: dist is a generated build product (just web-build)
-web/node_modules/
-web/runs/
-web/harness/__pycache__/
-web/dist/
+client/node_modules/
+client/runs/
+client/harness/__pycache__/
+client/dist/
 mods/saccade/gpui-kit.d.ts
 mods/saccade/herdr.d.ts
 
 # numbered result links from multi-output or repeated nix builds
 result-[0-9]*
+
+# Installed product skill: generated from tracker/skill in the devshell
+.agents/skills/saccade/

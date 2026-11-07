@@ -1,0 +1,35 @@
+[package]
+name = "saccade-board-viewer"
+version = "0.1.0"
+description = "Saccade read-only board viewer"
+edition = "2021"
+
+[lib]
+name = "saccade_board_viewer_lib"
+path = "src/lib.rs"
+
+# the core-client crate below: its contract tests run in the fast
+# check loop without any GUI dependency
+
+[[bin]]
+name = "saccade-board-viewer"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# managed by the package build (buildFeatures): a production binary
+# serves the embedded dist instead of dialing the dev server
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+webkit2gtk = { version = "2" }
+gtk = "0.18"
+serde_json = "1"
+board-viewer-core = { path = "core-client" }
+# the shared board grammar: admission runs here, on the Tauri side, so
+# the frontend never grows a second validator
+board-grammar = { path = "../../grammar" }
