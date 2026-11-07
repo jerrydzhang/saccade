@@ -144,9 +144,9 @@ def target_selector(target: str) -> str:
 
 def element_center(client: WebDriver, target: str) -> tuple[float, float]:
     rect = client.execute(
-        "(selector) => { const el = document.querySelector(selector);"
+        "const el = document.querySelector(selector);"
         " if (!el) return null; const r = el.getBoundingClientRect();"
-        " return {x: r.x, y: r.y, width: r.width, height: r.height}; }",
+        " return {x: r.x, y: r.y, width: r.width, height: r.height};",
         [target_selector(target)],
     )
     if not isinstance(rect, dict) or rect.get("width", 0) <= 0 and rect.get("height", 0) <= 0:
@@ -154,18 +154,21 @@ def element_center(client: WebDriver, target: str) -> tuple[float, float]:
     return float(rect["x"]) + float(rect.get("width", 0)) / 2, float(rect["y"]) + float(rect.get("height", 0)) / 2
 
 
+# W3C execute/sync evaluates the script as a function BODY: statements
+# with return, never a function expression (WebKit wraps the body and
+# discards a bare arrow function, which reads as undefined)
 OBSERVE_SCRIPT = (
-    "(selector, props) => { const el = document.querySelector(selector);"
+    "const el = document.querySelector(selector);"
     " if (!el) return null;"
     " const r = el.getBoundingClientRect();"
     " const cs = getComputedStyle(el);"
     " const style = {};"
     " for (const p of props || []) style[p] = cs.getPropertyValue(p);"
     " return {tag: el.tagName.toLowerCase(), rect: {x: r.x, y: r.y, width: r.width, height: r.height},"
-    " transform: cs.transform, text: (el.textContent || '').trim(), style}; }"
+    " transform: cs.transform, text: (el.textContent || '').trim(), style};"
 )
 
-INSPECT_SCRIPT = "() => (window.__boardViewer && window.__boardViewer.inspection()) || null"
+INSPECT_SCRIPT = "return (window.__boardViewer && window.__boardViewer.inspection()) || null;"
 
 
 def perform_input(client: WebDriver, request: dict) -> dict:
@@ -527,19 +530,27 @@ def main() -> int:
 
         ready_deadline = time.monotonic() + APP_READY_SECONDS
         ready = False
+        last_detail = "no execute result"
         while time.monotonic() < ready_deadline:
             if tauri_driver.poll() is not None:
+                last_detail = f"tauri-driver exited rc={tauri_driver.returncode}"
                 break
             try:
                 inspection = client.execute(INSPECT_SCRIPT)
-            except WebDriverError:
+            except WebDriverError as error:
+                last_detail = str(error)[:160]
                 time.sleep(0.5)
                 continue
-            if isinstance(inspection, dict) and inspection.get("resource", {}).get("status") == "loaded":
-                ready = True
-                break
+            if isinstance(inspection, dict):
+                resource = inspection.get("resource") or {}
+                last_detail = f"status={resource.get('status')!r} errors={len(inspection.get('errors') or [])}"
+                if resource.get("status") == "loaded":
+                    ready = True
+                    break
+            else:
+                last_detail = f"execute returned {type(inspection).__name__}"
             time.sleep(0.5)
-        check("app frontend up and board loaded", ready, f"board {board}")
+        check("app frontend up and board loaded", ready, f"board {board}; last: {last_detail}")
         if not ready:
             return teardown(state)
 
