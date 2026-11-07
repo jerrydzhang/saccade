@@ -27,6 +27,6 @@ hooks = [
 repo = "https://github.com/FeryET/pre-commit-rust"
 rev = "v1.2.1"
 hooks = [
-  { id = "fmt" },
+  { id = "fmt", args = ["--all"], pass_filenames = false, always_run = true },
   { id = "cargo-check" },
 ]
