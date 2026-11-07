@@ -157,8 +157,10 @@ allowlist, all explicit absolute paths or baseline values:
 (the pinned generated fontconfig - a store path over pinned DejaVu
 fonts; the existing /nix/store read-only bind covers it, so no host
 `/etc/fonts` or font directories are ever mounted), `SHOTS_DIR` (the
-run root's own shots directory), the six namespace baselines, host
-HOME/UID, tracker-db. The payload interpreter is the pinned
+run root's own shots directory), `__EGL_VENDOR_LIBRARY_DIRS` (pinned
+mesa egl_vendor.d) and `LIBGL_ALWAYS_SOFTWARE` (the WPE browser's
+display-less EGL, the native lane's software-GL pin), the six
+namespace baselines, host HOME/UID, tracker-db. The payload interpreter is the pinned
 withPackages python, its closure verified to contain the playwright
 module before any launch (the scrubbed env inherits no host
 PYTHONPATH). Chromium runs headless with its own sandbox disabled and

@@ -226,13 +226,17 @@ def browser_lane() -> int:
 
     Lane env additions beyond the fresh allowlist, all explicit and
     absolute: PLAYWRIGHT_BROWSERS_PATH (pinned browser package),
-    SHOTS_DIR (the run root's own shots directory, already rw-bound).
-    The lane binds read-only: the canary at /canary, the lane script at
-    /lane, viewer/dist at /app/dist. The payload python is the pinned
-    withPackages interpreter, its closure verified to contain the
-    playwright module before any launch (the scrubbed env inherits no
-    host PYTHONPATH). Chromium runs headless with its own sandbox
-    disabled - the enforced bwrap boundary is the containment.
+    SHOTS_DIR (the run root's own shots directory, already rw-bound),
+    FONTCONFIG_FILE (the pinned generated config),
+    __EGL_VENDOR_LIBRARY_DIRS (pinned mesa egl_vendor.d) and
+    LIBGL_ALWAYS_SOFTWARE (the WPE browser's display-less EGL, the
+    native lane's software-GL pin). The lane binds read-only: the
+    canary at /canary, the lane script at /lane, viewer/dist at
+    /app/dist. The payload python is the pinned withPackages
+    interpreter, its closure verified to contain the playwright module
+    before any launch (the scrubbed env inherits no host PYTHONPATH).
+    Chromium runs headless with its own sandbox disabled - the enforced
+    bwrap boundary is the containment.
     """
     sys.path.insert(0, str(HERE))
     import isolation
@@ -260,6 +264,17 @@ def browser_lane() -> int:
     usable, reason = verify_fontconfig_file(fontconf)
     if not usable:
         print(f"containment refusal: {reason}", file=sys.stderr)
+        return 1
+
+    # the WPE browser's display-less EGL: same software-GL pin as the
+    # native lane (pinned mesa vendor dir + forced software rendering);
+    # the sandbox env carries them so the browser process inherits both
+    mesa_dir = os.environ.get("BOARD_VIEWER_MESA_EGL_VENDOR_DIR", "")
+    if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
+        print(
+            "containment refusal: BOARD_VIEWER_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
+            file=sys.stderr,
+        )
         return 1
 
     dist = (VIEWER / "dist").resolve()
@@ -298,6 +313,8 @@ def browser_lane() -> int:
     env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
     env["SHOTS_DIR"] = str(run_root / "shots")
     env["FONTCONFIG_FILE"] = fontconf
+    env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
+    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
 
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),

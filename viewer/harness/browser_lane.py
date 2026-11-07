@@ -102,10 +102,16 @@ def webkit_stderr_capture() -> str:
 def launch_engine(playwright, engine: str):
     if engine == "chromium":
         return playwright.chromium.launch(headless=True, chromium_sandbox=False)
-    # env replaces the inherited environment, so the pinned complex-text
-    # flag rides a merged copy; pw_run.sh sets the same one before its exec
+    # env replaces the inherited environment, so the browser-specific
+    # flags ride a merged copy: WEBKIT_FORCE_COMPLEX_TEXT is what
+    # pw_run.sh sets before its exec; EGL_PLATFORM=surfaceless is the
+    # pinned Mesa's only display-less platform, whose ForceSoftware path
+    # runs swrast without DRM (dri2_initialize_surfaceless in the pinned
+    # source) - the vendor dir and LIBGL_ALWAYS_SOFTWARE arrive through
+    # the sandbox env
     launch_env = dict(os.environ)
     launch_env["WEBKIT_FORCE_COMPLEX_TEXT"] = "1"
+    launch_env["EGL_PLATFORM"] = "surfaceless"
     return playwright.webkit.launch(
         headless=True,
         executable_path=webkit_stderr_capture(),
