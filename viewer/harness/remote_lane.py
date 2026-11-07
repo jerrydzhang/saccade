@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import shutil
 import subprocess
 import sys
 import time
@@ -215,14 +214,27 @@ def start_weston(weston_bin: str, wayland_name: str, logs: pathlib.Path) -> subp
 def start_core(core_bin: str, session: str, logs: pathlib.Path) -> subprocess.Popen[bytes] | None:
     """One private core in the foreground (the daemon argv production
     itself runs), serving its own session socket in the fresh runtime
-    tmpfs."""
+    tmpfs. The core's PATH is built from the pins, because bwrap's
+    --setenv overrides PATH with the bare allowlist value and the
+    core's own spawns (the mesh's fixed argv) would otherwise not find
+    the pinned readers."""
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    log_path = logs / f"core-{session}.log"
-    core_log = open(log_path, "wb")
+    coreutils_bin = os.environ.get("BOARD_VIEWER_COREUTILS_BIN", "")
+    path_parts = [
+        os.path.dirname(core_bin),
+        coreutils_bin,
+        os.environ.get("PATH", ""),
+    ]
+    core_log_path = logs / f"core-{session}.log"
+    core_log = open(core_log_path, "wb")
     try:
         core = subprocess.Popen(
             [core_bin, "serve"],
-            env={**os.environ, "HC_SESSION": session},
+            env={
+                **os.environ,
+                "HC_SESSION": session,
+                "PATH": ":".join(part for part in path_parts if part),
+            },
             stdout=core_log,
             stderr=core_log,
         )
@@ -232,13 +244,13 @@ def start_core(core_bin: str, session: str, logs: pathlib.Path) -> subprocess.Po
     socket_path = pathlib.Path(runtime) / "herdr-core" / f"{session}.sock"
     while time.monotonic() < deadline:
         if core.poll() is not None:
-            check(f"core {session} stayed up", False, f"exited during startup (log: {log_path})")
+            check(f"core {session} stayed up", False, f"exited during startup (log: {core_log_path})")
             return None
         if socket_path.exists():
             check(f"core {session} socket up", True, str(socket_path))
             return core
         time.sleep(0.2)
-    check(f"core {session} socket up", False, f"never appeared within {CORE_SOCKET_SECONDS}s (log: {log_path})")
+    check(f"core {session} socket up", False, f"never appeared within {CORE_SOCKET_SECONDS}s (log: {core_log_path})")
     core.terminate()
     core.wait(timeout=5)
     return None
@@ -419,8 +431,10 @@ def main() -> int:
         # actually spawns on b - a bare name against PATH, the pinned
         # absolute path, and the spawner's whole environment. Evidence,
         # recorded verbatim beside the logs; none of it gates the
-        # viewer assertions that follow.
-        coreutils_bin = pathlib.Path(shutil.which("realpath")).resolve().parent
+        # viewer assertions that follow. The readers resolve from the
+        # env pin, not from which(): bwrap's --setenv overrides PATH
+        # inside the sandbox, and the pin rides the inherited environ.
+        coreutils_bin = pathlib.Path(pinned("BOARD_VIEWER_COREUTILS_BIN"))
         probes = [
             ("bare realpath on b", ["realpath", "--version"]),
             ("pinned absolute realpath on b", [str(coreutils_bin / "realpath"), "--version"]),
