@@ -593,28 +593,20 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
             file=sys.stderr,
         )
         return None
-    # the mesh's fixed-argv reads resolve names through the exec'd
-    # process's PATH, and the sandbox's /bin carries no coreutils: the
-    # two readers bind at the names the adapter argv uses, store-pinned
-    tools_missing = []
-    readers: dict[str, str] = {}
-    for name in ("realpath", "cat"):
-        located = shutil.which(name)
-        if located is None:
-            tools_missing.append(name)
-            continue
-        resolved_reader = str(pathlib.Path(located).resolve())
-        if not resolved_reader.startswith("/nix/store/"):
-            print(
-                f"containment refusal: the /bin/{name} bind must be a pinned store binary; "
-                f"resolved {resolved_reader!r}",
-                file=sys.stderr,
-            )
-            return None
-        readers[name] = resolved_reader
-    if tools_missing:
+    # the mesh's fixed-argv readers (realpath, cat) must resolve on the
+    # machine that spawns them; the sandbox has no /usr/bin, so the
+    # pinned coreutils bin dir rides the PATH the via and core B see
+    # (record 3114: an env value under /nix/store, never a bind). The
+    # adapter's argv stays exactly realpath/cat.
+    realpath_located = shutil.which("realpath")
+    if realpath_located is None:
+        print("containment refusal: realpath is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return None
+    coreutils_bin = str(pathlib.Path(realpath_located).resolve().parent)
+    if not coreutils_bin.startswith("/nix/store/"):
         print(
-            f"containment refusal: not in PATH (pinned devshell expected): {', '.join(tools_missing)}",
+            "containment refusal: the coreutils PATH dir must be a pinned store directory; "
+            f"resolved {coreutils_bin!r}",
             file=sys.stderr,
         )
         return None
@@ -705,8 +697,7 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
         "session_py": session_py,
         "client_py": client_py,
         "bash_bin": bash_bin,
-        "realpath_bin": readers["realpath"],
-        "cat_bin": readers["cat"],
+        "coreutils_bin": coreutils_bin,
         "weston": tools["weston"],
         "shooter": tools["shooter"],
         "tauri_driver": tools["tauri_driver"],
@@ -749,10 +740,14 @@ def remote_env(resolved: dict, run_root: pathlib.Path) -> dict[str, str]:
     env["BOARD_VIEWER_VIA_PY"] = resolved["python"]
     env["HC_SESSION"] = "a"
     env["BOARD_LOCATION"] = REMOTE_LOCATION
-    # the mesh's shell lines locate herdr-core on PATH (command -v);
-    # the pinned core's bin dir leads, so a resolved name is the tested
-    # bytes and nothing else
-    env["PATH"] = f"{os.path.dirname(resolved['herdr_core'])}:{env['PATH']}"
+    # the mesh's shell lines locate herdr-core on PATH (command -v) and
+    # the fixed-argv readers resolve there too: the pinned core's bin
+    # dir and the pinned coreutils bin dir lead, so a resolved name is
+    # the tested bytes and nothing else
+    env["BOARD_VIEWER_COREUTILS_BIN"] = resolved["coreutils_bin"]
+    env["PATH"] = (
+        f"{os.path.dirname(resolved['herdr_core'])}:{resolved['coreutils_bin']}:{env['PATH']}"
+    )
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
     return env
 
@@ -771,8 +766,6 @@ def remote_binds(resolved: dict) -> list[tuple[str, str]]:
         (resolved["client_py"], SESSION_CLIENT_SANDBOX_PATH),
         (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
         (resolved["bash_bin"], "/bin/sh"),
-        (resolved["realpath_bin"], "/bin/realpath"),
-        (resolved["cat_bin"], "/bin/cat"),
         (resolved["fixture_dir"], "/board"),
         (resolved["app"], resolved["app"]),
         (resolved["weston"], resolved["weston"]),

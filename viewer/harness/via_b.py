@@ -40,18 +40,25 @@ def line_from_argv(words: list[str]) -> str:
 
 def shell_argv(line: str, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
     """(argv, child env) for the line: the pinned /bin/sh -c, with the
-    pinned core's bin directory leading PATH so the line's own
-    `command -v herdr-core` finds the tested bytes. The caller's env is
-    never mutated."""
+    pinned core's bin directory and the pinned coreutils bin directory
+    leading PATH - the line's own `command -v herdr-core` resolves to
+    exactly the tested bytes, and the mesh's fixed-argv readers
+    (realpath, cat) resolve on whichever side spawns them. The caller's
+    env is never mutated."""
     if "\0" in line:
         raise ViaRefused(f"via: refusing line with a NUL byte: {line!r}")
     if not line.strip():
         raise ViaRefused(f"via: refusing an empty handover: {line!r}")
-    child_env = dict(env)
     core_bin = env.get("BOARD_VIEWER_HERDR_CORE_BIN", "")
     if not core_bin.startswith("/"):
         raise ViaRefused("via: BOARD_VIEWER_HERDR_CORE_BIN must be an absolute pinned path")
-    child_env["PATH"] = f"{os.path.dirname(core_bin)}:{child_env.get('PATH', '')}"
+    coreutils_bin = env.get("BOARD_VIEWER_COREUTILS_BIN", "")
+    if not coreutils_bin.startswith("/"):
+        raise ViaRefused("via: BOARD_VIEWER_COREUTILS_BIN must be an absolute pinned path")
+    child_env = dict(env)
+    child_env["PATH"] = (
+        f"{os.path.dirname(core_bin)}:{coreutils_bin}:{child_env.get('PATH', '')}"
+    )
     return ["/bin/sh", "-c", line], child_env
 
 

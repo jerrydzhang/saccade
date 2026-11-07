@@ -159,7 +159,12 @@ def main() -> int:
     check("all-empty baselines refuse every required entry", len(failures) >= 9, str(failures))
 
     # --- remote mesh lane: the via program and argv shapes (pure) -------
-    via_env = {"BOARD_VIEWER_HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a", "PATH": "/usr/bin:/bin"}
+    via_env = {
+        "BOARD_VIEWER_HERDR_CORE_BIN": "/pin/core/bin/herdr-core",
+        "BOARD_VIEWER_COREUTILS_BIN": "/pin/coreutils/bin",
+        "HC_SESSION": "a",
+        "PATH": "/usr/bin:/bin",
+    }
     argv, child_env = via_b.shell_argv("echo ok", via_env)
     check(
         "the dial probe runs whole as a shell line under the pinned sh",
@@ -167,8 +172,8 @@ def main() -> int:
         str(argv),
     )
     check(
-        "the pinned core's bin dir leads PATH for the line's command -v",
-        child_env["PATH"].startswith("/pin/core/bin:") and child_env["PATH"].endswith(":/usr/bin:/bin"),
+        "the pinned core and coreutils bin dirs lead PATH for the line's command -v and the mesh's fixed argv",
+        child_env["PATH"] == "/pin/core/bin:/pin/coreutils/bin:/usr/bin:/bin",
         child_env["PATH"],
     )
     check(
@@ -204,10 +209,18 @@ def main() -> int:
     except via_b.ViaRefused:
         check("via refuses a NUL byte in the line", True)
     try:
-        via_b.shell_argv("hc connect", {"HC_SESSION": "a"})
+        via_b.shell_argv("hc connect", {"HC_SESSION": "a", "BOARD_VIEWER_COREUTILS_BIN": "/pin/coreutils/bin"})
         check("via refuses a missing core pin", False, "no refusal raised")
     except via_b.ViaRefused as refusal:
         check("via refuses a missing core pin", "BOARD_VIEWER_HERDR_CORE_BIN" in str(refusal), str(refusal))
+    try:
+        via_b.shell_argv(
+            "hc connect",
+            {"BOARD_VIEWER_HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a"},
+        )
+        check("via refuses a missing coreutils pin", False, "no refusal raised")
+    except via_b.ViaRefused as refusal:
+        check("via refuses a missing coreutils pin", "BOARD_VIEWER_COREUTILS_BIN" in str(refusal), str(refusal))
     try:
         via_b.shell_argv("hc connect", {"BOARD_VIEWER_HERDR_CORE_BIN": "relative/hc"})
         check("via refuses a relative core pin", False, "no refusal raised")
