@@ -376,7 +376,9 @@ impl Boards {
     }
 
     /// Rewrite the task's materialized checkout from a commit: export
-    /// into a sibling temporary directory, then rename into place.
+    /// into a per-commit directory, then swap a symlink at the task's
+    /// path, so the checkout path resolves to a complete tree at every
+    /// instant - the old tree survives until the swap has landed.
     pub fn materialize(&self, task: &str, commit: &str) -> Result<(), BoardsFail> {
         single_component(task)?;
         if !self.commit_exists(commit) {
@@ -388,20 +390,34 @@ impl Boards {
         std::fs::create_dir_all(&self.checkouts).map_err(|error| BoardsFail::Io {
             detail: format!("{}: {error}", self.checkouts.display()),
         })?;
-        let staging = self
-            .checkouts
-            .join(format!(".staging-{task}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&staging);
-        self.export_tree(commit, &staging)?;
+        let tree_dir = self.checkouts.join(format!(".{task}-{commit}"));
+        let _ = std::fs::remove_dir_all(&tree_dir);
+        self.export_tree(commit, &tree_dir)?;
         let final_path = self.checkouts.join(task);
-        if final_path.exists() {
+        // a leftover real checkout from before the symlink swap is not
+        // replaceable by rename; drop it once so the swap is atomic from
+        // here on
+        let previous = std::fs::symlink_metadata(&final_path)
+            .ok()
+            .filter(|meta| !meta.is_symlink());
+        if previous.is_some() {
             std::fs::remove_dir_all(&final_path).map_err(|error| BoardsFail::Io {
                 detail: format!("{}: {error}", final_path.display()),
             })?;
         }
-        std::fs::rename(&staging, &final_path).map_err(|error| BoardsFail::Io {
-            detail: format!("{} to {}: {error}", staging.display(), final_path.display()),
+        let old_tree = std::fs::read_link(&final_path).ok();
+        let swap = self
+            .checkouts
+            .join(format!(".swap-{task}-{}", std::process::id()));
+        let _ = std::fs::remove_file(&swap);
+        symlink(&format!(".{task}-{commit}"), &swap)?;
+        std::fs::rename(&swap, &final_path).map_err(|error| BoardsFail::Io {
+            detail: format!("{} to {}: {error}", swap.display(), final_path.display()),
         })?;
+        // the tree the symlink pointed at survives until the swap landed
+        if let Some(old) = old_tree {
+            let _ = std::fs::remove_dir_all(self.checkouts.join(old));
+        }
         Ok(())
     }
 
@@ -716,6 +732,20 @@ fn single_component(key: &str) -> Result<(), BoardsFail> {
         return Err(BoardsFail::InvalidKey {
             key: key.to_string(),
         });
+    }
+    Ok(())
+}
+
+fn symlink(target: &str, link: &Path) -> Result<(), BoardsFail> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).map_err(|error| BoardsFail::Io {
+            detail: format!("{} to {}: {error}", link.display(), target),
+        })?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (target, link);
     }
     Ok(())
 }
@@ -1347,8 +1377,11 @@ content:
         assert!(store.commit_exists(&saved));
     }
 
+    // the checkout is a symlink swap: the task's path resolves to a
+    // complete tree at every instant, and the previous tree leaves only
+    // after the swap has landed
     #[test]
-    fn materialize_publishes_the_tree_atomically() {
+    fn the_checkout_path_always_resolves_to_a_complete_tree() {
         let tag = "materialize";
         let store = boards(tag);
         let older = first_commit(
@@ -1377,6 +1410,11 @@ content:
             .materialize("tone-arm-resonance", &newer)
             .expect("the newer checkout materializes");
         let checkout = store.checkouts.join("tone-arm-resonance");
+        assert!(checkout.is_symlink(), "the task's path is the swap point");
+        assert_eq!(
+            std::fs::read_link(&checkout).expect("the link reads"),
+            PathBuf::from(format!(".tone-arm-resonance-{newer}"))
+        );
         let board = std::fs::read_to_string(checkout.join(BOARD_FILE)).expect("the checkout reads");
         assert!(board.contains("7.2 Hz"), "{}", board);
         assert_eq!(
@@ -1386,11 +1424,29 @@ content:
         store
             .materialize("tone-arm-resonance", &older)
             .expect("the older checkout replaces it");
+        assert!(checkout.is_symlink());
         let board = std::fs::read_to_string(checkout.join(BOARD_FILE)).expect("the checkout reads");
         assert!(board.contains("7 Hz"), "{}", board);
         assert_eq!(
             std::fs::read(checkout.join("figures/plinth-section.png")).expect("the figure reads"),
             ORIGINAL_DRAWING
+        );
+        assert!(
+            !store
+                .checkouts
+                .join(format!(".tone-arm-resonance-{newer}"))
+                .exists(),
+            "the replaced tree leaves after the swap"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(&store.checkouts)
+            .expect("the checkout root lists")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".swap-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no swap temporary remains: {leftovers:?}"
         );
     }
 
