@@ -1,0 +1,11 @@
+grammar: 1
+task: floop-index-backfill
+content:
+  - text: |
+      The finding, in one paragraph.
+---
+grammar: 1
+task: source-model
+content:
+  - text: |
+      A second board in the same file.

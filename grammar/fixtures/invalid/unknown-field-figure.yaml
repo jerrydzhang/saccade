@@ -1,0 +1,7 @@
+grammar: 1
+task: floop-index-backfill
+content:
+  - figure:
+      input: figures/plinth-section.png
+      alt: Section through the rebuilt plinth
+      caption: Section through the rebuilt plinth with the measurement positions marked.

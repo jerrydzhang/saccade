@@ -1,0 +1,32 @@
+grammar: 1
+task: gd-quadratic-a1-b100
+content:
+  - text: |
+      ## Answer
+      No. Slow convergence here is carried by the a-coordinate, whose factor
+      $1-\eta$ is positive at both recorded step sizes, so its slow geometric
+      decay is monotone. Oscillation belongs to the b-coordinate and only
+      when $\eta>1/b$: at $\eta=0.019$ that coordinate alternates yet is the
+      fast one. In this model oscillation is neither necessary for slow
+      convergence nor evidence of it.
+  - incorporation:
+      source:
+        task: source-model
+        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        select: [/content/1]
+      content:
+        - text: |
+            Kept because the answer leans on the recorded update factors, the
+            contraction window $0<\eta<2/b$, and the scope note that this
+            account concerns this exact quadratic, not arbitrary losses. The
+            behaviors it covers: at $\eta=0.01$ the b-factor is $0$ and the
+            a-factor $0.99$ decays monotonically and slowly; at $\eta=0.019$
+            the b-factor $-0.9$ alternates while decaying quickly and the
+            a-factor $0.981$ still decays monotonically and slowly.
+  - text: |
+      ## Why the account shrank
+      The reader's annotation asked a question the recorded factors already
+      settle, so the separate comparison group and the second recorded
+      selection (the source's result statement) were folded into the retained
+      passage above. One recorded source and the factor signs remain; the
+      numbers cited there are the same ones the comparison group carried.

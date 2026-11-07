@@ -1,0 +1,39 @@
+grammar: 1
+task: tone-arm-resonance
+content:
+  - text: |
+      ## Question
+
+      Why does the tone arm resonate near 7 Hz on the rebuilt plinth, and
+      which damping change removes it?
+  - group:
+      title: Recorded setup
+      content:
+        - text: |
+            The plinth rebuild replaced the aluminium plate with birch ply,
+            and the counterweight moved 12 mm outward. Resonance appears
+            only with the rubber mat removed.
+        - figure:
+            input: figures/plinth-section.png
+            caption: Section through the rebuilt plinth with the measurement positions marked.
+  - group:
+      content:
+        - incorporation:
+            source:
+              task: cartridge-compliance-notes
+              revision: 4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f
+              select: [/content/1, /content/2/group/content/0]
+            content:
+              - text: |
+                  The recorded compliance figures set the predicted resonance
+                  window, and the mass note explains why the outward
+                  counterweight shift matters here.
+  - annotation: |
+      Reviewer concern: the resonance number assumes a 20 C room, while the
+      session log says 24 C. Check whether the compliance shift covers the
+      difference before this board is offered.
+  - text: |
+      ## Next step
+
+      Repeat the sweep with the mat fitted and record the peak frequency
+      beside the 7 Hz figure.

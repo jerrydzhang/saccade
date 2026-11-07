@@ -1,0 +1,58 @@
+grammar: 1
+task: gd-quadratic-a1-b100
+content:
+  - text: |
+      ## Goal
+      Explain what fixed-step gradient descent does on the recorded quadratic
+      for $a=1$, $b=100$ at step sizes $\eta=0.01$ and $\eta=0.019$.
+  - incorporation:
+      source:
+        task: source-model
+        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        select: [/content/1]
+      content:
+        - text: |
+            Recorded whole: the update factors, the contraction window
+            $0<\eta<2/b$, and the scope note that this account concerns this
+            exact quadratic and not arbitrary losses all live in this group,
+            and the numbers below depend on each of them. Read from it, the
+            coordinates obey $x_{k+1}=(1-\eta)x_k$ and
+            $y_{k+1}=(1-100\eta)y_k$.
+  - incorporation:
+      source:
+        task: source-model
+        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        select: [/content/2]
+      content:
+        - text: |
+            Recorded so the per-coordinate figures below are read as exact
+            consequences of the recurrence rather than a numerical walk; the
+            recorded result also warns that unequal contraction factors give
+            unequal progress.
+  - group:
+      title: The two step sizes
+      content:
+        - text: |
+            At $\eta=0.01$: the b-factor is $1-100\eta=0$, so $y$ settles on
+            the minimizer in one step. The a-factor is $0.99$, so $x$ decays
+            slowly and monotonically, taking about 459 steps to fall below
+            one percent of its start. No coordinate changes sign.
+        - text: |
+            At $\eta=0.019$: the b-factor is $-0.9$, so $y$ decays while
+            alternating sign, below one percent in about 44 steps. The
+            a-factor is $0.981$, so $x$ still decays slowly and
+            monotonically, about 240 steps to one percent. Both coordinates
+            stay contractive because $0.019<2/b=0.02$.
+  - annotation: |
+      Reader question: does slow convergence require oscillation? At
+      $\eta=0.01$ the slow a-coordinate never alternates, while at
+      $\eta=0.019$ the oscillating b-coordinate is the fast one. Settle the
+      question from the recorded factors before proposing any experiment.
+  - text: |
+      ## Why these step sizes
+      $\eta=0.01$ is exactly $1/b$: the point where the b-coordinate's factor
+      hits zero, the boundary between monotone and alternating decay.
+      $\eta=0.019$ sits between $1/b$ and $2/b$: still contractive, but the
+      b-coordinate overshoots and alternates. The persistently slow
+      coordinate is $x$ in both cases, and its factor $1-\eta$ stays
+      positive throughout.

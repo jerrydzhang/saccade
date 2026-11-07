@@ -1,0 +1,7 @@
+grammar: 1
+task: floop-index-backfill
+content:
+  - text: |
+      The finding, in one paragraph.
+  - group:
+      content: [

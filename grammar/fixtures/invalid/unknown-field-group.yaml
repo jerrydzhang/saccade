@@ -1,0 +1,11 @@
+grammar: 1
+task: floop-index-backfill
+content:
+  - group:
+      title: The two accounts
+      relation: comparison
+      content:
+        - text: |
+            The recorded account.
+        - text: |
+            The derived account.

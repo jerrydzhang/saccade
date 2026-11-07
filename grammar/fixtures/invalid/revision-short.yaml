@@ -1,0 +1,11 @@
+grammar: 1
+task: floop-index-backfill
+content:
+  - incorporation:
+      source:
+        task: source-model
+        revision: 647de6e
+        select: [/content/1]
+      content:
+        - text: |
+            The receiving text explains what this board takes from the source.
