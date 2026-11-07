@@ -1535,6 +1535,104 @@ mod test {
         assert!(matches!(refused, Err(Reject::InvalidStateTransition)));
     }
 
+    #[test]
+    fn checkpoints_never_rewind_at_the_explicit_door() {
+        let mut log = Log::new();
+        log.execute(
+            human(),
+            Command::CreateTask {
+                name: prose("carry a merge through the worktree"),
+            },
+            1,
+        )
+        .unwrap();
+        let base = GitCommit::new(format!("{}{}", "abc123", "0".repeat(34))).unwrap();
+        log.execute_system(
+            Command::EstablishWorkspace {
+                task_id: TaskId(0),
+                base: base.clone(),
+                branch: GitBranch::new("saccade/t-0".into()).unwrap(),
+                worktree: WorktreePath::new("/repo/wt/t-0".into()).unwrap(),
+            },
+            2,
+        )
+        .unwrap();
+
+        // the machinery rebases freely: boot recovery names an
+        // unrelated head and lands
+        let recovery = GitCommit::new(format!("{}{}", "777000", "0".repeat(34))).unwrap();
+        log.execute_system(
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: recovery.clone(),
+            },
+            3,
+        )
+        .unwrap();
+
+        // the explicit door is agent- and human-held: an advance lands
+        let merged = GitCommit::new(format!("{}{}", "def456", "0".repeat(34))).unwrap();
+        for ctx in [agent(), human()] {
+            log.execute(
+                ctx,
+                Command::CheckpointWorkspace {
+                    task_id: TaskId(0),
+                    checkpoint: merged.clone(),
+                },
+                4,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            log.world().tasks[0]
+                .workspace
+                .as_ref()
+                .unwrap()
+                .workspace
+                .checkpoint,
+            merged
+        );
+
+        // restating the recorded head is a no-op that succeeds
+        let before = log.records().len();
+        log.execute(
+            agent(),
+            Command::CheckpointWorkspace {
+                task_id: TaskId(0),
+                checkpoint: merged.clone(),
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(log.records().len(), before + 1);
+        assert_eq!(
+            log.world().tasks[0]
+                .workspace
+                .as_ref()
+                .unwrap()
+                .workspace
+                .checkpoint,
+            merged
+        );
+
+        // a rewind names a head the record left: the base, the recovered
+        // head - refused at both explicit tiers, writing nothing
+        for rewind in [base, recovery] {
+            for ctx in [agent(), human()] {
+                let refused = log.execute(
+                    ctx,
+                    Command::CheckpointWorkspace {
+                        task_id: TaskId(0),
+                        checkpoint: rewind.clone(),
+                    },
+                    6,
+                );
+                assert!(matches!(refused, Err(Reject::CheckpointRewind)));
+            }
+        }
+        assert_eq!(log.records().len(), before + 1);
+    }
+
     /// The root destination is the human's latest explicit choice:
     /// agents and machinery refuse both acts, a rebind replaces, a
     /// clear removes, and the log keeps every recorded choice.
