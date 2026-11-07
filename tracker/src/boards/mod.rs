@@ -164,6 +164,11 @@ pub struct UpdateOutcome {
 }
 
 impl Boards {
+    /// The derived checkout path for a task's current committed board.
+    pub fn materialized_path(&self, task: &str) -> PathBuf {
+        self.checkouts.join(task)
+    }
+
     /// Open the tracker's boards repository, initializing it if absent.
     /// Auto-gc is disabled: recorded commits are never garbage-collected.
     pub fn open(state_dir: &Path) -> Result<Boards, BoardsFail> {
@@ -197,7 +202,7 @@ impl Boards {
         message: &str,
     ) -> Result<Committed, BoardsFail> {
         single_component(task)?;
-        let board = read_working_board(workdir)?;
+        let board = Self::validate_workdir(workdir)?;
         if let Some(parent) = parent
             && !self.commit_exists(parent)
         {
@@ -206,6 +211,16 @@ impl Boards {
                 commit: parent.to_string(),
             });
         }
+        let commit = self.commit_tree(workdir, &board, parent, message)?;
+        Ok(Committed {
+            commit,
+            incorporations: board_grammar::incorporations(&board),
+        })
+    }
+
+    /// The local validation shared by `board check` and commit.
+    pub fn validate_workdir(workdir: &Path) -> Result<Board, BoardsFail> {
+        let board = read_working_board(workdir)?;
         for path in board_grammar::figures(&board) {
             let file = workdir.join(&path);
             let meta = std::fs::metadata(&file)
@@ -215,11 +230,7 @@ impl Boards {
                 return Err(BoardsFail::FigureTooLarge { path, size });
             }
         }
-        let commit = self.commit_tree(workdir, &board, parent, message)?;
-        Ok(Committed {
-            commit,
-            incorporations: board_grammar::incorporations(&board),
-        })
+        Ok(board)
     }
 
     /// Move the task's commit ref onto a commit the repository holds.
@@ -782,11 +793,48 @@ impl Boards {
         Ok(Some(out.stdout))
     }
 
-    fn text_at(&self, commit: &str, path: &str) -> Result<String, BoardsFail> {
+    /// The actor's checkpoint chain tip, when one stands.
+    pub fn checkpoint_tip(&self, task: &str, actor: &str) -> Result<Option<String>, BoardsFail> {
+        single_component(task)?;
+        single_component(actor)?;
+        self.read_ref(&format!("{COMMIT_REF_PREFIX}/{task}/wip/{actor}"))
+    }
+
+    /// One file's bytes inside a stored revision.
+    pub fn file_bytes(&self, commit: &str, path: &str) -> Result<Option<Vec<u8>>, BoardsFail> {
+        self.blob_at(commit, path)
+    }
+
+    /// A stored file's text; an absent path reads as empty.
+    pub fn text_at(&self, commit: &str, path: &str) -> Result<String, BoardsFail> {
         match self.blob_at(commit, path)? {
             Some(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
             None => Ok(String::new()),
         }
+    }
+
+    /// The unified diff between two stored revisions.
+    pub fn diff(&self, from: &str, to: &str) -> Result<String, BoardsFail> {
+        let out = run(&self.repo, &["diff", from, to], None)?;
+        if out.status != 0 {
+            return Err(BoardsFail::Git(format!(
+                "git diff failed: {}",
+                out.stderr.trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// A commit's full message, trimmed.
+    pub fn commit_message(&self, commit: &str) -> Result<String, BoardsFail> {
+        let out = run(&self.repo, &["log", "-1", "--format=%B", commit], None)?;
+        if out.status != 0 {
+            return Err(BoardsFail::Git(format!(
+                "git log failed for {commit}: {}",
+                out.stderr.trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
     fn read_ref(&self, refname: &str) -> Result<Option<String>, BoardsFail> {

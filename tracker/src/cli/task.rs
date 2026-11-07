@@ -38,20 +38,6 @@ pub(super) fn read_only(cli: &Cli, loadout: &db::Loadout) -> Result<String, Fail
             }
             LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
         },
-        Cmd::Search { terms, context } => {
-            let query = SearchQuery::parse(terms).map_err(|f| Fail::Usage(f.to_string()))?;
-            if let Some(around) = context {
-                let anchor = anchor_seq(loadout, &query)?;
-                return Ok(render_anchor(cli, &loadout.rows, anchor, *around, cursor));
-            }
-            match &loadout.state {
-                LoadState::Full(world) => {
-                    let groups = search(world, &query).map_err(|f| Fail::Usage(f.to_string()))?;
-                    Ok(render_search(cli, &groups, terms, &query, cursor))
-                }
-                LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
-            }
-        }
         _ => unreachable!("read_only reached from a mutating command"),
     }
 }
@@ -400,145 +386,63 @@ pub(super) fn show_stdin(
     Ok(format!("{}\n{}", blocks.join("\n\n"), cursor_line(cursor)))
 }
 
-/// The search door as text: thread groups of pointers, one matched
-/// line each. Counts ride the headers only when the query narrows -
-/// narrowing's visibility, never an aggregate badge - and a query
-/// that matched nothing says so in one line.
-pub(super) fn render_search(
+/// The board search door: current boards by default, one line per
+/// task; --history finds the revisions where terms appeared or
+/// disappeared; a t-N or t-N@rK term is a reference search. The
+/// boards live in the server's Git, so the search rides the server.
+pub(super) fn search_door(
     cli: &Cli,
-    groups: &[SearchGroup],
-    tokens: &[String],
-    query: &SearchQuery,
-    cursor: Option<usize>,
-) -> String {
-    let counts = !query.facets.is_empty();
+    destination: &Destination,
+    terms: &[String],
+    history: bool,
+    within: &Option<String>,
+) -> Result<String, Fail> {
+    if terms.is_empty() {
+        return Err(Fail::Usage(
+            "search names its terms: sac search <terms...> [--history] [--in t-N@rA..rB]".into(),
+        ));
+    }
+    let url = server_url(destination, "search")?;
+    let reply =
+        client::board_search(&url, terms, history, within.as_deref()).map_err(Fail::Client)?;
     if cli.json {
-        let rows: Vec<serde_json::Value> = groups
-            .iter()
-            .map(|g| {
-                let mut row = serde_json::json!({
-                    "task": format!("t-{}", g.task),
-                    "title": g.title,
-                    "records": g.records.iter().map(|r| serde_json::json!({
-                        "pointer": r.pointer,
-                        "kind": r.kind,
-                        "actor": r.actor,
-                        "body": r.body,
-                    })).collect::<Vec<_>>(),
-                });
-                if counts {
-                    row["shown"] = serde_json::json!(g.records.len());
-                    row["total"] = serde_json::json!(g.total);
-                }
-                row
-            })
-            .collect();
-        return serde_json::to_string_pretty(&serde_json::json!({
-            "groups": rows,
-            "cursor": cursor,
-        }))
-        .expect("results are plain data");
+        return Ok(serde_json::to_string_pretty(&reply).expect("results are plain data"));
     }
-    if groups.is_empty() {
-        return format!("no matches ({})\n{}", tokens.join(" "), cursor_line(cursor));
+    if reply.lines.is_empty() {
+        return Ok(format!("no boards match ({})", terms.join(" ")));
     }
-    let mut out = Vec::new();
-    for g in groups {
-        let mark = if counts {
-            format!(" ({} of {})", g.records.len(), g.total)
-        } else {
-            String::new()
-        };
-        out.push(format!("t-{}  {}{}", g.task, g.title, mark));
-        for r in &g.records {
-            let actor = r
-                .actor
-                .as_deref()
-                .map(|a| format!("{a}  "))
-                .unwrap_or_default();
-            let prefix = format!("  {}  {actor}", r.pointer);
-            let budget = WIDTH.saturating_sub(prefix.chars().count());
-            let line = matched_line(&query.terms, &r.text());
-            out.push(format!("{prefix}{}", glimpse(&line, budget)));
-        }
-    }
-    out.push(cursor_line(cursor));
-    out.join("\n")
-}
-
-/// The anchor query names one record: t-N's birth.
-pub(super) fn anchor_seq(loadout: &db::Loadout, query: &SearchQuery) -> Result<usize, Fail> {
-    match query.terms.as_slice() {
-        [Term::Task(id)] => match &loadout.state {
-            LoadState::Full(world) => {
-                world.tasks.get(id.0).map(|ctx| ctx.birth.0).ok_or_else(|| {
-                    Fail::Usage(format!(
-                        "no task t-{}; the fold holds {} tasks",
-                        id.0,
-                        world.tasks.len()
-                    ))
-                })
-            }
-            LoadState::Degraded(reason) => Err(Fail::Degraded(reason.clone())),
-        },
-        _ => Err(Fail::Usage(
-            "-C anchors on one record: give a single id term (c-<n> or t-N) and no facets".into(),
-        )),
-    }
-}
-
-/// The anchor's window: the record, N before, N after - one line each,
-/// straight off the log's own rows.
-pub(super) fn render_anchor(
-    cli: &Cli,
-    rows: &[StoredRecord],
-    anchor: usize,
-    around: usize,
-    cursor: Option<usize>,
-) -> String {
-    let from = anchor.saturating_sub(around);
-    let to = (anchor + around).min(rows.len().saturating_sub(1));
-    let window = &rows[from..=to];
-    if cli.json {
-        let records: Vec<serde_json::Value> = window
-            .iter()
-            .map(|row| {
-                serde_json::json!({
-                    "seq": row.seq,
-                    "kind": row.kind,
-                    "actor": format!("{}/{}", row.actor, row.tier),
-                    "line": row_line(row),
-                })
-            })
-            .collect();
-        return serde_json::to_string_pretty(&serde_json::json!({
-            "anchor": anchor,
-            "records": records,
-            "cursor": cursor,
-        }))
-        .expect("rows are plain data");
-    }
-    let mut lines: Vec<String> = window
+    let lines: Vec<String> = reply
+        .lines
         .iter()
-        .map(|row| {
-            let prefix = format!("seq {}  {}  {}/{}", row.seq, row.kind, row.actor, row.tier);
-            let budget = WIDTH.saturating_sub(prefix.chars().count() + 2);
-            format!("{prefix}  {}", glimpse(&row_line(row), budget))
+        .map(|line| match line {
+            saccade::serve::board_wire::SearchLine::Board {
+                task,
+                name,
+                revision,
+                excerpt,
+            } => {
+                format!("t-{task}@r{revision}  {name}  {excerpt}")
+            }
+            saccade::serve::board_wire::SearchLine::History {
+                task,
+                revision,
+                event,
+                term,
+                detail,
+            } => {
+                let anchor = revision
+                    .map(|r| format!("t-{task}@r{r}"))
+                    .unwrap_or_else(|| format!("t-{task}"));
+                let term = term.as_deref().unwrap_or("");
+                let detail = detail.as_deref().unwrap_or("");
+                if detail.is_empty() {
+                    format!("{anchor} {event} {term}")
+                } else {
+                    format!("{anchor} {event} {term}: {detail}")
+                }
+            }
+            saccade::serve::board_wire::SearchLine::Reference { line } => line.clone(),
         })
         .collect();
-    lines.push(cursor_line(cursor));
-    lines.join("\n")
-}
-
-/// The record's own first text line - the same fields the log prints.
-pub(super) fn row_line(row: &StoredRecord) -> String {
-    let payload: serde_json::Value = match serde_json::from_str(&row.payload) {
-        Ok(v) => v,
-        Err(_) => return String::new(),
-    };
-    ["name", "explanation"]
-        .iter()
-        .find_map(|k| payload.get(k).and_then(|v| v.as_str()))
-        .map(|t| t.lines().next().unwrap_or_default().to_string())
-        .unwrap_or_default()
+    Ok(lines.join("\n"))
 }

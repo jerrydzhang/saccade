@@ -1,6 +1,7 @@
 //! The serve edge: one sole-writer process behind the /api/v1 surface.
 
 pub mod api;
+pub mod board_wire;
 pub mod client;
 pub mod wire;
 

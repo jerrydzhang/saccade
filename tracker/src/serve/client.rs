@@ -794,3 +794,251 @@ pub fn assign_host_address(
         }),
     )
 }
+
+// -- the board doors' client half ----------------------------------------
+//
+// The same envelope law as the command face: the context is built
+// from the caller's store Context, the reply's failures carry the
+// server's codes, and every read is a plain GET.
+
+pub(crate) fn wire_context(context: &Context) -> crate::api::WireContext {
+    crate::api::WireContext {
+        actor: context.actor.clone(),
+        tier: match context.tier {
+            Tier::Human => crate::api::WireTier::Human,
+            Tier::Agent => crate::api::WireTier::Agent,
+            Tier::System => unreachable!("the API has no system tier"),
+        },
+        scope: context.scope.clone(),
+    }
+}
+
+fn board_reply<T: serde::de::DeserializeOwned>(
+    url: &str,
+    response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> Result<T, ClientFail> {
+    let mut response = response.map_err(|_| ClientFail::ServerUnreachable {
+        url: url.to_string(),
+    })?;
+    let status = response.status().as_u16();
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|_| ClientFail::ServerUnreachable {
+            url: url.to_string(),
+        })?;
+    if status == 200 {
+        return serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
+            code: "malformed_response".into(),
+            detail: e.to_string(),
+            message: None,
+        });
+    }
+    let body: ErrorBody = serde_json::from_str(&text).map_err(|e| ClientFail::Refused {
+        code: "malformed_response".into(),
+        detail: e.to_string(),
+        message: None,
+    })?;
+    Err(ClientFail::Refused {
+        code: body.error.code,
+        detail: body.error.detail.to_string(),
+        message: None,
+    })
+}
+
+fn board_post<T: serde::de::DeserializeOwned>(
+    url: &str,
+    route: &str,
+    body: &impl serde::Serialize,
+) -> Result<T, ClientFail> {
+    let response = ureq::post(&format!("{url}{route}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(serde_json::to_value(body).expect("board requests are plain data"));
+    board_reply(url, response)
+}
+
+fn board_read<T: serde::de::DeserializeOwned>(url: &str, route: &str) -> Result<T, ClientFail> {
+    let response = ureq::get(&format!("{url}{route}"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call();
+    board_reply(url, response)
+}
+
+pub fn board_edit(
+    url: &str,
+    task: usize,
+    actor: Option<&str>,
+) -> Result<crate::serve::board_wire::EditReply, ClientFail> {
+    let actor = actor.map(|a| query_escape(a.to_string()));
+    board_read(
+        url,
+        &format!(
+            "/api/v1/boards/edit?task={task}{}",
+            actor.map(|a| format!("&actor={a}")).unwrap_or_default()
+        ),
+    )
+}
+
+fn query_escape(value: String) -> String {
+    // ureq encodes nothing on our side; query values here are actor
+    // names, so the reserved few percent-escape minimally
+    value
+        .replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('&', "%26")
+        .replace('=', "%3D")
+        .replace('?', "%3F")
+        .replace('#', "%23")
+}
+
+pub fn board_checkpoint(
+    url: &str,
+    context: &Context,
+    task: usize,
+    files: &crate::serve::board_wire::BoardFiles,
+    base: &str,
+    message: &str,
+) -> Result<crate::serve::board_wire::CheckpointReply, ClientFail> {
+    board_post(
+        url,
+        "/api/v1/boards/checkpoint",
+        &crate::serve::board_wire::CheckpointRequest {
+            context: wire_context(context),
+            task,
+            files: files.clone(),
+            base: base.to_string(),
+            message: message.to_string(),
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
+    )
+}
+
+pub fn board_commit(
+    url: &str,
+    context: &Context,
+    task: usize,
+    files: &crate::serve::board_wire::BoardFiles,
+    message: &str,
+) -> Result<crate::serve::board_wire::CommitReply, ClientFail> {
+    board_post(
+        url,
+        "/api/v1/boards/commit",
+        &crate::serve::board_wire::CommitRequest {
+            context: wire_context(context),
+            task,
+            files: files.clone(),
+            message: message.to_string(),
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
+    )
+}
+
+pub fn board_discard(
+    url: &str,
+    context: &Context,
+    task: usize,
+) -> Result<crate::serve::board_wire::DiscardReply, ClientFail> {
+    board_post(
+        url,
+        "/api/v1/boards/discard",
+        &crate::serve::board_wire::DiscardRequest {
+            context: wire_context(context),
+            task,
+            client: Some(env!("CARGO_PKG_VERSION").to_string()),
+        },
+    )
+}
+
+pub fn board_update(
+    url: &str,
+    task: usize,
+    base: &str,
+    files: &crate::serve::board_wire::BoardFiles,
+) -> Result<crate::serve::board_wire::UpdateReply, ClientFail> {
+    board_post(
+        url,
+        "/api/v1/boards/update",
+        &crate::serve::board_wire::UpdateRequest {
+            task,
+            base: base.to_string(),
+            files: files.clone(),
+        },
+    )
+}
+
+/// One revision's tree; `revision` absent means the current one.
+pub fn board_get_tree(
+    url: &str,
+    task: usize,
+    revision: Option<usize>,
+) -> Result<crate::serve::board_wire::TreeReply, ClientFail> {
+    board_read(
+        url,
+        &format!(
+            "/api/v1/boards/get?task={task}{}",
+            revision
+                .map(|r| format!("&revision={r}"))
+                .unwrap_or_default()
+        ),
+    )
+}
+
+/// One file out of a revision.
+pub fn board_get_file(
+    url: &str,
+    task: usize,
+    revision: Option<usize>,
+    path: &str,
+) -> Result<crate::serve::board_wire::GetReply, ClientFail> {
+    board_read(
+        url,
+        &format!(
+            "/api/v1/boards/get?task={task}{}&path={}",
+            revision
+                .map(|r| format!("&revision={r}"))
+                .unwrap_or_default(),
+            query_escape(path.to_string())
+        ),
+    )
+}
+
+pub fn board_diff(
+    url: &str,
+    task: usize,
+    from: usize,
+    to: usize,
+) -> Result<crate::serve::board_wire::DiffReply, ClientFail> {
+    board_read(
+        url,
+        &format!("/api/v1/boards/diff?task={task}&from={from}&to={to}"),
+    )
+}
+
+pub fn board_log(url: &str, task: usize) -> Result<serde_json::Value, ClientFail> {
+    board_read(url, &format!("/api/v1/boards/log?task={task}"))
+}
+
+pub fn board_path(url: &str, task: usize) -> Result<serde_json::Value, ClientFail> {
+    board_read(url, &format!("/api/v1/boards/path/{task}"))
+}
+
+pub fn board_search(
+    url: &str,
+    terms: &[String],
+    history: bool,
+    within: Option<&str>,
+) -> Result<crate::serve::board_wire::SearchReply, ClientFail> {
+    board_post(
+        url,
+        "/api/v1/boards/search",
+        &crate::serve::board_wire::SearchQuery {
+            terms: terms.to_vec(),
+            history,
+            within: within.map(str::to_string),
+        },
+    )
+}

@@ -3168,6 +3168,7 @@ name = "saccade"
 version = "0.19.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "board-grammar",
  "clap",
  "libc",

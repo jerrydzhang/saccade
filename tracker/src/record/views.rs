@@ -67,6 +67,7 @@ pub fn mailbox(world: &World, id: IncarnationId) -> Vec<MessageId> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WaitUntil {
     Activity,
+    Offer,
 }
 
 /// Whether the record the event lands in wakes a wait on `target`.
@@ -77,8 +78,11 @@ pub fn wait_matches(
     at: RecordId,
     event: &Event,
     target: &Target,
-    _until: WaitUntil,
+    until: WaitUntil,
 ) -> bool {
+    if matches!(until, WaitUntil::Offer) {
+        return matches!(event, Event::TaskOffered { task, .. } if *target == Target::Task(*task));
+    }
     match event {
         Event::TaskCreated { .. } => {
             matches!(*target, Target::Task(t) if world.task_born_at(at) == Some(t))

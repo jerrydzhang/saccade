@@ -40,7 +40,7 @@ pub(super) fn wait_door(
     };
     let Some(until) = until else {
         return Err(Fail::Usage(
-            "the t-<n> wait names its mode: --until activity is required".into(),
+            "the t-<n> wait names its mode: --until activity or offer is required".into(),
         ));
     };
     let raw = wait_target(target)?;

@@ -283,13 +283,13 @@ impl AppState {
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum WireTier {
+pub enum WireTier {
     Human,
     Agent,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct WireContext {
+pub struct WireContext {
     pub actor: ActorName,
     pub tier: WireTier,
     /// The environment-declared scope, when the sending session carries one
@@ -452,6 +452,57 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         raw: String::from_utf8_lossy(&body).into_owned(),
     };
     // a send command rides the send operation like the send face: the
+    // an accept runs the effect layer's checkpoint guard in the same
+    // locked stretch that records it (D6): no actor of the task may
+    // hold unsaved checkpoints when the acceptance lands
+    if let Command::AcceptBoard { task } = &command {
+        let accept_task = *task;
+        let accept_context = context.clone();
+        let accept_command = command.clone();
+        let started = Instant::now();
+        let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+        let outcome: Result<Vec<StoredRecord>, ApiFail> = (|| {
+            let inner = board_ready(&mut guard)?;
+            if let Some(root) = app.repo_root() {
+                let boards = crate::boards::Boards::open(&crate::paths::state_dir(root)).map_err(
+                    |fail| {
+                        ApiFail::Refused(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            fail.code(),
+                            fail.detail(),
+                        )
+                    },
+                )?;
+                boards
+                    .accept_guard(&accept_task.0.to_string())
+                    .map_err(|fail| {
+                        ApiFail::Refused(StatusCode::CONFLICT, fail.code(), fail.detail())
+                    })?;
+            }
+            db::record(
+                &mut inner.conn,
+                &accept_context,
+                accept_command,
+                envelope.at.unwrap_or_else(db::now_epoch),
+            )
+            .map(|(stored, _)| stored)
+            .map_err(ApiFail::from)
+        })();
+        integration_outcome(&app, &guard, None, &received, started, &outcome);
+        drop(guard);
+        return match outcome {
+            Ok(stored) => {
+                let mut reply = json!({"records": &stored});
+                if let Ok(snapshot) = app.snapshot()
+                    && let Some(ctx) = snapshot.world.tasks.get(accept_task.0)
+                {
+                    reply["revision"] = json!(ctx.commits.len());
+                }
+                (StatusCode::OK, Json(reply)).into_response()
+            }
+            Err(e) => api_failure(e),
+        };
+    }
     // per-recipient lock must cover its record, and the attempt's truth
     // rides the reply as data
     if let Command::SendMessage { .. } = &command {
@@ -493,6 +544,14 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
                     .expect("the birth record folds into its task");
                 reply["id"] = json!(format!("t-{}", born.0));
             }
+            // a board decision names its revision: the dense rK the
+            // fold derives from the commit list
+            if let Command::CommitBoard { task, .. } | Command::OfferBoard { task, .. } = &command
+                && let Ok(snapshot) = app.snapshot()
+                && let Some(ctx) = snapshot.world.tasks.get(task.0)
+            {
+                reply["revision"] = json!(ctx.commits.len());
+            }
             (StatusCode::OK, Json(reply)).into_response()
         }
         Err(e) => execute_failure_response(&app, e, &command),
@@ -513,6 +572,16 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/incarnations/address", post(incarnation_address))
         .route("/api/v1/messages/send", post(message_send))
         .route("/api/v1/messages", get(messages_history))
+        .route("/api/v1/boards/path/{task}", get(board_path))
+        .route("/api/v1/boards/edit", get(board_edit))
+        .route("/api/v1/boards/get", get(board_get))
+        .route("/api/v1/boards/diff", get(board_diff))
+        .route("/api/v1/boards/log", get(board_log))
+        .route("/api/v1/boards/search", post(board_search))
+        .route("/api/v1/boards/checkpoint", post(board_checkpoint))
+        .route("/api/v1/boards/commit", post(board_commit))
+        .route("/api/v1/boards/discard", post(board_discard))
+        .route("/api/v1/boards/update", post(board_update))
         .route("/api/v1/version", get(version))
 }
 
@@ -2660,9 +2729,57 @@ fn api_failure(fail: ApiFail) -> Response {
 }
 
 /// The handshake surface: which build is serving, nothing more
+async fn board_path(
+    State(app): State<AppState>,
+    axum::extract::Path(task): axum::extract::Path<usize>,
+) -> Response {
+    let snapshot = match app.snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(fail) => {
+            return api_failure(match fail {
+                ReadFail::Degraded(degraded) => ApiFail::Degraded(degraded.reason),
+                ReadFail::Db(reason) => ApiFail::Db(reason),
+            });
+        }
+    };
+    let Some(context) = snapshot.world.tasks.get(task) else {
+        return api_failure(ApiFail::Reject(Reject::InvalidTaskId, None));
+    };
+    if context.commits.is_empty() {
+        return api_failure(ApiFail::Refused(
+            StatusCode::NOT_FOUND,
+            "board_missing",
+            format!("task t-{task} has no committed board"),
+        ));
+    }
+    let Some(root) = app.repo_root() else {
+        return api_failure(ApiFail::NoRepo);
+    };
+    let boards = match crate::boards::Boards::open(&crate::paths::state_dir(root)) {
+        Ok(boards) => boards,
+        Err(fail) => {
+            return api_failure(ApiFail::Refused(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                fail.code(),
+                fail.detail(),
+            ));
+        }
+    };
+    let path = boards.materialized_path(&task.to_string());
+    (
+        StatusCode::OK,
+        Json(json!({"task": format!("t-{task}"), "path": path.display().to_string()})),
+    )
+        .into_response()
+}
+
 async fn version(State(app): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "board_grammar": {
+            "min": *board_grammar::SUPPORTED_GRAMMAR_VERSIONS.start(),
+            "max": *board_grammar::SUPPORTED_GRAMMAR_VERSIONS.end(),
+        },
         "db": app.db_path().display().to_string(),
     }))
 }
@@ -2676,5 +2793,566 @@ async fn records(State(app): State<AppState>) -> Response {
             Json(json!({"error": {"code": "database_error", "detail": reason}})),
         )
             .into_response(),
+    }
+}
+
+// -- the board doors -----------------------------------------------------
+//
+// Working directories are local to the caller's machine; every Git
+// effect runs here, under the writer lock, in the D7 order. Reads
+// open the repository per request: the repair at boot keeps its
+// caches true, and an open re-reads the refs.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::serve::board_wire::{
+    BoardFile, BoardFiles, CheckpointReply, CheckpointRequest, CommitReply, CommitRequest,
+    DiffQuery, DiffReply, DiscardReply, DiscardRequest, EditQuery, EditReply, GetQuery, GetReply,
+    MAX_BOARD_FILE_BYTES, SearchReply, TreeReply, UpdateReply, UpdateRequest,
+};
+use base64::Engine as _;
+
+static BOARD_TEMP: AtomicUsize = AtomicUsize::new(0);
+
+fn board_tempdir(label: &str) -> std::path::PathBuf {
+    let n = BOARD_TEMP.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("saccade-board-{label}-{}-{n}", std::process::id()))
+}
+
+fn boards_of(app: &AppState) -> Result<crate::boards::Boards, ApiFail> {
+    let root = app.repo_root().ok_or(ApiFail::NoRepo)?;
+    crate::boards::Boards::open(&crate::paths::state_dir(root)).map_err(|fail| {
+        ApiFail::Refused(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            fail.code(),
+            fail.detail(),
+        )
+    })
+}
+
+fn snapshot_of(app: &AppState) -> Result<Snapshot, ApiFail> {
+    app.snapshot().map_err(|fail| match fail {
+        ReadFail::Degraded(degraded) => ApiFail::Degraded(degraded.reason),
+        ReadFail::Db(reason) => ApiFail::Db(reason),
+    })
+}
+
+/// The wire status a board effect refusal earns: validation is the
+/// caller's input, state conflicts are concurrent or sequence errors,
+/// and the infrastructure's failures are the server's own.
+fn boards_status(fail: &crate::boards::BoardsFail) -> StatusCode {
+    use crate::boards::BoardsFail;
+    match fail {
+        BoardsFail::BoardInvalid(_)
+        | BoardsFail::MissingFigure { .. }
+        | BoardsFail::FigureTooLarge { .. }
+        | BoardsFail::MissingBase { .. }
+        | BoardsFail::BadBase { .. }
+        | BoardsFail::InvalidKey { .. }
+        | BoardsFail::UnknownSourceTask { .. }
+        | BoardsFail::WorkingBoard { .. } => StatusCode::BAD_REQUEST,
+        BoardsFail::MissingCommit { .. }
+        | BoardsFail::UnsavedCheckpoints { .. }
+        | BoardsFail::Record(_) => StatusCode::CONFLICT,
+        BoardsFail::MissingCommits { .. } | BoardsFail::Git(_) | BoardsFail::Io { .. } => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+fn wire_context_of(context: &WireContext) -> Context {
+    Context {
+        actor: context.actor.clone(),
+        tier: match context.tier {
+            WireTier::Human => Tier::Human,
+            WireTier::Agent => Tier::Agent,
+        },
+        scope: context.scope.clone(),
+    }
+}
+
+fn board_ready(guard: &mut ServerState) -> Result<&mut crate::serve::api::Inner, ApiFail> {
+    match guard {
+        ServerState::Ready(inner) => Ok(inner),
+        ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
+    }
+}
+
+async fn board_checkpoint(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: CheckpointRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.context_client(),
+        raw,
+    };
+    let started = Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = board_checkpoint_operation(&app, &mut guard, &request);
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+fn board_checkpoint_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    request: &CheckpointRequest,
+) -> Result<CheckpointReply, ApiFail> {
+    let _inner = board_ready(guard)?;
+    let boards = boards_of(app)?;
+    let workdir = board_tempdir(&format!("checkpoint-{}", request.task));
+    let outcome = (|| {
+        request
+            .files
+            .write_to(&workdir)
+            .map_err(ApiFail::Malformed)?;
+        let actor = request.context.actor.as_str().to_string();
+        boards
+            .checkpoint(
+                &request.task.to_string(),
+                &actor,
+                &workdir,
+                &request.base,
+                &request.message,
+            )
+            .map(|commit| CheckpointReply { commit })
+            .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))
+    })();
+    let _ = std::fs::remove_dir_all(&workdir);
+    outcome
+}
+
+async fn board_commit(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: CommitRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.context_client(),
+        raw,
+    };
+    let started = Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = board_commit_operation(&app, &mut guard, &request);
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+/// The publish sequence (D7): the objects land first, every selector
+/// resolves, the caller's TaskCommitted records under the store's own
+/// guards, and only then do the ref and the checkout move. The writer
+/// lock is held throughout, so a concurrent commit refuses on the
+/// parent guard instead of interleaving.
+fn board_commit_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    request: &CommitRequest,
+) -> Result<CommitReply, ApiFail> {
+    let inner = board_ready(guard)?;
+    let world = match db::load(&inner.conn)
+        .map_err(|e| ApiFail::Db(e.to_string()))?
+        .state
+    {
+        db::LoadState::Full(world) => world,
+        db::LoadState::Degraded(reason) => return Err(ApiFail::Degraded(reason)),
+    };
+    let task_id = crate::TaskId(request.task);
+    if world.tasks.get(request.task).is_none() {
+        return Err(ApiFail::Reject(crate::Reject::InvalidTaskId, None));
+    }
+    let boards = boards_of(app)?;
+    let workdir = board_tempdir(&format!("commit-{}", request.task));
+    request
+        .files
+        .write_to(&workdir)
+        .map_err(ApiFail::Malformed)?;
+    let context = wire_context_of(&request.context);
+    let conn = &mut inner.conn;
+    let mut stored: Option<Vec<StoredRecord>> = None;
+    let mut revision: Option<usize> = None;
+    let landed = boards.publish_board(
+        task_id,
+        &request.task.to_string(),
+        &world,
+        &workdir,
+        &request.message,
+        |command| match db::record(conn, &context, command, db::now_epoch()) {
+            Ok((rows, world)) => {
+                revision = world.tasks.get(request.task).map(|ctx| ctx.commits.len());
+                stored = Some(rows);
+                Ok(())
+            }
+            Err(ExecuteFail::Reject(reject)) => Err(format!(
+                "{}: {}",
+                reject.code(),
+                serde_json::to_string(&reject).unwrap_or_default()
+            )),
+            Err(ExecuteFail::Degraded(reason)) => Err(reason),
+            Err(ExecuteFail::Db(error)) => Err(error.to_string()),
+        },
+    );
+    let _ = std::fs::remove_dir_all(&workdir);
+    let commit = landed
+        .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))?;
+    Ok(CommitReply {
+        records: stored.unwrap_or_default(),
+        commit,
+        revision: revision.unwrap_or_default(),
+    })
+}
+
+async fn board_discard(State(app): State<AppState>, body: Bytes) -> Response {
+    let raw = String::from_utf8_lossy(&body).into_owned();
+    let request: DiscardRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let received = AsReceived {
+        client: request.context_client(),
+        raw,
+    };
+    let started = Instant::now();
+    let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
+    let outcome = board_discard_operation(&app, &mut guard, &request);
+    integration_outcome(&app, &guard, None, &received, started, &outcome);
+    drop(guard);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+fn board_discard_operation(
+    app: &AppState,
+    guard: &mut ServerState,
+    request: &DiscardRequest,
+) -> Result<DiscardReply, ApiFail> {
+    let _inner = board_ready(guard)?;
+    let boards = boards_of(app)?;
+    let actor = request.context.actor.as_str().to_string();
+    boards
+        .discard_checkpoint(&request.task.to_string(), &actor)
+        .map(|_| DiscardReply {
+            task: format!("t-{}", request.task),
+            actor,
+        })
+        .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))
+}
+
+async fn board_update(State(app): State<AppState>, body: Bytes) -> Response {
+    let request: UpdateRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let outcome = board_update_operation(&app, &request);
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+/// The three-way merge onto the current commit (D2): the caller's
+/// working files ride up, the merged tree rides back, conflicts
+/// marked in place. The recorded base moves to the new commit either
+/// way, so a later commit names the right parent.
+fn board_update_operation(app: &AppState, request: &UpdateRequest) -> Result<UpdateReply, ApiFail> {
+    let snapshot = snapshot_of(app)?;
+    let Some(ctx) = snapshot.world.tasks.get(request.task) else {
+        return Err(ApiFail::Reject(crate::Reject::InvalidTaskId, None));
+    };
+    let Some(current) = ctx.commits.last() else {
+        return Err(ApiFail::Refused(
+            StatusCode::NOT_FOUND,
+            "board_missing",
+            format!("task t-{} has no committed board", request.task),
+        ));
+    };
+    let current = current.commit.as_str().to_string();
+    if request.base == current {
+        return Ok(UpdateReply {
+            files: request.files.clone(),
+            board_conflict: false,
+            figure_conflicts: Vec::new(),
+            base: current,
+            up_to_date: true,
+        });
+    }
+    let boards = boards_of(app)?;
+    let workdir = board_tempdir(&format!("update-{}", request.task));
+    let outcome = (|| {
+        request
+            .files
+            .write_to(&workdir)
+            .map_err(ApiFail::Malformed)?;
+        crate::boards::record_base(&workdir, &request.base)
+            .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))?;
+        let merged = boards
+            .update(&workdir, &current)
+            .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))?;
+        let files = BoardFiles::from_workdir(&workdir).map_err(ApiFail::Malformed)?;
+        Ok(UpdateReply {
+            files,
+            board_conflict: merged.board_conflict,
+            figure_conflicts: merged.figure_conflicts,
+            base: current.clone(),
+            up_to_date: false,
+        })
+    })();
+    let _ = std::fs::remove_dir_all(&workdir);
+    outcome
+}
+
+async fn board_edit(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<EditQuery>,
+) -> Response {
+    let outcome = (|| {
+        let snapshot = snapshot_of(&app)?;
+        let Some(ctx) = snapshot.world.tasks.get(query.task) else {
+            return Err(ApiFail::Reject(crate::Reject::InvalidTaskId, None));
+        };
+        let boards = boards_of(&app)?;
+        let current = ctx.commits.last().map(|c| c.commit.as_str().to_string());
+        let checkpoint = match query.actor.as_deref() {
+            Some(actor) if !actor.is_empty() => boards
+                .checkpoint_tip(&query.task.to_string(), actor)
+                .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))?
+                .filter(|tip| current.as_ref() != Some(tip)),
+            _ => None,
+        };
+        let chosen = checkpoint.clone().or_else(|| current.clone());
+        let files = match &chosen {
+            Some(commit) => {
+                let workdir = board_tempdir(&format!("edit-{}", query.task));
+                let files = (|| {
+                    boards.export_tree(commit, &workdir).map_err(|fail| {
+                        ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail())
+                    })?;
+                    BoardFiles::from_workdir(&workdir).map_err(ApiFail::Malformed)
+                })();
+                let _ = std::fs::remove_dir_all(&workdir);
+                files?
+            }
+            None => BoardFiles {
+                files: vec![encode_board_file(
+                    "board.yaml",
+                    crate::serve::board_wire::fresh_board_text(ctx.task.name.as_str()).as_bytes(),
+                )?],
+            },
+        };
+        Ok(EditReply {
+            files,
+            base: current,
+            commit: chosen,
+            task_name: ctx.task.name.as_str().to_string(),
+        })
+    })();
+    match outcome {
+        Ok(reply) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&reply).expect("the reply is plain data")),
+        )
+            .into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+fn encode_board_file(path: &str, bytes: &[u8]) -> Result<BoardFile, ApiFail> {
+    if bytes.len() > MAX_BOARD_FILE_BYTES {
+        return Err(ApiFail::Malformed(format!(
+            "{path} exceeds the per-file bound"
+        )));
+    }
+    Ok(BoardFile {
+        path: path.to_string(),
+        content: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
+}
+
+async fn board_get(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<GetQuery>,
+) -> Response {
+    let outcome = (|| {
+        let snapshot = snapshot_of(&app)?;
+        let Some(ctx) = snapshot.world.tasks.get(query.task) else {
+            return Err(ApiFail::Reject(crate::Reject::InvalidTaskId, None));
+        };
+        let revision = query.revision.unwrap_or(ctx.commits.len());
+        let at = revision.checked_sub(1).ok_or_else(|| {
+            ApiFail::Refused(
+                StatusCode::NOT_FOUND,
+                "revision_missing",
+                format!("revision r{revision} does not exist"),
+            )
+        })?;
+        let Some(board_commit) = ctx.commits.get(at) else {
+            return Err(ApiFail::Refused(
+                StatusCode::NOT_FOUND,
+                "revision_missing",
+                format!("t-{} has no revision r{revision}", query.task),
+            ));
+        };
+        let commit = board_commit.commit.as_str();
+        let boards = boards_of(&app)?;
+        if let Some(path) = &query.path {
+            // the spec names the file with the component-path leading
+            // slash; the tree stores bare relative paths
+            let path = path.trim_start_matches('/');
+            let bytes = boards.file_bytes(commit, path).map_err(|fail| {
+                ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail())
+            })?;
+            let Some(bytes) = bytes else {
+                return Err(ApiFail::Refused(
+                    StatusCode::NOT_FOUND,
+                    "board_file_missing",
+                    format!("{path} is not in t-{}@r{revision}", query.task),
+                ));
+            };
+            return Ok(serde_json::to_value(&GetReply {
+                name: path.to_string(),
+                content: base64::engine::general_purpose::STANDARD.encode(bytes),
+            })
+            .expect("the reply is plain data"));
+        }
+        let workdir = board_tempdir(&format!("get-{}", query.task));
+        let files = (|| {
+            boards.export_tree(commit, &workdir).map_err(|fail| {
+                ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail())
+            })?;
+            BoardFiles::from_workdir(&workdir).map_err(ApiFail::Malformed)
+        })();
+        let _ = std::fs::remove_dir_all(&workdir);
+        let files = files?;
+        Ok(serde_json::to_value(&TreeReply {
+            files,
+            commit: commit.to_string(),
+            revision,
+        })
+        .expect("the reply is plain data"))
+    })();
+    match outcome {
+        Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+async fn board_diff(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<DiffQuery>,
+) -> Response {
+    let outcome = (|| {
+        let snapshot = snapshot_of(&app)?;
+        let Some(ctx) = snapshot.world.tasks.get(query.task) else {
+            return Err(ApiFail::Reject(crate::Reject::InvalidTaskId, None));
+        };
+        let commit_at = |revision: usize| {
+            ctx.commits
+                .get(revision.checked_sub(1)?)
+                .map(|c| c.commit.as_str().to_string())
+        };
+        let from = commit_at(query.from).ok_or_else(|| {
+            ApiFail::Refused(
+                StatusCode::NOT_FOUND,
+                "revision_missing",
+                format!("t-{} has no revision r{}", query.task, query.from),
+            )
+        })?;
+        let to = commit_at(query.to).ok_or_else(|| {
+            ApiFail::Refused(
+                StatusCode::NOT_FOUND,
+                "revision_missing",
+                format!("t-{} has no revision r{}", query.task, query.to),
+            )
+        })?;
+        let boards = boards_of(&app)?;
+        let diff = boards
+            .diff(&from, &to)
+            .map_err(|fail| ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail()))?;
+        Ok(serde_json::to_value(&DiffReply {
+            diff,
+            from: query.from,
+            to: query.to,
+        })
+        .expect("the reply is plain data"))
+    })();
+    match outcome {
+        Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+async fn board_log(
+    State(app): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<EditQuery>,
+) -> Response {
+    let outcome = (|| {
+        let snapshot = snapshot_of(&app)?;
+        if snapshot.world.tasks.get(query.task).is_none() {
+            return Err(ApiFail::Reject(crate::Reject::InvalidTaskId, None));
+        }
+        let boards = boards_of(&app)?;
+        let history = crate::serve::board_wire::board_history(
+            &snapshot.world,
+            &snapshot.rows,
+            &boards,
+            query.task,
+        )
+        .map_err(ApiFail::Db)?;
+        Ok(serde_json::json!({ "history": history }))
+    })();
+    match outcome {
+        Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
+        Err(fail) => api_failure(fail),
+    }
+}
+
+async fn board_search(State(app): State<AppState>, body: Bytes) -> Response {
+    let query: crate::serve::board_wire::SearchQuery = match serde_json::from_slice(&body) {
+        Ok(q) => q,
+        Err(e) => return api_failure(ApiFail::Malformed(e.to_string())),
+    };
+    let outcome = (|| {
+        let snapshot = snapshot_of(&app)?;
+        let boards = boards_of(&app)?;
+        let lines = crate::serve::board_wire::board_search(
+            &snapshot.world,
+            &snapshot.rows,
+            &boards,
+            &query,
+        )
+        .map_err(ApiFail::Malformed)?;
+        Ok(serde_json::to_value(&SearchReply { lines }).expect("the reply is plain data"))
+    })();
+    match outcome {
+        Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
+        Err(fail) => api_failure(fail),
     }
 }

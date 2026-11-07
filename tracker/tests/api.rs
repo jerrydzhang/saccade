@@ -1492,9 +1492,323 @@ async fn a_local_write_shows_on_the_server_face() {
 }
 
 #[test]
-fn search_reads_the_record_through_the_cli_face() {
+fn board_doors_run_the_full_loop_through_the_cli_face() {
     let bin = env!("CARGO_BIN_EXE_sac");
-    let path = scratch_db("search-door");
+    let scratch = scratch_db("board-loop");
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    // a real repo: the doors' telemetry resolves its state dir the way
+    // production resolves the tracker it talks to
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&project)
+            .output()
+            .expect("git init");
+    };
+    git(&["init", "--quiet", project.to_str().unwrap()]);
+    git(&[
+        "-C",
+        project.to_str().unwrap(),
+        "config",
+        "user.email",
+        "smoke@saccade.invalid",
+    ]);
+    git(&[
+        "-C",
+        project.to_str().unwrap(),
+        "config",
+        "user.name",
+        "smoke",
+    ]);
+    let (mut serve, url) = spawn_serve(
+        bin,
+        scratch.db.as_path(),
+        &["--repo", project.to_str().unwrap()],
+        &[],
+    );
+    let sac = |args: &[&str]| {
+        let mut cmd = scrubbed(std::process::Command::new(bin));
+        cmd.arg("--repo")
+            .arg(&project)
+            .arg("--server")
+            .arg(&url)
+            .env("SACCADE_ACTOR", "pi")
+            .args(args);
+        let out = cmd.output().expect("spawn sac");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let sac_json = |args: &[&str]| {
+        let mut full = vec!["--json"];
+        full.extend_from_slice(args);
+        let (ok, out, err) = sac(&full);
+        assert!(ok, "{}: {err}", args.join(" "));
+        let value: Value = serde_json::from_str(&out).expect("the json face parses");
+        value
+    };
+
+    // two tasks: the source account and its consumer
+    let source = sac_json(&["create", "task", "prove the loop"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let consumer = sac_json(&["create", "task", "use the proof"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(source, "t-0");
+    assert_eq!(consumer, "t-1");
+
+    // the source's first board: edit writes the fresh template, the
+    // author replaces it, check passes, commit publishes r1
+    let src = project.join("src-dir");
+    let (ok, out, _) = sac(&["board", "edit", &source, src.to_str().unwrap()]);
+    assert!(ok, "{out}");
+    assert!(src.join("board.yaml").exists(), "the template landed");
+    std::fs::write(
+        src.join("board.yaml"),
+        "grammar: 1\ntask: prove the loop\ncontent:\n  - text: the loop holds for every input\n",
+    )
+    .unwrap();
+    let (ok, out, _) = sac(&["board", "check", src.to_str().unwrap()]);
+    assert!(ok, "{out}");
+    let reply = sac_json(&[
+        "board",
+        "commit",
+        &source,
+        src.to_str().unwrap(),
+        "-m",
+        "first account",
+    ]);
+    assert_eq!(reply["revision"], json!(1));
+    let r1 = reply["commit"].as_str().unwrap().to_string();
+
+    // the consumer incorporates the source's r1
+    let con = project.join("con-dir");
+    let (ok, out, _) = sac(&["board", "edit", &consumer, con.to_str().unwrap()]);
+    assert!(ok, "{out}");
+    std::fs::write(
+        con.join("board.yaml"),
+        format!(
+            "grammar: 1\ntask: use the proof\ncontent:\n  - incorporation:\n      source:\n        task: prove the loop\n        revision: {r1}\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
+        ),
+    )
+    .unwrap();
+    let reply = sac_json(&[
+        "board",
+        "commit",
+        &consumer,
+        con.to_str().unwrap(),
+        "-m",
+        "consumer cites the proof",
+    ]);
+    assert_eq!(reply["revision"], json!(1));
+
+    // the acceptance refuses while the source stands unaccepted
+    let (ok, _, _) = sac(&["offer", &consumer]);
+    assert!(ok);
+    let (ok, _, err) = sac(&["accept", &consumer]);
+    assert!(!ok, "the unaccepted source must refuse the acceptance");
+    assert!(err.contains("source_not_accepted"), "{err}");
+    let (ok, out, _) = sac(&[
+        "reject",
+        &consumer,
+        "--grounds",
+        "wait for the source to conclude",
+    ]);
+    assert!(ok, "{out}");
+
+    // the source's review loop: offer, reject, annotate, recommit.
+    // The offer wait returns on the TaskOffered, matching its mode
+    let waiter = scrubbed(std::process::Command::new(bin))
+        .arg("--repo")
+        .arg(&project)
+        .arg("--server")
+        .arg(&url)
+        .env("SACCADE_ACTOR", "pi")
+        .args([
+            "--json", "wait", &source, "--after", "0", "--until", "offer",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the offer waiter");
+    let (ok, out, _) = sac(&["offer", &source]);
+    assert!(ok, "{out}");
+    // committing refuses while offered
+    let (ok, _, _err) = sac(&[
+        "board",
+        "commit",
+        &source,
+        src.to_str().unwrap(),
+        "-m",
+        "too early",
+    ]);
+    assert!(!ok, "the offered stage refuses a commit");
+    let (ok, out, _) = sac(&[
+        "reject",
+        &source,
+        "--grounds",
+        "the boundary case is missing",
+    ]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("task open; annotate the board at t-0@r1"),
+        "the reject teaches the annotation step: {out}"
+    );
+    std::fs::write(
+        src.join("board.yaml"),
+        "grammar: 1\ntask: prove the loop\ncontent:\n  - text: the loop holds for every input\n  - annotation: the boundary case is covered in the appendix\n",
+    )
+    .unwrap();
+    let reply = sac_json(&[
+        "board",
+        "commit",
+        &source,
+        src.to_str().unwrap(),
+        "-m",
+        "annotate the boundary",
+    ]);
+    assert_eq!(reply["revision"], json!(2));
+    let r2 = reply["commit"].as_str().unwrap().to_string();
+    let (ok, _, _) = sac(&["offer", &source]);
+    assert!(ok);
+    let waited = waiter.wait_with_output().expect("the offer waiter returns");
+    assert!(waited.status.success(), "the offer wait woke");
+    let wait: Value = serde_json::from_slice(&waited.stdout).unwrap();
+    assert!(
+        wait["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == json!("task_offered")),
+        "{wait}"
+    );
+    let (ok, _, _) = sac(&["accept", &source]);
+    assert!(ok, "the source accepts once its incorporations hold");
+
+    // the consumer reconciles onto the accepted revision and concludes
+    std::fs::write(
+        con.join("board.yaml"),
+        format!(
+            "grammar: 1\ntask: use the proof\ncontent:\n  - incorporation:\n      source:\n        task: prove the loop\n        revision: {r2}\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
+        ),
+    )
+    .unwrap();
+    let reply = sac_json(&[
+        "board",
+        "commit",
+        &consumer,
+        con.to_str().unwrap(),
+        "-m",
+        "rebind to the accepted revision",
+    ]);
+    assert_eq!(reply["revision"], json!(2));
+    let (ok, _, _) = sac(&["offer", &consumer]);
+    assert!(ok);
+
+    // a checkpoint refuses the acceptance until it is discarded
+    let (ok, out, _) = sac(&["board", "checkpoint", &consumer, con.to_str().unwrap()]);
+    assert!(ok, "{out}");
+    let (ok, _, err) = sac(&["accept", &consumer]);
+    assert!(!ok, "unsaved checkpoints refuse the acceptance");
+    assert!(err.contains("boards_unsaved_checkpoints"), "{err}");
+    let (ok, out, _) = sac(&["board", "discard", &consumer]);
+    assert!(ok, "{out}");
+    let (ok, out, _) = sac(&["accept", &consumer]);
+    assert!(ok, "{out}");
+    assert!(out.contains("t-1 concluded"), "{out}");
+
+    // the task history interleaves commits with the decisions
+    let history = sac_json(&["board", "log", &source]);
+    let entries = history["history"].as_array().unwrap();
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"task_created")
+            && names.contains(&"task_committed")
+            && names.contains(&"task_offered")
+            && names.contains(&"task_rejected")
+            && names.contains(&"task_accepted"),
+        "{names:?}"
+    );
+    let committed = entries
+        .iter()
+        .find(|e| e["event"] == "task_committed")
+        .unwrap();
+    assert_eq!(committed["message"], json!("first account"));
+    assert_eq!(committed["revision"], json!(1));
+    let rejected = entries
+        .iter()
+        .find(|e| e["event"] == "task_rejected")
+        .unwrap();
+    assert_eq!(rejected["grounds"], json!("the boundary case is missing"));
+
+    // the diff names the annotation; get reads any revision; a single
+    // file prints; the materialized path exists on the server's disk
+    let (ok, diff, _) = sac(&["board", "diff", "t-0@r1..r2"]);
+    assert!(ok, "{diff}");
+    assert!(diff.contains("annotation"), "{diff}");
+    let (ok, old, _) = sac(&["board", "get", "t-0@r1:/board.yaml"]);
+    assert!(ok, "{old}");
+    assert!(
+        old.contains("the loop holds") && !old.contains("annotation"),
+        "{old}"
+    );
+    let tree_out = project.join("exported");
+    let (ok, out, _) = sac(&["board", "get", "t-0", "--out", tree_out.to_str().unwrap()]);
+    assert!(ok, "{out}");
+    assert!(tree_out.join("board.yaml").exists(), "{out}");
+    let (ok, path, _) = sac(&["board", "path", &source]);
+    assert!(ok, "{path}");
+    assert!(Path::new(path.trim()).join("board.yaml").exists(), "{path}");
+
+    // search: current boards one line per task, history changes,
+    // references are incorporations and messages
+    let (ok, out, _) = sac(&["search", "loop"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("t-0@r2"), "{out}");
+    assert!(
+        out.contains("t-1@r2"),
+        "the consumer cites the loop by name: {out}"
+    );
+    let (ok, out, _) = sac(&["search", "relying"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("t-1@r2"), "{out}");
+    let (ok, out, _) = sac(&["search", "--history", "boundary"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("appeared"), "{out}");
+    assert!(out.contains("annotate the boundary"), "{out}");
+    let (ok, out, _) = sac(&["search", "t-0"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("incorporates t-0@r"), "{out}");
+
+    // telemetry rides in the repo's state dir: verb, flags, outcome, tier
+    let telemetry =
+        std::fs::read_to_string(saccade::telemetry::at(&saccade::paths::db_at(&project))).unwrap();
+    assert!(
+        telemetry.contains("\"verb\":\"board.commit\""),
+        "{telemetry}"
+    );
+    assert!(telemetry.contains("\"tier\":\"agent\""), "{telemetry}");
+    assert!(
+        telemetry.contains("\"outcome\":\"source_not_accepted\""),
+        "{telemetry}"
+    );
+
+    serve.kill().unwrap();
+    let _ = serve.wait();
+}
+
+#[test]
+fn omitted_prose_refuses_without_a_terminal_and_names_the_move() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let path = scratch_db("prose-door");
     let sac = |args: &[&str]| {
         let out = scrubbed(std::process::Command::new(bin))
             .arg("--db")
@@ -1509,94 +1823,164 @@ fn search_reads_the_record_through_the_cli_face() {
             String::from_utf8_lossy(&out.stderr).into_owned(),
         )
     };
+    let (ok, _, _) = sac(&["create", "task", "named prose"]);
+    assert!(ok);
 
-    assert!(sac(&["create", "task", "migrate floop"]).0);
-    assert!(sac(&["create", "task", "floop guard"]).0);
-    assert!(sac(&["claim", "t-0"]).0);
-    // the cancel is the human's stop, recorded through the store the
-    // same way the CLI door would land it
-    {
-        let mut conn = saccade::db::open(&path).unwrap();
-        saccade::db::record(
-            &mut conn,
-            &saccade::store::Context {
-                actor: ActorName::new("jerry".into()).unwrap(),
-                tier: saccade::store::Tier::Human,
-                scope: None,
-            },
-            Command::CancelTask {
-                id: TaskId(1),
-                explanation: Prose::new("the floop guard is no longer wanted".into()).unwrap(),
-            },
-            saccade::db::now_epoch(),
-        )
-        .unwrap();
-    }
-
-    let (ok, out, _) = sac(&["search", "floop"]);
-    assert!(ok, "{out}");
-    // task-grouped pointers, record order; the explanation closes its
-    // group behind the name
-    let lines: Vec<&str> = out.lines().collect();
-    let t0 = lines
-        .iter()
-        .position(|l| *l == "t-0  migrate floop")
-        .expect("the owning task groups first");
-    assert_eq!(lines[t0 + 1], "  t-0  pi  migrate floop");
-    assert!(lines.contains(&"t-1  floop guard"), "{out}");
+    // no terminal, no prose: the door refuses and teaches both moves
+    let (ok, _, err) = sac(&["create", "task"]);
+    assert!(!ok);
+    assert!(err.contains("task name is required"), "{err}");
+    let (ok, _, err) = sac(&["cancel", "t-0"]);
+    assert!(!ok);
     assert!(
-        lines.contains(&"  t-1 explanation  the floop guard is no longer wanted"),
-        "{out}"
-    );
-
-    // narrowing prints visible counts; the filtered task stays visible
-    let (ok, out, _) = sac(&["search", "floop", "kind:explanation"]);
-    assert!(ok, "{out}");
-    assert!(out.contains("t-0  migrate floop (0 of 1)"), "{out}");
-    assert!(out.contains("t-1  floop guard (1 of 2)"), "{out}");
-
-    // the explanation rides the json face whole
-    let (ok, out, _) = sac(&["search", "--json", "no longer wanted"]);
-    assert!(ok, "{out}");
-    let json: Value = serde_json::from_str(&out).expect("the json face parses");
-    assert_eq!(
-        json["groups"][0]["records"][0]["body"],
-        "the floop guard is no longer wanted"
-    );
-
-    // total zero says so in one line and exits clean, terms or facets;
-    // the retired '#' term refuses, naming the t- form instead of matching words
-    let (ok, out, _) = sac(&["search", "absent"]);
-    assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "no matches (absent)\ncursor 3");
-    let (ok, _, err) = sac(&["search", "#99999"]);
-    assert!(!ok, "{err}");
-    assert!(
-        err.contains("drop the '#': the reference search is t-99999"),
+        err.contains("cancellation explanation is required"),
         "{err}"
     );
-    // a reference number past the id space refuses at the term door
-    // with the ordinary exit, never a panic
-    let (ok, _, err) = sac(&["search", "t-184467440737095516160"]);
+    let (ok, _, err) = sac(&["reject", "t-0"]);
     assert!(!ok);
-    assert!(err.contains("is not a reference"), "{err}");
-    let (ok, out, _) = sac(&["search", "by:nobody"]);
-    assert!(ok, "{out}");
-    assert_eq!(out.trim_end(), "no matches (by:nobody)\ncursor 3");
+    assert!(err.contains("rejection grounds is required"), "{err}");
 
-    // a t-N term is the reference search: the task's own records answer
-    let (ok, out, _) = sac(&["search", "t-1"]);
-    assert!(ok, "{out}");
-    assert!(out.contains("t-1  floop guard"), "{out}");
-    assert!(out.contains("explanation"), "{out}");
+    // explicit prose passes at the doors agents use; cancel and reopen
+    // stay the human's acts
+}
 
-    // an empty query refuses at the grammar door, naming the moves
-    let (ok, _, err) = sac(&["search"]);
-    assert!(!ok);
-    assert!(err.contains("give at least one term"), "{err}");
-    assert!(err.contains("the moves"), "{err}");
+#[test]
+fn board_wire_routes_hold_their_contracts() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db("board-wire");
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (mut serve, url) = spawn_serve(
+        bin,
+        scratch.db.as_path(),
+        &["--repo", project.to_str().unwrap()],
+        &[],
+    );
 
-    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    // the version route names the supported grammar range
+    let body: Value = ureq::get(&format!("{url}/api/v1/version"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap()
+        .body_mut()
+        .read_to_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(body["board_grammar"]["min"], json!(1));
+    assert_eq!(body["board_grammar"]["max"], json!(1));
+
+    // the path route refuses a task with no board, and a bad task id
+    let created = ureq::post(&format!("{url}/api/v1/command"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(json!({
+            "context": {"actor": "pi", "tier": "agent", "scope": null},
+            "command": {"create_task": {"name": "wire route task"}},
+            "at": null,
+            "client": "test"
+        }))
+        .unwrap();
+    assert_eq!(created.status().as_u16(), 200);
+    let status = ureq::get(&format!("{url}/api/v1/boards/path/0"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap()
+        .status();
+    assert_eq!(status.as_u16(), 404, "no board yet: {status}");
+    let status = ureq::get(&format!("{url}/api/v1/boards/path/99"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap()
+        .status();
+    assert_eq!(status.as_u16(), 400);
+
+    // a commit with an unparseable board refuses without recording
+    let request = json!({
+        "context": {"actor": "pi", "tier": "agent", "scope": null},
+        "task": 0,
+        "files": {"files": [{"path": "board.yaml", "content": "bm90IGEgYm9hcmQK"}]},
+        "message": "broken",
+        "client": "test"
+    });
+    // task 0 exists and the board does not parse: the validation refuses
+    let mut response = ureq::post(&format!("{url}/api/v1/boards/commit"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(request.clone())
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+    let body: Value = response
+        .body_mut()
+        .read_to_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(body["error"]["code"], json!("boards_board_invalid"));
+    // an unknown task id still refuses at the id
+    let mut response = ureq::post(&format!("{url}/api/v1/boards/commit"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(json!({
+            "context": {"actor": "pi", "tier": "agent", "scope": null},
+            "task": 99,
+            "files": {"files": []},
+            "message": "nowhere",
+            "client": "test"
+        }))
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+    let body: Value = response
+        .body_mut()
+        .read_to_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(body["error"]["code"], json!("invalid_task_id"));
+
+    // malformed json refuses as malformed, never panics
+    let mut response = ureq::post(&format!("{url}/api/v1/boards/commit"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send(&b"{not json"[..])
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+    let body: Value = response
+        .body_mut()
+        .read_to_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(body["error"]["code"], json!("malformed_request"));
+
+    // the search route answers empty on an empty tracker
+    let mut response = ureq::post(&format!("{url}/api/v1/boards/search"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .send_json(json!({"terms": ["anything"], "history": false, "within": null}))
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let body: Value = response
+        .body_mut()
+        .read_to_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(body["lines"], json!([]));
+
+    serve.kill().unwrap();
+    let _ = serve.wait();
 }
 
 #[test]
@@ -1653,14 +2037,14 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[1]["kind"], json!("task_claimed"));
 
-    // text reads end with the cursor line too: show, log, list, search, anchor
+    // text reads end with the cursor line too: show, log, list. The
+    // search face left for the boards: its answers are board lines,
+    // not record rows, and carry no cursor
     for args in [
         vec!["show", "t-0"],
         vec!["show", "1"],
         vec!["log"],
         vec!["list"],
-        vec!["search", "task"],
-        vec!["search", "t-0", "-C", "1"],
     ] {
         let (ok, out, _) = sac(&args);
         assert!(ok, "{}: {out}", args.join(" "));

@@ -77,8 +77,8 @@ fish -i -c '
   report switch_to "sac workspace switch i-0 --to "
   report clean "sac workspace clean "
   report restore "sac workspace restore "
-  report use_source "sac use t-0 --source "
-  report title_value "sac comment --title "
+  report board_static "sac board "
+  report offer_tasks "sac offer "
   report create_static "sac create "
   report skill_static "sac skill "
   report until_static "sac wait t-0 --until "
@@ -88,10 +88,9 @@ fish -i -c '
   report cancel_no_leak "sac cancel t-0 --wor"
   report launch_flag_name "sac launch --work"
   report launch_no_leak "sac launch --re"
-  report comment_flag_name "sac comment --ti"
-  report revise_flag_name "sac revise --body-f"
+  report reject_flag_name "sac reject t-0 --gro"
   report global_beside_verb "sac cancel --j"
-  report flag_value_still_clean "sac comment --title "
+  report flag_value_still_clean "sac cancel --explanation "
 ' > "$SMOKE/probes.out" 2> "$SMOKE/probes.err" || { cat "$SMOKE/probes.err"; fail "fish probes errored"; }
 [ -s "$SMOKE/probes.err" ] && { cat "$SMOKE/probes.err"; fail "fish stderr noise"; }
 
@@ -127,8 +126,12 @@ section clean | grep -q "realdir" && fail "clean leaked the filesystem fallback"
 section restore | grep -Fq "$WS" || { section restore; fail "restore misses the recorded path"; }
 section restore | grep -q "realdir" && fail "restore leaked the filesystem fallback"
 
-section use_source | grep -Fq "t-0${TAB}smoke the completions door" || { section use_source; fail "use --source misses tasks"; }
-[ -z "$(section title_value)" ] || { section title_value; fail "a title value leaked candidates"; }
+# the board controller's verbs complete statically; the decision verbs
+# name their tasks
+section board_static | grep -qx "edit" || { section board_static; fail "board lost edit"; }
+section board_static | grep -qx "commit" || { section board_static; fail "board lost commit"; }
+section board_static | grep -qx "path" || { section board_static; fail "board lost path"; }
+section offer_tasks | grep -Fq "t-0${TAB}smoke the completions door" || { section offer_tasks; fail "offer misses tasks"; }
 
 # static skeleton: create completes; multi-candidate registrations keep
 # every candidate; a static description survives in one piece
@@ -148,9 +151,7 @@ section cancel_flag_name | grep -Fqe "--explanation" || { section cancel_flag_na
 [ -z "$(section cancel_no_leak)" ] || { section cancel_no_leak; fail "another verb's flag leaked into cancel"; }
 section launch_flag_name | grep -Fqe "--workspace" || { section launch_flag_name; fail "launch misses --workspace"; }
 section launch_no_leak | grep -Fqe "--resume" || { section launch_no_leak; fail "launch misses --resume"; }
-section launch_no_leak | grep -qFe "--reason" && fail "use's --reason leaked into launch"
-section comment_flag_name | grep -Fqe "--title" || { section comment_flag_name; fail "comment misses --title"; }
-section revise_flag_name | grep -Fqe "--body-file" || { section revise_flag_name; fail "revise misses --body-file"; }
+section reject_flag_name | grep -Fqe "--grounds" || { section reject_flag_name; fail "reject misses --grounds"; }
 section global_beside_verb | grep -Fqe "--json${TAB}machine-readable output" || { section global_beside_verb; fail "global flags do not ride beside the per-verb set"; }
 [ -z "$(section flag_value_still_clean)" ] || { section flag_value_still_clean; fail "a flag name leaked into its own value"; }
 

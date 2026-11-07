@@ -22,7 +22,7 @@ function __saccade_positions
             continue
         end
         switch $t
-            case --db --repo --server --actor --at --explanation --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
+            case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --history --within
                 set prev_value 1
                 continue
             case '-*'
@@ -75,7 +75,7 @@ function __saccade_prev_value_flag
     # cursor is completing that value, no id belongs there
     set -l tokens (commandline -opc)
     switch $tokens[-1]
-        case --db --repo --server --actor --at --explanation --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --context -C
+        case --db --repo --server --actor --at --explanation --grounds --to --reply --task --workspace --resume --new --base --ask --until --after --out --bind --port --history --within
             return 0
     end
     return 1
@@ -91,7 +91,11 @@ function __saccade_verbs
     printf 'list\tList objects (world projection)\n'
     printf 'log\tPrint raw event records\n'
     printf 'show\tEverything about tasks and records, many at once\n'
-    printf 'search\tSearch the folded record\n'
+    printf 'search\tSearch the boards: current, history, references\n'
+    printf 'offer\tOffer the task current board revision\n'
+    printf 'accept\tAccept the offered board\n'
+    printf 'reject\tReject the offered board with grounds\n'
+    printf 'board\tThe task board controller\n'
     printf 'serve\tServe the console and api over HTTP\n'
     printf 'launch\tLaunch the composed native Pi in a workspace\n'
     printf 'workspace\tThe task-free workspace controller\n'
@@ -164,7 +168,13 @@ complete -c sac -n '__saccade_verb send' -l reply -r -f -d 'the message this one
 complete -c sac -n '__saccade_verb send' -l task -r -f -d 'task context riding the exchange (t-N)' -a '(__saccade_candidates tasks)'
 complete -c sac -n '__saccade_verb send' -l stdin -d 'read the body from stdin instead of an argument'
 complete -c sac -n '__saccade_verb show' -l stdin -d 'read one id per line from stdin'
-complete -c sac -n '__saccade_verb search' -s C -l context -r -f -d 'one id term plus N records before and after'
+complete -c sac -n '__saccade_verb search' -l history -d 'the revisions where terms appeared or disappeared'
+complete -c sac -n '__saccade_verb search' -l within -r -f -d 'narrow to one task revisions (t-N or t-N@rA..rB)'
+complete -c sac -n '__saccade_verb offer' -r -f -a '(__saccade_candidates tasks)'
+complete -c sac -n '__saccade_verb accept' -r -f -a '(__saccade_candidates tasks)'
+complete -c sac -n '__saccade_verb reject' -l grounds -r -f -d 'the grounds that reopen the task'
+complete -c sac -n '__saccade_verb board' -r -f -a 'edit check checkpoint commit update discard get diff log path'
+complete -c sac -n '__saccade_verb board; and __fish_seen_subcommand_from get diff' -r -f -a 't-(commandline -ot)'
 complete -c sac -n '__saccade_verb serve' -l bind -r -f -d 'the address to bind'
 complete -c sac -n '__saccade_verb serve' -l port -r -f -d 'the port to serve on'
 complete -c sac -n '__saccade_verb launch' -l workspace -r -f -d 'the workspace directory to work in' -a '(__saccade_candidates workspaces)' -k
@@ -185,5 +195,4 @@ complete -c sac -n '__saccade_verb migrate' -l out -r -f -d 'the fresh tracker t
 complete -c sac -n '__saccade_verb clone' -l at -r -f -d 'the storage seq to copy through, inclusive'
 complete -c sac -n '__saccade_verb clone' -l out -r -f -d 'the fresh tracker to write; must not exist'
 complete -c sac -n '__saccade_verb wait' -l after -r -f -d 'the global position matched strictly after'
-complete -c sac -n '__saccade_verb wait' -l until -r -f -a 'activity'
-complete -c sac -n '__saccade_verb wait' -l until -r -f -a 'activity'
+complete -c sac -n '__saccade_verb wait' -l until -r -f -a 'activity offer'

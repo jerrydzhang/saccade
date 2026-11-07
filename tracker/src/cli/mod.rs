@@ -1,5 +1,6 @@
 //! The CLI verb table and dispatch. Verb families live in sibling modules.
 
+pub mod board;
 pub mod completions;
 pub mod launch;
 pub mod message;
@@ -12,15 +13,14 @@ pub mod workspace;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use saccade::World;
-use saccade::views::{
-    MessageLine, SearchGroup, SearchQuery, TaskView, Term, mailbox, matched_line, message_line,
-    search, show_view, task_view,
-};
+use saccade::views::{MessageLine, TaskView, mailbox, message_line, show_view, task_view};
 
+use self::board::{BoardVerb, board_door};
 use self::completions::{FISH, Kind, complete_candidates};
 use self::launch::{ask_door, harness_choice, launch_door, launch_here_door, launch_new_door};
 use self::message::{messages_door, send_door};
@@ -77,7 +77,7 @@ enum Cmd {
     Create {
         #[arg(value_enum)]
         kind: ObjKind,
-        name: String,
+        name: Option<String>,
     },
     /// Take whole-task responsibility; a transfer, never a state change
     Claim { id: String },
@@ -85,13 +85,23 @@ enum Cmd {
     Cancel {
         id: String,
         #[arg(long)]
-        explanation: String,
+        explanation: Option<String>,
     },
+    /// Offer the task's current board revision
+    Offer { id: String },
+    /// Reject an offered board with grounds, reopening the task
+    Reject {
+        id: String,
+        #[arg(long)]
+        grounds: Option<String>,
+    },
+    /// Accept the offered board as a truthful final account
+    Accept { id: String },
     /// Human-only: resume a cancelled undertaking, explaining why
     Reopen {
         id: String,
         #[arg(long)]
-        explanation: String,
+        explanation: Option<String>,
     },
     /// Send a durable addressed message from this session's registered
     /// incarnation: the sender rides the environment (never authored);
@@ -141,21 +151,21 @@ enum Cmd {
         #[arg(long)]
         stdin: bool,
     },
-    /// Search the folded record: exact terms over task names and
-    /// cancellation explanations; a t-<n> term is a reference search
+    /// Search the boards: by default the current board of every task,
+    /// one line per task; --history finds the revisions where terms
+    /// appeared or disappeared; a t-N or t-N@rK term is a reference
+    /// search - incorporations citing it, plus messages carrying the task
     Search {
-        /// Terms to match (a record must match them all) and
-        /// only-show-me facets:
-        ///   in:t-N     one task's records only
-        ///   by:NAME    author, matched within names (by:pi finds pi/t-90-1)
-        ///   kind:K     task, explanation
-        ///
-        /// A t-<n> term is a reference search: the records of that task
-        #[arg(verbatim_doc_comment)]
+        /// Terms to match (a record must match them all)
         terms: Vec<String>,
-        /// With one id term: that record plus N before and after
-        #[arg(short = 'C', long)]
-        context: Option<usize>,
+        /// Search history instead of current boards: the revisions
+        /// where terms appeared or disappeared, with commit messages
+        /// and grounds
+        #[arg(long)]
+        history: bool,
+        /// Narrow to one task's revisions: t-N or t-N@rA..rB
+        #[arg(long)]
+        within: Option<String>,
     },
     /// Serve the console and /api/v1 over HTTP (the repo's tracker by
     /// default; --db names a different file)
@@ -259,9 +269,16 @@ enum Cmd {
         #[command(subcommand)]
         verb: SkillVerb,
     },
+    /// The task board controller: author, checkpoint, commit, and
+    /// read board revisions. Working directories are local to this
+    /// machine; the server does every Git effect
+    Board {
+        #[command(subcommand)]
+        verb: BoardVerb,
+    },
     /// Block until a match lands: a task (t-<n>) target matches
     /// record activity, the cursor named by --after and the mode by
-    /// --until; an incarnation (i-<n>) target waits for messages
+    /// --until (activity or offer); an incarnation (i-<n>) target waits for messages
     /// addressed to it - waking on arrivals at its host terminal,
     /// reading its mailbox for truth, bounded overall by --timeout
     /// seconds. Nothing is recorded
@@ -417,12 +434,14 @@ impl From<CompleteKind> for Kind {
 #[derive(Clone, Copy, ValueEnum)]
 enum UntilMode {
     Activity,
+    Offer,
 }
 
 impl UntilMode {
     fn until(self) -> saccade::views::WaitUntil {
         match self {
             UntilMode::Activity => saccade::views::WaitUntil::Activity,
+            UntilMode::Offer => saccade::views::WaitUntil::Offer,
         }
     }
 }
@@ -449,7 +468,10 @@ pub(crate) fn entry() -> ExitCode {
         return launch_here_door(&cli);
     }
 
-    match run(&cli) {
+    let started = std::time::Instant::now();
+    let outcome = run(&cli);
+    emit_telemetry(&cli, outcome.as_ref(), started.elapsed().as_millis() as u64);
+    match outcome {
         Ok(output) => {
             if !output.is_empty() {
                 println!("{output}");
@@ -458,6 +480,296 @@ pub(crate) fn entry() -> ExitCode {
         }
         Err(fail) => fail_exit(&cli, &fail),
     }
+}
+
+/// The D16 door line: verb, flag names (never values), outcome or
+/// refusal code, duration, tier. The db path resolves best-effort; a
+/// door with no resolvable tracker emits nothing.
+fn emit_telemetry(cli: &Cli, outcome: Result<&String, &Fail>, duration_ms: u64) {
+    let db = cli.db.clone().map(|db| canonical_db(&db)).or_else(|| {
+        resolve_repo(cli)
+            .ok()
+            .map(|repo| saccade::paths::db_at(&repo))
+    });
+    let tier = if std::env::var_os("SACCADE_ACTOR").is_some() {
+        "agent"
+    } else {
+        "human"
+    };
+    // a server refusal carries its own code: the door's line names
+    // the tracker's verdict, not the transport wrapper
+    let outcome = match outcome {
+        Ok(_) => "ok".to_string(),
+        Err(Fail::Client(client::ClientFail::Refused { code, .. })) => code.to_string(),
+        Err(fail) => fail.code().to_string(),
+    };
+    let mut flags = flag_names(&cli.command);
+    // the globals ride every line they shaped: the face and the
+    // destination a reader would need to reproduce the door
+    if cli.json {
+        flags.push("--json".into());
+    }
+    if cli.db.is_some() {
+        flags.push("--db".into());
+    }
+    if cli.server.is_some() {
+        flags.push("--server".into());
+    }
+    if cli.repo.is_some() {
+        flags.push("--repo".into());
+    }
+    if cli.at.is_some() {
+        flags.push("--at".into());
+    }
+    if std::env::var_os("SACCADE_TASK").is_some() {
+        flags.push("SACCADE_TASK".into());
+    }
+    saccade::telemetry::emit(
+        db.as_deref(),
+        &saccade::telemetry::Entry {
+            verb: &verb_path(&cli.command),
+            flags: &flags,
+            outcome,
+            duration_ms,
+            tier,
+        },
+    );
+}
+
+/// The verb's dotted path, the face the telemetry reader groups by.
+fn verb_path(command: &Cmd) -> String {
+    match command {
+        Cmd::Create { .. } => "create".into(),
+        Cmd::Claim { .. } => "claim".into(),
+        Cmd::Cancel { .. } => "cancel".into(),
+        Cmd::Offer { .. } => "offer".into(),
+        Cmd::Reject { .. } => "reject".into(),
+        Cmd::Accept { .. } => "accept".into(),
+        Cmd::Reopen { .. } => "reopen".into(),
+        Cmd::Send { .. } => "send".into(),
+        Cmd::Messages { .. } => "messages".into(),
+        Cmd::List { .. } => "list".into(),
+        Cmd::Log => "log".into(),
+        Cmd::Show { .. } => "show".into(),
+        Cmd::Search { .. } => "search".into(),
+        Cmd::Serve { .. } => "serve".into(),
+        Cmd::Launch { .. } => "launch".into(),
+        Cmd::Workspace { verb } => format!("workspace.{}", verb_name(verb)),
+        Cmd::Identity => "identity".into(),
+        Cmd::Completions { .. } => "completions".into(),
+        Cmd::Complete { .. } => "complete".into(),
+        Cmd::Clone { .. } => "clone".into(),
+        Cmd::Skill { .. } => "skill".into(),
+        Cmd::Wait { .. } => "wait".into(),
+        Cmd::Board { verb } => format!("board.{}", board_verb_name(verb)),
+    }
+}
+
+fn verb_name(verb: &WorkspaceVerb) -> &'static str {
+    match verb {
+        WorkspaceVerb::New { .. } => "new",
+        WorkspaceVerb::Switch { .. } => "switch",
+        WorkspaceVerb::Clean { .. } => "clean",
+        WorkspaceVerb::Restore { .. } => "restore",
+        WorkspaceVerb::Root { verb } => match verb {
+            RootVerb::Bind => "root-bind",
+            RootVerb::Show => "root-show",
+            RootVerb::Clear => "root-clear",
+        },
+        WorkspaceVerb::Reconcile { .. } => "reconcile",
+    }
+}
+
+fn board_verb_name(verb: &BoardVerb) -> &'static str {
+    match verb {
+        BoardVerb::Edit { .. } => "edit",
+        BoardVerb::Check { .. } => "check",
+        BoardVerb::Checkpoint { .. } => "checkpoint",
+        BoardVerb::Commit { .. } => "commit",
+        BoardVerb::Update { .. } => "update",
+        BoardVerb::Discard { .. } => "discard",
+        BoardVerb::Get { .. } => "get",
+        BoardVerb::Diff { .. } => "diff",
+        BoardVerb::Log { .. } => "log",
+        BoardVerb::Path { .. } => "path",
+    }
+}
+
+/// The flag names the door carried, never their values.
+fn flag_names(command: &Cmd) -> Vec<String> {
+    let mut flags = Vec::new();
+    let push = |flags: &mut Vec<String>, name: &str| flags.push(name.to_string());
+    match command {
+        Cmd::Create { name, .. } => {
+            if name.is_none() {
+                push(&mut flags, "$EDITOR");
+            }
+        }
+        Cmd::Cancel { explanation, .. }
+        | Cmd::Reopen { explanation, .. }
+        | Cmd::Reject {
+            grounds: explanation,
+            ..
+        } => {
+            if explanation.is_none() {
+                push(&mut flags, "$EDITOR");
+            }
+        }
+        Cmd::Send {
+            reply, task, stdin, ..
+        } => {
+            if reply.is_some() {
+                push(&mut flags, "--reply");
+            }
+            if task.is_some() {
+                push(&mut flags, "--task");
+            }
+            if *stdin {
+                push(&mut flags, "--stdin");
+            }
+        }
+        Cmd::Show { stdin, .. } => {
+            if *stdin {
+                push(&mut flags, "--stdin");
+            }
+        }
+        Cmd::Search {
+            history, within, ..
+        } => {
+            if *history {
+                push(&mut flags, "--history");
+            }
+            if within.is_some() {
+                push(&mut flags, "--in");
+            }
+        }
+        Cmd::Serve { .. }
+        | Cmd::Identity
+        | Cmd::Log
+        | Cmd::List { .. }
+        | Cmd::Claim { .. }
+        | Cmd::Offer { .. }
+        | Cmd::Accept { .. }
+        | Cmd::Messages { .. }
+        | Cmd::Completions { .. }
+        | Cmd::Clone { .. }
+        | Cmd::Skill { .. }
+        | Cmd::Complete { .. } => {}
+        Cmd::Launch {
+            workspace,
+            resume,
+            new,
+            base,
+            ask,
+            here,
+            harness,
+            prompt,
+        } => {
+            if workspace.is_some() {
+                push(&mut flags, "--workspace");
+            }
+            if resume.is_some() {
+                push(&mut flags, "--resume");
+            }
+            if new.is_some() {
+                push(&mut flags, "--new");
+            }
+            if base.is_some() {
+                push(&mut flags, "--base");
+            }
+            if ask.is_some() {
+                push(&mut flags, "--ask");
+            }
+            if *here {
+                push(&mut flags, "--here");
+            }
+            if harness.is_some() {
+                push(&mut flags, "--harness");
+            }
+            if !prompt.is_empty() {
+                push(&mut flags, "prompt");
+            }
+        }
+        Cmd::Workspace { verb } => match verb {
+            WorkspaceVerb::New { label, base } => {
+                if label.is_some() {
+                    push(&mut flags, "label");
+                }
+                if base.is_some() {
+                    push(&mut flags, "--base");
+                }
+            }
+            WorkspaceVerb::Switch {
+                to: _,
+                resume,
+                prompt,
+                ..
+            } => {
+                push(&mut flags, "--to");
+                if *resume {
+                    push(&mut flags, "--resume");
+                }
+                if !prompt.is_empty() {
+                    push(&mut flags, "prompt");
+                }
+            }
+            WorkspaceVerb::Clean { .. } | WorkspaceVerb::Restore { .. } => {}
+            WorkspaceVerb::Root { .. } => {}
+            WorkspaceVerb::Reconcile { apply } => {
+                if *apply {
+                    push(&mut flags, "--apply");
+                }
+            }
+        },
+        Cmd::Wait {
+            after,
+            until,
+            timeout,
+            ..
+        } => {
+            if after.is_some() {
+                push(&mut flags, "--after");
+            }
+            if until.is_some() {
+                push(&mut flags, "--until");
+            }
+            if timeout.is_some() {
+                push(&mut flags, "--timeout");
+            }
+        }
+        Cmd::Board { verb } => match verb {
+            BoardVerb::Edit { dir, .. }
+            | BoardVerb::Checkpoint { dir, .. }
+            | BoardVerb::Update { dir, .. } => {
+                if dir.is_some() {
+                    push(&mut flags, "dir");
+                }
+            }
+            BoardVerb::Check { dir } => {
+                if dir.is_some() {
+                    push(&mut flags, "dir");
+                }
+            }
+            BoardVerb::Commit { dir, message, .. } => {
+                if dir.is_some() {
+                    push(&mut flags, "dir");
+                }
+                if message.is_some() {
+                    push(&mut flags, "-m");
+                }
+            }
+            BoardVerb::Get { out, .. } => {
+                if out.is_some() {
+                    push(&mut flags, "--out");
+                }
+            }
+            BoardVerb::Discard { .. }
+            | BoardVerb::Diff { .. }
+            | BoardVerb::Log { .. }
+            | BoardVerb::Path { .. } => {}
+        },
+    }
+    flags
 }
 
 /// The shared refusal face: the json envelope or the error line, then
@@ -584,7 +896,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             kind: ObjKind::Task,
             name,
         } => Command::CreateTask {
-            name: Prose::new(name.clone())?,
+            name: Prose::new(editor_prose(name.clone(), "task name")?)?,
         },
         Cmd::Claim { id } => {
             let id = parse_task_id(id)?;
@@ -595,14 +907,49 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         }
         Cmd::Cancel { id, explanation } => Command::CancelTask {
             id: parse_task_id(id)?,
-            explanation: Prose::new(explanation.clone())?,
+            explanation: Prose::new(editor_prose(
+                explanation.clone(),
+                "cancellation explanation",
+            )?)?,
+        },
+        Cmd::Offer { id } => {
+            let id = parse_task_id(id)?;
+            let loadout = loadout_of(&destination)?;
+            let world = match loadout.state {
+                LoadState::Full(world) => world,
+                LoadState::Degraded(reason) => return Err(Fail::Degraded(reason)),
+            };
+            let commit = world
+                .tasks
+                .get(id.0)
+                .and_then(|task| task.commits.last())
+                .ok_or_else(|| {
+                    Fail::Usage(format!("task t-{} has no committed board to offer", id.0))
+                })?
+                .commit
+                .clone();
+            Command::OfferBoard { task: id, commit }
+        }
+        Cmd::Reject { id, grounds } => Command::RejectBoard {
+            task: parse_task_id(id)?,
+            grounds: Prose::new(editor_prose(grounds.clone(), "rejection grounds")?)?,
+        },
+        Cmd::Accept { id } => Command::AcceptBoard {
+            task: parse_task_id(id)?,
         },
         Cmd::Reopen { id, explanation } => Command::ReopenTask {
             id: parse_task_id(id)?,
-            explanation: Prose::new(explanation.clone())?,
+            explanation: Prose::new(editor_prose(explanation.clone(), "reopening explanation")?)?,
         },
-        Cmd::List { .. } | Cmd::Log | Cmd::Show { .. } | Cmd::Search { .. } => {
+        Cmd::List { .. } | Cmd::Log | Cmd::Show { .. } => {
             return read_only(cli, &loadout_of(&destination)?);
+        }
+        Cmd::Search {
+            terms,
+            history,
+            within,
+        } => {
+            return task::search_door(cli, &destination, terms, *history, within);
         }
         Cmd::Wait {
             target,
@@ -680,6 +1027,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             );
         }
         Cmd::Workspace { verb } => return workspace_door(cli, &destination, verb),
+        Cmd::Board { verb } => return board_door(cli, &destination, verb),
         Cmd::Identity => unreachable!("identity dispatches before the destination resolves"),
         Cmd::Serve { .. } => unreachable!("serve dispatches before the destination resolves"),
         Cmd::Completions { .. } | Cmd::Complete { .. } => {
@@ -717,6 +1065,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     identity_fallback_guard(cli, &context, attached_terminal())?;
     let creates = matches!(command, Command::CreateTask { .. });
     let mut born: Option<String> = None;
+    let mut world_now: Option<saccade::World> = None;
     let stored = match &destination {
         Destination::Local { db } => {
             let now = cli.at.unwrap_or_else(db::now_epoch);
@@ -726,6 +1075,7 @@ fn run(cli: &Cli) -> Result<String, Fail> {
                     if creates {
                         born = born_of(&stored, &world);
                     }
+                    world_now = Some(world);
                     stored
                 }
                 Err(ExecuteFail::Reject(reject)) => return Err(refused(&conn, &command, reject)),
@@ -734,12 +1084,73 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         }
         Destination::Server { url } => {
             client::handshake(url);
-            let reply = client::send(url, &context, command, cli.at).map_err(Fail::Client)?;
+            let reply =
+                client::send(url, &context, command.clone(), cli.at).map_err(Fail::Client)?;
             born = reply.id;
             reply.records
         }
     };
-    Ok(render_records(cli, &stored, born.as_deref()))
+    let mut output = render_records(cli, &stored, born.as_deref());
+    if let Some(line) = teaching_line(cli, &destination, &command, world_now.as_ref())? {
+        output.push('\n');
+        output.push_str(&line);
+    }
+    Ok(output)
+}
+
+/// The door's teaching line: the next step, one plain line for both
+/// readers (D11, D13). A reject reopens the board at its current
+/// revision; an offer and an accept name what the other side now sees.
+fn teaching_line(
+    cli: &Cli,
+    destination: &Destination,
+    command: &Command,
+    world_now: Option<&saccade::World>,
+) -> Result<Option<String>, Fail> {
+    if cli.json {
+        return Ok(None);
+    }
+    let current_revision = |task: saccade::TaskId| -> Result<usize, Fail> {
+        match world_now {
+            Some(world) => Ok(world
+                .tasks
+                .get(task.0)
+                .map(|ctx| ctx.commits.len())
+                .unwrap_or(0)),
+            None => {
+                let loadout = loadout_of(destination)?;
+                match loadout.state {
+                    LoadState::Full(world) => Ok(world
+                        .tasks
+                        .get(task.0)
+                        .map(|ctx| ctx.commits.len())
+                        .unwrap_or(0)),
+                    LoadState::Degraded(reason) => Err(Fail::Degraded(reason)),
+                }
+            }
+        }
+    };
+    Ok(match command {
+        Command::RejectBoard { task, .. } => {
+            let revision = current_revision(*task)?;
+            Some(format!(
+                "task open; annotate the board at t-{}@r{revision}",
+                task.0
+            ))
+        }
+        Command::OfferBoard { task, .. } => {
+            let revision = current_revision(*task)?;
+            Some(format!(
+                "t-{}@r{revision} offered; the reviewer accepts or rejects",
+                task.0
+            ))
+        }
+        Command::AcceptBoard { task } => Some(format!(
+            "t-{} concluded; its board is the final account",
+            task.0
+        )),
+        _ => None,
+    })
 }
 
 /// A refusal the world can teach: the expected format and, where the
@@ -800,6 +1211,61 @@ fn loadout_of(destination: &Destination) -> Result<saccade::db::Loadout, Fail> {
             db::fold_rows(rows).map_err(Fail::Db)
         }
     }
+}
+
+fn editor_prose(value: Option<String>, label: &str) -> Result<String, Fail> {
+    if let Some(value) = value {
+        return Ok(value);
+    }
+    if !attached_terminal() {
+        return Err(Fail::Usage(format!(
+            "{label} is required; pass it explicitly, or use a terminal to open $EDITOR"
+        )));
+    }
+    if std::env::var_os("EDITOR").is_none() {
+        return Err(Fail::Usage(format!(
+            "$EDITOR is unset; set it to edit the {label}, or pass the prose explicitly"
+        )));
+    }
+    static EDITOR_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "sac-editor-{}-{}.txt",
+        std::process::id(),
+        EDITOR_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, "").map_err(|error| {
+        Fail::Usage(format!(
+            "could not create an editor file for {label}: {error}"
+        ))
+    })?;
+    let status = ProcessCommand::new("sh")
+        .args(["-c", "exec $EDITOR \"$1\"", "sac-editor"])
+        .arg(&path)
+        .status();
+    let edited = match status {
+        Ok(status) if status.success() => std::fs::read_to_string(&path)
+            .map_err(|error| Fail::Usage(format!("could not read the edited {label}: {error}")))?,
+        Ok(status) => {
+            let _ = std::fs::remove_file(&path);
+            return Err(Fail::Usage(format!(
+                "$EDITOR exited with {status} while editing {label}"
+            )));
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&path);
+            return Err(Fail::Usage(format!(
+                "could not run $EDITOR for {label}: {error}"
+            )));
+        }
+    };
+    let _ = std::fs::remove_file(&path);
+    let prose = edited.trim_end_matches(['\r', '\n']).to_string();
+    if prose.trim().is_empty() {
+        return Err(Fail::Usage(format!(
+            "the edited {label} is empty; write it or pass it explicitly"
+        )));
+    }
+    Ok(prose)
 }
 
 fn context_of(cli: &Cli) -> Result<Context, Fail> {
@@ -1086,18 +1552,6 @@ fn wrap(text: &str, width: usize, first: &str, rest: &str) -> String {
         out.extend(piece);
     }
     out
-}
-
-/// One line cut to its budget on a char boundary; the ellipsis is the
-/// only mark a cut earns.
-fn glimpse(line: &str, budget: usize) -> String {
-    if line.chars().count() <= budget {
-        line.to_string()
-    } else {
-        let mut cut: String = line.chars().take(budget.saturating_sub(1)).collect();
-        cut.push_str("...");
-        cut
-    }
 }
 
 #[cfg(test)]
