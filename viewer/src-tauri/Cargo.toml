@@ -24,6 +24,7 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 webkit2gtk = { version = "2" }
+gtk = "0.18"
 serde_json = "1"
 
 [profile.release]

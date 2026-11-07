@@ -44,8 +44,27 @@ pub fn run() {
                             {
                                 use webkit2gtk::{SettingsExt, WebViewExt};
                                 let inner = webview.inner();
-                                if let Some(settings) = inner.settings() {
+                                if let Some(settings) = WebViewExt::settings(&inner) {
                                     settings.set_enable_write_console_messages_to_stdout(true);
+                                }
+                                // WebKitGTK derives the page scale from the
+                                // GTK gtk-xft-dpi setting (WebKit PR 28691:
+                                // scale = dpi/96). Without a desktop
+                                // environment providing it, the setting
+                                // carries a negative sentinel, and the page
+                                // scale becomes -1/96 - corrupting every
+                                // measurement and painting SVG text into
+                                // nothing. A negative DPI is never real, so
+                                // the shell substitutes the 96-dpi standard;
+                                // a desktop-provided value is left alone.
+                                use gtk::prelude::*;
+                                if let Some(gtk_settings) = gtk::Settings::default() {
+                                    let xft_dpi: i32 = gtk_settings.property("gtk-xft-dpi");
+                                    eprintln!("[bridge] gtk-xft-dpi was: {}", xft_dpi);
+                                    if xft_dpi <= 0 {
+                                        gtk_settings.set_property("gtk-xft-dpi", 98304);
+                                        eprintln!("[bridge] gtk-xft-dpi set: 98304 (96 dpi)");
+                                    }
                                 }
                                 eprintln!(
                                     "[bridge] webview zoom_level was: {}",
