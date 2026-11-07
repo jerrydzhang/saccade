@@ -501,7 +501,17 @@
         # DejaVu fonts, both pure store paths - the sandbox already binds
         # /nix/store read-only, so no host /etc/fonts or font dirs are
         # ever mounted
-        board-viewer = pkgs.mkShell {
+        board-viewer = let
+          laneFontsConf = pkgs.writeText "saccade-lane-fonts.conf" ''
+            <?xml version="1.0"?>
+            <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+            <fontconfig>
+              <dir>${pkgs.dejavu_fonts}</dir>
+              <include>${pkgs.fontconfig.out}/etc/fonts/conf.d</include>
+              <cachedir prefix="xdg">fontconfig</cachedir>
+            </fontconfig>
+          '';
+        in pkgs.mkShell {
           # the pinned Playwright pair (python package and browser
           # package) from this same nixpkgs revision: no browser
           # install or download anywhere
@@ -525,9 +535,11 @@
               pkgs.dejavu_fonts
             ];
           env.PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
-          env.FONTCONFIG_FILE = pkgs.makeFontsConf {
-            fontDirectories = [pkgs.dejavu_fonts];
-          };
+          # the sandbox has no /etc/fonts, so the makeFontsConf include
+          # of conf.d resolves to nothing and generic families match no
+          # font; this conf carries the pinned fontconfig's own conf.d
+          # (45/60-generic+latin assign sans-serif to DejaVu Sans)
+          env.FONTCONFIG_FILE = laneFontsConf;
           # the native lane's software-GL pin: glvnd vendor dir whose
           # 50_mesa.json carries the absolute store path of
           # libEGL_mesa.so.0 (llvmpipe/swrast live in the same output)
