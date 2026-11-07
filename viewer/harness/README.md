@@ -224,6 +224,47 @@ Cold costs are reported separately from the warm loop: the browser
 lane's own warm cost is measured per run and printed; cold devshell
 build (playwright pair) is a one-time devshell cost.
 
+## Packaging and the real-client run path
+
+The viewer's packaging lives in `viewer/package.nix`: one
+callPackage-able file whose dependencies come from the pkgs it is
+called on. The flake builds `packages.board-viewer`,
+`packages.board-viewer-web`, the flake checks, and the
+`apps.board-viewer` entry through that one derivation, and exposes the
+same app as `overlays.default`.
+
+Why the overlay: a binary built against this flake's own pinned
+nixpkgs links a foreign libglvnd/mesa stack. On a NixOS client that
+stack cannot use the host's `/run/opengl-driver` EGL vendors and the
+app aborts at startup (`Could not create default EGL display:
+EGL_BAD_PARAMETER`). Building the packaged binary against the
+consumer's own nixpkgs keeps the WebKitGTK/GL stack on the revision
+the host system was built from.
+
+Consumer (NixOS configuration):
+
+```nix
+nixpkgs.overlays = [ inputs.saccade.overlays.default ];
+```
+
+then `pkgs.saccade-board-viewer` is the packaged app (main program
+`saccade-board-viewer`, opened on an explicit board path). The
+derivation takes everything from the pkgs it is called on; it assumes
+no input of this flake - the rust-overlay and devenv inputs serve the
+development shell only.
+
+One-off review run against a client system revision, without touching
+the consumer's configuration:
+
+```sh
+nix run --override-input nixpkgs github:NixOS/nixpkgs/<client system rev> \
+  <repo flake ref>#board-viewer -- <absolute board.yaml>
+```
+
+The flake's own `packages.board-viewer` remains the dev-host build and
+the native lane's binary source; neither replaces a real-client
+review.
+
 ## What this harness is not
 
 No production probes, no host socket/status calls, no tracker database

@@ -71,7 +71,7 @@
   } @ inputs: let
     inherit (nixpkgs) lib;
     forAllSystems = lib.genAttrs lib.systems.flakeExposed;
-    overlays = [rust-overlay.overlays.default];
+    rustOverlays = [rust-overlay.overlays.default];
     # the pinned release bytes per linux target: the release manifest
     # hashes the tarball, which the lock entry pins by narHash; the
     # binarySha256 here is the derived assertion over the unpacked
@@ -362,124 +362,25 @@
           attachHook = "${mkAttachHook {inherit pkgs;}}/bin/saccade-cc-attach";
         };
     # the native integration the composed harness loads
-    # the board viewer's own frontend and npm graph: separate sources,
-    # lock and hash, never merged into the tracker crate or the workbench
-    # assets. Its checks are plain tool runs (typecheck, build, contract
-    # tests); they claim nothing about service isolation - the enforced
-    # bwrap boundary is the harness's job and applies to the service
-    # lanes only.
-    mkBoardViewer = pkgs: lib: let
-      src = pkgs.lib.sourceByRegex ./viewer [
-        "^src$"
-        "^src/.*$"
-        "^tests$"
-        "^tests/.*$"
-        "^fixtures$"
-        "^fixtures/.*$"
-        "^package\\.json$"
-        "^package-lock\\.json$"
-        "^index\\.html$"
-        "^svelte\\.config\\.js$"
-        "^vite\\.config\\.ts$"
-        "^tsconfig\\.json$"
-      ];
-      npm = {
-        pname = "saccade-board-viewer";
-        version = "0.1.0";
-        inherit src;
-        npmDepsHash = "sha256-v7PrzqHrGOLwK5xyq4AQvhMb8Va0MomRzI1zjaOEpcM=";
-      };
-      npmCheck = name: command: extra:
-        pkgs.buildNpmPackage (npm
-          // {
-            pname = "board-viewer-${name}";
-            buildPhase = command;
-            installPhase = ''
-              touch $out
-            '';
-          }
-          // extra);
-      webDist = pkgs.buildNpmPackage (npm
-        // {
-          installPhase = ''
-            mkdir -p $out
-            cp -r dist/. $out/
-          '';
-        });
-    in {
-      web = webDist;
-      checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-        board-viewer-typecheck = npmCheck "typecheck" "npm run check" {};
-        board-viewer-build = npmCheck "build" "npm run build" {};
-        board-viewer-contracts = npmCheck "contracts" "npm run test" {};
-      };
-
-      # the retained native app: the Tauri shell built against the
-      # bundled frontend dist, wrapped with its runtime libraries and the
-      # pinned fontconfig - a foreground binary a human runs with an
-      # explicit board path. No deployment, install or remote transfer.
-      app = let
-        webkitLibs = pkgs.lib.makeLibraryPath [
-          pkgs.webkitgtk_4_1
-          pkgs.gtk3
-          pkgs.cairo
-          pkgs.gdk-pixbuf
-          pkgs.glib
-          pkgs.pango
-          pkgs.dbus
-          pkgs.alsa-lib
-        ];
-        cargoSrc = pkgs.lib.sourceByRegex ./viewer/src-tauri [
-          "^src$"
-          "^src/.*$"
-          "^Cargo\\.toml$"
-          "^Cargo\\.lock$"
-          "^build\\.rs$"
-          "^tauri\\.conf\\.json$"
-          "^icons$"
-          "^icons/.*$"
-        ];
-      in
-        pkgs.rustPlatform.buildRustPackage {
-          pname = "saccade-board-viewer-app";
-          version = "0.1.0";
-          src = cargoSrc;
-          cargoLock = {
-            lockFile = ./viewer/src-tauri/Cargo.lock;
-          };
-          # without tauri's custom-protocol feature the release binary
-          # dials the dev server instead of serving the embedded dist
-          buildFeatures = "custom-protocol";
-          nativeBuildInputs = [pkgs.pkg-config pkgs.makeWrapper];
-          buildInputs = [
-            pkgs.webkitgtk_4_1
-            pkgs.gtk3
-            pkgs.cairo
-            pkgs.gdk-pixbuf
-            pkgs.glib
-            pkgs.pango
-            pkgs.dbus
-          ];
-          # the embedded frontend: tauri.conf reads frontendDist
-          # ../dist, one level above the source root in the build tree
-          preBuild = ''
-            mkdir -p ../dist
-            cp -r ${webDist}/. ../dist/
-          '';
-          postInstall = ''
-            wrapProgram $out/bin/saccade-board-viewer \
-              --prefix LD_LIBRARY_PATH : ${webkitLibs} \
-          '';
-          meta.mainProgram = "saccade-board-viewer";
-        };
-    };
     saccadePiExtensions = ["native/saccade.ts"];
+    # the board viewer's packaging lives in viewer/package.nix: one
+    # callPackage-able file taking every dependency from the pkgs it
+    # is called on, so overlays.default can build it against a
+    # consumer's own nixpkgs - the packaged binary then shares the
+    # host's GL stack instead of this flake's pin
+    boardViewer = pkgs: pkgs.callPackage ./viewer/package.nix {};
   in {
+    # the consumer-facing overlay: a NixOS configuration sets
+    # nixpkgs.overlays = [ inputs.saccade.overlays.default ] and gets
+    # pkgs.saccade-board-viewer built against its own nixpkgs
+    overlays.default = final: prev: {
+      saccade-board-viewer = (final.callPackage ./viewer/package.nix {}).app;
+    };
 
     devShells = forAllSystems (
       system: let
         pkgs = import nixpkgs {
-          inherit system overlays;
+          inherit system rustOverlays;
         };
 
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
@@ -624,7 +525,7 @@
     packages = forAllSystems (
       system: let
         pkgs = import nixpkgs {
-          inherit system overlays;
+          inherit system rustOverlays;
         };
         devHerdrCore = herdrCore system pkgs;
         devHerdrPin = herdrDev system pkgs;
@@ -727,8 +628,8 @@
 
           saccade-web-assets = webAssets;
 
-          board-viewer-web = (mkBoardViewer pkgs lib).web;
-          board-viewer = (mkBoardViewer pkgs lib).app;
+          board-viewer-web = (boardViewer pkgs).web;
+          board-viewer = (boardViewer pkgs).app;
 
           default = pkgs.symlinkJoin {
             name = "saccade";
@@ -772,7 +673,7 @@
     );
 
     apps = forAllSystems (system: let
-      boardViewerApp = (mkBoardViewer nixpkgs.legacyPackages.${system} lib).app;
+      boardViewerApp = (boardViewer nixpkgs.legacyPackages.${system}).app;
     in {
       board-viewer = {
         type = "app";
@@ -787,7 +688,7 @@
     checks = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
     in
-      (mkBoardViewer nixpkgs.legacyPackages.${system} lib).checks
+      (boardViewer nixpkgs.legacyPackages.${system}).checks
       // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
         herdr-ui =
           pkgs.runCommand "herdr-ui-contract" {
