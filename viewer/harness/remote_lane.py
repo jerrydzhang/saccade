@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
@@ -413,6 +414,29 @@ def main() -> int:
         if not connected:
             teardown(state)
             return 1
+
+        # the diagnostic the budget ordered (record 3119): how the mesh
+        # actually spawns on b - a bare name against PATH, the pinned
+        # absolute path, and the spawner's whole environment. Evidence,
+        # recorded verbatim beside the logs; none of it gates the
+        # viewer assertions that follow.
+        coreutils_bin = pathlib.Path(shutil.which("realpath")).resolve().parent
+        probes = [
+            ("bare realpath on b", ["realpath", "--version"]),
+            ("pinned absolute realpath on b", [str(coreutils_bin / "realpath"), "--version"]),
+            ("the spawner's environment on b", [str(coreutils_bin / "env")]),
+        ]
+        for name, argv in probes:
+            result = subprocess.run(
+                [core_bin, "exec", "--on", MACHINE_NAME, "--json", *argv],
+                env={**os.environ, "HC_SESSION": "a"},
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=MACHINE_CALL_SECONDS,
+            )
+            detail = (result.stdout or result.stderr).decode(errors="replace")
+            (logs / "env-on-b.txt").open("a").write(f"=== {name} rc={result.returncode}\n{detail}\n")
+            check(f"diagnostic: {name}", result.returncode == 0, detail[:300])
 
         # the viewer chain: the session lane's facts verbatim, opened on
         # the machine-named location instead of a path
