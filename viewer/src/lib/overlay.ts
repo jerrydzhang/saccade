@@ -32,7 +32,15 @@ export function expandDiagram(frame: HTMLElement): void {
   let dragging: { x: number; y: number; baseX: number; baseY: number } | null = null;
 
   const apply = (): void => {
-    cloned.setAttribute("transform", `translate(${panX} ${panY}) scale(${scale})`);
+    // CSS transform on the cloned <svg> itself, not the SVG transform
+    // ATTRIBUTE: WebKit ignores transform on the outermost svg element
+    // (Chromium honors it per SVG2), so the attribute broke zoom/pan on
+    // the real client while the browser lane passed. transform-origin
+    // keeps the translate/scale math identical in both engines, and
+    // getBoundingClientRect reflects CSS transforms, so fit stays
+    // consistent.
+    cloned.style.transformOrigin = "0 0";
+    cloned.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
     zoomLabel.textContent = `${Math.round(scale * 100)}%`;
   };
 
