@@ -47,6 +47,15 @@ pub fn run() {
                                 if let Some(settings) = inner.settings() {
                                     settings.set_enable_write_console_messages_to_stdout(true);
                                 }
+                                eprintln!(
+                                    "[bridge] webview zoom_level was: {}",
+                                    inner.zoom_level()
+                                );
+                                inner.set_zoom_level(1.0);
+                                eprintln!(
+                                    "[bridge] webview zoom_level set: {}",
+                                    inner.zoom_level()
+                                );
                             }
                         })
                         .expect("webview console setting failed");

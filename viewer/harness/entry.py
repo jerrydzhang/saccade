@@ -446,6 +446,8 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
     env["BOARD_VIEWER_WEBVIEW_CONSOLE"] = "1"
+    env["GDK_SCALE"] = "1"
+    env["GDK_DPI_SCALE"] = "1"
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
 
     ro_binds = [
