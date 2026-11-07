@@ -106,8 +106,10 @@ pub fn wait_matches(
         Event::TaskClaimed { id, .. }
         | Event::TaskCancelled { id, .. }
         | Event::TaskReopened { id, .. } => *target == Target::Task(*id),
-        // the launch machinery's own facts name no comment target
+        // the launch machinery's own facts name no comment target,
+        // and the root destination acts ride no task
         Event::SavedSessionBound { .. } | Event::HostAddressAssigned { .. } => false,
+        Event::RootSpaceBound { .. } | Event::RootSpaceCleared {} => false,
         Event::Commented { home, .. } => match target {
             Target::Task(task) => home == task,
             Target::Comment(watched) => world

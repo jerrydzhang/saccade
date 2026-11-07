@@ -430,6 +430,14 @@ enum WorkspaceVerb {
         /// The workspace's exact recorded path
         path: PathBuf,
     },
+    /// The primary checkout's Herdr destination: bind the chosen
+    /// manual root space once, show the standing choice, or clear it.
+    /// Root launches declare the bound pair; an unbound root runs
+    /// unplaced.
+    Root {
+        #[command(subcommand)]
+        verb: RootVerb,
+    },
     /// The one-time cutover verification over every recorded
     /// workspace: absent resources verified against git and the host,
     /// matching present ones preserved, conflicts surfaced. Dry run
@@ -440,6 +448,21 @@ enum WorkspaceVerb {
         #[arg(long)]
         apply: bool,
     },
+}
+
+#[derive(Clone, Subcommand)]
+enum RootVerb {
+    /// Bind the chosen manual root space: run inside the terminal
+    /// standing in that space, in this repository's context. Records
+    /// the terminal's exact live space/tab pair; missing or unlabeled
+    /// terminal refuses. Human-only; a rebind replaces the latest
+    /// choice, the log keeps the history.
+    Bind,
+    /// Show the bound root destination, if any: a read, no host ask
+    Show,
+    /// Clear the bound root destination: root launches run unplaced
+    /// until a later bind. Human-only; the history stays in the log.
+    Clear,
 }
 
 #[derive(Clone, Copy, Subcommand)]
@@ -2089,13 +2112,20 @@ impl From<saccade::launch::LaunchFail> for Fail {
 
 /// The reply's placement line: how to look, descriptive never pushy;
 /// a refused declaration discloses instead of hinting.
-fn placement_lines(terminal: &str, place_refusal: &Option<String>) -> String {
-    match place_refusal {
-        Some(evidence) => {
+fn placement_lines(
+    terminal: &str,
+    space: &Option<String>,
+    place_refusal: &Option<String>,
+) -> String {
+    match (space, place_refusal) {
+        (Some(_), Some(evidence)) => {
             format!("  placement was refused: {evidence} - the session runs unlabeled")
         }
-        None => format!(
+        (Some(_), None) => format!(
             "  look for it in the herdr app's sidebar, or attach from a terminal: hc attach {terminal}"
+        ),
+        (None, _) => format!(
+            "  unplaced: no Herdr space was declared, attach from a terminal: hc attach {terminal}"
         ),
     }
 }
@@ -2130,7 +2160,11 @@ fn launch_door(
         h = launch_harness_name(&submitted),
         ws = submitted.workspace,
         t = submitted.terminal,
-        place = placement_lines(&submitted.terminal, &submitted.place_refusal),
+        place = placement_lines(
+            &submitted.terminal,
+            &submitted.space,
+            &submitted.place_refusal
+        ),
     ))
 }
 
@@ -2456,8 +2490,8 @@ fn launch_here_run(
 struct AskOutcome {
     workspace: String,
     terminal: String,
-    space: String,
-    tab: String,
+    space: Option<String>,
+    tab: Option<String>,
     place_refusal: Option<String>,
     birth: usize,
     num: usize,
@@ -2637,8 +2671,8 @@ fn ask_run(
     Ok(AskOutcome {
         workspace: submitted.workspace,
         terminal: submitted.terminal,
-        space: submitted.space.expect("the ask door declares placement"),
-        tab: submitted.tab.expect("the ask door declares placement"),
+        space: submitted.space,
+        tab: submitted.tab,
         place_refusal: submitted.place_refusal,
         birth,
         num,
@@ -2687,7 +2721,7 @@ fn ask_door(
         workspace = outcome.workspace,
         terminal = outcome.terminal,
         creator = outcome.creator,
-        place = placement_lines(&outcome.terminal, &outcome.place_refusal),
+        place = placement_lines(&outcome.terminal, &outcome.space, &outcome.place_refusal),
     ))
 }
 
@@ -2798,7 +2832,7 @@ fn workspace_switch_door(
             h = launch_harness_name(&launch),
             ws = launch.workspace,
             t = launch.terminal,
-            place = placement_lines(&launch.terminal, &launch.place_refusal),
+            place = placement_lines(&launch.terminal, &launch.space, &launch.place_refusal),
         ));
     }
     if cli.json {
@@ -2836,7 +2870,115 @@ fn workspace_door(
         WorkspaceVerb::Clean { path } => workspace_clean_door(cli, destination, path),
         WorkspaceVerb::Restore { path } => workspace_restore_door(cli, destination, path),
         WorkspaceVerb::Reconcile { apply } => workspace_reconcile_door(cli, destination, *apply),
+        WorkspaceVerb::Root { verb } => match verb {
+            RootVerb::Bind => root_bind_door(cli, destination),
+            RootVerb::Show => root_show_door(cli, destination),
+            RootVerb::Clear => root_clear_door(cli, destination),
+        },
     }
+}
+
+/// `sac workspace root bind`: the human's explicit association of the
+/// primary checkout with the manual root space's terminal. One host
+/// ask on this pane's terminal, the exact live pair recorded; no
+/// sweep, no cwd inference. The store enforces the human tier.
+fn root_bind_door(cli: &Cli, destination: &Destination) -> Result<String, Fail> {
+    let url = server_url(destination, "workspace root bind")?;
+    let carried = std::env::var("HC_TERMINAL_ID")
+        .ok()
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| {
+            Fail::Usage(
+                "this pane declares no host terminal (HC_TERMINAL_ID absent): run the bind inside the terminal standing in the chosen manual root space".into(),
+            )
+        })?;
+    let host = saccade::herdr::HerdrCore::resolved().map_err(|e| Fail::Usage(e.to_string()))?;
+    let placed = host
+        .placement_of(&saccade::host_contract::HostAddress(carried))
+        .ok_or_else(|| {
+            Fail::Usage(
+                "the current terminal carries no live standing placement: select the chosen manual root space in the herdr app first, then bind".into(),
+            )
+        })?;
+    let tab = placed.tab.ok_or_else(|| {
+        Fail::Usage(
+            "the current terminal names a space but no tab: the bind records the exact pair".into(),
+        )
+    })?;
+    let context = context_of(cli)?;
+    let record_seq = client::send(
+        &url,
+        &context,
+        saccade::Command::BindRootSpace {
+            space: placed.space.clone(),
+            tab: tab.clone(),
+        },
+        None,
+    )
+    .map_err(Fail::Client)?;
+    let record = record_seq.records.first().map(|r| r.seq);
+    let line = format!(
+        "root space bound - {space} / {tab}{record}",
+        space = placed.space,
+        record = record.map(|r| format!(" (record {r})")).unwrap_or_default(),
+    );
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "bound": true,
+            "space": placed.space,
+            "records": record_seq.records,
+        }))
+        .expect("plain data"));
+    }
+    Ok(format!(
+        "{line}\n  launches at the primary checkout declare this pair; bind again in another space to re-point, or clear: sac workspace root clear"
+    ))
+}
+
+/// `sac workspace root show`: the standing binding as the record holds
+/// it - a read, no host ask, never an existence claim.
+fn root_show_door(cli: &Cli, destination: &Destination) -> Result<String, Fail> {
+    let loadout = loadout_of(destination)?;
+    let LoadState::Full(world) = loadout.state else {
+        return Err(Fail::Degraded(
+            "root show needs the world; the log will not fold".into(),
+        ));
+    };
+    let binding = world.root_space.as_ref();
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "bound": binding.is_some(),
+            "space": binding.map(|b| b.space.clone()),
+            "tab": binding.map(|b| b.tab.clone()),
+        }))
+        .expect("plain data"));
+    }
+    Ok(match binding {
+        Some(b) => format!("root space: {} / {}", b.space, b.tab),
+        None => "no root space is bound: root launches run unplaced".into(),
+    })
+}
+
+/// `sac workspace root clear`: remove the binding; root launches run
+/// unplaced until a later bind. Human-only at the store; history
+/// stays in the log.
+fn root_clear_door(cli: &Cli, destination: &Destination) -> Result<String, Fail> {
+    let url = server_url(destination, "workspace root clear")?;
+    let context = context_of(cli)?;
+    let sent = client::send(&url, &context, saccade::Command::ClearRootSpace {}, None)
+        .map_err(Fail::Client)?;
+    let record = sent.records.first().map(|r| r.seq);
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "cleared": true,
+            "records": sent.records,
+        }))
+        .expect("plain data"));
+    }
+    Ok(format!(
+        "root space cleared{record} - root launches run unplaced until a later bind",
+        record = record.map(|r| format!(" (record {r})")).unwrap_or_default(),
+    ))
 }
 
 /// `sac workspace clean`: the ordered cleanup through the server's
@@ -3052,7 +3194,7 @@ fn launch_new_door(
                 h = launch_harness_name(&launch),
                 ws = launch.workspace,
                 t = launch.terminal,
-                place = placement_lines(&launch.terminal, &launch.place_refusal),
+                place = placement_lines(&launch.terminal, &launch.space, &launch.place_refusal),
             ),
             Err(e) => return Err(launch_failed(&provisioned, e)),
         },

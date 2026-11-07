@@ -279,8 +279,12 @@ fn activity_entry(
         Event::TaskClaimed { id, .. }
         | Event::TaskCancelled { id, .. }
         | Event::TaskReopened { id, .. } => (resolved(Some(id.0))?, None, None, None),
-        // the launch machinery's own facts ride no workbench row
+        // the launch machinery's own facts ride no workbench row,
+        // and neither do the root destination acts
         Event::SavedSessionBound { .. } | Event::HostAddressAssigned { .. } => {
+            (resolved(None)?, None, None, None)
+        }
+        Event::RootSpaceBound { .. } | Event::RootSpaceCleared {} => {
             (resolved(None)?, None, None, None)
         }
         Event::Commented { home, .. } => (

@@ -849,8 +849,11 @@ pub struct LaunchReply {
     pub submitted: bool,
     pub workspace: String,
     pub terminal: String,
-    pub space: String,
-    pub tab: String,
+    /// The declared pair: None when the destination class declares
+    /// nothing - the --here arm, an unbound root, an unrecorded
+    /// directory.
+    pub space: Option<String>,
+    pub tab: Option<String>,
     pub place_refusal: Option<String>,
     pub harness: crate::Harness,
 }
@@ -1018,8 +1021,8 @@ fn launch_operation(
         submitted: true,
         workspace: submitted.workspace.clone(),
         terminal: submitted.terminal.clone(),
-        space: submitted.space.expect("the workbench declares placement"),
-        tab: submitted.tab.expect("the workbench declares placement"),
+        space: submitted.space.clone(),
+        tab: submitted.tab.clone(),
         place_refusal: submitted.place_refusal,
         harness,
     };

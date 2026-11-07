@@ -1,25 +1,45 @@
 //! The door's placement mechanics: every terminal a saccade door
-//! spawns declares where it lives, at birth. The space id is stable
-//! per workspace identity - the canonical directory - so every launch
-//! and every resume of one workspace declares the same space, and an
-//! already-standing space for that identity keeps its terminals. When
-//! a live terminal of the workspace carries a placement, the door
-//! declares that one (the standing space survives); otherwise the
-//! stable derivation stands. Ids wear the app's own shape: a prefix
-//! and 32 lowercase hex characters.
+//! spawns declares where it lives, at birth - and the destination
+//! alone decides what it declares. A recorded workspace declares its
+//! stable derived pair; the primary checkout declares the exact pair
+//! the human bound (`saccade workspace root bind`); an unbound root
+//! or any unrecorded destination declares nothing, and the terminal
+//! stays unplaced for human attachment. No launch consults the host's
+//! terminal table, lends another terminal's labels, or infers from
+//! any cwd: the Herdr app supplies worktree-under-root nesting from
+//! its own git facts. Ids wear the app's own shape: a prefix and 32
+//! lowercase hex characters.
 
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::herdr::{HerdrCore, HostTerminal};
-use crate::host_contract::HostAddress;
+use crate::World;
+use crate::workspace::{LifecycleAddress, resolve_workspace_address};
 
 /// The derived space and tab ids one directory declares.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Placement {
     pub space: String,
     pub tab: String,
+}
+
+/// The placement a launch declares for `dir`, or None when the
+/// destination has no declared placement: the human-bound pair at the
+/// primary checkout, the stable derivation for a recorded workspace,
+/// unplaced for an unbound root or any unrecorded directory.
+pub fn for_dir(world: &World, repo: &Path, dir: &Path) -> Option<Placement> {
+    let root_canonical = canonical(dir);
+    if root_canonical == canonical(repo) {
+        return world.root_space.as_ref().map(|b| Placement {
+            space: b.space.clone(),
+            tab: b.tab.clone(),
+        });
+    }
+    match resolve_workspace_address(world, dir) {
+        Ok(LifecycleAddress::Single(_)) => Some(derived(&root_canonical)),
+        _ => None,
+    }
 }
 
 /// The stable ids for one directory: a domain-separated sha256 over
@@ -31,46 +51,6 @@ pub fn derived(dir: &Path) -> Placement {
         space: mint("saccade-space", canonical.display(), "spa"),
         tab: mint("saccade-tab", canonical.display(), "tb"),
     }
-}
-
-/// The placement a launch declares for `dir`: the standing space of a
-/// live terminal already sitting in the workspace, else the stable
-/// derivation. A lookup miss (no table, no live candidates, no
-/// labels) is the derivation - the declaration is always defined.
-pub fn for_dir(host: &HerdrCore, dir: &Path) -> Placement {
-    let canonical = canonical(dir);
-    let fallback = derived(&canonical);
-    let Ok(rows) = host.terminals() else {
-        return fallback;
-    };
-    let mut candidates: Vec<&HostTerminal> = rows
-        .iter()
-        .filter(|row| row.state == "live" && under(&canonical, &row.cwd))
-        .collect();
-    // the host's launch cwd can be stale after a shell changes projects, so a candidate may lend another project's space
-    candidates.sort_by(|a, b| a.address.cmp(&b.address));
-    for row in candidates {
-        if let Some(standing) = host.placement_of(&HostAddress(row.address.clone())) {
-            return Placement {
-                space: standing.space,
-                tab: standing.tab.unwrap_or_else(|| fallback.tab.clone()),
-            };
-        }
-    }
-    fallback
-}
-
-/// One directory contains another cwd: equal, or a path below it.
-pub fn under(dir: &Path, cwd: &str) -> bool {
-    let dir = canonical(dir).to_string_lossy().into_owned();
-    let dir = dir.trim_end_matches('/');
-    if dir.is_empty() {
-        return false;
-    }
-    cwd == dir
-        || cwd
-            .strip_prefix(dir)
-            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn canonical(dir: &Path) -> PathBuf {
@@ -91,42 +71,36 @@ fn mint(domain: &str, path: impl std::fmt::Display, prefix: &str) -> String {
 mod test {
     use super::*;
 
-    use std::os::unix::fs::PermissionsExt;
-    use std::time::Duration;
+    use crate::objects::workspace::{CreatedWorkspace, CreatedWorkspaceContext, WorkspaceStage};
+    use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
+    use crate::{RecordId, WorkspaceId};
 
-    fn fake(name: &str, rows: &str, gets: &[(&str, &str)]) -> (HerdrCore, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("sac-place-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let script = dir.join("hc");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-$1.log\"\nif [ \"$1\" = ls ]; then\n  printf '{\"terminals\":%s}\\n' \"$(cat \"$here/rows.json\" 2>/dev/null)\"\n  exit 0\nfi\nif [ \"$1\" = get ] && [ -f \"$here/get-$2.json\" ]; then\n  cat \"$here/get-$2.json\"; printf '\\n'; exit 0\nfi\nif [ \"$1\" = get ]; then\n  printf '{\"error\":{\"kind\":\"not_found\",\"message\":\"no terminal\"}}\\n' >&2\n  exit 3\nfi\nprintf '{}\\n'\nexit 0\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::write(dir.join("rows.json"), rows).unwrap();
-        for (address, record) in gets {
-            std::fs::write(dir.join(format!("get-{address}.json")), record).unwrap();
+    fn world_with_root(space: &str, tab: &str) -> World {
+        World {
+            root_space: Some(crate::RootSpaceBinding {
+                space: space.into(),
+                tab: tab.into(),
+            }),
+            ..World::new()
         }
-        for _ in 0..50 {
-            match std::process::Command::new(&script).arg("--warmup").output() {
-                Ok(_) => break,
-                Err(e) if e.raw_os_error() == Some(26) => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => panic!("the fake script never became spawnable: {e}"),
-            }
-        }
-        (HerdrCore::over(&script), dir)
     }
 
-    fn argv_log(dir: &Path, verb: &str) -> Vec<String> {
-        std::fs::read_to_string(dir.join(format!("argv-{verb}.log")))
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect()
+    fn world_with_workspace(path: &Path) -> World {
+        let mut world = World::new();
+        world.workspaces.insert(
+            WorkspaceId(RecordId(7)),
+            CreatedWorkspaceContext {
+                workspace: CreatedWorkspace {
+                    base: GitCommit::new("0f9e8d7c".into()).unwrap(),
+                    branch: GitBranch::new("workspace-gloom".into()).unwrap(),
+                    worktree: WorktreePath::new(path.to_path_buf()).unwrap(),
+                    stage: WorkspaceStage::Available,
+                },
+                born_at: 0,
+                stage_fact: None,
+            },
+        );
+        world
     }
 
     #[test]
@@ -152,126 +126,51 @@ mod test {
     }
 
     #[test]
-    fn under_matches_equal_and_nested_paths_never_prefix_stretches() {
-        let dir = Path::new("/home/x/ws");
-        assert!(under(dir, "/home/x/ws"));
-        assert!(under(dir, "/home/x/ws/sub/deeper"));
-        assert!(!under(dir, "/home/x/ws-other"));
-        assert!(!under(dir, "/home/x"));
-        assert!(!under(dir, "/elsewhere"));
-        assert!(under(Path::new("/home/x/ws/"), "/home/x/ws/nested"));
-        // an unresolvable dir still matches by its own string
-        assert!(under(Path::new("/no/such/dir"), "/no/such/dir/inside"));
-        assert!(!under(Path::new("/no/such/dir"), "/no/such/dir-other"));
-    }
-
-    #[test]
-    fn a_live_labeled_candidate_lends_its_standing_placement() {
-        let ws = std::env::temp_dir().join(format!("sac-place-ws-{}", std::process::id()));
-        std::fs::create_dir_all(ws.join("sub")).unwrap();
-        let rows = format!(
-            "[{{\"address\":\"t5\",\"cwd\":\"{}\",\"state\":\"live\"}},\
-             {{\"address\":\"t6\",\"cwd\":\"/elsewhere\",\"state\":\"live\"}},\
-             {{\"address\":\"t7\",\"cwd\":\"{}\",\"state\":\"finished\"}}]",
-            ws.join("sub").display(),
-            ws.display(),
-        );
-        let (host, dir) = fake(
-            "standing",
-            &rows,
-            &[(
-                "t5",
-                "{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaStanding\",\"herdr.tab\":\"tbStanding\"}}",
-            )],
-        );
-        let placed = for_dir(&host, &ws);
-        assert_eq!(placed.space, "spaStanding");
-        assert_eq!(placed.tab, "tbStanding");
-        // only the live under-dir candidate was asked: the outside and
-        // finished rows never reached the record read
+    fn a_bound_root_declares_the_bound_pair_and_no_host_read() {
+        let repo = std::env::temp_dir().join(format!("sac-place-root-{}", std::process::id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        let world = world_with_root("spaManual", "tbManual");
         assert_eq!(
-            argv_log(&dir, "get"),
-            vec!["get".to_string(), "t5".to_string(), "--json".to_string()]
+            for_dir(&world, &repo, &repo),
+            Some(Placement {
+                space: "spaManual".into(),
+                tab: "tbManual".into()
+            })
         );
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&ws);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]
-    fn a_standing_space_without_a_tab_takes_the_derived_tab() {
-        let ws = std::env::temp_dir().join(format!("sac-place-notab-{}", std::process::id()));
-        std::fs::create_dir_all(&ws).unwrap();
-        let rows = format!(
-            "[{{\"address\":\"t5\",\"cwd\":\"{}\",\"state\":\"live\"}}]",
-            ws.display()
-        );
-        let (host, dir) = fake(
-            "standing-notab",
-            &rows,
-            &[(
-                "t5",
-                "{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaStanding\"}}",
-            )],
-        );
-        let placed = for_dir(&host, &ws);
-        assert_eq!(placed.space, "spaStanding");
-        assert_eq!(placed.tab, derived(&ws).tab);
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&ws);
+    fn an_unbound_root_is_unplaced_never_a_derived_space() {
+        let repo = std::env::temp_dir().join(format!("sac-place-noroot-{}", std::process::id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        let world = World::new();
+        assert_eq!(for_dir(&world, &repo, &repo), None);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]
-    fn the_lowest_address_wins_among_standing_candidates() {
-        let ws = std::env::temp_dir().join(format!("sac-place-order-{}", std::process::id()));
+    fn a_recorded_workspace_declares_its_derivation() {
+        let ws = std::env::temp_dir().join(format!("sac-place-ws-{}", std::process::id()));
         std::fs::create_dir_all(&ws).unwrap();
-        let rows = format!(
-            "[{{\"address\":\"t9\",\"cwd\":\"{}\",\"state\":\"live\"}},\
-             {{\"address\":\"t2\",\"cwd\":\"{}\",\"state\":\"live\"}}]",
-            ws.display(),
-            ws.display(),
-        );
-        let (host, dir) = fake(
-            "standing-order",
-            &rows,
-            &[
-                (
-                    "t2",
-                    "{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaEarly\"}}",
-                ),
-                (
-                    "t9",
-                    "{\"state\":\"live\",\"labels\":{\"herdr.space\":\"spaLate\"}}",
-                ),
-            ],
-        );
-        assert_eq!(for_dir(&host, &ws).space, "spaEarly");
-        let _ = std::fs::remove_dir_all(&dir);
+        let repo = std::env::temp_dir().join(format!("sac-place-repo-{}", std::process::id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        let world = world_with_workspace(&ws);
+        assert_eq!(for_dir(&world, &repo, &ws), Some(derived(&ws)));
         let _ = std::fs::remove_dir_all(&ws);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]
-    fn every_lookup_miss_falls_back_to_the_derivation() {
-        let ws = std::env::temp_dir().join(format!("sac-place-miss-{}", std::process::id()));
-        std::fs::create_dir_all(&ws).unwrap();
-        let expect = derived(&ws);
-        // no rows at all
-        let (host, dir) = fake("miss-empty", "", &[]);
-        assert_eq!(for_dir(&host, &ws), expect);
-        let _ = std::fs::remove_dir_all(&dir);
-        // live candidates under the dir, none labeled
-        let rows = format!(
-            "[{{\"address\":\"t5\",\"cwd\":\"{}\",\"state\":\"live\"}}]",
-            ws.display()
-        );
-        let (host, dir) = fake("miss-unlabeled", &rows, &[]);
-        assert_eq!(for_dir(&host, &ws), expect);
-        let _ = std::fs::remove_dir_all(&dir);
-        // the table itself unreadable
-        let (host, dir) = fake("miss-broken", "", &[]);
-        std::fs::write(dir.join("hc"), "#!/bin/sh\nexit 1\n").unwrap();
-        std::fs::set_permissions(dir.join("hc"), std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(for_dir(&host, &ws), expect);
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&ws);
+    fn an_unrecorded_non_root_destination_is_unplaced() {
+        let repo = std::env::temp_dir().join(format!("sac-place-repo2-{}", std::process::id()));
+        let other = std::env::temp_dir().join(format!("sac-place-other-{}", std::process::id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        // even a bound root does not lend its pair to another directory
+        let world = world_with_root("spaManual", "tbManual");
+        assert_eq!(for_dir(&world, &repo, &other), None);
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&other);
     }
 }

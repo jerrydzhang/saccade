@@ -20,6 +20,11 @@ fn required_tier(event: &Event) -> Authority {
         | Event::MessageSent { .. } => Authority::AnyTier,
         // the human-authored judgment acts: cancellation and reopening
         Event::TaskCancelled { .. } | Event::TaskReopened { .. } => Authority::Require(Tier::Human),
+        // the human's chosen root destination: an explicit act about
+        // host state semantics, never an agent's inference
+        Event::RootSpaceBound { .. } | Event::RootSpaceCleared {} => {
+            Authority::Require(Tier::Human)
+        }
         // a presentation repair may come from any judgment tier
         Event::CommentRevised { .. } | Event::CommentWithdrawn { .. } => Authority::AnyTier,
         // provisioning by role: the machinery's establishment and
@@ -157,6 +162,8 @@ pub fn decide(command: Command) -> Vec<Event> {
             body,
         }],
         Command::SubmitMessage { id, by } => vec![Event::MessageSubmitted { id, by }],
+        Command::BindRootSpace { space, tab } => vec![Event::RootSpaceBound { space, tab }],
+        Command::ClearRootSpace {} => vec![Event::RootSpaceCleared {}],
     }
 }
 
@@ -200,7 +207,7 @@ mod test {
         use Authority::*;
         let native_id = || NativeSessionId::new("a1b2c3d4".into()).unwrap();
         let locator = || SessionLocator::new("/sessions/a1b2c3d4.jsonl".into()).unwrap();
-        let events: [(Event, Authority); 24] = [
+        let events: [(Event, Authority); 26] = [
             (Event::TaskCreated { name: prose() }, AnyTier),
             (
                 Event::TaskClaimed {
@@ -223,6 +230,14 @@ mod test {
                 },
                 Require(Tier::Human),
             ),
+            (
+                Event::RootSpaceBound {
+                    space: "spaRoot".into(),
+                    tab: "tbRoot".into(),
+                },
+                Require(Tier::Human),
+            ),
+            (Event::RootSpaceCleared {}, Require(Tier::Human)),
             (
                 Event::Commented {
                     home: TaskId(0),
@@ -511,6 +526,11 @@ mod test {
                 id: MessageId(RecordId(2)),
                 by: IncarnationId(RecordId(1)),
             },
+            Command::BindRootSpace {
+                space: "spaRoot".into(),
+                tab: "tbRoot".into(),
+            },
+            Command::ClearRootSpace {},
         ];
         for command in commands {
             assert_eq!(decide(command.clone()).len(), 1);

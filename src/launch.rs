@@ -55,18 +55,20 @@ pub struct ResumeTarget {
 }
 
 /// One composed launch: the routing environment, the exact workspace,
-/// the session argv under the arm's harness, and the identity facts
-/// the submitting door records. Mechanics only.
+/// the session argv under the arm's harness, the identity facts
+/// the submitting door records, and the placement the destination
+/// class declares - None for the --here arm, an unbound root, or any
+/// unrecorded destination. Mechanics only.
 pub struct Composition {
     pub routing: Vec<String>,
     pub dir: PathBuf,
     pub session_argv: Vec<String>,
     pub fresh: Option<FreshBirth>,
     pub resume: Option<ResumeTarget>,
-    /// Whether the submit declares Herdr placement for the new
-    /// terminal. The --here arm declares nothing: its terminal stays
-    /// unplaced for explicit later attachment.
-    pub declare_placement: bool,
+    /// The placement the submit may declare: the bound pair at a
+    /// bound primary checkout, the derivation at a recorded
+    /// workspace, None elsewhere.
+    pub placement: Option<placement::Placement>,
 }
 
 /// What a submitted launch produced: the workspace and terminal the
@@ -138,7 +140,8 @@ pub struct LaunchRequest<'a> {
 /// harness argv, and the arm's identity facts. The resume arm runs its
 /// strict preflight here - saved locator, header identity, recorded
 /// workspace, cleaned guard, and host liveness - so a refused resume
-/// contacts no session and changes nothing.
+/// contacts no session and changes nothing. The destination class,
+/// not the caller, decides the declared placement.
 pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
     let LaunchRequest {
         world,
@@ -303,13 +306,18 @@ pub fn compose(request: LaunchRequest) -> Result<Composition, LaunchFail> {
             )
         }
     };
+    let placement = if declare_placement {
+        placement::for_dir(world, repo, &dir)
+    } else {
+        None
+    };
     Ok(Composition {
         routing: routing(url, repo, exe, label, launched_session.as_str()),
         dir,
         session_argv,
         fresh,
         resume,
-        declare_placement,
+        placement,
     })
 }
 
@@ -336,21 +344,21 @@ pub fn submit(composed: Composition) -> Result<Submitted, LaunchFail> {
             code: "launch_host_refused",
             detail: e.to_string(),
         })?;
-    // placement at birth: the author declares where the terminal
-    // lives, before the door replies - the space is stable per
-    // workspace, and a standing space for the same identity keeps it.
-    // The --here arm declares nothing: no lookup, no label ask, no
-    // placement claim - the terminal stays unplaced for explicit
-    // later attachment
-    let (space, tab, place_refusal) = if composed.declare_placement {
-        let placement = placement::for_dir(&host, &composed.dir);
-        let refusal = host
-            .place(&address, &placement.space, &placement.tab)
-            .err()
-            .map(|e| e.to_string());
-        (Some(placement.space), Some(placement.tab), refusal)
-    } else {
-        (None, None, None)
+    // placement at birth: the destination class decides what the
+    // terminal declares - the bound pair at a bound primary checkout,
+    // the derivation at a recorded workspace, and no lookup, no label
+    // ask, no placement claim anywhere else. The --here arm composes
+    // None the same way: its terminal stays unplaced for explicit
+    // later attachment.
+    let (space, tab, place_refusal) = match composed.placement {
+        Some(placement) => {
+            let refusal = host
+                .place(&address, &placement.space, &placement.tab)
+                .err()
+                .map(|e| e.to_string());
+            (Some(placement.space), Some(placement.tab), refusal)
+        }
+        None => (None, None, None),
     };
     Ok(Submitted {
         workspace: composed.dir.display().to_string(),

@@ -1041,6 +1041,29 @@ mod test {
             36,
         )
         .unwrap();
+        // the human's root destination rides the same round-trip:
+        // bind, clear, bind again - the final pair is the standing choice
+        record(
+            &mut conn,
+            &human(),
+            Command::BindRootSpace {
+                space: "spaRoot".into(),
+                tab: "tbRoot".into(),
+            },
+            36,
+        )
+        .unwrap();
+        record(&mut conn, &human(), Command::ClearRootSpace {}, 36).unwrap();
+        record(
+            &mut conn,
+            &human(),
+            Command::BindRootSpace {
+                space: "spaSecond".into(),
+                tab: "tbSecond".into(),
+            },
+            36,
+        )
+        .unwrap();
 
         // asserted after the last write of the story
         let (_, returned) = record(
@@ -1059,7 +1082,7 @@ mod test {
             panic!("expected a full load");
         };
         assert_eq!(returned, world);
-        assert_eq!(loadout.rows.len(), 47);
+        assert_eq!(loadout.rows.len(), 50);
         // the task families ride their own kinds
         assert_eq!(loadout.rows[0].kind, "task_created");
         assert_eq!(loadout.rows[1].kind, "task_claimed");
@@ -1309,6 +1332,19 @@ mod test {
                 adopted: false,
                 harness: crate::Harness::ClaudeCode,
             }
+        );
+        // the human's root destination: both kinds ride the round-trip,
+        // the final bind is the standing choice; the closing checkpoint
+        // follows them
+        assert_eq!(loadout.rows[46].kind, "root_space_bound");
+        assert_eq!(loadout.rows[47].kind, "root_space_cleared");
+        assert_eq!(loadout.rows[48].kind, "root_space_bound");
+        assert_eq!(
+            world
+                .root_space
+                .as_ref()
+                .map(|b| (b.space.as_str(), b.tab.as_str())),
+            Some(("spaSecond", "tbSecond"))
         );
         assert_eq!(world.messages.len(), 1);
         let mctx = &world.messages[&crate::MessageId(RecordId(37))];

@@ -128,10 +128,18 @@ function __saccade_workspace_verbs
     printf 'clean\tClose an exact recorded workspace, work preserved\n'
     printf 'restore\tBring an exact recorded cleaned workspace back\n'
     printf 'reconcile\tVerify every recorded workspace; Cleaned facts ride --apply\n'
+    printf 'root\tBind, show, or clear the primary checkout destination\n'
+end
+
+function __saccade_root_verbs
+    printf 'bind\tBind the manual root space from this terminal\n'
+    printf 'show\tShow the bound root destination\n'
+    printf 'clear\tClear the bound root destination\n'
 end
 
 complete -c sac -n '__saccade_no_verb; and not __saccade_prev_value_flag' -a '(__saccade_verbs)'
 complete -c sac -n '__saccade_verb workspace; and test (__saccade_npos) = 0; and not __saccade_prev_value_flag' -a '(__saccade_workspace_verbs)'
+complete -c sac -n '__saccade_verb workspace root; and test (__saccade_npos) = 1; and not __saccade_prev_value_flag' -a '(__saccade_root_verbs)'
 
 # static flags
 complete -c sac -l db -r -f -d 'select local operations on this database file'

@@ -127,6 +127,19 @@ pub enum Event {
     WorkspaceRestored {
         workspace: RecordRef,
     },
+    // Root destination events: the human's explicit association of
+    // the primary checkout with a Herdr space/tab pair
+    /// The chosen destination for launches at the primary checkout,
+    /// recorded from the terminal standing in the manual root space.
+    /// A chosen destination, never a host-space-existence claim; the
+    /// association does not depend on any shell staying alive.
+    RootSpaceBound {
+        space: String,
+        tab: String,
+    },
+    /// The removal of the root association: root launches go back to
+    /// unplaced until a later bind.
+    RootSpaceCleared {},
     // Incarnation and message events: registration and submission are
     // machinery verbs, System-authored by role; a message is authored
     // by its sending session's registered identity
@@ -270,6 +283,15 @@ pub enum Command {
     RestoreWorkspace {
         workspace: RecordRef,
     },
+    // The primary checkout's Herdr destination: the human binds the
+    // chosen manual root space's exact pair from the terminal standing
+    // in it; a rebind replaces the latest choice, clear removes it,
+    // and the log keeps every earlier choice.
+    BindRootSpace {
+        space: String,
+        tab: String,
+    },
+    ClearRootSpace {},
     // Registration and submission are machinery verbs: System
     // authorship comes from the role, never input. A message is
     // authored by its sending session's registered identity. The
