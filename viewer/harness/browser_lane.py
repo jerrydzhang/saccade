@@ -14,8 +14,10 @@ Order, enforced here:
      store path carries WebKit; nothing downloaded at runtime):
      Chromium first, then Playwright WebKit - the pinned WebKit
      launches its MiniBrowser directly because pw_run.sh needs PATH
-     tools the fresh sandbox PATH deliberately does not carry; a second
-     engine on identical checks so a Chromium-only pass cannot ship a
+     tools the fresh sandbox PATH deliberately does not carry; a WPE
+     grant refusal can take the first browser down, so the setup
+     relaunches once and runs that pass ungranted; a second engine on
+     identical checks so a Chromium-only pass cannot ship a
      WebKit-only defect again; the page navigates to the server and
      waits for the shared viewer API before any action
   4. per-engine outcomes over the real frontend and the real fixture
@@ -74,6 +76,61 @@ def pinned_webkit_executable() -> str:
             f"expected exactly one pinned webkit MiniBrowser under {browsers}, found {len(matches)}"
         )
     return str(matches[0])
+
+
+def launch_engine(playwright, engine: str):
+    if engine == "chromium":
+        return playwright.chromium.launch(headless=True, chromium_sandbox=False)
+    # env replaces the inherited environment, so the pinned complex-text
+    # flag rides a merged copy; pw_run.sh sets the same one before its exec
+    launch_env = dict(os.environ)
+    launch_env["WEBKIT_FORCE_COMPLEX_TEXT"] = "1"
+    return playwright.webkit.launch(
+        headless=True,
+        executable_path=pinned_webkit_executable(),
+        env=launch_env,
+    )
+
+
+def setup_engine_page(playwright, engine: str, base_url: str):
+    """One reused browser per engine, with one documented exception: the
+    clipboard grant is best-effort, and a WPE grant refusal surfaces
+    lazily at page creation and takes the first browser down - the
+    evidence prints, then the pass runs ungranted on a fresh launch.
+    Every setup failure lands as a named per-engine check."""
+    try:
+        browser = launch_engine(playwright, engine)
+    except Exception as error:
+        record_check(
+            f"[{engine}] headless browser launches from the pinned driver",
+            False,
+            f"{type(error).__name__}: {error}",
+        )
+        return None
+    try:
+        context = browser.new_context(viewport={"width": 1100, "height": 800})
+        # Engine-internal clipboard only; never the desktop's. The grant
+        # can be refused lazily at page creation, fatally to the browser;
+        # the copy checks then measure the engine's real behavior.
+        context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
+        return browser, context.new_page()
+    except Exception as error:
+        print(f"[browser] {engine}: clipboard permission grant unavailable: {type(error).__name__}: {str(error)[:160]}", flush=True)
+    try:
+        browser.close()
+    except Exception:
+        pass
+    try:
+        browser = launch_engine(playwright, engine)
+        context = browser.new_context(viewport={"width": 1100, "height": 800})
+        return browser, context.new_page()
+    except Exception as error:
+        record_check(
+            f"[{engine}] headless page setup from the pinned driver",
+            False,
+            f"{type(error).__name__}: {error}",
+        )
+        return None
 
 
 def run_canary_first() -> bool:
@@ -476,57 +533,28 @@ def main() -> int:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
-            # one reused browser per engine; the identical check list
-            # runs under each - engine differences are the evidence
+            # the identical check list runs under each engine - engine
+            # differences are the evidence
             for engine in ("chromium", "webkit"):
+                setup = setup_engine_page(playwright, engine, base_url)
+                if setup is None:
+                    continue
+                browser, page = setup
                 try:
-                    if engine == "chromium":
-                        browser = playwright.chromium.launch(headless=True, chromium_sandbox=False)
-                    else:
-                        # env replaces the inherited environment, so the
-                        # pinned complex-text flag rides a merged copy;
-                        # pw_run.sh sets the same one before its exec
-                        launch_env = dict(os.environ)
-                        launch_env["WEBKIT_FORCE_COMPLEX_TEXT"] = "1"
-                        browser = playwright.webkit.launch(
-                            headless=True,
-                            executable_path=pinned_webkit_executable(),
-                            env=launch_env,
-                        )
+                    page.set_default_timeout(10000)
+                    page.goto(base_url)
+                    page.wait_for_function("() => window.__boardViewer !== undefined")
                 except Exception as error:
-                    # the browser's own stderr is the evidence a dead
-                    # launch leaves; a truncated detail once hid the
-                    # actual cause
                     record_check(
-                        f"[{engine}] headless browser launches from the pinned driver",
+                        f"[{engine}] navigates to the served frontend",
                         False,
                         f"{type(error).__name__}: {error}",
                     )
-                    continue
-                try:
-                    context = browser.new_context(viewport={"width": 1100, "height": 800})
                     try:
-                        # Engine-internal clipboard only; never the desktop's.
-                        # A grant the engine cannot honor can surface lazily
-                        # at page creation; the pass then runs ungranted and
-                        # the copy checks measure its real clipboard behavior.
-                        context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
-                        page = context.new_page()
-                    except Exception as error:
-                        print(f"[browser] {engine}: clipboard permission grant unavailable: {type(error).__name__}: {str(error)[:160]}", flush=True)
-                        context = browser.new_context(viewport={"width": 1100, "height": 800})
-                        page = context.new_page()
-                except Exception as error:
-                    record_check(
-                        f"[{engine}] headless page setup from the pinned driver",
-                        False,
-                        f"{type(error).__name__}: {error}",
-                    )
-                    browser.close()
+                        browser.close()
+                    except Exception:
+                        pass
                     continue
-                page.set_default_timeout(10000)
-                page.goto(base_url)
-                page.wait_for_function("() => window.__boardViewer !== undefined")
                 run_checks(page, base_url, shots_dir, engine)
                 browser.close()
     finally:
