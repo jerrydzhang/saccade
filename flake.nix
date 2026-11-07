@@ -473,7 +473,6 @@
             wrapProgram $out/bin/saccade-board-viewer \
               --prefix LD_LIBRARY_PATH : ${webkitLibs} \
               --set FONTCONFIG_FILE ${fontsConf} \
-              --set WEBKIT_DISABLE_COMPOSITING_MODE 1
           '';
           meta.mainProgram = "saccade-board-viewer";
         };
