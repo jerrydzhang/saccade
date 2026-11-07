@@ -408,9 +408,13 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("copy multi-unit and flow math", phase_copy_multi_and_flow)
 
-    # phase 3: duplicate-expression search, both occurrences reachable
+    # phase 3: duplicate-expression search, both occurrences reachable;
+    # the search bar is on demand now, so the phase opens it with the
+    # real Ctrl+F keystroke first
     def phase_search() -> None:
         open_board("repeated-math.yaml")
+        page.keyboard.press("Control+f")
+        page.wait_for_function("() => document.querySelector('input[type=search]') !== null")
         page.fill("input[type=search]", "0 < \\eta < 2/b")
         page.wait_for_function("() => (document.querySelector('.search-state')?.textContent ?? '').trim().startsWith('1 / 2')")
         search_state = page.text_content(".search-state") or ""
