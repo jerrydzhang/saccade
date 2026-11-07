@@ -48,11 +48,14 @@ function engine(): Promise<MermaidRenderFn> {
 // actually contains, so a rendering gap is attributable (text nodes
 // present but empty, absent entirely, or font resolution). Gated by
 // the same env var the shell reads for console observability.
+function diagEnabled(): boolean {
+  return (window as unknown as { __BOARD_VIEWER_DIAG__?: boolean }).__BOARD_VIEWER_DIAG__ === true;
+}
+
 function logSvgDiagnostics(id: string, svg: string): void {
-  // shell-scoped evidence: only the native shell carries the bridge,
-  // and only the lane turns its console to stdout
-  const inShell = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-  if (!inShell) return;
+  // only where the lane's explicit env signal arrived over the bridge;
+  // a human run never logs, never probes
+  if (!diagEnabled()) return;
   const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
   const texts = doc.querySelectorAll("text");
   const first = texts[0];
@@ -87,6 +90,21 @@ export async function renderMermaid(code: string): Promise<MermaidRender> {
     render = await engine();
   } catch (error) {
     return { ok: false, message: `mermaid engine unavailable: ${String(error)}` };
+  }
+  // Label wrapping depends on DOM text measurement. In the headless
+  // lane the first renders ran before fonts and window geometry were
+  // ready and measurement returned nonsense (negative widths), so
+  // every render waits for the fonts; the diagnostics record the
+  // viewport facts for the evidence trail.
+  if (document.fonts.status !== "loaded") {
+    if (diagEnabled()) console.log(`[viewer-diag] fonts status=${document.fonts.status}; awaiting ready`);
+    await document.fonts.ready;
+    if (diagEnabled()) console.log(`[viewer-diag] fonts ready status=${document.fonts.status}`);
+  }
+  if (diagEnabled()) {
+    console.log(
+      `[viewer-diag] viewport=${window.innerWidth}x${window.innerHeight} dpr=${window.devicePixelRatio}`,
+    );
   }
   const id = `mmd-${++renderCount}`;
   try {

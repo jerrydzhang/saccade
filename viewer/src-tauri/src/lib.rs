@@ -32,6 +32,7 @@ pub fn run() {
             commands::read_asset,
             commands::viewer_identity,
             commands::initial_board,
+            commands::lane_console_enabled,
         ])
         .setup(move |app| {
             if console_requested {
@@ -41,7 +42,7 @@ pub fn run() {
                         .with_webview(|webview| {
                             #[cfg(target_os = "linux")]
                             {
-                                use webkit2gtk::{SettingsExt, WebViewExt, gio};
+                                use webkit2gtk::{SettingsExt, WebViewExt};
                                 let inner = webview.inner();
                                 if let Some(settings) = inner.settings() {
                                     settings.set_enable_write_console_messages_to_stdout(true);
