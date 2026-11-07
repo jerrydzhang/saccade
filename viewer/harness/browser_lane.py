@@ -78,6 +78,27 @@ def pinned_webkit_executable() -> str:
     return str(matches[0])
 
 
+def webkit_stderr_capture() -> str:
+    """The driver swallows WPE stderr when the browser dies mid-run, so
+    the browser writes its own stderr through a tiny wrapper into the
+    run root - the abort message behind a TargetClosedError must be
+    readable evidence, not a silent close. stdout stays on the pipe:
+    the driver reads the inspector handshake from it."""
+    real = pinned_webkit_executable()
+    # the pinned MiniBrowser wrapper's shebang names the pinned bash
+    bash = pathlib.Path(real).read_text().splitlines()[0].removeprefix("#!").strip().split()[0]
+    run_artifacts = pathlib.Path(os.environ["SHOTS_DIR"])
+    err_log = run_artifacts / "webkit-browser-stderr.log"
+    wrapper = run_artifacts / "webkit-minibrowser.sh"
+    wrapper.write_text(
+        f"#!{bash}\n"
+        f'exec 2>>"{err_log}"\n'
+        f'exec "{real}" "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    return str(wrapper)
+
+
 def launch_engine(playwright, engine: str):
     if engine == "chromium":
         return playwright.chromium.launch(headless=True, chromium_sandbox=False)
@@ -87,7 +108,7 @@ def launch_engine(playwright, engine: str):
     launch_env["WEBKIT_FORCE_COMPLEX_TEXT"] = "1"
     return playwright.webkit.launch(
         headless=True,
-        executable_path=pinned_webkit_executable(),
+        executable_path=webkit_stderr_capture(),
         env=launch_env,
     )
 
