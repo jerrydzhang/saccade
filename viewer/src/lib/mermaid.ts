@@ -47,16 +47,20 @@ async function loadMermaid(): Promise<MermaidRenderFn> {
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",
-    htmlLabels: false,
+    // SVG <text> paints invisibly under the native WebKitGTK geometry
+    // bug (glyph positioning inherits the broken page scale while HTML
+    // text paints correctly - the board prose proves the HTML path).
+    // The final SVG evidence: all 12 node labels present in the SVG,
+    // none visible in the frame. HTML labels ride foreignObject and
+    // the working HTML text path; copy semantics are unchanged (copy
+    // reads textContent either way).
+    htmlLabels: true,
     // a family the pinned fontconfig actually provides: the probe in
     // the lane evidence showed generic resolution is not trustworthy
     // under WebKitGTK's SVG text
     fontFamily: "'DejaVu Sans', sans-serif",
-    flowchart: {
-      htmlLabels: false,
-      wrappingWidth: 200,
-    },
-    class: { htmlLabels: false },
+    flowchart: { htmlLabels: true, wrappingWidth: 200 },
+    class: { htmlLabels: true },
   });
   return (id: string, code: string) => mermaid.render(id, code);
 }
