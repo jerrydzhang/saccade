@@ -3,6 +3,18 @@
 One entry point: `viewer/harness/entry.py`. Agents never spawn app,
 browser, compositor, server or SSH processes by hand.
 
+## Standing authorization
+
+Routine lane and session runs use the standing authorization recorded
+on t-71 (`BOARD_VIEWER_RUNTIME_AUTHORIZED=3030` or its successor
+record), with no per-run check-in, while its conditions hold: a
+committed clean HEAD, the frozen containment boundary, and run roots
+kept; sessions end with an explicit `session down`. Excluded forever
+without a fresh boundary decision: GPU access, the host display, SSH,
+any network, other machines, and any other capability outside the
+frozen boundary. Boundary changes and new capabilities still go to the
+coordinator first.
+
 ## Lanes and what they claim
 
 - `check-fast`: plain, uncontained tool runs (typecheck, pure contract
