@@ -166,7 +166,7 @@ def main() -> int:
     usable, reason = entry.verify_playwright_closure(str(empty_env / "bin" / "python3"))
     check("closure without playwright refuses with the env root named", not usable and "playwright module not found" in reason, reason)
     # --- browser lane wiring traversal (no spawn) -------------------------
-    lane_calls = {"canary": 0, "server": 0, "goto": [], "checks": 0, "engines": [], "shutdown": 0, "shots": []}
+    lane_calls = {"canary": 0, "server": 0, "goto": [], "checks": 0, "engines": [], "shutdown": 0, "shots": [], "webkit_dead": False}
 
     class FakeServer:
         def shutdown(self):
@@ -205,15 +205,24 @@ def main() -> int:
     class FakeSyncContext:
         def __enter__(self):
             fake = type("FakePw", (), {})()
+
+            def chromium_launch(**kwargs):
+                return FakeBrowser()
+
+            def webkit_launch(**kwargs):
+                if lane_calls["webkit_dead"]:
+                    raise RuntimeError("pw_run.sh: cannot open display")
+                return FakeBrowser()
+
             fake.chromium = type(
                 "FakeChromium",
                 (),
-                {"launch": staticmethod(lambda **kwargs: FakeBrowser())},
+                {"launch": staticmethod(chromium_launch)},
             )()
             fake.webkit = type(
                 "FakeWebkit",
                 (),
-                {"launch": staticmethod(lambda **kwargs: FakeBrowser())},
+                {"launch": staticmethod(webkit_launch)},
             )()
             return fake
 
@@ -275,6 +284,21 @@ def main() -> int:
             str(lane_calls),
         )
         check("screenshots land under the run-root shots dir", lane_calls["shots"] == [] and shots_dir.is_dir(), str(shots_dir))
+
+        # a dead engine launch is recorded with its full stderr and
+        # fails the lane - never a silent pass
+        FakeCanary.code = 0
+        lane_calls["webkit_dead"] = True
+        code = browser_lane.main()
+        launch_records = [r for r in browser_lane.RESULTS if r[1] == "[webkit] headless browser launches from the pinned driver"]
+        check(
+            "a dead engine launch is recorded and fails the lane",
+            code == 1
+            and len(launch_records) == 1
+            and launch_records[0][0] is False
+            and "cannot open display" in launch_records[0][2],
+            str(launch_records),
+        )
 
     finally:
         browser_lane.containment_canary = real_canary_mod

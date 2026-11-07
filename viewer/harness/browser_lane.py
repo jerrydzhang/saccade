@@ -453,7 +453,6 @@ def main() -> int:
     base_url = f"http://127.0.0.1:{SERVER_PORT}"
     print(f"[browser] serving {DIST_SANDBOX} on {base_url}", flush=True)
 
-    failures = 0
     try:
         from playwright.sync_api import sync_playwright
 
@@ -467,10 +466,13 @@ def main() -> int:
                     else:
                         browser = playwright.webkit.launch(headless=True)
                 except Exception as error:
+                    # the browser's own stderr is the evidence a dead
+                    # launch leaves; a truncated detail once hid the
+                    # actual cause
                     record_check(
                         f"[{engine}] headless browser launches from the pinned driver",
                         False,
-                        f"{type(error).__name__}: {str(error)[:160]}",
+                        f"{type(error).__name__}: {error}",
                     )
                     continue
                 context = browser.new_context(viewport={"width": 1100, "height": 800})
@@ -486,16 +488,19 @@ def main() -> int:
                 page.set_default_timeout(10000)
                 page.goto(base_url)
                 page.wait_for_function("() => window.__boardViewer !== undefined")
-                failures += run_checks(page, base_url, shots_dir, engine)
+                run_checks(page, base_url, shots_dir, engine)
                 browser.close()
     finally:
         server.shutdown()
         server.server_close()
 
+    # every recorded failure counts, including an engine whose browser
+    # never launched - the lane passes only when BOTH engines did
+    failed = sum(1 for ok, _name, _detail in RESULTS if not ok)
     cost = time.monotonic() - started
-    print(f"[browser] {len(RESULTS) - failures}/{len(RESULTS)} checks passed in {cost:.1f}s", flush=True)
+    print(f"[browser] {len(RESULTS) - failed}/{len(RESULTS)} checks passed in {cost:.1f}s", flush=True)
     print(f"[browser] screenshots saved under {shots_dir} for inspection", flush=True)
-    return 1 if failures else 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
