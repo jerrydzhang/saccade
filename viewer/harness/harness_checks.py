@@ -166,7 +166,7 @@ def main() -> int:
     usable, reason = entry.verify_playwright_closure(str(empty_env / "bin" / "python3"))
     check("closure without playwright refuses with the env root named", not usable and "playwright module not found" in reason, reason)
     # --- browser lane wiring traversal (no spawn) -------------------------
-    lane_calls = {"canary": 0, "server": 0, "goto": [], "checks": 0, "engines": [], "shutdown": 0, "shots": [], "webkit_dead": False}
+    lane_calls = {"canary": 0, "server": 0, "goto": [], "checks": 0, "engines": [], "shutdown": 0, "shots": [], "webkit_dead": False, "webkit_rejects_grant": False}
 
     class FakeServer:
         def shutdown(self):
@@ -193,6 +193,11 @@ def main() -> int:
             pass
 
         def new_page(self):
+            if lane_calls["webkit_rejects_grant"]:
+                # the refusal surfaces lazily at page creation, as WebKit
+                # does it: grant stored at the driver, rejected on create
+                lane_calls["webkit_rejects_grant"] = False
+                raise RuntimeError("Unknown permission: clipboard-write")
             return FakePage()
 
     class FakeBrowser:
@@ -288,6 +293,7 @@ def main() -> int:
         # a dead engine launch is recorded with its full stderr and
         # fails the lane - never a silent pass
         FakeCanary.code = 0
+        browser_lane.RESULTS.clear()
         lane_calls["webkit_dead"] = True
         code = browser_lane.main()
         launch_records = [r for r in browser_lane.RESULTS if r[1] == "[webkit] headless browser launches from the pinned driver"]
@@ -298,6 +304,21 @@ def main() -> int:
             and launch_records[0][0] is False
             and "cannot open display" in launch_records[0][2],
             str(launch_records),
+        )
+
+        # a clipboard grant the engine rejects lazily degrades to an
+        # ungranted pass - never a payload crash, teardown still owned
+        FakeCanary.code = 0
+        browser_lane.RESULTS.clear()
+        lane_calls["webkit_dead"] = False
+        lane_calls["webkit_rejects_grant"] = True
+        code = browser_lane.main()
+        check(
+            "a refused clipboard grant runs the pass ungranted",
+            code == 0
+            and lane_calls["checks"] == 5
+            and lane_calls["engines"] == ["chromium", "webkit", "chromium", "chromium", "webkit"],
+            str(lane_calls),
         )
 
     finally:

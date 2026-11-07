@@ -503,16 +503,27 @@ def main() -> int:
                         f"{type(error).__name__}: {error}",
                     )
                     continue
-                context = browser.new_context(viewport={"width": 1100, "height": 800})
                 try:
-                    # Engine-internal clipboard only; never the desktop's.
-                    # An engine that cannot grant these lets the copy
-                    # checks measure what it actually does - masking the
-                    # grant would defeat the parity pass.
-                    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
+                    context = browser.new_context(viewport={"width": 1100, "height": 800})
+                    try:
+                        # Engine-internal clipboard only; never the desktop's.
+                        # A grant the engine cannot honor can surface lazily
+                        # at page creation; the pass then runs ungranted and
+                        # the copy checks measure its real clipboard behavior.
+                        context.grant_permissions(["clipboard-read", "clipboard-write"], origin=base_url)
+                        page = context.new_page()
+                    except Exception as error:
+                        print(f"[browser] {engine}: clipboard permission grant unavailable: {type(error).__name__}: {str(error)[:160]}", flush=True)
+                        context = browser.new_context(viewport={"width": 1100, "height": 800})
+                        page = context.new_page()
                 except Exception as error:
-                    print(f"[browser] {engine}: clipboard permission grant unavailable: {type(error).__name__}: {str(error)[:120]}", flush=True)
-                page = context.new_page()
+                    record_check(
+                        f"[{engine}] headless page setup from the pinned driver",
+                        False,
+                        f"{type(error).__name__}: {error}",
+                    )
+                    browser.close()
+                    continue
                 page.set_default_timeout(10000)
                 page.goto(base_url)
                 page.wait_for_function("() => window.__boardViewer !== undefined")
