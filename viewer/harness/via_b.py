@@ -1,54 +1,32 @@
 """The remote mesh lane's via program: what core A runs when it dials
 core B. machine.add --via hands the program one shell line ("a shell
-line to run there as its last argument, like ssh"); two shapes exist,
-and everything else refuses:
+line to run there as its last argument, like ssh"). The observed
+shapes from the run budget: the dial-time probe "echo ok", and a
+sh -c line that locates herdr-core on PATH, sets HC_SESSION=b and
+execs `connect`.
 
-- the reachability probe the core dials with, exactly "echo ok": the
-  pipe itself answers "ok" - bytes pass, nothing asked;
-- a connect line whose head is exactly "hc": rewritten to the pinned
-  binary by path and executed against session b, overriding the
-  inherited session a.
+The program is therefore the sandbox's faithful remote shell: it runs
+the line whole under the pinned /bin/sh - which the lane binds - with
+the pinned core's bin directory first on PATH, so the line's
+`command -v herdr-core` resolves to exactly the tested bytes. Nothing
+is second-guessed and no shell is spawned by this program: the line is
+the contract, and the sandbox is the containment.
 
-The stdin/stdout pipe to A's core is the transport; no shell is ever
-spawned, nothing retries. Runs inside the sandbox as
-[<BOARD_VIEWER_VIA_PY>, /pin/via_b.py, <line>]. The decision lives in
-decide() so the contract runs against fakes in the fast check loop.
+Runs inside the sandbox as
+[<BOARD_VIEWER_VIA_PY>, /pin/via_b.py, <line words...>]. The decision
+lives in shell_argv so the contract runs against fakes in the fast
+check loop.
 """
 
 from __future__ import annotations
 
 import os
-import shlex
 import sys
-
-PROBE_ARGV = ["echo", "ok"]
 
 
 class ViaRefused(Exception):
-    """The composed line is neither the probe nor a connect line; A
-    surfaces the refusal, and the message quotes the line."""
-
-
-def decide(line: str, env: dict[str, str]) -> tuple[str, object, object]:
-    """('print', text, None) for the probe, ('exec', argv, child_env)
-    for a connect line."""
-    if "\0" in line:
-        raise ViaRefused(f"via: refusing line with a NUL byte: {line!r}")
-    try:
-        argv = shlex.split(line)
-    except ValueError as error:
-        raise ViaRefused(f"via: unparseable line {line!r}: {error}") from error
-    if argv == PROBE_ARGV:
-        return "print", PROBE_ARGV[1], None
-    if argv and argv[0] == "hc":
-        core = env.get("BOARD_VIEWER_HERDR_CORE_BIN", "")
-        if not core.startswith("/"):
-            raise ViaRefused("via: BOARD_VIEWER_HERDR_CORE_BIN must be an absolute pinned path")
-        rewritten = [core, *argv[1:]]
-        child_env = dict(env)
-        child_env["HC_SESSION"] = "b"
-        return "exec", rewritten, child_env
-    raise ViaRefused(f"via: refusing line that is neither the probe nor a connect line: {line!r}")
+    """The handover is not a shell line at all; A surfaces the
+    refusal, and the message quotes what arrived."""
 
 
 def line_from_argv(words: list[str]) -> str:
@@ -57,6 +35,23 @@ def line_from_argv(words: list[str]) -> str:
     when the core appends it word by word, intact when it appends one
     quoted argument."""
     return " ".join(words[1:])
+
+
+def shell_argv(line: str, env: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+    """(argv, child env) for the line: the pinned /bin/sh -c, with the
+    pinned core's bin directory leading PATH so the line's own
+    `command -v herdr-core` finds the tested bytes. The caller's env is
+    never mutated."""
+    if "\0" in line:
+        raise ViaRefused(f"via: refusing line with a NUL byte: {line!r}")
+    if not line.strip():
+        raise ViaRefused(f"via: refusing an empty handover: {line!r}")
+    child_env = dict(env)
+    core_bin = env.get("BOARD_VIEWER_HERDR_CORE_BIN", "")
+    if not core_bin.startswith("/"):
+        raise ViaRefused("via: BOARD_VIEWER_HERDR_CORE_BIN must be an absolute pinned path")
+    child_env["PATH"] = f"{os.path.dirname(core_bin)}:{child_env.get('PATH', '')}"
+    return ["/bin/sh", "-c", line], child_env
 
 
 def main() -> int:
@@ -71,14 +66,11 @@ def main() -> int:
         pass
     line = line_from_argv(sys.argv)
     try:
-        action, payload, child_env = decide(line, dict(os.environ))
+        argv, child_env = shell_argv(line, dict(os.environ))
     except ViaRefused as refusal:
         print(refusal, file=sys.stderr)
         return 2
-    if action == "print":
-        print(payload)
-        return 0
-    os.execve(payload[0], payload, child_env)
+    os.execve(argv[0], argv, child_env)
 
 
 if __name__ == "__main__":

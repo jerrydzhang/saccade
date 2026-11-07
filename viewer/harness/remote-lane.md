@@ -144,29 +144,35 @@ therefore runs, for the dial probe and for the connect:
 [<BOARD_VIEWER_VIA_PY>, "/pin/via_b.py", "<line>"]
 ```
 
-The program never spawns a shell. The core composes two shapes - its
-dial-time reachability probe, exactly "echo ok" (observed in run two
-of the run budget as the add failure's own hint), and the connect line
-("hc connect", possibly with --session) - and everything else refuses:
+The program never spawns a shell of its own and never second-guesses
+the line: the contract is A SHELL LINE, and the sandbox is the
+containment. The run budget observed the real shapes (run four's
+breadcrumb): the dial-time probe `echo ok`, then a connect line that
+locates herdr-core on PATH, sets HC_SESSION=b and execs `connect`:
 
 ```python
-line = sys.argv[-1]
-argv = shlex.split(line)
-if argv == ["echo", "ok"]:
-    print("ok")                 # the pipe itself answers the probe
-elif argv and argv[0] == "hc":
-    argv[0] = os.environ["BOARD_VIEWER_HERDR_CORE_BIN"]  # pinned, by path
-    env = {**os.environ, "HC_SESSION": "b"}              # B's session
-    os.execve(argv[0], argv, env)
-else:
-    refuse(line)                # exit 2, line quoted
+line = " ".join(sys.argv[1:])   # word-by-word or single-argument alike
+argv, env = shell_argv(line, os.environ)
+os.execve(argv[0], argv, env)
+
+# shell_argv:
+#   refuses a NUL byte or an empty handover (exit 2, quoted)
+#   requires BOARD_VIEWER_HERDR_CORE_BIN (absolute; pinned bytes)
+#   prepends its bin dir to PATH, so the line's own
+#     `command -v herdr-core` resolves to exactly the tested bytes
+#   returns ["/bin/sh", "-c", line], child env
 ```
+
+`/bin/sh` is the pinned bash the lane binds (the sandbox has no /bin
+otherwise); `HC_SESSION=b` arrives inside the observed line, set by
+the core itself.
 
 The stdin/stdout pipe between A's core and this child is the transport
 - inherited fds inside the namespace, no listener, no network. If the
-composed lines ever change shape again, the child refuses with the
-line quoted and A surfaces it as an unreachable/`why` error, which the
-lane records - the assumption is checked, not silent.
+composed lines ever change shape again, the child leaves an argv
+breadcrumb in the sandbox tmp dir and A surfaces the failure as an
+unreachable/`why` or hc_missing error with the full text in the lane
+log - the assumption is checked, not silent.
 
 ## Env the mesh runs in
 

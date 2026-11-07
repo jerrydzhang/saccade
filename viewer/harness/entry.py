@@ -716,6 +716,10 @@ def remote_env(resolved: dict, run_root: pathlib.Path) -> dict[str, str]:
     env["BOARD_VIEWER_VIA_PY"] = resolved["python"]
     env["HC_SESSION"] = "a"
     env["BOARD_LOCATION"] = REMOTE_LOCATION
+    # the mesh's shell lines locate herdr-core on PATH (command -v);
+    # the pinned core's bin dir leads, so a resolved name is the tested
+    # bytes and nothing else
+    env["PATH"] = f"{os.path.dirname(resolved['herdr_core'])}:{env['PATH']}"
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
     return env
 

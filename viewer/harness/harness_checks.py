@@ -159,56 +159,57 @@ def main() -> int:
     check("all-empty baselines refuse every required entry", len(failures) >= 9, str(failures))
 
     # --- remote mesh lane: the via program and argv shapes (pure) -------
-    via_env = {"BOARD_VIEWER_HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a", "PATH": "/usr/bin"}
-    action, payload, child_env = via_b.decide("echo ok", via_env)
+    via_env = {"BOARD_VIEWER_HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a", "PATH": "/usr/bin:/bin"}
+    argv, child_env = via_b.shell_argv("echo ok", via_env)
     check(
-        "the core's echo-ok probe answers through the pipe itself",
-        action == "print" and payload == "ok" and child_env is None,
-        f"{action} {payload!r}",
+        "the dial probe runs whole as a shell line under the pinned sh",
+        argv == ["/bin/sh", "-c", "echo ok"],
+        str(argv),
     )
-    for probe_variant in ["echo", "echo not-ok", "echo ok extra"]:
+    check(
+        "the pinned core's bin dir leads PATH for the line's command -v",
+        child_env["PATH"].startswith("/pin/core/bin:") and child_env["PATH"].endswith(":/usr/bin:/bin"),
+        child_env["PATH"],
+    )
+    check(
+        "the caller env is never mutated by the via decision",
+        via_env["PATH"] == "/usr/bin:/bin" and via_env["HC_SESSION"] == "a",
+        str(via_env),
+    )
+    observed = (
+        "sh -c 'p=$(command -v herdr-core) || p=$HOME/.local/bin/herdr-core; "
+        '[ -x "$p" ] || { echo "herdr-core is not installed here" >&2; exit 127; }; '
+        'HC_SESSION=b exec "$p" connect'
+    )
+    argv, child_env = via_b.shell_argv(observed, via_env)
+    check(
+        "the observed connect line runs whole, untouched, under the pinned sh",
+        argv == ["/bin/sh", "-c", observed],
+        str(argv),
+    )
+    check(
+        "the connect line's own HC_SESSION=b survives into the child env",
+        "HC_SESSION=b" in observed and child_env.get("HC_SESSION") == "a",
+        str(child_env.get("HC_SESSION")),
+    )
+    for bad_line in ["", "   "]:
         try:
-            via_b.decide(probe_variant, via_env)
-            check("only the exact probe line passes", False, probe_variant)
+            via_b.shell_argv(bad_line, via_env)
+            check("via refuses an empty handover", False, repr(bad_line))
         except via_b.ViaRefused:
-            check("only the exact probe line passes", True, probe_variant)
-    action, payload, _none = via_b.decide("echo 'ok'", via_env)
-    check(
-        "a shell-quoted probe unquotes to the same command",
-        action == "print" and payload == "ok",
-        f"{action} {payload!r}",
-    )
-    action, argv, child_env = via_b.decide("hc connect", via_env)
-    check("via rewrites hc to the pinned binary by path", action == "exec" and argv == ["/pin/core/bin/herdr-core", "connect"], str(argv))
-    check(
-        "via forces session b over the inherited a without touching the caller env",
-        child_env["HC_SESSION"] == "b" and via_env["HC_SESSION"] == "a",
-        str(child_env),
-    )
-    action, argv, _child_env = via_b.decide("hc connect --session b", via_env)
-    check("via keeps the line's own arguments", action == "exec" and argv[1:] == ["connect", "--session", "b"], str(argv))
-    for bad_line in ["ls /", "", "hcc connect", "/bin/hc connect", "HC connect", 'hc "unclosed']:
-        try:
-            via_b.decide(bad_line, via_env)
-            check("via refuses a non-connect line", False, repr(bad_line))
-        except via_b.ViaRefused as refusal:
-            check(
-                "via refuses a non-connect line with the line quoted",
-                repr(bad_line) in str(refusal),
-                str(refusal),
-            )
+            check("via refuses an empty handover", True, repr(bad_line))
     try:
-        via_b.decide("hc\0connect", via_env)
+        via_b.shell_argv("hc\0connect", via_env)
         check("via refuses a NUL byte in the line", False, "no refusal raised")
     except via_b.ViaRefused:
         check("via refuses a NUL byte in the line", True)
     try:
-        via_b.decide("hc connect", {"HC_SESSION": "a"})
+        via_b.shell_argv("hc connect", {"HC_SESSION": "a"})
         check("via refuses a missing core pin", False, "no refusal raised")
     except via_b.ViaRefused as refusal:
         check("via refuses a missing core pin", "BOARD_VIEWER_HERDR_CORE_BIN" in str(refusal), str(refusal))
     try:
-        via_b.decide("hc connect", {"BOARD_VIEWER_HERDR_CORE_BIN": "relative/hc"})
+        via_b.shell_argv("hc connect", {"BOARD_VIEWER_HERDR_CORE_BIN": "relative/hc"})
         check("via refuses a relative core pin", False, "no refusal raised")
     except via_b.ViaRefused:
         check("via refuses a relative core pin", True)
