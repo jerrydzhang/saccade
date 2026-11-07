@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod attempts;
+pub mod boards;
 pub mod client;
 pub mod completions;
 pub mod db;
