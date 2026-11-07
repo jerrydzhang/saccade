@@ -578,6 +578,15 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
     via_py = str((HERE / "via_b.py").resolve())
     session_py = str((HERE / "webdriver_session.py").resolve())
     client_py = str((HERE / "webdriver_client.py").resolve())
+    # the sandbox has no /bin; a pinned bash binds there so whatever
+    # composition the core uses for the via line can run at all. The
+    # via program itself never spawns a shell; this is insurance for
+    # the core's own composition, read-only and store-pinned.
+    bash = shutil.which("bash")
+    if bash is None:
+        print("containment refusal: bash is not in PATH (pinned devshell expected)", file=sys.stderr)
+        return None
+    bash_bin = str(pathlib.Path(bash).resolve())
     fixture_dir = HERE / "remote_fixture"
     if not fixture_dir.is_dir() or not (fixture_dir / "real.yaml").is_file():
         print("containment refusal: harness/remote_fixture with real.yaml is missing", file=sys.stderr)
@@ -664,6 +673,7 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
         "via_py": via_py,
         "session_py": session_py,
         "client_py": client_py,
+        "bash_bin": bash_bin,
         "weston": tools["weston"],
         "shooter": tools["shooter"],
         "tauri_driver": tools["tauri_driver"],
@@ -723,6 +733,7 @@ def remote_binds(resolved: dict) -> list[tuple[str, str]]:
         (resolved["via_py"], VIA_PROGRAM_SANDBOX_PATH),
         (resolved["client_py"], SESSION_CLIENT_SANDBOX_PATH),
         (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
+        (resolved["bash_bin"], "/bin/sh"),
         (resolved["fixture_dir"], "/board"),
         (resolved["app"], resolved["app"]),
         (resolved["weston"], resolved["weston"]),

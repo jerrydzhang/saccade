@@ -355,7 +355,7 @@ def main() -> int:
         # B joins A's list through the via program; add itself dials and
         # checks that hc answers there, so a failure is already evidence
         code, out, err = machine_call(core_bin, machine_add_argv(core_bin, via_command(via_py)))
-        detail = (err or out).decode(errors="replace")[:200]
+        detail = (err or out).decode(errors="replace")[:1500]
         check("machine add accepted b", code == 0, detail)
         if code != 0:
             teardown(state)

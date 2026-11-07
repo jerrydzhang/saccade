@@ -240,6 +240,12 @@ def main() -> int:
         remote_lane.via_command("/pin/python") == "/pin/python /pin/via_b.py",
         remote_lane.via_command("/pin/python"),
     )
+    check(
+        "the composed line joins word-by-word and single-argument handovers alike",
+        via_b.line_from_argv(["/pin/via_b.py", "echo", "ok"]) == "echo ok"
+        and via_b.line_from_argv(["/pin/via_b.py", "echo ok"]) == "echo ok",
+        str(via_b.line_from_argv(["/pin/via_b.py", "echo", "ok"])),
+    )
 
     fixture_dir = HERE / "remote_fixture"
     board_text = (fixture_dir / "real.yaml").read_text()

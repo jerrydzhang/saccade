@@ -51,8 +51,25 @@ def decide(line: str, env: dict[str, str]) -> tuple[str, object, object]:
     raise ViaRefused(f"via: refusing line that is neither the probe nor a connect line: {line!r}")
 
 
+def line_from_argv(words: list[str]) -> str:
+    """The composed line, however the core hands it over: the via
+    command's own words are dropped, the rest is the line - joined
+    when the core appends it word by word, intact when it appends one
+    quoted argument."""
+    return " ".join(words[1:])
+
+
 def main() -> int:
-    line = sys.argv[-1] if len(sys.argv) > 1 else ""
+    # a diagnostic breadcrumb in the sandbox's own tmp dir: the exact
+    # argv the core handed over, so a composition surprise is evidence,
+    # not a guess
+    try:
+        trail = os.path.join(os.environ.get("TMPDIR", "/tmp"), "via-args.log")
+        with open(trail, "a", encoding="utf-8") as log:
+            log.write(repr(sys.argv) + "\n")
+    except OSError:
+        pass
+    line = line_from_argv(sys.argv)
     try:
         action, payload, child_env = decide(line, dict(os.environ))
     except ViaRefused as refusal:
