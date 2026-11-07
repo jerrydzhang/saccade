@@ -83,9 +83,7 @@ async fn spawn_server(db_path: &std::path::Path) -> String {
     let state = AppState::open(db_path).expect("the scratch tracker opens");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let router = axum::Router::new()
-        .merge(saccade::api::routes())
-        .with_state(state);
+    let router = saccade::serve::router(state);
     tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
@@ -103,11 +101,13 @@ fn post_command(base_url: &str, envelope: &Value) -> (u16, String) {
 }
 
 fn post_raw(base_url: &str, body: &str) -> (u16, String) {
+    // raw bytes, but named JSON: the content-type policy is pinned in
+    // the wire-contracts test, not here
     let mut r = ureq::post(&format!("{base_url}/api/v1/command"))
         .config()
         .http_status_as_error(false)
         .build()
-        .content_type("text/plain")
+        .content_type("application/json")
         .send(body)
         .expect("the loopback server answers");
     (r.status().as_u16(), r.body_mut().read_to_string().unwrap())
@@ -1273,9 +1273,7 @@ async fn spawn_workspace_server(db_path: &std::path::Path, repo: &std::path::Pat
         .with_repo_root(repo.to_path_buf());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let router = axum::Router::new()
-        .merge(saccade::api::routes())
-        .with_state(state);
+    let router = saccade::serve::router(state);
     tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
@@ -1874,19 +1872,6 @@ fn board_wire_routes_hold_their_contracts() {
     // the tracker's name for tracker-named locations: the repo's
     // directory basename; the fixture repo directory is "project"
     assert_eq!(body["tracker"], json!("project"));
-    // the viewer and components are separate origins by construction:
-    // every answer carries the permissive origin header
-    let cors = ureq::get(&format!("{url}/api/v1/version"))
-        .config()
-        .http_status_as_error(false)
-        .build()
-        .call()
-        .unwrap();
-    let origin = cors
-        .headers()
-        .get("access-control-allow-origin")
-        .and_then(|value| value.to_str().ok());
-    assert_eq!(origin, Some("*"), "the viewer reads cross-origin");
 
     // the path route refuses a task with no board, and a bad task id
     let created = ureq::post(&format!("{url}/api/v1/command"))
@@ -1964,10 +1949,13 @@ fn board_wire_routes_hold_their_contracts() {
     assert_eq!(body["error"]["code"], json!("invalid_task_id"));
 
     // malformed json refuses as malformed, never panics
+    // malformed JSON still refuses as malformed: the bytes name
+    // themselves JSON even when they do not parse
     let mut response = ureq::post(&format!("{url}/api/v1/boards/commit"))
         .config()
         .http_status_as_error(false)
         .build()
+        .header("content-type", "application/json")
         .send(&b"{not json"[..])
         .unwrap();
     assert_eq!(response.status().as_u16(), 400);
@@ -1978,6 +1966,86 @@ fn board_wire_routes_hold_their_contracts() {
         .parse()
         .unwrap();
     assert_eq!(body["error"]["code"], json!("malformed_request"));
+
+    // the origin policy: a browser page always names its origin, so a
+    // request from a non-allowlisted origin refuses on reads and writes
+    // alike; a shell origin reads with its origin echoed, never a
+    // wildcard; a POST names its body JSON, which a cross-site form
+    // cannot
+    let header = |name: (&str, &str)| {
+        ureq::get(&format!("{url}/api/v1/version"))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .header(name.0, name.1)
+            .call()
+            .unwrap()
+    };
+    let mut page = header(("origin", "https://evil.example"));
+    assert_eq!(page.status().as_u16(), 403, "a stranger origin refuses");
+    let body: Value = page.body_mut().read_to_string().unwrap().parse().unwrap();
+    assert_eq!(body["error"]["code"], json!("origin_forbidden"));
+
+    let mut shell = header(("origin", "tauri://localhost"));
+    assert_eq!(shell.status().as_u16(), 200, "the shell origin reads");
+    assert_eq!(
+        shell
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("tauri://localhost"),
+        "the origin is echoed, never a wildcard",
+    );
+    assert!(
+        shell.headers().get("vary").is_some(),
+        "the answer varies by origin"
+    );
+
+    let anonymous = ureq::get(&format!("{url}/api/v1/version"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    assert_eq!(
+        anonymous.status().as_u16(),
+        200,
+        "no origin header, no page"
+    );
+    assert!(
+        anonymous
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
+    );
+
+    // the forged-write hole: a cross-site form or no-cors POST arrives
+    // with text/plain or a form content type and refuses however it came
+    let mut form = ureq::post(&format!("{url}/api/v1/command"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .header("origin", "tauri://localhost")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .send("context=tier%3Dhuman")
+        .unwrap();
+    assert_eq!(form.status().as_u16(), 415, "a form body refuses");
+    let body: Value = form.body_mut().read_to_string().unwrap().parse().unwrap();
+    assert_eq!(body["error"]["code"], json!("content_type_required"));
+
+    let mut stranger_post = ureq::post(&format!("{url}/api/v1/command"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .header("origin", "https://evil.example")
+        .header("content-type", "application/json")
+        .send("{}")
+        .unwrap();
+    assert_eq!(
+        stranger_post.status().as_u16(),
+        403,
+        "the stranger origin refuses writes too"
+    );
 
     // the search route answers empty on an empty tracker
     let mut response = ureq::post(&format!("{url}/api/v1/boards/search"))

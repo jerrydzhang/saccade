@@ -174,6 +174,11 @@ enum Cmd {
         bind: String,
         #[arg(long, default_value_t = 8811)]
         port: u16,
+        /// An extra origin whose browser pages may read this server
+        /// (the served frontend's origin in the viewer lanes);
+        /// repeatable, on top of the shells' own origins
+        #[arg(long = "allow-origin")]
+        allow_origin: Vec<String>,
     },
     /// Launch the composed native Pi in an explicit existing
     /// workspace, task-free: a fresh session registers itself as a new
@@ -887,8 +892,13 @@ fn run(cli: &Cli) -> Result<String, Fail> {
         return Ok(complete_candidates(cli, *kind));
     }
     // serve starts a server, so it never resolves a client destination
-    if let Cmd::Serve { bind, port } = &cli.command {
-        return serve_door(cli, bind, port);
+    if let Cmd::Serve {
+        bind,
+        port,
+        allow_origin,
+    } = &cli.command
+    {
+        return serve_door(cli, bind, port, allow_origin);
     }
     let destination = resolve_destination(cli)?;
     let command = match &cli.command {

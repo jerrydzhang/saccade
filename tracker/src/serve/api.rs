@@ -93,7 +93,20 @@ pub struct AppState {
     /// This server's own URL, published at bind: the routing a launched
     /// session needs to reach the tracker it was started from.
     server_url: Option<String>,
+    /// The origins whose browser pages may read this server: the Tauri
+    /// shells by default, the served frontend's origin configured at
+    /// serve time. A request naming another origin refuses; a request
+    /// naming none (the CLI, curl) never did come from a page.
+    pub(crate) allowed_origins: Arc<[String]>,
 }
+
+/// The shells the viewer ships in; their origins are fixed by the
+/// webview runtimes.
+pub const TAURI_ORIGINS: [&str; 3] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
 
 pub struct Snapshot {
     pub world: World,
@@ -161,6 +174,10 @@ impl AppState {
             attempts: Attempts::beside(db_path),
             repo_root: None,
             server_url: None,
+            allowed_origins: TAURI_ORIGINS
+                .iter()
+                .map(|origin| origin.to_string())
+                .collect(),
         })
     }
 
@@ -171,6 +188,15 @@ impl AppState {
     /// Name the serving repo's root.
     pub fn with_repo_root(mut self, root: std::path::PathBuf) -> Self {
         self.repo_root = Some(root);
+        self
+    }
+
+    /// Extend the origin allowlist with serve-time entries: the served
+    /// frontend's origin in the lanes, a component's origin in deploy.
+    pub fn with_allowed_origins(mut self, origins: Vec<String>) -> Self {
+        let mut allowed = self.allowed_origins.to_vec();
+        allowed.extend(origins);
+        self.allowed_origins = allowed.into();
         self
     }
 
@@ -558,20 +584,75 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
     }
 }
 
-/// Every answer carries the permissive origin header: the viewer and
-/// the components are separate origins by construction (the Tauri
-/// shell, a browser page), and this server is a loopback single writer.
-/// Reads only ever cross here; a writing component adds the preflight
-/// half when one exists.
-async fn allow_any_origin(
+/// The origin policy. A browser page always names its origin, so every
+/// request that carries one must name an allowlisted origin - on POST
+/// and GET alike, which closes the cross-site form and no-cors forgery
+/// of human-tier writes. An allowlisted read gets its origin echoed
+/// back, never a wildcard. A POST also names its body as JSON: the one
+/// content type a cross-site form cannot claim. A request with no
+/// Origin header never came from a page; the CLI and scripts walk in.
+pub(crate) async fn origin_policy(
+    axum::Extension(allowed): axum::Extension<Arc<[String]>>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let origin = request
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    if let Some(origin) = &origin {
+        if !allowed.iter().any(|candidate| candidate == origin) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": {
+                        "code": "origin_forbidden",
+                        "detail": format!(
+                            "origin '{origin}' is not allowed here; the server allows its shells and the origins configured at serve time"
+                        ),
+                    }
+                })),
+            )
+                .into_response();
+        }
+    }
+    if request.method() == axum::http::Method::POST {
+        let json = request
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(str::trim)
+            .map(|media_type| media_type.eq_ignore_ascii_case("application/json"))
+            .unwrap_or(false);
+        if !json {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                Json(json!({
+                    "error": {
+                        "code": "content_type_required",
+                        "detail": "POST bodies ride Content-Type: application/json; a form or text body is refused, however it arrived"
+                    }
+                })),
+            )
+                .into_response();
+        }
+    }
+    let is_read = request.method() == axum::http::Method::GET;
     let mut response = next.run(request).await;
-    response.headers_mut().insert(
-        "access-control-allow-origin",
-        axum::http::HeaderValue::from_static("*"),
-    );
+    if let Some(origin) = &origin
+        && is_read
+    {
+        if let Ok(value) = axum::http::HeaderValue::from_str(origin) {
+            response
+                .headers_mut()
+                .insert("access-control-allow-origin", value);
+            response
+                .headers_mut()
+                .append("vary", axum::http::HeaderValue::from_static("Origin"));
+        }
+    }
     response
 }
 
@@ -600,7 +681,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/boards/discard", post(board_discard))
         .route("/api/v1/boards/update", post(board_update))
         .route("/api/v1/version", get(version))
-        .layer(axum::middleware::from_fn(allow_any_origin))
 }
 
 // -- the task-free workspace controller ----------------------------------

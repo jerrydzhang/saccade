@@ -1,6 +1,11 @@
 use super::*;
 
-pub(super) fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fail> {
+pub(super) fn serve_door(
+    cli: &Cli,
+    bind: &str,
+    port: &u16,
+    allow_origin: &[String],
+) -> Result<String, Fail> {
     if cli.server.is_some() {
         return Err(Fail::Usage(
             "serve starts a server; --server selects one for clients (--db names the file to serve)".into(),
@@ -32,7 +37,13 @@ pub(super) fn serve_door(cli: &Cli, bind: &str, port: &u16) -> Result<String, Fa
         .enable_all()
         .build()
         .map_err(|e| Fail::Usage(format!("runtime: {e}")))?;
-    match runtime.block_on(saccade::serve::run(&db_path, repo_root, bind, *port)) {
+    match runtime.block_on(saccade::serve::run(
+        &db_path,
+        repo_root,
+        bind,
+        *port,
+        allow_origin.to_vec(),
+    )) {
         Err(e) => Err(Fail::Usage(e)),
         Ok(infallible) => match infallible {},
     }

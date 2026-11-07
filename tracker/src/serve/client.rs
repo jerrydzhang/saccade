@@ -156,6 +156,8 @@ pub fn send(
         at,
         client: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
+    // send_json rides Content-Type: application/json - the one content
+    // type the server's POST policy accepts, so the CLI never trips it
     let mut response = ureq::post(&format!("{url}/api/v1/command"))
         .config()
         .http_status_as_error(false)

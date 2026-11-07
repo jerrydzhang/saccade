@@ -103,13 +103,13 @@ def machine_ls_argv(core_bin: str) -> list[str]:
 
 
 def figure_paths(board_text: str) -> list[str]:
-    """The authored figure paths in order - render outcomes carry the
-    path as their message, so paths are the assertion's address."""
+    """The authored figure inputs in order - render outcomes carry the
+    input as their message, so inputs are the assertion's address."""
     paths: list[str] = []
     for line in board_text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("path:"):
-            paths.append(stripped[len("path:") :].strip())
+        if stripped.startswith("input:"):
+            paths.append(stripped[len("input:") :].strip())
     return paths
 
 

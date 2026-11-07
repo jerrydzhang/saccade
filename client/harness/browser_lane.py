@@ -600,9 +600,9 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
     # cited revision. The real wire is pinned on the server side by the
     # cargo api tests; this phase pins the viewer's half.
     def phase_tracker() -> None:
-        tracker = tracker_mock.TrackerMock("smoke")
+        tracker = tracker_mock.TrackerMock("smoke", allowed_origins=[base_url])
         tracker.start()
-        future = tracker_mock.TrackerMock("future", min_version=2, max_version=2)
+        future = tracker_mock.TrackerMock("future", min_version=2, max_version=2, allowed_origins=[base_url])
         future.start()
         try:
             save_server = lambda value: (  # noqa: E731

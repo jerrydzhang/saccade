@@ -84,10 +84,14 @@ class TrackerMock:
     grammar range the version route reports; `name` is the tracker the
     route claims to serve."""
 
-    def __init__(self, name: str, min_version: int = 1, max_version: int = 1):
+    def __init__(self, name: str, min_version: int = 1, max_version: int = 1, allowed_origins: list[str] | None = None):
         self.name = name
         self.min_version = min_version
         self.max_version = max_version
+        # the origin policy the routes carry: a request naming an origin
+        # outside the allowlist refuses on every method; an allowlisted
+        # read gets its own origin echoed, never a wildcard
+        self.allowed_origins = allowed_origins or []
         mock = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -95,6 +99,13 @@ class TrackerMock:
                 pass
 
             def do_GET(self):
+                origin = self.headers.get("Origin")
+                if origin is not None and origin not in mock.allowed_origins:
+                    self._reply(
+                        json.dumps({"error": {"code": "origin_forbidden", "detail": f"origin '{origin}' is not allowed here"}}).encode(),
+                        403,
+                    )
+                    return
                 if self.path.startswith("/api/v1/version"):
                     body = json.dumps({
                         "version": "0.0.0-mock",
@@ -102,25 +113,26 @@ class TrackerMock:
                         "board_grammar": {"min": mock.min_version, "max": mock.max_version},
                         "db": "/mock/saccade.db",
                     }).encode()
-                    self._reply(body)
+                    self._reply(body, origin=origin)
                 elif self.path.startswith("/api/v1/boards/get"):
                     query = dict(pair.split("=", 1) for pair in self.path.split("?", 1)[-1].split("&") if "=" in pair)
                     task = int(query.get("task", "-1"))
                     board = BOARDS.get(task)
                     if board is None:
-                        self._reply(json.dumps({"error": {"code": "board_missing", "detail": "no such board"}}).encode(), 404)
+                        self._reply(json.dumps({"error": {"code": "board_missing", "detail": "no such board"}}).encode(), 404, origin=origin)
                     else:
-                        self._reply(json.dumps(board).encode())
+                        self._reply(json.dumps(board).encode(), origin=origin)
                 elif self.path.startswith("/api/v1/boards/log"):
-                    self._reply(json.dumps(HISTORY_T1).encode())
+                    self._reply(json.dumps(HISTORY_T1).encode(), origin=origin)
                 else:
-                    self._reply(b"{}", 404)
+                    self._reply(b"{}", 404, origin=origin)
 
-            def _reply(self, body: bytes, status: int = 200):
+            def _reply(self, body: bytes, status: int = 200, origin: str | None = None):
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Access-Control-Allow-Origin", "*")
+                if origin is not None:
+                    self.send_header("Access-Control-Allow-Origin", origin)
                 self.end_headers()
                 self.wfile.write(body)
 

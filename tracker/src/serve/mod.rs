@@ -14,9 +14,10 @@ pub async fn run(
     repo_root: Option<std::path::PathBuf>,
     bind: &str,
     port: u16,
+    allow_origins: Vec<String>,
 ) -> Result<std::convert::Infallible, String> {
     let addr = format!("{bind}:{port}");
-    let mut state = AppState::open(db_path)?;
+    let mut state = AppState::open(db_path)?.with_allowed_origins(allow_origins);
     if let Some(root) = &repo_root {
         state = state.with_repo_root(root.clone());
         // the boards caches repair from the fold before the doors open
@@ -79,7 +80,13 @@ fn published_url(bound: &std::net::SocketAddr) -> String {
     format!("http://{host}:{}", bound.port())
 }
 
-/// The whole HTTP surface: the versioned API.
+/// The whole HTTP surface: the versioned API. The origin allowlist
+/// rides an extension and the policy middleware wraps every route.
 pub fn router(state: AppState) -> axum::Router {
-    crate::api::routes().with_state(state)
+    // the extension wraps the policy: the middleware reads the
+    // allowlist from the request the extension has already enriched
+    crate::api::routes()
+        .layer(axum::middleware::from_fn(crate::api::origin_policy))
+        .layer(axum::Extension(state.allowed_origins.clone()))
+        .with_state(state)
 }
