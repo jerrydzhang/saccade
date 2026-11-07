@@ -138,29 +138,35 @@ machine.add `--via` takes a command that "is given a shell line to run
 there as its last argument, like ssh; it must pass bytes both ways
 untouched and ask nothing" (pinned 0.1.17 CLI help; the schema's
 machine.add carries the same fields: via, name, session). A's core
-therefore runs, for the connect and for any later probe:
+therefore runs, for the dial probe and for the connect:
 
 ```
 [<BOARD_VIEWER_VIA_PY>, "/pin/via_b.py", "<line>"]
 ```
 
-The program never spawns a shell:
+The program never spawns a shell. The core composes two shapes - its
+dial-time reachability probe, exactly "echo ok" (observed in run two
+of the run budget as the add failure's own hint), and the connect line
+("hc connect", possibly with --session) - and everything else refuses:
 
 ```python
 line = sys.argv[-1]
 argv = shlex.split(line)
-if not argv or argv[0] != "hc":
-    print(f"via: refusing line {line!r}", file=sys.stderr); sys.exit(2)
-argv[0] = os.environ["BOARD_VIEWER_HERDR_CORE_BIN"]      # the pinned binary, by path
-env = {**os.environ, "HC_SESSION": "b"}     # B's session, overriding A's
-os.execve(argv[0], argv, env)
+if argv == ["echo", "ok"]:
+    print("ok")                 # the pipe itself answers the probe
+elif argv and argv[0] == "hc":
+    argv[0] = os.environ["BOARD_VIEWER_HERDR_CORE_BIN"]  # pinned, by path
+    env = {**os.environ, "HC_SESSION": "b"}              # B's session
+    os.execve(argv[0], argv, env)
+else:
+    refuse(line)                # exit 2, line quoted
 ```
 
 The stdin/stdout pipe between A's core and this child is the transport
 - inherited fds inside the namespace, no listener, no network. If the
-composed line ever changes shape, the child refuses with the line
-quoted and A surfaces it as an unreachable/`why` error, which the lane
-records - the assumption is checked, not silent.
+composed lines ever change shape again, the child refuses with the
+line quoted and A surfaces it as an unreachable/`why` error, which the
+lane records - the assumption is checked, not silent.
 
 ## Env the mesh runs in
 
