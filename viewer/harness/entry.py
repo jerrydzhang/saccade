@@ -1219,17 +1219,21 @@ def session_shot(args: list[str]) -> int:
     return session_command({"cmd": "shot", "name": name})
 
 
-def run_session_checks(socket_path: str, resolved: dict, query: str) -> int:
+def run_session_checks(socket_path: str, resolved: dict, query: str, log_path: str) -> int:
     """The scripted checks, expressed only through the session command
     surface: semantic addressing via the projected targets, real input
     on elements, observation of geometry, and a shot per state."""
     failures = 0
+    log = open(log_path, "a", encoding="utf-8")
 
     def check(name: str, condition: bool, detail: str = "") -> None:
         nonlocal failures
         if not condition:
             failures += 1
-        print(f"[webdriver] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}", flush=True)
+        line = f"[webdriver] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}"
+        print(line, flush=True)
+        log.write(line + "\n")
+        log.flush()
 
     def wait_response(payload: dict, predicate, timeout: float) -> dict | None:
         deadline = time.monotonic() + timeout
@@ -1375,6 +1379,15 @@ def run_session_checks(socket_path: str, resolved: dict, query: str) -> int:
     )
     shot("04-diagram-panned")
 
+    # 5a: the drag is a gesture - the diagram's label text must not be
+    # selected by it
+    try:
+        chosen = session_request(socket_path, {"cmd": "selection"}, timeout=20.0)
+        selected = chosen.get("selection")
+    except (OSError, RuntimeError, ValueError) as error:
+        selected = f"error: {error}"
+    check("drag leaves no text selection", selected == "", repr(selected)[:120])
+
     # 5b: reset returns the rendered geometry: the width shrinks back
     # from the zoomed size toward the unzoomed base
     try:
@@ -1462,6 +1475,8 @@ def session_checks(board_arg: str, tracker_db_candidate: str, query: str, lifeti
     run_root = isolation.make_run_root("session")
     token = uuid.uuid4().hex
     env = session_env(resolved, run_root, token, lifetime)
+    (run_root / "logs").mkdir(exist_ok=True)
+    checks_log = run_root / "logs" / "session-checks.log"
     cmd = isolation.build_command(
         resolved["bwrap"],
         run_root,
@@ -1495,7 +1510,7 @@ def session_checks(board_arg: str, tracker_db_candidate: str, query: str, lifeti
                 output = supervisor.read_output()
                 print(output, end="" if output.endswith("\n") else "\n", file=sys.stderr, flush=True)
             return 1
-        failures = run_session_checks(socket_path, resolved, query)
+        failures = run_session_checks(socket_path, resolved, query, str(checks_log))
         try:
             session_request(socket_path, {"cmd": "down"}, timeout=20.0)
         except (OSError, RuntimeError, ValueError):
@@ -1511,6 +1526,7 @@ def session_checks(board_arg: str, tracker_db_candidate: str, query: str, lifeti
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         cost = time.monotonic() - started
         print(f"[webdriver] checks done in {cost:.1f}s; payload exit={code}", flush=True)
+        print(f"[webdriver] checks log: {checks_log}", flush=True)
         return 1 if failures or (code not in (0, None)) else 0
     except isolation.ContainmentRefused as error:
         print(f"containment refusal: {error}", file=sys.stderr)

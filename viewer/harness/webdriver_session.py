@@ -382,6 +382,10 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
     if command == "input":
         assert state.client is not None
         return {"ok": True, "input": perform_input(state.client, request)}, False
+    if command == "selection":
+        assert state.client is not None
+        chosen = state.client.execute("return String(window.getSelection())")
+        return {"ok": True, "selection": chosen}, False
     if command == "shot":
         assert state.client is not None
         name = request.get("name")

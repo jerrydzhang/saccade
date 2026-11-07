@@ -96,6 +96,9 @@ export function expandDiagram(frame: HTMLElement): void {
   });
 
   stage.addEventListener("pointerdown", (event) => {
+    // the default pointerdown starts a text selection; pan is a
+    // gesture and the CSS user-select above is the second guard
+    event.preventDefault();
     dragging = { x: event.clientX, y: event.clientY, baseX: panX, baseY: panY };
     stage.setPointerCapture(event.pointerId);
   });

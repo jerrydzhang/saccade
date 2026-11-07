@@ -403,6 +403,9 @@ code.raw-html {
   display: flex;
   flex-direction: column;
   z-index: 40;
+  /* pan is a gesture, never a selection: dragging must not highlight
+     the diagram's label text */
+  user-select: none;
 }
 
 .diagram-controls {
