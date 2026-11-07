@@ -360,9 +360,10 @@ text input plus the `open:host` button, or the fixture select). Raw
 coordinates are an explicit escape hatch, never the default.
 
 `checks` runs the scripted sequence (board opens, header path, diagram
-projection, click-expand, '+' geometry change, drag pan, close,
-search, next match, a WebDriver shot plus a weston frame per state)
-entirely as such commands under one supervisor, then downs:
+projection, click-expand, '+' geometry change, drag pan, reset
+geometry, close, search, next match, a WebDriver shot plus a weston
+frame per state) entirely as such commands under one supervisor, then
+downs:
 
 ```sh
 BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record> \

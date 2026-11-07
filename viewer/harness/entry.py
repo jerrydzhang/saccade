@@ -1375,6 +1375,30 @@ def run_session_checks(socket_path: str, resolved: dict, query: str) -> int:
     )
     shot("04-diagram-panned")
 
+    # 5b: reset returns the rendered geometry: the width shrinks back
+    # from the zoomed size toward the unzoomed base
+    try:
+        session_request(socket_path, {"cmd": "input", "kind": "click", "target": "overlay:reset"}, timeout=30.0)
+    except (OSError, RuntimeError, ValueError) as error:
+        check("reset clicked", False, str(error))
+    try:
+        observed = session_request(socket_path, {"cmd": "observe", "target": "diagram-svg"}, timeout=20.0)
+        reset_rect = (observed.get("observed") or {}).get("rect", {})
+    except (OSError, RuntimeError, ValueError) as error:
+        reset_rect = {"error": str(error)}
+    shrank = (
+        isinstance(reset_rect.get("width"), (int, float))
+        and isinstance(panned.get("after"), dict)
+        and isinstance(panned["after"].get("width"), (int, float))
+        and float(reset_rect["width"]) < float(panned["after"]["width"]) * 0.95
+    )
+    check(
+        "reset returns the rendered geometry",
+        shrank,
+        f"zoomed width {panned.get('after', {}).get('width')} -> reset width {reset_rect.get('width')}",
+    )
+    shot("05-diagram-reset")
+
     # 6: close returns to the board (real click on the overlay's control)
     try:
         session_request(socket_path, {"cmd": "input", "kind": "click", "target": "overlay:close"}, timeout=30.0)
@@ -1402,7 +1426,7 @@ def run_session_checks(socket_path: str, resolved: dict, query: str) -> int:
     search_text = (((found or {}).get("observed") or {}).get("text") or "").strip()
     match = state_pattern.match(search_text)
     check("search finds an occurrence", match is not None and int(match.group(2)) >= 1, repr(search_text))
-    shot("05-search-match")
+    shot("06-search-match")
 
     # 8: next match advances when a second occurrence exists
     if match is not None and int(match.group(2)) >= 2:
