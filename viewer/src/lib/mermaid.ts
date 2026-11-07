@@ -41,6 +41,41 @@ function engine(): Promise<MermaidRenderFn> {
   return renderFn;
 }
 
+// Diagnostic evidence for the native lane only: what the produced SVG
+// actually contains, so a rendering gap is attributable (text nodes
+// present but empty, absent entirely, or font resolution). Gated by
+// the same env var the shell reads for console observability.
+function logSvgDiagnostics(id: string, svg: string): void {
+  const gated = (window as unknown as { __BOARD_VIEWER_DIAG__?: boolean }).__BOARD_VIEWER_DIAG__;
+  if (!gated) return;
+  const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+  const texts = doc.querySelectorAll("text");
+  const first = texts[0];
+  console.log(
+    `[viewer-diag] ${id}: svg=${svg.length}b textNodes=${texts.length} ` +
+      `firstText=${JSON.stringify(first ? first.textContent : null)} ` +
+      `firstFont=${JSON.stringify(first ? first.getAttribute("font-family") : null)}`,
+  );
+  const live = document.querySelector(`#${id} text, #${id} span`);
+  if (live) {
+    const style = getComputedStyle(live);
+    console.log(
+      `[viewer-diag] ${id}: liveText=${JSON.stringify(live.textContent)} ` +
+        `computedFont=${JSON.stringify(style.fontFamily)} ` +
+        `fontSize=${JSON.stringify(style.fontSize)} fill=${JSON.stringify(style.fill)}`,
+    );
+  } else {
+    console.log(`[viewer-diag] ${id}: no live text/span under #${id}`);
+  }
+  const probe = document.createElement("span");
+  probe.textContent = "mermaid-font-probe";
+  probe.style.fontFamily = 'sans-serif';
+  document.body.appendChild(probe);
+  const rect = probe.getBoundingClientRect();
+  console.log(`[viewer-diag] font probe sans-serif width=${rect.width} height=${rect.height}`);
+  probe.remove();
+}
+
 export async function renderMermaid(code: string): Promise<MermaidRender> {
   let render: MermaidRenderFn;
   try {
@@ -51,6 +86,7 @@ export async function renderMermaid(code: string): Promise<MermaidRender> {
   const id = `mmd-${++renderCount}`;
   try {
     const { svg } = await render(id, code);
+    logSvgDiagnostics(id, svg);
     return { ok: true, svg };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) };

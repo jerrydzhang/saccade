@@ -41,10 +41,19 @@ pub fn run() {
                         .with_webview(|webview| {
                             #[cfg(target_os = "linux")]
                             {
-                                use webkit2gtk::{SettingsExt, WebViewExt};
-                                if let Some(settings) = webview.inner().settings() {
+                                use webkit2gtk::{SettingsExt, WebViewExt, gio};
+                                let inner = webview.inner();
+                                if let Some(settings) = inner.settings() {
                                     settings.set_enable_write_console_messages_to_stdout(true);
                                 }
+                                // the lane's SVG/font diagnostics ride the
+                                // same gate: the flag is read by the
+                                // mermaid renderer before each diagram
+                                inner.run_javascript(
+                                    "window.__BOARD_VIEWER_DIAG__ = true",
+                                    None::<&gio::Cancellable>,
+                                    |_| {},
+                                );
                             }
                         })
                         .expect("webview console setting failed");
