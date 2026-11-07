@@ -4311,6 +4311,13 @@ fn run_here_in_pty(bin: &str, args: &[String], envs: &[(&str, String)]) -> std::
     ] {
         cmd.env_remove(key);
     }
+    // no pty door ever resolves the ambient adapter: the default host
+    // path denies loudly (no such executable, every ask fails) unless
+    // the case names its own fake
+    cmd.env(
+        "SACCADE_HERDR",
+        std::env::temp_dir().join("saccade-pty-deny-hc"),
+    );
     cmd.env("SACCADE_TEST_CONTEXT", "1");
     for (key, value) in envs {
         cmd.env(key, value);
