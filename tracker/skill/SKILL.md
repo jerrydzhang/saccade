@@ -7,8 +7,10 @@ description: Use when running the `sac` CLI - working tasks, authoring task boar
 
 One binary over an append-only event log; the world is a fold of that log.
 The record is the reasoning cache: what lands in it survives context loss,
-handoff, and reboot. There is no managed execution: the tracker records
-undertakings and accounts, it holds no waits and supervises nothing.
+handoff, and reboot. Ratified decisions land by kind: the task's thread
+carries the working record; the law files and package docs carry standing
+rules. There is no managed execution: the tracker records undertakings and
+accounts, it holds no waits and supervises nothing.
 
 Before your first tracker write, run `sac identity`. Tier is **possessed,
 never passed**: `SACCADE_ACTOR` set means agent tier, unset means human
@@ -54,6 +56,51 @@ its flags. Output is human-readable by default and `--json` on every face.
   accepted revision and committing.
 - Cancel and reopen are human-only, each with an explanation. Agents pass
   prose explicitly; with a terminal attached, omitted prose opens $EDITOR.
+
+## Writing a board
+
+A board is one `board.yaml` beside its figures (8 MiB each), naming the
+five kinds and only these:
+
+```yaml
+grammar: 1
+task: t-2
+content:
+  - text: |
+      ## Question
+
+      Why does the tone arm resonate near 7 Hz on the rebuilt plinth?
+  - group:
+      title: Recorded setup
+      content:
+        - text: |
+            The plinth rebuild replaced the plate with birch ply.
+        - figure:
+            input: figures/plinth-section.png
+            caption: Section through the rebuilt plinth.
+  - incorporation:
+      source:
+        task: t-3
+        revision: 1
+        select: [/content/0]
+      content:
+        - text: |
+            The compliance figures set the predicted resonance window.
+  - annotation: |
+      Reviewer concern: the number assumes a 20 C room; the session log
+      says 24 C.
+```
+
+`text` is markdown with dollar math; `group` nests content under an
+optional title; `figure` names a file in the board tree plus a caption;
+`incorporation` cites another task's revision **by number** with select
+paths and its own receiving text; `annotation` is a review concern
+placed near what it addresses. The file is one YAML document: no
+anchors, no aliases, no duplicate keys.
+
+The steps: `sac create task "..."`, `sac board edit t-N [dir]`, write
+board.yaml and its figures with your own tools, `sac board check
+[dir]`, `sac board commit t-N [dir] -m "..."`, `sac offer t-N`.
 
 ## The authoring loop
 
