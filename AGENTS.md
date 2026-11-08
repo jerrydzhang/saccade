@@ -5,14 +5,14 @@ binary: event log, server, CLI, boards), `grammar` (the board format),
 `client` (the board viewer), `tools/herdr-ui` (the desktop-app
 sandbox). Each package owns its version and its docs. `AXIOMS.md`
 carries world belief - read it before proposing anything
-architectural. The dogfood tracker (this repository's own) is where
-work is claimed and closed; `tracker/skill/SKILL.md` teaches the `sac`
-CLI, and `tracker/README.md` carries the tracker's law.
+architectural. Using the tracker is not required to develop this
+project; `tracker/skill/SKILL.md` teaches the `sac` CLI for when you
+do, and `tracker/README.md` carries the tracker's law.
 
 ## Decisions and ratification
 
-- One decision at a time; the human ratifies; it lands by kind: the
-  task's thread, `AXIOMS.md`, a package's docs, or the sections here.
+- One decision at a time; the human ratifies; it lands in `AXIOMS.md`,
+  a package's docs, or the sections here.
 - The problem is never silently modified. Deviations are announced
   before enactment. Success claims name their evidence: tests run and
   counts, files touched, commands exercised.
@@ -78,15 +78,11 @@ CLI, and `tracker/README.md` carries the tracker's law.
 - Never add production machines to a sandbox, never automate the
   person's real display, never stop another session's core or
   compositor.
-- The dogfood server is production: read-only doors only, unless the
-  task itself is the change.
 - The headless loop proves mechanics, not the human's actual client;
   the real-client gate stays separate.
 
 ## Branches and commits
 
-- Branch and path names are established at workspace creation and
-  never derive from task or incarnation numbering.
 - One commit per decision or mechanical batch; the message says what
   changed, not the history of deciding.
 - Re-read the exact lines before every edit - files change live during

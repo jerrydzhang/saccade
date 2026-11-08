@@ -18,7 +18,8 @@ sac serve --repo /home/jerry/Projects/saccade --bind 0.0.0.0 --port 8811
 ```
 
 with `restart.on = "on_failure"` (max 10) and a readiness probe on
-`GET /` at port 8811.
+`GET /` at port 8811. The dogfood server is production: read-only
+doors only, unless the task itself is the change.
 
 - `--repo` names the tracker: the shell may sit anywhere, so the db's
   repo is declared, not discovered from the working directory.
