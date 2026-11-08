@@ -430,11 +430,23 @@ pub(super) struct AskOutcome {
 // Native startup binds after taking raw input; terminal creation alone does not.
 pub(super) const ASK_BIND_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The binding bound is 30 seconds in production and that is the only
+/// production value. The test harness alone shortens it through
+/// SACCADE_ASK_BIND_BOUND_SECS so the timeout path costs seconds, not
+/// the production wait; nothing else reads that variable.
+fn ask_bind_bound() -> std::time::Duration {
+    match std::env::var("SACCADE_ASK_BIND_BOUND_SECS") {
+        Ok(secs) => std::time::Duration::from_secs(secs.parse().unwrap_or(30)),
+        Err(_) => ASK_BIND_BOUND,
+    }
+}
+
 pub(super) fn wait_for_ask_binding(
     destination: &Destination,
     incarnation: IncarnationId,
 ) -> Result<(), Fail> {
-    let deadline = std::time::Instant::now() + ASK_BIND_BOUND;
+    let bound = ask_bind_bound();
+    let deadline = std::time::Instant::now() + bound;
     loop {
         let loadout = loadout_of(destination)?;
         let LoadState::Full(world) = loadout.state else {
@@ -453,7 +465,7 @@ pub(super) fn wait_for_ask_binding(
         if left.is_zero() {
             return Err(Fail::Usage(format!(
                 "native startup did not bind its saved-session locator within {} seconds",
-                ASK_BIND_BOUND.as_secs()
+                bound.as_secs()
             )));
         }
         std::thread::sleep(left.min(WAIT_POLL));

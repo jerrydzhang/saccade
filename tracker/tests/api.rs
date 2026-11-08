@@ -5301,6 +5301,9 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
             ("SACCADE_PI", pi.display().to_string()),
             ("SACCADE_ACTOR", "creator".to_string()),
             ("SACCADE_INCARNATION_SEQ", creator_birth.to_string()),
+            // the test harness alone shortens the binding bound: the
+            // timeout path costs seconds, never the production 30
+            ("SACCADE_ASK_BIND_BOUND_SECS", "2".to_string()),
         ],
     );
     assert!(!timed_out, "{out}{err}");
@@ -5310,8 +5313,12 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
         err.contains("initial question was not recorded or sent"),
         "{err}"
     );
-    assert!(err.contains("within 30 seconds"), "{err}");
-    assert!(started.elapsed() >= std::time::Duration::from_secs(30));
+    assert!(err.contains("within 2 seconds"), "{err}");
+    assert!(started.elapsed() >= std::time::Duration::from_secs(2));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "the test knob bounded the wait; the production 30 s never ran"
+    );
     assert_eq!(std::fs::read_to_string(send_log).unwrap(), sends_before);
     let (_, body) = get_json(&base_url, "/api/v1/records");
     assert_eq!(
