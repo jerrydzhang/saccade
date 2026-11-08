@@ -75,6 +75,9 @@ SESSION_DOWN_TIMEOUT_SECONDS = 30
 SESSION_DEFAULT_LIFETIME_SECONDS = 1800
 # the scripted check sequence under one supervisor
 SESSION_CHECKS_TIMEOUT_SECONDS = 300
+# the tracker sequence's whole bound: server start, seed, the UI walk,
+# the bounded-refusal wait, teardown
+SESSION_TRACKER_TIMEOUT_SECONDS = 300
 # The canary file is bound read-only into the sandbox at this path: the
 # interpreter inside must be able to read it without any host HOME or
 # worktree visibility.
@@ -984,7 +987,7 @@ def session_request(socket_path: str, payload: dict, timeout: float = 60.0) -> d
     return response
 
 
-def session_resolved(board_arg: str, tracker_db_candidate: str) -> dict | None:
+def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bin: bool = False) -> dict | None:
     """Every pinned path the session lane consumes, with the same
     refusals the native lane makes. Returns None after printing a
     refusal."""
@@ -1050,6 +1053,15 @@ def session_resolved(board_arg: str, tracker_db_candidate: str) -> dict | None:
         print(f"containment refusal: baseline tracker db does not exist on the caller side: {tracker_db}", file=sys.stderr)
         return None
 
+    serve_bin = ""
+    if require_serve_bin:
+        serve_bin = os.environ.get("SACCADE_SERVE_BIN", "")
+        if not serve_bin.startswith("/") or not os.access(serve_bin, os.X_OK):
+            print(
+                "containment refusal: SACCADE_SERVE_BIN must be an executable absolute sac binary for the tracker sequence",
+                file=sys.stderr,
+            )
+            return None
     fontconf = os.environ.get("FONTCONFIG_FILE", "")
     usable, reason = verify_fontconfig_file(fontconf)
     if not usable:
@@ -1079,6 +1091,7 @@ def session_resolved(board_arg: str, tracker_db_candidate: str) -> dict | None:
         "tracker_db": tracker_db,
         "fontconf": fontconf,
         "mesa_dir": mesa_dir,
+        "serve_bin": serve_bin,
     }
 
 
@@ -1123,8 +1136,9 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
     """Read-only binds: the canary, both lane modules, the pinned
     binaries (covered by the /nix/store bind - stated explicitly for
     review) and the board's parent directory. The screenshooter stays
-    bound: shot captures compositor frames beside WebDriver shots."""
-    return [
+    bound: shot captures compositor frames beside WebDriver shots.
+    The tracker sequence adds its own sac binary at /lane/sac."""
+    binds = [
         (resolved["canary"], CANARY_SANDBOX_PATH),
         (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
         (resolved["client_py"], SESSION_CLIENT_SANDBOX_PATH),
@@ -1135,6 +1149,9 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
         (resolved["webkit_driver"], resolved["webkit_driver"]),
         (resolved["board_dir"], "/board"),
     ]
+    if resolved.get("serve_bin"):
+        binds.append((resolved["serve_bin"], "/lane/sac"))
+    return binds
 
 
 def record_alive(record: dict | None) -> bool:
@@ -1349,6 +1366,61 @@ def session_up(board_arg: str, lifetime: float) -> int:
     except (ChildProcessError, OSError):
         pass
     return 1
+
+
+def session_tracker(board_arg: str, tracker_db_candidate: str) -> int:
+    """Gated. One bounded sandbox run: the payload spawns a real
+    `sac serve` on a throwaway db, commits two seed boards on the wire,
+    drives the packaged app through the tracker UI by WebDriver input,
+    navigates a citation, then answers a stopped server with a bounded
+    structured refusal. The sequence owns its teardown; the supervisor
+    stop is the backstop."""
+    isolation_gate("webdriver")
+    sys.path.insert(0, str(HERE))
+    import isolation
+
+    resolved = session_resolved(board_arg, tracker_db_candidate, require_serve_bin=True)
+    if resolved is None:
+        return 1
+
+    import uuid
+
+    run_root = isolation.make_run_root("session-tracker")
+    token = uuid.uuid4().hex
+    env = session_env(resolved, run_root, token, SESSION_DEFAULT_LIFETIME_SECONDS)
+    env["SESSION_MODE"] = "tracker"
+    env["BOARD_VIEWER_SERVE_BIN"] = "/lane/sac"
+    (run_root / "logs").mkdir(exist_ok=True)
+    cmd = isolation.build_command(
+        resolved["bwrap"],
+        run_root,
+        [resolved["python"], SESSION_PAYLOAD_SANDBOX_PATH],
+        session_binds(resolved),
+    )
+    print("[webdriver] gate command:", " ".join(cmd), flush=True)
+    print(f"[webdriver] run root: {run_root}", flush=True)
+    supervisor = isolation.PidfdSupervisor(cmd, env)
+    started = time.monotonic()
+    try:
+        supervisor.start()
+        try:
+            code = supervisor.wait(timeout=SESSION_TRACKER_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            print("[webdriver] the tracker sequence exceeded its bound; stopping via pidfd", file=sys.stderr)
+            supervisor.stop()
+            code = None
+        output = supervisor.read_output()
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        cost = time.monotonic() - started
+        print(f"[webdriver] tracker sequence done in {cost:.1f}s; payload exit={code}", flush=True)
+        return 0 if code == 0 else 1
+    except isolation.ContainmentRefused as error:
+        print(f"containment refusal: {error}", file=sys.stderr)
+        return 1
+    finally:
+        code = supervisor.stop()
+        if code != 0 and code is not None:
+            print(f"[webdriver] supervisor exit after cleanup: {code}", file=sys.stderr)
 
 
 def session_down() -> int:
@@ -1917,7 +1989,7 @@ def session_checks(board_arg: str, tracker_db_candidate: str, query: str, lifeti
 
 def parse_session_verb(rest: list[str]) -> tuple[str, dict, float]:
     if not rest:
-        print("[session] a verb is required: up/down/status/inspect/observe/input/shot/checks", file=sys.stderr)
+        print("[session] a verb is required: up/down/status/inspect/observe/input/shot/checks/tracker", file=sys.stderr)
         raise SystemExit(2)
     verb, args = rest[0], rest[1:]
     lifetime = SESSION_DEFAULT_LIFETIME_SECONDS
@@ -1955,6 +2027,8 @@ def session_main(rest: list[str], board_arg: str) -> int:
         return session_status()
     if verb == "checks":
         return session_checks(board_arg, tracker_db_arg, options["query"], lifetime)
+    if verb == "tracker":
+        return session_tracker(board_arg, tracker_db_arg)
     if verb == "inspect":
         return session_command({"cmd": "inspect"})
     if verb == "shot":

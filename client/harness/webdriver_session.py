@@ -31,6 +31,7 @@ PID-namespace teardown remains the backstop.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import pathlib
@@ -39,6 +40,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 HERE = "/lane"
 sys.path.insert(0, "/canary")
@@ -309,6 +311,11 @@ class SessionState:
         self.board = ""
         self.expires_epoch = 0.0
         self.torn_down = False
+        # the tracker sequence's own server: spawned, fed, stopped and
+        # re-checked inside one bounded run; never adopted, never
+        # outliving the sandbox
+        self.server: subprocess.Popen[bytes] | None = None
+        self.server_port = 0
 
     def chain_status(self) -> dict:
         return {
@@ -357,6 +364,13 @@ def teardown(state: SessionState) -> int:
         except subprocess.TimeoutExpired:
             state.weston.kill()
             state.weston.wait(timeout=5)
+    if state.server is not None and state.server.poll() is None:
+        state.server.terminate()
+        try:
+            state.server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            state.server.kill()
+            state.server.wait(timeout=5)
     return 0
 
 
@@ -479,6 +493,203 @@ def serve(state: SessionState, socket_path: str, lifetime: float, ready_file: st
     return teardown(state)
 
 
+def tracker_free_port() -> int:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind((NATIVE_HOST, 0))
+    port = int(probe.getsockname()[1])
+    probe.close()
+    return port
+
+
+def tracker_post(base: str, route: str, payload: dict) -> dict:
+    request = urllib.request.Request(
+        base + route,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=20) as reply:
+        return json.loads(reply.read().decode("utf-8"))
+
+
+TRACKER_CITED_BOARD = """grammar: 1
+task: t-0
+content:
+  - text: the seed account a citation points at
+"""
+
+TRACKER_CITING_BOARD = """grammar: 1
+task: t-1
+content:
+  - text: the citing account, served by the real wire
+  - incorporation:
+      source:
+        task: t-0
+        revision: 1
+        select: [/content/0]
+      content:
+        - text: the receiving text for the cited seed
+"""
+
+
+def run_tracker_sequence(state: SessionState) -> int:
+    """The scripted tracker sequence: a real `sac serve` on a throwaway
+    db inside this sandbox, two boards committed on the real wire, the
+    packaged app driven by WebDriver input through the tracker UI (the
+    server setting typed and saved, the location opened), the citation
+    navigated, and a stopped server answered by a structured refusal in
+    bounded time - never an endless load. Runs under the real CSP."""
+    assert state.client is not None
+    serve_bin = os.environ.get("BOARD_VIEWER_SERVE_BIN", "")
+    if not serve_bin.startswith("/"):
+        print("containment refusal: BOARD_VIEWER_SERVE_BIN must be an absolute sandbox path", file=sys.stderr)
+        teardown(state)
+        return 1
+    root = state.shots.parent / "tracker"
+    (root / "repo").mkdir(parents=True, exist_ok=True)
+    db = root / "lanetracker.db"
+    port = tracker_free_port()
+    server_log_path = state.shots.parent / "logs" / "tracker-serve.log"
+    server_log = open(server_log_path, "wb")
+    try:
+        state.server = subprocess.Popen(
+            [serve_bin, "serve", "--db", str(db), "--repo", str(root / "repo"),
+             "--bind", NATIVE_HOST, "--port", str(port)],
+            env={**os.environ},
+            stdout=server_log,
+            stderr=server_log,
+        )
+    finally:
+        server_log.close()
+    state.server_port = port
+    base = f"http://{NATIVE_HOST}:{port}"
+    deadline = time.monotonic() + 20
+    ready = False
+    while time.monotonic() < deadline:
+        if state.server.poll() is not None:
+            break
+        try:
+            with urllib.request.urlopen(base + "/", timeout=2) as reply:
+                ready = reply.status == 200
+                break
+        except OSError:
+            time.sleep(0.3)
+    check("a real sac serve answers on the sandbox loopback", ready, f"log: {server_log_path}")
+    if not ready:
+        return teardown(state)
+
+    # two boards on the real wire: t-0 the cited plain account, t-1
+    # citing it by revision - the citation the sequence navigates
+    context = {"actor": "lane", "tier": "agent", "scope": None}
+    ids: list[int] = []
+    try:
+        for name in ("the cited seed account", "the citing account"):
+            reply = tracker_post(base, "/api/v1/command", {
+                "context": context,
+                "command": {"create_task": {"name": name}},
+                "at": None,
+                "client": "lane",
+            })
+            ids.append(int(str(reply["id"]).removeprefix("t-")))
+        for task, board_text in ((ids[0], TRACKER_CITED_BOARD), (ids[1], TRACKER_CITING_BOARD)):
+            reply = tracker_post(base, "/api/v1/boards/commit", {
+                "context": context,
+                "task": task,
+                "files": {"files": [{"path": "board.yaml",
+                                     "content": base64.b64encode(board_text.encode("utf-8")).decode("ascii")}]},
+                "message": "the lane's seed commit",
+                "client": "lane",
+            })
+            check(f"t-{task}'s seed board committed at revision 1", reply.get("revision") == 1, str(reply)[:160])
+    except (OSError, ValueError, KeyError) as error:
+        check("two boards committed on the real wire", False, str(error)[:200])
+        return teardown(state)
+
+    def inspect_bounded(predicate, timeout: float):
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            try:
+                last = state.client.execute(INSPECT_SCRIPT)
+            except WebDriverError as error:
+                last = {"error": str(error)[:160]}
+            if isinstance(last, dict) and predicate(last):
+                return last
+            time.sleep(0.4)
+        return last
+
+    # the human path: type the server address once, then open the
+    # tracker-named location; every stroke is real WebDriver input
+    try:
+        perform_input(state.client, {"kind": "type", "target": "server:host", "text": f"{NATIVE_HOST}:{port}"})
+        perform_input(state.client, {"kind": "click", "target": "server:save"})
+        perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": f"lanetracker/t-{ids[1]}"})
+        perform_input(state.client, {"kind": "click", "target": "open:host"})
+    except WebDriverError as error:
+        check("the tracker UI takes real input", False, str(error)[:200])
+        return teardown(state)
+    check("the tracker UI takes real input", True)
+    loaded = inspect_bounded(
+        lambda i: i.get("resource", {}).get("status") == "loaded"
+        and i.get("identity", {}).get("task") == f"t-{ids[1]}"
+        and i.get("resource", {}).get("machine") == "tracker:lanetracker",
+        30.0,
+    )
+    ok = isinstance(loaded, dict) and loaded.get("resource", {}).get("status") == "loaded"
+    check("a tracker location loads through the real server under the real CSP", bool(ok), str(loaded)[:300])
+    if not ok:
+        return teardown(state)
+
+    cited_ok = False
+    cited = inspect_bounded(lambda i: "board:open-citation" in [t.get("id", "") for t in i.get("targets", [])], 10.0)
+    if isinstance(cited, dict) and "board:open-citation" in [t.get("id", "") for t in cited.get("targets", [])]:
+        try:
+            perform_input(state.client, {"kind": "click", "target": "board:open-citation"})
+            navigated = inspect_bounded(
+                lambda i: i.get("resource", {}).get("status") == "loaded"
+                and i.get("identity", {}).get("task") == f"t-{ids[0]}"
+                and i.get("resource", {}).get("path") == f"t-{ids[0]}@r1",
+                15.0,
+            )
+            cited_ok = isinstance(navigated, dict) and navigated.get("resource", {}).get("path") == f"t-{ids[0]}@r1"
+        except WebDriverError as error:
+            check("the citation opens the cited revision", False, str(error)[:200])
+    check("the citation opens the cited revision through the real wire", bool(cited_ok))
+    try:
+        png = state.client.screenshot()
+        (state.shots / "tracker-real-server.png").write_bytes(png)
+    except WebDriverError:
+        pass
+
+    # the server dies: the next open is a structured refusal in bounded
+    # time (the request bound plus slack), never an endless load
+    if state.server.poll() is None:
+        state.server.terminate()
+        try:
+            state.server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            state.server.kill()
+            state.server.wait(timeout=5)
+    check("the tracker server stopped", state.server.poll() is not None)
+    stopped_at = time.monotonic()
+    try:
+        perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": f"lanetracker/t-{ids[1]}"})
+        perform_input(state.client, {"kind": "click", "target": "open:host"})
+    except WebDriverError as error:
+        check("the stopped-server open takes input", False, str(error)[:200])
+    refused = inspect_bounded(
+        lambda i: i.get("resource", {}).get("status") == "invalid" and bool(i.get("errors")),
+        20.0,
+    )
+    bounded = (
+        isinstance(refused, dict)
+        and refused.get("resource", {}).get("status") == "invalid"
+        and (time.monotonic() - stopped_at) < 25.0
+    )
+    check("a stopped server refuses in bounded time, never endless loading", bool(bounded), str(refused)[:300])
+    return teardown(state)
+
+
 def main() -> int:
     if not run_canary_first():
         return 1
@@ -577,6 +788,8 @@ def main() -> int:
         if not ready:
             return teardown(state)
 
+        if os.environ.get("SESSION_MODE") == "tracker":
+            return run_tracker_sequence(state)
         code = serve(state, socket_path, lifetime, ready_file)
         cost = time.monotonic() - started
         passed = sum(1 for ok, _name, _detail in RESULTS if ok)

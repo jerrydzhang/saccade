@@ -18,6 +18,10 @@ import { resolveRelative } from "./resolve.ts";
 // address hint), pasted once.
 const SERVER_KEY = "saccade.server.host";
 
+// One wire request's whole patience: past this, the server is down and
+// the answer is a structured refusal.
+const REQUEST_BOUND_MS = 10_000;
+
 export function serverHost(): string | null {
   try {
     return localStorage.getItem(SERVER_KEY);
@@ -51,11 +55,17 @@ type VersionReply = {
 };
 
 async function fetchJson(url: string): Promise<unknown> {
+  // the wire answers or the request dies in bounded time: a tracker
+  // that never answers is a structured refusal, never an endless load
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_BOUND_MS);
   let response: Response;
   try {
-    response = await fetch(url);
+    response = await fetch(url, { signal: controller.signal });
   } catch (error) {
     throw new SourceUnavailableError("core-unavailable", `the tracker server did not answer at ${url}: ${String(error)}`);
+  } finally {
+    clearTimeout(timer);
   }
   if (!response.ok) {
     let detail = `status ${response.status}`;
@@ -151,6 +161,9 @@ export class TrackerSource implements BoardSource {
       return reply;
     })();
     this.trees.set(location.path, load);
+    // a failed read is not a fact about the tracker: drop it, so the
+    // next open tries the wire again instead of replaying the refusal
+    load.catch(() => this.trees.delete(location.path));
     return load;
   }
 
