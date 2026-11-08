@@ -54,16 +54,6 @@
     inherit src;
     npmDepsHash = "sha256-v7PrzqHrGOLwK5xyq4AQvhMb8Va0MomRzI1zjaOEpcM=";
   };
-  npmCheck = name: command: extra:
-    buildNpmPackage (npm
-      // {
-        pname = "board-viewer-${name}";
-        buildPhase = command;
-        installPhase = ''
-          touch $out
-        '';
-      }
-      // extra);
   webDist = buildNpmPackage (npm
     // {
       installPhase = ''
@@ -73,11 +63,6 @@
     });
 in {
   web = webDist;
-  checks = lib.optionalAttrs stdenv.hostPlatform.isLinux {
-    board-viewer-typecheck = npmCheck "typecheck" "npm run check" {};
-    board-viewer-build = npmCheck "build" "npm run build" {};
-    board-viewer-contracts = npmCheck "contracts" "npm run test" {};
-  };
 
   # the retained native app: the Tauri shell built against the
   # bundled frontend dist, wrapped with its runtime libraries - a
@@ -97,8 +82,8 @@ in {
     # the app's cargo tree: client/src-tauri plus the shared board-grammar
     # crate it validates through, kept at their real tree shape so the
     # path dependency "../../grammar" resolves exactly as in the working
-    # copy. The fixture corpus rides along because the packaged build
-    # runs the crate's parity tests over it; no nested lock files.
+    # copy. The fixture corpus is dead weight for the build and stays
+    # only while the source shape is unchanged; no nested lock files.
     cargoSrc = lib.sourceByRegex repoRoot [
       "^Cargo\.toml$"
       "^Cargo\.lock$"
@@ -130,6 +115,10 @@ in {
       pname = "saccade-board-viewer-app";
       version = "0.1.0";
       src = cargoSrc;
+      # no tests inside nix: the parity suite runs in the devshell
+      # (viewer-native-check); a sandbox cold compile puts the cheap
+      # failure behind the expensive step
+      doCheck = false;
       # cargoRoot names the manifest for the lockfile check and vendor
       # paths; buildAndTestSubdir is what moves cargo into it for the
       # build itself in this nixpkgs

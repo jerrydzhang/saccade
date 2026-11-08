@@ -518,6 +518,8 @@
         board-grammar = pkgs.rustPlatform.buildRustPackage {
           pname = "board-grammar";
           version = "0.1.0";
+          # no tests inside nix: the grammar suite runs in the devshell
+          doCheck = false;
           src = pkgs.lib.sourceByRegex ../. [
             "^grammar$"
             "^grammar/Cargo\\.toml$"
@@ -600,19 +602,9 @@
       };
     });
 
-    checks = forAllSystems (system: let
-      pkgs = nixpkgs.legacyPackages.${system};
-    in
-      (boardViewer nixpkgs.legacyPackages.${system} ../.).checks
-      // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-        herdr-ui =
-          pkgs.runCommand "herdr-ui-contract" {
-            nativeBuildInputs = [pkgs.python3];
-          } ''
-            python -B ${../tools/herdr-ui}/herdr_ui_test.py -v
-            touch $out
-          '';
-      });
+    # no tests inside nix: the suites, the frontend checks and the
+    # contract tests run in the devshell and the lanes, never behind a
+    # sandbox cold compile; the flake carries no checks output
 
     formatter = forAllSystems (system: nixpkgs.legacyPackages.${system}.alejandra);
 }
