@@ -46,4 +46,5 @@ mods/saccade/herdr.d.ts
 result-[0-9]*
 
 # Installed product skill: generated from tracker/skill in the devshell
-.agents/skills/saccade/
+.agents
+.claude
