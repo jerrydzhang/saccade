@@ -96,3 +96,16 @@ pub struct IncarnationContext {
     /// Event time of the birth record
     pub born_at: u64,
 }
+
+/// The law of one live holder: when an attach assigns an address
+/// another incarnation holds, the older holder is superseded - the
+/// fact the fold derives from the superseding assignment record
+/// itself, never a rewrite of it. The log keeps the older assignment
+/// as the past fact it is; this carries the supersession's evidence:
+/// who took the address, at which record, and which address.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Supersession {
+    pub by: IncarnationId,
+    pub at: RecordId,
+    pub address: String,
+}

@@ -8477,17 +8477,19 @@ async fn a_git_dir_inherited_by_the_server_never_reaches_the_board_store() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_send_to_a_gone_incarnation_delivers_to_the_recycled_address_occupant() {
-    // t-10's defect: the gone incarnation's recorded terminal address
-    // now belongs to a newer session; the send resolves the recorded
-    // address and delivers into whoever holds the slot, reporting the
-    // delivery as submitted
+async fn a_send_to_a_superseded_incarnation_refuses_and_discloses_the_supersession() {
+    // t-10, the ratified law: an address belongs to one live
+    // incarnation. A send to an incarnation whose slot a newer session
+    // took refuses at the fold - the host would answer live and the
+    // delivery would land in the successor's terminal - and discloses
+    // the supersession's evidence: who took the address, at which
+    // record
     let bin = env!("CARGO_BIN_EXE_sac");
     let scratch = scratch_db("recycled-address");
     let project = scratch.dir.join("project");
     std::fs::create_dir_all(&project).unwrap();
     // the fake host: get answers live for every address; send accepts
-    // and logs - the delivery lands in whoever holds the slot
+    // and logs - a wrong delivery would show in this log
     let hc = scratch.dir.join("hc");
     std::fs::write(
         &hc,
@@ -8536,9 +8538,11 @@ async fn a_send_to_a_gone_incarnation_delivers_to_the_recycled_address_occupant(
         }),
     );
     assert_eq!(status, 200, "{body}");
+    let gone_seq = json_of(&body)["incarnation"].as_u64().unwrap();
 
     // the successor: a fresh session attaches at the same slot, the
-    // way a new launch reuses the host's address numbering
+    // way a new launch reuses the host's address numbering. The fold
+    // derives the supersession from this assignment's record
     let (status, body) = post_json(
         &url,
         "/api/v1/native/attach",
@@ -8550,8 +8554,9 @@ async fn a_send_to_a_gone_incarnation_delivers_to_the_recycled_address_occupant(
         }),
     );
     assert_eq!(status, 200, "{body}");
+    let successor_seq = json_of(&body)["incarnation"].as_u64().unwrap();
 
-    // a send addressed to the gone incarnation
+    // a send addressed to the gone incarnation, by its own identity
     let (status, body) = post_json(
         &url,
         "/api/v1/messages/send",
@@ -8561,26 +8566,293 @@ async fn a_send_to_a_gone_incarnation_delivers_to_the_recycled_address_occupant(
                 "tier": "agent",
                 "scope": {"incarnation": sender_seq},
             },
-            "to": 0,
-            "body": "hello into whoever holds t65 now",
+            "to": gone_seq,
+            "body": "never lands in the successor's slot",
+            "client": "test",
+        }),
+    );
+    // THE LAW: the reply refuses - the send faces' established 409
+    // refusal shape - and discloses the supersession: who took the
+    // address, at which record, and the message's own reference. The
+    // host's log proves nothing was delivered into the slot
+    assert_eq!(status, 409, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["error"]["code"], json!("recipient_gone"), "{body}");
+    let detail = reply["error"]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains(&format!("i-{successor_seq}")),
+        "the refusal names the superseding incarnation: {body}"
+    );
+    assert!(
+        detail.contains("t65"),
+        "the refusal names the contested address: {body}"
+    );
+    assert!(
+        detail.contains("record seq"),
+        "the refusal discloses the supersession's record: {body}"
+    );
+    assert_eq!(
+        reply["message"]["seq"],
+        json!(3),
+        "the message record stands as evidence though nothing delivered"
+    );
+    let log = std::fs::read_to_string(scratch.dir.join("argv-send.log"));
+    assert!(
+        log.is_err() || !log.unwrap().contains("never lands in the successor's slot"),
+        "the host must never receive the message"
+    );
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relaunch_that_takes_another_incarnations_address_supersedes_that_holder() {
+    // the law on the reassignment path: an existing incarnation whose
+    // relaunch lands on an address another incarnation holds
+    // supersedes that holder - the older holder's delivery refuses,
+    // the mover's own delivery keeps working
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db("relaunch-takes-slot");
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let hc = scratch.dir.join("hc");
+    std::fs::write(
+        &hc,
+        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-send.log\"\nif [ \"$1\" = get ]; then printf '{\"state\":\"live\"}\\n'; exit 0; fi\nprintf '{}\\n'\nexit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (url, mut server) = spawn_serving_subprocess(
+        &scratch.db,
+        &project,
+        bin,
+        &scratch.dir,
+        None,
+        &[("SACCADE_HERDR", hc.to_str().unwrap())],
+    );
+
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({
+            "native_id": "sender000001",
+            "address": "t90",
+            "adopted": false,
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sender_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // the mover: resident at t80
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "mover00000001",
+            "session_file": "/sessions/mover00000001.jsonl",
+            "terminal": {"address": "t80", "adopted": false},
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let mover_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // the neighbor: resident at t65
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "neighbor000001",
+            "session_file": "/sessions/neighbor000001.jsonl",
+            "terminal": {"address": "t65", "adopted": false},
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let neighbor_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // the mover relaunches and the host hands it t65 - the neighbor's
+    // slot. The reassignment carries the law with it
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "mover00000001",
+            "session_file": "/sessions/mover00000001.jsonl",
+            "terminal": {"address": "t65", "adopted": false},
             "client": "test",
         }),
     );
     assert_eq!(status, 200, "{body}");
 
-    // THE DEFECT: the reply reports the delivery as submitted, and
-    // the host's log shows the text delivered into the slot the
-    // successor now holds
+    // the neighbor's delivery refuses, naming the mover
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {
+                "actor": "sender",
+                "tier": "agent",
+                "scope": {"incarnation": sender_seq},
+            },
+            "to": neighbor_seq,
+            "body": "the neighbor is gone",
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 409, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["error"]["code"], json!("recipient_gone"), "{body}");
+    let detail = reply["error"]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains(&format!("i-{mover_seq}")) && detail.contains("t65"),
+        "the refusal names the mover and the address: {body}"
+    );
+
+    // the mover's own delivery keeps working at the slot
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {
+                "actor": "sender",
+                "tier": "agent",
+                "scope": {"incarnation": sender_seq},
+            },
+            "to": mover_seq,
+            "body": "the mover holds the slot now",
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
     let reply = json_of(&body);
     assert_eq!(reply["submission"]["state"], json!("submitted"), "{body}");
-    assert_eq!(
-        reply["records"][0]["payload"]["to"],
-        json!(0),
-        "addressed to the gone incarnation"
-    );
     let log = std::fs::read_to_string(scratch.dir.join("argv-send.log")).unwrap();
-    assert!(log.contains("t65"), "{log}");
-    assert!(log.contains("hello into whoever holds t65 now"), "{log}");
+    assert!(
+        log.lines().any(|l| l == "t65"),
+        "the mover's delivery submitted at t65: {log}"
+    );
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resume_at_its_own_address_never_supersedes_the_incarnation() {
+    // the ratified law's exemption: the holder of an address who
+    // re-presents the same pair is the same live incarnation - no
+    // supersession, and delivery keeps working
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db("resume-own-address");
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let hc = scratch.dir.join("hc");
+    std::fs::write(
+        &hc,
+        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-send.log\"\nif [ \"$1\" = get ]; then printf '{\"state\":\"live\"}\\n'; exit 0; fi\nprintf '{}\\n'\nexit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (url, mut server) = spawn_serving_subprocess(
+        &scratch.db,
+        &project,
+        bin,
+        &scratch.dir,
+        None,
+        &[("SACCADE_HERDR", hc.to_str().unwrap())],
+    );
+
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({
+            "native_id": "sender000001",
+            "address": "t90",
+            "adopted": false,
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sender_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // the resident: registered and attached at its slot
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "resident000001",
+            "session_file": "/sessions/resident000001.jsonl",
+            "terminal": {"address": "t65", "adopted": false},
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let resident_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // the resume: the same native session re-attaches at its own
+    // address, the ordinary compaction-and-resume path
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "resident000001",
+            "session_file": "/sessions/resident000001.jsonl",
+            "terminal": {"address": "t65", "adopted": false},
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["registered"], json!(false), "{body}");
+    assert_eq!(
+        reply["incarnation"],
+        json!(resident_seq),
+        "the resume resolves to the same incarnation"
+    );
+    assert_eq!(
+        reply["records"].as_array().map(Vec::len),
+        Some(0),
+        "an equal pair records no assignment at all: {body}"
+    );
+
+    // delivery still works, and the fold never learned a supersession
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {
+                "actor": "sender",
+                "tier": "agent",
+                "scope": {"incarnation": sender_seq},
+            },
+            "to": resident_seq,
+            "body": "still the same live holder",
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["submission"]["state"], json!("submitted"), "{body}");
+    let log = std::fs::read_to_string(scratch.dir.join("argv-send.log")).unwrap();
+    let args: Vec<&str> = log.lines().collect();
+    assert!(
+        args.contains(&"send") && args.contains(&"t65"),
+        "the delivery submitted at the resident's own address: {log}"
+    );
+    assert!(
+        log.contains("still the same live holder"),
+        "the body rode the envelope: {log}"
+    );
 
     let _ = server.kill();
     let _ = server.wait();

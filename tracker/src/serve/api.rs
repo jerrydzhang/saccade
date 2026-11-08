@@ -2593,9 +2593,29 @@ fn send_operation(
     let _serialized = lock.lock().expect("the submit lock holds");
     let stored = app.execute(context, command, None, received)?;
     let sent = stored.first().expect("a message lands its one record").seq;
-    // the freshest address under the lock: an unaddressed recipient is
-    // the pre-B shape - the record stands as evidence, nothing submits
+    // the freshest facts under the lock: the snapshot that resolves
+    // the address holds the just-landed message, so its numbers are
+    // fold-guaranteed
     let snapshot = app.snapshot().ok();
+    // gone for delivery, first face: the fold knows the recipient was
+    // superseded - its recorded address belongs to a newer incarnation
+    // now. The refusal discloses the supersession's evidence and never
+    // asks the host: the host would answer live and the delivery would
+    // land in the successor's slot
+    if let Some(supersession) = snapshot.as_ref().and_then(|s| s.world.superseded.get(&to)) {
+        return Ok((
+            stored,
+            SubmitOutcome::Refused {
+                code: "recipient_gone",
+                detail: format!(
+                    "the recipient is superseded: incarnation i-{} holds its address {} since record seq {}; delivery never lands in another session's slot",
+                    supersession.by.0.0, supersession.address, supersession.at.0
+                ),
+            },
+        ));
+    }
+    // an unaddressed recipient is the pre-B shape - the record stands
+    // as evidence, nothing submits
     let Some(address) = snapshot.as_ref().and_then(|s| addressed(&s.world)) else {
         return Ok((
             stored,
