@@ -2585,6 +2585,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-client_2": {
+      "locked": {
+        "lastModified": 1790822859,
+        "narHash": "sha256-69xHQhAeMAD2wDXO7T2pcOZIF9Sga2W+JkmY2a11Ops=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c59305bab2065cfecc4944690d9eedbb56f3a9fa",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c59305bab2065cfecc4944690d9eedbb56f3a9fa",
+        "type": "github"
+      }
+    },
     "nixpkgs-darwin-x64": {
       "locked": {
         "lastModified": 1788334797,
@@ -3594,6 +3610,7 @@
         "herdr-core-aarch64-linux": "herdr-core-aarch64-linux_2",
         "herdr-core-x86_64-linux": "herdr-core-x86_64-linux_2",
         "nixpkgs": "nixpkgs_5",
+        "nixpkgs-client": "nixpkgs-client_2",
         "rust-overlay": "rust-overlay_4",
         "saccade": [
           "saccade"
@@ -3601,11 +3618,11 @@
         "wrapped-pi": "wrapped-pi"
       },
       "locked": {
-        "lastModified": 1793837295,
-        "narHash": "sha256-FsPjjISYnc6+i+OPvQmXE38KhueGxopOWQah89JDs/A=",
+        "lastModified": 1794107824,
+        "narHash": "sha256-uHqxG9Ljp3PNcJYUAhPiltC9xfITvNBVI29CwJ7A9XQ=",
         "owner": "jerrydzhang",
         "repo": "saccade",
-        "rev": "fed6cc141796bac85e66e1cdc01da4db18a92c2f",
+        "rev": "5191c0b48295dd4293eca4f677d377d3e5118c06",
         "type": "github"
       },
       "original": {

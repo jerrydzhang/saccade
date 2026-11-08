@@ -397,7 +397,7 @@
                 wrappedPiBin = "${wrapped-pi.packages.${system}.default}/bin/wrapped-pi";
                 extraArgs = lib.escapeShellArgs (lib.concatMap (path: ["-e" "${config.devenv.root}/${path}"]) saccadePiExtensions);
               in
-                pkgs.hiPrio (pkgs.writeShellApplication {
+                pkgs.lib.hiPrio (pkgs.writeShellApplication {
                   name = "saccade-pi";
                   runtimeInputs = [pkgs.util-linux];
                   text = ''
