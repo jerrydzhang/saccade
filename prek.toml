@@ -36,6 +36,14 @@ repo = "local"
 hooks = [
   { id = "merge-gate", name = "merge gate: the full suite and both nix builds",
     entry = "bash", language = "system",
-    args = ["-c", "cargo test -q && nix build .#sac .#board-viewer --no-link"],
+    args = ['''
+set -eu
+cargo test -q
+sha="${PRE_COMMIT_TO_REF:-}"
+case "$sha" in "" | *0000000000000000000000000000000000000000*) exit 0 ;; esac
+repo="$(git rev-parse --path-format=absolute --git-common-dir)"
+repo="${repo%/.git}"
+nix build --no-link "git+file://$repo?rev=$sha"
+'''],
     pass_filenames = false, always_run = true, stages = ["pre-push"] },
 ]

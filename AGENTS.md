@@ -71,9 +71,12 @@ do, and `tracker/README.md` carries the tracker's law.
   (`... entry.py --board <yaml> session tracker`, with the built `sac`
   as `SACCADE_SERVE_BIN`). The lane logs are inspected, not assumed.
 - The merge gate is the pre-push hook (`merge-gate` in prek.toml):
-  the full suite and `nix build .#sac .#board-viewer` run again
-  before anything reaches GitHub; the nix builds are not part of the
-  per-commit phase gate.
+  the full suite runs first, then the hook builds the commit being
+  pushed - the sha prek hands it in `PRE_COMMIT_TO_REF`, fetched as
+  `git+file://<repo>?rev=<sha>`, so the build reads the pushed commit
+  and never this working tree (branch deletions never fire the
+  hook). Nothing reaches GitHub without the suite and the builds; the
+  nix builds are not part of the per-commit phase gate.
 - Agents run nix once, last, before offering. The fast phase gate
   first (the suites, clippy -D warnings, the prek hooks, the lanes);
   only when it is green, commit and `nix build .#sac
