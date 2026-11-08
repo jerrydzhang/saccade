@@ -2057,6 +2057,47 @@ fn board_wire_routes_hold_their_contracts() {
         "the answer varies by origin"
     );
 
+    // the rebinding guard: a domain name that is not this server
+    // refuses before routing, and an allowlisted page can read why; an
+    // IP literal never comes from a rebinding and answers
+    let rebound = |host: &str| {
+        ureq::get(&format!("{url}/api/v1/version"))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .header("host", host)
+            .header("origin", "tauri://localhost")
+            .call()
+            .unwrap()
+    };
+    let mut stranger = rebound("evil.example:8811");
+    assert_eq!(stranger.status().as_u16(), 403, "a stranger name refuses");
+    assert_eq!(
+        stranger
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("tauri://localhost"),
+        "the shell reads the refusal"
+    );
+    let body: Value = stranger
+        .body_mut()
+        .read_to_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(body["error"]["code"], json!("host_forbidden"));
+    assert_eq!(
+        rebound("192.168.0.51:8811").status().as_u16(),
+        200,
+        "a LAN IP literal answers"
+    );
+    assert_eq!(
+        rebound("[fd00::5]:8811").status().as_u16(),
+        200,
+        "an IPv6 literal answers"
+    );
+
     let anonymous = ureq::get(&format!("{url}/api/v1/version"))
         .config()
         .http_status_as_error(false)

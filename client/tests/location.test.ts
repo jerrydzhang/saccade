@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { apiUrl, baseFromHost, parseLocation, parseTaskSpec, trackerLocation } from "../src/lib/location.ts";
 
 test("a plain absolute path is the machine this viewer runs on", () => {
@@ -95,4 +96,15 @@ test("tracker routes resolve against the server host with one slash", () => {
     const url = apiUrl(base, "/api/v1/version");
     assert.equal(new URL(url).pathname, "/api/v1/version", url);
   }
+});
+
+test("the native shell's policy lets the webview reach a tracker server", () => {
+  const conf = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  const connect = String(conf.app.security.csp)
+    .split(";")
+    .map((part: string) => part.trim())
+    .find((part: string) => part.startsWith("connect-src"));
+  assert.ok(connect, "the policy names connect-src");
+  const sources = connect.split(/\s+/);
+  assert.ok(sources.includes("http:") && sources.includes("https:"), connect);
 });

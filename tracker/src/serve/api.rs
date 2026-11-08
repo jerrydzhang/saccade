@@ -618,10 +618,16 @@ pub(crate) async fn origin_policy(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let origin = request
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     // the DNS-rebinding guard: a page on an attacker's domain resolves
-    // that domain to this server and sends its own name as Host.
-    // Loopback names and the bind address are this server's own faces;
-    // anything else refuses before routing.
+    // that domain to this server and sends its own name as Host. A
+    // rebinding always carries a domain name, so IP literals answer, as
+    // do loopback names, the bind address and serve-time entries;
+    // another name refuses before routing
     if let Some(host) = request
         .headers()
         .get(axum::http::header::HOST)
@@ -629,31 +635,46 @@ pub(crate) async fn origin_policy(
     {
         let name = host
             .rsplit_once(':')
+            .filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
             .map(|(before, _)| before)
             .unwrap_or(host);
-        let loopback = matches!(name, "127.0.0.1" | "localhost" | "[::1]" | "::1");
+        let literal = name
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok();
+        let loopback = name == "localhost";
         let bound = hosts.bind.as_deref() == Some(host);
         let listed = hosts.extra.iter().any(|allowed| allowed == host);
-        if !loopback && !bound && !listed {
-            return (
+        if !literal && !loopback && !bound && !listed {
+            let mut refusal = (
                 StatusCode::FORBIDDEN,
                 Json(json!({
                     "error": {
                         "code": "host_forbidden",
                         "detail": format!(
-                            "host '{host}' is not this server; call it by its loopback name or the bind address, or allow the host at serve time"
+                            "host '{host}' is not this server; call it by an IP address, its loopback name or the bind address, or allow the host at serve time"
                         ),
                     }
                 })),
             )
                 .into_response();
+            // an allowlisted page reads the refusal instead of a blind
+            // network failure
+            if let Some(origin) = origin.as_deref()
+                && allowed.iter().any(|candidate| candidate == origin)
+                && let Ok(value) = axum::http::HeaderValue::from_str(origin)
+            {
+                refusal
+                    .headers_mut()
+                    .insert("access-control-allow-origin", value);
+                refusal
+                    .headers_mut()
+                    .append("vary", axum::http::HeaderValue::from_static("Origin"));
+            }
+            return refusal;
         }
     }
-    let origin = request
-        .headers()
-        .get(axum::http::header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
     if let Some(origin) = &origin
         && !allowed.iter().any(|candidate| candidate == origin)
     {
