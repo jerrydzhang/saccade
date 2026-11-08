@@ -44,3 +44,12 @@ test("empty and segment-free paths are denied", () => {
   assert.ok(!resolveRelative("/boards/first", "").ok);
   assert.ok(!resolveRelative("/boards/first", "./").ok);
 });
+
+test("an empty declaration base resolves repo-relative: no leading slash", () => {
+  const result = resolveRelative("", "figures/error-render.png");
+  assert.ok(result.ok);
+  assert.equal(result.ok ? result.joined : "", "figures/error-render.png");
+  const nested = resolveRelative("", "a/b/c.png");
+  assert.ok(nested.ok);
+  assert.equal(nested.ok ? nested.joined : "", "a/b/c.png");
+});

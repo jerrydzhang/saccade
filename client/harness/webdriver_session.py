@@ -508,8 +508,12 @@ def tracker_post(base: str, route: str, payload: dict) -> dict:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=20) as reply:
-        return json.loads(reply.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=20) as reply:
+            return json.loads(reply.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"{route} answered {error.code}: {detail}") from None
 
 
 TRACKER_CITED_BOARD = """grammar: 1
@@ -670,6 +674,82 @@ def run_tracker_sequence(state: SessionState) -> int:
         except WebDriverError as error:
             check("the citation opens the cited revision", False, str(error)[:200])
     check("the citation opens the cited revision through the real wire", bool(cited_ok))
+
+    # the landing-on-a-real-server pin: t-2 first holds text only; the
+    # figure commit lands; a re-open must render the committed figure
+    # from the new revision - never a stale tree or a missing file
+    landing_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    landing_r1 = (
+        "grammar: 1\ntask: t-{}\ncontent:\n  - text: the landing board, first pass"
+    )
+    landing_r2 = (
+        "grammar: 1\ntask: t-{}\ncontent:\n  - text: the landing board, revised\n"
+        "  - figure:\n      input: figures/landing.png\n      caption: the landing figure, committed\n"
+    )
+    try:
+        reply = tracker_post(base, "/api/v1/command", {
+            "context": {"actor": "lane", "tier": "agent", "scope": None},
+            "command": {"create_task": {"name": "the landing board"}},
+            "at": None,
+            "client": "lane",
+        })
+        landing_task = int(str(reply["id"]).removeprefix("t-"))
+        reply = tracker_post(base, "/api/v1/boards/commit", {
+            "context": {"actor": "lane", "tier": "agent", "scope": None},
+            "task": landing_task,
+            "files": {"files": [{"path": "board.yaml",
+                                 "content": base64.b64encode(landing_r1.format(landing_task).encode("utf-8")).decode("ascii")}]},
+            "message": "the landing seed, text only",
+            "client": "lane",
+        })
+        check(
+            f"t-{landing_task}'s landing seed commits at revision 1 (text only)",
+            reply.get("revision") == 1,
+            str(reply)[:160],
+        )
+        perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": f"lanetracker/t-{landing_task}"})
+        perform_input(state.client, {"kind": "click", "target": "open:host"})
+        loaded_seed = inspect_bounded(
+            lambda i: i.get("resource", {}).get("status") == "loaded",
+            20.0,
+        )
+        check("the landing seed opens at revision 1", bool(
+            isinstance(loaded_seed, dict) and loaded_seed.get("resource", {}).get("status") == "loaded"
+        ))
+        reply = tracker_post(base, "/api/v1/boards/commit", {
+            "context": {"actor": "lane", "tier": "agent", "scope": None},
+            "task": landing_task,
+            "files": {"files": [
+                {"path": "board.yaml",
+                 "content": base64.b64encode(landing_r2.format(landing_task).encode("utf-8")).decode("ascii")},
+                {"path": "figures/landing.png", "content": landing_png},
+            ]},
+            "message": "the landing board, revised with the figure",
+            "client": "lane",
+        })
+        check(
+            f"t-{landing_task}'s figure commit lands at revision 2",
+            reply.get("revision") == 2,
+            str(reply)[:160],
+        )
+        perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": f"lanetracker/t-{landing_task}"})
+        perform_input(state.client, {"kind": "click", "target": "open:host"})
+        reopened = inspect_bounded(
+            lambda i: i.get("resource", {}).get("status") == "loaded"
+            and i.get("identity", {}).get("task") == f"t-{landing_task}"
+            and any(o.get("kind") == "figure" for o in i.get("renderOutcomes", [])),
+            20.0,
+        )
+        outcomes = reopened.get("renderOutcomes", []) if isinstance(reopened, dict) else []
+        missing = [o for o in outcomes if o.get("kind") == "figure" and o.get("status") == "missing"]
+        ok = [o for o in outcomes if o.get("kind") == "figure" and o.get("status") == "ok"]
+        check(
+            "a landed figure renders on re-open: no stale tree, no missing file",
+            missing == [] and len(ok) == 1,
+            str(outcomes)[:200],
+        )
+    except WebDriverError as error:
+        check("the landing-on-a-real-server pin runs", False, str(error)[:200])
     try:
         png = state.client.screenshot()
         (state.shots / "tracker-real-server.png").write_bytes(png)

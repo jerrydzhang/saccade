@@ -686,6 +686,54 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("tracker locations", phase_tracker)
 
+    # the straddle the human hit: a revision landing between the text
+    # fetch and the figure fetch of ONE open. The stand-in answers the
+    # new tree (caption, figure component, the file) to the first
+    # boards/get and the old tree (image embedded in text, no file)
+    # afterwards. One open must issue one boards/get and render
+    # caption and figure from that one tree
+    def phase_landing() -> None:
+        def open_landing(spec: str) -> dict:
+            page.fill('[data-control="open:host-path"]', spec)
+            page.click('[data-control="open:host"]')
+            page.wait_for_function(
+                f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
+            )
+            return page.evaluate(f"() => {viewer}.inspection()")
+
+        tracker = tracker_mock.TrackerMock("smoke", allowed_origins=[base_url])
+        tracker.start()
+        try:
+            # this phase serves its own mock: the header setting must
+            # point at it, not at the tracker phase's stopped one
+            page.fill('[data-control="server:host"]', f"127.0.0.1:{tracker.port}")
+            page.click('[data-control="server:save"]')
+            tracker.landing_gets = 0
+            inspection = open_landing("smoke/t-3")
+            page.wait_for_function(
+                f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'figure')"
+            )
+            inspection = page.evaluate(f"() => {viewer}.inspection()")
+            outcomes = inspection["renderOutcomes"]
+            missing = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "missing"]
+            ok = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "ok"]
+            check(
+                "a landing mid-open never reports a committed figure as missing",
+                missing == [],
+                str(outcomes)[:200],
+            )
+            check("the committed figure renders", len(ok) == 1, str(outcomes)[:200])
+            check(
+                "one open issues one boards/get",
+                tracker.landing_gets == 1,
+                f"landing boards/get count: {tracker.landing_gets}",
+            )
+            screenshot_at(".figure-frame", "landing-figure.png")
+        finally:
+            tracker.stop()
+
+    phase("landing straddle", phase_landing)
+
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 
 

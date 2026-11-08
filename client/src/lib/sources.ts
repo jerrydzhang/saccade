@@ -216,11 +216,23 @@ export class RemoteSource implements BoardSource {
   }
 }
 
+// One tracker source per machine: its tree cache must live across the
+// text and figure loads of one open, so one open issues one boards/get
+// and text and figures read one tree.
+const trackerSources = new Map<Machine, TrackerSource>();
+
 export function sourceFor(machine: Machine): BoardSource {
   if (machine === "fixture") return new FixtureSource();
   if (machine === "host") return new HostFileSource();
   // A tracker-named board rides that tracker's own HTTP API.
-  if (machine.startsWith("tracker:")) return new TrackerSource(machine.slice("tracker:".length));
+  if (machine.startsWith("tracker:")) {
+    let source = trackerSources.get(machine);
+    if (source === undefined) {
+      source = new TrackerSource(machine.slice("tracker:".length));
+      trackerSources.set(machine, source);
+    }
+    return source;
+  }
   // Runtime callers can pass unknown machines despite the static type.
   // An empty name is a refusal; anything else is a core machine name.
   if (machine.length === 0) {
