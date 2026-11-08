@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { decodeBoard, MAX_NESTING_DEPTH, SUPPORTED_GRAMMAR_VERSIONS } from "../src/lib/board/decode.ts";
 
-const VALID_REVISION = "647de6e6d2b90c507bf2d05dacc32740558e0bfc";
+const VALID_REVISION = 1;
 
 function validBoard(...content: string[]): string {
   return ["grammar: 1", "task: t-0", "content:", ...content].join("\n");
@@ -177,8 +177,8 @@ test("an incorporation missing source or content is a structured error", () => {
   assert.ok(codes.includes("missing-key"));
 });
 
-test("a source revision must be the full lowercase hex commit", () => {
-  for (const revision of ["647de6e", VALID_REVISION.toUpperCase(), "z" + VALID_REVISION.slice(1)]) {
+test("a source revision must be the dense revision number", () => {
+  for (const revision of ["r3", 0, -2, 1.5, '"1"']) {
     const text = validBoard(
       "  - incorporation:",
       "      source:",

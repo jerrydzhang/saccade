@@ -59,6 +59,9 @@ pub enum BoardsFail {
     WorkingBoard { path: PathBuf, detail: String },
     /// An incorporation names a source task the fold does not hold.
     UnknownSourceTask { name: String },
+    /// An incorporation names a revision number its source task never
+    /// published.
+    UnknownSourceRevision { name: String, revision: usize },
     /// The board's task field does not name the committing task.
     TaskMismatch {
         board_task: String,
@@ -86,6 +89,7 @@ impl BoardsFail {
             BoardsFail::BadBase { .. } => "boards_base_unreadable",
             BoardsFail::InvalidKey { .. } => "boards_invalid_key",
             BoardsFail::UnknownSourceTask { .. } => "boards_unknown_source_task",
+            BoardsFail::UnknownSourceRevision { .. } => "boards_unknown_source_revision",
             BoardsFail::TaskMismatch { .. } => "boards_task_mismatch",
             BoardsFail::Record(_) => "boards_record_refused",
             BoardsFail::UnsavedCheckpoints { .. } => "boards_unsaved_checkpoints",
@@ -133,6 +137,9 @@ impl BoardsFail {
             BoardsFail::UnknownSourceTask { name } => format!(
                 "the incorporation cites '{name}', which no task in this tracker bears; incorporations cite tasks as t-N, and the task must exist"
             ),
+            BoardsFail::UnknownSourceRevision { name, revision } => format!(
+                "the incorporation cites {name} revision r{revision}, which that task never published; cite one of its published revisions by number"
+            ),
             BoardsFail::TaskMismatch {
                 board_task,
                 expected,
@@ -164,7 +171,7 @@ pub struct Boards {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Committed {
     pub commit: String,
-    pub incorporations: Vec<(String, String)>,
+    pub incorporations: Vec<(String, usize)>,
 }
 
 /// What a working-directory update did: whether board.yaml merged with
@@ -504,6 +511,28 @@ impl Boards {
             .tasks
             .get(task.0)
             .and_then(|ctx| ctx.commits.last().map(|c| c.commit.clone()));
+        // citations arrive as (t-N, K): the door resolves K to that
+        // task's recorded commit, and an unknown K refuses before the
+        // record is attempted
+        let mut resolved = Vec::with_capacity(declared.len());
+        for (name, revision, selects) in &declared {
+            let position = name
+                .strip_prefix("t-")
+                .and_then(|digits| digits.parse::<usize>().ok())
+                .filter(|n| world.tasks.get(*n).is_some())
+                .ok_or_else(|| BoardsFail::UnknownSourceTask { name: name.clone() })?;
+            let source = FoldTaskId(position);
+            let cited = world
+                .tasks
+                .get(position)
+                .and_then(|ctx| ctx.commits.get(revision.checked_sub(1)?))
+                .map(|c| c.commit.clone())
+                .ok_or_else(|| BoardsFail::UnknownSourceRevision {
+                    name: name.clone(),
+                    revision: *revision,
+                })?;
+            resolved.push((source, cited, selects));
+        }
         let landed = self.commit(
             ref_key,
             workdir,
@@ -511,27 +540,29 @@ impl Boards {
             message,
         )?;
         // selector verification against each cited revision
-        for (name, revision, selects) in &declared {
-            let source_board = match self.read_board_at(revision) {
+        for (source, cited, selects) in resolved.iter() {
+            let name = format!("t-{}", source.0);
+            let cited_str = cited.as_str();
+            let source_board = match self.read_board_at(cited_str) {
                 Ok(board) => board,
                 Err(error) => {
                     return Err(BoardsFail::BoardInvalid(selector_refusal(
-                        name,
-                        revision,
+                        &name,
+                        cited_str,
                         "",
                         &ParseError {
                             kind: ErrorKind::NoReceivingText,
-                            at: GrammarWhere::Path(revision.to_string()),
+                            at: GrammarWhere::Path(cited_str.to_string()),
                             message: error.detail(),
                         },
                     )));
                 }
             };
-            for select in selects {
+            for select in selects.iter() {
                 if let Err(error) = board_grammar::select(&source_board, select) {
                     return Err(BoardsFail::BoardInvalid(selector_refusal(
-                        name,
-                        revision,
+                        &name,
+                        cited_str,
                         &select.to_string(),
                         &ParseError {
                             kind: ErrorKind::BadSelectPath,
@@ -542,21 +573,14 @@ impl Boards {
                 }
             }
         }
-        // source tasks arrive as t-N and resolve to fold tasks; an
-        // unknown t-N refuses before the record is attempted
-        let mut pairs = Vec::with_capacity(declared.len());
-        for (name, revision, _) in &declared {
-            let position = name
-                .strip_prefix("t-")
-                .and_then(|digits| digits.parse::<usize>().ok())
-                .filter(|n| world.tasks.get(*n).is_some())
-                .ok_or_else(|| BoardsFail::UnknownSourceTask { name: name.clone() })?;
-            let source = FoldTaskId(position);
+        let mut pairs = Vec::with_capacity(resolved.len());
+        for (source, cited, _) in resolved.iter() {
+            let cited_str = cited.as_str();
             let cited =
-                crate::types::pointers::GitCommit::new(revision.clone()).map_err(|error| {
-                    BoardsFail::Git(format!("the cited revision {revision}: {error:?}"))
+                crate::types::pointers::GitCommit::new(cited_str.to_string()).map_err(|error| {
+                    BoardsFail::Git(format!("the cited revision {cited_str}: {error:?}"))
                 })?;
-            pairs.push((source, cited));
+            pairs.push((*source, cited));
         }
         let commit = crate::types::pointers::GitCommit::new(landed.commit.clone())
             .map_err(|error| BoardsFail::Git(format!("the landed commit: {error:?}")))?;
@@ -918,16 +942,12 @@ fn figures_in(board_text: &str) -> std::collections::BTreeSet<String> {
 }
 
 /// Every incorporation's citation from a parsed board: the source
-/// task's name, the pinned revision, and the selectors it takes.
-fn incorporation_sources(board: &Board) -> Vec<(String, String, Vec<SelectPath>)> {
+/// task's name, the pinned revision number, and the selectors it takes.
+fn incorporation_sources(board: &Board) -> Vec<(String, usize, Vec<SelectPath>)> {
     let mut found = Vec::new();
     walk_board(&board.content, &mut |component| {
         if let Component::Incorporation { source, .. } = component {
-            found.push((
-                source.task.clone(),
-                source.revision.clone(),
-                source.select.clone(),
-            ));
+            found.push((source.task.clone(), source.revision, source.select.clone()));
         }
     });
     found
@@ -1098,7 +1118,7 @@ content:
   - incorporation:
       source:
         task: t-1
-        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        revision: 1
         select: [/content/1]
       content:
         - text: |
@@ -1107,7 +1127,7 @@ content:
   - incorporation:
       source:
         task: ledger-notes
-        revision: 4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f
+        revision: 1
         select: [/content/0]
       content:
         - text: |
@@ -1264,16 +1284,7 @@ content:
         );
         assert_eq!(
             landed.incorporations,
-            vec![
-                (
-                    "t-1".to_string(),
-                    "647de6e6d2b90c507bf2d05dacc32740558e0bfc".to_string()
-                ),
-                (
-                    "ledger-notes".to_string(),
-                    "4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f".to_string()
-                ),
-            ]
+            vec![("t-1".to_string(), 1), ("ledger-notes".to_string(), 1)]
         );
         assert!(store.commit_exists(&landed.commit));
         assert_eq!(
@@ -1913,7 +1924,7 @@ content:
   - incorporation:
       source:
         task: t-9
-        revision: {source_commit}
+        revision: 1
         select: [/content/0]
       content:
         - text: |

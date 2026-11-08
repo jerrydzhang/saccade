@@ -89,7 +89,6 @@ function decodeBase64(content: string): Uint8Array {
  * revision and both the board text and its figures read from it. */
 export class TrackerSource implements BoardSource {
   private trees = new Map<string, Promise<TreeReply>>();
-  private citations = new Map<string, Promise<{ label: string; path: string } | null>>();
 
   readonly tracker: string;
 
@@ -178,28 +177,4 @@ export class TrackerSource implements BoardSource {
     return { bytes: decodeBase64(file.content), path: relative };
   }
 
-  /** The dense revision a citation's commit occupies in its source
-   * task's history, resolved once per (task, commit): "t-N@rK", or
-   * null when the server cannot map it - the caller falls back to the
-   * task and hash, never guesses a number. */
-  async citationLabel(task: string, commit: string): Promise<{ label: string; path: string } | null> {
-    const key = `${task}@${commit}`;
-    const cached = this.citations.get(key);
-    if (cached) return cached;
-    const load = (async () => {
-      await this.checkContract();
-      const base = serverBase();
-      const history = (await fetchJson(`${base}/api/v1/boards/log?task=${task.slice(2)}`)) as {
-        history?: Array<{ event?: string; commit?: string | null; revision?: number | null }>;
-      };
-      const hit = (history.history ?? []).find(
-        (entry) => entry.event === "task_committed" && entry.commit === commit && entry.revision != null,
-      );
-      if (!hit) return null;
-      const path = `${task}@r${hit.revision}`;
-      return { label: path, path };
-    })();
-    this.citations.set(key, load);
-    return load;
-  }
 }

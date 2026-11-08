@@ -22,12 +22,16 @@ fn converted_exercise_boards_keep_their_declared_references() {
     let before = common::parse_fixture("valid/board-before.yaml");
     let annotated = common::parse_fixture("valid/board-annotated.yaml");
     let after = common::parse_fixture("valid/board-after.yaml");
-    for board in [&before, &annotated, &after] {
+    for board in [&before, &annotated] {
         assert_eq!(board.task, "t-2");
         for (task, revision) in board_grammar::incorporations(board) {
             assert_eq!(task, "t-1");
-            assert_eq!(revision, "647de6e6d2b90c507bf2d05dacc32740558e0bfc");
+            assert_eq!(revision, 1);
         }
+    }
+    for (task, revision) in board_grammar::incorporations(&after) {
+        assert_eq!(task, "t-1");
+        assert_eq!(revision, 2);
     }
     assert_eq!(before.content.len(), 5);
     assert_eq!(annotated.content.len(), 6);
@@ -54,8 +58,7 @@ fn every_invalid_fixture_refuses_with_its_declared_kind() {
             "incorporation-no-text" => ErrorKind::NoReceivingText,
             "incorporation-empty-content" => ErrorKind::NoReceivingText,
             "incorporation-no-own-text" => ErrorKind::NoReceivingText,
-            "revision-short" => ErrorKind::BadRevision,
-            "revision-not-hex" => ErrorKind::BadRevision,
+            "revision-not-number" => ErrorKind::BadRevision,
             "figure-absolute" => ErrorKind::BadFigurePath,
             "figure-parent" => ErrorKind::BadFigurePath,
             "select-empty" => ErrorKind::EmptySelect,
@@ -101,7 +104,7 @@ content:
   - incorporation:
       source:
         task: t-1
-        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        revision: 1
         select: [/content/0]
       content: []
 "#,
@@ -134,18 +137,16 @@ content:
   - incorporation:
       source:
         task: t-1
-        revision: 647de6e
+        revision: r3
         select: [/content/0]
       content:
         - text: |
             The receiving text.
 "#,
     )
-    .expect_err("the short revision is refused");
+    .expect_err("a revision that is not a number is refused");
     assert!(
-        revision
-            .message
-            .contains("full 40-character lowercase hex commit"),
+        revision.message.contains("dense number as an integer"),
         "{}",
         revision.message
     );
@@ -227,7 +228,7 @@ content:
   - incorporation:
       source:
         task: t-1
-        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        revision: 1
         select: [/content/0]
       content:
         - text: "   "
@@ -256,7 +257,7 @@ content:
   - incorporation:
       source:
         task: t-1
-        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        revision: 1
         select: [/content/0]
       content:
         - group:
@@ -368,7 +369,7 @@ fn all_kinds_fixture_shapes_match_the_model() {
     );
     let expected_source = Source {
         task: "t-3".into(),
-        revision: "4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f".into(),
+        revision: 1,
         select: vec![
             board_grammar::SelectPath::parse("/content/1").expect("the path parses"),
             board_grammar::SelectPath::parse("/content/2/group/content/0")

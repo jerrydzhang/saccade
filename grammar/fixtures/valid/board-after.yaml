@@ -12,7 +12,7 @@ content:
   - incorporation:
       source:
         task: t-1
-        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        revision: 2
         select: [/content/1]
       content:
         - text: |

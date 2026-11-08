@@ -4,7 +4,7 @@ content:
   - incorporation:
       source:
         task: t-1
-        revision: 647de6e
+        revision: r3
         select: [/content/1]
       content:
         - text: |

@@ -764,7 +764,7 @@ function decodeIncorporation(
   }
   const incorporation: IncorporationBlock = {
     kind: "incorporation",
-    source: { task: "", revision: "", select: [] },
+    source: { task: "", revision: 0, select: [] },
     content: [],
     pos: range ?? zeroRange(),
   };
@@ -865,7 +865,7 @@ function decodeSource(
   body: unknown,
   at: string,
   path: (string | number)[],
-  source: { task: string; revision: string; select: string[] },
+  source: { task: string; revision: number; select: string[] },
   errors: StructuredIssue[],
 ): void {
   if (!isMap(body)) {
@@ -882,21 +882,42 @@ function decodeSource(
     return;
   }
   let task: string | null = null;
-  let revision: string | null = null;
+  let revision: number | null = null;
   let select: ParsedNode[] | null = null;
   const unknown: string[] = [];
   for (const pair of (body as { items: Pair[] }).items) {
     const key = scalarKey(pair.key);
-    if (key === "task" || key === "revision") {
+    if (key === "task") {
       if (isScalar(pair.value) && typeof pair.value.value === "string") {
-        if (key === "task") task = pair.value.value;
-        else revision = pair.value.value;
+        task = pair.value.value;
       } else {
         errors.push(
           issueAt(
             {
               code: "wrong-type",
-              message: `the source '${key}' at ${at} is ${key === "task" ? "the source task's name as text" : "the commit hash as text"}; found ${describe(pair.value)}`,
+              message: `the source 'task' at ${at} is the source task's name as text; found ${describe(pair.value)}`,
+              path: [...path, key],
+            },
+            rangeOf(text, pair.value),
+          ),
+        );
+      }
+    } else if (key === "revision") {
+      // the authored form names the revision by its dense number; the
+      // commit door resolves it
+      if (
+        isScalar(pair.value) &&
+        typeof pair.value.value === "number" &&
+        Number.isInteger(pair.value.value) &&
+        pair.value.value >= 1
+      ) {
+        revision = pair.value.value;
+      } else {
+        errors.push(
+          issueAt(
+            {
+              code: "bad-revision",
+              message: `the incorporation source at ${at} pins the revision by number; write the source revision's dense number as an integer, like revision: 3`,
               path: [...path, key],
             },
             rangeOf(text, pair.value),
@@ -950,18 +971,7 @@ function decodeSource(
   if (revision === null) {
     errors.push(
       issueAt(
-        { code: "missing-key", message: `the incorporation source at ${at} pins no revision; add 'revision: <full commit hash>'`, path },
-        rangeOf(text, body),
-      ),
-    );
-  } else if (!isFullRevision(revision)) {
-    errors.push(
-      issueAt(
-        {
-          code: "bad-revision",
-          message: `the incorporation at ${at} cites revision '${revision}'; cite the full 40-character lowercase hex commit of the source revision, as 'git rev-parse' prints it`,
-          path: [...path, "revision"],
-        },
+        { code: "missing-key", message: `the incorporation source at ${at} pins no revision; add 'revision: <revision number>'`, path },
         rangeOf(text, body),
       ),
     );
@@ -1013,10 +1023,6 @@ function decodeSource(
       source.select.push(written);
     }
   });
-}
-
-function isFullRevision(revision: string): boolean {
-  return revision.length === 40 && /^[0-9a-f]{40}$/.test(revision);
 }
 
 // The select path language, mirroring the crate's SelectPath::parse: a

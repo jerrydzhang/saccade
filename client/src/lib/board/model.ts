@@ -46,7 +46,7 @@ export type IncorporationBlock = {
  */
 export type IncorporationSource = {
   task: string;
-  revision: string;
+  revision: number;
   select: string[];
 };
 

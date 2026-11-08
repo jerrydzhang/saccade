@@ -3004,6 +3004,7 @@ fn boards_status(fail: &crate::boards::BoardsFail) -> StatusCode {
         | BoardsFail::BadBase { .. }
         | BoardsFail::InvalidKey { .. }
         | BoardsFail::UnknownSourceTask { .. }
+        | BoardsFail::UnknownSourceRevision { .. }
         | BoardsFail::TaskMismatch { .. }
         | BoardsFail::WorkingBoard { .. } => StatusCode::BAD_REQUEST,
         BoardsFail::MissingCommit { .. }

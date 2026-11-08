@@ -54,10 +54,9 @@ export async function hydrate(
   return collected;
 }
 
-/** The incorporation citations: on the tracker lane the dense revision
- * resolves through the tracker's own history and the citation becomes a
- * link to that revision; anywhere else the authored claim and the hash
- * stay as rendered - a provenance fact, never a guessed number. */
+/** The incorporation citations carry their revision number in the
+ * authored form, so the tracker lane reads t-N@rK directly and the
+ * citation becomes a link to that revision. */
 async function hydrateCitations(
   container: HTMLElement,
   model: ViewerModel,
@@ -66,30 +65,28 @@ async function hydrateCitations(
   if (!location.machine.startsWith("tracker:")) return;
   const source = sourceFor(location.machine);
   if (!(source instanceof TrackerSource)) return;
-  const spans = Array.from(container.querySelectorAll<HTMLElement>(".citation[data-cite-task]"));
+  const spans = Array.from(
+    container.querySelectorAll<HTMLElement>(".citation[data-cite-task][data-cite-revision]"),
+  );
   for (const span of spans) {
     const task = span.dataset.citeTask ?? "";
-    const commit = span.dataset.citeCommit ?? "";
-    const resolved = await source.citationLabel(task, commit).catch(() => null);
-    if (resolved) {
-      const link = el(
-        "a",
-        {
-          class: "citation-link",
-          href: "#",
-          "data-control": "board:open-citation",
-          "data-open-path": resolved.path,
-        },
-        resolved.label,
-      );
-      link.addEventListener("click", (event) => {
-        event.preventDefault();
-        void model.open({ machine: location.machine, path: resolved.path });
-      });
-      span.replaceChildren(link);
-    } else {
-      span.append(el("span", { class: "citation-unresolved" }, ` (${commit.slice(0, 8)})`));
-    }
+    const revision = span.dataset.citeRevision ?? "";
+    const path = `${task}@r${revision}`;
+    const link = el(
+      "a",
+      {
+        class: "citation-link",
+        href: "#",
+        "data-control": "board:open-citation",
+        "data-open-path": path,
+      },
+      path,
+    );
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      void model.open({ machine: location.machine, path });
+    });
+    span.replaceChildren(link);
   }
 }
 

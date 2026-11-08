@@ -65,18 +65,18 @@ impl Component {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
     pub task: String,
-    /// The full 40-character lowercase hex commit of the pinned revision.
-    pub revision: String,
+    /// The source revision's dense number, 1-based.
+    pub revision: usize,
     pub select: Vec<SelectPath>,
 }
 
-/// The declared incorporation references, as (source task, source revision)
-/// pairs in document order, nested components included.
-pub fn incorporations(board: &Board) -> Vec<(String, String)> {
+/// The declared incorporation references, as (source task, source
+/// revision number) pairs in document order, nested components included.
+pub fn incorporations(board: &Board) -> Vec<(String, usize)> {
     let mut found = Vec::new();
     walk(&board.content, &mut |component| {
         if let Component::Incorporation { source, .. } = component {
-            found.push((source.task.clone(), source.revision.clone()));
+            found.push((source.task.clone(), source.revision));
         }
     });
     found

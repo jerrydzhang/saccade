@@ -660,15 +660,18 @@ fn build_source(value: &Yaml, path: &str) -> Result<Source, ParseError> {
         kind: ErrorKind::MissingField,
         at: Where::Path(path.into()),
         message: format!(
-            "the incorporation source at {path} pins no revision; add 'revision: <full commit hash>'"
+            "the incorporation source at {path} pins no revision; add 'revision: <revision number>'"
         ),
     })?;
-    let revision = plain_string(
-        revision,
-        Where::Path(path.into()),
-        &format!("the source 'revision' at {path} is the commit hash as text"),
-    )?;
-    check_revision(&revision, path)?;
+    // the authored form names the revision by its dense number; the
+    // commit door resolves it, so no hash ever rides the board text
+    let revision = revision.as_i64().filter(|k| *k >= 1).map(|k| k as usize).ok_or_else(|| ParseError {
+        kind: ErrorKind::BadRevision,
+        at: Where::Path(path.into()),
+        message: format!(
+            "the incorporation source at {path} pins the revision by number; write the source revision's dense number as an integer, like revision: 3"
+        ),
+    })?;
     let select = select.ok_or_else(|| ParseError {
         kind: ErrorKind::MissingField,
         at: Where::Path(path.into()),
@@ -711,23 +714,6 @@ fn build_source(value: &Yaml, path: &str) -> Result<Source, ParseError> {
         task,
         revision,
         select: paths,
-    })
-}
-
-fn check_revision(revision: &str, path: &str) -> Result<(), ParseError> {
-    let full = revision.len() == 40
-        && revision
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
-    if full {
-        return Ok(());
-    }
-    Err(ParseError {
-        kind: ErrorKind::BadRevision,
-        at: Where::Path(path.into()),
-        message: format!(
-            "the incorporation at {path} cites revision '{revision}'; cite the full 40-character lowercase hex commit of the source revision, as 'git rev-parse' prints it"
-        ),
     })
 }
 

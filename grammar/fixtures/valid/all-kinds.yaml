@@ -21,7 +21,7 @@ content:
         - incorporation:
             source:
               task: t-3
-              revision: 4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f
+              revision: 1
               select: [/content/1, /content/2/group/content/0]
             content:
               - text: |

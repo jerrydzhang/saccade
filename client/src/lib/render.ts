@@ -104,10 +104,9 @@ export function renderBlock(block: Block, blockId: string, hooks: RenderHooks): 
     case "incorporation": {
       const div = el("div", { class: "block block-incorporation", "data-block-id": blockId });
       const select = block.source.select ? ` select ${block.source.select.join("/")}` : "";
-      // The citation names its source as t-N; hydration resolves the
-      // dense revision through the tracker and turns it into a link to
-      // that revision. Off the tracker lane the authored claim and the
-      // hash stand unlinked - a provenance fact, never a guess.
+      // The citation names its source as t-N@rK, the revision read
+      // straight from the authored number; hydration turns it into a
+      // link to that revision.
       div.append(
         el(
           "p",
@@ -118,11 +117,11 @@ export function renderBlock(block: Block, blockId: string, hooks: RenderHooks): 
             {
               class: "citation",
               "data-cite-task": block.source.task,
-              "data-cite-commit": block.source.revision,
+              "data-cite-revision": String(block.source.revision),
             },
             block.source.task,
           ),
-          el("span", { class: "provenance-hash" }, ` (revision ${block.source.revision})`),
+          el("span", { class: "provenance-hash" }, ` @r${block.source.revision}`),
           ...(select ? [el("span", {}, select)] : []),
         ),
       );

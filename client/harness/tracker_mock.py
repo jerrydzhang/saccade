@@ -11,8 +11,8 @@ server side by the cargo api tests; here the viewer's behavior is the
 thing under test.
 
 Boards (the per-version fixtures):
-  t-0  supported grammar 1, incorporating t-1's revision (the citation
-       the viewer resolves and links)
+  t-0  supported grammar 1, incorporating t-1's revision by number
+       (the citation the viewer labels and links)
   t-1  grammar 1 carrying an unknown component kind (lenient render)
   t-2  grammar 2 (the unsupported major: refuses)
 """
@@ -25,7 +25,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SOURCE_COMMIT = "a" * 40
-CITED_HASH = "b" * 40
+CITED_REVISION = 1
 
 T0 = f"""grammar: 1
 task: t-0
@@ -34,7 +34,7 @@ content:
   - incorporation:
       source:
         task: t-1
-        revision: {CITED_HASH}
+        revision: {CITED_REVISION}
         select: [/content/0]
       content:
         - text: the receiving text for the cited source
@@ -54,7 +54,7 @@ content: []
 HISTORY_T1 = {
     "history": [
         {"seq": 4, "event": "task_committed", "actor": "smoke", "tier": "agent",
-         "at": 1, "revision": 1, "commit": CITED_HASH, "message": "the cited account",
+         "at": 1, "revision": 1, "commit": SOURCE_COMMIT, "message": "the cited account",
          "grounds": None, "explanation": None},
     ]
 }

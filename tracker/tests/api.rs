@@ -1583,17 +1583,33 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
         "first account",
     ]);
     assert_eq!(reply["revision"], json!(1));
-    let r1 = reply["commit"].as_str().unwrap().to_string();
 
-    // the consumer incorporates the source's r1
+    // the consumer incorporates the source's r1 by number; an unknown
+    // number refuses with the teaching line
     let con = project.join("con-dir");
     let (ok, out, _) = sac(&["board", "edit", &consumer, con.to_str().unwrap()]);
     assert!(ok, "{out}");
     std::fs::write(
         con.join("board.yaml"),
-        format!(
-            "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: {r1}\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
-        ),
+        "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: 9\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n",
+    )
+    .unwrap();
+    let (ok, _, err) = sac(&[
+        "board",
+        "commit",
+        &consumer,
+        con.to_str().unwrap(),
+        "-m",
+        "cites a revision the source never published",
+    ]);
+    assert!(!ok, "the unknown revision refuses");
+    assert!(
+        err.contains("boards_unknown_source_revision") && err.contains("r9"),
+        "{err}"
+    );
+    std::fs::write(
+        con.join("board.yaml"),
+        "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: 1\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n",
     )
     .unwrap();
     let reply = sac_json(&[
@@ -1671,7 +1687,6 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
         "annotate the boundary",
     ]);
     assert_eq!(reply["revision"], json!(2));
-    let r2 = reply["commit"].as_str().unwrap().to_string();
     let (ok, _, _) = sac(&["offer", &source]);
     assert!(ok);
     let waited = waiter.wait_with_output().expect("the offer waiter returns");
@@ -1692,7 +1707,7 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     std::fs::write(
         con.join("board.yaml"),
         format!(
-            "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: {r2}\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
+            "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: 2\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
         ),
     )
     .unwrap();

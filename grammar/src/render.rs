@@ -43,7 +43,7 @@ fn write_item(out: &mut String, component: &Component, indent: &str) {
             let _ = writeln!(out, "{field}source:");
             let inner = format!("{field}  ");
             let _ = writeln!(out, "{inner}task: {}", inline(&source.task));
-            let _ = writeln!(out, "{inner}revision: {}", inline(&source.revision));
+            let _ = writeln!(out, "{inner}revision: {}", source.revision);
             let paths: Vec<String> = source.select.iter().map(SelectPath::to_string).collect();
             let _ = writeln!(out, "{inner}select: [{}]", paths.join(", "));
             let _ = writeln!(out, "{field}content:");

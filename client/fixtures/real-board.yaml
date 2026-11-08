@@ -26,13 +26,13 @@ content:
   - incorporation:
       source:
         task: t-17
-        revision: a015b6e7c8d940f2a1b2c3d4e5f60718293a4b5c
+        revision: 1
         select: [/content/0]
       content:
         - text: |
             The paragraph above restates two axioms in ordinary language.
             The claim shown here is exactly what the declaration says: a
-            task name, a revision hash, and a select path. The viewer
+            task name, a revision number, and a select path. The viewer
             renders that claim; it validates nothing. Provenance is
             displayed honestly or not at all.
   - group:
@@ -70,7 +70,7 @@ content:
   - annotation: |
       Review note authored with the board: the incorporation claim above
       is a demo of honest provenance display, not an acceptance
-      statement. The revision hash is a placeholder for this draft.
+      statement. The revision number is a placeholder for this draft.
   - text: |
       ## Open decisions carried by the record
 

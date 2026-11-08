@@ -73,10 +73,11 @@ optional `title` (text). No other fields; layout hints do not exist here.
 `incorporation` is a mapping with required `source` and `content`.
 
 - `source` is a mapping with exactly `task`, `revision`, and `select`.
-  `task` names the source task as `t-N`. `revision` is the full
-  40-character lowercase hex commit hash of the pinned source revision.
-  `select` is a non-empty list of select paths (below) naming whole
-  components in that revision.
+  `task` names the source task as `t-N`. `revision` is the source
+  revision's dense number, written as an integer (`revision: 3`); the
+  committing door resolves it to the recorded commit, so no hash ever
+  rides the board text. `select` is a non-empty list of select paths
+  (below) naming whole components in that revision.
 - `content` is a list of components and must include at least one `text`
   component with non-blank text, at any depth through groups: the receiving
   text that says what is taken from the source. Text inside a nested
@@ -117,7 +118,7 @@ slash and carry no empty steps.
 - a grammar version outside `SUPPORTED_GRAMMAR_VERSIONS`, or a `grammar`
   value that is not an integer
 - an incorporation whose content carries no non-blank `text` component
-- a `revision` that is not the full 40-character lowercase hex commit hash
+- a `revision` that is not a positive integer (the dense revision number)
 - a figure `input` that is absolute or contains a `..` segment
 - an empty `select` list, or a select path that does not match the language above
 - content nesting deeper than `MAX_NESTING_DEPTH` (100 levels)

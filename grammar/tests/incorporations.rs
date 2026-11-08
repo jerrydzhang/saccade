@@ -5,26 +5,11 @@ use board_grammar::incorporations;
 #[test]
 fn the_pairs_come_back_in_document_order_with_nesting() {
     let board = common::parse_fixture("valid/all-kinds.yaml");
-    assert_eq!(
-        incorporations(&board),
-        vec![(
-            "t-3".to_string(),
-            "4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f".to_string()
-        )]
-    );
+    assert_eq!(incorporations(&board), vec![("t-3".to_string(), 1)]);
     let board = common::parse_fixture("valid/board-before.yaml");
     assert_eq!(
         incorporations(&board),
-        vec![
-            (
-                "t-1".to_string(),
-                "647de6e6d2b90c507bf2d05dacc32740558e0bfc".to_string()
-            ),
-            (
-                "t-1".to_string(),
-                "647de6e6d2b90c507bf2d05dacc32740558e0bfc".to_string()
-            ),
-        ]
+        vec![("t-1".to_string(), 1), ("t-1".to_string(), 1)]
     );
 }
 
@@ -43,13 +28,13 @@ content:
   - incorporation:
       source:
         task: outer-source
-        revision: 647de6e6d2b90c507bf2d05dacc32740558e0bfc
+        revision: 2
         select: [/content/0]
       content:
         - incorporation:
             source:
               task: inner-source
-              revision: 4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f
+              revision: 1
               select: [/content/1]
             content:
               - text: |
@@ -62,14 +47,8 @@ content:
     assert_eq!(
         incorporations(&board),
         vec![
-            (
-                "outer-source".to_string(),
-                "647de6e6d2b90c507bf2d05dacc32740558e0bfc".to_string()
-            ),
-            (
-                "inner-source".to_string(),
-                "4a1b8ef52c0d47e6a90b3f1d2c5a7e8b9c0d1e2f".to_string()
-            ),
+            ("outer-source".to_string(), 2),
+            ("inner-source".to_string(), 1)
         ]
     );
 }
