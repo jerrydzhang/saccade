@@ -75,7 +75,8 @@ async function fetchJson(url: string): Promise<unknown> {
 }
 
 type TreeFile = { path: string; content: string };
-type TreeReply = { files: TreeFile[]; commit: string; revision: number };
+// the server nests the list: {"files": {"files": [...]}, commit, revision}
+type TreeReply = { files: { files: TreeFile[] }; commit: string; revision: number };
 
 function decodeBase64(content: string): Uint8Array {
   const binary = atob(content);
@@ -144,7 +145,7 @@ export class TrackerSource implements BoardSource {
       const base = serverBase();
       const suffix = spec.revision === null ? "" : `&revision=${spec.revision}`;
       const reply = (await fetchJson(apiUrl(base, `/api/v1/boards/get?task=${spec.task}${suffix}`))) as TreeReply;
-      if (!Array.isArray(reply.files)) {
+      if (!Array.isArray(reply.files?.files)) {
         throw new SourceUnavailableError("core-protocol", "the boards/get answer carries no file list");
       }
       return reply;
@@ -155,7 +156,7 @@ export class TrackerSource implements BoardSource {
 
   async loadText(location: Location): Promise<LoadedText> {
     const tree = await this.tree(location);
-    const board = tree.files.find((file) => file.path === "board.yaml");
+    const board = tree.files.files.find((file) => file.path === "board.yaml");
     if (!board) {
       throw new SourceUnavailableError("asset-missing", `t-${location.path} holds no board.yaml`);
     }
@@ -169,7 +170,7 @@ export class TrackerSource implements BoardSource {
     if (!resolved.ok) {
       throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
     }
-    const file = tree.files.find((entry) => entry.path === resolved.joined);
+    const file = tree.files.files.find((entry) => entry.path === resolved.joined);
     if (!file) {
       throw new SourceUnavailableError("asset-missing", `revision t-${location.path} holds no file '${relative}'`);
     }

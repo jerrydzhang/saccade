@@ -66,7 +66,7 @@ def b64(text: str) -> str:
 
 def tree(*texts: str) -> dict:
     return {
-        "files": [{"path": "board.yaml", "content": b64(text)} for text in texts],
+        "files": {"files": [{"path": "board.yaml", "content": b64(text)} for text in texts]},
         "commit": SOURCE_COMMIT,
         "revision": 1,
     }

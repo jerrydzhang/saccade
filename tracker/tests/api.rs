@@ -1815,6 +1815,26 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     let (ok, out, _) = sac(&["board", "get", "t-0", "--out", tree_out.to_str().unwrap()]);
     assert!(ok, "{out}");
     assert!(tree_out.join("board.yaml").exists(), "{out}");
+    // the boards/get wire the viewer reads: the file list nests under
+    // files.files, each entry a path and base64 content
+    let tree: Value = ureq::get(&format!("{url}/api/v1/boards/get?task=0"))
+        .call()
+        .unwrap()
+        .body_mut()
+        .read_to_string()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let listed = tree["files"]["files"]
+        .as_array()
+        .expect("the viewer reads files.files as a list");
+    assert!(
+        listed
+            .iter()
+            .any(|f| f["path"] == json!("board.yaml") && f["content"].is_string()),
+        "{tree}"
+    );
+    assert_eq!(tree["revision"], json!(2));
     let (ok, path, _) = sac(&["board", "path", &source]);
     assert!(ok, "{path}");
     assert!(Path::new(path.trim()).join("board.yaml").exists(), "{path}");
