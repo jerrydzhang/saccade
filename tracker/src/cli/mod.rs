@@ -264,6 +264,18 @@ enum Cmd {
         #[arg(value_enum)]
         kind: CompleteKind,
     },
+    /// The cutover import: carry workspaces, branches, saved sessions
+    /// and the root association from the pre-board log into a fresh
+    /// tracker. No tasks, comments or messages. The destination must
+    /// be fresh
+    ImportWorkspaces {
+        /// The pre-board database to read
+        #[arg(long)]
+        from: PathBuf,
+        /// The fresh tracker to write; it must hold no records
+        #[arg(long)]
+        into: PathBuf,
+    },
     /// Clone the log's prefix through a storage seq into a fresh
     /// tracker: the reproduction recipe's cursor half
     Clone {
@@ -568,6 +580,7 @@ fn verb_path(command: &Cmd) -> String {
         Cmd::Identity => "identity".into(),
         Cmd::Completions { .. } => "completions".into(),
         Cmd::Complete { .. } => "complete".into(),
+        Cmd::ImportWorkspaces { .. } => "import-workspaces".into(),
         Cmd::Clone { .. } => "clone".into(),
         Cmd::Skill { .. } => "skill".into(),
         Cmd::Wait { .. } => "wait".into(),
@@ -663,6 +676,7 @@ fn flag_names(command: &Cmd) -> Vec<String> {
         | Cmd::Messages { .. }
         | Cmd::Completions { .. }
         | Cmd::Clone { .. }
+        | Cmd::ImportWorkspaces { .. }
         | Cmd::Skill { .. }
         | Cmd::Complete { .. } => {}
         Cmd::Launch {
@@ -906,6 +920,11 @@ fn run(cli: &Cli) -> Result<String, Fail> {
     {
         return serve_door(cli, bind, port, allow_origin, allow_host);
     }
+    // the cutover import names both databases itself; it lands no
+    // record through any server
+    if let Cmd::ImportWorkspaces { from, into } = &cli.command {
+        return task::import_door(cli, from, into);
+    }
     let destination = resolve_destination(cli)?;
     let command = match &cli.command {
         Cmd::Create {
@@ -1074,6 +1093,9 @@ fn run(cli: &Cli) -> Result<String, Fail> {
             });
         }
         Cmd::Skill { .. } => unreachable!("the skill door dispatches before the db doors"),
+        Cmd::ImportWorkspaces { .. } => {
+            unreachable!("the import door dispatches before the destination resolves")
+        }
     };
 
     // Identity is required only where it is recorded: mutating commands.

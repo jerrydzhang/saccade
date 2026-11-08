@@ -1,5 +1,6 @@
 use super::*;
 use std::io::IsTerminal;
+use std::path::Path;
 
 pub(super) fn read_only(cli: &Cli, loadout: &db::Loadout) -> Result<String, Fail> {
     let cursor = loadout.rows.last().map(|r| r.seq);
@@ -40,6 +41,50 @@ pub(super) fn read_only(cli: &Cli, loadout: &db::Loadout) -> Result<String, Fail
         },
         _ => unreachable!("read_only reached from a mutating command"),
     }
+}
+
+/// The cutover import door: carry the workspace facts from the
+/// pre-board log into a fresh tracker, and teach the result.
+pub(super) fn import_door(cli: &Cli, from: &Path, into: &Path) -> Result<String, Fail> {
+    let carried = saccade::import::import_workspaces(from, into).map_err(|fail| Fail::Taught {
+        code: match &fail {
+            saccade::import::ImportFail::NotSaccade => "not_saccade",
+            saccade::import::ImportFail::NewerSchema(_) => "newer_schema",
+            saccade::import::ImportFail::NotFresh { .. } => "not_fresh",
+            saccade::import::ImportFail::UnmappedReference { .. } => "unmapped_reference",
+            saccade::import::ImportFail::FoldRefused { .. } => "import_refused",
+            saccade::import::ImportFail::Sqlite(_) | saccade::import::ImportFail::Db(_) => {
+                "database_error"
+            }
+            saccade::import::ImportFail::Json { .. }
+            | saccade::import::ImportFail::Actor { .. } => "import_unreadable",
+        },
+        text: fail.to_string(),
+    })?;
+    if cli.json {
+        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "workspaces": carried.workspaces,
+            "workspace_stages": carried.workspace_stages,
+            "saved_sessions": carried.saved_sessions,
+            "session_binds": carried.session_binds,
+            "root_association": carried.root_association,
+            "records": carried.records,
+            "into": into.display().to_string(),
+        }))
+        .expect("the import reply is plain data"));
+    }
+    let mut lines = vec![
+        format!("imported {} workspaces", carried.workspaces),
+        format!("{} workspace stages", carried.workspace_stages),
+        format!(
+            "{} saved sessions ({} binds)",
+            carried.saved_sessions, carried.session_binds
+        ),
+        format!("{} root association records", carried.root_association),
+        format!("{} records landed in {}", carried.records, into.display()),
+    ];
+    lines.push("next: open it with sac --db <into> list; the archive reads the old log".into());
+    Ok(lines.join("\n"))
 }
 
 pub(super) fn parse_task_id(token: &str) -> Result<TaskId, Fail> {

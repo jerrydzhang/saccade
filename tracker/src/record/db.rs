@@ -13,11 +13,10 @@ use crate::wire;
 /// file-header stamp identifying a Saccade database.
 const APPLICATION_ID: i32 = i32::from_be_bytes(*b"sacd");
 /// The schema this binary reads and writes.
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 /// The oldest schema the offline migration reads: Saccade 0.13.0's
 /// stamp. The chain runs every step in order - a later source schema
 /// enters at its own step.
-pub const MIGRATE_FROM_VERSION: i32 = 3;
 
 #[derive(Debug)]
 pub enum DbError {
@@ -56,9 +55,11 @@ impl std::fmt::Display for DbError {
             DbError::NewerSchema(v) => {
                 write!(f, "database schema v{v} is newer than this binary; upgrade")
             }
-            DbError::OlderSchema(v) => {
-                write!(f, "database schema v{v} predates this binary")
-            }
+            DbError::OlderSchema(v) => write!(
+                f,
+                "this log's schema v{v} predates sac {} (the board cutover); read it with the pinned archive - nix run .#sac-archive -- clone --at <seq> --out <path> - and carry workspaces over with sac import-workspaces --from <this database> --into <fresh tracker>",
+                env!("CARGO_PKG_VERSION")
+            ),
             DbError::Missing(path) => write!(
                 f,
                 "no saccade database at {}\nany mutating command creates one",

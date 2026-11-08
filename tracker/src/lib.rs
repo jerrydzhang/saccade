@@ -11,7 +11,7 @@ pub mod telemetry;
 pub use host::{
     attempts, harness, herdr, host_contract, launch, paths, pi_session, placement, workspace,
 };
-pub use record::{db, decide, events, objects, refusals, store, types, views};
+pub use record::{db, decide, events, import, objects, refusals, store, types, views};
 pub use serve::{api, client, wire};
 pub use views::Target;
 

@@ -100,6 +100,7 @@ function __saccade_verbs
     printf 'launch\tLaunch the composed native Pi in a workspace\n'
     printf 'workspace\tThe task-free workspace controller\n'
     printf 'identity\tReport this session declared identity and routing\n'
+    printf 'import-workspaces\tCarry workspaces from the pre-board log into a fresh tracker\n'
     printf 'clone\tClone the log prefix through a storage seq into a fresh tracker\n'
     printf 'skill\tDeploy this binary embedded skill, or verify the copy\n'
     printf 'wait\tBlock until a matching record lands on the target\n'

@@ -502,9 +502,42 @@
           inherit pkgs lib saccadePi devHerdrPin saccadeClaudeCode;
           root = ../.;
         };
+        # the pinned archive: main's 0.18.0 tip, the release the live
+        # tracker ran. The dev host's primary checkout carries the git
+        # object; the rev is the pin, the use is read-only.
+        sac-archive = import ./sac-archive.nix {
+          inherit pkgs lib;
+          archiveRev = "189894f54f4c747ad937493f34c5e526a76726b8";
+          archiveSrc =
+            builtins.fetchGit {
+              url = "/home/jerry/Projects/saccade";
+              rev = "189894f54f4c747ad937493f34c5e526a76726b8";
+              allRefs = true;
+            };
+        };
+        # the grammar crate as its own package
+        board-grammar = pkgs.rustPlatform.buildRustPackage {
+          pname = "board-grammar";
+          version = "0.1.0";
+          src = pkgs.lib.sourceByRegex ../. [
+            "^grammar$"
+            "^grammar/Cargo\\.toml$"
+            "^grammar/Cargo\\.lock$"
+            "^grammar/src$"
+            "^grammar/src/.*$"
+            "^grammar/fixtures$"
+            "^grammar/fixtures/.*$"
+          ];
+          cargoLock.lockFile = ../grammar/Cargo.lock;
+          meta.mainProgram = "board-grammar";
+        };
       in
         {
           sac = sac;
+
+          sac-archive = sac-archive;
+
+          board-grammar = board-grammar;
 
           saccade-pi = saccadePi;
 
