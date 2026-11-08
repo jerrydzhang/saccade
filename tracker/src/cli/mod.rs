@@ -264,10 +264,10 @@ enum Cmd {
         #[arg(value_enum)]
         kind: CompleteKind,
     },
-    /// The cutover import: carry workspaces, branches, saved sessions
-    /// and the root association from the pre-board log into a fresh
-    /// tracker. No tasks, comments or messages. The destination must
-    /// be fresh
+    /// The cutover import: carry workspaces, branches and the root
+    /// association from the pre-board log into a fresh tracker. No
+    /// tasks, comments, messages, incarnations or saved sessions. The
+    /// destination must be fresh
     ImportWorkspaces {
         /// The pre-board database to read
         #[arg(long)]

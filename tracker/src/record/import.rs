@@ -1,24 +1,22 @@
-//! The cutover's bounded import: carry the workspace facts, the saved
-//! native sessions, and the root destination association from the
-//! pre-board log into a fresh one. No tasks, no comments, no messages -
-//! those start fresh at the cutover. The old database is read raw and
-//! read-only: its schema stamp predates this binary on purpose, and the
-//! import is the one reader that means to.
+//! The cutover's bounded import: carry the workspace facts and the
+//! root destination association from the pre-board log into a fresh
+//! one. No tasks, no comments, no messages, no incarnations, no saved
+//! sessions - those start fresh at the cutover. The old database is
+//! read raw and read-only: its schema stamp predates this binary on
+//! purpose, and the import is the one reader that means to.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::Connection;
 use serde_json::Value;
 
-use crate::IncarnationId;
 use crate::db::DbError;
 use crate::db::RecordDraft;
 use crate::events::Event;
-use crate::harness::Harness;
 use crate::store::{RecordId, Tier};
 use crate::types::actor::ActorName;
-use crate::types::pointers::{GitBranch, GitCommit, NativeSessionId, SessionLocator, WorktreePath};
+use crate::types::pointers::{GitBranch, GitCommit, WorktreePath};
 
 /// The import's own refusal: counts, references, and stamps.
 #[derive(Debug)]
@@ -96,8 +94,6 @@ impl std::fmt::Display for ImportFail {
 pub struct Carried {
     pub workspaces: usize,
     pub workspace_stages: usize,
-    pub saved_sessions: usize,
-    pub session_binds: usize,
     pub root_association: usize,
     pub records: usize,
 }
@@ -196,32 +192,10 @@ pub fn import_workspaces(source: &Path, destination: &Path) -> Result<Carried, I
         }
     }
 
-    // the carried incarnations: those born with a saved session, plus
-    // those a bind names - resolved before the walk, since a bind can
-    // never precede its registration but the decision needs the whole
-    // log
-    let mut carried_incs: HashSet<usize> = HashSet::new();
-    for row in &rows {
-        match row.kind.as_str() {
-            "incarnation_registered" => {
-                if string_at(&row.payload, "saved_session").is_some() {
-                    carried_incs.insert(row.seq);
-                }
-            }
-            "saved_session_bound" => {
-                if let Some(incarnation) = row.payload.get("incarnation").and_then(|v| v.as_u64()) {
-                    carried_incs.insert(incarnation as usize);
-                }
-            }
-            _ => {}
-        }
-    }
-
     let mut drafts: Vec<RecordDraft> = Vec::new();
     // old birth seq -> new record seq (a fresh log numbers its first
-    // batch from zero), for the references stages and binds name
+    // batch from zero), for the references stages name
     let mut workspace_births: HashMap<usize, usize> = HashMap::new();
-    let mut incarnation_births: HashMap<usize, usize> = HashMap::new();
     let mut carried = Carried::default();
 
     for row in &rows {
@@ -302,86 +276,6 @@ pub fn import_workspaces(source: &Path, destination: &Path) -> Result<Carried, I
                 });
                 carried.workspace_stages += 1;
             }
-            "incarnation_registered" if carried_incs.contains(&row.seq) => {
-                let native_id = string_at(&row.payload, "native_id").ok_or(ImportFail::Json {
-                    seq: row.seq,
-                    detail: "no native id".into(),
-                })?;
-                let saved_session = string_at(&row.payload, "saved_session");
-                let adopted = row
-                    .payload
-                    .get("adopted")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                let harness = row
-                    .payload
-                    .get("harness")
-                    .and_then(|v| v.as_str())
-                    .map(|name| serde_json::from_str(&format!("\"{name}\"")).ok())
-                    .unwrap_or(Some(Harness::Pi))
-                    .unwrap_or(Harness::Pi);
-                let new_position = drafts.len();
-                drafts.push(RecordDraft {
-                    context,
-                    event: Event::IncarnationRegistered {
-                        native_id: NativeSessionId::new(native_id).map_err(|_| {
-                            ImportFail::Json {
-                                seq: row.seq,
-                                detail: "bad native id".into(),
-                            }
-                        })?,
-                        saved_session: saved_session
-                            .clone()
-                            .map(|path| SessionLocator::new(path.into()))
-                            .transpose()
-                            .map_err(|_| ImportFail::Json {
-                                seq: row.seq,
-                                detail: "bad saved session".into(),
-                            })?,
-                        address: None,
-                        adopted,
-                        harness,
-                    },
-                });
-                incarnation_births.insert(row.seq, new_position);
-                if saved_session.is_some() {
-                    carried.saved_sessions += 1;
-                }
-            }
-            "saved_session_bound" => {
-                let incarnation = row
-                    .payload
-                    .get("incarnation")
-                    .and_then(|v| v.as_u64())
-                    .ok_or(ImportFail::Json {
-                        seq: row.seq,
-                        detail: "no incarnation".into(),
-                    })? as usize;
-                let mapped = incarnation_births.get(&incarnation).copied().ok_or(
-                    ImportFail::UnmappedReference {
-                        kind: row.kind.clone(),
-                        reference: incarnation,
-                    },
-                )?;
-                let saved_session =
-                    string_at(&row.payload, "saved_session").ok_or(ImportFail::Json {
-                        seq: row.seq,
-                        detail: "no saved session".into(),
-                    })?;
-                drafts.push(RecordDraft {
-                    context,
-                    event: Event::SavedSessionBound {
-                        incarnation: IncarnationId(RecordId(mapped)),
-                        saved_session: SessionLocator::new(saved_session.into()).map_err(|_| {
-                            ImportFail::Json {
-                                seq: row.seq,
-                                detail: "bad saved session".into(),
-                            }
-                        })?,
-                    },
-                });
-                carried.session_binds += 1;
-            }
             "root_space_bound" => {
                 let space = string_at(&row.payload, "space").ok_or(ImportFail::Json {
                     seq: row.seq,
@@ -403,8 +297,9 @@ pub fn import_workspaces(source: &Path, destination: &Path) -> Result<Carried, I
                     event: Event::RootSpaceCleared {},
                 });
             }
-            // tasks, comments, messages, artifacts, checkpoints, use
-            // bindings, host addresses: the cutover starts them fresh
+            // tasks, comments, messages, incarnations, saved sessions,
+            // binds, artifacts, checkpoints, use bindings, host
+            // addresses: the cutover starts them fresh
             _ => {}
         }
     }
@@ -479,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cutover_import_carries_workspaces_sessions_and_the_root() {
+    fn the_cutover_import_carries_workspaces_and_the_root() {
         let dir = scratch("carry");
         let old = old_fixture(&dir.join("old.db"));
         put(
@@ -487,45 +382,20 @@ mod tests {
             0,
             "codex",
             "agent",
-            "incarnation_registered",
-            r#"{"native_id":"0188d5f4-9f61-7cc3-9e53-d5e6a2ad4b1c","saved_session":"/run/saccade-import-fixture/native-sessions/one.jsonl"}"#,
-        );
-        // sessionless at birth: the later bind is what carries this one
-        put(
-            &old,
-            1,
-            "ida person",
-            "human",
-            "incarnation_registered",
-            r#"{"native_id":"0192a7c1-4b0e-7dd1-9f11-c71d24b6a6e2"}"#,
-        );
-        put(
-            &old,
-            2,
-            "codex",
-            "agent",
-            "saved_session_bound",
-            r#"{"incarnation":1,"saved_session":"/run/saccade-import-fixture/native-sessions/two.jsonl"}"#,
-        );
-        put(
-            &old,
-            3,
-            "codex",
-            "agent",
             "workspace_created",
             r#"{"base":"6d7e0ef629c03cddfc65722b325634b83a825055","branch":"fix-message-behavior-a542d73c","worktree":"/run/saccade-import-fixture/worktrees/fix-message-behavior-a542d73c"}"#,
         );
         put(
             &old,
-            4,
+            1,
             "codex",
             "agent",
             "workspace_cleaned",
-            r#"{"workspace":3}"#,
+            r#"{"workspace":0}"#,
         );
         put(
             &old,
-            5,
+            2,
             "codex",
             "agent",
             "workspace_created",
@@ -533,7 +403,7 @@ mod tests {
         );
         put(
             &old,
-            6,
+            3,
             "ida person",
             "human",
             "root_space_bound",
@@ -547,10 +417,8 @@ mod tests {
             Carried {
                 workspaces: 2,
                 workspace_stages: 1,
-                saved_sessions: 1,
-                session_binds: 1,
                 root_association: 1,
-                records: 7,
+                records: 4,
             }
         );
 
@@ -560,9 +428,6 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                "incarnation_registered",
-                "incarnation_registered",
-                "saved_session_bound",
                 "workspace_created",
                 "workspace_cleaned",
                 "workspace_created",
@@ -570,18 +435,18 @@ mod tests {
             ]
         );
         // the carried contexts keep actor and tier from the old log
-        assert_eq!(loadout.rows[6].actor, "ida person");
-        assert_eq!(loadout.rows[6].tier, "human");
+        assert_eq!(loadout.rows[3].actor, "ida person");
+        assert_eq!(loadout.rows[3].tier, "human");
         // the fold reads the carried facts: the cleaned stage and the
         // human's root destination
         let (records, _) = crate::db::parse_rows(&loadout.rows).unwrap();
         let world = crate::store::World::replay(records).unwrap();
         assert_eq!(
-            world.workspace_stage(RecordId(3)),
+            world.workspace_stage(RecordId(0)),
             Some(crate::WorkspaceStage::Cleaned)
         );
         assert_eq!(
-            world.workspace_stage(RecordId(5)),
+            world.workspace_stage(RecordId(2)),
             Some(crate::WorkspaceStage::Available)
         );
         let root = world.root_space.unwrap();
@@ -591,7 +456,7 @@ mod tests {
         // a second import refuses: the destination holds records now
         let again = import_workspaces(&dir.join("old.db"), &dest).unwrap_err();
         assert!(
-            matches!(again, ImportFail::NotFresh { records: 7 }),
+            matches!(again, ImportFail::NotFresh { records: 4 }),
             "the non-empty destination refuses: {again:?}"
         );
     }

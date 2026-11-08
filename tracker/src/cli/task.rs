@@ -65,8 +65,6 @@ pub(super) fn import_door(cli: &Cli, from: &Path, into: &Path) -> Result<String,
         return Ok(serde_json::to_string_pretty(&serde_json::json!({
             "workspaces": carried.workspaces,
             "workspace_stages": carried.workspace_stages,
-            "saved_sessions": carried.saved_sessions,
-            "session_binds": carried.session_binds,
             "root_association": carried.root_association,
             "records": carried.records,
             "into": into.display().to_string(),
@@ -76,10 +74,6 @@ pub(super) fn import_door(cli: &Cli, from: &Path, into: &Path) -> Result<String,
     let mut lines = vec![
         format!("imported {} workspaces", carried.workspaces),
         format!("{} workspace stages", carried.workspace_stages),
-        format!(
-            "{} saved sessions ({} binds)",
-            carried.saved_sessions, carried.session_binds
-        ),
         format!("{} root association records", carried.root_association),
         format!("{} records landed in {}", carried.records, into.display()),
     ];
