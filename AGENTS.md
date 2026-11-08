@@ -59,6 +59,9 @@ do, and `tracker/README.md` carries the tracker's law.
 - `just fmt`, `just lint`, `just test`; the clippy gate is
   `cargo clippy -p saccade -p board-grammar --all-targets -- -D warnings`.
 - `cargo build` is the judge, not grep.
+- While iterating, run the suites that own the touched contract (the
+  lib unit tests for tracker code, `just viewer-check` for viewer
+  code); the full suite runs once before a commit lands.
 - A phase gate: the suites, fmt, every prek hook on each commit, and
   the three viewer lanes under
   `BOARD_VIEWER_RUNTIME_AUTHORIZED=3030`:
