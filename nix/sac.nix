@@ -3,14 +3,12 @@ pkgs.rustPlatform.buildRustPackage ({
           name = "saccade";
           src = root;
           buildInputs = [];
-          # the api tests exercise real git worktrees under a
-          # writable home, through a real direnv layer
-          nativeBuildInputs = [
-            pkgs.git
-            pkgs.direnv
-            # flock guards the native-door tests' scratch holders
-            pkgs.util-linux
-          ];
+          # the suites run once, in the devshell: that run is the
+          # full-suite gate, and the sandbox never carried it whole (no
+          # /dev/pts for the pty test), so this build packages without
+          # re-testing; the pre-push hook re-runs the suites beside these
+          # builds at merge time
+          doCheck = false;
           # the pinned harness this binary's start door launches;
           # SACCADE_PI remains the development override
           SACCADE_PI = "${saccadePi}/bin/saccade-pi";
@@ -25,16 +23,6 @@ pkgs.rustPlatform.buildRustPackage ({
           postInstall = ''
             mkdir -p $out/share/fish/vendor_completions.d
             $out/bin/sac completions fish > $out/share/fish/vendor_completions.d/sac.fish
-          '';
-          # the unattended-prose door alone drives a real host pty;
-          # the nix sandbox mounts no /dev/pts and it cannot open the
-          # slave there, while the full suite passes in the devShell
-          checkFlags = [
-            "--skip"
-            "piped_human_prose_passes_and_unattended_refuses"
-          ];
-          preCheck = ''
-            export HOME=$(mktemp -d)
           '';
           cargoLock.lockFile = root + "/Cargo.lock";
           meta.mainProgram = "sac";
