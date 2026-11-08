@@ -78,6 +78,42 @@ BOARDS = {
     2: tree(T2),
 }
 
+# the landing task: a revision landing between the text fetch and the
+# figure fetch of one open. The first boards/get answers the new tree
+# (caption, figure component, the file); every later boards/get
+# answers the old tree (text with the image embedded, no file) - the
+# exact split behind "caption from the new revision, figure missing"
+LANDING_TASK = 3
+LANDING_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+LANDING_NEW_BOARD = f"""grammar: 1
+task: t-{LANDING_TASK}
+content:
+  - text: the landing board, revised
+  - figure:
+      input: figures/error-render.png
+      caption: the error render, committed
+"""
+LANDING_OLD_BOARD = f"""grammar: 1
+task: t-{LANDING_TASK}
+content:
+  - text: the landing board, first pass ![the error render](figures/error-render.png)
+"""
+
+
+def landing_tree(first: bool) -> dict:
+    if first:
+        return tree(LANDING_NEW_BOARD, "") | {
+            "files": {
+                "files": [
+                    {"path": "board.yaml", "content": b64(LANDING_NEW_BOARD)},
+                    {"path": "figures/error-render.png", "content": LANDING_PNG},
+                ]
+            },
+            "commit": SOURCE_COMMIT,
+            "revision": 2,
+        }
+    return tree(LANDING_OLD_BOARD) | {"revision": 1}
+
 
 class TrackerMock:
     """One mock tracker on a private loopback port. `min`/`max` are the
@@ -88,6 +124,9 @@ class TrackerMock:
         self.name = name
         self.min_version = min_version
         self.max_version = max_version
+        # how many boards/get requests the landing task has served: the
+        # straddle pin's counter
+        self.landing_gets = 0
         # the origin policy the routes carry: a request naming an origin
         # outside the allowlist refuses on every method; an allowlisted
         # read gets its own origin echoed, never a wildcard
@@ -122,7 +161,11 @@ class TrackerMock:
                 elif self.path.startswith("/api/v1/boards/get"):
                     query = dict(pair.split("=", 1) for pair in self.path.split("?", 1)[-1].split("&") if "=" in pair)
                     task = int(query.get("task", "-1"))
-                    board = BOARDS.get(task)
+                    if task == LANDING_TASK:
+                        mock.landing_gets += 1
+                        board = landing_tree(mock.landing_gets == 1)
+                    else:
+                        board = BOARDS.get(task)
                     if board is None:
                         self._reply(json.dumps({"error": {"code": "board_missing", "detail": "no such board"}}).encode(), 404, origin=origin)
                     else:

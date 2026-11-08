@@ -99,6 +99,10 @@ function decodeBase64(content: string): Uint8Array {
  * revision and both the board text and its figures read from it. */
 export class TrackerSource implements BoardSource {
   private trees = new Map<string, Promise<TreeReply>>();
+  // in-flight loads, keyed by the requested path: the text and the
+  // figures of one open join the same fetch, so they read one tree
+  // even when a revision lands mid-open
+  private pending = new Map<string, Promise<TreeReply>>();
 
   readonly tracker: string;
 
@@ -142,14 +146,19 @@ export class TrackerSource implements BoardSource {
   }
 
   private tree(location: Location): Promise<TreeReply> {
-    const cached = this.trees.get(location.path);
-    if (cached) return cached;
     const spec = parseTaskSpec(location.path);
     if (!spec) {
       return Promise.reject(
         new SourceUnavailableError("asset-missing", `'${location.path}' is not a task spec (t-N or t-N@rK)`),
       );
     }
+    // a pinned revision is immutable: its tree, once fetched, is exact
+    if (spec.revision !== null) {
+      const cached = this.trees.get(location.path);
+      if (cached) return cached;
+    }
+    const inflight = this.pending.get(location.path);
+    if (inflight) return inflight;
     const load = (async () => {
       await this.checkContract();
       const base = serverBase();
@@ -160,21 +169,39 @@ export class TrackerSource implements BoardSource {
       }
       return reply;
     })();
-    this.trees.set(location.path, load);
-    // a failed read is not a fact about the tracker: drop it, so the
-    // next open tries the wire again instead of replaying the refusal
-    load.catch(() => this.trees.delete(location.path));
+    this.pending.set(location.path, load);
+    void load.then(
+      (reply) => {
+        this.pending.delete(location.path);
+        // a location without a revision resolved: the tree caches
+        // under the revision it answered, never under the bare path -
+        // a later open re-resolves instead of replaying an old current
+        const key = spec.revision === null ? `t-${spec.task}@r${reply.revision}` : location.path;
+        this.trees.set(key, Promise.resolve(reply));
+      },
+      () => {
+        // a failed read is not a fact about the tracker: drop it, so
+        // the next open tries the wire again
+        this.pending.delete(location.path);
+      },
+    );
     return load;
   }
 
   async loadText(location: Location): Promise<LoadedText> {
-    const tree = await this.tree(location);
-    const board = tree.files.files.find((file) => file.path === "board.yaml");
+    const reply = await this.tree(location);
+    const board = reply.files.files.find((file) => file.path === "board.yaml");
     if (!board) {
-      throw new SourceUnavailableError("asset-missing", `t-${location.path} holds no board.yaml`);
+      throw new SourceUnavailableError("asset-missing", `${location.path} holds no board.yaml`);
     }
     const bytes = decodeBase64(board.content);
-    return { text: new TextDecoder().decode(bytes), location };
+    const text = new TextDecoder().decode(bytes);
+    // a bare location resolved: the caller renders the revision that
+    // answered, so its figures read the same tree
+    const spec = parseTaskSpec(location.path);
+    const resolved =
+      spec && spec.revision === null ? { ...location, path: `t-${spec.task}@r${reply.revision}` } : location;
+    return { text, location: resolved };
   }
 
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
@@ -185,7 +212,7 @@ export class TrackerSource implements BoardSource {
     }
     const file = tree.files.files.find((entry) => entry.path === resolved.joined);
     if (!file) {
-      throw new SourceUnavailableError("asset-missing", `revision t-${location.path} holds no file '${relative}'`);
+      throw new SourceUnavailableError("asset-missing", `revision ${location.path} holds no file '${relative}'`);
     }
     return { bytes: decodeBase64(file.content), path: relative };
   }

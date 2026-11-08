@@ -99,10 +99,14 @@ export class ViewerModel {
       renderGeneration: null,
     });
     let text: string;
+    let resolvedLocation: Location = location;
     try {
       const loaded = await sourceFor(location.machine).loadText(location);
       if (token !== this.generation) return;
       text = loaded.text;
+      // a bare tracker location resolved: the board on screen is the
+      // revision that answered, and its figures read the same tree
+      resolvedLocation = loaded.location;
     } catch (error) {
       if (token !== this.generation) return;
       const message = error instanceof SourceUnavailableError ? error.message : String(error);
@@ -170,6 +174,7 @@ export class ViewerModel {
     }
     this.set({
       status: "loaded",
+      location: resolvedLocation,
       board: result.board,
       rawText: text,
       errors: [],

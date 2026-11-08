@@ -44,5 +44,8 @@ export function resolveRelative(baseDir: string, relative: string): ResolveResul
     return { ok: false, failure: { code: "asset-denied", reason: "empty path" } };
   }
   const base = baseDir.endsWith("/") ? baseDir.slice(0, -1) : baseDir;
-  return { ok: true, joined: `${base}/${out.join("/")}` };
+  // an empty declaration base is repo-relative (tracker boards): the
+  // join must not grow a leading slash the tree listing never carries
+  const prefix = base === "" ? "" : `${base}/`;
+  return { ok: true, joined: `${prefix}${out.join("/")}` };
 }
