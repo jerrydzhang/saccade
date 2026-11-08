@@ -74,7 +74,7 @@ pub struct Provisioned {
 }
 
 pub fn git(root: &Path, args: &[&str]) -> Result<String, WorkspaceFail> {
-    let out = std::process::Command::new("git")
+    let out = crate::boards::git_command()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -98,7 +98,7 @@ fn resolve_commit(root: &Path, name: Option<&str>) -> Result<GitCommit, Workspac
 }
 
 fn branch_exists(root: &Path, branch: &GitBranch) -> bool {
-    std::process::Command::new("git")
+    crate::boards::git_command()
         .arg("-C")
         .arg(root)
         .args([
@@ -405,7 +405,7 @@ pub fn registered_worktrees(
 /// branch. Quiet verification: a missing branch is a fact, not a
 /// plumbing failure.
 pub fn branch_tip(root: &Path, branch: &GitBranch) -> Result<Option<GitCommit>, WorkspaceFail> {
-    let out = std::process::Command::new("git")
+    let out = crate::boards::git_command()
         .arg("-C")
         .arg(root)
         .args([

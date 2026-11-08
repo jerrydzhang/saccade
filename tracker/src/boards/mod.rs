@@ -1036,8 +1036,59 @@ struct Outcome {
     stderr: String,
 }
 
-fn run(repo: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result<Outcome, BoardsFail> {
+/// The repo-locating variables git reads before anything else, pinned
+/// as data: `git rev-parse --local-env-vars`.
+const INHERITED_REPO_ENV: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// A git command whose repository comes only from its own arguments:
+/// the inherited repo-locating variables are stripped, so a server or
+/// a suite spawned under a hook's GIT_DIR cannot touch that
+/// repository.
+pub fn git_command() -> Command {
     let mut command = Command::new("git");
+    scrub_inherited_repo_env(&mut command);
+    command
+}
+
+/// The scrub alone, for callers assembling a git command themselves.
+pub fn scrub_inherited_repo_env(command: &mut Command) {
+    let mut names: Vec<String> = INHERITED_REPO_ENV
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    // the config triplets ride the same env: a surviving count with its
+    // key/value pairs would be config lines the caller never meant
+    if let Ok(count) = std::env::var("GIT_CONFIG_COUNT")
+        && let Ok(count) = count.parse::<u64>()
+    {
+        for index in 0..count.min(4096) {
+            names.push(format!("GIT_CONFIG_KEY_{index}"));
+            names.push(format!("GIT_CONFIG_VALUE_{index}"));
+        }
+    }
+    for name in names {
+        command.env_remove(name);
+    }
+}
+
+fn run(repo: &Path, args: &[&str], stdin: Option<&[u8]>) -> Result<Outcome, BoardsFail> {
+    let mut command = git_command();
     command.arg("-C").arg(repo).args(args);
     if stdin.is_some() {
         command.stdin(std::process::Stdio::piped());

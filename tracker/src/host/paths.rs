@@ -74,7 +74,7 @@ pub fn state_dir(repo_root: &Path) -> PathBuf {
 /// repository they belong to, so a session inside a worktree finds the
 /// same tracker as the main checkout.
 pub fn repo_root(cwd: &Path) -> Result<PathBuf, String> {
-    let out = std::process::Command::new("git")
+    let out = crate::boards::git_command()
         .arg("-C")
         .arg(cwd)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])

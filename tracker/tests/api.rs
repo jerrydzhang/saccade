@@ -1334,7 +1334,7 @@ fn scratch_repo(dir: &std::path::Path) -> (std::path::PathBuf, String, String) {
 }
 
 fn sh(dir: &std::path::Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
+    let out = saccade::boards::git_command()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -1525,7 +1525,7 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     // a real repo: the doors' telemetry resolves its state dir the way
     // production resolves the tracker it talks to
     let git = |args: &[&str]| {
-        std::process::Command::new("git")
+        saccade::boards::git_command()
             .args(args)
             .current_dir(&project)
             .output()
@@ -5533,6 +5533,7 @@ fn spawn_serve(
 
 /// A runner free of every inherited SACCADE_* value.
 fn scrubbed(mut cmd: std::process::Command) -> std::process::Command {
+    saccade::boards::scrub_inherited_repo_env(&mut cmd);
     for key in [
         "SACCADE_ACTOR",
         "SACCADE_DB",
@@ -5810,7 +5811,7 @@ fn discovery_resolves_the_repos_server_and_refuses_the_broken_ways() {
 
     // a worktree resolves the same common dir, so the same server
     let wt = dir.join("wt");
-    let out = std::process::Command::new("git")
+    let out = saccade::boards::git_command()
         .arg("-C")
         .arg(&root)
         .args(["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "side"])
@@ -8383,4 +8384,94 @@ fn a_helper_run_writes_nothing_outside_its_scratch() {
 
     let after = listing();
     assert_eq!(before, after, "the real state root gained nothing");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_git_dir_inherited_by_the_server_never_reaches_the_board_store() {
+    // the hook-leak shape: the server runs with a caller's GIT_DIR and
+    // friends set. The decoy is a real bare repo - if the store's git
+    // calls resolved the environment, the commit would be visible
+    // there
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db("decoy-gitdir");
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let decoy = scratch.dir.join("decoy.git");
+    saccade::boards::git_command()
+        .args(["init", "--bare", "--quiet", decoy.to_str().unwrap()])
+        .output()
+        .expect("the decoy repo initializes");
+    let config_before = std::fs::read_to_string(decoy.join("config")).unwrap();
+    let objects_before = std::fs::read_dir(decoy.join("objects")).unwrap().count();
+    let (url, mut server) = spawn_serving_subprocess(
+        &scratch.db,
+        &project,
+        bin,
+        &scratch.dir,
+        None,
+        &[
+            ("GIT_DIR", decoy.to_str().unwrap()),
+            ("GIT_COMMON_DIR", decoy.to_str().unwrap()),
+            (
+                "GIT_OBJECT_DIRECTORY",
+                decoy.join("objects").to_str().unwrap(),
+            ),
+            ("GIT_INDEX_FILE", decoy.join("index").to_str().unwrap()),
+            ("GIT_WORK_TREE", project.to_str().unwrap()),
+        ],
+    );
+
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/command",
+        &json!({
+            "context": {"actor": "lane", "tier": "agent", "scope": null},
+            "command": {"create_task": {"name": "the decoy probe"}},
+            "at": null,
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/boards/commit",
+        &json!({
+            "context": {"actor": "lane", "tier": "agent", "scope": null},
+            "task": 0,
+            "files": {"files": [{"path": "board.yaml",
+                "content": "Z3JhbW1hcjogMQp0YXNrOiB0LTAKY29udGVudDoKICAtIHRleHQ6IHRoZSBwcm9iZSBib2FyZCB0aGUgc3RvcmUgbXVzdCBob2xkIGl0c2VsZgo="}]},
+            "message": "the decoy probe commit",
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["revision"], json!(1));
+
+    // the decoy never heard about any of it
+    let config_after = std::fs::read_to_string(decoy.join("config")).unwrap();
+    assert_eq!(config_before, config_after, "the decoy's config changed");
+    assert_eq!(
+        objects_before,
+        std::fs::read_dir(decoy.join("objects")).unwrap().count(),
+        "objects landed in the decoy"
+    );
+    let refs = saccade::boards::git_command()
+        .arg("--git-dir")
+        .arg(&decoy)
+        .args(["for-each-ref"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&refs.stdout).trim().is_empty(),
+        "refs landed in the decoy"
+    );
+
+    // and the store itself holds the board on its own repo
+    let (_, got) = get_json(&url, "/api/v1/boards/get?task=0");
+    let got = json_of(&got);
+    let files = got["files"]["files"].as_array().unwrap();
+    assert!(!files.is_empty(), "{got}");
+
+    let _ = server.kill();
+    let _ = server.wait();
 }
