@@ -30,3 +30,12 @@ hooks = [
   { id = "fmt", args = ["--all"], pass_filenames = false, always_run = true },
   { id = "cargo-check" },
 ]
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "merge-gate", name = "merge gate: the full suite and both nix builds",
+    entry = "bash", language = "system",
+    args = ["-c", "cargo test -q && nix build .#sac .#board-viewer --no-link"],
+    pass_filenames = false, always_run = true, stages = ["pre-push"] },
+]

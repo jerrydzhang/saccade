@@ -59,12 +59,16 @@ do, and `tracker/README.md` carries the tracker's law.
 - `just fmt`, `just lint`, `just test`; the clippy gate is
   `cargo clippy -p saccade -p board-grammar --all-targets -- -D warnings`.
 - `cargo build` is the judge, not grep.
-- A phase gate: the suites, fmt, every prek hook on each commit,
-  `nix build .#sac .#board-viewer`, and the three viewer lanes under
+- A phase gate: the suites, fmt, every prek hook on each commit, and
+  the three viewer lanes under
   `BOARD_VIEWER_RUNTIME_AUTHORIZED=3030`:
   `nix develop .#board-viewer -c env BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<db> python3 client/harness/entry.py browser|remote`,
   with `--board <yaml>` and the built app for native. The lane logs
   are inspected, not assumed.
+- The merge gate is the pre-push hook (`merge-gate` in prek.toml):
+  the full suite and `nix build .#sac .#board-viewer` run again
+  before anything reaches GitHub; the nix builds are not part of the
+  per-commit phase gate.
 - Phase reviews diff the test inventory by name against the previous
   phase: additions fine, every removal explained.
 - Tracker test placement and suite contracts live in
