@@ -3405,7 +3405,7 @@ async fn board_get(
             return Ok(serde_json::to_value(&GetReply {
                 name: select.to_string(),
                 content: base64::engine::general_purpose::STANDARD
-                    .encode(board_grammar::render(&component)),
+                    .encode(board_grammar::render(component)),
             })
             .expect("the reply is plain data"));
         }
