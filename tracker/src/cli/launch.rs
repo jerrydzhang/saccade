@@ -436,10 +436,10 @@ pub(super) const ASK_BIND_BOUND: std::time::Duration = std::time::Duration::from
 /// costs seconds; the released binary never reads the variable.
 fn ask_bind_bound() -> std::time::Duration {
     #[cfg(debug_assertions)]
-    if let Ok(secs) = std::env::var("SACCADE_ASK_BIND_BOUND_SECS") {
-        if let Ok(n) = secs.parse::<u64>() {
-            return std::time::Duration::from_secs(n);
-        }
+    if let Ok(secs) = std::env::var("SACCADE_ASK_BIND_BOUND_SECS")
+        && let Ok(n) = secs.parse::<u64>()
+    {
+        return std::time::Duration::from_secs(n);
     }
     ASK_BIND_BOUND
 }
