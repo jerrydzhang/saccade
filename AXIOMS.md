@@ -2,8 +2,8 @@
 
 Epistemic status: this file names the beliefs the design stands on and the
 discipline that admits them. The law layer is the record itself - enforced
-behavior in code, ratified decisions in tracker threads, standing
-constraints on the not-yet-built in AGENTS.md. This is the axiom layer:
+behavior in code, ratified decisions in task boards and their histories,
+standing constraints on the not-yet-built in AGENTS.md. This is the axiom layer:
 what law and everything built derive from. Files here carry primaries only
 and must not drift. Every change here is a regime change and gets its own
 task and conversation.
@@ -56,12 +56,13 @@ that ever exists; that discovery narrows the rule rather than widening it.
 Derivations:
 
 - Orientation comes from the record. Anything working in the world
-  self-locates from the log alone - at birth and mid-life alike; carry-over
+  self-locates from the record alone: the log and the boards it names - at
+  birth and mid-life alike; carry-over
   context is already degraded.
 - Claims are held by names, not processes. A promise held by a session
   would be state outside the record.
 - Attribution is record-side. Even a live agent forgets; the fold may
-  summarize, never anonymize (c-33 is this rule violated today).
+  summarize, never anonymize.
 - Receipts are written at done-time, at the peak of the writer's knowledge -
   it is all decay afterward.
 - Documentation follows this axiom: a doc is never a second source of truth.
@@ -101,8 +102,8 @@ it demands something - promoted to the unit of account.
 
 Routing - the two ways a demand reaches its addressee:
 
-- **Pull.** The addressee visits (surfaces: canvas, gate, ready list; the
-  agent's TOC).
+- **Pull.** The addressee visits (surfaces: the CLI's list and search, and
+  the viewer; the agent's TOC).
 - **Push.** Only an unsatisfied human-addressed demand may arrive unprompted.
   The signal is its future carrier - unbuilt; the roadmap's judgment push.
   Counting rule: signal types are counted in kinds of demands, never kinds
