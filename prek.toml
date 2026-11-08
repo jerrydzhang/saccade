@@ -38,6 +38,9 @@ hooks = [
     entry = "bash", language = "system",
     args = ["-c", '''
 set -eu
+# the push hands the hook git's own env: every scratch repo the tests
+# build would resolve against this checkout's git dir without the scrub
+unset $(git rev-parse --local-env-vars) 2>/dev/null || true
 cargo test -q
 sha="${PRE_COMMIT_TO_REF:-}"
 case "$sha" in "" | *0000000000000000000000000000000000000000*) exit 0 ;; esac
