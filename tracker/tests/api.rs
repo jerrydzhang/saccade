@@ -8607,6 +8607,151 @@ async fn a_send_to_a_superseded_incarnation_refuses_and_discloses_the_supersessi
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_fresh_assignment_of_its_own_un_supersedes_the_incarnation() {
+    // the way back: an incarnation superseded at its old slot, then
+    // reassigned to a fresh terminal of its own, is live again -
+    // delivery reaches it at the new address and never at the old
+    // slot's holder
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db("un-supersede");
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let hc = scratch.dir.join("hc");
+    std::fs::write(
+        &hc,
+        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-send.log\"\nif [ \"$1\" = get ]; then printf '{\"state\":\"live\"}\\n'; exit 0; fi\nprintf '{}\\n'\nexit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (url, mut server) = spawn_serving_subprocess(
+        &scratch.db,
+        &project,
+        bin,
+        &scratch.dir,
+        None,
+        &[("SACCADE_HERDR", hc.to_str().unwrap())],
+    );
+
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({
+            "native_id": "sender000001",
+            "address": "t90",
+            "adopted": false,
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sender_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // A: resident at t65
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "a0000000001",
+            "session_file": "/sessions/a0000000001.jsonl",
+            "terminal": {"address": "t65", "adopted": false},
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let a_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // B takes t65: A is superseded
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "b0000000001",
+            "session_file": "/sessions/b0000000001.jsonl",
+            "terminal": {"address": "t65", "adopted": false},
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // the hole as it stood: A's delivery refuses
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {
+                "actor": "sender",
+                "tier": "agent",
+                "scope": {"incarnation": sender_seq},
+            },
+            "to": a_seq,
+            "body": "refused while superseded",
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(
+        json_of(&body)["error"]["code"],
+        json!("recipient_gone"),
+        "{body}"
+    );
+
+    // A relaunches onto a fresh terminal of its own: t70. The
+    // reassignment is A's way back
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "a0000000001",
+            "session_file": "/sessions/a0000000001.jsonl",
+            "terminal": {"address": "t70", "adopted": false},
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(
+        reply["records"].as_array().map(Vec::len),
+        Some(1),
+        "the reassignment lands: {body}"
+    );
+
+    // A's delivery submits, at t70 - and never at B's t65
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {
+                "actor": "sender",
+                "tier": "agent",
+                "scope": {"incarnation": sender_seq},
+            },
+            "to": a_seq,
+            "body": "live again at the new address",
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let reply = json_of(&body);
+    assert_eq!(reply["submission"]["state"], json!("submitted"), "{body}");
+    let log = std::fs::read_to_string(scratch.dir.join("argv-send.log")).unwrap();
+    let args: Vec<&str> = log.lines().collect();
+    assert!(
+        args.contains(&"t70") && !args.contains(&"t65"),
+        "the delivery reached t70 and never the old slot: {log}"
+    );
+    assert!(
+        log.contains("live again at the new address"),
+        "A's body rode the envelope: {log}"
+    );
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_relaunch_that_takes_another_incarnations_address_supersedes_that_holder() {
     // the law on the reassignment path: an existing incarnation whose
     // relaunch lands on an address another incarnation holds

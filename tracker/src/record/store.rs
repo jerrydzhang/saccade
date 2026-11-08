@@ -413,9 +413,16 @@ impl World {
     /// lands: a birth or reassignment that carries an address another
     /// incarnation holds supersedes that holder, whatever the
     /// workspace, whatever the address kind. A resume at the holder's
-    /// own address never supersedes: the assignee is exempt. The
+    /// own address never supersedes: the assignee is exempt. And the
+    /// assignee's own fresh assignment clears any supersession it
+    /// carried - it holds a live address again, so delivery reaches
+    /// it there; its old slot stays with whoever took it. The
     /// supersession's evidence is the assignment record itself.
     fn supersede_address_holders(&mut self, assignee: IncarnationId, address: &str, at: RecordId) {
+        // a fresh assignment of one's own is the way back: the
+        // superseded incarnation holds a live address again, so its
+        // supersession clears; its old slot stays with whoever took it
+        self.superseded.remove(&assignee);
         let holders: Vec<IncarnationId> = self
             .incarnations
             .iter()
