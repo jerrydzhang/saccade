@@ -36,7 +36,7 @@ repo = "local"
 hooks = [
   { id = "merge-gate", name = "merge gate: the full suite and both nix builds",
     entry = "bash", language = "system",
-    args = ['''
+    args = ["-c", '''
 set -eu
 cargo test -q
 sha="${PRE_COMMIT_TO_REF:-}"
