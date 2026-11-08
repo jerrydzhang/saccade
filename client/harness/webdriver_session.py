@@ -577,9 +577,14 @@ def run_tracker_sequence(state: SessionState) -> int:
         if state.server.poll() is not None:
             break
         try:
-            with urllib.request.urlopen(base + "/", timeout=2) as reply:
+            with urllib.request.urlopen(base + "/api/v1/version", timeout=2) as reply:
                 ready = reply.status == 200
                 break
+        except urllib.error.HTTPError:
+            # any typed answer means the wire is up; a wrong status is
+            # still an answer
+            ready = True
+            break
         except OSError:
             time.sleep(0.3)
     check("a real sac serve answers on the sandbox loopback", ready, f"log: {server_log_path}")
