@@ -508,8 +508,12 @@ def tracker_post(base: str, route: str, payload: dict) -> dict:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=20) as reply:
-        return json.loads(reply.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=20) as reply:
+            return json.loads(reply.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"{route} answered {error.code}: {detail}") from None
 
 
 TRACKER_CITED_BOARD = """grammar: 1
@@ -676,10 +680,10 @@ def run_tracker_sequence(state: SessionState) -> int:
     # from the new revision - never a stale tree or a missing file
     landing_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
     landing_r1 = (
-        "grammar: 1\ntask: {}\ncontent:\n  - text: the landing board, first pass"
+        "grammar: 1\ntask: t-{}\ncontent:\n  - text: the landing board, first pass"
     )
     landing_r2 = (
-        "grammar: 1\ntask: {}\ncontent:\n  - text: the landing board, revised\n"
+        "grammar: 1\ntask: t-{}\ncontent:\n  - text: the landing board, revised\n"
         "  - figure:\n      input: figures/landing.png\n      caption: the landing figure, committed\n"
     )
     try:
