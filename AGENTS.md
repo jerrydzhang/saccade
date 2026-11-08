@@ -328,7 +328,7 @@ Rules:
 - `just herdr-ui info` reports the app home and log directory. Read that
   home's installed `AGENTS.md` and generated type declarations before writing
   mods. Edit personal mods/layouts there; live reload does not require a
-  rebuild. Read `tools/herdr-ui/herdr-ui.md` for commands and working-copy
+  rebuild. Read `tools/herdr-ui/README.md` for commands and working-copy
   setup.
 - After each mod edit, run `just herdr-ui check <mod-directory>`, inspect
   `just herdr-ui status`, then capture and actually inspect `just herdr-ui
