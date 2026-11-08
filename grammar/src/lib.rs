@@ -6,10 +6,12 @@ use std::ops::RangeInclusive;
 
 mod error;
 mod parse;
+mod render;
 mod select;
 
 pub use error::{ErrorKind, ParseError, SelectError, Where};
 pub use parse::parse;
+pub use render::render;
 pub use select::{SelectPath, select};
 
 /// The grammar versions this build parses; callers negotiating versions read this.

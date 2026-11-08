@@ -52,11 +52,14 @@ pub(crate) enum BoardVerb {
         /// The task whose checkpoint to drop (t-<n>)
         task: String,
     },
-    /// Write any revision out, for reading or citing: t-N,
-    /// t-N@rK, or one file as t-N@rK:/path
+    /// Print one component of a revision (t-N@rK:/content/0), print
+    /// one file (--file path), or write the whole revision out
     Get {
-        /// The revision or file spec
+        /// The revision or component spec
         spec: String,
+        /// A file in the board tree to print (or write with --out)
+        #[arg(long)]
+        file: Option<String>,
         /// Where to write; a whole revision defaults to a temp
         /// directory (printed), a single file to stdout
         #[arg(long)]
@@ -91,12 +94,13 @@ fn default_board_dir(task: usize) -> PathBuf {
 struct BoardSpec {
     task: usize,
     revision: Option<usize>,
-    path: Option<String>,
+    /// The positional path naming one component
+    select: Option<String>,
 }
 
 fn parse_board_spec(token: &str) -> Result<BoardSpec, Fail> {
-    let (head, path) = match token.split_once(':') {
-        Some((head, path)) => (head, Some(path.to_string())),
+    let (head, select) = match token.split_once(':') {
+        Some((head, select)) => (head, Some(select.to_string())),
         None => (token, None),
     };
     let (task_part, revision) = match head.split_once('@') {
@@ -114,7 +118,7 @@ fn parse_board_spec(token: &str) -> Result<BoardSpec, Fail> {
     Ok(BoardSpec {
         task: parse_task_id(task_part)?.0,
         revision,
-        path,
+        select,
     })
 }
 
@@ -183,7 +187,9 @@ pub(super) fn board_door(
         }
         BoardVerb::Update { task, dir } => update_door(cli, destination, task, dir.as_deref()),
         BoardVerb::Discard { task } => discard_door(cli, destination, task),
-        BoardVerb::Get { spec, out } => get_door(cli, destination, spec, out.as_deref()),
+        BoardVerb::Get { spec, file, out } => {
+            get_door(cli, destination, spec, file.as_deref(), out.as_deref())
+        }
         BoardVerb::Diff { spec } => diff_door(cli, destination, spec),
         BoardVerb::Log { task } => log_door(cli, destination, task),
         BoardVerb::Path { task } => path_door(cli, destination, task),
@@ -450,6 +456,7 @@ fn get_door(
     cli: &Cli,
     destination: &Destination,
     spec: &str,
+    file: Option<&str>,
     out: Option<&Path>,
 ) -> Result<String, Fail> {
     let url = server_url(destination, "board get")?;
@@ -459,7 +466,24 @@ fn get_door(
             .map(|r| format!("r{r}"))
             .unwrap_or_else(|| format!("r{latest}"))
     };
-    if let Some(path) = &parsed.path {
+    if let Some(select) = &parsed.select {
+        if file.is_some() {
+            return Err(Fail::Usage(
+                "name the component in the spec or a file with --file, not both".into(),
+            ));
+        }
+        if out.is_some() {
+            return Err(Fail::Usage(
+                "the component form prints; --out writes a file read".into(),
+            ));
+        }
+        let reply = client::board_get_component(&url, parsed.task, parsed.revision, select)
+            .map_err(Fail::Client)?;
+        let bytes = decode_content(&reply.content)?;
+        return String::from_utf8(bytes)
+            .map_err(|_| Fail::Usage("the component is not text".into()));
+    }
+    if let Some(path) = file {
         let reply = client::board_get_file(&url, parsed.task, parsed.revision, path)
             .map_err(Fail::Client)?;
         let bytes = decode_content(&reply.content)?;
@@ -581,15 +605,15 @@ mod test {
         let bare = parse_board_spec("t-5").expect("a bare task parses");
         assert_eq!(bare.task, 5);
         assert_eq!(bare.revision, None);
-        assert_eq!(bare.path, None);
+        assert_eq!(bare.select, None);
 
         let revised = parse_board_spec("t-5@r3").expect("a revision parses");
         assert_eq!(revised.task, 5);
         assert_eq!(revised.revision, Some(3));
 
-        let pathed = parse_board_spec("t-5@r3:/figures/loss.svg").expect("a path parses");
-        assert_eq!(pathed.revision, Some(3));
-        assert_eq!(pathed.path.as_deref(), Some("/figures/loss.svg"));
+        let selected = parse_board_spec("t-5@r3:/content/1").expect("a component parses");
+        assert_eq!(selected.revision, Some(3));
+        assert_eq!(selected.select.as_deref(), Some("/content/1"));
 
         let err = parse_diff_spec("t-5").unwrap_err().to_string();
         assert!(err.contains("no revision range"));

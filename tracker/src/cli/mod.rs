@@ -782,9 +782,12 @@ fn flag_names(command: &Cmd) -> Vec<String> {
                     push(&mut flags, "-m");
                 }
             }
-            BoardVerb::Get { out, .. } => {
+            BoardVerb::Get { out, file, .. } => {
                 if out.is_some() {
                     push(&mut flags, "--out");
+                }
+                if file.is_some() {
+                    push(&mut flags, "--file");
                 }
             }
             BoardVerb::Discard { .. }

@@ -1747,12 +1747,25 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
         .unwrap();
     assert_eq!(rejected["grounds"], json!("the boundary case is missing"));
 
-    // the diff names the annotation; get reads any revision; a single
-    // file prints; the materialized path exists on the server's disk
+    // the diff names the annotation; get reads any revision; the
+    // component form prints one component; the file read rides the
+    // flag; the materialized path exists on the server's disk
     let (ok, diff, _) = sac(&["board", "diff", "t-0@r1..r2"]);
     assert!(ok, "{diff}");
     assert!(diff.contains("annotation"), "{diff}");
-    let (ok, old, _) = sac(&["board", "get", "t-0@r1:/board.yaml"]);
+    let (ok, component, _) = sac(&["board", "get", "t-0@r2:/content/0"]);
+    assert!(ok, "{component}");
+    assert!(
+        component.contains("the loop holds") && !component.contains("annotation"),
+        "{component}"
+    );
+    let (ok, note, _) = sac(&["board", "get", "t-0@r2:/content/1"]);
+    assert!(ok, "{note}");
+    assert!(note.contains("annotation"), "{note}");
+    let (ok, _, err) = sac(&["board", "get", "t-0@r2:/content/0", "--file", "board.yaml"]);
+    assert!(!ok, "the component and file forms refuse each other: {err}");
+    assert!(err.contains("not both"), "{err}");
+    let (ok, old, _) = sac(&["board", "get", "t-0@r1", "--file", "board.yaml"]);
     assert!(ok, "{old}");
     assert!(
         old.contains("the loop holds") && !old.contains("annotation"),

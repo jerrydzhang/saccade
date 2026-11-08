@@ -231,7 +231,10 @@ pub struct EditReply {
 pub struct GetQuery {
     pub task: usize,
     pub revision: Option<usize>,
+    /// A file in the board tree; the whole tree when absent
     pub path: Option<String>,
+    /// A positional path naming one component of the revision's board
+    pub select: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

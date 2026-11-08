@@ -990,6 +990,23 @@ pub fn board_get_tree(
 }
 
 /// One file out of a revision.
+pub fn board_get_component(
+    url: &str,
+    task: usize,
+    revision: Option<usize>,
+    select: &str,
+) -> Result<crate::serve::board_wire::GetReply, ClientFail> {
+    board_read(
+        url,
+        &format!(
+            "/api/v1/boards/get?task={task}{}&select={select}",
+            revision
+                .map(|r| format!("&revision={r}"))
+                .unwrap_or_default()
+        ),
+    )
+}
+
 pub fn board_get_file(
     url: &str,
     task: usize,

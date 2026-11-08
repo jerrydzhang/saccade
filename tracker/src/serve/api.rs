@@ -3382,6 +3382,33 @@ async fn board_get(
         };
         let commit = board_commit.commit.as_str();
         let boards = boards_of(&app)?;
+        if let Some(select) = &query.select {
+            // the spec names a component of the revision's board; the
+            // reply carries it in the grammar's written form
+            let board = boards.read_board_at(commit).map_err(|fail| {
+                ApiFail::Refused(boards_status(&fail), fail.code(), fail.detail())
+            })?;
+            let path = board_grammar::SelectPath::parse(select).map_err(|error| {
+                ApiFail::Refused(
+                    StatusCode::BAD_REQUEST,
+                    "bad_select_path",
+                    error.to_string(),
+                )
+            })?;
+            let component = board_grammar::select(&board, &path).map_err(|error| {
+                ApiFail::Refused(
+                    StatusCode::BAD_REQUEST,
+                    "bad_select_path",
+                    error.to_string(),
+                )
+            })?;
+            return Ok(serde_json::to_value(&GetReply {
+                name: select.to_string(),
+                content: base64::engine::general_purpose::STANDARD
+                    .encode(board_grammar::render(&component)),
+            })
+            .expect("the reply is plain data"));
+        }
         if let Some(path) = &query.path {
             // the spec names the file with the component-path leading
             // slash; the tree stores bare relative paths

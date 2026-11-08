@@ -75,7 +75,9 @@ chapter of the account; a task committed once at the end has no story.
 Commit when a chapter is complete: an annotation addressed, a finding
 landed, a correction made.
 
-Other doors: `sac board get t-N[@rK][:/file] --out <dir>` writes any
+Other doors: `sac board get t-N[@rK]:/content/0` prints one component;
+`sac board get t-N[@rK] --file <path> [--out <file>]` prints (or writes)
+one tree file; `sac board get t-N[@rK] --out <dir>` writes a whole
 revision out; `sac board diff t-N@rA..rB`; `sac board log t-N` (the task's
 history: commits with messages interleaved with the decisions); `sac board
 path t-N` (the materialized board's path on the server's machine).
