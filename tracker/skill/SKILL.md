@@ -1,7 +1,6 @@
 ---
 name: saccade
 description: Use when running the `sac` CLI - working tasks, authoring task boards, offering and reviewing conclusions, or any question about the tracker's events, task states, or messages.
-  - ".agents/**"
 ---
 
 # Saccade (`sac`)
@@ -37,10 +36,16 @@ its flags. Output is human-readable by default and `--json` on every face.
   it to offered. No prose: the board is the account.
 - **Reject** (`sac reject t-N --grounds "..."`) names the standing offer,
   requires grounds, and reopens the task.
-- **Accept** (`sac accept t-N`) concludes the task: it certifies the board
-  is a truthful account of the final state, whatever the outcome. Accept
-  when the work is relied on, not when it is merely finished. Cancellation
-  is for set-aside and cleanup, not for honest findings.
+- **Accept** (`sac accept t-N`) concludes the task: it certifies a
+  truthful account of the final state, whatever the outcome, and only
+  after the reviewer has checked that the board answers the task as
+  posed. The common failure is an account of an easier problem: a
+  constraint relaxed that the task never said could be relaxed. A board
+  that narrows the task must say so up front, and a reviewer rejects one
+  that does not. When in doubt, reject with grounds. An agent accepts
+  only when whoever asked for the review asked it to decide; otherwise it
+  reports and leaves the decision. Cancellation is for set-aside and
+  cleanup, not for honest findings.
 - **Incorporation and the acceptance rule**: a board may cite another
   task's revision (an `incorporation` component, source named `t-N`, full
   commit hash, positional select paths, plus receiving text). A task can
@@ -75,6 +80,10 @@ chapter of the account; a task committed once at the end has no story.
 Commit when a chapter is complete: an annotation addressed, a finding
 landed, a correction made.
 
+**Name the relaxations before the result.** Every constraint relaxed,
+assumption changed, or unstated freedom you used is written in the board
+before the account presents its result, not after.
+
 Other doors: `sac board get t-N[@rK]:/content/0` prints one component;
 `sac board get t-N[@rK] --file <path> [--out <file>]` prints (or writes)
 one tree file; `sac board get t-N[@rK] --out <dir>` writes a whole
@@ -96,6 +105,10 @@ The reviewed object is the board revision, so review is a real judgment:
    the commit that addresses it. Publishing refuses while the task is
    offered - reject first, then annotate, then offer again.
 4. `sac accept t-N` when the board is a truthful account.
+
+Wake on the offer instead of polling: `sac wait t-N --after <seq>
+--until offer` returns once a TaskOffered record lands past the cursor
+seq (`sac log` or `sac show t-N` names it).
 
 ## Messages
 
