@@ -1706,9 +1706,7 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     // the consumer reconciles onto the accepted revision and concludes
     std::fs::write(
         con.join("board.yaml"),
-        format!(
-            "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: 2\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n"
-        ),
+        "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: 2\n        select: [\"/content/0\"]\n      content:\n        - text: relying on the proof\n",
     )
     .unwrap();
     let reply = sac_json(&[

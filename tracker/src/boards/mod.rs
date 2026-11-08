@@ -1906,19 +1906,17 @@ content:
             "the refusal names both tasks: {}",
             error.detail()
         );
-        let source_commit = {
+        {
             let source = workdir(tag, "source");
             write(&source, BOARD_FILE, LEDGER_FINDING.as_bytes());
             store
                 .commit("0", &source, None, "the source account")
-                .expect("the source commit lands")
-                .commit
-        };
+                .expect("the source commit lands");
+        }
         write(
             &dir,
             BOARD_FILE,
-            format!(
-                r#"grammar: 1
+            r#"grammar: 1
 task: t-0
 content:
   - incorporation:
@@ -1930,7 +1928,6 @@ content:
         - text: |
             The receiving text explains what this board takes.
 "#
-            )
             .as_bytes(),
         );
         let unknown = store.publish_board(
