@@ -532,6 +532,12 @@ content:
 """
 
 
+def tracker_finish(state: SessionState) -> int:
+    """Teardown, then the lane's verdict: any failed check fails the run."""
+    teardown(state)
+    return 1 if any(not ok for ok, _name, _detail in RESULTS) else 0
+
+
 def run_tracker_sequence(state: SessionState) -> int:
     """The scripted tracker sequence: a real `sac serve` on a throwaway
     db inside this sandbox, two boards committed on the real wire, the
@@ -555,7 +561,9 @@ def run_tracker_sequence(state: SessionState) -> int:
         state.server = subprocess.Popen(
             [serve_bin, "serve", "--db", str(db), "--repo", str(root / "repo"),
              "--bind", NATIVE_HOST, "--port", str(port)],
-            env={**os.environ},
+            # the server shells out to git, which the scrubbed env would
+            # never find: the pinned git rides /lane beside the server
+            env={**os.environ, "PATH": "/lane:" + os.environ.get("PATH", "/usr/bin:/bin")},
             stdout=server_log,
             stderr=server_log,
         )
@@ -576,7 +584,7 @@ def run_tracker_sequence(state: SessionState) -> int:
             time.sleep(0.3)
     check("a real sac serve answers on the sandbox loopback", ready, f"log: {server_log_path}")
     if not ready:
-        return teardown(state)
+        return tracker_finish(state)
 
     # two boards on the real wire: t-0 the cited plain account, t-1
     # citing it by revision - the citation the sequence navigates
@@ -603,7 +611,7 @@ def run_tracker_sequence(state: SessionState) -> int:
             check(f"t-{task}'s seed board committed at revision 1", reply.get("revision") == 1, str(reply)[:160])
     except (OSError, ValueError, KeyError) as error:
         check("two boards committed on the real wire", False, str(error)[:200])
-        return teardown(state)
+        return tracker_finish(state)
 
     def inspect_bounded(predicate, timeout: float):
         deadline = time.monotonic() + timeout
@@ -627,7 +635,7 @@ def run_tracker_sequence(state: SessionState) -> int:
         perform_input(state.client, {"kind": "click", "target": "open:host"})
     except WebDriverError as error:
         check("the tracker UI takes real input", False, str(error)[:200])
-        return teardown(state)
+        return tracker_finish(state)
     check("the tracker UI takes real input", True)
     loaded = inspect_bounded(
         lambda i: i.get("resource", {}).get("status") == "loaded"
@@ -638,7 +646,7 @@ def run_tracker_sequence(state: SessionState) -> int:
     ok = isinstance(loaded, dict) and loaded.get("resource", {}).get("status") == "loaded"
     check("a tracker location loads through the real server under the real CSP", bool(ok), str(loaded)[:300])
     if not ok:
-        return teardown(state)
+        return tracker_finish(state)
 
     cited_ok = False
     cited = inspect_bounded(lambda i: "board:open-citation" in [t.get("id", "") for t in i.get("targets", [])], 10.0)
@@ -687,7 +695,7 @@ def run_tracker_sequence(state: SessionState) -> int:
         and (time.monotonic() - stopped_at) < 25.0
     )
     check("a stopped server refuses in bounded time, never endless loading", bool(bounded), str(refused)[:300])
-    return teardown(state)
+    return tracker_finish(state)
 
 
 def main() -> int:

@@ -1054,6 +1054,7 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
         return None
 
     serve_bin = ""
+    git_bin = ""
     if require_serve_bin:
         serve_bin = os.environ.get("SACCADE_SERVE_BIN", "")
         if not serve_bin.startswith("/") or not os.access(serve_bin, os.X_OK):
@@ -1062,6 +1063,11 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
                 file=sys.stderr,
             )
             return None
+        found_git = shutil.which("git")
+        if found_git is None:
+            print("containment refusal: git is not in PATH (pinned devshell expected)", file=sys.stderr)
+            return None
+        git_bin = str(pathlib.Path(found_git).resolve())
     fontconf = os.environ.get("FONTCONFIG_FILE", "")
     usable, reason = verify_fontconfig_file(fontconf)
     if not usable:
@@ -1092,6 +1098,7 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
         "fontconf": fontconf,
         "mesa_dir": mesa_dir,
         "serve_bin": serve_bin,
+        "git_bin": git_bin,
     }
 
 
@@ -1151,6 +1158,8 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
     ]
     if resolved.get("serve_bin"):
         binds.append((resolved["serve_bin"], "/lane/sac"))
+    if resolved.get("git_bin"):
+        binds.append((resolved["git_bin"], "/lane/git"))
     return binds
 
 
