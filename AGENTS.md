@@ -63,11 +63,13 @@ do, and `tracker/README.md` carries the tracker's law.
   lib unit tests for tracker code, `just viewer-check` for viewer
   code); the full suite runs once before a commit lands.
 - A phase gate: the suites, fmt, every prek hook on each commit, and
-  the three viewer lanes under
+  the viewer lanes under
   `BOARD_VIEWER_RUNTIME_AUTHORIZED=3030`:
   `nix develop .#board-viewer -c env BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<db> python3 client/harness/entry.py browser|remote`,
-  with `--board <yaml>` and the built app for native. The lane logs
-  are inspected, not assumed.
+  with `--board <yaml>` and the built app for native and for the
+  session lane's tracker sequence
+  (`... entry.py --board <yaml> session tracker`, with the built `sac`
+  as `SACCADE_SERVE_BIN`). The lane logs are inspected, not assumed.
 - The merge gate is the pre-push hook (`merge-gate` in prek.toml):
   the full suite and `nix build .#sac .#board-viewer` run again
   before anything reaches GitHub; the nix builds are not part of the
