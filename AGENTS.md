@@ -1,15 +1,18 @@
 # AGENTS.md - how agents work in this repo
 
 Saccade is an opinionated, agent-native issue tracker: one Rust binary, an
-append-only SQLite event log, a world that is a fold of that log. Read
+append-only SQLite event log, a world that is a fold of that log, and a
+tracker-owned Git repository holding each task's board. Read
 `AXIOMS.md` before proposing anything architectural - it is the framework
 the project exists under, not a suggestion. Ratified decisions live in the
 tracker's own threads (`sac log`, `sac show t-N`); standing law lives in
-this file. Working context for in-flight tasks lives
-as comments on the tasks themselves (`sac comment t-N "..."`). The dogfood
-tracker (`sac`, repo's own `saccade.db`) is where
-work is claimed and closed; see `.agents/skills/saccade/SKILL.md` for the CLI
-discipline.
+this file. Working context for in-flight tasks lands as board content on
+the task's board, revised by commits; logistics between participants is
+messages. The dogfood tracker (this repository's own tracker) is where
+work is claimed and closed; see `tracker/skill/SKILL.md` for the CLI
+discipline. The skill's source lives in `tracker/skill/` and deploys into
+projects with `sac skill install` - the installed copy is generated and
+git-ignored, never authored here.
 
 ## How decisions happen
 
@@ -44,6 +47,18 @@ discipline.
 - In-memory types take the width of their job: `usize` for indices and counts,
   `u64` for absolute times. Storage/wire convert explicitly at the boundary.
 
+## Documentation
+
+- Markdown lives in the root law files (`AGENTS.md`, `AXIOMS.md`) and in
+  per-package docs - a package README or a package docs directory -
+  written for anyone working on the repository, not for agents alone.
+  Development know-how that sat in skills becomes package docs. The skill
+  is the one exception: it describes `sac`'s commands exactly, shares
+  sac's life cycle, and lives in `tracker/skill/`.
+- A phase review checks locality and that no stray docs or files remain.
+- The `.agents` directory carries no tracked files: deployed skill copies
+  are generated, git-ignored, and refreshed by `sac skill install`.
+
 ## Standing law
 
 Law that binds the not-yet-built: code enforces only what exists, and
@@ -62,10 +77,11 @@ with them.
   is an ontology change.
 - No learn semantics anywhere: the system never infers from use; standing
   things are admitted by ratification, never by recurrence.
-- Pointers, never payloads: artifact bytes live outside the record; the
-  tracker stores claims, pointers, and outcome summaries. Publish an artifact
-  when the object itself is useful to inspect or reuse, not merely because
-  it was produced during execution.
+- Content lives in the board repository; the tracker stores claims,
+  references, and decision prose. A figure's file lives in the board tree,
+  and a document too large for a text component signals an overloaded
+  account, not a storage need. Publish a board revision when the account
+  is ready to be judged, not merely because work happened.
 - No LLM calls in any read path; no LLM classification at capture or import.
 - The human read path is part of completion: execution capabilities and
   recorded facts alone are insufficient. The human must be able to
@@ -75,18 +91,31 @@ with them.
   instances, never theory.
 - Workflow fires on triggers, not clocks.
 - Identity follows reference: task ids are dense fold-derived positions;
-  comments, incarnations, and messages have stable birth-record references.
-  Their human-facing numbers are dense within each kind, derived by the fold,
-  never competing persisted counters. Record seq remains provenance, not a
-  human-facing object number.
+  board revisions are dense per task and derived by the fold (`t-N@rK`);
+  incarnations and messages have stable birth-record references, and
+  their human-facing numbers are dense within each kind, derived by the
+  fold, never competing persisted counters. Record seq remains
+  provenance, not a human-facing object number.
 - Breaking payload changes are allowed while this repo is the sole consumer;
   the promise that old logs always load begins at external adoption or
   painful volume, whichever comes first.
-- Versioning is 0.x semver: the minor position is breaking. A MINOR bump
-  may break log loading, the `/api/v1` wire, or CLI verbs, and demands
-  binaries move in step. PATCH covers everything else; UI surfaces and
-  internal modules are never breaking alone. 1.0.0 is the external-adoption
-  line above.
+- Versioning is per package, each 0.x semver over the contract it offers:
+  `sac` (the log format, the `/api/v1` wire, the CLI verbs), the board
+  grammar crate (the `board.yaml` format), and the viewer. Within a
+  package the minor position is breaking: a MINOR bump may break that
+  package's contract and demands its binaries move in step; PATCH covers
+  everything else; UI surfaces and internal modules are never breaking
+  alone. 1.0.0 is the external-adoption line. Tags and flake outputs are
+  per package, named `<package>-v<version>`; cross-package changes land
+  as one tested commit; components declare the contract ranges they use.
+- Shared code is one package per contract: a thing shares only when a
+  second consumer needs it and its shape has settled; packages join only
+  on an identical life cycle. Internal code used by several packages but
+  carrying no public contract may live in an internal workspace crate
+  named for what it does, never "common". Code with one user stays inside
+  its package. Breaking a shared contract is a major bump and ratified;
+  shared code may change internally without a bump as long as its
+  behavior holds.
 - Required stored-format migrations are bounded version-to-version steps in
   code, run before serving with transactional validation and recovery
   safeguards. Behavioral breaks alone do not justify data rewriting.
@@ -101,7 +130,7 @@ with them.
   CLI and web output, UI labels, and agent-visible envelopes carry
   ordinary ASCII punctuation, and a repository check holds every tracked
   text file to the rule. The rule reaches authored text only: Unicode
-  data - messages, comments, paths, names, artifact bytes, record
+  data - messages, board paths, names, figure bytes, record
   content - stays Unicode-capable, and this rule never transliterates or
   rewrites it. Separately ratified semantic migrations keep their own
   authority over record content. Runtime Unicode needed to recognize or
@@ -154,7 +183,7 @@ with them.
   Available and Cleaned change only through verified completed effects,
   not intermediate progress states. Probes check consistency; finding a
   directory does not silently restore a Cleaned workspace.
-- Messages are durable communication, never comment variants or implicit
+- Messages are durable communication, never board content or implicit
   thread publications. Agent messages carry machine-supplied sender,
   message, and reply references; native human input remains native. Known
   contacts come from creation, contact, or explicit introduction, not a
@@ -172,17 +201,22 @@ with them.
   not unsolicited push signals.
 - The requesting incarnation interprets returned contributions against its
   goal and retains continuation unless explicitly handed onward. Delivery
-  supplies activation, never judgment or a successor goal. A use records
-  reliance, not an execution subscription or automatic continuation agent.
-- Comments add information rather than repeat prior accounts. Explicit
-  structured references connect contributions; their explanations remain
-  prose. Presentation revision never retargets them, substantive corrections
-  are new contributions, and historical prose does not acquire inferred
-  graph edges.
-- Comments land at the tier they describe: work facts on the work thread,
-  episode facts on the episode's container, direction facts on the direction
-  home; session-shaped work writes no thread summary unless it changed
-  law - the commit is the record.
+  supplies activation, never judgment or a successor goal. Reliance is
+  recorded by the consuming task's board incorporation, never an
+  execution subscription or automatic continuation agent.
+- Decisions are task events, written once. An offer names the task's
+  current revision and carries no prose - the board is the account.
+  Rejection requires grounds and reopens the task; grounds are the entry
+  point into the why and the home for concerns that attach to no specific
+  place. Acceptance certifies a truthful final state, whatever the
+  outcome. Corrections are new decisions on later offers; grounds and
+  explanations follow the cancellation precedent and are never revisable
+  in place.
+- The board is the task's account and its content channel: findings, dead
+  ends, working state, and review annotations live there, revised by
+  commits. A correction removes an annotation in the commit that
+  addresses it; history keeps the annotated revision. There is no
+  resolved/unresolved lifecycle and no separate withdrawal.
 
 ## Test philosophy
 
@@ -192,26 +226,35 @@ Placement is a contract:
   are invariants, pinned where they live. Placement is by entry point, not
   by invariant-hood.
 
-- `src/objects/*.rs` tests: pure exhaustive transition inventory for the
-  object the module defines.
-- `src/decide.rs` tests: pure command translation and authority; the
-  authority inventory states its expected cells independently of the
-  table it pins; fixtures are constructed events and `World::new()` -
-  never a `Log`.
-- `src/store.rs` tests: the law's contracts over `store::execute` - cross-object
-  invariants, authority ordering, the lifecycle and reliance guards - driven
-  through the in-memory `Log` fixture (test-private, no storage layer)
-  against the shared `populate_log` story; plus every `Reason` pinned
-  and the command translation table.
-- `src/views.rs` tests: view derivations over folded worlds, including
-  the ownership and standing-offer panels.
-- `src/db.rs` tests: the persistence layer - one all-event round-trip; new
-  event families ride the existing round-trip, they don't get their own.
-- `tests/proptest_harness.rs`: random legal sequences never panic the fold,
-  and the world `db::record` returns equals replay and reload.
-- `tests/api.rs`: server, wire, and console contracts over HTTP - command
-  round-trips, the tier law through the wire, malformed bodies, client send,
-  and the CLI face through a real subprocess.
+- `tracker/src/record/objects/*.rs` tests: pure exhaustive transition
+  inventory for the object the module defines.
+- `tracker/src/record/decide.rs` tests: pure command translation and
+  authority; the authority inventory states its expected cells
+  independently of the table it pins; fixtures are constructed events and
+  `World::new()` - never a `Log`.
+- `tracker/src/record/store.rs` tests: the law's contracts over
+  `store::execute` - cross-object invariants, authority ordering, the
+  lifecycle and reliance guards - driven through the in-memory fixture
+  (test-private, no storage layer) against the shared story; plus every
+  `Reason` pinned and the command translation table.
+- `tracker/src/boards/` tests: the Git effects' contracts - write order,
+  crash points, merge behavior - over temporary repositories.
+- `tracker/src/record/views.rs` tests: view derivations over folded
+  worlds, including the ownership and standing-offer panels.
+- `tracker/src/record/db.rs` tests: the persistence layer - one all-event
+  round-trip; new event families ride the existing round-trip, they don't
+  get their own.
+- `tracker/tests/proptest_harness.rs`: random legal sequences never panic
+  the fold, and the world `db::record` returns equals replay and reload.
+- `tracker/tests/api.rs`: server, wire, and console contracts over HTTP -
+  command round-trips, the tier law through the wire, malformed bodies,
+  client send, the board routes, and the CLI face through a real
+  subprocess, including the full offer/reject/annotate/accept loop.
+- `grammar/` tests: fixture-driven parse contracts - every valid fixture
+  parses, every invalid fixture refuses with its declared kind.
+- `client/` node tests: the presentation decoder's parity with the
+  grammar crate over the shared fixtures; the browser, native and remote
+  lanes carry the rendered contracts.
 
 Rules:
 
@@ -225,8 +268,10 @@ Rules:
 - Keep the suite green and honest:
   a failing suite from a fixture change means the fixture changed a contract
   - find out which before editing assertions.
+- Phase reviews diff the test inventory by name against the previous
+  phase: additions fine, every removal explained.
 
-## Comment law
+## Code comments
 
 - Test comments: one line, plain, self-contained. Say what the assertion
   pins ("the claim is the ownership ledger's last entry"). No citations of
@@ -243,9 +288,10 @@ Rules:
   so authority always precedes it, and every command is its events with no
   expansion. Do not give decide a world "for convenience."
 - No birth event carries its id; references do. Task ids are fold-derived push
-  positions, dense by construction. Stored comment, incarnation, and message
-  references identify birth records; displayed numbers count births of each
-  kind, not global record positions.
+  positions, dense by construction. Stored incarnation, message, and
+  workspace references identify birth records; displayed numbers count
+  births of each kind, and board revisions count per task, not global
+  record positions.
 - Validation depends on tier, never actor identity - the exception is the
   self-acceptance door: an agent whose environment-declared task scope
   covers the offered task cannot accept it. Scope is disclosure riding
@@ -253,20 +299,21 @@ Rules:
   tier argument: `SACCADE_ACTOR` presence is agent tier, its absence
   human. Judgment acts (cancel, reopen) are human-only and executed
   with an explanation, never proposed.
-- Comments carry note, offer, accept, reject, or use payloads, an explicit
-  home task, and structured citation mappings, never a recipient. Notes
-  and offers carry their own authored title at birth - required,
-  rendered as plain text beside the prose, revisable in presentation
-  independently of the body; accept stays untitled and bodyless, and
-  no other kind takes a title. Withdrawal hides a note's title and
-  body together. Requests are messages. Offer addresses its whole
-  task; accept and reject name its current offer. A use declares a
-  fixed other source task; explicit binding or rebinding selects that
-  task's current Offered or Concluded account with grounds. Earlier
-  selections remain recorded, and source replacement or acceptance
-  never changes the selection automatically. Changing source task
-  creates another use. Use never creates acceptance, nor acceptance
-  use.
+- The board publish sequence is Git objects, then the event in one
+  SQLite transaction, then the ref; the log decides current, offered
+  and accepted, and refs plus the materialized checkout are derived
+  caches repaired at startup. A crash leaves at worst orphan objects or
+  a lagging ref; a logged commit missing from the repository refuses to
+  serve.
+- A commit names the commit it builds on and refuses if the current one
+  moved; committing refuses while the task is offered, so an offered
+  revision cannot move and no revision-moved guard exists.
+- Acceptance requires every incorporation to cite exactly its source's
+  accepted revision; reconciliation onto an accepted revision is an
+  ordinary commit, with no new act.
+- Checkpoints are snapshots mid-edit: they validate nothing, carry no
+  event, chain onto the actor's own ref, and must be discarded before
+  anything accepts the task.
 
 ## Native host UI development
 
@@ -281,7 +328,8 @@ Rules:
 - `just herdr-ui info` reports the app home and log directory. Read that
   home's installed `AGENTS.md` and generated type declarations before writing
   mods. Edit personal mods/layouts there; live reload does not require a
-  rebuild. Read `dev/herdr-ui.md` for commands and working-copy setup.
+  rebuild. Read `tools/herdr-ui/herdr-ui.md` for commands and working-copy
+  setup.
 - After each mod edit, run `just herdr-ui check <mod-directory>`, inspect
   `just herdr-ui status`, then capture and actually inspect `just herdr-ui
   shot`. Use `do` for app commands and `input` for private-display input;
