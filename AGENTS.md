@@ -74,6 +74,13 @@ do, and `tracker/README.md` carries the tracker's law.
   the full suite and `nix build .#sac .#board-viewer` run again
   before anything reaches GitHub; the nix builds are not part of the
   per-commit phase gate.
+- Agents run nix once, last, before offering. The fast phase gate
+  first (the suites, clippy -D warnings, the prek hooks, the lanes);
+  only when it is green, commit and `nix build .#sac
+  .#board-viewer` at that commit - a clean tree at the offered commit
+  is the same build the merge gate will do. Never chained: a red
+  fast gate is fixed and rerun, never queued behind a nix build. The
+  offer names the commit that was built.
 - Phase reviews diff the test inventory by name against the previous
   phase: additions fine, every removal explained.
 - Tracker test placement and suite contracts live in
