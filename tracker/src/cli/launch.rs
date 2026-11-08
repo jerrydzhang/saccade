@@ -431,14 +431,17 @@ pub(super) struct AskOutcome {
 pub(super) const ASK_BIND_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The binding bound is 30 seconds in production and that is the only
-/// production value. The test harness alone shortens it through
-/// SACCADE_ASK_BIND_BOUND_SECS so the timeout path costs seconds, not
-/// the production wait; nothing else reads that variable.
+/// production value. Debug builds alone (the test profile is one) may
+/// shorten it through SACCADE_ASK_BIND_BOUND_SECS so the timeout path
+/// costs seconds; the released binary never reads the variable.
 fn ask_bind_bound() -> std::time::Duration {
-    match std::env::var("SACCADE_ASK_BIND_BOUND_SECS") {
-        Ok(secs) => std::time::Duration::from_secs(secs.parse().unwrap_or(30)),
-        Err(_) => ASK_BIND_BOUND,
+    #[cfg(debug_assertions)]
+    if let Ok(secs) = std::env::var("SACCADE_ASK_BIND_BOUND_SECS") {
+        if let Ok(n) = secs.parse::<u64>() {
+            return std::time::Duration::from_secs(n);
+        }
     }
+    ASK_BIND_BOUND
 }
 
 pub(super) fn wait_for_ask_binding(
