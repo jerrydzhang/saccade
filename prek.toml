@@ -46,7 +46,7 @@ sha="${PRE_COMMIT_TO_REF:-}"
 case "$sha" in "" | *0000000000000000000000000000000000000000*) exit 0 ;; esac
 repo="$(git rev-parse --path-format=absolute --git-common-dir)"
 repo="${repo%/.git}"
-nix build --no-link "git+file://$repo?rev=$sha"
+nix build --no-link "git+file://$repo?rev=$sha#sac" "git+file://$repo?rev=$sha#board-viewer"
 '''],
     pass_filenames = false, always_run = true, stages = ["pre-push"] },
 ]
