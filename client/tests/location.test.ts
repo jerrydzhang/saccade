@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseLocation, parseTaskSpec, trackerLocation } from "../src/lib/location.ts";
+import { apiUrl, baseFromHost, parseLocation, parseTaskSpec, trackerLocation } from "../src/lib/location.ts";
 
 test("a plain absolute path is the machine this viewer runs on", () => {
   assert.deepEqual(parseLocation("/srv/boards/first.yaml"), {
@@ -86,4 +86,13 @@ test("a task spec parses the bare and revisioned forms", () => {
   assert.equal(parseTaskSpec("t-"), null);
   assert.equal(parseTaskSpec("5"), null);
   assert.equal(parseTaskSpec("t-5/r2"), null);
+});
+
+test("tracker routes resolve against the server host with one slash", () => {
+  for (const host of ["192.168.0.51:8811", "127.0.0.1:8811/", "http://127.0.0.1:8811"]) {
+    const base = baseFromHost(host);
+    assert.ok(base !== null, host);
+    const url = apiUrl(base, "/api/v1/version");
+    assert.equal(new URL(url).pathname, "/api/v1/version", url);
+  }
 });

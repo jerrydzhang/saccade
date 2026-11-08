@@ -99,6 +99,11 @@ class TrackerMock:
                 pass
 
             def do_GET(self):
+                # http.server collapses a leading // before self.path; the
+                # real tracker answers 404, so the stand-in must too
+                if self.requestline.split(" ")[1].startswith("//"):
+                    self._reply(json.dumps({"error": {"code": "not_found", "detail": "no route"}}).encode(), 404)
+                    return
                 origin = self.headers.get("Origin")
                 if origin is not None and origin not in mock.allowed_origins:
                     self._reply(

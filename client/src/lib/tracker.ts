@@ -10,7 +10,7 @@
 import { SUPPORTED_GRAMMAR_VERSIONS } from "./board/decode.ts";
 import type { BoardSource, LoadedAsset, LoadedText, Location } from "./sources.ts";
 import { SourceUnavailableError } from "./sources.ts";
-import { parseTaskSpec } from "./location.ts";
+import { apiUrl, baseFromHost, parseTaskSpec } from "./location.ts";
 import { resolveRelative } from "./resolve.ts";
 
 // The one viewer setting: the tracker server's host. The value is the
@@ -38,12 +38,11 @@ function serverBase(): URL {
       "no tracker server set; the tracker publishes its address beside its database - set it in the header once",
     );
   }
-  const raw = host.includes("://") ? host : `http://${host}`;
-  try {
-    return new URL(raw);
-  } catch {
+  const base = baseFromHost(host);
+  if (base === null) {
     throw new SourceUnavailableError("lane-unavailable", `the tracker server '${host}' is not a host or URL`);
   }
+  return base;
 }
 
 type VersionReply = {
@@ -105,7 +104,7 @@ export class TrackerSource implements BoardSource {
    * versions this viewer decodes. */
   private async checkContract(): Promise<void> {
     const base = serverBase();
-    const version = (await fetchJson(`${base}/api/v1/version`)) as Partial<VersionReply>;
+    const version = (await fetchJson(apiUrl(base, "/api/v1/version"))) as Partial<VersionReply>;
     if (version.tracker !== null && version.tracker !== undefined && version.tracker !== this.tracker) {
       throw new SourceUnavailableError(
         "machine-unknown",
@@ -144,7 +143,7 @@ export class TrackerSource implements BoardSource {
       await this.checkContract();
       const base = serverBase();
       const suffix = spec.revision === null ? "" : `&revision=${spec.revision}`;
-      const reply = (await fetchJson(`${base}/api/v1/boards/get?task=${spec.task}${suffix}`)) as TreeReply;
+      const reply = (await fetchJson(apiUrl(base, `/api/v1/boards/get?task=${spec.task}${suffix}`))) as TreeReply;
       if (!Array.isArray(reply.files)) {
         throw new SourceUnavailableError("core-protocol", "the boards/get answer carries no file list");
       }

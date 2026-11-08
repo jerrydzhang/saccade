@@ -50,3 +50,19 @@ export function parseLocation(input: string): ParsedLocation {
   }
   return null;
 }
+
+/** The server base for a host setting: a bare host:port gets http. */
+export function baseFromHost(host: string): URL | null {
+  const raw = host.includes("://") ? host : `http://${host}`;
+  try {
+    return new URL(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** A route on the server, resolved against the base: a URL's string
+ * form ends in a slash, so string concatenation would double it. */
+export function apiUrl(base: URL, route: string): string {
+  return new URL(route, base).toString();
+}
