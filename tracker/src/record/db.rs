@@ -271,7 +271,7 @@ fn read_rows(conn: &Connection) -> Result<Vec<StoredRecord>, DbError> {
 
 /// Rows to records; unknown kind/tier stops at the first as a
 /// degradation, malformed payloads of known kinds are corruption.
-fn parse_rows(rows: &[StoredRecord]) -> Result<(Vec<Record>, Option<String>), DbError> {
+pub fn parse_rows(rows: &[StoredRecord]) -> Result<(Vec<Record>, Option<String>), DbError> {
     let mut degraded: Option<String> = None;
     let mut records = Vec::with_capacity(rows.len());
     for row in rows {
@@ -1303,6 +1303,11 @@ mod test {
             verify(&stamped(SCHEMA_VERSION - 1)),
             Err(DbError::OlderSchema(v)) if v == SCHEMA_VERSION - 1
         ));
+        let line = DbError::OlderSchema(SCHEMA_VERSION - 1).to_string();
+        assert!(
+            line.contains(".#sac-archive") && line.contains("import-workspaces"),
+            "the old-format refusal teaches the archive and the import: {line}"
+        );
         assert!(matches!(
             verify(&stamped(SCHEMA_VERSION + 1)),
             Err(DbError::NewerSchema(v)) if v == SCHEMA_VERSION + 1

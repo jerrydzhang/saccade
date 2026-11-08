@@ -434,3 +434,187 @@ pub fn import_workspaces(source: &Path, destination: &Path) -> Result<Carried, I
     })?;
     Ok(carried)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    // the pre-board log the import reads: the schema-5 events table
+    // with the old kinds and their payload shapes
+    fn old_fixture(path: &Path) -> Connection {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                seq INTEGER PRIMARY KEY,
+                event_time INTEGER NOT NULL,
+                logged_time INTEGER NOT NULL,
+                actor TEXT NOT NULL,
+                tier TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                scope TEXT NULL
+            );
+            PRAGMA application_id = 1935762276;
+            PRAGMA user_version = 5;",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn put(conn: &Connection, seq: i64, actor: &str, tier: &str, kind: &str, payload: &str) {
+        conn.execute(
+            "INSERT INTO events (seq, event_time, logged_time, actor, tier, kind, payload)
+             VALUES (?1, 1791657084 + ?1, 1791657085 + ?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![seq, actor, tier, kind, payload],
+        )
+        .unwrap();
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sac-import-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_cutover_import_carries_workspaces_sessions_and_the_root() {
+        let dir = scratch("carry");
+        let old = old_fixture(&dir.join("old.db"));
+        put(
+            &old,
+            0,
+            "codex",
+            "agent",
+            "incarnation_registered",
+            r#"{"native_id":"0188d5f4-9f61-7cc3-9e53-d5e6a2ad4b1c","saved_session":"/run/saccade-import-fixture/native-sessions/one.jsonl"}"#,
+        );
+        // sessionless at birth: the later bind is what carries this one
+        put(
+            &old,
+            1,
+            "ida person",
+            "human",
+            "incarnation_registered",
+            r#"{"native_id":"0192a7c1-4b0e-7dd1-9f11-c71d24b6a6e2"}"#,
+        );
+        put(
+            &old,
+            2,
+            "codex",
+            "agent",
+            "saved_session_bound",
+            r#"{"incarnation":1,"saved_session":"/run/saccade-import-fixture/native-sessions/two.jsonl"}"#,
+        );
+        put(
+            &old,
+            3,
+            "codex",
+            "agent",
+            "workspace_created",
+            r#"{"base":"6d7e0ef629c03cddfc65722b325634b83a825055","branch":"fix-message-behavior-a542d73c","worktree":"/run/saccade-import-fixture/worktrees/fix-message-behavior-a542d73c"}"#,
+        );
+        put(
+            &old,
+            4,
+            "codex",
+            "agent",
+            "workspace_cleaned",
+            r#"{"workspace":3}"#,
+        );
+        put(
+            &old,
+            5,
+            "codex",
+            "agent",
+            "workspace_created",
+            r#"{"base":"6d7e0ef629c03cddfc65722b325634b83a825055","branch":"board-lifecycle-9a01b7d2","worktree":"/run/saccade-import-fixture/worktrees/board-lifecycle-9a01b7d2"}"#,
+        );
+        put(
+            &old,
+            6,
+            "ida person",
+            "human",
+            "root_space_bound",
+            r#"{"space":"work","tab":"tracker"}"#,
+        );
+
+        let dest = dir.join("fresh.db");
+        let carried = import_workspaces(&dir.join("old.db"), &dest).unwrap();
+        assert_eq!(
+            carried,
+            Carried {
+                workspaces: 2,
+                workspace_stages: 1,
+                saved_sessions: 1,
+                session_binds: 1,
+                root_association: 1,
+                records: 7,
+            }
+        );
+
+        let conn = crate::db::open_read(&dest).unwrap();
+        let loadout = crate::db::load(&conn).unwrap();
+        let kinds: Vec<&str> = loadout.rows.iter().map(|r| r.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "incarnation_registered",
+                "incarnation_registered",
+                "saved_session_bound",
+                "workspace_created",
+                "workspace_cleaned",
+                "workspace_created",
+                "root_space_bound"
+            ]
+        );
+        // the carried contexts keep actor and tier from the old log
+        assert_eq!(loadout.rows[6].actor, "ida person");
+        assert_eq!(loadout.rows[6].tier, "human");
+        // the fold reads the carried facts: the cleaned stage and the
+        // human's root destination
+        let (records, _) = crate::db::parse_rows(&loadout.rows).unwrap();
+        let world = crate::store::World::replay(records).unwrap();
+        assert_eq!(
+            world.workspace_stage(RecordId(3)),
+            Some(crate::WorkspaceStage::Cleaned)
+        );
+        assert_eq!(
+            world.workspace_stage(RecordId(5)),
+            Some(crate::WorkspaceStage::Available)
+        );
+        let root = world.root_space.unwrap();
+        assert_eq!(root.space, "work");
+        assert_eq!(root.tab, "tracker");
+
+        // a second import refuses: the destination holds records now
+        let again = import_workspaces(&dir.join("old.db"), &dest).unwrap_err();
+        assert!(
+            matches!(again, ImportFail::NotFresh { records: 7 }),
+            "the non-empty destination refuses: {again:?}"
+        );
+    }
+
+    #[test]
+    fn the_import_refuses_a_source_stamped_above_its_shapes() {
+        let dir = scratch("stamp");
+        let old = old_fixture(&dir.join("old.db"));
+        put(
+            &old,
+            0,
+            "codex",
+            "agent",
+            "workspace_created",
+            r#"{"base":"6d7e0ef629c03cddfc65722b325634b83a825055","branch":"future-branch-1a2b3c4d","worktree":"/run/saccade-import-fixture/worktrees/future-branch-1a2b3c4d"}"#,
+        );
+        old.execute_batch("PRAGMA user_version = 6;").unwrap();
+
+        let refused = import_workspaces(&dir.join("old.db"), &dir.join("fresh.db")).unwrap_err();
+        assert!(
+            matches!(refused, ImportFail::NewerSchema(6)),
+            "a newer stamp refuses: {refused:?}"
+        );
+        assert!(!dir.join("fresh.db").exists());
+    }
+}
