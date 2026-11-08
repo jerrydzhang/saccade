@@ -1949,6 +1949,23 @@ fn board_wire_routes_hold_their_contracts() {
     // directory basename; the fixture repo directory is "project"
     assert_eq!(body["tracker"], json!("project"));
 
+    // a doubled slash lands on no route: 404, never a collapsed-path
+    // answer, so a client that joins one slash too many sees a refusal
+    for path in ["//api/v1/version", "//api/v1/boards/get?task=0"] {
+        let mut response = ureq::get(&format!("{url}{path}"))
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 404, "{path}");
+        let body = response.body_mut().read_to_string().unwrap();
+        assert!(
+            !body.contains("board_grammar") && !body.contains("files"),
+            "{path}: {body}"
+        );
+    }
+
     // the path route refuses a task with no board, and a bad task id
     let created = ureq::post(&format!("{url}/api/v1/command"))
         .config()
