@@ -552,14 +552,16 @@ def run_tracker_sequence(state: SessionState) -> int:
         teardown(state)
         return 1
     root = state.shots.parent / "tracker"
-    (root / "repo").mkdir(parents=True, exist_ok=True)
+    # the tracker's name is the repo directory's basename: the location
+    # spec names it, so the dir carries the name the spec uses
+    (root / "lanetracker").mkdir(parents=True, exist_ok=True)
     db = root / "lanetracker.db"
     port = tracker_free_port()
     server_log_path = state.shots.parent / "logs" / "tracker-serve.log"
     server_log = open(server_log_path, "wb")
     try:
         state.server = subprocess.Popen(
-            [serve_bin, "serve", "--db", str(db), "--repo", str(root / "repo"),
+            [serve_bin, "serve", "--db", str(db), "--repo", str(root / "lanetracker"),
              "--bind", NATIVE_HOST, "--port", str(port)],
             # the server shells out to git, which the scrubbed env would
             # never find: the pinned git rides /lane beside the server
