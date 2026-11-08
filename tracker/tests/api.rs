@@ -11,6 +11,33 @@ use serde_json::{Value, json};
 
 use saccade::api::AppState;
 
+/// The suite's own state parent and working directory, under the temp
+/// tree: every spawned sac resolves state and repo discovery here, so
+/// a test run writes nothing into the host's real state root - the
+/// live tracker's state included.
+fn suite_state() -> PathBuf {
+    std::env::temp_dir().join(format!("sac-suite-state-{}", std::process::id()))
+}
+
+fn suite_cwd() -> PathBuf {
+    let dir = suite_state().join("cwd");
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// The host's real state parent, as the unhelped environment resolves
+/// it: read-only evidence for the helper's pin.
+fn real_state_parent() -> PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
+        return dir;
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
+        .join(".local")
+        .join("state")
+}
+
 fn scratch_db(tag: &str) -> ScratchDir {
     let dir = std::env::temp_dir().join(format!("sac-api-{tag}-{}", std::process::id()));
     // a killed run may have left this pid's dir behind; every test
@@ -1813,8 +1840,11 @@ fn board_doors_run_the_full_loop_through_the_cli_face() {
     assert!(out.contains("incorporates t-0@r"), "{out}");
 
     // telemetry rides in the repo's state dir: verb, flags, outcome, tier
-    let telemetry =
-        std::fs::read_to_string(saccade::telemetry::at(&saccade::paths::db_at(&project))).unwrap();
+    let telemetry = std::fs::read_to_string(saccade::telemetry::at(&saccade::paths::db_at_in(
+        &suite_state(),
+        &project,
+    )))
+    .unwrap();
     assert!(
         telemetry.contains("\"verb\":\"board.commit\""),
         "{telemetry}"
@@ -2170,7 +2200,7 @@ fn show_and_log_json_read_byte_exact_through_the_cli_face() {
     let pipe = |input: &str, args: &[&str]| {
         use std::io::Write as _;
         use std::process::Stdio;
-        let mut child = std::process::Command::new(bin)
+        let mut child = scrubbed(std::process::Command::new(bin))
             .arg("--db")
             .arg(&path)
             .args(args)
@@ -2299,7 +2329,7 @@ fn the_binary_deploys_and_verifies_its_embedded_skill() {
     let dir = std::env::temp_dir().join(format!("sac-skill-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let sac = |args: &[&str]| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .current_dir(&dir)
             .args(args)
             .output()
@@ -2422,7 +2452,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     let bin = env!("CARGO_BIN_EXE_sac");
     let path = scratch_db("wait-door");
     let sac = |args: &[&str]| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .arg("--db")
             .arg(&path)
             .env("SACCADE_ACTOR", "pi")
@@ -2587,7 +2617,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
     );
 
     // the same wait over the wire, waking on a local write
-    let mut serve = std::process::Command::new(bin)
+    let mut serve = scrubbed(std::process::Command::new(bin))
         .args(["serve", "--db"])
         .arg(&path)
         .args(["--port", "0"])
@@ -2606,7 +2636,7 @@ fn the_wait_door_wakes_on_committed_and_delayed_matches_and_lands_nothing() {
             _ => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     };
-    let mut wire_waiter = std::process::Command::new(bin)
+    let mut wire_waiter = scrubbed(std::process::Command::new(bin))
         .arg("--server")
         .arg(&url)
         .args([
@@ -3041,7 +3071,7 @@ fn bounded_sac<S: AsRef<str>>(
     args: &[S],
     envs: &[(&str, String)],
 ) -> (bool, String, String, bool) {
-    let mut cmd = std::process::Command::new(bin);
+    let mut cmd = scrubbed(std::process::Command::new(bin));
     cmd.args(args.iter().map(AsRef::as_ref))
         .process_group(0)
         .stdout(std::process::Stdio::piped())
@@ -3124,7 +3154,7 @@ async fn identity_reads_the_scope_and_the_retired_words_refuse_at_the_parser() {
 
     // every sac run rides the fake host's PATH, scrubbed of inherited scope
     let run = |args: &[String], envs: &[(&str, &str)]| {
-        let mut cmd = std::process::Command::new(bin);
+        let mut cmd = scrubbed(std::process::Command::new(bin));
         cmd.env(
             "PATH",
             format!(
@@ -3279,6 +3309,10 @@ async fn launch_with_direnv_stripped_from_the_path() {
     let workspace = db.parent().unwrap().join("bare-workspace");
     std::fs::create_dir_all(&workspace).unwrap();
 
+    // this one spawns raw on purpose: the contract under test is the
+    // ambient resolution itself (PATH bait, no override), so the
+    // helper's fail-safes would change the answer. Only the state
+    // root and the cwd still point at scratch.
     let out = std::process::Command::new(bin)
         .args([
             "--server",
@@ -3291,6 +3325,10 @@ async fn launch_with_direnv_stripped_from_the_path() {
             "--",
             "register and wait",
         ])
+        // the launch composes the caller's location, so this child
+        // runs from the scratch workspace
+        .current_dir(&workspace)
+        .env("XDG_STATE_HOME", suite_state())
         // the fake host sits on PATH as ambient bait; direnv deliberately is not
         .env("PATH", host.parent().unwrap().display().to_string())
         .env("FAKE_ORCA_LOG", host_log.display().to_string())
@@ -3338,7 +3376,7 @@ async fn the_launch_scrubs_stale_inheritance() {
     let workspace = db.parent().unwrap().join("chosen-workspace");
     std::fs::create_dir_all(&workspace).unwrap();
 
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .args([
             "--server",
             &base_url,
@@ -3425,7 +3463,7 @@ async fn the_launch_scrubs_stale_inheritance() {
 /// through collected pipes.
 fn run_here_in_pty(bin: &str, args: &[String], envs: &[(&str, String)]) -> std::process::Output {
     let mut masters = Vec::new();
-    let mut cmd = std::process::Command::new(bin);
+    let mut cmd = scrubbed(std::process::Command::new(bin));
     cmd.args(args.iter().map(String::as_str))
         .stdin(pty_stdio(&mut masters));
     for key in [
@@ -4137,7 +4175,7 @@ fn spawn_serving_subprocess(
     state_home: Option<&Path>,
     extra_envs: &[(&str, &str)],
 ) -> (String, ServerProc) {
-    let mut cmd = std::process::Command::new(bin);
+    let mut cmd = scrubbed(std::process::Command::new(bin));
     cmd.args([
         "--db",
         db.to_str().unwrap(),
@@ -5020,7 +5058,7 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
     let workspace = db.parent().unwrap().join("peer-workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let binding = bind_next_ask(&base_url);
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .args([
             "--server",
             &base_url,
@@ -5081,7 +5119,7 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
     );
 
     // a plain send to the newborn rides the same submission
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .args([
             "--server",
             &base_url,
@@ -5111,7 +5149,7 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
 
     // a send to the finished address refuses, naming the recorded
     // message beside the host's evidence
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .args([
             "--server",
             &base_url,
@@ -5134,7 +5172,7 @@ fn the_ask_door_introduces_and_the_send_door_discloses() {
     assert!(err.contains("recipient_not_live"), "{err}");
 
     // without a declared incarnation the ask door refuses, taught
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .args([
             "--server",
             &base_url,
@@ -5265,7 +5303,7 @@ fn run_with_terminals(
 ) -> std::process::Output {
     use std::io::Write;
     let mut masters = Vec::new();
-    let mut cmd = std::process::Command::new(bin);
+    let mut cmd = scrubbed(std::process::Command::new(bin));
     cmd.args(args)
         .env_remove("SACCADE_ACTOR")
         .env_remove("SACCADE_TASK")
@@ -5298,7 +5336,7 @@ fn piped_human_prose_passes_and_unattended_refuses() {
     let db = scratch_db("ws-guard");
 
     // the task exists; possession (an agent) seeds it offline
-    let seed = std::process::Command::new(bin)
+    let seed = scrubbed(std::process::Command::new(bin))
         .arg("--db")
         .arg(&db)
         .env("SACCADE_ACTOR", "pi")
@@ -5377,11 +5415,13 @@ fn spawn_serve(
     envs: &[(&str, &str)],
 ) -> (ServerProc, String) {
     let mut child = ServerProc(
-        std::process::Command::new(bin)
+        scrubbed(std::process::Command::new(bin))
             .args(["serve", "--port", "0", "--db"])
             .arg(db)
             .args(extra)
             .envs(envs.iter().copied())
+            .env("XDG_STATE_HOME", suite_state())
+            .current_dir(suite_cwd())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -5426,6 +5466,10 @@ fn scrubbed(mut cmd: std::process::Command) -> std::process::Command {
     // test, never the production server
     cmd.env("SACCADE_TEST_CONTEXT", "1");
     cmd.env("SACCADE_HERDR", "/nonexistent-sac-test-hc");
+    // the state root and the working directory are the helper's own:
+    // discovery from the real tree would find the live tracker
+    cmd.env("XDG_STATE_HOME", suite_state());
+    cmd.current_dir(suite_cwd());
     cmd
 }
 
@@ -5780,7 +5824,7 @@ async fn the_declared_repo_carries_the_serving_effects() {
     };
     assert!(refused, "repo-less serve must refuse");
 
-    let mut serve = std::process::Command::new(bin)
+    let mut serve = scrubbed(std::process::Command::new(bin))
         .args(["serve", "--port", "0", "--db"])
         .arg(&db)
         .arg("--repo")
@@ -6201,7 +6245,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
 
     // the CLI face: creation and switch through a real subprocess
     let sac = |args: &[&str], envs: &[(&str, &str)]| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .args(["--server", &base_url, "--repo", root.to_str().unwrap()])
             .args(args)
             .env("SACCADE_DB", "")
@@ -6374,7 +6418,7 @@ async fn the_task_free_controller_creates_and_switches_stopped_sessions() {
         let ask_out = ask_out.clone();
         let ask_err = ask_err.clone();
         move || {
-            std::process::Command::new(bin)
+            scrubbed(std::process::Command::new(bin))
                 .args([
                     "--server",
                     &base_url,
@@ -7439,7 +7483,7 @@ fn completions_emit_scripts_and_the_candidate_doors_answer_the_fold() {
     drop(conn);
 
     let sac = |args: &[&str]| {
-        let out = std::process::Command::new(bin)
+        let out = scrubbed(std::process::Command::new(bin))
             .arg("--db")
             .arg(&path)
             .args(args)
@@ -7511,7 +7555,7 @@ fn completions_emit_scripts_and_the_candidate_doors_answer_the_fold() {
     // destination the door answers empty, exit 0, no stderr
     let outside = std::env::temp_dir().join(format!("sac-api-no-repo-{}", std::process::id()));
     std::fs::create_dir_all(&outside).unwrap();
-    let out = std::process::Command::new(bin)
+    let out = scrubbed(std::process::Command::new(bin))
         .arg("complete")
         .arg("tasks")
         .current_dir(&outside)
@@ -7534,7 +7578,7 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
     let _ = std::fs::remove_dir_all(&dir);
     // the launch doors resolve the repo's own database: the serve
     // subprocess must publish exactly that path's address hint
-    let db = saccade::paths::state_dir(&dir).join("saccade.db");
+    let db = saccade::paths::state_dir_in(&suite_state(), &dir).join("saccade.db");
     let workspace = dir.join("ws");
     std::fs::create_dir_all(&workspace).unwrap();
     // the contract-shaped fake: hc run accepts the composed launch and
@@ -7632,8 +7676,9 @@ fn the_launch_door_births_the_incarnation_with_its_host_address() {
     );
     assert!(saved_session.is_none(), "the locator binds at attach");
 
-    // the door-owned session dir exists under the tracker's state root
-    let sessions = saccade::pi_session::sessions_dir(&dir);
+    // the door-owned session dir exists under the suite's state root,
+    // where the helper pointed the child
+    let sessions = saccade::paths::state_dir_in(&suite_state(), &dir).join("native-sessions");
     assert!(sessions.is_dir(), "the native-sessions dir stands");
 
     // the identity is a real registration: the mailbox read resolves it
@@ -8066,11 +8111,12 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
     std::fs::create_dir_all(&dir).unwrap();
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    let db = saccade::paths::state_dir(&repo).join("saccade.db");
+    let db = saccade::paths::state_dir_in(&suite_state(), &repo).join("saccade.db");
 
     // a log whose fold carries a board commit the repository must hold
-    let boards = saccade::boards::Boards::open(&saccade::paths::state_dir(&repo))
-        .expect("the boards repository opens");
+    let boards =
+        saccade::boards::Boards::open(&saccade::paths::state_dir_in(&suite_state(), &repo))
+            .expect("the boards repository opens");
     let work = dir.join("work");
     std::fs::create_dir_all(&work).unwrap();
     std::fs::write(
@@ -8123,7 +8169,7 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
     let _ = boards.repair(&[("0".to_string(), commit.as_str().to_string())]);
 
     let log = std::fs::File::create(dir.join("serve.log")).unwrap();
-    let mut cmd = std::process::Command::new(bin);
+    let mut cmd = scrubbed(std::process::Command::new(bin));
     cmd.args([
         "--db",
         db.to_str().unwrap(),
@@ -8147,9 +8193,10 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
     let _ = serve.wait();
 
     // a logged commit missing from the repository refuses to serve
-    std::fs::remove_dir_all(saccade::paths::state_dir(&repo).join("boards.git")).unwrap();
+    std::fs::remove_dir_all(saccade::paths::state_dir_in(&suite_state(), &repo).join("boards.git"))
+        .unwrap();
     let log2 = std::fs::File::create(dir.join("serve2.log")).unwrap();
-    let mut cmd2 = std::process::Command::new(bin);
+    let mut cmd2 = scrubbed(std::process::Command::new(bin));
     cmd2.args([
         "--db",
         db.to_str().unwrap(),
@@ -8185,4 +8232,70 @@ fn serve_startup_repairs_boards_and_refuses_a_missing_logged_commit() {
     );
     let _ = serve2.wait();
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_helper_run_writes_nothing_outside_its_scratch() {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    // the host's real state root, read as evidence only: the listing
+    // before and after the runs must not move
+    let root = real_state_parent().join("saccade");
+    let listing = || -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&root)
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    let before = listing();
+
+    // a bare run from the helper's cwd passes the identity guard and
+    // finds no tracker; the refusal lands nowhere
+    let out = scrubbed(std::process::Command::new(bin))
+        .env("SACCADE_ACTOR", "pin bot")
+        .args(["create", "task", "nowhere to land"])
+        .output()
+        .expect("spawn sac");
+    assert!(!out.status.success(), "a bare run finds no tracker");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("pass --db"), "the refusal teaches: {err}");
+
+    // an explicit run through the helper writes into the suite state
+    // root and nowhere else
+    let scratch = scratch_db("helper-pin");
+    let out = scrubbed(std::process::Command::new(bin))
+        .env("SACCADE_ACTOR", "pin bot")
+        .arg("--db")
+        .arg(&scratch)
+        .args(["create", "task", "scratch only"])
+        .output()
+        .expect("spawn sac");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // the run's own evidence sits inside the scratch: the db carries
+    // the record and its telemetry rides beside it
+    let out = scrubbed(std::process::Command::new(bin))
+        .env("SACCADE_ACTOR", "pin bot")
+        .arg("--db")
+        .arg(&scratch)
+        .args(["--json", "list"])
+        .output()
+        .expect("spawn sac");
+    let out_text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out_text.contains("scratch only"), "{out_text}");
+    assert!(
+        scratch.with_file_name("telemetry.jsonl").exists(),
+        "the run's telemetry rides beside the scratch db"
+    );
+
+    let after = listing();
+    assert_eq!(before, after, "the real state root gained nothing");
 }

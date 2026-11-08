@@ -54,13 +54,20 @@ pub fn session_key(native_id: &str) -> String {
     format!("s{:08x}", fnv1a(native_id.as_bytes()))
 }
 
-pub fn state_dir(repo_root: &Path) -> PathBuf {
+/// The repo's per-repo state directory under an explicit parent: the
+/// composition `state_dir` applies to the host's own state parent.
+/// Tests point the parent at scratch so nothing lands in real state.
+pub fn state_dir_in(parent: &Path, repo_root: &Path) -> PathBuf {
     let slug = format!(
         "{}-{:06x}",
         repo_basename(repo_root),
         fnv1a(repo_root.to_string_lossy().as_bytes())
     );
-    state_parent().join("saccade").join(slug)
+    parent.join("saccade").join(slug)
+}
+
+pub fn state_dir(repo_root: &Path) -> PathBuf {
+    state_dir_in(&state_parent(), repo_root)
 }
 
 /// The main repo root for the current directory: worktrees resolve to the
@@ -88,8 +95,14 @@ pub fn repo_root(cwd: &Path) -> Result<PathBuf, String> {
 }
 
 /// The default db location for a repo: its state root, not its working tree.
+/// The `_in` variant composes under an explicit parent, the test seam
+/// that keeps suite state in scratch.
+pub fn db_at_in(parent: &Path, repo_root: &Path) -> PathBuf {
+    state_dir_in(parent, repo_root).join("saccade.db")
+}
+
 pub fn db_at(repo_root: &Path) -> PathBuf {
-    state_dir(repo_root).join("saccade.db")
+    db_at_in(&state_parent(), repo_root)
 }
 
 /// The write-attempt log's home: beside the tracker it observes, so a
