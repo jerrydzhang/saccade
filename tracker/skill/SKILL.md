@@ -62,7 +62,7 @@ its flags. Output is human-readable by default and `--json` on every face.
 A board is one `board.yaml` beside its figures (8 MiB each), naming the
 five kinds and only these:
 
-```yaml
+````yaml
 grammar: 1
 task: t-2
 content:
@@ -70,6 +70,11 @@ content:
       ## Question
 
       Why does the tone arm resonate near 7 Hz on the rebuilt plinth?
+
+      ```mermaid
+      flowchart LR
+        cli["sac CLI"] --> api["/api/v1"]
+      ```
   - group:
       title: Recorded setup
       content:
@@ -89,14 +94,16 @@ content:
   - annotation: |
       Reviewer concern: the number assumes a 20 C room; the session log
       says 24 C.
-```
+````
 
-`text` is markdown with dollar math; `group` nests content under an
-optional title; `figure` names a file in the board tree plus a caption;
-`incorporation` cites another task's revision **by number** with select
-paths and its own receiving text; `annotation` is a review concern
-placed near what it addresses. The file is one YAML document: no
-anchors, no aliases, no duplicate keys.
+`text` is markdown with dollar math, fenced code blocks, and Mermaid
+diagrams in a mermaid-fenced block. Mermaid support is uneven across
+Markdown renderers; the viewer renders it (client/src/lib/render.ts).
+`group` nests content under an optional title; `figure` names a file in
+the board tree plus a caption; `incorporation` cites another task's
+revision **by number** with select paths and its own receiving text;
+`annotation` is a review concern placed near what it addresses. The
+file is one YAML document: no anchors, no aliases, no duplicate keys.
 
 The steps: `sac create task "..."`, `sac board edit t-N [dir]`, write
 board.yaml and its figures with your own tools, `sac board check
