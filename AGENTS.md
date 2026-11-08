@@ -78,6 +78,12 @@ do, and `tracker/README.md` carries the tracker's law.
 - Never add production machines to a sandbox, never automate the
   person's real display, never stop another session's core or
   compositor.
+- No SSH, transfer, install, or deploy to a production machine without
+  the human's approval.
+- Never stop processes by pattern or name; stop only processes you
+  started, by their own handle.
+- Preserve logs and artifacts; no automated deletion or cleanup
+  sweeps.
 - The headless loop proves mechanics, not the human's actual client;
   the real-client gate stays separate.
 
