@@ -73,17 +73,18 @@ do, and `tracker/README.md` carries the tracker's law.
 - The merge gate is the pre-push hook (`merge-gate` in prek.toml):
   the full suite runs first, then the hook builds the commit being
   pushed - the sha prek hands it in `PRE_COMMIT_TO_REF`, fetched as
-  `git+file://<repo>?rev=<sha>`, so the build reads the pushed commit
-  and never this working tree (branch deletions never fire the
-  hook). Nothing reaches GitHub without the suite and the builds; the
-  nix builds are not part of the per-commit phase gate.
-- Agents run nix once, last, before offering. The fast phase gate
-  first (the suites, clippy -D warnings, the prek hooks, the lanes);
-  only when it is green, commit and `nix build .#sac
-  .#board-viewer` at that commit - a clean tree at the offered commit
-  is the same build the merge gate will do. Never chained: a red
-  fast gate is fixed and rerun, never queued behind a nix build. The
-  offer names the commit that was built.
+  `git+file://<repo>?rev=<sha>#all`, so the build reads the pushed
+  commit and never this working tree (branch deletions never fire
+  the hook), and `#all` covers every package, not a hand-picked two.
+  Nothing reaches GitHub without the suite and the build; the nix
+  build is not part of the per-commit phase gate.
+- Agents run nix once, last, before handing work over for merge.
+  The fast phase gate first (the suites, clippy -D warnings, the
+  prek hooks, the lanes); only when it is green, commit and `nix
+  build .#all` at that commit - a clean tree at that commit is the
+  same build the merge gate will do. Never chained: a red fast gate
+  is fixed and rerun, never queued behind a nix build. Say which
+  commit you built when you hand the work over.
 - Phase reviews diff the test inventory by name against the previous
   phase: additions fine, every removal explained.
 - Tracker test placement and suite contracts live in

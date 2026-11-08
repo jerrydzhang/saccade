@@ -520,73 +520,86 @@
           version = "0.1.0";
           # no tests inside nix: the grammar suite runs in the devshell
           doCheck = false;
-          src = pkgs.lib.sourceByRegex ../. [
-            "^grammar$"
-            "^grammar/Cargo\\.toml$"
-            "^grammar/Cargo\\.lock$"
-            "^grammar/src$"
-            "^grammar/src/.*$"
-            "^grammar/fixtures$"
-            "^grammar/fixtures/.*$"
-          ];
-          cargoLock.lockFile = ../grammar/Cargo.lock;
+          # built as the workspace member it is, with the workspace
+          # lock: the grammar-local Cargo.lock is not tracked, so a
+          # git-sourced build cannot use it (this derivation failed
+          # evaluation from any git checkout since the lock left git)
+          src = ../.;
+          cargoRoot = ".";
+          buildAndTestSubdir = "grammar";
+          cargoLock.lockFile = ../Cargo.lock;
           meta.mainProgram = "board-grammar";
         };
       in
-        {
-          sac = sac;
+        let
+          pkgSet =
+            {
+              sac = sac;
 
-          sac-archive = sac-archive;
+              sac-archive = sac-archive;
 
-          board-grammar = board-grammar;
+              board-grammar = board-grammar;
 
-          saccade-pi = saccadePi;
+              saccade-pi = saccadePi;
 
-          # the app the client runs: built against nixpkgs-client, the
-          # revision the human's system flake is built from
-          board-viewer = (boardViewer clientPkgs ../.).app;
-          board-viewer-web = (boardViewer pkgs ../.).web;
-          board-viewer-tauri-driver = (boardViewer pkgs ../.).driver;
+              # the app the client runs: built against nixpkgs-client, the
+              # revision the human's system flake is built from
+              board-viewer = (boardViewer clientPkgs ../.).app;
+              board-viewer-web = (boardViewer pkgs ../.).web;
+              board-viewer-tauri-driver = (boardViewer pkgs ../.).driver;
 
-          default = pkgs.symlinkJoin {
-            name = "saccade";
-            paths =
-              [sac saccadePi]
-              ++ lib.optional (saccadeClaudeCode != null) saccadeClaudeCode;
-            meta.mainProgram = "sac";
+              default = pkgs.symlinkJoin {
+                name = "saccade";
+                paths =
+                  [sac saccadePi]
+                  ++ lib.optional (saccadeClaudeCode != null) saccadeClaudeCode;
+                meta.mainProgram = "sac";
+              };
+            }
+            // lib.optionalAttrs (saccadeClaudeCode != null) {
+              # the composed Claude Code harness: the pinned binary, the
+              # SessionStart identity hook, the injected settings
+              saccade-claude-code = saccadeClaudeCode;
+            }
+            // lib.optionalAttrs (devHerdrCore != null) {
+              # the claim itself: the unpatched pinned herdr-core, runnable
+              # by anyone with the flake; no source patches, no fork
+              herdr-core = devHerdrCore;
+            }
+            // lib.optionalAttrs (devHerdrPin != null) {
+              # the development arm: the same bytes behind the dev sandbox
+              herdr-core-dev = devHerdrPin;
+            }
+            // lib.optionalAttrs (devHerdrApp != null) {
+              # the pairing's app side: the pinned app and the wrapper that
+              # carries its runtime libs - runnable with nix, no manual
+              # file installs, nothing seeded
+              herdr-app = devHerdrApp;
+              herdr-app-saccade = mkHerdrAppSaccade {
+                inherit pkgs;
+                herdrApp = devHerdrApp;
+              };
+            }
+            // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && devHerdrApp != null && devHerdrCore != null) {
+              herdr-ui = mkHerdrUi {
+                inherit pkgs;
+                herdrApp = devHerdrApp;
+                herdrCore = devHerdrCore;
+              };
+            };
+          # one installable that builds every package: the merge gate
+          # and the offer-time build name it, so nothing reaches a
+          # review unbuilt. Heavier than its parts alone: it carries
+          # the desktop wrapper, the pins and the archive too.
+          all = pkgs.releaseTools.aggregate {
+            name = "saccade-all";
+            constituents = lib.attrValues pkgSet;
           };
-        }
-        // lib.optionalAttrs (saccadeClaudeCode != null) {
-          # the composed Claude Code harness: the pinned binary, the
-          # SessionStart identity hook, the injected settings
-          saccade-claude-code = saccadeClaudeCode;
-        }
-        // lib.optionalAttrs (devHerdrCore != null) {
-          # the claim itself: the unpatched pinned herdr-core, runnable
-          # by anyone with the flake; no source patches, no fork
-          herdr-core = devHerdrCore;
-        }
-        // lib.optionalAttrs (devHerdrPin != null) {
-          # the development arm: the same bytes behind the dev sandbox
-          herdr-core-dev = devHerdrPin;
-        }
-        // lib.optionalAttrs (devHerdrApp != null) {
-          # the pairing's app side: the pinned app and the wrapper that
-          # carries its runtime libs - runnable with nix, no manual
-          # file installs, nothing seeded
-          herdr-app = devHerdrApp;
-          herdr-app-saccade = mkHerdrAppSaccade {
-            inherit pkgs;
-            herdrApp = devHerdrApp;
-          };
-        }
-        // lib.optionalAttrs (pkgs.stdenv.hostPlatform.isLinux && devHerdrApp != null && devHerdrCore != null) {
-          herdr-ui = mkHerdrUi {
-            inherit pkgs;
-            herdrApp = devHerdrApp;
-            herdrCore = devHerdrCore;
-          };
-        }
+        in
+          pkgSet
+          // {
+            inherit all;
+          }
     );
 
     apps = forAllSystems (system: let
