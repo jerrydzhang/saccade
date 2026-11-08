@@ -8475,3 +8475,113 @@ async fn a_git_dir_inherited_by_the_server_never_reaches_the_board_store() {
     let _ = server.kill();
     let _ = server.wait();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_send_to_a_gone_incarnation_delivers_to_the_recycled_address_occupant() {
+    // t-10's defect: the gone incarnation's recorded terminal address
+    // now belongs to a newer session; the send resolves the recorded
+    // address and delivers into whoever holds the slot, reporting the
+    // delivery as submitted
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db("recycled-address");
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    // the fake host: get answers live for every address; send accepts
+    // and logs - the delivery lands in whoever holds the slot
+    let hc = scratch.dir.join("hc");
+    std::fs::write(
+        &hc,
+        "#!/bin/sh\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" >> \"$here/argv-send.log\"\nif [ \"$1\" = get ]; then printf '{\"state\":\"live\"}\\n'; exit 0; fi\nprintf '{}\\n'\nexit 0\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (url, mut server) = spawn_serving_subprocess(
+        &scratch.db,
+        &project,
+        bin,
+        &scratch.dir,
+        None,
+        &[("SACCADE_HERDR", hc.to_str().unwrap())],
+    );
+
+    // the sender: a registered incarnation declaring its seq in the
+    // scope, the way a session's own send door does
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({
+            "native_id": "sender000001",
+            "address": "t90",
+            "adopted": false,
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sender_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+
+    // the gone incarnation: registered at the slot; its session is
+    // gone and nothing records that
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({
+            "native_id": "gone00000001",
+            "address": "t65",
+            "adopted": false,
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // the successor: a fresh session attaches at the same slot, the
+    // way a new launch reuses the host's address numbering
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({
+            "native_id": "newborn000001",
+            "session_file": "/sessions/newborn000001.jsonl",
+            "terminal": {"address": "t65", "adopted": false},
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // a send addressed to the gone incarnation
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/messages/send",
+        &json!({
+            "context": {
+                "actor": "sender",
+                "tier": "agent",
+                "scope": {"incarnation": sender_seq},
+            },
+            "to": 0,
+            "body": "hello into whoever holds t65 now",
+            "client": "test",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    // THE DEFECT: the reply reports the delivery as submitted, and
+    // the host's log shows the text delivered into the slot the
+    // successor now holds
+    let reply = json_of(&body);
+    assert_eq!(reply["submission"]["state"], json!("submitted"), "{body}");
+    assert_eq!(
+        reply["records"][0]["payload"]["to"],
+        json!(0),
+        "addressed to the gone incarnation"
+    );
+    let log = std::fs::read_to_string(scratch.dir.join("argv-send.log")).unwrap();
+    assert!(log.contains("t65"), "{log}");
+    assert!(log.contains("hello into whoever holds t65 now"), "{log}");
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
