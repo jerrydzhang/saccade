@@ -819,11 +819,12 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             page.keyboard.press("Enter")
             page.wait_for_function(
                 f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
-                f" && {viewer}.inspection().resource.path === 't-1'"
+                f" && {viewer}.inspection().identity.task === 't-1'"
             )
             check(
                 "Enter opens the clicked row's board through the link",
-                page.evaluate(f"() => {viewer}.inspection().resource.path") == "t-1",
+                page.evaluate(f"() => {viewer}.inspection().identity.task") == "t-1"
+                and page.evaluate(f"() => {viewer}.inspection().resource.path") == "t-1@r1",
                 str(page.evaluate(f"() => {viewer}.inspection().resource")),
             )
             # back to the pipeline: typing a row's label opens its one
