@@ -179,8 +179,8 @@ export function stateShowingTask(states: WindowState[], location: string): Windo
 
 export class PoolClient {
   readonly device: string;
+  readonly base: URL;
   private readonly fetcher: Fetcher;
-  private readonly base: URL;
   // the newest sequence one of this client's own writes landed at; the
   // echo filter compares watch answers against it
   private lastWrittenSeq = 0;

@@ -45,6 +45,13 @@
     fieldsDiffer,
     type WindowState,
   } from "./lib/pool.ts";
+  import {
+    assignChips,
+    entryMatches,
+    jumpPickerEntries,
+    shortLocation,
+    type JumpEntry,
+  } from "./lib/suite.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
   import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
@@ -137,6 +144,7 @@
   let pool: PoolClient | null = null;
   let poolStateId: string | null = null;
   let poolWatch: { stop: () => void } | null = null;
+  let windowLabel: string | null = null;
   // the mirrors this window applies and writes: a value already here
   // is never written again, so no-op settles bump no sequences
   let appliedLocation: string | null = null;
@@ -246,6 +254,7 @@
         label: string;
         state_id?: string | null;
       };
+      windowLabel = binding.label;
       let stateId = binding.state_id ?? null;
       if (stateId === null) {
         const fresh =
@@ -254,10 +263,17 @@
             : `w-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         const created = await pool.create(fresh);
         stateId = created.id;
-        await invoke("bind_window_state", { stateId });
       }
       poolStateId = stateId;
       const attached = await pool.attach(stateId);
+      // the shell's binding carries the pool's address and this
+      // device's id: the close detach needs them after the webview is
+      // gone
+      await invoke("bind_window_state", {
+        stateId,
+        server: pool.base.toString(),
+        device: pool.device,
+      });
       knownZoom = attached.zoom;
       knownPart = attached.part;
       knownDrafts = attached.drafts ?? [];
@@ -273,6 +289,233 @@
   }
   void openTestBoard();
   void startPoolWindow();
+
+  // -- the window jump (t-14 "The suite") --------------------------------
+  //
+  // Labels on every visible suite window, and the picker listing
+  // windows on this device, then detached ones: Enter focuses an
+  // attached window, resumes a detached state here in a new window,
+  // and ^x twice discards a state on every device. Focus moves only
+  // here: every other act leaves focus alone. The keys ' and " are
+  // placeholders (t-14, "Open and deferred").
+  type JumpMode =
+    | { kind: "labels"; chips: { window: string; chip: string }[]; typed: string }
+    | {
+        kind: "picker";
+        entries: JumpEntry[];
+        query: string;
+        selected: number;
+        armed: string | null;
+      };
+  let jumpMode = $state<JumpMode | null>(null);
+  let jumpChipShown = $state<string | null>(null);
+  let jumpNote = $state<string | null>(null);
+
+  // the shell's broadcast door: the acting window assigns the chips,
+  // every suite window shows its own
+  (window as unknown as Record<string, unknown>).__suiteJumpShow = (chip: string) => {
+    jumpChipShown = chip;
+  };
+  (window as unknown as Record<string, unknown>).__suiteJumpHide = () => {
+    jumpChipShown = null;
+  };
+
+  function blurForJump(): void {
+    (document.activeElement as HTMLElement | null)?.blur();
+  }
+
+  async function shellInvoke(): Promise<ReturnType<typeof tauriInvoke>> {
+    const invoke = tauriInvoke();
+    return invoke;
+  }
+
+  async function enterJumpLabels(): Promise<void> {
+    blurForJump();
+    jumpNote = null;
+    try {
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as { label: string }[];
+      const chips = assignChips(windows.map((window) => window.label));
+      const list = [...chips].map(([windowLabel, chip]) => ({ window: windowLabel, chip }));
+      if (list.length === 0) {
+        jumpNote = "no suite windows to jump between";
+        return;
+      }
+      await invoke("broadcast_jump_labels", { labels: list });
+      jumpMode = { kind: "labels", chips: list, typed: "" };
+    } catch (error) {
+      jumpNote = `the labels failed: ${String(error)}`;
+    }
+  }
+
+  async function enterJumpPicker(): Promise<void> {
+    blurForJump();
+    jumpNote = null;
+    if (pool === null) {
+      jumpNote = "no tracker server; the pool is not serving this window";
+      return;
+    }
+    try {
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as {
+        label: string;
+        state_id?: string | null;
+      }[];
+      const states = await pool.list();
+      const entries = jumpPickerEntries(
+        windows.map((window) => ({ label: window.label, stateId: window.state_id ?? null })),
+        states.map((state) => ({
+          id: state.id,
+          location: state.location,
+          attachedHere: state.attachedHere,
+        })),
+      );
+      jumpMode = { kind: "picker", entries, query: "", selected: 0, armed: null };
+    } catch (error) {
+      jumpNote = `the picker failed: ${String(error)}`;
+    }
+  }
+
+  async function clearJumpBroadcast(): Promise<void> {
+    try {
+      const invoke = await shellInvoke();
+      await invoke("broadcast_jump_labels_clear");
+    } catch {
+      // the labels clear with the mode; a failed broadcast is quiet
+    }
+  }
+
+  function exitJump(): void {
+    jumpMode = null;
+    void clearJumpBroadcast();
+  }
+
+  async function jumpFocus(label: string): Promise<void> {
+    const invoke = await shellInvoke();
+    await invoke("focus_suite_window", { label });
+  }
+
+  async function refreshJumpPicker(mode: Extract<JumpMode, { kind: "picker" }>): Promise<void> {
+    if (pool === null) return;
+    const invoke = await shellInvoke();
+    const windows = (await invoke("suite_windows")) as {
+      label: string;
+      state_id?: string | null;
+    }[];
+    const states = await pool.list();
+    mode.entries = jumpPickerEntries(
+      windows.map((window) => ({ label: window.label, stateId: window.state_id ?? null })),
+      states.map((state) => ({
+        id: state.id,
+        location: state.location,
+        attachedHere: state.attachedHere,
+      })),
+    );
+    if (mode.selected >= mode.entries.length) mode.selected = Math.max(0, mode.entries.length - 1);
+  }
+
+  async function jumpAct(entry: JumpEntry): Promise<void> {
+    const target = entry;
+    exitJump();
+    try {
+      if (target.kind === "window" && target.windowLabel !== null) {
+        // the jump: focus moves because the human asked
+        await jumpFocus(target.windowLabel);
+      } else {
+        // resume a detached state here: a window opens, the human
+        // asked for this one, so the activation request goes out with
+        // it
+        const invoke = await shellInvoke();
+        const label = (await invoke("open_suite_window", { stateId: target.stateId })) as string;
+        await jumpFocus(label);
+      }
+    } catch (error) {
+      jumpNote = `the jump failed: ${String(error)}`;
+    }
+  }
+
+  async function onJumpKey(event: KeyboardEvent): Promise<void> {
+    const mode = jumpMode;
+    if (mode === null) return;
+    if (mode.kind === "labels") {
+      if (event.key === "Escape") {
+        exitJump();
+        return;
+      }
+      if (event.key === "Backspace") {
+        mode.typed = mode.typed.slice(0, -1);
+        return;
+      }
+      if (/^[a-z]$/.test(event.key)) {
+        mode.typed += event.key;
+        const matches = mode.chips.filter((entry) => entry.chip.startsWith(mode.typed));
+        const landed = matches.length === 1 ? matches[0] : undefined;
+        if (matches.length === 0) {
+          exitJump();
+          return;
+        }
+        if (matches.length === 1 && landed && landed.chip === mode.typed) {
+          const target = landed.window;
+          exitJump();
+          try {
+            await jumpFocus(target);
+          } catch (error) {
+            jumpNote = `the jump failed: ${String(error)}`;
+          }
+        }
+      }
+      return;
+    }
+    // the picker
+    if (event.key === "Escape") {
+      exitJump();
+      return;
+    }
+    if (event.ctrlKey && event.key === "x") {
+      const entry = mode.entries[mode.selected];
+      if (!entry) return;
+      if (mode.armed === entry.stateId) {
+        if (pool !== null) {
+          await pool.discard(entry.stateId);
+          await refreshJumpPicker(mode);
+        }
+        mode.armed = null;
+      } else {
+        mode.armed = entry.stateId;
+      }
+      return;
+    }
+    if (event.key === "ArrowUp" || (event.key === "k" && !event.ctrlKey)) {
+      event.preventDefault();
+      mode.armed = null;
+      mode.selected = Math.max(0, mode.selected - 1);
+      return;
+    }
+    if (event.key === "ArrowDown" || (event.key === "j" && !event.ctrlKey)) {
+      event.preventDefault();
+      mode.armed = null;
+      mode.selected = Math.min(mode.entries.length - 1, mode.selected + 1);
+      return;
+    }
+    if (/^[a-z0-9/]$/.test(event.key) && !event.ctrlKey) {
+      mode.query += event.key;
+      return;
+    }
+    if (event.key === "Backspace") {
+      mode.query = mode.query.slice(0, -1);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const alive = mode.entries.filter((entry) => entryMatches(entry, mode.query));
+      const entry = alive[mode.selected];
+      if (entry) await jumpAct(entry);
+    }
+  }
+
+  function visibleJumpEntries(mode: Extract<JumpMode, { kind: "picker" }>): JumpEntry[] {
+    return mode.entries.filter((entry) => entryMatches(entry, mode.query));
+  }
 
   /** A settled write: the location this window opened, with the
    * reading position reset - new content, no part yet. */
@@ -1248,6 +1491,12 @@
       void model.forward();
       return;
     }
+    if (jumpMode !== null) {
+      // the window jump owns the keyboard while it is on
+      event.preventDefault();
+      void onJumpKey(event);
+      return;
+    }
 
     switch (keyMode) {
       case "labels": {
@@ -1423,6 +1672,16 @@
       case "?":
         event.preventDefault();
         helpOpen = true;
+        return;
+      case "'":
+        // the window jump's labels (the key is a placeholder, t-14)
+        event.preventDefault();
+        void enterJumpLabels();
+        return;
+      case '"':
+        // the window jump's picker (the key is a placeholder, t-14)
+        event.preventDefault();
+        void enterJumpPicker();
         return;
       case "Enter": {
         event.preventDefault();
@@ -1732,6 +1991,9 @@
 
 <div class="app">
   <header class="app-header">
+    {#if jumpChipShown !== null}
+      <span class="jump-chip-self" data-control="jump:self">{jumpChipShown}</span>
+    {/if}
     <span class="identity">
       {#if view.location}
         <strong>{view.location.machine}</strong>
@@ -1833,6 +2095,11 @@
         <p class="help-row"><span class="ctx-menu-key">Ctrl+Shift+C</span> copy source / plain</p>
         <p class="help-row"><span class="ctx-menu-key">?</span> this list</p>
       </div>
+      <div class="help-section">
+        <p class="help-title">windows</p>
+        <p class="help-row"><span class="ctx-menu-key">'</span> labels on every suite window; type a label to jump</p>
+        <p class="help-row"><span class="ctx-menu-key">"</span> windows here, then detached; enter resumes; ^x twice discards</p>
+      </div>
     </div>
   </div>
   {/if}
@@ -1873,6 +2140,42 @@
 
   {#if lookNotice}
     <p class="look-notice" aria-live="polite">{lookNotice}</p>
+  {/if}
+
+  {#if jumpMode !== null}
+    <div class="jump-overlay" role="dialog" aria-label="window jump" data-control="jump:overlay">
+      {#if jumpMode.kind === "labels"}
+        <p class="jump-title">window jump: type a label</p>
+        <p class="jump-typed" data-control="jump:typed">{jumpMode.typed.length > 0 ? jumpMode.typed : "..."}</p>
+      {:else}
+        <p class="jump-title">windows here, then detached</p>
+        <div class="jump-list" data-control="jump:list">
+          {#each visibleJumpEntries(jumpMode) as entry, index}
+            {@const selected = index === jumpMode.selected}
+            <button
+              type="button"
+              class="jump-row"
+              class:jump-active={selected}
+              data-control="jump:row"
+              onclick={() => void jumpAct(entry)}
+            >
+              <span class="jump-entry-chip">{entry.chip ?? ""}</span>
+              <span class="jump-entry-kind">{entry.kind === "window" ? "window" : "detached"}</span>
+              <span class="jump-entry-name">{entry.name}</span>
+              {#if selected && jumpMode.armed === entry.stateId}
+                <span class="jump-armed" data-control="jump:armed">^x again discards the state on every device</span>
+              {/if}
+            </button>
+          {:else}
+            <p class="picker-empty">no windows and no detached states</p>
+          {/each}
+        </div>
+        <p class="jump-hint">enter jumps there or resumes here | ^x ^x discards | escape leaves</p>
+      {/if}
+      {#if jumpNote}
+        <p class="jump-note" data-control="jump:note">{jumpNote}</p>
+      {/if}
+    </div>
   {/if}
 
   {#if view.errors.length > 0}
