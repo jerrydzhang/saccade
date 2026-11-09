@@ -99,10 +99,8 @@ export type TaskFact = { spec: string; name: string | null };
 
 export class TrackerSource implements BoardSource {
   private contract: Promise<Contract> | null = null;
-  // bare path -> the pinned spec that answered (t-N@rK): the open's
-  // text and figures all read that one immutable revision
-  private pinned = new Map<string, string>();
-  // pinned spec -> the board page
+  // pinned spec -> the board page (an immutable revision: the page and
+  // its facts cache; the file routes ride the same revision)
   private pages = new Map<string, Promise<ViewPage>>();
   // every task the window has seen, newest resolution first
   readonly seenTasks: TaskFact[] = [];
@@ -189,9 +187,18 @@ export class TrackerSource implements BoardSource {
 
   /** The board page at a pinned revision: the open's resolver and the
    * task-facts source. Cached per revision; a failure clears. */
+  /** The board page at a pinned revision: the open's resolver and the
+   * task-facts source. Cached per PINNED revision only - an immutable
+   * revision's page never moves; a bare location never touches the
+   * cache, so a later open re-resolves instead of replaying an old
+   * current. A failure clears its entry. */
   private boardPage(pinned: string): Promise<ViewPage> {
-    const cached = this.pages.get(pinned);
-    if (cached) return cached;
+    const spec = parseTaskSpec(pinned);
+    const cacheable = spec !== null && spec.revision !== null;
+    if (cacheable) {
+      const cached = this.pages.get(pinned);
+      if (cached) return cached;
+    }
     const load = (async () => {
       await this.checkContract();
       const base = serverBase();
@@ -205,10 +212,12 @@ export class TrackerSource implements BoardSource {
       this.rememberTask(pinned, page);
       return page;
     })();
-    this.pages.set(pinned, load);
-    void load.catch(() => {
-      if (this.pages.get(pinned) === load) this.pages.delete(pinned);
-    });
+    if (cacheable) {
+      this.pages.set(pinned, load);
+      void load.catch(() => {
+        if (this.pages.get(pinned) === load) this.pages.delete(pinned);
+      });
+    }
     return load;
   }
 
@@ -233,13 +242,11 @@ export class TrackerSource implements BoardSource {
       void this.boardPage(pinned).catch(() => {});
       return { pinned, page: null };
     }
-    const bare = `t-${spec.task}`;
-    const cached = this.pinned.get(bare);
-    if (cached) return { pinned: cached, page: await this.boardPage(cached) };
-    const page = await this.boardPage(bare);
-    const pinned = page.location;
-    this.pinned.set(bare, pinned);
-    return { pinned, page };
+    // a bare location re-resolves through the board page on EVERY
+    // open: a later open never replays the revision an earlier one
+    // answered
+    const page = await this.boardPage(`t-${spec.task}`);
+    return { pinned: page.location, page };
   }
 
   private rememberTask(pinned: string, page: ViewPage): void {

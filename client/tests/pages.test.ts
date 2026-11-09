@@ -203,6 +203,33 @@ test("a non-JSON answer is a structured refusal, never a crash", async () => {
   await assert.rejects(fetchPage(bad, "http://x/view/v1/"), /non-JSON/);
 });
 
+test("a bare location re-resolves on every open; a later open never replays an old current", async () => {
+  const log: string[] = [];
+  let revision = 1;
+  const routes: Record<string, Route> = {
+    "/view/v1/": { body: () => ROOT },
+    "/view/v1/t-7": {
+      body: () => ({ ...BOARD_PAGE, location: `t-7@r${revision}`, revision }),
+    },
+    "/view/v1/t-7@r1/file/board.yaml": { body: () => "grammar: 1\ntask: t-7\ncontent: []\n", type: "text/yaml" },
+    "/view/v1/t-7@r2/file/board.yaml": { body: () => "grammar: 1\ntask: t-7\ncontent:\n  - text: second\n", type: "text/yaml" },
+  };
+  const source = new TrackerSource("smoke", wire(routes, log));
+  const restore = withHost("127.0.0.1:8811");
+  try {
+    const first = await source.loadText({ machine: "tracker:smoke", path: "t-7" });
+    assert.equal(first.location.path, "t-7@r1");
+    revision = 2;
+    const second = await source.loadText({ machine: "tracker:smoke", path: "t-7" });
+    assert.equal(second.location.path, "t-7@r2", "the second open answered the revision that landed");
+    assert.match(second.text, /second/);
+    const bareResolutions = log.filter((p) => p === "/view/v1/t-7");
+    assert.equal(bareResolutions.length, 2, "every bare open resolved through the board page");
+  } finally {
+    restore();
+  }
+});
+
 // -- the source over the wire -----------------------------------------
 
 type Route = { body: (path: string) => unknown; type?: string };
