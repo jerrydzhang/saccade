@@ -313,6 +313,9 @@
       console.log(`[viewer] pool window bound: ${stateId}`);
     } catch (error) {
       console.error(`[viewer] pool window failed: ${String(error)}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`[viewer] pool window stack: ${error.stack}`);
+      }
       // a transient failure retries on the same quiet timer
       schedulePoolRetry();
     }
