@@ -793,7 +793,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             )
             check(
                 "the rows share one grid, the columns named once per section",
-                all("tasktitleagentslatest commitage" in "".join(h.split()) for h in heads),
+                all("tasktitleagentslatestcommitage" in "".join(h.split()) for h in heads),
                 str(heads)[:160],
             )
             # select first: s puts labels on what can be selected,
@@ -850,7 +850,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 "els => els.length",
             )
             lane_present = page.evaluate(
-                "() => document.querySelector('[data-control=\'instrument:lane\']') !== null"
+                """() => document.querySelector('[data-control="instrument:lane"]') !== null"""
             )
             check(
                 "the task's menu e shows its activity: the lane and its events",
@@ -859,7 +859,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             )
             screenshot_at('[data-control="instrument:overlay"]', "instrument-activity.png")
             page.keyboard.press("Escape")
-            page.wait_for_function("() => document.querySelector('[data-control=\'instrument:overlay\']') === null")
+            page.wait_for_function("""() => document.querySelector('[data-control="instrument:overlay"]') === null""")
             # help on demand names the instrument's own keys
             page.keyboard.press("?")
             page.wait_for_selector('[data-control="help:overlay"]')
