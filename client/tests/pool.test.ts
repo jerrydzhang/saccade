@@ -161,3 +161,32 @@ test("the interim store reads only well-shaped drafts, and the move marks only c
     (globalThis as Record<string, unknown>).localStorage = saved;
   }
 });
+
+import { normalizeState } from "../src/lib/pool.ts";
+
+test("the wire's absent fields normalize to null: undefined never reads as a value", () => {
+  // the answered doc omits every cleared field (t-24@r20's shape), so
+  // a raw answer carries undefined where the client's rules read null
+  const answered = normalizeState({
+    id: "w-x",
+    location: undefined as unknown as null,
+    part: undefined as unknown as null,
+    zoom: undefined as unknown as null,
+    drafts: undefined as unknown as null,
+    lastDevice: undefined as unknown as null,
+    changed: 3,
+    attachedHere: true,
+    link: "w-y",
+  } as WindowState);
+  assert.equal(answered.location, null);
+  assert.equal(answered.part, null);
+  assert.equal(answered.zoom, null);
+  assert.equal(answered.drafts, null);
+  assert.equal(answered.lastDevice, null);
+  assert.equal(answered.link, "w-y");
+  assert.equal(
+    answered.location !== null,
+    false,
+    "an absent location is null, never undefined that reads as a value",
+  );
+});

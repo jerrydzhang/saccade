@@ -63,6 +63,23 @@ export function deviceId(): string {
   }
 }
 
+/** The wire omits a cleared field instead of answering null (t-24@r20's
+ * doc shape), so every answer normalizes absent to null here: the
+ * client's own rule - `null !== undefined` - reads one way. */
+export function normalizeState(state: WindowState): WindowState {
+  return {
+    id: state.id,
+    location: state.location ?? null,
+    part: state.part ?? null,
+    zoom: state.zoom ?? null,
+    drafts: state.drafts ?? null,
+    lastDevice: state.lastDevice ?? null,
+    changed: state.changed,
+    attachedHere: state.attachedHere,
+    link: state.link ?? null,
+  };
+}
+
 /** The echo rule: a pool write returned the sequence it landed at; a
  * watch answer at or below the newest sequence this client produced is
  * its own echo or history it already applied - never re-applied, so a
@@ -232,7 +249,7 @@ export class PoolClient {
   private stateOf(doc: unknown): WindowState {
     const state = (doc as { state?: WindowState } | null)?.state;
     if (!state) throw new Error("the pool answered no state");
-    return state;
+    return normalizeState(state);
   }
 
   /** The pool's own facts and standing sequence. */
@@ -249,7 +266,7 @@ export class PoolClient {
     });
     if (status !== 200) this.fail("states", status, doc);
     const states = (doc as { states?: WindowState[] } | null)?.states;
-    return states ?? [];
+    return (states ?? []).map(normalizeState);
   }
 
   /** Birth of the window's state: the id is client-generated and
