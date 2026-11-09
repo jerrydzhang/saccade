@@ -476,7 +476,15 @@ def main() -> int:
                     "--native-driver",
                     webkit_driver_bin,
                 ],
-                env={**os.environ, "WAYLAND_DISPLAY": wayland_name},
+                env={
+                    **os.environ,
+                    "WAYLAND_DISPLAY": wayland_name,
+                    # the lanes' test-open channel (t-24@r11): the
+                    # launch argument left the human surface, so the
+                    # machine-named location opens through the same
+                    # model.open the inspection surface uses
+                    "BOARD_VIEWER_TEST_OPEN": location,
+                },
                 stdout=driver_log,
                 stderr=driver_log,
             )
@@ -491,7 +499,7 @@ def main() -> int:
 
         client = WebDriver(DRIVER_PORT, timeout=60.0)
         state.client = client
-        session_id = client.new_session(app_bin, [location])
+        session_id = client.new_session(app_bin, [])
         check("webdriver session created for the packaged app", True, f"session {session_id[:8]} on {location}")
 
         inspection: dict = {}
