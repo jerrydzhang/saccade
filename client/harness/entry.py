@@ -540,6 +540,10 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
     env["BOARD_VIEWER_WEBVIEW_CONSOLE"] = "1"
+    # the shell feasibility probe (t-19, test-only machinery): passed
+    # through only when the caller set it, so a routine lane run without
+    # it stays exactly as before
+    env["BOARD_VIEWER_SHELL_PROBE"] = os.environ.get("BOARD_VIEWER_SHELL_PROBE", "")
     env["GDK_SCALE"] = "1"
     env["GDK_DPI_SCALE"] = "1"
     (run_root / "shots").mkdir(parents=True, exist_ok=True)

@@ -67,20 +67,26 @@ them. `/api/v1` stays `sac`'s own API.
 - **The record is written once**: publishing task-board annotations
   (t-14, the law landed with the commit that builds the act). `a`
   drafts in place on the current revision of a task board - drafts
-  persist on the device keyed by task until the window-state pool
-  lands (t-24@r11) and are never lost on a refused publish; `space p`
-  publishes the drafts together as ONE commit with ONE message through
-  the commit door, under the HUMAN's own identity: the human tier and,
-  as the actor, the client configuration's override or the device
-  account name as `sac` derives it without SACCADE_ACTOR (`$USER`, else
-  "human"), never refusing for lack of it. The published board.yaml is
-  the shown revision's authored text plus annotation components and
-  nothing else - byte-level insertions at the parts' own positions.
-  Before the POST the viewer re-reads the current revision and refuses,
-  keeping the drafts, when a revision landed after its read; an offered
-  board refuses, naming the reject-with-grounds CLI step. Only the
-  current revision of a task board drafts; a pinned older revision
-  refuses, saying where annotation is possible (t-24@r11).
+  ride the window's state in the tracker's window store (t-24@r20,
+  t-28); before the store landed they persisted on the device, and
+  the one-time mover takes each device's interim drafts once, per task,
+  into its attached state showing that task or into a new detached
+  state, marking the interim store moved only after the window store
+  confirms, the rows staying and nothing reading them again - and a
+  draft is never lost on a refused publish. `space p` publishes the
+  drafts of the window it is pressed in, together as ONE commit with
+  ONE message through the commit door, under the HUMAN's own identity:
+  the human tier and, as the actor, the client configuration's override
+  or the device account name as `sac` derives it without SACCADE_ACTOR
+  (`$USER`, else "human"), never refusing for lack of it. The published
+  board.yaml is the shown revision's authored text plus annotation
+  components and nothing else - byte-level insertions at the parts'
+  own positions. Before the POST the viewer re-reads the current
+  revision and refuses, keeping the drafts, when a revision landed
+  after its read; an offered board refuses, naming the
+  reject-with-grounds CLI step. Only the current revision of a task
+  board drafts; a pinned older revision refuses, saying where
+  annotation is possible (t-24@r11).
 - **An explainer board file is written once**: its annotation submit
   (t-14 ratified item 3, t-24@r21). An explainer is a bare-path file
   that decodes as board grammar 1 - a file on the tracker's machine,
@@ -99,8 +105,9 @@ them. `/api/v1` stays `sac`'s own API.
   that does not occur exactly once refuses before the wire. The
   staleness guard is whole-file byte equality: a file that changed
   since this window read it refuses the write, keeps the annotation
-  TEXT on the device keyed by the path (until the pool lands; the only
-  thing ever kept), drops the placement and says so - the next `a` on
+  TEXT on the device keyed by the path (the only thing ever kept;
+  t-21 was built before the window store landed, and moving this text
+  into the window state, as t-24@r21 A6 says, is still open), drops the placement and says so - the next `a` on
   the freshly read file opens the editor with the kept text. The
   wire's own exact-once refusal is the same refusal reached through
   the other half of the guard. The deck is this package's other t-21
@@ -247,10 +254,25 @@ Keys:
 - `space` leads the viewer's own commands: `space space` the picker
   (id, name, word start, substring, scattered letters; recency ties;
   the open item last; kind and name only; a typed location always
-  resolves), `space h` history, `space m` marginalia, `space p` publish
+  resolves), `space h` history, `space m` marginalia, `space p`
+  publish, `space l` link this window by labels, `space u` unlink
+- the window jump: `'` labels on every visible suite window, typing
+  one jumps (the key is a placeholder, t-14); `"` windows on this
+  device, then detached ones - Enter focuses an attached window or
+  resumes a detached state here, `^x` twice discards a state on every
+  device
+- the two acts, never a mode (t-14): `Enter` (or a plain click) is
+  the primary act and the viewer follows here; `o` (or shift- or
+  middle-click) opens elsewhere through the link - with no link it
+  asks once (labels on visible windows, `n` new, `/` a detached one)
+  and the answer becomes the link; `i` opens elsewhere once without
+  changing the link; `w` always opens a new window. The routing is
+  the instrument's declaration (lib/acts.ts): the viewer follows
+  here; the tasks and agents instruments (t-18) declare
+  Enter-through-the-link and arrive without rework
 - in history: `h` `l` step time, `n` `N` jump to changes, `t` tracks the
   reading-height part, `H` `L` walk its changes
-- zoom: `+` `-` `=`, the window's own memory until the pool lands;
+- zoom: `+` `-` `=`, carried by the window's state (t-24@r20);
   figures and diagrams enlarge as their primary act; an incorporation
   expands to exactly its cited components
 - `Ctrl+F` opens the search bar; `Escape` closes it; `Enter` and
@@ -361,6 +383,37 @@ suite):
 - relative assets resolve at the declaration's location on the selected
   machine; traversal and absolute paths are refused on both the frontend
   and the host side
+
+## The window and its stored state (t-14 "The suite", t-24@r20)
+
+One window, one window state: what the window shows, the part at the
+reading height, its zoom, its drafts - kept on the tracker's server,
+outside the record, under /api/v1/windows (the tracker README carries that
+surface's law). The client's own half:
+
+- **The device is an opaque client-generated id**, generated once and
+  persisted on the device; the window store stores and compares it and never
+  interprets it (t-24@r20: not the machine id).
+- **The binding is the shell's**: the Tauri shell keeps one
+  label-to-state pairing per window, so a window's state survives a
+  frontend reload and the shell that closes, jumps and links windows
+  knows the pairing. A window that has bound no state creates one
+  (the id client-generated and opaque) and binds it. A page with no
+  shell (the browser lane) has no binding and runs unbacked.
+- **Sync waits, never polls**: the window long-polls its state with
+  `?after=` on the window store's own sequence, applies every answer that is
+  not its own echo (a write's landing sequence names it - a device
+  never jumps its own view), and on a dropped connection retries with
+  backoff and re-reads the state whole. Position writes settle first:
+  the reading height when it stops moving, zoom when the steps stop,
+  drafts when written - never per scroll frame or per key press. A
+  settled write that changes nothing is not sent.
+- **A window with no tracker server runs unbacked**, like every read
+  face without one; its drafts stay in memory, which is still never a
+  lost draft, and the move waits for a start with the window store. The server
+  setting appears once, typed in the header - a window that started
+  before it retries on a quiet timer, and the window store arrives
+  without a restart.
 
 ## Layout
 

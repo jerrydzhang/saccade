@@ -7,6 +7,9 @@
 pub mod board_validate;
 pub mod commands;
 pub mod look_config;
+pub mod shell_probe;
+pub mod suite;
+pub mod window_registry;
 pub mod words;
 
 pub fn run() {
@@ -27,7 +30,14 @@ pub fn run() {
         if console_requested { "on" } else { "off" }
     );
 
+    // the registry before the builder: the close detach's hook needs
+    // it, and the windows need the same registry managed
+    let registry = window_registry::WindowRegistry::new();
     tauri::Builder::default()
+        .on_window_event({
+            let registry = registry.clone();
+            move |window, event| suite::on_window_event(window, event, &registry)
+        })
         .invoke_handler(tauri::generate_handler![
             commands::read_declaration,
             commands::read_asset,
@@ -43,6 +53,16 @@ pub fn run() {
             commands::deck_delete,
             commands::deck_watch,
             commands::deck_wait,
+            commands::shell_probe_active,
+            commands::shell_probe_report,
+            window_registry::window_binding,
+            window_registry::bind_window_state,
+            suite::suite_windows,
+            suite::open_suite_window,
+            suite::focus_suite_window,
+            suite::broadcast_jump_labels,
+            suite::broadcast_jump_labels_clear,
+            suite::open_in_window,
             board_validate::validate_board,
             look_config::look_config,
             look_config::wait_look_config,
@@ -89,6 +109,12 @@ pub fn run() {
                     .map(|path| path.to_path_buf())
                     .ok(),
             );
+            // the window registry: which window state each window shows
+            // (t-19); the shell's own memory, never a record fact
+            app.manage(registry);
+            // the shell feasibility probe (t-19): test-only machinery,
+            // inert unless the lane sets BOARD_VIEWER_SHELL_PROBE
+            shell_probe::maybe_start(app.handle().clone());
             if console_requested {
                 use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {

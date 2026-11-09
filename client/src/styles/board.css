@@ -923,6 +923,117 @@ code.raw-html {
   color: var(--ink-3);
 }
 
+/* ---------- the window jump: labels, picker, discard ---------- */
+
+.jump-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  padding-top: 10vh;
+  background: rgb(0 0 0 / 0.3);
+}
+
+.jump-overlay > * {
+  display: grid;
+  width: min(560px, 90vw);
+  padding: 10px 12px;
+  background: var(--app-bg);
+  border: 1px solid var(--pop-line);
+}
+
+.jump-title {
+  margin: 0;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.jump-typed {
+  margin: 4px 0 0;
+  font-family: var(--f-ui);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+}
+
+.jump-list {
+  max-height: 50vh;
+  margin-top: 6px;
+  overflow: auto;
+}
+
+.jump-row {
+  display: grid;
+  grid-template-columns: 2em 5em 1fr;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 4px 6px;
+  text-align: left;
+  font-family: var(--f-ui);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.jump-row.jump-active {
+  background: var(--acc);
+  color: var(--acc-ink);
+}
+
+.jump-entry-chip {
+  font-weight: 600;
+}
+
+.jump-entry-kind {
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.jump-row.jump-active .jump-entry-kind {
+  color: var(--acc-ink);
+}
+
+.jump-entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jump-armed {
+  grid-column: 1 / -1;
+  font-size: var(--fs-small);
+}
+
+.jump-hint {
+  margin: 6px 0 0;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.jump-note {
+  margin: 6px 0 0;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+/* the chip a window shows for itself while the label mode is on */
+
+.jump-chip-self {
+  padding: 1px 7px;
+  font-family: var(--f-ui);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--acc-ink);
+  background: var(--acc);
+}
+
 /* ---------- history mode: margin, ruler, tick, diff marks ---------- */
 
 .board-wrap {
@@ -1378,4 +1489,13 @@ main.instrument {
   margin: 10px 0 0;
   display: flex;
   justify-content: space-between;
+}
+
+/* the link's target in the HUD: -> name */
+
+.link-target {
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+  white-space: nowrap;
 }

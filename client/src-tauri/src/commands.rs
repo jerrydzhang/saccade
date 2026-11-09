@@ -50,6 +50,35 @@ pub fn tracker_machine() -> Option<String> {
 /// human tier and, as the actor, the configured override, else the
 /// device account name as `sac` derives it without SACCADE_ACTOR
 /// ($USER), else "human". Publish never refuses for lack of it.
+/// Whether the shell feasibility probe is active (t-19, test-only
+/// machinery): the main window probes its localStorage only when the
+/// lane set BOARD_VIEWER_SHELL_PROBE, so a human run writes nothing.
+#[tauri::command]
+pub fn shell_probe_active() -> bool {
+    std::env::var("BOARD_VIEWER_SHELL_PROBE")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// The shell feasibility probe's report (t-19, test-only machinery):
+/// one line per window with the localStorage probe keys that window
+/// sees, read from the native lane's app log as the storage-sharing
+/// evidence.
+#[derive(Deserialize)]
+pub struct ShellProbeReport {
+    pub label: String,
+    pub sees_main: Option<String>,
+    pub sees_second: Option<String>,
+}
+
+#[tauri::command]
+pub fn shell_probe_report(report: ShellProbeReport) {
+    eprintln!(
+        "[shell-probe] window {} sees main={:?} second={:?}",
+        report.label, report.sees_main, report.sees_second
+    );
+}
+
 #[derive(Serialize)]
 pub struct PublishIdentity {
     pub actor: String,

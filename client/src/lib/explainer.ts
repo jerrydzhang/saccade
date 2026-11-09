@@ -17,7 +17,8 @@
 // The staleness guard is whole-file byte equality, t-14's literal
 // rule: a file that changed since this window read it refuses the
 // write, keeps the annotation TEXT on the device (keyed by the path,
-// until the window-state pool lands), drops the placement and says so;
+// not yet moved into the window state; t-24@r21 A6), drops the
+// placement and says so;
 // the next `a` on the freshly read file opens the editor with the kept
 // text. The only thing ever kept is the text of a refused annotation.
 

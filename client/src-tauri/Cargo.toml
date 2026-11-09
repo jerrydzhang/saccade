@@ -7,7 +7,6 @@ edition = "2021"
 [lib]
 name = "saccade_board_viewer_lib"
 path = "src/lib.rs"
-
 # the core-client crate below: its contract tests run in the fast
 # check loop without any GUI dependency
 
@@ -25,6 +24,8 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# the close detach: one fire-and-retry POST when a bound window dies
+ureq = { version = "3", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 webkit2gtk = { version = "2" }
 gtk = "0.18"

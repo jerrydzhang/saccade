@@ -36,9 +36,6 @@
   import { formatLocation, parseLocation } from "./lib/location.ts";
   import {
     annotatedBoard,
-    clearDrafts,
-    loadDrafts,
-    saveDrafts,
     publishPayload,
     publishAnnotations,
     type Draft,
@@ -61,6 +58,19 @@
     type DeckState,
   } from "./lib/deck.ts";
   import { trackerCoreMachine } from "./lib/sources.ts";
+  import {
+    WindowsClient,
+    fieldsDiffer,
+    type WindowState,
+  } from "./lib/windows.ts";
+  import {
+    assignChips,
+    entryMatches,
+    jumpPickerEntries,
+    shortLocation,
+    type JumpEntry,
+  } from "./lib/suite.ts";
+  import { citationSpec, VIEWER_ROUTING, type ElsewhereAct } from "./lib/acts.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
   import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
@@ -200,7 +210,775 @@
       console.error(`[viewer] test open board FAILED: ${String(error)}`);
     }
   }
+
+  // -- the window and its stored state (t-14 "The suite", t-24@r20) --------------
+  //
+  // One window, one window state: what this window shows, the part at
+  // the reading height, its zoom, its drafts - on the tracker's
+  // server, outside the record. Writes settle before sending; the
+  // watcher applies every answer that is not this client's own echo.
+  // A window with no tracker server runs unbacked, like every read
+  // face without one.
+  let windowStore: WindowsClient | null = null;
+  let windowStateId: string | null = null;
+  let windowWatch: { stop: () => void } | null = null;
+  let windowLabel: string | null = null;
+  let windowRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  // the mirrors this window applies and writes: a value already here
+  // is never written again, so no-op settles bump no sequences
+  let appliedLocation: string | null = null;
+  let knownPart: string | null = null;
+  let knownZoom: number | null = null;
+  let knownDrafts: Draft[] = [];
+  let windowDiscarded = false;
+  let zoomWriteTimer: ReturnType<typeof setTimeout> | null = null;
+  let partWriteTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** The part at the reading height, as the window store names it: the select
+   * path of the top-level block nearest the reading line. */
+  function windowReadingPart(): string | null {
+    if (!contentHost || !view.board) return null;
+    const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
+    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    let best: HTMLElement | null = null;
+    let bestDistance = Number.MAX_SAFE_INTEGER;
+    for (const block of blocks) {
+      const rect = block.getBoundingClientRect();
+      const distance = rect.top > readingLine ? rect.top - readingLine : readingLine - rect.bottom;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = block;
+      }
+    }
+    if (!best) return null;
+    const index = blocks.indexOf(best);
+    return index >= 0 ? `/content/${index}` : null;
+  }
+
+  /** Scroll so the named part sits at the reading height. The block
+   * may not exist for a few frames after an open; a handful of frames
+   * are tried before giving up quietly. */
+  function scrollToStatePart(part: string, tries = 20): void {
+    if (!contentHost) return;
+    const match = /^\/content\/(\d+)$/.exec(part);
+    if (!match) return;
+    const index = Number(match[1]);
+    const block = contentHost.querySelectorAll<HTMLElement>(":scope > .block")[index];
+    if (!block) {
+      if (tries > 0) window.requestAnimationFrame(() => scrollToStatePart(part, tries - 1));
+      return;
+    }
+    const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
+    const delta = block.getBoundingClientRect().top - readingLine;
+    contentHost.scrollTop += delta;
+  }
+
+  function applyZoom(value: number): void {
+    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+    if (contentHost) contentHost.style.zoom = String(zoom);
+  }
+
+  /** The state as the window store carries it, applied locally: zoom, drafts,
+   * the location to open, the part to scroll to. A discarded state
+   * (changed 0, nothing in it) leaves the window empty - the human
+   * opens anew or closes. */
+  async function applyWindowState(state: WindowState): Promise<void> {
+    if (state.changed === 0 && state.location === null) {
+      windowDiscarded = true;
+      console.log("[viewer] windows state discarded elsewhere; the window sits empty");
+      return;
+    }
+    const nextZoom = state.zoom ?? 1;
+    if (nextZoom !== knownZoom) {
+      knownZoom = nextZoom;
+      applyZoom(nextZoom);
+    }
+    const nextDrafts = state.drafts ?? [];
+    if (JSON.stringify(nextDrafts) !== JSON.stringify(knownDrafts)) {
+      knownDrafts = nextDrafts;
+      drafts = nextDrafts;
+    }
+    if (state.location !== null && state.location !== appliedLocation) {
+      appliedLocation = state.location;
+      await model.openInput(state.location);
+    }
+    if (state.part !== knownPart) {
+      knownPart = state.part;
+      if (state.part !== null) scrollToStatePart(state.part);
+    }
+    // the link: a new target refreshes the HUD's name and watches it
+    if (state.link !== linkTargetId) {
+      void refreshLink(state.link);
+    }
+  }
+
+  /** The window's state: the shell names the binding (the state
+   * survives a reload); a first window creates its state, attaches
+   * this device, applies what the state carries, and watches. The
+   * one-time interim-draft move runs on the first start with the window store. */
+  /** The retry for a window that started before any server existed:
+   * one quiet timer, gone the moment the window binds. */
+  function scheduleWindowRetry(): void {
+    if (windowRetryTimer !== null || windowStateId !== null) return;
+    windowRetryTimer = setTimeout(() => {
+      windowRetryTimer = null;
+      if (windowStateId !== null) return;
+      void startStateWindow();
+    }, 2000);
+  }
+
+  async function startStateWindow(): Promise<void> {
+    let invoke: ReturnType<typeof tauriInvoke>;
+    try {
+      invoke = tauriInvoke();
+    } catch (error) {
+      if (error instanceof SourceUnavailableError) {
+        console.log("[viewer] windows: no bridge; the window runs unbacked");
+        return;
+      }
+      throw error;
+    }
+    windowStore = WindowsClient.open();
+    if (windowStore === null) {
+      // no server YET: the server setting appears once, typed in the
+      // header - a window that started before it retries, and the
+      // window store arrives without a restart
+      console.log("[viewer] windows: no tracker server set; the window retries when one appears");
+      scheduleWindowRetry();
+      return;
+    }
+    try {
+      console.log("[viewer] windows: bootstrap starts");
+      const binding = (await invoke("window_binding")) as {
+        label: string;
+        state_id?: string | null;
+      };
+      windowLabel = binding.label;
+      console.log(`[viewer] windows: binding ${binding.label} ${binding.state_id ?? "(none)"}`);
+      let stateId = binding.state_id ?? null;
+      if (stateId === null) {
+        const fresh =
+          typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `w-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const created = await windowStore.create(fresh);
+        stateId = created.id;
+      }
+      windowStateId = stateId;
+      console.log(`[viewer] windows: state ${stateId}`);
+      const attached = await windowStore.attach(stateId);
+      console.log("[viewer] windows: attached");
+      // the shell's binding carries the window store's address and this
+      // device's id: the close detach needs them after the webview is
+      // gone
+      await invoke("bind_window_state", {
+        stateId,
+        server: windowStore.base.toString(),
+        device: windowStore.device,
+      });
+      console.log("[viewer] windows: shell bound");
+      knownZoom = attached.zoom;
+      knownPart = attached.part;
+      knownDrafts = attached.drafts ?? [];
+      await applyWindowState(attached);
+      console.log("[viewer] windows: state applied");
+      windowWatch = windowStore.watch(stateId, (state) => {
+        void applyWindowState(state);
+      });
+      console.log("[viewer] windows: watching");
+      void windowStore.moveInterimDrafts();
+      console.log(`[viewer] windows window bound: ${stateId}`);
+    } catch (error) {
+      console.error(`[viewer] windows window failed: ${String(error)}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`[viewer] windows window stack: ${error.stack}`);
+      }
+      // a transient failure retries on the same quiet timer
+      scheduleWindowRetry();
+    }
+  }
   void openTestBoard();
+  void startStateWindow();
+
+  // -- the window jump (t-14 "The suite") --------------------------------
+  //
+  // Labels on every visible suite window, and the picker listing
+  // windows on this device, then detached ones: Enter focuses an
+  // attached window, resumes a detached state here in a new window,
+  // and ^x twice discards a state on every device. Focus moves only
+  // here: every other act leaves focus alone. The keys ' and " are
+  // placeholders (t-14, "Open and deferred").
+  type JumpMode =
+    | { kind: "labels"; chips: { window: string; chip: string }[]; typed: string }
+    | { kind: "link"; chips: { window: string; chip: string }[]; typed: string }
+    | {
+        kind: "picker";
+        entries: JumpEntry[];
+        query: string;
+        selected: number;
+        armed: string | null;
+      };
+  let jumpMode = $state<JumpMode | null>(null);
+  let jumpChipShown = $state<string | null>(null);
+  let jumpNote = $state<string | null>(null);
+
+  // the shell's broadcast door: the acting window assigns the chips,
+  // every suite window shows its own
+  (window as unknown as Record<string, unknown>).__suiteJumpShow = (chip: string) => {
+    jumpChipShown = chip;
+  };
+  (window as unknown as Record<string, unknown>).__suiteJumpHide = () => {
+    jumpChipShown = null;
+  };
+
+  function blurForJump(): void {
+    (document.activeElement as HTMLElement | null)?.blur();
+  }
+
+  async function shellInvoke(): Promise<ReturnType<typeof tauriInvoke>> {
+    const invoke = tauriInvoke();
+    return invoke;
+  }
+
+  async function enterJumpLabels(): Promise<void> {
+    blurForJump();
+    jumpNote = null;
+    try {
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as { label: string }[];
+      const chips = assignChips(windows.map((window) => window.label));
+      const list = [...chips].map(([windowLabel, chip]) => ({ window: windowLabel, chip }));
+      if (list.length === 0) {
+        jumpNote = "no suite windows to jump between";
+        return;
+      }
+      await invoke("broadcast_jump_labels", { labels: list });
+      jumpMode = { kind: "labels", chips: list, typed: "" };
+    } catch (error) {
+      jumpNote = `the labels failed: ${String(error)}`;
+    }
+  }
+
+  async function enterJumpPicker(): Promise<void> {
+    blurForJump();
+    jumpNote = null;
+    if (windowStore === null) {
+      jumpNote = "no tracker server; the window store is not serving this window";
+      return;
+    }
+    try {
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as {
+        label: string;
+        state_id?: string | null;
+      }[];
+      const states = await windowStore.list();
+      const entries = jumpPickerEntries(
+        windows.map((window) => ({ label: window.label, stateId: window.state_id ?? null })),
+        states.map((state) => ({
+          id: state.id,
+          location: state.location,
+          attachedHere: state.attachedHere,
+        })),
+      );
+      jumpMode = { kind: "picker", entries, query: "", selected: 0, armed: null };
+    } catch (error) {
+      jumpNote = `the picker failed: ${String(error)}`;
+    }
+  }
+
+  async function clearJumpBroadcast(): Promise<void> {
+    try {
+      const invoke = await shellInvoke();
+      await invoke("broadcast_jump_labels_clear");
+    } catch {
+      // the labels clear with the mode; a failed broadcast is quiet
+    }
+  }
+
+  function exitJump(): void {
+    jumpMode = null;
+    void clearJumpBroadcast();
+  }
+
+  async function jumpFocus(label: string): Promise<void> {
+    const invoke = await shellInvoke();
+    await invoke("focus_suite_window", { label });
+  }
+
+  async function refreshJumpPicker(mode: Extract<JumpMode, { kind: "picker" }>): Promise<void> {
+    if (windowStore === null) return;
+    const invoke = await shellInvoke();
+    const windows = (await invoke("suite_windows")) as {
+      label: string;
+      state_id?: string | null;
+    }[];
+    const states = await windowStore.list();
+    mode.entries = jumpPickerEntries(
+      windows.map((window) => ({ label: window.label, stateId: window.state_id ?? null })),
+      states.map((state) => ({
+        id: state.id,
+        location: state.location,
+        attachedHere: state.attachedHere,
+      })),
+    );
+    if (mode.selected >= mode.entries.length) mode.selected = Math.max(0, mode.entries.length - 1);
+  }
+
+  async function jumpAct(entry: JumpEntry): Promise<void> {
+    const target = entry;
+    exitJump();
+    try {
+      if (target.kind === "window" && target.windowLabel !== null) {
+        // the jump: focus moves because the human asked
+        await jumpFocus(target.windowLabel);
+      } else {
+        // resume a detached state here: a window opens, the human
+        // asked for this one, so the activation request goes out with
+        // it
+        const invoke = await shellInvoke();
+        const label = (await invoke("open_suite_window", { stateId: target.stateId })) as string;
+        await jumpFocus(label);
+      }
+    } catch (error) {
+      jumpNote = `the jump failed: ${String(error)}`;
+    }
+  }
+
+  async function onJumpKey(event: KeyboardEvent): Promise<void> {
+    const mode = jumpMode;
+    if (mode === null) return;
+    if (mode.kind === "labels" || mode.kind === "link") {
+      const binding = mode.kind === "link";
+      if (event.key === "Escape") {
+        exitJump();
+        return;
+      }
+      if (event.key === "Backspace") {
+        mode.typed = mode.typed.slice(0, -1);
+        return;
+      }
+      if (/^[a-z]$/.test(event.key)) {
+        mode.typed += event.key;
+        const matches = mode.chips.filter((entry) => entry.chip.startsWith(mode.typed));
+        const landed = matches.length === 1 ? matches[0] : undefined;
+        if (matches.length === 0) {
+          exitJump();
+          return;
+        }
+        if (matches.length === 1 && landed && landed.chip === mode.typed) {
+          const target = landed.window;
+          exitJump();
+          try {
+            if (binding) {
+              await linkToWindow(target);
+            } else {
+              // the jump: focus moves because the human asked
+              await jumpFocus(target);
+            }
+          } catch (error) {
+            jumpNote = `${binding ? "the link" : "the jump"} failed: ${String(error)}`;
+          }
+        }
+      }
+      return;
+    }
+    // the picker
+    if (event.key === "Escape") {
+      exitJump();
+      return;
+    }
+    if (event.ctrlKey && event.key === "x") {
+      const entry = mode.entries[mode.selected];
+      if (!entry) return;
+      if (mode.armed === entry.stateId) {
+        if (windowStore !== null) {
+          await windowStore.discard(entry.stateId);
+          await refreshJumpPicker(mode);
+        }
+        mode.armed = null;
+      } else {
+        mode.armed = entry.stateId;
+      }
+      return;
+    }
+    if (event.key === "ArrowUp" || (event.key === "k" && !event.ctrlKey)) {
+      event.preventDefault();
+      mode.armed = null;
+      mode.selected = Math.max(0, mode.selected - 1);
+      return;
+    }
+    if (event.key === "ArrowDown" || (event.key === "j" && !event.ctrlKey)) {
+      event.preventDefault();
+      mode.armed = null;
+      mode.selected = Math.min(mode.entries.length - 1, mode.selected + 1);
+      return;
+    }
+    if (/^[a-z0-9/]$/.test(event.key) && !event.ctrlKey) {
+      mode.query += event.key;
+      return;
+    }
+    if (event.key === "Backspace") {
+      mode.query = mode.query.slice(0, -1);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const alive = mode.entries.filter((entry) => entryMatches(entry, mode.query));
+      const entry = alive[mode.selected];
+      if (entry) await jumpAct(entry);
+    }
+  }
+
+  function visibleJumpEntries(mode: Extract<JumpMode, { kind: "picker" }>): JumpEntry[] {
+    return mode.entries.filter((entry) => entryMatches(entry, mode.query));
+  }
+
+  // -- the link (t-14 "The suite") ---------------------------------------
+  //
+  // Per device, one per window, many windows may link to one target,
+  // only between windows attached on this device - the window store enforces
+  // the shape and lapses the link when its target detaches. A linked
+  // window shows its target; space l links by labels, space u
+  // unlinks; links never travel devices.
+  let linkTargetId = $state<string | null>(null);
+  let linkTargetName = $state<string | null>(null);
+  let linkTargetWindowLabel = $state<string | null>(null);
+  let linkWatch: { stop: () => void } | null = null;
+
+  async function refreshLink(targetId: string | null): Promise<void> {
+    linkTargetId = targetId;
+    linkWatch?.stop();
+    linkWatch = null;
+    if (targetId === null || windowStore === null) {
+      linkTargetName = null;
+      linkTargetWindowLabel = null;
+      return;
+    }
+    try {
+      const target = await windowStore.getState(targetId);
+      linkTargetName = shortLocation(target.location);
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as {
+        label: string;
+        state_id?: string | null;
+      }[];
+      linkTargetWindowLabel =
+        windows.find((window) => window.state_id === targetId)?.label ?? null;
+      // the target's own changes follow: its name in this window's
+      // HUD moves when the target moves, without any polling
+      linkWatch = windowStore.watch(targetId, (targetState) => {
+        linkTargetName = shortLocation(targetState.location);
+      });
+    } catch {
+      // the target left the window store: the link lapses server-side; this
+      // window shows no target until a new link is set
+      linkTargetName = null;
+      linkTargetWindowLabel = null;
+    }
+  }
+
+  async function enterLinkLabels(): Promise<void> {
+    blurForJump();
+    jumpNote = null;
+    if (windowStore === null || windowStateId === null || windowDiscarded) {
+      jumpNote = "no tracker server; the window store is not serving this window";
+      return;
+    }
+    try {
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as {
+        label: string;
+        state_id?: string | null;
+      }[];
+      const chips = assignChips(windows.map((window) => window.label));
+      const list = [...chips].map(([windowLabel, chip]) => ({ window: windowLabel, chip }));
+      await invoke("broadcast_jump_labels", { labels: list });
+      jumpMode = { kind: "link", chips: list, typed: "" };
+    } catch (error) {
+      jumpNote = `the labels failed: ${String(error)}`;
+    }
+  }
+
+  async function linkToWindow(windowLabel: string): Promise<void> {
+    if (windowStore === null || windowStateId === null) return;
+    const invoke = await shellInvoke();
+    const windows = (await invoke("suite_windows")) as {
+      label: string;
+      state_id?: string | null;
+    }[];
+    const target = windows.find((window) => window.label === windowLabel);
+    if (!target?.state_id) {
+      jumpNote = `no state bound to ${windowLabel} yet`;
+      return;
+    }
+    try {
+      await windowStore.setLink(windowStateId, target.state_id);
+      exitJump();
+    } catch (error) {
+      jumpNote = `the link refused: ${String(error)}`;
+      exitJump();
+    }
+  }
+
+  async function unlinkHere(): Promise<void> {
+    if (windowStore === null || windowStateId === null || windowDiscarded) return;
+    try {
+      await windowStore.clearLink(windowStateId);
+    } catch (error) {
+      jumpNote = `the unlink refused: ${String(error)}`;
+    }
+  }
+
+  // -- the two acts (t-14 "The suite") -----------------------------------
+  //
+  // Enter (or a click) is the primary act; o (or shift- or
+  // middle-click) opens elsewhere through the link. With no link,
+  // opening elsewhere asks once - labels on visible windows, n new,
+  // / a detached one - and the answer becomes the link; i opens
+  // elsewhere once without changing the link; w always opens a new
+  // window. The viewer's Enter follows here (the declaration is the
+  // instrument's: acts.ts); the tasks and agents instruments (t-18)
+  // declare their own and arrive without rework.
+  type AskOnce = {
+    act: ElsewhereAct;
+    spec: string;
+    chips: { window: string; chip: string }[];
+    typed: string;
+    detached: JumpEntry[];
+    detachedSelected: number;
+    showDetached: boolean;
+  };
+  let askOnce = $state<AskOnce | null>(null);
+
+  async function openElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
+    if (windowStore === null || windowStateId === null || windowDiscarded) {
+      jumpNote = "no tracker server; the window store is not serving this window";
+      return;
+    }
+    if (act === "link" && linkTargetWindowLabel !== null) {
+      // through the link: the target opens it here, focus never moves
+      const target = linkTargetWindowLabel;
+      await openInWindow(target, spec);
+      return;
+    }
+    if (act === "new") {
+      await openInNewWindow(spec, false);
+      return;
+    }
+    // no link (or a once act): ask once
+    blurForJump();
+    jumpNote = null;
+    try {
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as { label: string }[];
+      const chips = assignChips(windows.map((window) => window.label));
+      const list = [...chips].map(([windowLabel, chip]) => ({ window: windowLabel, chip }));
+      await invoke("broadcast_jump_labels", { labels: list });
+      const states = await windowStore.list();
+      const detached = states
+        .filter((state) => !state.attachedHere)
+        .map((state) => ({
+          kind: "detached" as const,
+          chip: null,
+          windowLabel: null,
+          stateId: state.id,
+          name: shortLocation(state.location),
+        }));
+      askOnce = {
+        act,
+        spec,
+        chips: list,
+        typed: "",
+        detached,
+        detachedSelected: 0,
+        showDetached: false,
+      };
+    } catch (error) {
+      jumpNote = `the ask failed: ${String(error)}`;
+    }
+  }
+
+  async function openInWindow(label: string, spec: string): Promise<void> {
+    const invoke = await shellInvoke();
+    await invoke("open_in_window", { label, location: spec });
+  }
+
+  /** A new window shows a new window state: the caller creates the
+   * state (so it can link to it) and the window's bootstrap attaches
+   * what it finds. The optional answer of an ask-once becomes the
+   * link when the act was o. */
+  async function openInNewWindow(spec: string, becomeLink: boolean): Promise<void> {
+    if (windowStore === null || windowStateId === null) return;
+    const fresh =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `w-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    await windowStore.create(fresh);
+    const invoke = await shellInvoke();
+    const label = (await invoke("open_suite_window", { stateId: fresh })) as string;
+    await invoke("open_in_window", { label, location: spec });
+    if (becomeLink) {
+      await windowStore.setLink(windowStateId, fresh);
+    }
+  }
+
+  async function askOnceAnswer(location: "window" | "new" | "detached", pick?: JumpEntry): Promise<void> {
+    const asking = askOnce;
+    if (asking === null) return;
+    askOnce = null;
+    void clearJumpBroadcast();
+    const becomeLink = asking.act === "link";
+    try {
+      if (location === "window") {
+        const chip = asking.typed;
+        const match = asking.chips.find((entry) => entry.chip === chip);
+        if (!match) return;
+        await openInWindow(match.window, asking.spec);
+        if (becomeLink && windowStore !== null && windowStateId !== null) {
+          const invoke = await shellInvoke();
+          const windows = (await invoke("suite_windows")) as {
+            label: string;
+            state_id?: string | null;
+          }[];
+          const target = windows.find((window) => window.label === match.window);
+          if (target?.state_id) await windowStore.setLink(windowStateId, target.state_id);
+        }
+        return;
+      }
+      if (location === "new") {
+        await openInNewWindow(asking.spec, becomeLink);
+        return;
+      }
+      if (pick) {
+        // a detached state: it resumes here in a new window and opens
+        // the citation there
+        const invoke = await shellInvoke();
+        const label = (await invoke("open_suite_window", { stateId: pick.stateId })) as string;
+        await invoke("open_in_window", { label, location: asking.spec });
+        if (becomeLink && windowStore !== null && windowStateId !== null) {
+          await windowStore.setLink(windowStateId, pick.stateId);
+        }
+      }
+    } catch (error) {
+      jumpNote = `the open failed: ${String(error)}`;
+    }
+  }
+
+  async function onAskOnceKey(event: KeyboardEvent): Promise<void> {
+    const asking = askOnce;
+    if (asking === null) return;
+    if (asking.showDetached) {
+      if (event.key === "Escape") {
+        askOnce = null;
+        void clearJumpBroadcast();
+        return;
+      }
+      if (event.key === "ArrowUp" || event.key === "k") {
+        asking.detachedSelected = Math.max(0, asking.detachedSelected - 1);
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "j") {
+        asking.detachedSelected = Math.min(asking.detached.length - 1, asking.detachedSelected + 1);
+        return;
+      }
+      if (event.key === "Enter") {
+        const alive = asking.detached;
+        await askOnceAnswer("detached", alive[asking.detachedSelected]);
+        return;
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      askOnce = null;
+      void clearJumpBroadcast();
+      return;
+    }
+    if (event.key === "/") {
+      asking.showDetached = true;
+      return;
+    }
+    if (event.key === "n") {
+      await askOnceAnswer("new");
+      return;
+    }
+    if (event.key === "Backspace") {
+      asking.typed = asking.typed.slice(0, -1);
+      return;
+    }
+    if (/^[a-z]$/.test(event.key)) {
+      asking.typed += event.key;
+      const matches = asking.chips.filter((entry) => entry.chip.startsWith(asking.typed));
+      const landed = matches.length === 1 ? matches[0] : undefined;
+      if (matches.length === 0) {
+        askOnce = null;
+        void clearJumpBroadcast();
+        return;
+      }
+      if (matches.length === 1 && landed && landed.chip === asking.typed) {
+        await askOnceAnswer("window");
+      }
+    }
+  }
+
+  /** The elsewhere half of a citation act: the spec the target window
+   * opens, routed per the two acts. */
+  async function openSpecElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
+    await openElsewhere(spec, act);
+  }
+
+  // the citation click's routing: hydrate signals every citation
+  // activation; the shell routes it per the instrument's declaration -
+  // the viewer follows here, a shifted or middle click opens
+  // elsewhere through the link (the answer becoming the link when
+  // there is none)
+  window.addEventListener("suite-open-citation", ((event: CustomEvent<{ machine: string; path: string; shifted: boolean }>) => {
+    const spec = citationSpec(event.detail, event.detail.path);
+    if (spec === null) return;
+    if (event.detail.shifted || VIEWER_ROUTING.primary === "link") {
+      void openElsewhere(spec, "link");
+      return;
+    }
+    void model.openInput(spec);
+  }) as EventListener);
+
+  /** A settled write: the location this window opened, with the
+   * reading position reset - new content, no part yet. */
+  $effect(() => {
+    const current = location;
+    if (!current || windowStore === null || windowStateId === null || windowDiscarded) return;
+    const spec = formatLocation(current);
+    if (spec === appliedLocation) return;
+    appliedLocation = spec;
+    knownPart = null;
+    void windowStore.patch(windowStateId, { location: spec, part: null }).catch(() => {
+      // an unreachable window store leaves the window readable; the next
+      // settled write retries
+    });
+  });
+
+  /** The reading height settles while reading: written when it stops
+   * moving, never per scroll frame (t-24@r20). */
+  function schedulePartWrite(): void {
+    if (windowStore === null || windowStateId === null || windowDiscarded) return;
+    if (partWriteTimer !== null) clearTimeout(partWriteTimer);
+    partWriteTimer = setTimeout(() => {
+      partWriteTimer = null;
+      if (windowStore === null || windowStateId === null || windowDiscarded) return;
+      const part = windowReadingPart();
+      if (part === null || part === knownPart) return;
+      knownPart = part;
+      void windowStore.patch(windowStateId, { part }).catch(() => {});
+    }, 600);
+  }
+
+  $effect(() => {
+    const host = contentHost;
+    if (!host) return;
+    const onScroll = (): void => schedulePartWrite();
+    host.addEventListener("scroll", onScroll);
+    return () => host.removeEventListener("scroll", onScroll);
+  });
 
   let hostPath = $state("");
   let query = $state("");
@@ -502,6 +1280,44 @@
     };
     if (target.kind === "citation" || target.kind === "incorporation") {
       acts.push({ key: "Enter", label: "open the cited revision", onAct: open });
+      // the two acts, pointer-reachable (t-14: every act is reachable
+      // by the pointer too)
+      acts.push({
+        key: "o",
+        label: "open elsewhere through the link",
+        onAct: () => {
+          const current = view.location;
+          const path = target.element.getAttribute("data-open-path");
+          if (current && path) {
+            const spec = citationSpec(current, path);
+            if (spec !== null) void openSpecElsewhere(spec, "link");
+          }
+        },
+      });
+      acts.push({
+        key: "i",
+        label: "open elsewhere once, the link unchanged",
+        onAct: () => {
+          const current = view.location;
+          const path = target.element.getAttribute("data-open-path");
+          if (current && path) {
+            const spec = citationSpec(current, path);
+            if (spec !== null) void openSpecElsewhere(spec, "once");
+          }
+        },
+      });
+      acts.push({
+        key: "w",
+        label: "open in a new window",
+        onAct: () => {
+          const current = view.location;
+          const path = target.element.getAttribute("data-open-path");
+          if (current && path) {
+            const spec = citationSpec(current, path);
+            if (spec !== null) void openSpecElsewhere(spec, "new");
+          }
+        },
+      });
     }
     if (target.kind === "diagram") {
       acts.push({ key: "Enter", label: "enlarge", onAct: enlarge });
@@ -907,18 +1723,34 @@
     if (anchor) historyMode.track(anchor.key);
   }
 
-  // Zoom (+ - =, t-14): the document's scale, the window's own
-  // in-memory state until the pool lands (t-24@r11).
+  // Zoom (+ - =, t-14): the document's scale, carried by the window's
+  // window state since the window store landed (t-24@r20; it was memory-only
+  // before) - written when it settles, applied from the state on
+  // resume and on another device's change.
   let zoom = $state(1);
   const ZOOM_MIN = 0.7;
   const ZOOM_MAX = 2;
   function zoomBy(delta: number): void {
-    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((zoom + delta) * 100) / 100));
-    if (contentHost) contentHost.style.zoom = String(zoom);
+    applyZoom(zoom + delta);
+    scheduleZoomWrite();
   }
   function zoomReset(): void {
-    zoom = 1;
-    if (contentHost) contentHost.style.zoom = "1";
+    applyZoom(1);
+    scheduleZoomWrite();
+  }
+
+  /** A settled zoom write: sent when the steps stop, never per key
+   * press (t-24@r20). */
+  function scheduleZoomWrite(): void {
+    if (windowStore === null || windowStateId === null || windowDiscarded) return;
+    if (zoomWriteTimer !== null) clearTimeout(zoomWriteTimer);
+    zoomWriteTimer = setTimeout(() => {
+      zoomWriteTimer = null;
+      if (windowStore === null || windowStateId === null || windowDiscarded) return;
+      if (zoom === knownZoom) return;
+      knownZoom = zoom;
+      void windowStore.patch(windowStateId, { zoom }).catch(() => {});
+    }, 400);
   }
 
   $effect(() => {
@@ -1029,15 +1861,17 @@
   });
 
   // Draft annotations (t-14, ratified): `a` on the part at the reading
-  // height drafts in place; drafts persist on the device keyed by task
-  // (t-24@r11) and survive a closed window or a restart. `space p`
-  // publishes them together as ONE commit with ONE message under the
-  // human's own identity; the current revision of a task board only.
+  // height drafts in place; drafts ride the window's state since
+  // the window store landed (t-24@r20) - two devices showing one state share
+  // them, and the window's own drafts never lose on a refused
+  // publish. `space p` publishes them together as ONE commit with ONE
+  // message under the human's own identity; the current revision of a
+  // task board only. A window with no window store keeps its drafts in
+  // memory, which is still never a lost draft.
   // On an explainer - a bare-path file that decodes as a board - the
   // editor's save IS the submit: one annotation written straight into
   // the file (t-24@r21), nothing pooled.
   let drafts = $state<Draft[]>([]);
-  let draftsFor = $state("");
   let draftEditor = $state<{ path: string; text: string } | null>(null);
   let draftEditorIndex = $state<number | null>(null);
   let draftKind = $state<"task" | "explainer">("task");
@@ -1058,24 +1892,14 @@
     };
   }
 
-  function reloadDrafts(): void {
-    const current = currentTaskSpec();
-    if (!current) {
-      drafts = [];
-      draftsFor = "";
-      return;
-    }
-    const key = `${current.tracker}/${current.task}`;
-    if (key !== draftsFor) {
-      draftsFor = key;
-      drafts = loadDrafts(current.tracker, current.task);
-    }
-  }
-
   function updateDrafts(next: Draft[]): void {
     drafts = next;
-    const current = currentTaskSpec();
-    if (current) saveDrafts(current.tracker, current.task, next);
+    knownDrafts = next;
+    if (windowStore === null || windowStateId === null || windowDiscarded) return;
+    void windowStore.patch(windowStateId, { drafts: next }).catch(() => {
+      // an unreachable window store keeps the drafts in memory; the next
+      // settled draft write carries them
+    });
   }
 
   /** The part the act lands on: the selected block, else the one at
@@ -1340,9 +2164,14 @@
         }
         return;
       }
-      // published: the drafts landed with the new revision
-      clearDrafts(current.tracker, current.task, drafts.map((draft) => draft.path));
+      // published: the drafts landed with the new revision; the
+      // window's state carries none now (t-24@r20: drafts ride
+      // the state)
+      knownDrafts = [];
       drafts = [];
+      if (windowStore !== null && windowStateId !== null && !windowDiscarded) {
+        void windowStore.patch(windowStateId, { drafts: [] }).catch(() => {});
+      }
       publishOpen = false;
       publishPanel = null;
       publishNote = `published as r${result.revision} under ${identity.actor}/human`;
@@ -1696,6 +2525,18 @@
       void model.forward();
       return;
     }
+    if (jumpMode !== null) {
+      // the window jump owns the keyboard while it is on
+      event.preventDefault();
+      void onJumpKey(event);
+      return;
+    }
+    if (askOnce !== null) {
+      // the ask-once owns the keyboard while it is on
+      event.preventDefault();
+      void onAskOnceKey(event);
+      return;
+    }
 
     switch (keyMode) {
       case "labels": {
@@ -1757,6 +2598,12 @@
           void toggleMarginalia();
         } else if (event.key === "p") {
           openPublish();
+        } else if (event.key === "l") {
+          // space l: link this window by labels (t-14)
+          void enterLinkLabels();
+        } else if (event.key === "u") {
+          // space u: unlink this window
+          void unlinkHere();
         }
         // the other leader commands (marginalia, publish) land with
         // their own chapters
@@ -1903,6 +2750,16 @@
         event.preventDefault();
         helpOpen = true;
         return;
+      case "'":
+        // the window jump's labels (the key is a placeholder, t-14)
+        event.preventDefault();
+        void enterJumpLabels();
+        return;
+      case '"':
+        // the window jump's picker (the key is a placeholder, t-14)
+        event.preventDefault();
+        void enterJumpPicker();
+        return;
       case "Enter": {
         event.preventDefault();
         const target = selected;
@@ -1915,6 +2772,23 @@
           const rect = target.element.getBoundingClientRect();
           openTargetMenu(target, { x: rect.right + 8, y: rect.top });
         }
+        return;
+      }
+      case "o":
+      case "i":
+      case "w": {
+        // the elsewhere acts on the selected citation (t-14): o opens
+        // through the link, i elsewhere once, w always a new window
+        const target = selected;
+        const path = target?.element.getAttribute("data-open-path");
+        const current = view.location;
+        if (!target || !path || !current) return;
+        const spec = citationSpec(current, path);
+        if (spec === null) return;
+        event.preventDefault();
+        if (event.key === "o") void openSpecElsewhere(spec, "link");
+        else if (event.key === "i") void openSpecElsewhere(spec, "once");
+        else void openSpecElsewhere(spec, "new");
         return;
       }
       case " ":
@@ -2269,6 +3143,12 @@
 
 <div class="app">
   <header class="app-header">
+    {#if jumpChipShown !== null}
+      <span class="jump-chip-self" data-control="jump:self">{jumpChipShown}</span>
+    {/if}
+    {#if linkTargetName !== null}
+      <span class="link-target" data-control="link:target" title="this window's link">-&gt; {linkTargetName}</span>
+    {/if}
     <span class="identity">
       {#if view.location}
         <strong>{view.location.machine}</strong>
@@ -2388,6 +3268,20 @@
         <p class="help-row"><span class="ctx-menu-key">?</span> this list</p>
       </div>
       {/if}
+      <div class="help-section">
+        <p class="help-title">windows</p>
+        <p class="help-row"><span class="ctx-menu-key">'</span> labels on every suite window; type a label to jump</p>
+        <p class="help-row"><span class="ctx-menu-key">"</span> windows here, then detached; enter resumes; ^x twice discards</p>
+        <p class="help-row"><span class="ctx-menu-key">space l</span> link this window by labels</p>
+        <p class="help-row"><span class="ctx-menu-key">space u</span> unlink this window</p>
+      </div>
+      <div class="help-section">
+        <p class="help-title">two acts</p>
+        <p class="help-row"><span class="ctx-menu-key">Enter</span> the primary act, here</p>
+        <p class="help-row"><span class="ctx-menu-key">o</span> open elsewhere through the link (shift- or middle-click too)</p>
+        <p class="help-row"><span class="ctx-menu-key">i</span> open elsewhere once, the link unchanged</p>
+        <p class="help-row"><span class="ctx-menu-key">w</span> open in a new window</p>
+      </div>
     </div>
   </div>
   {/if}
@@ -2475,6 +3369,77 @@
 
   {#if publishNote && !publishOpen}
     <p class="look-notice" data-control="action:note" aria-live="polite">{publishNote}</p>
+  {/if}
+
+  {#if jumpMode !== null}
+    <div class="jump-overlay" role="dialog" aria-label="window jump" data-control="jump:overlay">
+      {#if jumpMode.kind === "labels"}
+        <p class="jump-title">window jump: type a label</p>
+        <p class="jump-typed" data-control="jump:typed">{jumpMode.typed.length > 0 ? jumpMode.typed : "..."}</p>
+      {:else if jumpMode.kind === "link"}
+        <p class="jump-title">link this window to: type a label</p>
+        <p class="jump-typed" data-control="link:typed">{jumpMode.typed.length > 0 ? jumpMode.typed : "..."}</p>
+      {:else}
+        <p class="jump-title">windows here, then detached</p>
+        <div class="jump-list" data-control="jump:list">
+          {#each visibleJumpEntries(jumpMode) as entry, index}
+            {@const selected = index === jumpMode.selected}
+            <button
+              type="button"
+              class="jump-row"
+              class:jump-active={selected}
+              data-control="jump:row"
+              onclick={() => void jumpAct(entry)}
+            >
+              <span class="jump-entry-chip">{entry.chip ?? ""}</span>
+              <span class="jump-entry-kind">{entry.kind === "window" ? "window" : "detached"}</span>
+              <span class="jump-entry-name">{entry.name}</span>
+              {#if selected && jumpMode.armed === entry.stateId}
+                <span class="jump-armed" data-control="jump:armed">^x again discards the state on every device</span>
+              {/if}
+            </button>
+          {:else}
+            <p class="picker-empty">no windows and no detached states</p>
+          {/each}
+        </div>
+        <p class="jump-hint">enter jumps there or resumes here | ^x ^x discards | escape leaves</p>
+      {/if}
+      {#if jumpNote}
+        <p class="jump-note" data-control="jump:note">{jumpNote}</p>
+      {/if}
+    </div>
+  {/if}
+
+  {#if askOnce !== null}
+    <div class="jump-overlay" role="dialog" aria-label="open elsewhere" data-control="ask:overlay">
+      {#if askOnce.showDetached}
+        <p class="jump-title">open in a detached state</p>
+        <div class="jump-list" data-control="ask:detached">
+          {#each askOnce.detached as entry, index}
+            <button
+              type="button"
+              class="jump-row"
+              class:jump-active={index === askOnce.detachedSelected}
+              data-control="ask:row"
+              onclick={() => void askOnceAnswer("detached", entry)}
+            >
+              <span class="jump-entry-kind">detached</span>
+              <span class="jump-entry-name">{entry.name}</span>
+            </button>
+          {:else}
+            <p class="picker-empty">no detached states</p>
+          {/each}
+        </div>
+        <p class="jump-hint">enter opens there{askOnce.act === "link" ? " and becomes the link" : ""} | escape leaves</p>
+      {:else}
+        <p class="jump-title">open elsewhere: a label, n new, / a detached one</p>
+        <p class="jump-typed" data-control="ask:typed">{askOnce.typed.length > 0 ? askOnce.typed : "..."}</p>
+        <p class="jump-hint">the answer {askOnce.act === "link" ? "becomes the link" : "changes no link"} | escape leaves</p>
+      {/if}
+      {#if jumpNote}
+        <p class="jump-note" data-control="ask:note">{jumpNote}</p>
+      {/if}
+    </div>
   {/if}
 
   {#if view.errors.length > 0}
