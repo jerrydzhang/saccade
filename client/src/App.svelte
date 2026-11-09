@@ -50,6 +50,16 @@
     clearKeptExplainer,
     submitExplainerEdit,
   } from "./lib/explainer.ts";
+  import {
+    applyDocument,
+    cueCommand,
+    deckNameFromBytes,
+    jumpDeck,
+    newDeck,
+    stepDeck,
+    waitingSlide,
+    type DeckState,
+  } from "./lib/deck.ts";
   import { trackerCoreMachine } from "./lib/sources.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
@@ -132,6 +142,7 @@
     }
   }
   void openTestBoard();
+  void ensureDeck();
 
   let hostPath = $state("");
   let query = $state("");
@@ -337,6 +348,7 @@
 
   async function pickerOpenResult(item: PickerItem): Promise<void> {
     closePicker();
+    void ensureDeck();
     await model.openInput(item.location);
   }
 
@@ -1063,6 +1075,196 @@
 
   let mainWrap: HTMLElement | undefined = $state(undefined);
 
+  // -- the deck (t-21, t-24@r21) -----------------------------------------
+  // The address is a herdr-core document per window: deck- plus 96
+  // random bits, created on the machine the bare-path rule resolves
+  // (the hub's own core there, the declared tracker machine
+  // elsewhere). Holding the address is the permission; the document
+  // holds locations only, never the human's position; the shell
+  // deletes it when the window closes. The cue feed is the wake-driven
+  // hold (deck_wait), never a timer: every answer re-enters the hold
+  // while this window's deck stands.
+  let deck = $state.raw<DeckState | null>(null);
+  let deckMachine = "";
+  const deckSnapshots = new Map<number, string>();
+  let deckFeedLost = $state<string | null>(null);
+
+  function deckInvoke(): ReturnType<typeof tauriInvoke> {
+    return tauriInvoke();
+  }
+
+  async function ensureDeck(): Promise<void> {
+    if (deck || !bridgePresent) return;
+    let machine: string;
+    try {
+      machine = await trackerCoreMachine();
+    } catch (error) {
+      // no core, no server set, or not the hub without a declaration:
+      // the deck is absent, the reason on the app log for the lanes
+      console.log(
+        `[viewer] deck absent: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    const bytes = new Uint8Array(12);
+    crypto.getRandomValues(bytes);
+    const name = deckNameFromBytes(bytes);
+    try {
+      await deckInvoke()("deck_create", { name, on: machine });
+    } catch (error) {
+      console.log(`[viewer] deck refused: ${String(error)}`);
+      return;
+    }
+    deckMachine = machine;
+    deck = newDeck(name);
+    console.log(`[viewer] deck offered: ${name}`);
+    void watchDeck();
+  }
+
+  async function watchDeck(): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    try {
+      await deckInvoke()("deck_watch", { name: current.name, on: deckMachine });
+    } catch (error) {
+      deckFeedLost = String(error);
+      return;
+    }
+    while (deck === current) {
+      let message: { kind?: string; version?: number; reason?: string };
+      try {
+        message = (await deckInvoke()("deck_wait", { name: current.name })) as typeof message;
+      } catch (error) {
+        if (deck !== current) return;
+        deckFeedLost = String(error);
+        return;
+      }
+      if (deck !== current) return;
+      if (message.kind === "doc") {
+        await deckDocument(current);
+        continue;
+      }
+      if (message.kind === "lost") {
+        deckFeedLost = message.reason ?? "the feed ended";
+        return;
+      }
+      // Quiet: the hold expired with nothing cued; re-enter it
+    }
+  }
+
+  async function deckDocument(expected: DeckState): Promise<void> {
+    const current = deck;
+    if (!current || current !== expected) return;
+    let doc: { value: unknown; version: number };
+    try {
+      doc = (await deckInvoke()("deck_read", {
+        name: current.name,
+        on: deckMachine,
+      })) as typeof doc;
+    } catch {
+      return;
+    }
+    if (deck !== current) return;
+    const onLatest = view.slideIndex !== null && view.slideIndex === current.position;
+    const event = applyDocument(current, onLatest, doc.value, doc.version);
+    if (event.dead) {
+      // the address is dead: the document was deleted from outside
+      deck = null;
+      deckSnapshots.clear();
+      publishNote = "the deck's document was deleted; the address is dead";
+      return;
+    }
+    deck = event.state;
+    // file slides snapshot when the cue lands; boards pin by revision
+    // when shown (their location already carries @rK if the agent
+    // cued it, else the open pins what answers)
+    for (const index of event.arrived) {
+      const spec = event.state.slides[index];
+      if (spec === undefined) continue;
+      const location = parseLocation(spec);
+      if (!location || location.machine.startsWith("tracker:")) continue;
+      void snapshotFor(index, location);
+    }
+    if (event.show) {
+      await showSlide(event.state.slides.length - 1);
+    }
+  }
+
+  async function snapshotFor(index: number, location: Location): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    try {
+      const loaded = await sourceFor(location.machine).loadText(location);
+      if (deck !== current) return;
+      deckSnapshots.set(index, loaded.text);
+    } catch {
+      // no snapshot held: showing the slide answers with the live
+      // read's own structured refusal
+    }
+  }
+
+  async function showSlide(index: number): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    const spec = current.slides[index];
+    if (spec === undefined) return;
+    const location = parseLocation(spec);
+    if (!location) {
+      publishNote = `slide ${index + 1} is a location this viewer cannot parse: ${spec}`;
+      return;
+    }
+    if (location.machine.startsWith("tracker:")) {
+      await model.open(location, { deck: true, slideIndex: index });
+    } else {
+      const snapshot = deckSnapshots.get(index);
+      if (typeof snapshot === "string") {
+        await model.openSnapshot(location, snapshot, index);
+      } else {
+        await model.open(location, { deck: true, slideIndex: index });
+      }
+    }
+    if (deck !== current) return;
+    deck = { ...current, position: index, entered: true };
+  }
+
+  async function deckStep(direction: "older" | "newer"): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    const step = stepDeck(current, direction);
+    deck = step.state;
+    if (step.target !== null) await showSlide(step.target);
+  }
+
+  async function deckJump(digit: number): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    const jump = jumpDeck(current, digit);
+    deck = jump.state;
+    if (jump.target !== null) await showSlide(jump.target);
+  }
+
+  function copyCueCommand(): void {
+    const current = deck;
+    if (!current) return;
+    const command = cueCommand(current.name, "<location>");
+    if (bridgePresent) void bridgeWrite(command);
+    else void navigator.clipboard?.writeText(command).catch(() => {});
+  }
+
+  let deckOnLatest = $derived(
+    deck !== null && view.slideIndex !== null && view.slideIndex === deck.position,
+  );
+  let deckWaiting = $derived(deck === null ? null : waitingSlide(deck, deckOnLatest));
+  let deckStateText = $derived.by(() => {
+    const current = deck;
+    if (!current) return "";
+    if (view.slideIndex !== null) {
+      const shown = `slide ${view.slideIndex + 1}/${current.slides.length}`;
+      return deckWaiting !== null ? `${shown}, slide ${deckWaiting} waiting` : shown;
+    }
+    return deckWaiting !== null ? `slide ${deckWaiting} waiting` : "";
+  });
+
   let historyActive = $derived(historyMode !== null);
 
   // Marginalia (space m): rows, each run of parts beside the full
@@ -1250,11 +1452,22 @@
           void historyStep("older");
           return;
         }
+        if (deck && !marginaliaMode) {
+          // h l move between slides; in history they step time (t-14)
+          event.preventDefault();
+          void deckStep("older");
+          return;
+        }
         break;
       case "l":
         if (historyMode) {
           event.preventDefault();
           void historyStep("newer");
+          return;
+        }
+        if (deck && !marginaliaMode) {
+          event.preventDefault();
+          void deckStep("newer");
           return;
         }
         break;
@@ -1311,6 +1524,23 @@
         event.preventDefault();
         scrollByPages(contentHost, -0.5);
         return;
+      case "1":
+      case "2":
+      case "3":
+      case "4":
+      case "5":
+      case "6":
+      case "7":
+      case "8":
+      case "9":
+        // digits jump to slide numbers in normal mode (t-14, t-24@r21:
+        // label mode consumes them first - this switch is normal mode)
+        if (deck) {
+          event.preventDefault();
+          void deckJump(Number(event.key));
+          return;
+        }
+        break;
       case "g":
         event.preventDefault();
         keyMode = "gg";
@@ -1596,10 +1826,38 @@
       // the look's test surfaces: in-memory overrides and a summary
       setLook: setInspectedLook,
       look: () => lookSummary(resolveLook(lastSource)),
+      // the deck's test surface (t-21): the standing deck state for
+      // HUD and key checks in the browser lane, where no core exists.
+      // Test-only machinery, named as such, never human functionality.
+      deck: () =>
+        deck === null
+          ? null
+          : {
+              name: deck.name,
+              slides: [...deck.slides],
+              position: deck.position,
+              entered: deck.entered,
+              feedLost: deckFeedLost,
+            },
+      deckTest: (patch: {
+        slides?: string[];
+        position?: number | null;
+        entered?: boolean;
+      }) => {
+        const current = deck ?? newDeck("deck-" + "0".repeat(24));
+        deck = {
+          ...current,
+          slides: patch.slides ?? current.slides,
+          position: patch.position ?? current.position,
+          entered: patch.entered ?? current.entered,
+        };
+      },
+      deckShow: (index: number) => void showSlide(index),
     };
   });
 
   async function openHost(): Promise<void> {
+    void ensureDeck();
     if (hostPath) await model.openInput(hostPath);
   }
 
@@ -1661,6 +1919,13 @@
         {/if}
       {:else}
         <span class="status status-empty">no board open</span>
+      {/if}
+      {#if deck}
+        <span class="task-meta" data-control="deck:line">deck: <code>{deck.name}</code></span>
+        <button type="button" data-control="deck:copy" onclick={copyCueCommand}>copy cue command</button>
+      {/if}
+      {#if deckStateText}
+        <span class="task-meta deck-state" data-control="deck:state">{deckStateText}</span>
       {/if}
     </span>
     <span class="controls">

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import socket
 import subprocess
 import sys
 import time
@@ -388,6 +389,16 @@ def main() -> int:
     started = time.monotonic()
     state = LaneState()
     wayland_name = f"wayland-{os.getpid() % 97}"
+
+    # the client configuration declares the tracker machine (t-24@r12):
+    # the deck's address rides the same bare-path rule, so the deck
+    # document lands on machine b through core a's relay. Written before
+    # the app launches; the config reader follows it at start.
+    config_dir = pathlib.Path("config/dev.saccade.board-viewer")
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.toml").write_text(f'tracker-machine = "{MACHINE_NAME}"\n')
+    check("client configuration written (tracker-machine b)", True, str(config_dir))
+
     try:
         # the private mesh, before anything that needs it
         core_a = start_core(core_bin, "a", logs)
@@ -579,6 +590,143 @@ def main() -> int:
 
         frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote")
         check("compositor frame captured", frame is not None, "screenshooter produced no frame")
+
+        # -- the deck end-to-end (t-21, t-24@r21) ------------------------
+        # The app offered its deck on machine b through the relay; the
+        # lane now plays the agent: append the slide to the deck
+        # document on the real doc store (core a's socket, on=b), and
+        # the viewer's wake-driven feed picks the landing up and shows
+        # the slide - a view whose path differs from the startup open,
+        # so a passing check names the cue.
+        DECK_LOCATION = "b:/board/deck-slide.yaml"
+
+        def deck_state() -> dict | None:
+            try:
+                candidate = client.execute(
+                    "return (window.__boardViewer && window.__boardViewer.deck()) || null;"
+                )
+            except WebDriverError as error:
+                check("deck state readable", False, str(error)[:160])
+                return None
+            return candidate if isinstance(candidate, dict) else None
+
+        deck: dict | None = None
+        deck_deadline = time.monotonic() + APP_READY_SECONDS
+        while time.monotonic() < deck_deadline:
+            deck = deck_state()
+            if deck is not None:
+                break
+            time.sleep(0.5)
+        check(
+            "the app offered its deck on the declared machine",
+            deck is not None and str(deck.get("name", "")).startswith("deck-"),
+            str(deck)[:200],
+        )
+
+        if deck is not None:
+            deck_name = str(deck["name"])
+
+            def rpc(method: str, params: dict) -> dict:
+                sock = pathlib.Path(os.environ["XDG_RUNTIME_DIR"]) / "herdr-core" / "a.sock"
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock_fd:
+                    sock_fd.settimeout(10)
+                    sock_fd.connect(str(sock))
+                    reader = sock_fd.makefile("rb")
+                    writer = sock_fd.makefile("wb")
+                    request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+                    writer.write((json.dumps(request) + "\n").encode())
+                    writer.flush()
+                    return json.loads(reader.readline())
+
+            cue_landed = False
+            last_detail = "no cue attempt"
+            for attempt in range(2):
+                read = rpc("doc.get", {"name": deck_name, "on": MACHINE_NAME})
+                doc = read.get("result") or {}
+                slides = doc.get("value") or []
+                if DECK_LOCATION in slides:
+                    cue_landed = True
+                    last_detail = f"already cued at version {doc.get('version')}"
+                    break
+                written = rpc(
+                    "doc.set",
+                    {
+                        "name": deck_name,
+                        "on": MACHINE_NAME,
+                        "version": doc.get("version", 0),
+                        "value": [*slides, DECK_LOCATION],
+                    },
+                )
+                if "error" in written:
+                    last_detail = f"doc.set refused: {json.dumps(written['error'])[:160]}"
+                    continue
+                # bounded wait for the feed to carry the landing into a
+                # shown slide; one re-cue is the protocol's own retry
+                shown_deadline = time.monotonic() + CONNECT_WAIT_SECONDS
+                while time.monotonic() < shown_deadline:
+                    state_now = deck_state()
+                    if state_now is not None and DECK_LOCATION in (state_now.get("slides") or []):
+                        cue_landed = True
+                        last_detail = f"slide shown at position {state_now.get('position')}"
+                        break
+                    time.sleep(0.5)
+                if cue_landed:
+                    break
+            check(
+                "the agent's cue lands in the deck document and is read back",
+                cue_landed,
+                last_detail,
+            )
+
+            # the slide is the shown view: a fresh inspection names the
+            # cued location, not the startup open
+            slide_shown = False
+            shown_detail = "no fresh inspection"
+            shown_deadline = time.monotonic() + CONNECT_WAIT_SECONDS
+            while time.monotonic() < shown_deadline:
+                try:
+                    fresh = client.execute(INSPECT_SCRIPT)
+                except WebDriverError as error:
+                    shown_detail = str(error)[:160]
+                    time.sleep(0.5)
+                    continue
+                resource = (fresh or {}).get("resource") or {}
+                if (
+                    resource.get("machine") == MACHINE_NAME
+                    and resource.get("path") == "/board/deck-slide.yaml"
+                    and resource.get("status") == "loaded"
+                ):
+                    slide_shown = True
+                    shown_detail = str(resource)[:160]
+                    break
+                shown_detail = f"status={resource.get('status')!r} path={resource.get('path')!r}"
+                time.sleep(0.5)
+            check(
+                "the cued slide is the shown view through the mesh",
+                slide_shown,
+                shown_detail,
+            )
+
+            hud = ""
+            hud_deadline = time.monotonic() + 10
+            while time.monotonic() < hud_deadline:
+                hud = str(
+                    client.execute(
+                        "return document.querySelector('[data-control=\"deck:state\"]')?.textContent ?? '';"
+                    )
+                    or ""
+                )
+                if "slide 1/" in hud:
+                    break
+                time.sleep(0.5)
+            check(
+                "the HUD states the shown slide",
+                "slide 1/1" in hud,
+                hud,
+            )
+
+        frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote-deck")
+        check("deck compositor frame captured", frame is not None, "screenshooter produced no frame")
 
         passed = sum(1 for ok, _name, _detail in RESULTS if ok)
         code = 0 if passed == len(RESULTS) else 1

@@ -931,6 +931,76 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("explainer", phase_explainer)
 
+    # phase 11: the deck's HUD and keys (t-21, t-24@r21). No core
+    # exists in this lane, so the standing deck state rides the test
+    # surface (deckTest, named test machinery); what is pinned is the
+    # UI contract: the waiting statement, the slide indicator, digit
+    # jumps, h l motion, and the deck line with its copy act.
+    def phase_deck() -> None:
+        def key(key: str, modifiers: list[str] | None = None) -> None:
+            for modifier in modifiers or []:
+                page.keyboard.down(modifier)
+            page.keyboard.press(key)
+            for modifier in reversed(modifiers or []):
+                page.keyboard.up(modifier)
+
+        def set_deck(slides: list[str], position: int | None, entered: bool) -> None:
+            page.evaluate(
+                f"() => {viewer}.deckTest({{slides: {json.dumps(slides)}, position: {json.dumps(position)}, entered: {json.dumps(entered)}}})"
+            )
+
+        def state_text() -> str:
+            return str(
+                page.evaluate("() => document.querySelector('[data-control=\"deck:state\"]')?.textContent ?? ''")
+            )
+
+        # a waiting cue is stated plainly in the HUD's own text
+        set_deck(["tracker/x/t-1", "tracker/x/t-2", "tracker/x/t-3"], 0, True)
+        state = state_text()
+        check(
+            "a waiting cue is stated in the HUD",
+            "slide 2 waiting" in state,
+            state,
+        )
+        # digits jump to slide numbers
+        key("3")
+        deck_after = page.evaluate(f"() => {viewer}.deck()")
+        check(
+            "digit 3 jumps to slide 3",
+            deck_after is not None and deck_after["position"] == 2,
+            str(deck_after),
+        )
+        # this lane cannot open the slide's view (no bridge, no core),
+        # so the shown-state text (slide 3/3) pins in the remote lane's
+        # end-to-end; here the honest outcome is that on the latest
+        # nothing waits
+        state = state_text()
+        check(
+            "on the latest nothing waits",
+            "waiting" not in state,
+            state,
+        )
+        # h steps back through the slides
+        key("h")
+        deck_after = page.evaluate(f"() => {viewer}.deck()")
+        check("h steps back a slide", deck_after is not None and deck_after["position"] == 1, str(deck_after))
+        # l steps forward again
+        key("l")
+        deck_after = page.evaluate(f"() => {viewer}.deck()")
+        check("l steps forward a slide", deck_after is not None and deck_after["position"] == 2, str(deck_after))
+        # on the latest, nothing waits
+        check("on the latest nothing waits", "waiting" not in state_text())
+        # the deck line carries the address and the copy act
+        line = page.evaluate("() => document.querySelector('[data-control=\"deck:line\"]')?.textContent ?? ''")
+        copy_button = page.evaluate("() => document.querySelector('[data-control=\"deck:copy\"]') !== null")
+        check(
+            "the header states the deck's address with its copy act",
+            line.startswith("deck: deck-") and copy_button,
+            f"{line!r} button={copy_button}",
+        )
+
+    phase("deck", phase_deck)
+
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 
 

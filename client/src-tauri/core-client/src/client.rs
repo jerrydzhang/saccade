@@ -107,6 +107,42 @@ impl<T: CoreTransport> CoreClient<T> {
         Ok(FileEditOutcome { bytes })
     }
 
+    /// One opaque document read: the deck's read-back (t-24@r21 B1) -
+    /// the value as it stands and its version, zero when never
+    /// written. A deleted document answers value null with its
+    /// retained version.
+    pub fn doc_get(&self, machine: &str, name: &str) -> Result<DeckDoc, CoreFail> {
+        let result = self.request(
+            "doc.get",
+            &subject_params(machine, name),
+            machine,
+            Some(name),
+        )?;
+        Ok(DeckDoc {
+            value: result.get("value").cloned().unwrap_or(Value::Null),
+            version: number_field(&result, "version")?,
+        })
+    }
+
+    /// One versioned document write: the whole value, the caller's
+    /// version must still match. A lost race is a `conflict` refusal -
+    /// the cue protocol's retry is the caller's (read again, set
+    /// again); nothing here retries.
+    pub fn doc_set(
+        &self,
+        machine: &str,
+        name: &str,
+        value: &Value,
+        version: u64,
+    ) -> Result<u64, CoreFail> {
+        let mut params = json!({"name": name, "value": value, "version": version});
+        if !machine.is_empty() {
+            params["on"] = json!(machine);
+        }
+        let result = self.request("doc.set", &params, machine, Some(name))?;
+        Ok(number_field(&result, "version")?)
+    }
+
     /// One fixed-argv program on a machine: argv as given, no shell,
     /// bounded time. A nonzero exit or a timeout is a result, not an
     /// error. An empty machine is the local core's own machine: `on`
@@ -372,6 +408,24 @@ pub struct FileEditOutcome {
     pub bytes: u64,
 }
 
+/// One document read-back: the value as it stands and its version.
+#[derive(Debug)]
+pub struct DeckDoc {
+    pub value: Value,
+    pub version: u64,
+}
+
+/// The subject-call params: the named subject, with `on` omitted for
+/// the local core's own machine (t-24@r12), the same call the CLI's
+/// no-`--on` form makes.
+fn subject_params(machine: &str, subject: &str) -> Value {
+    let mut params = json!({"name": subject});
+    if !machine.is_empty() {
+        params["on"] = json!(machine);
+    }
+    params
+}
+
 /// The file-call params: `on` names the machine and is omitted for
 /// the local core's own machine (t-24@r12), the same call the CLI's
 /// no-`--on` form makes.
@@ -556,7 +610,6 @@ mod tests {
         assert_eq!(calls[0].1, json!({"path": "/srv/b.yaml", "on": "tired"}));
     }
 
-    #[test]
     #[test]
     fn an_edit_sends_the_exact_once_replacements_and_omits_on_for_the_local_machine() {
         let fake = Fake::new(&[json!({"result": {"path": "/srv/x.yaml", "bytes": 115}})]);

@@ -37,6 +37,10 @@ export type ViewerState = {
   renderGeneration: number | null;
   copyMode: CopyMode;
   theme: "system" | "light" | "dark";
+  /** The deck slide this view is, or null when the view is not a
+   * slide: a human open always clears it, a deck show always sets it
+   * (t-24@r21: on the latest slide only while showing it as cued). */
+  slideIndex: number | null;
 };
 
 export class ViewerModel {
@@ -52,6 +56,7 @@ export class ViewerModel {
     renderGeneration: null,
     copyMode: "source",
     theme: "system",
+    slideIndex: null,
   };
 
   /** Monotonic open generation: stale loads and hydrations are dropped
@@ -108,9 +113,14 @@ export class ViewerModel {
    * Stale responses (a slow A arriving after B was selected) are dropped:
    * the location on screen always names the board on screen. A plain open
    * pushes the replaced location onto the back stack; a navigate open
-   * (the back/forward keys) moves around the stacks instead. */
-  async open(location: Location, opts?: { navigate?: boolean }): Promise<void> {
-    if (!opts?.navigate) {
+   * (the back/forward keys) moves around the stacks instead; a deck open
+   * (a cued slide shown) touches neither stack - the deck has its own
+   * order (t-3), the stacks stay the human's own trail. */
+  async open(
+    location: Location,
+    opts?: { navigate?: boolean; deck?: boolean; slideIndex?: number },
+  ): Promise<void> {
+    if (!opts?.navigate && !opts?.deck) {
       const current = this.state.location;
       if (current && (current.machine !== location.machine || current.path !== location.path)) {
         this.backStack.push(current);
@@ -128,6 +138,7 @@ export class ViewerModel {
       laneMessage: null,
       renderOutcomes: [],
       renderGeneration: null,
+      slideIndex: opts?.slideIndex ?? null,
     });
     let text: string;
     let resolvedLocation: Location = location;
@@ -151,6 +162,34 @@ export class ViewerModel {
       });
       return;
     }
+    await this.admit(resolvedLocation, text, token);
+  }
+
+  /** A deck slide's file view: the snapshot the deck already held is
+   * shown as this location's view without a read (t-24@r21 B3: a file
+   * slide is its cued snapshot for the life of the deck). The decoded
+   * board, the refusal and the render generation all ride the same
+   * path a read open takes. */
+  async openSnapshot(location: Location, text: string, slideIndex: number): Promise<void> {
+    const token = ++this.generation;
+    this.set({
+      status: "loading",
+      location,
+      board: null,
+      rawText: null,
+      errors: [],
+      diagnostics: [],
+      laneMessage: null,
+      renderOutcomes: [],
+      renderGeneration: null,
+      slideIndex,
+    });
+    await this.admit(location, text, token);
+  }
+
+  /** Everything a shown text becomes, read or snapshot: validation,
+   * decode, the refusal states, the loaded state. */
+  private async admit(resolvedLocation: Location, text: string, token: number): Promise<void> {
     const verdict = await this.validate(text);
     if (token !== this.generation) return;
     const result = decodeBoard(text);

@@ -15,8 +15,11 @@
 //! here; the renderer gets no socket, no shell and no machine
 //! management.
 
-use board_viewer_core::{guard_relative, CoreClient, CoreFail, FileEdit, SocketTransport};
+use board_viewer_core::{
+    guard_relative, CoreClient, CoreFail, FileEdit, SocketTransport, Subscription,
+};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::look_config;
 
@@ -416,6 +419,41 @@ mod tests {
     }
 
     #[test]
+    fn a_deck_name_must_be_the_viewer_s_own_form() {
+        let good = format!("deck-{}", "ab".repeat(12));
+        assert!(super::deck_name_guard(&good).is_ok());
+        let upper = format!("deck-{}", "AB".repeat(12));
+        let short = format!("deck-{}", "ab".repeat(11));
+        let long = format!("deck-{}", "ab".repeat(13));
+        let other = format!("other-{}", "ab".repeat(12));
+        for bad in [
+            upper,
+            short,
+            long,
+            "deck-xyxyxyxyxyxyxyxyxyxyxyxy".to_string(),
+            other,
+            String::new(),
+        ] {
+            let failure = super::deck_name_guard(&bad).expect_err("refused");
+            assert_eq!(failure.code, "asset-denied", "{bad:?}");
+            assert!(failure.message.contains("24 lowercase hex"), "{failure:?}");
+        }
+    }
+
+    #[test]
+    fn a_deck_machine_must_be_a_core_machine_name_or_the_hub() {
+        assert!(super::deck_machine_guard("").is_ok(), "the hub's own core");
+        assert!(super::deck_machine_guard("tired").is_ok());
+        for bad in ["../x", "a b", "-lead", ".dot", ""] {
+            if bad.is_empty() {
+                continue; // empty is the hub and already admitted
+            }
+            let failure = super::deck_machine_guard(bad).expect_err("refused");
+            assert_eq!(failure.code, "asset-denied", "{bad:?}");
+        }
+    }
+
+    #[test]
     fn the_read_target_follows_the_machine_argument() {
         assert!(matches!(core_read_of(&None), CoreRead::HostFile));
         assert!(matches!(core_read_of(&Some("".into())), CoreRead::Local));
@@ -467,4 +505,210 @@ pub fn write_clipboard(window: tauri::Window, text: String) -> Result<usize, Str
     clipboard.set_text(&text);
     eprintln!("[bridge] clipboard set: {} chars", text.chars().count());
     Ok(text.chars().count())
+}
+
+// -- the deck (t-24@r21 B1, B2) ----------------------------------------
+
+/// The deck this window offered, for the close-time delete: the name
+/// and the machine it lives on, recorded when the create lands. Never
+/// a second copy of deck state - the document is the truth; this is
+/// only the address the shell must retire at close.
+static DECK_ADDRESS: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+
+/// The address the shell must retire at close, for lib.rs's window
+/// hook: (name, machine) once a deck was offered, else None.
+pub fn deck_address() -> Option<(String, String)> {
+    DECK_ADDRESS.lock().ok().and_then(|slot| slot.clone())
+}
+
+fn deck_machine_guard(on: &str) -> Result<(), BridgeError> {
+    // the deck machine is the caller's resolution of the bare-path
+    // rule: "" for the hub's own core, else a declared machine name.
+    // Anything else has not gone through that rule.
+    if on.is_empty() {
+        return Ok(());
+    }
+    if !on
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        || on.starts_with('-')
+        || on.starts_with('.')
+    {
+        return Err(deny("the deck machine is not a core machine name"));
+    }
+    Ok(())
+}
+
+/// The deck's name must be the viewer's own form: `deck-` plus 24
+/// lowercase hex characters - 96 bits inside the core's name rule
+/// (t-24@r21 B2, probed against the pinned core). A name that does
+/// not match is refused before the wire: an address that can be
+/// guessed is not a permission.
+fn deck_name_guard(name: &str) -> Result<(), BridgeError> {
+    let valid = name.len() == 29
+        && name.starts_with("deck-")
+        && name[5..].chars().all(|c| c.is_ascii_hexdigit())
+        && name[5..].chars().all(|c| !c.is_ascii_uppercase());
+    if !valid {
+        return Err(deny("the deck name is not deck- plus 24 lowercase hex"));
+    }
+    Ok(())
+}
+
+/// Offer the deck: create the document as an empty list at version 0.
+/// A conflict means the name is not fresh - the frontend generates a
+/// new address rather than adopting a document it did not create.
+#[tauri::command]
+pub fn deck_create(name: String, on: String) -> Result<u64, BridgeError> {
+    deck_name_guard(&name)?;
+    deck_machine_guard(&on)?;
+    let client = core_client()?;
+    let version = client
+        .doc_set(&on, &name, &serde_json::json!([]), 0)
+        .map_err(core_failure)?;
+    let recorded = DECK_ADDRESS.lock().map(|mut slot| {
+        *slot = Some((name.clone(), on));
+    });
+    if recorded.is_err() {
+        return Err(deny("the deck address could not be recorded"));
+    }
+    eprintln!("[bridge] deck_create {name}: version {version}");
+    Ok(version)
+}
+
+/// The deck's read-back: the document as it stands (locations only,
+/// never the human's position) with its version.
+#[derive(Serialize)]
+pub struct DeckDoc {
+    pub value: serde_json::Value,
+    pub version: u64,
+}
+
+#[tauri::command]
+pub fn deck_read(name: String, on: String) -> Result<DeckDoc, BridgeError> {
+    deck_name_guard(&name)?;
+    deck_machine_guard(&on)?;
+    let client = core_client()?;
+    let doc = client.doc_get(&on, &name).map_err(core_failure)?;
+    Ok(DeckDoc {
+        value: doc.value,
+        version: doc.version,
+    })
+}
+
+/// Retire the address: the document is deleted (null value, retained
+/// version) when the window closes or its state is discarded. A lost
+/// race reads the current version and deletes once more; a document
+/// already gone is success - the address is dead either way. Best
+/// effort and bounded: the close path never hangs on it.
+#[tauri::command]
+pub fn deck_delete(name: String, on: String) -> Result<(), BridgeError> {
+    deck_name_guard(&name)?;
+    deck_machine_guard(&on)?;
+    let client = core_client()?;
+    let mut version = client.doc_get(&on, &name).map_err(core_failure)?.version;
+    for _ in 0..3 {
+        match client.doc_set(&on, &name, &serde_json::json!(null), version) {
+            Ok(_) => {
+                eprintln!("[bridge] deck_delete {name}: deleted");
+                return Ok(());
+            }
+            Err(CoreFail::Conflict { .. }) => {
+                version = client.doc_get(&on, &name).map_err(core_failure)?.version;
+            }
+            Err(fail) => return Err(core_failure(fail)),
+        }
+    }
+    Err(deny("the delete kept losing its race"))
+}
+
+/// The deck's open feed: the subscription the watch holds. One feed -
+/// this viewer is one window.
+static DECK_FEED: std::sync::Mutex<Option<Subscription>> = std::sync::Mutex::new(None);
+
+/// One feed answer: a document landing for the deck's name, the feed
+/// ending, or the hold expiring quiet (a normal answer - the cue feed
+/// waits with the window, never a timer).
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind")]
+pub enum DeckFeedMessage {
+    Doc { version: u64 },
+    Lost { reason: String },
+    Quiet,
+}
+
+/// Watch the deck: open the persistent `events.subscribe` connection
+/// the holds read from. The cue feed is wake-driven: `deck_wait`
+/// parks on the subscription with a bounded read (25 s, the hold
+/// pattern wait_look_config rides), answers on a landing, and the
+/// frontend re-enters the hold after every answer. No timer poll: the
+/// only timer is the hold's own deadline, and the core's heartbeat
+/// sits far inside it.
+#[tauri::command]
+pub fn deck_watch(name: String, on: String) -> Result<(), BridgeError> {
+    deck_name_guard(&name)?;
+    deck_machine_guard(&on)?;
+    let socket = SocketTransport::default_path().map_err(core_failure)?;
+    let subscription = Subscription::open(&socket, &on).map_err(core_failure)?;
+    let mut slot = DECK_FEED
+        .lock()
+        .map_err(|_| deny("the deck feed lock poisoned"))?;
+    *slot = Some(subscription);
+    eprintln!("[bridge] deck_watch {name}: subscribed");
+    Ok(())
+}
+
+const DECK_HOLD_SECONDS: u64 = 25;
+
+fn deck_hold(name: &str) -> DeckFeedMessage {
+    let mut slot = match DECK_FEED.lock() {
+        Ok(slot) => slot,
+        Err(_) => {
+            return DeckFeedMessage::Lost {
+                reason: "the feed lock is poisoned".into(),
+            }
+        }
+    };
+    let subscription = match slot.as_mut() {
+        Some(subscription) => subscription,
+        None => {
+            return DeckFeedMessage::Lost {
+                reason: "no feed is open".into(),
+            }
+        }
+    };
+    subscription.hold_timeout(Duration::from_secs(DECK_HOLD_SECONDS));
+    match subscription.next_doc_event(name) {
+        Ok(Some(event)) => DeckFeedMessage::Doc {
+            version: event.version,
+        },
+        Ok(None) => {
+            // the core closed the stream: the feed is over
+            *slot = None;
+            DeckFeedMessage::Lost {
+                reason: "the core closed the feed".into(),
+            }
+        }
+        Err(fail) if Subscription::timed_out(&fail) => {
+            // the hold's own deadline: quiet is a normal answer
+            DeckFeedMessage::Quiet
+        }
+        Err(fail) => {
+            *slot = None;
+            DeckFeedMessage::Lost {
+                reason: fail.to_string(),
+            }
+        }
+    }
+}
+
+/// One bounded hold on the cue feed (t-24@r21 B1: read by the viewer
+/// through events.subscribe, never a timer). Answers on a landing for
+/// the deck's name, on the feed ending, or quiet at the deadline.
+#[tauri::command]
+pub async fn deck_wait(name: String) -> Result<DeckFeedMessage, BridgeError> {
+    deck_name_guard(&name)?;
+    let held_name = name;
+    let handle = tauri::async_runtime::spawn_blocking(move || deck_hold(&held_name));
+    handle.await.map_err(|_| deny("the deck hold task failed"))
 }

@@ -75,6 +75,14 @@ pub enum CoreFail {
         machine: String,
         detail: String,
     },
+    /// A versioned document write lost its race: the document moved
+    /// between the caller's read and write. The cue protocol's retry
+    /// (read again, set again) is the caller's.
+    Conflict { name: String, detail: String },
+    /// A bounded read expired without an answer: the hold's own
+    /// deadline, quiet being a normal answer. Internal to the deck's
+    /// feed hold - it never reaches the renderer as a load code.
+    HoldQuiet,
 }
 
 impl CoreFail {
@@ -101,6 +109,8 @@ impl CoreFail {
             CoreFail::Denied { .. } => "asset-denied",
             CoreFail::TextTruncated { .. } => "text-truncated",
             CoreFail::EditFailed { .. } => "edit-failed",
+            CoreFail::Conflict { .. } => "core-conflict",
+            CoreFail::HoldQuiet => "core-unavailable",
         }
     }
 }
@@ -212,6 +222,10 @@ impl fmt::Display for CoreFail {
                 f,
                 "the edit into {path:?} on machine {machine:?} was refused, the file is untouched: {detail}"
             ),
+            CoreFail::Conflict { name, detail } => {
+                write!(f, "the document {name:?} moved before the write landed: {detail}")
+            }
+            CoreFail::HoldQuiet => write!(f, "the bounded read expired quiet"),
         }
     }
 }
@@ -340,6 +354,14 @@ mod tests {
                 },
                 "edit-failed",
             ),
+            (
+                CoreFail::Conflict {
+                    name: "deck-ab".into(),
+                    detail: "d".into(),
+                },
+                "core-conflict",
+            ),
+            (CoreFail::HoldQuiet, "core-unavailable"),
         ];
         for (fail, code) in &inventory {
             assert_eq!(&fail.code(), code, "{fail:?}");

@@ -17,9 +17,11 @@ pub mod base64;
 pub mod client;
 pub mod error;
 pub mod guard;
+pub mod subscribe;
 pub mod transport;
 
 pub use client::{CoreClient, ExecOutput, FileEdit, FileEditOutcome, ASSET_CAP};
 pub use error::CoreFail;
 pub use guard::guard_relative;
+pub use subscribe::{DocEvent, Subscription};
 pub use transport::{CoreTransport, SocketTransport};

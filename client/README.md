@@ -106,6 +106,66 @@ them. `/api/v1` stays `sac`'s own API.
   the other half of the guard. The deck is this package's other t-21
   surface, stated in its own section below.
 
+**The deck** (t-14 "The viewer", t-3 "Agent-owned viewer", t-24@r21).
+When an agent holds the window's address it may cue slides. The address
+is a herdr-core document's name - `deck-` plus 96 random bits (24
+lowercase hex, inside the core's 32-character name rule, probed against
+the pinned core 0.1.17), on the machine the bare-path rule resolves:
+the hub's own core there, the declared tracker machine elsewhere.
+Holding the address is the permission: nothing lists documents and the
+name is unguessable, so an untold agent can never reach the deck. The
+viewer offers the deck when it can reach that core (at start and on the
+next open after a failure), shows the address in the header, and its
+copy act copies the exact cue command an agent runs verbatim -
+`doc.get`, append the location, `doc.set` with that version, retry on a
+conflict, the slide number printed back:
+
+```
+python3 - '<location>' <<'DECK'
+import json, subprocess, sys
+name = "deck-<96 bits>"
+def call(method, params):
+    line = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+    out = subprocess.run(["hc", "connect"], input=line + "\n", capture_output=True, text=True)
+    return json.loads(out.stdout)
+doc = call("doc.get", {"name": name})["result"]
+while True:
+    slides = (doc.get("value") or [])
+    slides.append(sys.argv[1])
+    done = call("doc.set", {"name": name, "version": doc["version"], "value": slides})
+    if "error" not in done:
+        print("slide", len(slides))
+        break
+    doc = call("doc.get", {"name": name})["result"]
+DECK
+```
+
+The document is a JSON array of location strings and holds locations
+only - never the human's position or history; reading it is the
+agent's read-back, a slide's number is its position in the list. The
+cue feed is wake-driven: one `events.subscribe` connection read
+through bounded holds (`deck_wait`, the hold pattern the look's wait
+rides), never a timer poll; the core's heartbeat keeps the read alive.
+The viewer deletes the document when the window closes (the shell's
+close hook, best effort and logged); the address is dead from then on,
+and a document deleted from outside ends the deck.
+
+A cue waits unless the human is on the latest slide - "on the latest"
+only while the window shows that slide as cued; after following a ref
+away, a cue waits and the HUD states it plainly (`slide 4 waiting`, in
+the state colour, no badge). The one exception: a deck's first cue
+lands on whatever the window shows - handing out the address is asking
+for the slideshow. A slide is fixed when cued: a board is pinned by
+revision when shown (an agent wanting an exact one cues `t-N@rK`); a
+file is read when the cue lands and its snapshot held for the life of
+the deck. Slides are ordinary views with full board behaviour -
+select, search, history, marginalia, zoom all work on them; a file the
+viewer cannot yet interpret shows its own structured refusal. `h` `l`
+move between slides (in history they keep stepping time); digits 1-9
+jump (single presses only - beyond 9 steps with h l); deck motion
+never touches the back/forward stacks, which stay the human's own
+trail, and the human adds no slides.
+
 The validation split: admission is the shared crate's job on the Tauri
 side (`validate_board`, a path dependency), and the native lanes refuse
 on its verdict; the frontend keeps only the presentation decoder, which
