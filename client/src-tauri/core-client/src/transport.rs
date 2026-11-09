@@ -45,6 +45,12 @@ impl SocketTransport {
         }
     }
 
+    /// The socket path this transport dials: the subscription face
+    /// names it in its failures and the tests hold it.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// A bounded read timeout, for tests and for honesty about the
     /// default.
     pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
