@@ -172,7 +172,7 @@ export function rowDetail(row: AgentRow): string {
   const parts: string[] = [];
   if (row.word?.msg) parts.push(row.word.msg);
   if (row.word?.progress) parts.push(row.word.progress);
-  return parts.join("\u00b7");
+  return parts.join(" \u00b7 ");
 }
 
 /** The row's time: the word's last change, epoch seconds. Nothing
