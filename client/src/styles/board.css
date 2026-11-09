@@ -1201,3 +1201,181 @@ code.raw-html {
 .incorporation-cited .md {
   margin: 0;
 }
+
+/* ---------- the instruments: the pipeline and the glance
+   (t-14 "Tasks and agents"). The ledger's rules, applied: one grid
+   down every list, sections divided by space and a plain label, state
+   the only colour, numbers and times right-aligned in tabular
+   figures. ---------- */
+
+/* an instrument takes the document's reading column; the board's main
+   hides while one is open - one instrument per window */
+.board-wrap.instrument-active > main.content:not(.instrument) {
+  display: none;
+}
+
+main.instrument {
+  overflow-y: auto;
+}
+
+.instrument-label {
+  /* the section's plain label, carried by the .sec primitive */
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.instrument-table {
+  margin-bottom: 10px;
+}
+
+/* the one grid every row shares: the columns the instrument names.
+   Tasks: task | title | agents | latest commit | age. Agents: shape |
+   incarnation | detail | task | time. Numbers and times sit right in
+   tabular figures (.num). */
+.instrument-head {
+  color: var(--ink-3);
+  font-size: var(--fs-ui);
+  border-bottom: none;
+}
+
+.instrument-head .st-cell {
+  width: 9px;
+}
+
+.instrument-row {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font: var(--fs-ui) var(--f-sec);
+  cursor: pointer;
+  min-height: var(--row-h);
+}
+
+.instrument-row .instrument-title,
+.instrument-row .instrument-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* a commit is an identifier, but the column reads as data: full width
+   kept small, right-aligned */
+.commit-cell {
+  font-family: var(--f-id);
+  font-size: var(--fs-ui);
+}
+
+.agent-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 10px;
+}
+
+.st-cell {
+  width: 14px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.instrument-empty {
+  padding: 2px 0 10px;
+  margin: 0;
+}
+
+.instrument-note {
+  margin: 0 0 6px;
+  color: var(--ink-2);
+}
+
+/* the e overlay: one panel, ruled at the edge like every floating
+   structure, the lane drawn to nothing but its own facts */
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--app-bg) 70%, transparent);
+}
+
+.overlay-panel {
+  background: var(--app-bg);
+  border: 1px solid var(--line);
+  padding: 18px 22px;
+  min-width: min(560px, 80vw);
+  max-width: 80vw;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.overlay-panel .sec {
+  padding: 0 0 8px;
+}
+
+.overlay-facts {
+  margin: 6px 0;
+}
+
+.overlay-fact {
+  margin: 2px 0;
+  font: var(--fs-ui) var(--f-sec);
+}
+
+.overlay-events {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.overlay-event {
+  margin: 2px 0;
+  font: var(--fs-ui) var(--f-id);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overlay-hint {
+  margin-top: 10px;
+}
+
+.activity-lane {
+  margin: 10px 0 4px;
+}
+
+/* the axis: a quiet rule, the events as ticks in the state colours
+   are NOT used here - an event is not a state; the tick reads in the
+   muted ink, the lane carries no urgency */
+.activity-axis {
+  position: relative;
+  height: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.activity-event {
+  position: absolute;
+  bottom: -4px;
+  width: 2px;
+  height: 9px;
+  background: var(--ink-2);
+}
+
+.activity-event.activity-clamped {
+  opacity: 0.6;
+}
+
+.activity-mark {
+  position: absolute;
+  bottom: -8px;
+  width: 1px;
+  height: 13px;
+  background: var(--ink-3);
+}
+
+.activity-scale {
+  margin: 10px 0 0;
+  display: flex;
+  justify-content: space-between;
+}

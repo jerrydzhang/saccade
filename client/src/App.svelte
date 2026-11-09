@@ -53,6 +53,18 @@
   import { parseTaskSpec } from "./lib/location.ts";
   import { inspect } from "./lib/board/inspection.ts";
   import type { CopyMode } from "./lib/copy.ts";
+  import { startWords, onWords, setWords, type WordsTable } from "./lib/words.ts";
+  import {
+    agentsAddressMap,
+    agentsSections,
+    attachCommand,
+    rowDetail,
+    rowTime,
+    type AgentRow,
+  } from "./lib/instruments/agents.ts";
+  import { tasksSections, taskAge, type TasksSection } from "./lib/instruments/tasks.ts";
+  import { laneLayout, type LaneEntry, type LaneLayout } from "./lib/instruments/lane.ts";
+  import type { HistoryEntry as TimelineEntry } from "./lib/pages.ts";
   import type { RenderOutcome, ViewerState } from "./lib/board/viewmodel.ts";
   import type { Board } from "./lib/board/model.ts";
   import type { Diagnostic } from "./lib/board/errors.ts";
@@ -84,6 +96,51 @@
     });
     return unsubscribe;
   });
+
+  // The instruments' live half: the app's ONE feed lands its words in
+  // the shell's table; windows read it here (t-24@r22). A window with
+  // no host starts it anyway - it resolves false and the lanes inject
+  // through the inspection setter, test-only machinery.
+  let wordsTable: WordsTable = $state.raw({});
+  void startWords();
+  $effect(() => {
+    const unsubscribe = onWords((words) => {
+      wordsTable = words;
+    });
+    return unsubscribe;
+  });
+
+  // The tasks instrument's live join: the rows name agent ids; their
+  // terminal addresses come from the agents page (the record's own
+  // join), read beside the pipeline page and on every fresh load.
+  let agentAddresses: Record<string, string> = $state.raw({});
+  $effect(() => {
+    const current = view;
+    if (current.instrument?.kind !== "tasks" || !current.location) return;
+    const source = sourceFor(current.location.machine);
+    if (!(source instanceof TrackerSource)) return;
+    let stale = false;
+    void source
+      .agentsPage()
+      .then((page) => {
+        if (!stale) agentAddresses = agentsAddressMap(page);
+      })
+      .catch(() => {
+        if (!stale) agentAddresses = {};
+      });
+    return () => {
+      stale = true;
+    };
+  });
+
+  // The `e` overlay: the task's activity (the lane and its events) or
+  // the session's details, one panel, Escape leaves.
+  let overlay: {
+    title: string;
+    facts: Array<{ label: string; value: string }>;
+    lane: LaneLayout | null;
+    events: LaneEntry[];
+  } | null = $state.raw(null);
 
   // The lanes' test-open channel: the one startup open, riding the
   // same model.openInput the controls use. Test-only machinery
@@ -131,6 +188,13 @@
   let searchOpen = $state(false);
   let searchInput: HTMLInputElement | undefined = $state(undefined);
   let contentHost: HTMLElement | undefined = $state(undefined);
+  let instrumentHost: HTMLElement | undefined = $state(undefined);
+
+  /** The element the motion keys scroll: the instrument when one is
+   * open, the document otherwise. */
+  function scroller(): HTMLElement {
+    return (view.instrument ? instrumentHost : contentHost) ?? contentHost!;
+  }
 
   function openSearch(): void {
     searchOpen = true;
@@ -183,6 +247,214 @@
     highlight(selected, previous);
   }
 
+  /** The tasks row's live shape: the agents' word joined through the
+   * agents page's addresses. No word, no shape - colour is spent only
+   * on state. */
+  function taskRowShapes(agents: string): Array<{ id: string; word: string | null }> {
+    return agents
+      .split(/\s+/)
+      .filter((id) => id.length > 0)
+      .map((id) => {
+        const address = agentAddresses[id];
+        const state = address ? (wordsTable[address]?.state ?? null) : null;
+        return { id, word: state };
+      });
+  }
+
+  /** The agents instrument's sections, from the page and the words. */
+  let agentSections = $derived.by(() => {
+    const current = view;
+    if (current.instrument?.kind !== "agents") return [];
+    return agentsSections(current.instrument.page, wordsTable);
+  });
+
+  /** The tasks instrument's sections. */
+  let taskSections = $derived.by(() => {
+    const current = view;
+    if (current.instrument?.kind !== "tasks") return [];
+    return tasksSections(current.instrument.page);
+  });
+
+  function copyText(text: string | null, what: string): void {
+    if (!text) return;
+    if (bridgePresent) void bridgeWrite(text);
+    else void navigator.clipboard?.writeText(text).catch(() => {});
+    copyNote = `${what} copied`;
+    window.setTimeout(() => (copyNote = null), 1200);
+  }
+  let copyNote = $state<string | null>(null);
+
+  /** The branch a workspace sits on, read from its own HEAD through
+   * the tracker's machine - a plain file read, for diffing from the
+   * primary checkout (t-14). Null when the read refuses: no invented
+   * branch. */
+  async function workspaceBranch(workspace: string | null): Promise<string | null> {
+    if (!workspace) return null;
+    try {
+      const loaded = await sourceFor("tracker-machine").loadText({
+        machine: "tracker-machine",
+        path: `${workspace}/.git/HEAD`,
+      });
+      const match = /ref: refs\/heads\/(\S+)/.exec(loaded.text.trim());
+      return match?.[1] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  function showActivityOverlay(task: string): void {
+    const current = view;
+    if (!current.location) return;
+    const source = sourceFor(current.location.machine);
+    if (!(source instanceof TrackerSource)) return;
+    overlay = { title: task, facts: [], lane: null, events: [] };
+    void source
+      .history(task)
+      .then((page) => {
+        const entries: LaneEntry[] = (page.entries ?? []).map((entry: TimelineEntry) => ({
+          at: entry.at,
+          kind: entry.event,
+          label:
+            entry.message ??
+            entry.grounds ??
+            entry.explanation ??
+            entry.event,
+        }));
+        const now = Math.floor(Date.now() / 1000);
+        overlay = {
+          title: task,
+          facts: [],
+          lane: laneLayout(entries, now),
+          events: [...entries].reverse(),
+        };
+      })
+      .catch((error) => {
+        overlay = {
+          title: task,
+          facts: [],
+          lane: null,
+          events: [],
+        };
+        copyNote = String(error instanceof SourceUnavailableError ? error.message : error);
+      });
+  }
+
+  function showDetailsOverlay(row: AgentRow): void {
+    const facts: Array<{ label: string; value: string }> = [
+      { label: "incarnation", value: row.incarnation },
+    ];
+    if (row.harness) facts.push({ label: "harness", value: row.harness });
+    if (row.workspace) facts.push({ label: "workspace", value: row.workspace });
+    if (row.lastCommit) facts.push({ label: "last commit", value: row.lastCommit });
+    if (row.tasks.length > 0) facts.push({ label: "tasks", value: row.tasks.join(" ") });
+    overlay = { title: row.incarnation, facts, lane: null, events: [] };
+  }
+
+  function instrumentRowActs(target: SelectableTarget, open: () => void): MenuAct[] {
+    const kind = target.element.getAttribute("data-instrument");
+    const task = target.element.getAttribute("data-task");
+    const acts: MenuAct[] = [];
+    if (kind === "tasks") {
+      acts.push({ key: "Enter", label: "open the board through the link", onAct: open });
+      if (task) {
+        acts.push({
+          key: "e",
+          label: "the activity: a lane on the 6h/24h axis and the events",
+          onAct: () => showActivityOverlay(task),
+        });
+      }
+      return acts;
+    }
+    // the agents row: open, details, the copies (t-14: the attach
+    // command, the workspace path, the branch)
+    acts.push({
+      key: "Enter",
+      label: task ? "open the task's board through the link" : "no task owned - nothing to open",
+      onAct: task ? open : () => {},
+    });
+    acts.push({ key: "e", label: "the session's details", onAct: () => {
+      const row = rowFromElement(target.element);
+      if (row) showDetailsOverlay(row);
+    } });
+    const attach = target.element.getAttribute("data-attach");
+    const workspace = target.element.getAttribute("data-workspace");
+    acts.push({
+      key: "a",
+      label: "copy the attach command",
+      onAct: () => copyText(attach, "the attach command"),
+    });
+    acts.push({
+      key: "w",
+      label: "copy the workspace path",
+      onAct: () => copyText(workspace, "the workspace path"),
+    });
+    acts.push({
+      key: "b",
+      label: "copy the branch",
+      onAct: () => {
+        const row = rowFromElement(target.element);
+        if (!row) return;
+        void workspaceBranch(row.workspace).then((branch) => {
+          if (branch) copyText(branch, "the branch");
+          else copyNote = "no branch readable for this workspace";
+        });
+      },
+    });
+    return acts;
+  }
+
+  /** The row's data, back from its element: the acts read what the
+   * render wrote. */
+  function rowFromElement(element: HTMLElement): AgentRow | null {
+    const get = (name: string) => element.getAttribute(name);
+    const incarnation = get("data-incarnation");
+    if (!incarnation) return null;
+    const tasks = (get("data-tasks") ?? "").split(/\s+/).filter((t) => t.length > 0);
+    const at = get("data-at");
+    const state = get("data-word");
+    return {
+      incarnation,
+      address: get("data-address"),
+      harness: get("data-harness"),
+      tasks,
+      workspace: get("data-workspace"),
+      lastCommit: get("data-last-commit"),
+      word:
+        at === null
+          ? null
+          : {
+              state: state ?? null,
+              app: get("data-app"),
+              msg: get("data-msg"),
+              progress: get("data-progress"),
+              title: get("data-title"),
+              finished: get("data-finished"),
+              at: Number(at),
+            },
+    };
+  }
+
+  /** A row selects on click: the pointer's own path to the primary
+   * act, beside the label flow. */
+  function selectInstrumentRow(click: MouseEvent): void {
+    const eventTarget = click.target as HTMLElement | null;
+    const element = eventTarget?.closest<HTMLElement>(".instrument-row");
+    if (!element) return;
+    targets = collectTargets(document.body);
+    const index = targets.findIndex((candidate) => candidate.element === element);
+    if (index >= 0) selectTarget(index);
+  }
+
+  /** Enter in an instrument goes through the link (t-14: tasks and
+   * agents have no here). */
+  function instrumentEnter(): void {
+    const target = selected;
+    if (!target) return;
+    const path = target.element.getAttribute("data-open-path");
+    const current = view.location;
+    if (path && current) void model.open({ machine: current.machine, path });
+  }
+
   function actsFor(target: SelectableTarget): MenuAct[] {
     const acts: MenuAct[] = [];
     const open = (): void => {
@@ -190,6 +462,9 @@
       const location = view.location;
       if (path && location) void model.open({ machine: location.machine, path });
     };
+    if (target.element.classList.contains("instrument-row")) {
+      return instrumentRowActs(target, open);
+    }
     const enlarge = (): void => target.element.click();
     const copy = (): void => {
       // the bridge write exists only inside the native shell; the
@@ -1034,6 +1309,11 @@
         helpOpen = false;
         return;
       }
+      if (overlay) {
+        event.preventDefault();
+        overlay = null;
+        return;
+      }
     }
     if (closeMenu || inTextField(event)) return;
     if (helpOpen || pickerOpen) return;
@@ -1117,7 +1397,7 @@
       case "gg": {
         event.preventDefault();
         keyMode = "normal";
-        if (event.key === "g") scrollTop(contentHost);
+        if (event.key === "g") scrollTop(scroller());
         return;
       }
       case "normal":
@@ -1177,20 +1457,20 @@
       case "j":
         event.preventDefault();
         if (selected) moveSelection(1);
-        else scrollByLines(contentHost, 2);
+        else scrollByLines(scroller(), 2);
         return;
       case "k":
         event.preventDefault();
         if (selected) moveSelection(-1);
-        else scrollByLines(contentHost, -2);
+        else scrollByLines(scroller(), -2);
         return;
       case "d":
         event.preventDefault();
-        scrollByPages(contentHost, 0.5);
+        scrollByPages(scroller(), 0.5);
         return;
       case "u":
         event.preventDefault();
-        scrollByPages(contentHost, -0.5);
+        scrollByPages(scroller(), -0.5);
         return;
       case "g":
         event.preventDefault();
@@ -1198,7 +1478,7 @@
         return;
       case "G":
         event.preventDefault();
-        scrollBottom(contentHost);
+        scrollBottom(scroller());
         return;
       case "s":
         event.preventDefault();
@@ -1227,6 +1507,11 @@
       case "Enter": {
         event.preventDefault();
         const target = selected;
+        if (view.instrument) {
+          // the instruments have no here: Enter goes through the link
+          instrumentEnter();
+          return;
+        }
         if (target) {
           const rect = target.element.getBoundingClientRect();
           openTargetMenu(target, { x: rect.right + 8, y: rect.top });
@@ -1242,22 +1527,22 @@
       if (event.key === "f") {
         // page down
         event.preventDefault();
-        scrollByPages(contentHost, 1);
+        scrollByPages(scroller(), 1);
         return;
       }
       if (event.key === "b") {
         event.preventDefault();
-        scrollByPages(contentHost, -1);
+        scrollByPages(scroller(), -1);
         return;
       }
       if (event.key === "d") {
         event.preventDefault();
-        scrollByPages(contentHost, 0.5);
+        scrollByPages(scroller(), 0.5);
         return;
       }
       if (event.key === "u") {
         event.preventDefault();
-        scrollByPages(contentHost, -0.5);
+        scrollByPages(scroller(), -0.5);
         return;
       }
     }
@@ -1266,7 +1551,7 @@
   function onContextMenu(event: MouseEvent): void {
     event.preventDefault();
     const element = (event.target as HTMLElement | null)?.closest<HTMLElement>(
-      ".block, .diagram-frame, .citation-link, [data-control]",
+      ".block, .diagram-frame, .citation-link, .instrument-row, [data-control]",
     );
     if (element) {
       targets = collectTargets(document.body);
@@ -1477,6 +1762,8 @@
       // the look's test surfaces: in-memory overrides and a summary
       setLook: setInspectedLook,
       look: () => lookSummary(resolveLook(lastSource)),
+      // the words' test surface: the lanes' injection, named as such
+      setWords: (next: WordsTable) => setWords(next),
     };
   });
 
@@ -1626,6 +1913,16 @@
         <p class="help-row"><span class="ctx-menu-key">right-click</span> the same menu at the pointer</p>
         <p class="help-row"><span class="ctx-menu-key">Escape</span> leaves the mode</p>
       </div>
+      {#if view.instrument}
+      <div class="help-section">
+        <p class="help-title">{view.instrument.kind === "tasks" ? "pipeline" : "agents"}</p>
+        <p class="help-row"><span class="ctx-menu-key">Enter</span> opens the row's board through the link</p>
+        <p class="help-row"><span class="ctx-menu-key">e</span> {view.instrument.kind === "tasks" ? "the task's activity: the lane and its events" : "the session's details"}</p>
+        {#if view.instrument.kind === "agents"}
+        <p class="help-row"><span class="ctx-menu-key">a w b</span> copy the attach command / workspace path / branch</p>
+        {/if}
+      </div>
+      {:else}
       <div class="help-section">
         <p class="help-title">viewer</p>
         <p class="help-row"><span class="ctx-menu-key">space</span> this instrument's commands</p>
@@ -1633,6 +1930,7 @@
         <p class="help-row"><span class="ctx-menu-key">Ctrl+Shift+C</span> copy source / plain</p>
         <p class="help-row"><span class="ctx-menu-key">?</span> this list</p>
       </div>
+      {/if}
     </div>
   </div>
   {/if}
@@ -1671,6 +1969,49 @@
   </div>
   {/if}
 
+  {#if overlay}
+  <div class="overlay-backdrop" role="dialog" aria-label="{overlay.title} details" data-control="instrument:overlay">
+    <div class="overlay-panel">
+      <p class="sec">{overlay.title}</p>
+      {#if overlay.lane}
+        <div class="activity-lane" data-control="instrument:lane">
+          <div class="activity-axis">
+            {#each overlay.lane.positions as pos, i (i)}
+              {#if pos.x >= 0}
+                <span
+                  class="activity-event"
+                  class:activity-clamped={pos.clamped}
+                  style:left={`${pos.x * 100}%`}
+                  title={`${pos.entry.label} (${pos.entry.kind})`}
+                ></span>
+              {/if}
+            {/each}
+            <span class="activity-mark" style:left={`${overlay.lane.sixHourMark * 100}%`} title="6h"></span>
+          </div>
+          <p class="dim3 activity-scale">24h <span>6h mark</span> now</p>
+        </div>
+      {/if}
+      {#if overlay.facts.length > 0}
+        <div class="overlay-facts">
+          {#each overlay.facts as fact (fact.label)}
+            <p class="overlay-fact"><span class="dim3">{fact.label}</span> <span>{fact.value}</span></p>
+          {/each}
+        </div>
+      {/if}
+      {#if overlay.events.length > 0}
+        <div class="overlay-events" data-control="instrument:events">
+          {#each overlay.events as entry, i (i)}
+            <p class="overlay-event"><span class="dim3">{entry.kind}</span> {entry.label}</p>
+          {/each}
+        </div>
+      {:else if !overlay.lane}
+        <p class="dim3 instrument-empty">nothing yet</p>
+      {/if}
+      <p class="dim3 overlay-hint">Escape leaves</p>
+    </div>
+  </div>
+  {/if}
+
   {#if lookNotice}
     <p class="look-notice" aria-live="polite">{lookNotice}</p>
   {/if}
@@ -1686,8 +2027,92 @@
     </section>
   {/if}
 
-  <div class="board-wrap" class:history-active={historyActive} class:marginalia-active={marginaliaActive} bind:this={mainWrap}>
+  <div class="board-wrap" class:history-active={historyActive} class:marginalia-active={marginaliaActive} class:instrument-active={view.instrument !== null} bind:this={mainWrap}>
     <main class="content" bind:this={contentHost} aria-label="board content"></main>
+    {#if view.instrument}
+      <main class="content instrument" bind:this={instrumentHost} aria-label="{view.instrument.kind} instrument" data-instrument={view.instrument.kind}>
+        {#if copyNote}<p class="instrument-note" role="status" data-control="instrument:note">{copyNote}</p>{/if}
+        {#if view.instrument.kind === "tasks"}
+          {#each taskSections as section (section.title)}
+            <p class="sec instrument-label">{section.title}</p>
+            <div class="instrument-table" role="table" aria-label="{section.title} tasks" data-control="instrument:section">
+              <div class="row instrument-head" role="row" aria-hidden="true">
+                <span class="tid">task</span><span>title</span><span>agents</span><span class="num">latest commit</span><span class="num">age</span>
+              </div>
+              {#each section.rows as row (row.task)}
+                <button
+                  type="button"
+                  class="row instrument-row"
+                  role="row"
+                  data-control="instrument:row"
+                  data-instrument="tasks"
+                  data-task={row.task}
+                  data-open-path={row.location}
+                  data-agents={row.agents}
+                  onclick={(click) => selectInstrumentRow(click)}
+                >
+                  <span class="tid">{row.task}</span>
+                  <span class="instrument-title">{row.title}</span>
+                  <span class="instrument-agents">
+                    {#each taskRowShapes(row.agents) as shape (shape.id)}
+                      <span class="agent-cell">
+                        {#if shape.word}<span class="st {shape.word}" title={shape.word}></span>{/if}
+                        <span class="sid">{shape.id}</span>
+                      </span>
+                    {/each}
+                  </span>
+                  <span class="num commit-cell">{row.latestCommit}</span>
+                  <span class="num">{taskAge(row.at, Math.floor(Date.now() / 1000))}</span>
+                </button>
+              {:else}
+                <p class="dim3 instrument-empty">none</p>
+              {/each}
+            </div>
+          {/each}
+        {:else}
+          {#each agentSections as section, index (section.word ?? "absent")}
+            <p class="sec instrument-label">{section.word ?? "absent"}</p>
+            <div class="row instrument-head" role="row" aria-hidden="true">
+              <span class="st-cell"></span><span class="sid">incarnation</span><span>detail</span><span>task</span><span class="num">time</span>
+            </div>
+            <div class="instrument-table" role="table" aria-label="{section.word ?? "absent"} sessions" data-control="instrument:section">
+              {#each section.rows as row (row.incarnation + String(index))}
+                <button
+                  type="button"
+                  class="row instrument-row"
+                  role="row"
+                  data-control="instrument:row"
+                  data-instrument="agents"
+                  onclick={(click) => selectInstrumentRow(click)}
+                  data-incarnation={row.incarnation}
+                  data-address={row.address}
+                  data-harness={row.harness}
+                  data-tasks={row.tasks.join(" ")}
+                  data-workspace={row.workspace}
+                  data-last-commit={row.lastCommit}
+                  data-open-path={row.tasks[0] ?? ""}
+                  data-word={row.word?.state ?? ""}
+                  data-app={row.word?.app ?? ""}
+                  data-msg={row.word?.msg ?? ""}
+                  data-progress={row.word?.progress ?? ""}
+                  data-title={row.word?.title ?? ""}
+                  data-finished={row.word?.finished ?? ""}
+                  data-at={rowTime(row) ?? ""}
+                >
+                  <span class="st-cell">{#if row.word?.state}<span class="st {row.word.state}" title={row.word.state}></span>{/if}</span>
+                  <span class="sid">{row.incarnation}</span>
+                  <span class="instrument-detail">{rowDetail(row)}</span>
+                  <span class="tid">{row.tasks[0] ?? ""}</span>
+                  <span class="num">{rowTime(row) !== null ? taskAge(rowTime(row), Math.floor(Date.now() / 1000)) : ""}</span>
+                </button>
+              {:else}
+                <p class="dim3 instrument-empty">none</p>
+              {/each}
+            </div>
+          {/each}
+        {/if}
+      </main>
+    {/if}
     {#if historyActive && historyCommit}
       <aside class="history-margin" data-control="history:margin">
         <p class="history-position">revision r{historyMode?.at ?? ""} of r{historyMode?.newest ?? ""}</p>

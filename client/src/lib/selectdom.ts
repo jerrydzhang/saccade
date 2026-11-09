@@ -31,7 +31,7 @@ function kindOf(element: HTMLElement): TargetKind {
 export function collectTargets(root: HTMLElement): SelectableTarget[] {
   const targets: SelectableTarget[] = [];
   const seen = new Set<HTMLElement>();
-  for (const node of root.querySelectorAll<HTMLElement>(".block, .diagram-frame, .citation-link, [data-control]")) {
+  for (const node of root.querySelectorAll<HTMLElement>(".block, .diagram-frame, .citation-link, .instrument-row, [data-control]")) {
     if (seen.has(node)) continue;
     seen.add(node);
     targets.push({

@@ -741,6 +741,222 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("tracker locations", phase_tracker)
 
+    # phase 9: the instruments (t-14 step 3) - the pipeline page and
+    # the glance over the same stand-in: the sections and rows render,
+    # select-first puts labels on the rows, Enter goes through the
+    # link, the menu's e shows the activity (the lane and its events),
+    # the agents' live join sections by the injected word (the lanes'
+    # inspection setter - the browser lane has no host), and the
+    # copies name what they carry. Real key events over the real
+    # frontend, like the interaction phase.
+    def phase_instruments() -> None:
+        tracker = tracker_mock.TrackerMock("smoke", allowed_origins=[base_url])
+        tracker.start()
+        try:
+            page.fill('[data-control="server:host"]', f"127.0.0.1:{tracker.port}")
+            page.click('[data-control="server:save"]')
+
+            def open_location(spec: str) -> dict:
+                page.fill('[data-control="open:host-path"]', spec)
+                page.click('[data-control="open:host"]')
+                page.wait_for_function(
+                    f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
+                )
+                return page.evaluate(f"() => {viewer}.inspection()")
+
+            inspection = open_location("smoke/tasks")
+            check(
+                "the pipeline page opens as the tasks instrument",
+                inspection["resource"]["status"] == "loaded"
+                and inspection["resource"]["path"] == "tasks"
+                and inspection["resource"]["machine"] == "tracker:smoke",
+                str(inspection["resource"]),
+            )
+            sections = page.eval_on_selector_all(
+                ".instrument-label", "els => els.map(e => e.textContent)"
+            )
+            check(
+                "the four recorded states section the view, in order",
+                sections == ["waiting", "in flight", "awaiting judgment", "concluded last 24h"],
+                str(sections),
+            )
+            rows = page.eval_on_selector_all(
+                '[data-control="instrument:row"]', "els => els.map(e => e.getAttribute('data-task'))"
+            )
+            check(
+                "the rows are task-identifiable and carry their links",
+                "t-1" in rows and "t-0" in rows,
+                str(rows),
+            )
+            heads = page.eval_on_selector_all(
+                ".instrument-head", "els => els.map(e => e.textContent.trim())"
+            )
+            check(
+                "the rows share one grid, the columns named once per section",
+                all("tasktitleagentslatest commitage" in h.replace(" ", "") for h in heads),
+                str(heads)[:160],
+            )
+            # select first: s puts labels on what can be selected,
+            # rows included; a click selects a row, Enter goes through
+            # the link
+            page.keyboard.press("s")
+            page.wait_for_selector(".select-label")
+            chips = page.eval_on_selector_all(
+                ".select-label",
+                "els => els.map(e => ({text: e.textContent.trim(), row: e.closest('.instrument-row')?.getAttribute('data-task')}))",
+            )
+            row_chips = [c for c in chips if c.get("row")]
+            check(
+                "s puts labels on the rows",
+                len(row_chips) >= 2,
+                str(chips)[:160],
+            )
+            page.keyboard.press("Escape")
+            page.wait_for_function("() => document.querySelector('.select-label') === null")
+            # the pointer's own path: click the waiting row, then the
+            # primary act - through the link
+            page.click('[data-instrument="tasks"][data-task="t-1"]')
+            page.keyboard.press("Enter")
+            page.wait_for_function(
+                f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
+                f" && {viewer}.inspection().resource.path === 't-1'"
+            )
+            check(
+                "Enter opens the clicked row's board through the link",
+                page.evaluate(f"() => {viewer}.inspection().resource.path") == "t-1",
+                str(page.evaluate(f"() => {viewer}.inspection().resource")),
+            )
+            # back to the pipeline: typing a row's label opens its one
+            # menu, its acts keyed; the menu's e shows the activity -
+            # the lane on its axis and the events beside it
+            open_location("smoke/tasks")
+            page.keyboard.press("s")
+            page.wait_for_selector(".select-label")
+            chips = page.eval_on_selector_all(
+                ".select-label",
+                "els => els.map(e => ({text: e.textContent.trim(), row: e.closest('.instrument-row')?.getAttribute('data-task')}))",
+            )
+            t0_chip = next((c["text"] for c in chips if c.get("row") == "t-0"), None)
+            assert t0_chip is not None, f"no label chip rides the t-0 row: {chips}"
+            page.keyboard.type(t0_chip)
+            page.wait_for_selector(".ctx-menu")
+            page.keyboard.press("e")
+            page.wait_for_selector('[data-control="instrument:overlay"]')
+            events = page.eval_on_selector_all(
+                '[data-control="instrument:events"] .overlay-event',
+                "els => els.length",
+            )
+            lane_present = page.evaluate(
+                "() => document.querySelector('[data-control=\'instrument:lane\']') !== null"
+            )
+            check(
+                "the task's menu e shows its activity: the lane and its events",
+                events >= 2 and lane_present,
+                f"events={events} lane={lane_present}",
+            )
+            screenshot_at('[data-control="instrument:overlay"]', "instrument-activity.png")
+            page.keyboard.press("Escape")
+            page.wait_for_function("() => document.querySelector('[data-control=\'instrument:overlay\']') === null")
+            # help on demand names the instrument's own keys
+            page.keyboard.press("?")
+            page.wait_for_selector('[data-control="help:overlay"]')
+            help_text = page.text_content('[data-control="help:overlay"]') or ""
+            check(
+                "? in the pipeline names the instrument's keys",
+                "pipeline" in help_text and "the task's activity" in help_text,
+                help_text[:160],
+            )
+            page.keyboard.press("Escape")
+
+            # the glance: the agents instrument, its live join riding
+            # the injected words (no host here - the inspection
+            # setter, named as such)
+            inspection = open_location("smoke/agents")
+            check(
+                "the agents page opens as the agents instrument",
+                inspection["resource"]["status"] == "loaded"
+                and inspection["resource"]["path"] == "agents",
+                str(inspection["resource"]),
+            )
+            page.evaluate(
+                f"""() => {viewer}.setWords({{
+                    tA: {{ state: "working", app: "pi", msg: "editing the smoke", progress: "42", at: {int(1_000)} }},
+                }})"""
+            )
+            page.wait_for_selector(".st.working")
+            sections = page.eval_on_selector_all(
+                ".instrument-label", "els => els.map(e => e.textContent)"
+            )
+            check(
+                "the glance sections by the live word, the absent last",
+                "working" in sections and sections[-1] == "absent",
+                str(sections),
+            )
+            detail = page.eval_on_selector_all(
+                ".instrument-detail", "els => els.map(e => e.textContent.trim())"
+            )
+            check(
+                "the row shows Herdr's msg and progress exactly as sent",
+                "editing the smoke" in detail and any("42" in d for d in detail),
+                str(detail),
+            )
+            wordless = page.evaluate(
+                "() => [...document.querySelectorAll('.instrument-row')].some(r => r.getAttribute('data-incarnation') === 'i-5' && r.querySelector('.st') === null)"
+            )
+            check(
+                "a session with no word rides absent, shapeless",
+                wordless is True,
+                str(wordless),
+            )
+            screenshot_at("main.instrument", "instrument-agents.png")
+            # the row menu: the copies and the details
+            page.keyboard.press("s")
+            page.wait_for_selector(".select-label")
+            chips = page.eval_on_selector_all(
+                ".select-label",
+                "els => els.map(e => ({text: e.textContent.trim(), row: e.closest('.instrument-row')?.getAttribute('data-incarnation')}))",
+            )
+            row_chip = next((c["text"] for c in chips if c.get("row") == "i-2"), None)
+            assert row_chip is not None, f"no label chip rides the i-2 row: {chips}"
+            page.keyboard.type(row_chip)
+            page.wait_for_selector(".ctx-menu", timeout=3000)
+            acts = page.eval_on_selector_all(
+                ".ctx-menu-act", "els => els.map(e => e.textContent.trim())"
+            )
+            check(
+                "the agents row's menu carries the copies and the details",
+                any("attach command" in a for a in acts)
+                and any("workspace path" in a for a in acts)
+                and any("the branch" in a for a in acts),
+                str(acts),
+            )
+            for act in acts:
+                if "attach command" in act:
+                    key = act.split("attach")[0].strip()
+                    if key:
+                        page.keyboard.press(key)
+                        break
+            page.wait_for_selector('[data-control="instrument:note"]')
+            note = page.text_content('[data-control="instrument:note"]')
+            check(
+                "the attach command's copy names what it carried",
+                "attach command copied" in (note or ""),
+                str(note),
+            )
+            page.keyboard.press("?")
+            page.wait_for_selector('[data-control="help:overlay"]')
+            help_text = page.text_content('[data-control="help:overlay"]') or ""
+            check(
+                "? in the glance names the agents' keys",
+                "agents" in help_text and "attach command / workspace path / branch" in help_text,
+                help_text[:160],
+            )
+            page.keyboard.press("Escape")
+        finally:
+            tracker.stop()
+
+    phase("instruments", phase_instruments)
+
     # the straddle the human hit, adapted to the pinned reads: a
     # revision landing between one open's revision resolution and the
     # next open. The stand-in's bare page answers r1 once (image

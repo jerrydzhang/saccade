@@ -279,6 +279,13 @@ export class TrackerSource implements BoardSource {
     return page;
   }
 
+  /** The agents page, for the tasks instrument's live join: the
+   * rows' agent ids reach the words only through the sessions'
+   * terminal addresses, which this page carries. */
+  async agentsPage(): Promise<ViewPage> {
+    return this.instrumentPage("agents");
+  }
+
   async loadText(location: Location): Promise<LoadedText> {
     if (instrumentPath(location.path)) {
       throw new SourceUnavailableError(

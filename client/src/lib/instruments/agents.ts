@@ -57,6 +57,25 @@ type SessionFacts = {
   lastCommit: string | null;
 };
 
+/** The address map the tasks instrument's live join rides: each
+ * session's public number -> its terminal address, from the agents
+ * page. A session with no address names none. */
+export function agentsAddressMap(page: ViewPage): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const part of page.content ?? []) {
+    if (part.kind !== "group") continue;
+    let incarnation: string | null = null;
+    let address: string | null = null;
+    for (const child of (part as GroupPart).content) {
+      if (child.kind !== "fact") continue;
+      if (child.label === "incarnation") incarnation = child.value;
+      if (child.label === "terminal address") address = child.value;
+    }
+    if (incarnation !== null && address !== null) map[incarnation] = address;
+  }
+  return map;
+}
+
 function sessionFacts(group: GroupPart): SessionFacts | null {
   let incarnation: string | null = null;
   const facts: SessionFacts = {
