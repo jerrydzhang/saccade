@@ -734,3 +734,108 @@ code.raw-html {
   background: var(--scroll);
   border-radius: 0;
 }
+
+/* ---------- select first: labels, selection, context menus, help ---------- */
+
+.select-labels {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+}
+
+.select-label {
+  position: fixed;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  line-height: 1;
+  padding: 2px 3px;
+  color: var(--app-bg);
+  background: var(--ink);
+}
+
+.select-label-other {
+  font-weight: 600;
+}
+
+.select-selected {
+  outline: 1px solid var(--acc);
+  outline-offset: 1px;
+}
+
+.ctx-menu {
+  position: fixed;
+  z-index: 70;
+  display: grid;
+  min-width: 220px;
+  background: var(--app-bg);
+  border: 1px solid var(--pop-line);
+}
+
+.ctx-menu-act {
+  display: grid;
+  grid-template-columns: 3.2em 1fr;
+  gap: 6px;
+  align-items: baseline;
+  text-align: left;
+  padding: 5px 8px;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.ctx-menu-act:hover,
+.ctx-menu-act:focus {
+  background: var(--acc);
+  color: var(--app-bg);
+  outline: none;
+}
+
+.ctx-menu-key {
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--acc);
+}
+
+.ctx-menu-act:hover .ctx-menu-key,
+.ctx-menu-act:focus .ctx-menu-key {
+  color: var(--app-bg);
+}
+
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.35);
+}
+
+.help-panel {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 24px;
+  padding: 16px 20px;
+  background: var(--app-bg);
+  border: 1px solid var(--pop-line);
+}
+
+.help-title {
+  margin: 0 0 8px;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--acc);
+}
+
+.help-row {
+  display: grid;
+  grid-template-columns: 9em 1fr;
+  gap: 8px;
+  align-items: baseline;
+  margin: 2px 0;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+}

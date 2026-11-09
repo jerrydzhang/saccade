@@ -58,6 +58,19 @@ export class ViewerModel {
    * at their await boundaries, never written over a newer selection. */
   private generation = 0;
 
+  // the back/forward history of locations this window opened
+  // (t-14: Ctrl-o Ctrl-i back and forward). A plain open pushes the
+  // location it replaces onto the back stack and clears the forward
+  // one; a navigation (back/forward itself) moves around the stacks
+  // without pushing.
+  private backStack: Location[] = [];
+  private forwardStack: Location[] = [];
+
+  /** The locations behind and ahead, for the inspection surface. */
+  get history(): { back: Location[]; forward: Location[] } {
+    return { back: [...this.backStack], forward: [...this.forwardStack] };
+  }
+
   private listeners = new Set<(state: ViewerState) => void>();
 
   subscribe(listener: (state: ViewerState) => void): () => void {
@@ -89,8 +102,17 @@ export class ViewerModel {
 
   /** Open an explicit location. Every lane and control funnels through here.
    * Stale responses (a slow A arriving after B was selected) are dropped:
-   * the location on screen always names the board on screen. */
-  async open(location: Location): Promise<void> {
+   * the location on screen always names the board on screen. A plain open
+   * pushes the replaced location onto the back stack; a navigate open
+   * (the back/forward keys) moves around the stacks instead. */
+  async open(location: Location, opts?: { navigate?: boolean }): Promise<void> {
+    if (!opts?.navigate) {
+      const current = this.state.location;
+      if (current && (current.machine !== location.machine || current.path !== location.path)) {
+        this.backStack.push(current);
+        this.forwardStack = [];
+      }
+    }
     const token = ++this.generation;
     this.set({
       status: "loading",
@@ -191,6 +213,24 @@ export class ViewerModel {
       renderOutcomes: [],
       renderGeneration: token,
     });
+  }
+
+  /** Ctrl-o: the location behind, keeping the current one ahead. */
+  async back(): Promise<void> {
+    const previous = this.backStack.pop();
+    const current = this.state.location;
+    if (!previous || !current) return;
+    this.forwardStack.push(current);
+    await this.open(previous, { navigate: true });
+  }
+
+  /** Ctrl-i: the location ahead, keeping the current one behind. */
+  async forward(): Promise<void> {
+    const next = this.forwardStack.pop();
+    const current = this.state.location;
+    if (!next || !current) return;
+    this.backStack.push(current);
+    await this.open(next, { navigate: true });
   }
 
   /** The native gate: admission through the shared board-grammar crate.

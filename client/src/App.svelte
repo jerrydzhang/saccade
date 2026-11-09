@@ -6,6 +6,27 @@
   import { hydrate } from "./lib/board/hydrate.ts";
   import { bindDiagramExpansion } from "./lib/overlay.ts";
   import { installCopyHandler } from "./lib/copydom.ts";
+  import {
+    collectTargets,
+    highlight,
+    inTextField,
+    labelsFor,
+    scrollBottom,
+    scrollByLines,
+    scrollByPages,
+    scrollTop,
+    showLabels,
+    type SelectableTarget,
+  } from "./lib/selectdom.ts";
+  import {
+    assignLabels,
+    isTextKind,
+    narrowStep,
+    startNarrow,
+    type NarrowState,
+    type TargetKind,
+  } from "./lib/select.ts";
+  import { openContextMenu, type MenuAct } from "./lib/menu.ts";
   import { inspect } from "./lib/board/inspection.ts";
   import type { CopyMode } from "./lib/copy.ts";
   import type { RenderOutcome, ViewerState } from "./lib/board/viewmodel.ts";
@@ -96,9 +117,130 @@
     searchOpen = false;
   }
 
-  // Key-driven chrome: Ctrl+F opens the search, Escape closes it,
-  // Ctrl+Shift+C switches between Source and Plain copy. No visible
-  // mode buttons: Source is the default and Plain is one keystroke.
+  // Key-driven chrome: the select-first keymap (t-14 "Interaction")
+  // plus the standing search and copy-mode keys. No visible mode
+  // buttons: every mode is a key, and ? lists them on demand.
+  type KeyMode = "normal" | "labels" | "leader" | "gg";
+  let keyMode = $state<KeyMode>("normal");
+  let selected: SelectableTarget | null = $state(null);
+  let targets: SelectableTarget[] = [];
+  let labels: string[] = [];
+  let narrow: NarrowState | null = null;
+  let hideLabels: (() => void) | null = null;
+  let closeMenu: (() => void) | null = null;
+  let helpOpen = $state(false);
+
+  function exitLabelMode(): void {
+    if (hideLabels) hideLabels();
+    hideLabels = null;
+    narrow = null;
+    keyMode = "normal";
+  }
+
+  function enterLabelMode(): void {
+    if (keyMode === "labels") return;
+    targets = collectTargets(document.body);
+    if (targets.length === 0) return;
+    labels = labelsFor(targets);
+    narrow = startNarrow(targets.length);
+    if (hideLabels) hideLabels();
+    hideLabels = showLabels(targets, labels);
+    keyMode = "labels";
+  }
+
+  function selectTarget(index: number | null): void {
+    const previous = selected;
+    if (index === null || targets[index] === undefined) {
+      selected = null;
+      highlight(null, previous);
+      return;
+    }
+    selected = targets[index] ?? null;
+    highlight(selected, previous);
+  }
+
+  function actsFor(target: SelectableTarget): MenuAct[] {
+    const acts: MenuAct[] = [];
+    const open = (): void => {
+      const path = target.element.getAttribute("data-open-path");
+      const location = view.location;
+      if (path && location) void model.open({ machine: location.machine, path });
+    };
+    const enlarge = (): void => target.element.click();
+    const copy = (): void => {
+      // the bridge write exists only inside the native shell; the
+      // browser keeps the engine's clipboard
+      if (bridgePresent) void bridgeWrite(target.text);
+      else void navigator.clipboard?.writeText(target.text).catch(() => {});
+    };
+    if (target.kind === "citation" || target.kind === "incorporation") {
+      acts.push({ key: "Enter", label: "open the cited revision", onAct: open });
+    }
+    if (target.kind === "diagram") {
+      acts.push({ key: "Enter", label: "enlarge", onAct: enlarge });
+    }
+    if (target.kind === "control") {
+      acts.push({ key: "Enter", label: "activate", onAct: enlarge });
+    }
+    if (isTextKind(target.kind)) {
+      acts.push({ key: "c", label: "copy the part", onAct: copy });
+    }
+    if (acts.length === 0) {
+      acts.push({ key: "Enter", label: "open the menu", onAct: () => {} });
+    }
+    return acts;
+  }
+
+  function documentActs(): MenuAct[] {
+    const acts: MenuAct[] = [
+      { key: "s", label: "labels on what can be selected", onAct: () => enterLabelMode() },
+      { key: "/", label: "search", onAct: () => openSearch() },
+      { key: "?", label: "help", onAct: () => (helpOpen = true) },
+      {
+        key: "m",
+        label: view.copyMode === "plain" ? "copy plain (now source)" : "copy source (now plain)",
+        onAct: () => model.setCopyMode(view.copyMode === "plain" ? "source" : "plain"),
+      },
+    ];
+    return acts;
+  }
+
+  function openTargetMenu(target: SelectableTarget, at: { x: number; y: number }): void {
+    if (closeMenu) closeMenu();
+    const selection = selected;
+    closeMenu = openContextMenu({
+      ...at,
+      acts: actsFor(target),
+      onClose: () => {
+        closeMenu = null;
+        selectTarget(null);
+        void selection;
+      },
+    });
+  }
+
+  function openDocumentMenu(at: { x: number; y: number }): void {
+    if (closeMenu) closeMenu();
+    closeMenu = openContextMenu({
+      ...at,
+      acts: documentActs(),
+      onClose: () => {
+        closeMenu = null;
+      },
+    });
+  }
+
+  function moveSelection(delta: number): void {
+    targets = collectTargets(document.body);
+    labels = labelsFor(targets);
+    const current = selected ? targets.findIndex((t) => t.element === selected?.element) : -1;
+    const next = Math.min(Math.max(current + delta, 0), targets.length - 1);
+    if (targets[next] !== undefined) {
+      selected = targets[next] ?? null;
+      highlight(selected, current >= 0 ? (targets[current] ?? null) : null);
+    }
+  }
+
   function onWindowKey(event: KeyboardEvent): void {
     if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "f") {
       event.preventDefault();
@@ -110,15 +252,196 @@
       model.setCopyMode(view.copyMode === "plain" ? "source" : "plain");
       return;
     }
-    if (event.key === "Escape" && searchOpen) {
-      event.preventDefault();
-      closeSearch();
+    if (event.key === "Escape") {
+      if (searchOpen) {
+        event.preventDefault();
+        closeSearch();
+        return;
+      }
+      if (helpOpen) {
+        event.preventDefault();
+        helpOpen = false;
+        return;
+      }
     }
+    if (closeMenu || inTextField(event)) return;
+    if (helpOpen) return;
+
+    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "o") {
+      event.preventDefault();
+      void model.back();
+      return;
+    }
+    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "i") {
+      event.preventDefault();
+      void model.forward();
+      return;
+    }
+
+    switch (keyMode) {
+      case "labels": {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          exitLabelMode();
+          return;
+        }
+        if (event.key === "Enter" && narrow) {
+          event.preventDefault();
+          const alive = narrow.alive;
+          exitLabelMode();
+          if (alive.length === 1) {
+            const index = alive[0];
+            if (index !== undefined) {
+              selectTarget(index);
+              const target = targets[index];
+              if (target) {
+                const rect = target.element.getBoundingClientRect();
+                openTargetMenu(target, { x: rect.right + 8, y: rect.top });
+              }
+            }
+          }
+          return;
+        }
+        if (event.key.length !== 1) return;
+        event.preventDefault();
+        if (!narrow) return;
+        const texts = targets.map((t) => t.text);
+        const kinds = targets.map((t) => t.kind);
+        const step = narrowStep(narrow, kinds, texts, labels, event.key);
+        if (step.selected !== null) {
+          const index = step.selected;
+          exitLabelMode();
+          selectTarget(index);
+          const target = targets[index];
+          if (target) {
+            const rect = target.element.getBoundingClientRect();
+            openTargetMenu(target, { x: rect.right + 8, y: rect.top });
+          }
+          return;
+        }
+        narrow = step;
+        // repaint the chips for what is still alive
+        const aliveTargets = step.alive.map((index) => targets[index]).filter((t) => t !== undefined);
+        if (hideLabels) hideLabels();
+        hideLabels = showLabels(aliveTargets, aliveTargets.map((t) => labels[targets.indexOf(t)] ?? ""));
+        return;
+      }
+      case "leader": {
+        event.preventDefault();
+        keyMode = "normal";
+        // space leads the viewer's own commands; each command lands
+        // with its own chapter (picker, history, marginalia, publish)
+        return;
+      }
+      case "gg": {
+        event.preventDefault();
+        keyMode = "normal";
+        if (event.key === "g") scrollTop(contentHost);
+        return;
+      }
+      case "normal":
+        break;
+    }
+
+    switch (event.key) {
+      case "j":
+        event.preventDefault();
+        if (selected) moveSelection(1);
+        else scrollByLines(contentHost, 2);
+        return;
+      case "k":
+        event.preventDefault();
+        if (selected) moveSelection(-1);
+        else scrollByLines(contentHost, -2);
+        return;
+      case "d":
+        event.preventDefault();
+        scrollByPages(contentHost, 0.5);
+        return;
+      case "u":
+        event.preventDefault();
+        scrollByPages(contentHost, -0.5);
+        return;
+      case "g":
+        event.preventDefault();
+        keyMode = "gg";
+        return;
+      case "G":
+        event.preventDefault();
+        scrollBottom(contentHost);
+        return;
+      case "s":
+        event.preventDefault();
+        enterLabelMode();
+        return;
+      case "?":
+        event.preventDefault();
+        helpOpen = true;
+        return;
+      case "Enter": {
+        event.preventDefault();
+        const target = selected;
+        if (target) {
+          const rect = target.element.getBoundingClientRect();
+          openTargetMenu(target, { x: rect.right + 8, y: rect.top });
+        }
+        return;
+      }
+      case " ":
+        event.preventDefault();
+        keyMode = "leader";
+        return;
+    }
+    if (event.ctrlKey && !event.shiftKey) {
+      if (event.key === "f") {
+        // page down
+        event.preventDefault();
+        scrollByPages(contentHost, 1);
+        return;
+      }
+      if (event.key === "b") {
+        event.preventDefault();
+        scrollByPages(contentHost, -1);
+        return;
+      }
+      if (event.key === "d") {
+        event.preventDefault();
+        scrollByPages(contentHost, 0.5);
+        return;
+      }
+      if (event.key === "u") {
+        event.preventDefault();
+        scrollByPages(contentHost, -0.5);
+        return;
+      }
+    }
+  }
+
+  function onContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+    const element = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+      ".block, .diagram-frame, .citation-link, [data-control]",
+    );
+    if (element) {
+      targets = collectTargets(document.body);
+      const target = targets.find((candidate) => candidate.element === element);
+      if (target) {
+        selectTarget(targets.indexOf(target));
+        openTargetMenu(target, { x: event.clientX, y: event.clientY });
+        return;
+      }
+    }
+    selectTarget(null);
+    openDocumentMenu({ x: event.clientX, y: event.clientY });
   }
 
   $effect(() => {
     window.addEventListener("keydown", onWindowKey);
-    return () => window.removeEventListener("keydown", onWindowKey);
+    window.addEventListener("contextmenu", onContextMenu);
+    return () => {
+      window.removeEventListener("keydown", onWindowKey);
+      window.removeEventListener("contextmenu", onContextMenu);
+    };
   });
 
   async function bridgeWrite(text: string): Promise<boolean> {
@@ -333,6 +656,37 @@
     </span>
     <button type="button" data-control="search:prev" onclick={() => nextMatch(-1)} aria-label="previous match">prev</button>
     <button type="button" data-control="search:next" onclick={() => nextMatch(1)} aria-label="next match">next</button>
+  </div>
+  {/if}
+
+  {#if helpOpen}
+  <div class="help-overlay" role="dialog" aria-label="keys and commands" data-control="help:overlay">
+    <div class="help-panel">
+      <div class="help-section">
+        <p class="help-title">motion</p>
+        <p class="help-row"><span class="ctx-menu-key">j k</span> line down / up</p>
+        <p class="help-row"><span class="ctx-menu-key">Ctrl-f Ctrl-b</span> page down / up</p>
+        <p class="help-row"><span class="ctx-menu-key">Ctrl-d Ctrl-u</span> half page down / up (d u)</p>
+        <p class="help-row"><span class="ctx-menu-key">gg G</span> top / bottom</p>
+        <p class="help-row"><span class="ctx-menu-key">Ctrl-o Ctrl-i</span> back / forward</p>
+      </div>
+      <div class="help-section">
+        <p class="help-title">select</p>
+        <p class="help-row"><span class="ctx-menu-key">s</span> labels on what can be selected</p>
+        <p class="help-row"><span class="ctx-menu-key">label</span> select it and open its menu</p>
+        <p class="help-row"><span class="ctx-menu-key">text</span> narrows the text targets</p>
+        <p class="help-row"><span class="ctx-menu-key">Enter</span> the selected target's acts</p>
+        <p class="help-row"><span class="ctx-menu-key">right-click</span> the same menu at the pointer</p>
+        <p class="help-row"><span class="ctx-menu-key">Escape</span> leaves the mode</p>
+      </div>
+      <div class="help-section">
+        <p class="help-title">viewer</p>
+        <p class="help-row"><span class="ctx-menu-key">space</span> this instrument's commands</p>
+        <p class="help-row"><span class="ctx-menu-key">Ctrl+f</span> search (Escape closes)</p>
+        <p class="help-row"><span class="ctx-menu-key">Ctrl+Shift+C</span> copy source / plain</p>
+        <p class="help-row"><span class="ctx-menu-key">?</span> this list</p>
+      </div>
+    </div>
   </div>
   {/if}
 
