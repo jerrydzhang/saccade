@@ -43,6 +43,14 @@
     publishAnnotations,
     type Draft,
   } from "./lib/annotations.ts";
+  import {
+    explainerEdit,
+    loadKeptExplainer,
+    saveKeptExplainer,
+    clearKeptExplainer,
+    submitExplainerEdit,
+  } from "./lib/explainer.ts";
+  import { trackerCoreMachine } from "./lib/sources.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
   import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
@@ -729,10 +737,14 @@
   // (t-24@r11) and survive a closed window or a restart. `space p`
   // publishes them together as ONE commit with ONE message under the
   // human's own identity; the current revision of a task board only.
+  // On an explainer - a bare-path file that decodes as a board - the
+  // editor's save IS the submit: one annotation written straight into
+  // the file (t-24@r21), nothing pooled.
   let drafts = $state<Draft[]>([]);
   let draftsFor = $state("");
   let draftEditor = $state<{ path: string; text: string } | null>(null);
   let draftEditorIndex = $state<number | null>(null);
+  let draftKind = $state<"task" | "explainer">("task");
   let publishOpen = $state(false);
   let publishMessage = $state("");
   let publishBusy = $state(false);
@@ -796,11 +808,27 @@
   function beginDraft(): void {
     if (!view.board) return;
     const location = view.location;
-    const spec = parseTaskSpec(location?.path ?? "");
-    if (!location || !spec) {
-      publishNote = "annotations draft on a task board; this location is not one";
+    if (!location) return;
+    if (location.machine === "tracker-machine") {
+      // the explainer write (t-24@r21): bare paths only - the file
+      // this window decoded as a board. The text of a refused
+      // annotation is kept on the device keyed by the path; the next
+      // `a` opens the editor with it, placement dropped.
+      draftKind = "explainer";
+      publishNote = null;
+      const index = actPartIndex();
+      if (index === null) return;
+      draftEditorIndex = index;
+      draftEditor = { path: `/content/${index}`, text: loadKeptExplainer(location.path) ?? "" };
       return;
     }
+    const spec = parseTaskSpec(location.path);
+    if (!spec) {
+      publishNote =
+        "annotations draft on a task board or on a bare path on the tracker's machine; this location is neither - bare paths only for the explainer write (t-24@r21)";
+      return;
+    }
+    draftKind = "task";
     if (spec.revision !== null) {
       // t-24@r11: only the current revision drafts; a pinned older
       // revision refuses, saying where annotation is possible
@@ -818,11 +846,97 @@
     const editor = draftEditor;
     if (!editor) return;
     const text = editor.text;
+    if (draftKind === "explainer") {
+      // the submit IS the save (t-24@r21 A5): one annotation into the
+      // file, nothing pooled; an empty save just closes
+      if (text.trim().length === 0) {
+        cancelDraft();
+        return;
+      }
+      void submitExplainer(text);
+      return;
+    }
     const next = drafts.filter((draft) => draft.path !== editor.path);
     if (text.trim().length > 0) next.push({ path: editor.path, text: text.replace(/\s+$/, "") });
     updateDrafts(next);
     draftEditor = null;
     draftEditorIndex = null;
+  }
+
+  /** The explainer annotation submit: the edit computed against the
+   * shown text and decoded before anything is sent (t-24@r21 A1), the
+   * whole file re-read and byte-compared with what this window shows
+   * (A4), then one file.edit through the bridge. A refusal keeps the
+   * annotation TEXT, drops the placement, and says where to place it
+   * again; the wire's exact-once answer is the same refusal reached
+   * through the other half of the guard. */
+  async function submitExplainer(text: string): Promise<void> {
+    const location = view.location;
+    const shown = model.snapshot.rawText ?? "";
+    if (!location || location.machine !== "tracker-machine" || shown.length === 0) return;
+    const editorPath = draftEditor?.path;
+    if (!editorPath) return;
+    const generation = model.currentGeneration;
+    const stale = (): boolean => {
+      // the human navigated while the act awaited: the submit is void,
+      // nothing is written, nothing is noted
+      return model.currentGeneration !== generation;
+    };
+    const plan = explainerEdit(shown, editorPath, text);
+    if ("failure" in plan) {
+      // nothing was sent; the editor stays open with the reason
+      publishNote = plan.failure;
+      return;
+    }
+    let machine: string;
+    try {
+      machine = await trackerCoreMachine();
+    } catch (error) {
+      publishNote = error instanceof Error ? error.message : String(error);
+      return;
+    }
+    if (stale()) return;
+    let current: string;
+    try {
+      const source = sourceFor("tracker-machine");
+      current = (await source.loadText(location)).text;
+    } catch (error) {
+      publishNote = error instanceof Error ? error.message : String(error);
+      return;
+    }
+    if (stale()) return;
+    if (current !== shown) {
+      saveKeptExplainer(location.path, text);
+      draftEditor = null;
+      draftEditorIndex = null;
+      publishNote =
+        "the file changed since this window read it; the annotation text is kept - reopen the file and press a on the part you want, the editor opens with the kept text";
+      return;
+    }
+    const outcome = await submitExplainerEdit(tauriInvoke(), {
+      path: location.path,
+      old: plan.edit.old,
+      new: plan.edit.new,
+      on: machine,
+    });
+    if (stale()) return;
+    if (!outcome.ok) {
+      if (outcome.code === "edit-failed") {
+        saveKeptExplainer(location.path, text);
+        draftEditor = null;
+        draftEditorIndex = null;
+        publishNote =
+          "the file moved under this window - the edit's exact-once guard refused and the file is untouched; the annotation text is kept - reopen the file and press a on the part you want";
+        return;
+      }
+      publishNote = `the write refused: ${outcome.code} ${outcome.detail}`;
+      return;
+    }
+    clearKeptExplainer(location.path);
+    draftEditor = null;
+    draftEditorIndex = null;
+    publishNote = `annotation written into ${location.path}`;
+    await model.open({ machine: location.machine, path: location.path });
   }
 
   function cancelDraft(): void {
@@ -834,6 +948,11 @@
 
   function openPublish(): void {
     if (!view.board) return;
+    if (view.location?.machine === "tracker-machine" || draftKind === "explainer") {
+      publishNote =
+        "an explainer has no pooled publish; each annotation is written straight into its file on save (t-24@r21)";
+      return;
+    }
     if (drafts.length === 0) {
       publishNote = "no drafts to publish; press a on a part first";
       return;
@@ -1673,6 +1792,10 @@
 
   {#if lookNotice}
     <p class="look-notice" aria-live="polite">{lookNotice}</p>
+  {/if}
+
+  {#if publishNote && !publishOpen}
+    <p class="look-notice" data-control="action:note" aria-live="polite">{publishNote}</p>
   {/if}
 
   {#if view.errors.length > 0}

@@ -26,6 +26,7 @@ export const LANE_CODES = [
   "exec-spawn-failed",
   "asset-too-large",
   "text-truncated",
+  "edit-failed",
 ] as const;
 
 export type LaneCode = (typeof LANE_CODES)[number];

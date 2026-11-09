@@ -1,17 +1,21 @@
-//! Read-only declaration and asset reads. The guard mirrors the frontend
-//! resolve rules exactly: relative segments only, no parent traversal, no
-//! backslash separators, no absolute paths, no NUL bytes. Canonicalized
+//! Read-only declaration and asset reads, plus the suite's one write:
+//! the explainer annotation submit (t-24@r21). The guard mirrors the
+//! frontend resolve rules exactly: relative segments only, no parent
+//! traversal, no backslash separators, no absolute paths, no NUL bytes.
+//! Canonicalized
 //! prefix checking runs second so a guard bypass still cannot escape.
 //!
 //! Local locations read through std::fs exactly as before. A location
-//! that names a machine reads through the LOCAL herdr-core's read-only
-//! face instead (file.read for text; fixed-argv exec for bytes and
-//! remote path resolution), with containment proven on the remote side
+//! that names a machine reads through the LOCAL herdr-core's face
+//! instead (file.read for text; fixed-argv exec for bytes and remote
+//! path resolution; file.edit for the one annotation submit -
+//! exact-once, all-or-none), with containment proven on the remote side
 //! and every machine state surfacing as a structured error. The core
-//! socket is the only door here, and it opens read-only calls; the
-//! renderer gets no socket, no shell and no machine management.
+//! socket is the only door here, and it opens only the calls named
+//! here; the renderer gets no socket, no shell and no machine
+//! management.
 
-use board_viewer_core::{guard_relative, CoreClient, CoreFail, SocketTransport};
+use board_viewer_core::{guard_relative, CoreClient, CoreFail, FileEdit, SocketTransport};
 use serde::{Deserialize, Serialize};
 
 use crate::look_config;
@@ -85,7 +89,15 @@ pub struct DeclaredText {
     pub text: String,
 }
 
-#[derive(Serialize, Deserialize)]
+/// What one landed edit answers: the file's new size. The frontend
+/// re-opens the file through its read path after a landed edit, so no
+/// text rides back here.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct EditedText {
+    pub bytes: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BridgeError {
     pub code: String,
     pub message: String,
@@ -110,6 +122,55 @@ fn core_failure(fail: CoreFail) -> BridgeError {
         code: fail.code().into(),
         message: fail.to_string(),
     }
+}
+
+/// The one file write the suite makes (t-14 ratified item 3, t-24@r21):
+/// an explainer annotation submit. One exact-text replacement through
+/// the local core's `file.edit` - all-or-none, old found exactly once -
+/// on the machine the caller resolved (the same rule the bare-path
+/// reads ride: the local core on the hub, the declared tracker machine
+/// elsewhere). Identity-free: a file write lands no record, so the
+/// log line below is the act's trace.
+#[tauri::command]
+pub fn edit_declaration(
+    path: String,
+    old: String,
+    new: String,
+    on: Option<String>,
+) -> Result<EditedText, BridgeError> {
+    if path.is_empty() {
+        return Err(deny("empty path"));
+    }
+    if !path.starts_with('/') {
+        return Err(deny("the edit path must be absolute"));
+    }
+    if path.contains('\0') || old.contains('\0') || new.contains('\0') {
+        return Err(deny("NUL byte in the edit"));
+    }
+    let machine = match on.as_deref() {
+        None => return Err(deny("the explainer edit names no machine; bare paths only")),
+        Some(machine) => machine,
+    };
+    let client = core_client()?;
+    let outcome = match client.edit_text(machine, &path, &[FileEdit { old, new }]) {
+        Ok(outcome) => outcome,
+        Err(fail) => {
+            let _ = log_bridge(
+                "edit_declaration",
+                &format!("{}{path}", core_machine_label(machine)),
+                &format!("failed: {}", fail.code()),
+            );
+            return Err(core_failure(fail));
+        }
+    };
+    let _ = log_bridge(
+        "edit_declaration",
+        &format!("{}{path}", core_machine_label(machine)),
+        &format!("{} bytes", outcome.bytes),
+    );
+    Ok(EditedText {
+        bytes: outcome.bytes,
+    })
 }
 
 fn core_client() -> Result<CoreClient<SocketTransport>, BridgeError> {
@@ -330,6 +391,29 @@ pub fn viewer_identity() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::{core_read_of, guard_relative, CoreRead};
+
+    #[test]
+    fn an_edit_refuses_non_absolute_and_nul_paths_before_any_wire() {
+        for (path, old, new) in [
+            ("", "a".to_string(), "b".to_string()),
+            ("relative/path.yaml", "a".to_string(), "b".to_string()),
+            ("/abs\0path", "a".to_string(), "b".to_string()),
+            ("/abs", "a\0".to_string(), "b".to_string()),
+            ("/abs", "a".to_string(), "b\0".to_string()),
+        ] {
+            let failure = super::edit_declaration(path.into(), old, new, Some("".into()))
+                .expect_err("refused");
+            assert_eq!(failure.code, "asset-denied", "{failure:?}");
+        }
+    }
+
+    #[test]
+    fn an_edit_without_a_resolved_machine_is_refused() {
+        let failure = super::edit_declaration("/abs/x.yaml".into(), "a".into(), "b".into(), None)
+            .expect_err("refused");
+        assert_eq!(failure.code, "asset-denied");
+        assert!(failure.message.contains("bare paths"), "{failure:?}");
+    }
 
     #[test]
     fn the_read_target_follows_the_machine_argument() {

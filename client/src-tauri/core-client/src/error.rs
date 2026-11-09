@@ -66,6 +66,15 @@ pub enum CoreFail {
         got_last: u64,
         total_lines: u64,
     },
+    /// The core refused an edit because its exact-once rule failed:
+    /// some old text is not in the file, or is there more than once.
+    /// The file is untouched (all-or-none); to the caller this is the
+    /// wire's half of the staleness guard.
+    EditFailed {
+        path: String,
+        machine: String,
+        detail: String,
+    },
 }
 
 impl CoreFail {
@@ -91,6 +100,7 @@ impl CoreFail {
             CoreFail::Containment { .. } => "asset-denied",
             CoreFail::Denied { .. } => "asset-denied",
             CoreFail::TextTruncated { .. } => "text-truncated",
+            CoreFail::EditFailed { .. } => "edit-failed",
         }
     }
 }
@@ -197,6 +207,10 @@ impl fmt::Display for CoreFail {
                 f,
                 "the text read stopped inside {path:?} on machine {machine:?}: \
                  it got through line {got_last} of {total_lines}"
+            ),
+            CoreFail::EditFailed { path, machine, detail } => write!(
+                f,
+                "the edit into {path:?} on machine {machine:?} was refused, the file is untouched: {detail}"
             ),
         }
     }
@@ -317,6 +331,14 @@ mod tests {
                     total_lines: 2,
                 },
                 "text-truncated",
+            ),
+            (
+                CoreFail::EditFailed {
+                    path: "/p".into(),
+                    machine: "m".into(),
+                    detail: "d".into(),
+                },
+                "edit-failed",
             ),
         ];
         for (fail, code) in &inventory {

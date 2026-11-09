@@ -887,6 +887,50 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("interaction", phase_interaction)
 
+    # phase 10: the explainer annotation gates (t-21, t-24@r21). The
+    # browser lane has no bridge and no core, so the write itself cannot
+    # run here; what is pinned over the real frontend is the boundary:
+    # a fixture is never written (the refusal names the bare-path rule),
+    # the refusal is visible as a note, no editor opens, and space p
+    # refuses the pooled publish on a non-task location.
+    def phase_explainer() -> None:
+        def key(key: str, modifiers: list[str] | None = None) -> None:
+            for modifier in modifiers or []:
+                page.keyboard.down(modifier)
+            page.keyboard.press(key)
+            for modifier in reversed(modifiers or []):
+                page.keyboard.up(modifier)
+
+        open_board("explainer-board.yaml")
+        inspection = page.evaluate(f"() => {viewer}.inspection()")
+        check(
+            "the explainer fixture opens as a board",
+            inspection["resource"]["status"] == "loaded" and inspection["resource"]["machine"] == "fixture",
+            str(inspection["resource"]),
+        )
+        key("a")
+        editor_open = page.evaluate("() => document.querySelector('[data-control=\"draft:input\"]') !== null")
+        check("a on a fixture opens no draft editor (fixtures are never written)", not editor_open)
+        note = page.evaluate("() => document.querySelector('[data-control=\"action:note\"]')?.textContent ?? ''")
+        check(
+            "the fixture refusal names the bare-path rule and is visible",
+            "bare path" in str(note),
+            str(note)[:160],
+        )
+        # space p refuses the pooled publish outside a task board
+        key(" ")
+        key("p")
+        publish_open = page.evaluate("() => document.querySelector('[data-control=\"publish:overlay\"]') !== null")
+        check("space p opens no publish outside a task board", not publish_open)
+        note = page.evaluate("() => document.querySelector('[data-control=\"action:note\"]')?.textContent ?? ''")
+        check(
+            "the pooled-publish refusal names the explainer's own write rule",
+            "no pooled publish" in str(note),
+            str(note)[:160],
+        )
+
+    phase("explainer", phase_explainer)
+
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 
 

@@ -1,9 +1,12 @@
 # Board viewer
 
-A retained, read-only research reader: it renders an explicitly supplied
-board declaration and nothing else. Loading a board never touches tracker
+A retained research reader: it renders an explicitly supplied board
+declaration and nothing else. Loading a board never touches tracker
 storage, authority, or workflow; the `task` field in a declaration is
-authored metadata, not a tracker association.
+authored metadata, not a tracker association. The record is written
+once, by publishing task-board annotations; an explainer board file is
+written once, by its annotation submit - both ratified, both stated
+below.
 
 ## Run
 
@@ -59,25 +62,49 @@ file family at that pinned revision - so one open's text and figures
 are one immutable tree, and a revision landing mid-open cannot split
 them. `/api/v1` stays `sac`'s own API.
 
-**The suite's only write to the record is publishing task-board
-annotations** (t-14, ratified; the law of this package, landed with the
-commit that builds the act): `a` drafts in place on the current
-revision of a task board - drafts persist on the device keyed by task
-until the window-state pool lands (t-24@r11) and are never lost on a
-refused publish; `space p` publishes the drafts together as ONE commit
-with ONE message through the commit door, under the HUMAN's own
-identity: the human tier and, as the actor, the client configuration's
-override or the device account name as `sac` derives it without
-SACCADE_ACTOR (`$USER`, else "human"), never refusing for lack of it.
-The published board.yaml is the shown revision's authored text plus
-annotation components and nothing else - byte-level insertions at the
-parts' own positions. Before the POST the viewer re-reads the current
-revision and refuses, keeping the drafts, when a revision landed after
-its read; an offered board refuses, naming the reject-with-grounds CLI
-step. Only the current revision of a task board drafts; a pinned older
-revision refuses, saying where annotation is possible (t-24@r11).
-Explainer-file annotation writes and the deck are t-21, not this
-package's.
+**The suite's writes.** Two, each ratified, nothing else:
+
+- **The record is written once**: publishing task-board annotations
+  (t-14, the law landed with the commit that builds the act). `a`
+  drafts in place on the current revision of a task board - drafts
+  persist on the device keyed by task until the window-state pool
+  lands (t-24@r11) and are never lost on a refused publish; `space p`
+  publishes the drafts together as ONE commit with ONE message through
+  the commit door, under the HUMAN's own identity: the human tier and,
+  as the actor, the client configuration's override or the device
+  account name as `sac` derives it without SACCADE_ACTOR (`$USER`, else
+  "human"), never refusing for lack of it. The published board.yaml is
+  the shown revision's authored text plus annotation components and
+  nothing else - byte-level insertions at the parts' own positions.
+  Before the POST the viewer re-reads the current revision and refuses,
+  keeping the drafts, when a revision landed after its read; an offered
+  board refuses, naming the reject-with-grounds CLI step. Only the
+  current revision of a task board drafts; a pinned older revision
+  refuses, saying where annotation is possible (t-24@r11).
+- **An explainer board file is written once**: its annotation submit
+  (t-14 ratified item 3, t-24@r21). An explainer is a bare-path file
+  that decodes as board grammar 1 - a file on the tracker's machine,
+  never a named `machine:` path, never a fixture, never a lane's host
+  reader. `a` drafts in place; the editor's save IS the submit: one
+  annotation component into the file, nothing pooled (`space p` stays
+  task-board-only), no record, no identity - a file write lands no
+  attribution, and the bridge log line (operation, path, outcome) is
+  the act's trace. The edit rides the local herdr core's `file.edit` -
+  exact-once, all-or-none - on the machine the bare-path reads already
+  resolve: the local core on the hub, the declared tracker machine
+  elsewhere. Before anything is sent the client applies the edit to
+  the shown text and decodes the result as grammar 1, refusing with
+  the annotation editor still open when the result would not decode or
+  the annotation would not sit beside the part it addresses; old text
+  that does not occur exactly once refuses before the wire. The
+  staleness guard is whole-file byte equality: a file that changed
+  since this window read it refuses the write, keeps the annotation
+  TEXT on the device keyed by the path (until the pool lands; the only
+  thing ever kept), drops the placement and says so - the next `a` on
+  the freshly read file opens the editor with the kept text. The
+  wire's own exact-once refusal is the same refusal reached through
+  the other half of the guard. The deck is this package's other t-21
+  surface, stated in its own section below.
 
 The validation split: admission is the shared crate's job on the Tauri
 side (`validate_board`, a path dependency), and the native lanes refuse
@@ -170,8 +197,11 @@ in-app persistence.
 A machine-named board reads through the local core's read-only face:
 `file.read` for declaration text, fixed-argv `exec` (`realpath -e`, then
 `cat`) for figure bytes over base64 - no shell strings anywhere. The
-viewer never adds machines, logs in, updates a core or writes a file;
-those are the human's own host setup. Machine states are structured,
+viewer never adds machines, logs in or updates a core; those are the
+human's own host setup. The one call beyond the read face is the
+explainer annotation submit's `file.edit` (the write section above) -
+never machine management, never anything but annotation components into
+a shown board file. Machine states are structured,
 human-actionable errors with the machine's own reason (`needs_login`,
 `unreachable`, `needs_update`, unknown name) and no retries. Because the
 remote host enforces no path containment, the asset's canonical prefix
