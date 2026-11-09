@@ -56,6 +56,16 @@ import tracker_mock  # noqa: E402
 
 SERVER_PORT = 1421
 DIST_SANDBOX = "/app/dist"
+# the env-gated reference page, bound by the entry point at these fixed
+# sandbox paths and served by the loopback server: the page at the
+# reference route, its sibling reference-assets/ beside it (the mockup
+# vendors its pinned CDN libraries there; a scrubbed sandbox has no
+# mime database and no network, so a file:// page renders as plain
+# source and CDN scripts never arrive)
+REFERENCE_SANDBOX_PATH = "/app/reference.html"
+REFERENCE_ROUTE = "/reference.html"
+REFERENCE_ASSETS_SANDBOX_PATH = "/app/reference-assets"
+REFERENCE_ASSETS_ROUTE = "/reference-assets"
 READY_SECONDS = 20
 
 RESULTS: list[tuple[bool, str, str]] = []
@@ -171,9 +181,47 @@ def run_canary_first() -> bool:
 
 
 def start_server() -> ThreadingHTTPServer | None:
-    """Stdlib loopback static server for the built frontend. A thread in
-    this process - no child, no teardown protocol beyond shutdown()."""
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=DIST_SANDBOX)
+    """Stdlib loopback static server for the built frontend, plus the
+    env-gated reference route: the bound reference file is served from
+    its sandbox path with an explicit text/html type, because a scrubbed
+    sandbox has no mime database and WebKit renders a file:// page as
+    plain source. A thread in this process - no child, no teardown
+    protocol beyond shutdown()."""
+
+    class Handler(SimpleHTTPRequestHandler):
+        def translate_reference(self, path: str):
+            """A reference-assets request maps into the bound reference
+            directory; anything else under the reference prefix is a 404
+            like any unknown path."""
+            if not path.startswith(REFERENCE_ASSETS_ROUTE + "/"):
+                return None
+            name = path[len(REFERENCE_ASSETS_ROUTE) + 1:]
+            if "/" in name or ".." in name or name.startswith("."):
+                return None
+            candidate = pathlib.Path(REFERENCE_ASSETS_SANDBOX_PATH) / name
+            return candidate if candidate.is_file() else None
+
+        def do_GET(self):
+            route = self.path.split("?")[0]
+            if route == REFERENCE_ROUTE and os.path.isfile(REFERENCE_SANDBOX_PATH):
+                data = pathlib.Path(REFERENCE_SANDBOX_PATH).read_bytes()
+                ctype = "text/html; charset=utf-8"
+            elif (asset := self.translate_reference(route)) is not None:
+                data = asset.read_bytes()
+                ctype = "text/javascript" if asset.suffix == ".js" else "application/octet-stream"
+            else:
+                super().do_GET()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, format, *args):
+            pass
+
+    handler = functools.partial(Handler, directory=DIST_SANDBOX)
     try:
         server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), handler)
     except OSError as error:
@@ -738,35 +786,39 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
 
 def reference_document() -> pathlib.Path | None:
-    """The env-gated reference page: an absolute .html file, bound into
-    the sandbox read-only at its host path by the entry point. Unset
-    means absent; set-but-invalid means the lane refuses loudly (the
-    caller wanted a reference and did not get one)."""
-    raw = os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", "")
-    if not raw:
+    """The env-gated reference page: the entry point validated the host
+    path (absolute, readable, .html) and bound it at the fixed sandbox
+    path; unset means absent, a missing bind means the lane refuses
+    loudly (the caller wanted a reference and did not get one)."""
+    doc_raw = os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", "")
+    if not doc_raw:
         return None
-    candidate = pathlib.Path(raw)
-    if not candidate.is_absolute() or not candidate.is_file() or candidate.suffix != ".html":
+    bound = pathlib.Path(REFERENCE_SANDBOX_PATH)
+    if not bound.is_file():
         return None
-    return candidate
+    return bound
 
 
-def run_reference(page, shots_dir: pathlib.Path, engine: str) -> None:
+def run_reference(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> None:
     """One navigation of the reference page after the main pass: render
     it, keep a screenshot under the run root. Test plumbing within the
-    existing containment - no new capability, no second server, no
-    product surface."""
+    existing containment - the same loopback server, the same engine,
+    no new capability."""
     doc = reference_document()
     if doc is None:
         record_check(
-            f"[{engine}] reference page is a readable absolute .html file",
+            f"[{engine}] reference page is bound and readable",
             False,
             os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", ""),
         )
         return
     try:
-        page.goto(doc.as_uri())
+        page.goto(f"{base_url}{REFERENCE_ROUTE}")
         page.wait_for_load_state("load")
+        # a bounded settle: the reference may compose nested documents
+        # (the round 16 mockup builds each window in an iframe) that
+        # paint a beat after load
+        page.wait_for_timeout(800)
         title = page.title()
         record_check(f"[{engine}] reference page renders with its own title", bool(title), str(title))
         # a viewport capture: a reference page may lay out taller than
@@ -827,9 +879,9 @@ def main() -> int:
                     continue
                 run_checks(page, base_url, shots_dir, engine)
                 # the env-gated reference page rides the same sandboxed
-                # engine after the product pass
+                # engine and the same loopback server after the product pass
                 if os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", ""):
-                    run_reference(page, shots_dir, engine)
+                    run_reference(page, base_url, shots_dir, engine)
                 browser.close()
     finally:
         server.shutdown()

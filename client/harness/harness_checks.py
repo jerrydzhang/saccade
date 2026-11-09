@@ -376,6 +376,9 @@ def main() -> int:
         def wait_for_load_state(self, state):
             pass
 
+        def wait_for_timeout(self, ms):
+            pass
+
         def title(self):
             return "Reference"
 
@@ -494,6 +497,7 @@ def main() -> int:
         reference = reference_dir / "reference.html"
         reference.write_text("<html><head><title>Reference</title></head><body></body></html>")
         os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"] = str(reference)
+        browser_lane.REFERENCE_SANDBOX_PATH = str(reference)
         browser_lane.RESULTS.clear()
         lane_calls["goto"].clear()
         lane_calls["shots"].clear()
@@ -504,7 +508,8 @@ def main() -> int:
         check(
             "the reference page rides the same engine after the product pass",
             code == 0
-            and lane_calls["goto"] == [f"http://127.0.0.1:{browser_lane.SERVER_PORT}", reference.as_uri()]
+            and lane_calls["goto"]
+            == [f"http://127.0.0.1:{browser_lane.SERVER_PORT}", f"http://127.0.0.1:{browser_lane.SERVER_PORT}/reference.html"]
             and len(reference_records) == 2
             and all(ok for ok, _n, _d in reference_records)
             and lane_calls["shots"] == [str(shots_dir / "reference-webkit.png")]
@@ -520,14 +525,16 @@ def main() -> int:
         # original traversal's single webkit pass must survive mine
         lane_calls["checks"] = 1
         lane_calls["engines"] = ["webkit"]
-        # a set-but-invalid reference refuses the lane loudly
+        # a set-but-invalid reference refuses the lane loudly: the env is
+        # set but no readable file is bound at the sandbox path
         os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"] = str(reference_dir / "missing.html")
+        browser_lane.REFERENCE_SANDBOX_PATH = str(reference_dir / "missing.html")
         browser_lane.RESULTS.clear()
         lane_calls["goto"].clear()
         FakePage.gotos.clear()
         FakeCanary.code = 0
         code = browser_lane.main()
-        refusal_records = [r for r in browser_lane.RESULTS if "readable absolute .html" in r[1]]
+        refusal_records = [r for r in browser_lane.RESULTS if "bound and readable" in r[1]]
         check(
             "a set-but-invalid reference is a recorded refusal, not a silent skip",
             code == 1 and len(refusal_records) == 1 and refusal_records[0][0] is False,
