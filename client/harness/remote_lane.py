@@ -640,6 +640,7 @@ def main() -> int:
                     return json.loads(reader.readline())
 
             cue_landed = False
+            app_processed = False
             last_detail = "no cue attempt"
             # the agent cues through its own core - the core the deck
             # lives on (the ratified placement: the deck is on the hub's
@@ -652,44 +653,45 @@ def main() -> int:
             # both shapes (direct write delivers, relayed write does
             # not) and the limitation went to i-3.
             sock_b = pathlib.Path(os.environ["XDG_RUNTIME_DIR"]) / "herdr-core" / "b.sock"
-            for attempt in range(2):
-                read = rpc(sock_b, "doc.get", {"name": deck_name})
-                doc = read.get("result") or {}
-                slides = doc.get("value") or []
-                if DECK_LOCATION in slides:
+            # the pass condition is the VIEWER's state: the document
+            # holding the location is necessary, not sufficient - a
+            # landing the feed delivers late must not yank the view
+            # during a later phase
+            processed_deadline = time.monotonic() + 60
+            attempt = 0
+            while time.monotonic() < processed_deadline:
+                state_now = deck_state()
+                if state_now is not None and DECK_LOCATION in (state_now.get("slides") or []):
                     cue_landed = True
-                    last_detail = f"already cued at version {doc.get('version')}"
+                    app_processed = True
+                    last_detail = (
+                        f"slide at position {state_now.get('position')}"
+                        f" feedLost={state_now.get('feedLost')!r}"
+                    )
                     break
-                written = rpc(
-                    sock_b,
-                    "doc.set",
-                    {
-                        "name": deck_name,
-                        "version": doc.get("version", 0),
-                        "value": [*slides, DECK_LOCATION],
-                    },
-                )
-                if "error" in written:
-                    last_detail = f"doc.set refused: {json.dumps(written['error'])[:160]}"
-                    continue
-                # bounded wait for the feed to carry the landing into a
-                # shown slide; one re-cue is the protocol's own retry
-                shown_deadline = time.monotonic() + CONNECT_WAIT_SECONDS
-                while time.monotonic() < shown_deadline:
-                    state_now = deck_state()
-                    if state_now is not None and DECK_LOCATION in (state_now.get("slides") or []):
-                        cue_landed = True
-                        last_detail = (
-                            f"slide shown at position {state_now.get('position')}"
-                            f" feedLost={state_now.get('feedLost')!r}"
+                if attempt < 2:
+                    read = rpc(sock_b, "doc.get", {"name": deck_name})
+                    doc = read.get("result") or {}
+                    slides = doc.get("value") or []
+                    if DECK_LOCATION not in slides:
+                        written = rpc(
+                            sock_b,
+                            "doc.set",
+                            {
+                                "name": deck_name,
+                                "version": doc.get("version", 0),
+                                "value": [*slides, DECK_LOCATION],
+                            },
                         )
-                        break
-                    time.sleep(0.5)
-                if cue_landed:
-                    break
+                        if "error" in written:
+                            last_detail = f"doc.set refused: {json.dumps(written['error'])[:160]}"
+                        attempt += 1
+                        continue
+                last_detail = "the document holds the cue; the viewer's feed has not carried it yet"
+                time.sleep(0.5)
             check(
-                "the agent's cue lands in the deck document and reaches the viewer",
-                cue_landed,
+                "the agent's cue lands and the viewer's feed carries it",
+                cue_landed and app_processed,
                 last_detail,
             )
 
