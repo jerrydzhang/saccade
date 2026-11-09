@@ -200,7 +200,15 @@ def main() -> int:
         reply = sub.line()
         print(f"subscribe reply: {(reply or 'NONE')[:200]}", flush=True)
 
-        # land a doc on b, then read A's stream raw for 10 s
+        # land a doc on b, then read A's stream raw for 10 s - with the
+        # lane's timing first: the cue lands ~35s after the subscription
+        # opened, with nothing in between; idleness must not matter
+        print("idle 35s (the lane's subscribe-to-cue gap)...", flush=True)
+        idle_end = time.monotonic() + 35
+        while time.monotonic() < idle_end:
+            idle_line = sub.line(timeout=2.0)
+            if idle_line is not None:
+                print(f"A-stream line (idle window): {idle_line.strip()[:200]}", flush=True)
         written = rpc_b.call(
             "doc.set",
             {"name": name, "value": ["b:/board/deck-slide.yaml"], "version": 1},

@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// One document landing.
 #[derive(Debug, Clone, PartialEq)]
@@ -86,32 +86,31 @@ impl Subscription {
         })
     }
 
-    /// Set the read budget of the next bounded read (the deck feed's
-    /// hold). The core's 15 s heartbeat sits far inside the 40 s
-    /// default; a hold may ask for less, and a quiet expiry answers
-    /// as [`CoreFail::HoldQuiet`], not as a socket failure.
-    pub fn hold_timeout(&mut self, timeout: Duration) -> Result<(), CoreFail> {
-        self.reader
-            .get_ref()
-            .set_read_timeout(Some(timeout))
-            .map_err(|e| socket_fail(&self.path, e))
-    }
-
-    /// True when a failure is the bounded read's quiet expiry.
-    pub fn timed_out(fail: &CoreFail) -> bool {
-        matches!(fail, CoreFail::HoldQuiet)
-    }
-
     /// One document landing for `name`, or None when the core closed
     /// the stream cleanly. Every other line - heartbeats, other
     /// terminals' facts, other documents' events - is skipped; a
     /// `missed` marker names the subscriber as fallen behind, and the
     /// caller's next doc.get answers whatever changed, so skipping it
-    /// costs only the ordinary next event. A read error (the read
-    /// budget is 40 s against a 15 s heartbeat) is the core stopping
+    /// costs only the ordinary next event. `deadline` bounds the skip
+    /// loop whole: a chatty stream (heartbeats every 15 s) would
+    /// otherwise keep the loop reading forever and the caller's own
+    /// wall check would never run. A read error is the core stopping
     /// talking: an error, never silence.
-    pub fn next_doc_event(&mut self, name: &str) -> Result<Option<DocEvent>, CoreFail> {
+    pub fn next_doc_event(
+        &mut self,
+        name: &str,
+        deadline: Duration,
+    ) -> Result<Option<DocEvent>, CoreFail> {
+        let end = Instant::now() + deadline;
         loop {
+            let remaining = end.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(CoreFail::HoldQuiet);
+            }
+            self.reader
+                .get_ref()
+                .set_read_timeout(Some(remaining))
+                .map_err(|e| socket_fail(&self.path, e))?;
             let line = Subscription::read_line(&mut self.reader, &self.path)?;
             let line = match line {
                 None => return Ok(None),
@@ -228,7 +227,10 @@ mod tests {
             vec![heartbeat, other_event, terminal_event, doc_event],
         );
         let mut subscription = Subscription::open(&path, "").unwrap();
-        let event = subscription.next_doc_event("deck-ab").unwrap().unwrap();
+        let event = subscription
+            .next_doc_event("deck-ab", Duration::from_secs(8))
+            .unwrap()
+            .unwrap();
         assert_eq!(event.name, "deck-ab");
         assert_eq!(event.version, 4);
     }
@@ -272,7 +274,10 @@ mod tests {
             vec![relayed],
         );
         let mut subscription = Subscription::open(&path, "").unwrap();
-        let event = subscription.next_doc_event("deck-ab").unwrap().unwrap();
+        let event = subscription
+            .next_doc_event("deck-ab", Duration::from_secs(8))
+            .unwrap()
+            .unwrap();
         assert_eq!(event.version, 4);
         // another machine's document still does not match
         let (path2, _requests2) = framed_socket(
@@ -284,7 +289,10 @@ mod tests {
             })],
         );
         let mut subscription2 = Subscription::open(&path2, "").unwrap();
-        assert!(subscription2.next_doc_event("deck-ab").unwrap().is_none());
+        assert!(subscription2
+            .next_doc_event("deck-ab", Duration::from_secs(8))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -294,7 +302,54 @@ mod tests {
             vec![],
         );
         let mut subscription = Subscription::open(&path, "").unwrap();
-        let event = subscription.next_doc_event("deck-ab").unwrap();
+        let event = subscription
+            .next_doc_event("deck-ab", Duration::from_secs(8))
+            .unwrap();
         assert!(event.is_none());
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Against a REAL core: DECK_SUB_TEST_SOCKET names the session
+    /// socket, DECK_SUB_TEST_SECONDS the watch window. Ignored by
+    /// default; run by hand when a live core's feed needs reading.
+    #[test]
+    #[ignore]
+    fn a_live_subscription_reads_what_the_core_sends() {
+        let path = std::env::var("DECK_SUB_TEST_SOCKET").expect("DECK_SUB_TEST_SOCKET");
+        let seconds: u64 = std::env::var("DECK_SUB_TEST_SECONDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(45);
+        let on = std::env::var("DECK_SUB_TEST_ON").unwrap_or_default();
+        let name = std::env::var("DECK_SUB_TEST_NAME")
+            .unwrap_or_else(|_| "deck-000000000000000000000000".into());
+        let mut subscription = Subscription::open(path.as_ref(), &on).expect("subscribe");
+        let start = Instant::now();
+        let mut lines = 0;
+        while start.elapsed() < Duration::from_secs(seconds) {
+            match subscription.next_doc_event(&name, Duration::from_secs(25)) {
+                Ok(Some(event)) => {
+                    lines += 1;
+                    println!("[live] doc event: {} v{}", event.name, event.version);
+                }
+                Ok(None) => {
+                    println!("[live] EOF");
+                    break;
+                }
+                Err(CoreFail::HoldQuiet) => {
+                    println!("[live] hold quiet at {:?}", start.elapsed());
+                }
+                Err(fail) => {
+                    println!("[live] error: {fail}");
+                    break;
+                }
+            }
+        }
+        println!("[live] doc events in {seconds}s: {lines}");
     }
 }

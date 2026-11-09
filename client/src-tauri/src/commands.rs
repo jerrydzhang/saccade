@@ -677,11 +677,16 @@ fn deck_hold(name: &str) -> DeckFeedMessage {
             }
         }
     };
-    subscription.hold_timeout(Duration::from_secs(DECK_HOLD_SECONDS));
-    match subscription.next_doc_event(name) {
-        Ok(Some(event)) => DeckFeedMessage::Doc {
-            version: event.version,
-        },
+    match subscription.next_doc_event(name, Duration::from_secs(DECK_HOLD_SECONDS)) {
+        Ok(Some(event)) => {
+            eprintln!(
+                "[bridge] deck_hold {name}: doc event v{} forwarded",
+                event.version
+            );
+            DeckFeedMessage::Doc {
+                version: event.version,
+            }
+        }
         Ok(None) => {
             // the core closed the stream: the feed is over
             *slot = None;
