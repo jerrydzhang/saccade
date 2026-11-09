@@ -260,11 +260,16 @@ mod test {
     /// then prints the given lines. The socket lives in a fresh temp
     /// directory, retained (no deletion sweeps).
     fn fake_core(lines: &[String]) -> (std::path::PathBuf, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "saccade-events-test-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
-        ));
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::SeqCst);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .subsec_nanos();
+        // a short name: a Unix socket path must fit SUN_LEN; unique
+        // creation, retained (no deletion sweeps)
+        let dir = std::env::temp_dir().join(format!("sace-{}-{}-{}", std::process::id(), n, nanos));
         std::fs::create_dir_all(&dir).unwrap();
         let socket_path = dir.join("test.sock");
         let listener = UnixListener::bind(&socket_path).unwrap();
