@@ -56,6 +56,16 @@ import tracker_mock  # noqa: E402
 
 SERVER_PORT = 1421
 DIST_SANDBOX = "/app/dist"
+# the env-gated reference page, bound by the entry point at these fixed
+# sandbox paths and served by the loopback server: the page at the
+# reference route, its sibling reference-assets/ beside it (the mockup
+# vendors its pinned CDN libraries there; a scrubbed sandbox has no
+# mime database and no network, so a file:// page renders as plain
+# source and CDN scripts never arrive)
+REFERENCE_SANDBOX_PATH = "/app/reference.html"
+REFERENCE_ROUTE = "/reference.html"
+REFERENCE_ASSETS_SANDBOX_PATH = "/app/reference-assets"
+REFERENCE_ASSETS_ROUTE = "/reference-assets"
 READY_SECONDS = 20
 
 RESULTS: list[tuple[bool, str, str]] = []
@@ -171,9 +181,47 @@ def run_canary_first() -> bool:
 
 
 def start_server() -> ThreadingHTTPServer | None:
-    """Stdlib loopback static server for the built frontend. A thread in
-    this process - no child, no teardown protocol beyond shutdown()."""
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=DIST_SANDBOX)
+    """Stdlib loopback static server for the built frontend, plus the
+    env-gated reference route: the bound reference file is served from
+    its sandbox path with an explicit text/html type, because a scrubbed
+    sandbox has no mime database and WebKit renders a file:// page as
+    plain source. A thread in this process - no child, no teardown
+    protocol beyond shutdown()."""
+
+    class Handler(SimpleHTTPRequestHandler):
+        def translate_reference(self, path: str):
+            """A reference-assets request maps into the bound reference
+            directory; anything else under the reference prefix is a 404
+            like any unknown path."""
+            if not path.startswith(REFERENCE_ASSETS_ROUTE + "/"):
+                return None
+            name = path[len(REFERENCE_ASSETS_ROUTE) + 1:]
+            if "/" in name or ".." in name or name.startswith("."):
+                return None
+            candidate = pathlib.Path(REFERENCE_ASSETS_SANDBOX_PATH) / name
+            return candidate if candidate.is_file() else None
+
+        def do_GET(self):
+            route = self.path.split("?")[0]
+            if route == REFERENCE_ROUTE and os.path.isfile(REFERENCE_SANDBOX_PATH):
+                data = pathlib.Path(REFERENCE_SANDBOX_PATH).read_bytes()
+                ctype = "text/html; charset=utf-8"
+            elif (asset := self.translate_reference(route)) is not None:
+                data = asset.read_bytes()
+                ctype = "text/javascript" if asset.suffix == ".js" else "application/octet-stream"
+            else:
+                super().do_GET()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, format, *args):
+            pass
+
+    handler = functools.partial(Handler, directory=DIST_SANDBOX)
     try:
         server = ThreadingHTTPServer(("127.0.0.1", SERVER_PORT), handler)
     except OSError as error:
@@ -594,7 +642,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
     phase("grammar version range", phase_grammar)
 
     # phase 8: tracker-named locations over the tracker contract stand-in
-    # (harness/tracker_mock.py): the one server setting, the version
+    # (harness/tracker_mock.py): the one server setting, the root-page
     # handshake, the unknown-kind lenient render, the unsupported major,
     # the wrong-tracker refusal, and the citation link navigating to the
     # cited revision. The real wire is pinned on the server side by the
@@ -680,18 +728,27 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 str(inspection["errors"])[:200],
             )
             save_server(f"127.0.0.1:{tracker.port}")
+            inspection = open_location("/some/research-file.md")
+            check(
+                "a bare path refuses where no Herdr core exists",
+                inspection["resource"]["status"] == "invalid"
+                and any("tracker's machine" in e["message"] for e in inspection["errors"]),
+                str(inspection["errors"])[:200],
+            )
         finally:
             tracker.stop()
             future.stop()
 
     phase("tracker locations", phase_tracker)
 
-    # the straddle the human hit: a revision landing between the text
-    # fetch and the figure fetch of ONE open. The stand-in answers the
-    # new tree (caption, figure component, the file) to the first
-    # boards/get and the old tree (image embedded in text, no file)
-    # afterwards. One open must issue one boards/get and render
-    # caption and figure from that one tree
+    # the straddle the human hit, adapted to the pinned reads: a
+    # revision landing between one open's revision resolution and the
+    # next open. The stand-in's bare page answers r1 once (image
+    # embedded in prose, the file present) and r2 afterwards (the
+    # figure component). One open resolves its revision once and reads
+    # text and figures at that one immutable revision, so a landing
+    # mid-open cannot split the tree; the re-open answers the new
+    # revision and its committed figure renders.
     def phase_landing() -> None:
         def open_landing(spec: str) -> dict:
             page.fill('[data-control="open:host-path"]', spec)
@@ -709,24 +766,37 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             page.fill('[data-control="server:host"]', f"127.0.0.1:{tracker.port}")
             page.click('[data-control="server:save"]')
             tracker.landing_gets = 0
+            tracker.landing_served = False
             inspection = open_landing("smoke/t-3")
             page.wait_for_function(
-                f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'figure')"
+                f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'image' || o.kind === 'figure')"
             )
             inspection = page.evaluate(f"() => {viewer}.inspection()")
             outcomes = inspection["renderOutcomes"]
-            missing = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "missing"]
-            ok = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "ok"]
+            missing = [o for o in outcomes if o["kind"] in ("image", "figure") and o["status"] == "missing"]
+            ok = [o for o in outcomes if o["kind"] in ("image", "figure") and o["status"] == "ok"]
             check(
                 "a landing mid-open never reports a committed figure as missing",
                 missing == [],
                 str(outcomes)[:200],
             )
-            check("the committed figure renders", len(ok) == 1, str(outcomes)[:200])
+            check("the first revision's image renders from its own tree", len(ok) == 1, str(outcomes)[:200])
             check(
-                "one open issues one boards/get",
+                "one open resolves its revision once",
                 tracker.landing_gets == 1,
-                f"landing boards/get count: {tracker.landing_gets}",
+                f"landing board-page count: {tracker.landing_gets}",
+            )
+            inspection = open_landing("smoke/t-3")
+            page.wait_for_function(
+                f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'figure' && o.status === 'ok')"
+            )
+            inspection = page.evaluate(f"() => {viewer}.inspection()")
+            outcomes = inspection["renderOutcomes"]
+            ok = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "ok"]
+            check(
+                "the committed figure renders on re-open after the landing",
+                len(ok) == 1 and inspection["resource"]["path"].startswith("t-3@r2"),
+                f"{outcomes} {inspection['resource']}",
             )
             screenshot_at(".figure-frame", "landing-figure.png")
         finally:
@@ -734,14 +804,141 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("landing straddle", phase_landing)
 
+    # phase 9: select first, the picker, help, zoom - the interaction
+    # chapter over the real frontend. The acts ride real key events; the
+    # inspection surface observes the DOM state.
+    def phase_interaction() -> None:
+        def key(key: str, modifiers: list[str] | None = None) -> None:
+            for modifier in modifiers or []:
+                page.keyboard.down(modifier)
+            page.keyboard.press(key)
+            for modifier in reversed(modifiers or []):
+                page.keyboard.up(modifier)
+
+        def inspect_now() -> dict:
+            return page.evaluate(f"() => {viewer}.inspection()")
+
+        # labels on what can be selected
+        key("s")
+        chips = page.evaluate("() => document.querySelectorAll('.select-label').length")
+        check(
+            "s puts labels on what can be selected",
+            chips > 0,
+            f"chips: {chips}",
+        )
+        key("Escape")
+        chips_after = page.evaluate("() => document.querySelectorAll('.select-label').length")
+        check("escape leaves the label mode", chips_after == 0, f"chips: {chips_after}")
+
+        # right-click opens the document menu with its acts
+        page.evaluate("""
+          () => {
+            const target = document.querySelector('.content');
+            const rect = target.getBoundingClientRect();
+            target.dispatchEvent(new MouseEvent('contextmenu', {
+              bubbles: true, cancelable: true,
+              clientX: rect.left + 40, clientY: rect.top + 40,
+            }));
+          }
+        """)
+        menu_visible = page.evaluate("() => document.querySelector('.ctx-menu') !== null")
+        check("right-click opens the same menu at the pointer", menu_visible)
+        acts = page.evaluate(
+            "() => Array.from(document.querySelectorAll('.ctx-menu-act .ctx-menu-label')).map(e => e.textContent)"
+        )
+        check(
+            "the menu carries the acts with their keys",
+            any("zoom" in str(act) for act in acts) and any("search" in str(act) for act in acts),
+            str(acts)[:120],
+        )
+        key("Escape")
+
+        # the picker opens over space space and resolves a typed location
+        key(" ")
+        key(" ")
+        picker_open = page.evaluate("() => document.querySelector('[data-control=\"picker:overlay\"]') !== null")
+        check("space space opens the picker", picker_open)
+        page.fill('[data-control="picker:input"]', "smoke/t-0")
+        page.wait_for_selector('[data-control="picker:result"]')
+        rows = page.evaluate(
+            "() => Array.from(document.querySelectorAll('[data-control=\"picker:result\"] .picker-name')).map(e => e.textContent)"
+        )
+        check(
+            "a typed location resolves in the picker even unenumerated",
+            any("t-0" in str(row) for row in rows),
+            str(rows)[:120],
+        )
+        key("Escape")
+
+        # help on demand
+        key("?")
+        help_visible = page.evaluate("() => document.querySelector('[data-control=\"help:overlay\"]') !== null")
+        check("? lists the keys and commands", help_visible)
+        key("Escape")
+
+        # zoom
+        before = page.evaluate("() => document.querySelector('.content').style.zoom || '1'")
+        key("+")
+        after = page.evaluate("() => document.querySelector('.content').style.zoom")
+        check("plus zooms the document", float(after) > float(before), f"{before} -> {after}")
+        key("=")
+        reset = page.evaluate("() => document.querySelector('.content').style.zoom")
+        check("equals resets the zoom", abs(float(reset) - 1.0) < 0.001, reset)
+
+    phase("interaction", phase_interaction)
+
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
+
+
+def reference_document() -> pathlib.Path | None:
+    """The env-gated reference page: the entry point validated the host
+    path (absolute, readable, .html) and bound it at the fixed sandbox
+    path; unset means absent, a missing bind means the lane refuses
+    loudly (the caller wanted a reference and did not get one)."""
+    doc_raw = os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", "")
+    if not doc_raw:
+        return None
+    bound = pathlib.Path(REFERENCE_SANDBOX_PATH)
+    if not bound.is_file():
+        return None
+    return bound
+
+
+def run_reference(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> None:
+    """One navigation of the reference page after the main pass: render
+    it, keep a screenshot under the run root. Test plumbing within the
+    existing containment - the same loopback server, the same engine,
+    no new capability."""
+    doc = reference_document()
+    if doc is None:
+        record_check(
+            f"[{engine}] reference page is bound and readable",
+            False,
+            os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", ""),
+        )
+        return
+    try:
+        page.goto(f"{base_url}{REFERENCE_ROUTE}")
+        page.wait_for_load_state("load")
+        # a bounded settle: the reference may compose nested documents
+        # (the round 16 mockup builds each window in an iframe) that
+        # paint a beat after load
+        page.wait_for_timeout(800)
+        title = page.title()
+        record_check(f"[{engine}] reference page renders with its own title", bool(title), str(title))
+        # a viewport capture: a reference page may lay out taller than
+        # the engine's screenshot bound in full-page mode
+        shot = shots_dir / f"reference-{engine}.png"
+        page.screenshot(path=str(shot))
+        record_check(f"[{engine}] reference page screenshot retained", shot.is_file(), str(shot))
+    except Exception as error:
+        record_check(f"[{engine}] reference page renders", False, f"{type(error).__name__}: {str(error)[:160]}")
 
 
 def main() -> int:
     started = time.monotonic()
     if not run_canary_first():
         return 1
-
     shots_raw = os.environ.get("SHOTS_DIR", "")
     if not shots_raw.startswith("/"):
         print("containment refusal: SHOTS_DIR must be an absolute run-root path", file=sys.stderr)
@@ -786,6 +983,10 @@ def main() -> int:
                         pass
                     continue
                 run_checks(page, base_url, shots_dir, engine)
+                # the env-gated reference page rides the same sandboxed
+                # engine and the same loopback server after the product pass
+                if os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", ""):
+                    run_reference(page, base_url, shots_dir, engine)
                 browser.close()
     finally:
         server.shutdown()

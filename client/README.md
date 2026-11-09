@@ -24,13 +24,22 @@ section below is their contract.
 ## Reading a board
 
 The standing control is the header location field: give an explicit
-location and open it. A location is `/absolute/path` (the machine this
-viewer runs on) or `machine:/absolute/path` (a machine from the local
-herdr-core's list, as `hc machine ls` shows); the same grammar is the
-launch argument, `board-viewer /path/b.yaml` or `board-viewer --on
-machine /path/b.yaml`. Fixtures live in `fixtures/` and remain a
-dev/test path (the browser lane and the tests address them through the
-inspection surface, not the human UI).
+location and open it. The viewer is never a local opener (t-24@r11,
+t-24@r12): a location is `tracker/t-N[@rK]` (a task board on that
+tracker), `machine:/absolute/path` (a machine from the local herdr-core's
+list), or a bare `/absolute/path` (a file on the TRACKER's machine,
+read through Herdr core: the machine that hosts the tracker is declared
+once in the client configuration as `tracker-machine`; on the tracker's
+own machine - proven by machine identity, the root page's machine id
+equaling this device's own /etc/machine-id (t-24@r14), never the server
+address's shape - the local core's own machine is read, and without a
+declaration when the proof fails or an id is unavailable the open
+refuses saying what to set). The same grammar is every open surface's,
+picker
+included; there is no launch argument and no path on the device the
+human sits at. Fixtures live in `fixtures/` and remain a dev/test path
+(the lanes address them through the inspection surface and the
+lanes' test-open channel, never the human UI).
 
 Grammar versions: the viewer declares the versions it renders - exactly
 1 today, the same range the shared `board-grammar` crate parses. A board
@@ -39,6 +48,36 @@ a message that names the supported versions; there is no legacy
 interpretation. A component kind the build does not know (a newer minor
 grammar's admission) never refuses the board: it renders as its raw
 authored source beside a diagnostic.
+
+The read surface is `/view/v1` only (t-14 "Pages", t-24@r2): the root
+page is the version contract (the tracker name, the view majors, the
+board grammar range, and the host facts - the machine id and the
+repository path - a bare-path read needs to prove the hub, t-24@r14),
+the board page resolves a bare task location to its pinned revision and
+names the task, and the authored `board.yaml` and its figures ride the
+file family at that pinned revision - so one open's text and figures
+are one immutable tree, and a revision landing mid-open cannot split
+them. `/api/v1` stays `sac`'s own API.
+
+**The suite's only write to the record is publishing task-board
+annotations** (t-14, ratified; the law of this package, landed with the
+commit that builds the act): `a` drafts in place on the current
+revision of a task board - drafts persist on the device keyed by task
+until the window-state pool lands (t-24@r11) and are never lost on a
+refused publish; `space p` publishes the drafts together as ONE commit
+with ONE message through the commit door, under the HUMAN's own
+identity: the human tier and, as the actor, the client configuration's
+override or the device account name as `sac` derives it without
+SACCADE_ACTOR (`$USER`, else "human"), never refusing for lack of it.
+The published board.yaml is the shown revision's authored text plus
+annotation components and nothing else - byte-level insertions at the
+parts' own positions. Before the POST the viewer re-reads the current
+revision and refuses, keeping the drafts, when a revision landed after
+its read; an offered board refuses, naming the reject-with-grounds CLI
+step. Only the current revision of a task board drafts; a pinned older
+revision refuses, saying where annotation is possible (t-24@r11).
+Explainer-file annotation writes and the deck are t-21, not this
+package's.
 
 The validation split: admission is the shared crate's job on the Tauri
 side (`validate_board`, a path dependency), and the native lanes refuse
@@ -50,11 +89,83 @@ tests on both sides: this repository's node tests and the
 
 Keys:
 
+- `s` puts labels on what can be selected (lowercase on prose, uppercase
+  on the rest); typing a label selects its target and opens its one
+  context menu beside it; typing anything else narrows the text targets
+  by their text; right-click opens the same menu at the pointer; `Enter`
+  opens the selected target's acts; `?` lists keys and commands on
+  demand
+- motion: `j` `k` lines, `Ctrl-f` `Ctrl-b` pages, `Ctrl-d` `Ctrl-u` and
+  `d` `u` half pages, `gg` `G` ends, `Ctrl-o` `Ctrl-i` back and forward
+- `space` leads the viewer's own commands: `space space` the picker
+  (id, name, word start, substring, scattered letters; recency ties;
+  the open item last; kind and name only; a typed location always
+  resolves), `space h` history, `space m` marginalia, `space p` publish
+- in history: `h` `l` step time, `n` `N` jump to changes, `t` tracks the
+  reading-height part, `H` `L` walk its changes
+- zoom: `+` `-` `=`, the window's own memory until the pool lands;
+  figures and diagrams enlarge as their primary act; an incorporation
+  expands to exactly its cited components
 - `Ctrl+F` opens the search bar; `Escape` closes it; `Enter` and
   `Shift+Enter` walk the matches
 - copy is Source by default; `Ctrl+Shift+C` toggles Plain; `Ctrl+C`
   copies the selection in the current mode (a formula is copied whole
   in its current mode whatever fraction of it is selected)
+
+## The look (t-14 "The design language", as clarified by t-24@r3)
+
+The viewer renders in the ledger design language, on the user's own
+base16 scheme. The scheme and the text weight are configuration, read
+from a file, never chosen in the app: there is no preference UI and no
+in-app persistence.
+
+- The configuration file is `<platform config
+  directory>/dev.saccade.board-viewer/config.toml`. It names exactly
+  one of `scheme-path` (a path to a base16 scheme file, so a
+  Stylix-generated scheme can be followed live) or `scheme-inline`
+  (the scheme text itself), and optionally `weight` (`regular`,
+  `medium`, `semibold`; regular by default). Unknown keys, a bad
+  weight, both scheme keys, or an unreadable scheme file are stated
+  problems.
+- The host reads the file at start and follows changes: a poll thread
+  re-reads the config and the named scheme file when their fingerprint
+  (mtime, size) moves, republishes, and the frontend re-applies the
+  tokens. The frontend waits over the bridge (`look_config`,
+  `wait_look_config`); there are no events and no renderer-chosen
+  paths.
+- Light or dark is the scheme's own: a light base16 scheme (a light
+  `base00`) gives a light suite; the ramp always reads in base16
+  order. Nothing in the client reverses a scheme or selects a mode.
+- A missing or invalid configuration falls back to the built-in
+  default (the user's Mountain (Boosted), the round 16 reference
+  scheme) and the client says so once, plainly, in a quiet notice
+  line; the notice clears when a valid configuration arrives. A
+  window with no host at all (the browser lane) has no configuration
+  to fix, so it uses the default silently (t-24@r8).
+- Meaning-bearing roles keep their hue and are floored in OKLCH
+  against the background: about 3:1 for the state shapes, 4.5:1 for
+  state text, 3:1 for muted ink, the accent and the selection label.
+  The floor is always reachable (white or black clears about 4.58:1
+  against any background): the walk goes in the natural direction
+  first and falls back to the opposite direction when that cannot
+  reach the ratio (t-24@r10). A miss is a defect, caught by the tests
+  over dark, light, mid-luminance, hostile and grayscale schemes -
+  never a shipped state and never a log line.
+- The colour tokens live only in `src/lib/look/` (scheme parsing, the
+  floor, the map, the store); the stylesheets read tokens and never
+  name a colour. `styles/tokens.css` holds the static tokens (faces,
+  the 13px-minimum type scale, rhythm, one motion speed, and the
+  radius tokens, which exist and are zero - no rounded corners);
+  `styles/board.css` holds the ledger component rules. A node test
+  pins both directions of that split: every colour variable the
+  styles read, the map produces; every token the map produces is read
+  by the styles or named as waiting for a later step's component.
+- The inspection surface carries the look's test tools, named as
+  such, never human functionality: `setLook({ schemeText, weight })`
+  overrides in memory for one run; `look()` answers the resolved
+  scheme name, weight, polarity and the active notice. The older
+  `setTheme` remains as a DOM marker for the lane contract only; it
+  no longer selects colours (t-24@r3 removed the mode feature).
 
 A machine-named board reads through the local core's read-only face:
 `file.read` for declaration text, fixed-argv `exec` (`realpath -e`, then
@@ -68,7 +179,14 @@ check runs on the remote side: one `realpath -e -- <base> <candidate>`
 answers with both canonical forms, the prefix relation is checked
 there, and the read itself uses the canonical path. Bytes over the 8 MB
 exec cap, or flagged `truncated`, and text reads that stopped inside
-the file, are refused with an error - never partially rendered.
+the file, are refused with an error - never partially rendered. The
+local-device host reader (`read_declaration`/`read_asset` with no
+machine) is test-only machinery since t-24@r11: the lanes' fixture
+reader, carrying the same path guards, never presented as human
+functionality. The lanes open their boards through the test-open
+channel (`BOARD_VIEWER_TEST_OPEN`, one location at startup riding the
+same open path the inspection surface uses) - the launch argument left
+the human surface with the local-path form.
 
 Contracts this reader holds (pinned by `tests/` and the bridge's cargo
 suite):
@@ -98,15 +216,17 @@ suite):
 
 - `src/lib/` - read model, decode, Markdown pipeline, projection, copy
   semantics, sources, view model, inspection projection, DOM renderer,
-  hydration, diagram overlay
+  hydration, diagram overlay, the /view/v1 page client (`pages.ts`)
+  and the tracker read source over it (`tracker.ts`)
 - `src/App.svelte` - the shell; one view model feeds the human UI, the
   machine-readable inspection (`window.__boardViewer`) and the copy
   handler
 - `src/styles/board.css` - the centrally shared stylesheet
 - `src-tauri/` - the narrow Tauri 2 shell: read-only declaration and
   asset commands with mirrored path guards; board admission through the
-  shared `board-grammar` crate (`validate_board`); no shell, no eval, no
-  generic filesystem surface, no plugins. `src-tauri/core-client/` is
+  shared `board-grammar` crate (`validate_board`); the look's local
+  configuration reader and follower (`look_config.rs`); no shell, no
+  eval, no generic filesystem surface, no plugins. `src-tauri/core-client/` is
   the pure read-only herdr-core client (JSON-RPC over the local core's
   socket, machine-named reads, remote containment), contract-tested in
   the fast loop against fakes
@@ -141,6 +261,12 @@ Lanes:
 - `browser` - the gated WebKit check list over the real frontend and
   fixture boards (Chromium triage behind an explicit flag, never
   gating), plus the tracker-location contract over a wire stand-in.
+  Behind `BOARD_VIEWER_BROWSER_REFERENCE_HTML` (an absolute, readable
+  `.html` file) the same sandboxed engine additionally navigates that
+  one reference page after the product pass and retains its screenshot
+  in the run root: the contained way to render a visual reference
+  (the entry point binds the file read-only; set-but-invalid refuses;
+  unset changes nothing about the default single navigation).
 - `native` - the gated native/WebKitGTK lane: the packaged app in the
   foreground on an explicit board, private headless Weston, bounded
   frame captures, bridge log evidence.
@@ -194,18 +320,23 @@ SACCADE_DB=<absolute db> nix develop .#board-viewer -c \
 python3 client/harness/entry.py --board <absolute board.yaml> session up
 ```
 
+The lanes' `--board` is the harness's own argument, not the app's: it
+selects the fixture the lane opens through the test-open channel
+(`BOARD_VIEWER_TEST_OPEN`, t-24@r11) - the launch argument left the
+human surface with the local-path form.
+
 Session commands ride the run-root socket from the last `up`:
 `session status | inspect | input click|type|key|wheel|drag |
 coords | observe | shot | checks | down`. Acting is real WebDriver
 input only, addressed semantically through the inspection
 projection's `targets` (stable `data-control` ids); raw coordinates
 are an explicit escape hatch. Open happens only the ways a real user
-opens: the launch `--board` or the UI's own open controls.
+opens: the UI's own open controls, or the lanes' test-open channel.
 
 The remote lane's fixture board and its escape symlink live in
-`harness/remote_fixture/`; the tracker-location wire stand-in lives
-in `harness/tracker_mock.py` and speaks exactly the `/api/v1` routes
-the real server pins on the server side.
+`harness/remote_fixture/`; the tracker wire stand-in lives in
+`harness/tracker_mock.py` and speaks exactly the `/view/v1` page
+shapes the real server pins on the server side.
 
 What this harness is not: no production probes, no host socket or
 status calls, no tracker database access, no SSH to real machines, no

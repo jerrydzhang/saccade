@@ -164,6 +164,72 @@ them.
   event, chain onto the actor's own ref, and must be discarded before
   anything accepts the task.
 
+## The pages (/view/v1)
+
+The instruments' read surface: server-shaped hypermedia view documents
+at `/view/v1/<location>`, settled by t-14 "Pages, the instruments'
+read surface" and t-24@r2. The pages are pure record: they read the
+same fold and board repository as every other read face, wait on the
+record's sequence, and never watch the host - tracker logic does not
+depend on Herdr. `/api/v1` stays `sac`'s own API and changes freely;
+nothing writes through `/view/v1`.
+
+- **A page belongs to a location, not an endpoint.** The location
+  grammar v1 serves: `` (the root, naming the tracker, the host facts
+  a consumer needs to prove hub identity per t-24@r14 and t-24@r16 -
+  the machine id, the trimmed `/etc/machine-id`, absent when unreadable
+  or empty so absence means "cannot prove same machine", and the
+  repository path; plain read-only host facts, the root stays no-Herdr -
+  the view grammar majors and board grammar range, and the page
+  families),
+  `t-N[@rK]` (a board page), `t-N[@rK]/history` (a timeline of
+  commits interleaved with decisions in record order; a pinned
+  revision cuts the timeline at the commit that landed it),
+  `t-N@rA..rB/diff` (the stored unified diff, one text part),
+  `t-N[@rK]/file/<path>` (raw file bytes, typed by extension), and
+  `t-N@rK/content/<select path>` (one pinned component). Only the
+  file family answers with bytes; every other answer is a view
+  document in `application/json`.
+- **The view grammar v1 has six kinds**: text, group, fact, time,
+  ref, figure. A kind added in a later minor carries a text fallback,
+  so older instruments degrade instead of breaking. Two location
+  rules hold in every family: a part's own `location` names what it
+  is in the tracker's addressing grammar (a wrapped board part is
+  `t-N@rK:/content/...`, an agents-page item would be `i-N`); a ref's
+  `location` names where to go in the page-location grammar - the
+  route tail after `/view/v1/`. A board page wraps the board in these
+  kinds (an annotation rides a titled group; an incorporation rides
+  its collapsed shape: source revision, receiving text, a ref per
+  cited component), and the authored `board.yaml` stays reachable raw
+  through the file route, so a viewer may keep decoding the authored
+  source. Every history entry carries the full commit message, the
+  decision's grounds or explanation, the session behind the record
+  (the incarnation its recorded scope names, as a ref), and refs to
+  its revision and the diff from the revision before it.
+- **Waiting is a cursor on the same route**: every page carries its
+  cursor `seq` (the fold's last record the page was computed at);
+  `?after=<seq>` answers at once when a record relevant to the
+  location has landed past the cursor, else parks on the landing wake
+  until one lands or the hold expires. The hold is wake-driven: the
+  registration enters the wake's wait list before the deciding read
+  runs, so a write landing between the read and the park can never
+  be missed, and the wait's only timer is the wait's own deadline.
+  Quiet is a normal answer: the page as it
+  stands, with its current cursor. The hold defaults to 25 s and
+  `?timeout=` caps at 55 s. Relevant means the records the fold
+  attributes to the page's task (the wait filter's activity set); the
+  root wakes on any record. A page that refuses today keeps its
+  task's watch, so a wait parks through a missing board or revision.
+- **Refusals are documents**: kind `refusal`, a fact naming the
+  refusal's code, a text naming what would make it answerable, under
+  an informative HTTP status (unknown location or bad query 400,
+  unknown task, missing board, revision, component or file 404,
+  degraded 503, storage 500).
+- A later page family extends the one dispatch in
+  `src/serve/pages.rs` - one arm in the location match, one line in
+  the root page's family list, its own arm of the watch enum - and
+  never a second surface.
+
 ## Test placement
 
 Placement is by entry point, not by invariant-hood; unit tests also

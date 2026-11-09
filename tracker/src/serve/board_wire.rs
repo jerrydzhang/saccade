@@ -303,6 +303,33 @@ pub struct SearchReply {
 
 // -- read-side assembly ----------------------------------------------
 
+/// One history entry: the record facts of the task's story, the commit
+/// messages from Git, and the session behind the record - the
+/// incarnation its recorded scope names, when the fold resolves it.
+/// The CLI face and the pages render the same entries.
+#[derive(Serialize)]
+pub struct HistoryEntry {
+    pub seq: usize,
+    pub event: String,
+    pub actor: String,
+    pub tier: String,
+    pub at: u64,
+    pub revision: Option<usize>,
+    pub commit: Option<String>,
+    pub message: Option<String>,
+    pub grounds: Option<String>,
+    pub explanation: Option<String>,
+    pub session: Option<String>,
+}
+
+/// The incarnation a record's recorded scope names, as the public
+/// i-N; a scope naming no resident incarnation names no session.
+fn session_of(world: &World, row: &crate::db::StoredRecord) -> Option<String> {
+    let scope: crate::store::Scope = serde_json::from_str(row.scope.as_ref()?).ok()?;
+    let num = world.incarnation_num(scope.incarnation?);
+    num.map(|num| format!("i-{num}"))
+}
+
 /// The task's history: commits interleaved with decisions, grouped by
 /// revision, ordered by record. Commit messages come from Git; every
 /// other fact comes from the fold.
@@ -311,7 +338,7 @@ pub fn board_history(
     rows: &[crate::db::StoredRecord],
     boards: &crate::boards::Boards,
     task: usize,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<HistoryEntry>, String> {
     let mut entries = Vec::new();
     for row in rows {
         let Ok(event) = wire::assemble(&row.kind, &row.payload) else {
@@ -361,18 +388,19 @@ pub fn board_history(
             Some(hash) => boards.commit_message(hash).ok(),
             None => None,
         };
-        entries.push(json!({
-            "seq": row.seq,
-            "event": row.kind,
-            "actor": row.actor,
-            "tier": row.tier,
-            "at": row.event_time,
-            "revision": revision,
-            "commit": commit,
-            "message": message,
-            "grounds": extra["grounds"].as_str(),
-            "explanation": extra["explanation"].as_str(),
-        }));
+        entries.push(HistoryEntry {
+            seq: row.seq,
+            event: row.kind.clone(),
+            actor: row.actor.clone(),
+            tier: row.tier.clone(),
+            at: row.event_time,
+            revision,
+            commit,
+            message,
+            grounds: extra["grounds"].as_str().map(str::to_string),
+            explanation: extra["explanation"].as_str().map(str::to_string),
+            session: session_of(world, row),
+        });
     }
     Ok(entries)
 }

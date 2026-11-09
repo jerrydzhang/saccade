@@ -7,7 +7,12 @@ import type { Diagnostic, StructuredIssue } from "./errors.ts";
 import { decodeBoard } from "./decode.ts";
 import type { Board, FigureBlock } from "./model.ts";
 import { crateVerdict } from "./validate.ts";
-import { sourceFor, SourceUnavailableError, type Location, type Machine } from "../sources.ts";
+import {
+  sourceFor,
+  SourceUnavailableError,
+  type Location,
+  type Machine,
+} from "../sources.ts";
 import { parseLocation } from "../location.ts";
 import type { CopyMode } from "../copy.ts";
 
@@ -53,6 +58,23 @@ export class ViewerModel {
    * at their await boundaries, never written over a newer selection. */
   private generation = 0;
 
+  // the back/forward history of locations this window opened
+  // (t-14: Ctrl-o Ctrl-i back and forward). A plain open pushes the
+  // location it replaces onto the back stack and clears the forward
+  // one; a navigation (back/forward itself) moves around the stacks
+  // without pushing.
+  private backStack: Location[] = [];
+  private forwardStack: Location[] = [];
+
+  // the window's own recency (t-24@r11): what this window opened,
+  // newest first - the picker's tie-breaker, not a record fact
+  readonly recent: Location[] = [];
+
+  /** The locations behind and ahead, for the inspection surface. */
+  get history(): { back: Location[]; forward: Location[] } {
+    return { back: [...this.backStack], forward: [...this.forwardStack] };
+  }
+
   private listeners = new Set<(state: ViewerState) => void>();
 
   subscribe(listener: (state: ViewerState) => void): () => void {
@@ -84,8 +106,17 @@ export class ViewerModel {
 
   /** Open an explicit location. Every lane and control funnels through here.
    * Stale responses (a slow A arriving after B was selected) are dropped:
-   * the location on screen always names the board on screen. */
-  async open(location: Location): Promise<void> {
+   * the location on screen always names the board on screen. A plain open
+   * pushes the replaced location onto the back stack; a navigate open
+   * (the back/forward keys) moves around the stacks instead. */
+  async open(location: Location, opts?: { navigate?: boolean }): Promise<void> {
+    if (!opts?.navigate) {
+      const current = this.state.location;
+      if (current && (current.machine !== location.machine || current.path !== location.path)) {
+        this.backStack.push(current);
+        this.forwardStack = [];
+      }
+    }
     const token = ++this.generation;
     this.set({
       status: "loading",
@@ -109,7 +140,8 @@ export class ViewerModel {
       resolvedLocation = loaded.location;
     } catch (error) {
       if (token !== this.generation) return;
-      const message = error instanceof SourceUnavailableError ? error.message : String(error);
+      const message =
+        error instanceof SourceUnavailableError ? error.message : String(error);
       this.set({
         status: "invalid",
         board: null,
@@ -127,7 +159,10 @@ export class ViewerModel {
     // The crate's refusal is final in the native lanes; the presentation
     // decoder never overrides it.
     if (verdict && verdict.verdict === "refused") {
-      const issue: StructuredIssue = { code: "board-refused", message: verdict.message };
+      const issue: StructuredIssue = {
+        code: "board-refused",
+        message: verdict.message,
+      };
       if (verdict.line !== undefined) {
         issue.line = verdict.line;
         issue.column = verdict.column ?? 0;
@@ -182,17 +217,43 @@ export class ViewerModel {
       renderOutcomes: [],
       renderGeneration: token,
     });
+    const seen = this.recent.findIndex(
+      (candidate) => candidate.machine === resolvedLocation.machine && candidate.path === resolvedLocation.path,
+    );
+    if (seen >= 0) this.recent.splice(seen, 1);
+    this.recent.unshift(resolvedLocation);
+  }
+
+  /** Ctrl-o: the location behind, keeping the current one ahead. */
+  async back(): Promise<void> {
+    const previous = this.backStack.pop();
+    const current = this.state.location;
+    if (!previous || !current) return;
+    this.forwardStack.push(current);
+    await this.open(previous, { navigate: true });
+  }
+
+  /** Ctrl-i: the location ahead, keeping the current one behind. */
+  async forward(): Promise<void> {
+    const next = this.forwardStack.pop();
+    const current = this.state.location;
+    if (!next || !current) return;
+    this.backStack.push(current);
+    await this.open(next, { navigate: true });
   }
 
   /** The native gate: admission through the shared board-grammar crate.
    * Null in the browser lane, where the mirror decoder alone decides. A
    * bridge that fails to answer refuses the board loudly; it never
    * degrades silently to mirror-only admission. */
-  private async validate(text: string): Promise<Awaited<ReturnType<typeof crateVerdict>>> {
+  private async validate(
+    text: string,
+  ): Promise<Awaited<ReturnType<typeof crateVerdict>>> {
     try {
       return await crateVerdict(text);
     } catch (error) {
-      const message = error instanceof SourceUnavailableError ? error.message : String(error);
+      const message =
+        error instanceof SourceUnavailableError ? error.message : String(error);
       return { verdict: "refused", kind: "bridge-invalid", message };
     }
   }
@@ -202,8 +263,7 @@ export class ViewerModel {
   async openInput(raw: string): Promise<void> {
     const parsed = parseLocation(raw);
     if (!parsed) {
-      const message =
-        `not a location: ${JSON.stringify(raw)}; use /absolute/path, machine:/absolute/path, or tracker/t-N`;
+      const message = `not a location: ${JSON.stringify(raw)}; use a tracker location (saccade/t-N), a path on the tracker's machine (/absolute/path), or machine:/absolute/path`;
       this.set({
         status: "invalid",
         board: null,
@@ -219,10 +279,16 @@ export class ViewerModel {
     await this.open(parsed);
   }
 
-  async loadFigureAsset(location: Location, block: FigureBlock): Promise<Uint8Array | string> {
+  async loadFigureAsset(
+    location: Location,
+    block: FigureBlock,
+  ): Promise<Uint8Array | string> {
     const token = this.generation;
     try {
-      const asset = await sourceFor(location.machine).loadAsset(location, block.input);
+      const asset = await sourceFor(location.machine).loadAsset(
+        location,
+        block.input,
+      );
       if (token !== this.generation) return "stale";
       return asset.bytes;
     } catch (error) {

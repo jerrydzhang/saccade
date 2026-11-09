@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -75,6 +75,30 @@ impl SubmitLocks {
 #[derive(Clone, Default)]
 pub struct LandingWake {
     notify: Arc<tokio::sync::Notify>,
+}
+
+impl LandingWake {
+    /// A parked read's hold on the landing wake, used by the page
+    /// door. `decide` runs once the registration has entered the
+    /// wake's wait list, so a write landing between the deciding read
+    /// and the park wakes the hold - it can never be missed. The
+    /// hold answers `None` when the wake fired or the bound expired;
+    /// the caller re-evaluates the page either way. Wake-driven: one
+    /// registration, one decide, one wake-or-deadline wait, no
+    /// periodic re-checks.
+    pub async fn hold<R>(
+        &self,
+        mut decide: impl FnMut() -> Option<R>,
+        bound: Duration,
+    ) -> Option<R> {
+        let mut notified = std::pin::pin!(self.notify.notified());
+        let _ = notified.as_mut().enable();
+        if let Some(answer) = decide() {
+            return Some(answer);
+        }
+        let _ = tokio::time::timeout(bound, notified).await;
+        None
+    }
 }
 
 /// The sole writer's state: every face loads the log fresh under the
@@ -270,7 +294,7 @@ impl AppState {
             Ok(stored) => {
                 // a landed write may be a parked read's predicate: the
                 // landing is the wake, never a timer
-                self.landing.notify.notify_waiters();
+                self.wake_landing();
                 self.attempts.append(
                     Some(context.actor.as_str()),
                     received.client.as_deref(),
@@ -292,6 +316,13 @@ impl AppState {
             ),
         }
         outcome
+    }
+
+    /// Fire the landing wake: call wherever this server's own door
+    /// landed a write outside `execute`. A parked page hold wakes and
+    /// re-reads the fold.
+    pub(crate) fn wake_landing(&self) {
+        self.landing.notify.notify_waiters();
     }
 
     pub fn snapshot(&self) -> Result<Snapshot, ReadFail> {
@@ -529,6 +560,9 @@ pub async fn command(State(app): State<AppState>, body: Bytes) -> Response {
         })();
         integration_outcome(&app, &guard, None, &received, started, &outcome);
         drop(guard);
+        if outcome.is_ok() {
+            app.wake_landing();
+        }
         return match outcome {
             Ok(stored) => {
                 let mut reply = json!({"records": &stored});
@@ -754,6 +788,11 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/boards/discard", post(board_discard))
         .route("/api/v1/boards/update", post(board_update))
         .route("/api/v1/version", get(version))
+        // the pages: the instruments' read surface, one door per route
+        // tail, every answer a view document or raw file bytes
+        .route("/view/v1", get(crate::serve::pages::view_root))
+        .route("/view/v1/", get(crate::serve::pages::view_root))
+        .route("/view/v1/{*location}", get(crate::serve::pages::view_page))
 }
 
 // -- the task-free workspace controller ----------------------------------
@@ -864,6 +903,9 @@ async fn workspace_create(State(app): State<AppState>, body: Bytes) -> Response 
         request.base.as_deref(),
     );
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     drop(guard);
     match outcome {
         Ok(reply) => (
@@ -1134,6 +1176,9 @@ async fn workspace_change(State(app): State<AppState>, body: Bytes) -> Response 
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = change_operation(&mut guard, request.incarnation, &request.to);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     drop(guard);
     match outcome {
         Ok(reply) => (
@@ -1974,6 +2019,9 @@ async fn workspace_clean(State(app): State<AppState>, body: Bytes) -> Response {
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = clean_operation(&app, &mut guard, &request.path);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     drop(guard);
     match outcome {
         Ok(reply) => (
@@ -1999,6 +2047,9 @@ async fn workspace_restore(State(app): State<AppState>, body: Bytes) -> Response
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = restore_operation(&app, &mut guard, &request.path);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     drop(guard);
     match outcome {
         Ok(reply) => (
@@ -2024,6 +2075,9 @@ async fn workspace_reconcile(State(app): State<AppState>, body: Bytes) -> Respon
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = reconcile_operation(&app, &mut guard, request.apply);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     drop(guard);
     match outcome {
         Ok(reply) => (
@@ -2331,6 +2385,9 @@ async fn incarnation_register(State(app): State<AppState>, body: Bytes) -> Respo
         ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
     };
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     match outcome {
         Ok((records, incarnation, registered)) => (
             StatusCode::OK,
@@ -2443,6 +2500,9 @@ async fn incarnation_address(State(app): State<AppState>, body: Bytes) -> Respon
         ServerState::Degraded(reason, _) => Err(ApiFail::Degraded(reason.clone())),
     };
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     match outcome {
         Ok(records) => (
             StatusCode::OK,
@@ -2480,6 +2540,9 @@ async fn native_attach(State(app): State<AppState>, body: Bytes) -> Response {
         request.terminal.as_ref(),
     );
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     match outcome {
         Ok(reply) => (
             StatusCode::OK,
@@ -2668,6 +2731,9 @@ fn send_operation(
                 ServerState::Degraded(..) => false,
             };
             drop(guard);
+            if recorded {
+                app.wake_landing();
+            }
             Ok((
                 stored,
                 if recorded {
@@ -3143,6 +3209,9 @@ async fn board_commit(State(app): State<AppState>, body: Bytes) -> Response {
     let mut guard = app.inner.lock().expect("the writer lock is not poisoned");
     let outcome = board_commit_operation(&app, &mut guard, &request);
     integration_outcome(&app, &guard, None, &received, started, &outcome);
+    if outcome.is_ok() {
+        app.wake_landing();
+    }
     drop(guard);
     match outcome {
         Ok(reply) => (
@@ -3583,5 +3652,76 @@ async fn board_search(State(app): State<AppState>, body: Bytes) -> Response {
     match outcome {
         Ok(reply) => (StatusCode::OK, Json(reply)).into_response(),
         Err(fail) => api_failure(fail),
+    }
+}
+
+#[cfg(test)]
+mod hold_test {
+    use super::*;
+
+    // The page hold's own contract: one registration, one decide, one
+    // wake-or-deadline wait - never a periodic re-check, and a
+    // landing after the registration is never missed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hold_runs_wake_driven_to_its_deadline_without_periodic_rechecks() {
+        let wake = LandingWake::default();
+        // no landing: the hold runs its full bound, deciding once
+        let started = std::time::Instant::now();
+        let decides = std::cell::Cell::new(0u32);
+        let answer = wake
+            .hold(
+                || {
+                    decides.set(decides.get() + 1);
+                    None::<u8>
+                },
+                std::time::Duration::from_millis(600),
+            )
+            .await;
+        assert_eq!(answer, None);
+        assert_eq!(
+            decides.get(),
+            1,
+            "one decide per hold, no periodic re-checks"
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(590),
+            "the hold ran to its deadline"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(1500),
+            "the hold did not overshoot its deadline"
+        );
+
+        // a landing during the decide wakes the hold at once: the
+        // registration was entered before the decide ran
+        let waker = wake.clone();
+        let started = std::time::Instant::now();
+        let answer = wake
+            .hold(
+                || {
+                    let waker = waker.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        waker.notify.notify_waiters();
+                    });
+                    None::<u8>
+                },
+                std::time::Duration::from_secs(30),
+            )
+            .await;
+        assert_eq!(
+            answer, None,
+            "the wake ends the hold, the caller re-decides"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the landing woke the hold long before the bound"
+        );
+
+        // the decide answering Some ends the hold at once
+        let answer = wake
+            .hold(|| Some(7u8), std::time::Duration::from_secs(30))
+            .await;
+        assert_eq!(answer, Some(7));
     }
 }
