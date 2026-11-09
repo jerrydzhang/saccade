@@ -269,12 +269,17 @@ fn feed() -> &'static WordsFeed {
 }
 
 #[tauri::command]
-pub fn words_wait(since: u64, timeout: Option<u64>) -> WordsSnapshot {
+pub async fn words_wait(since: u64, timeout: Option<u64>) -> WordsSnapshot {
+    // the bounded hold rides a blocking thread; the async command
+    // never blocks the main thread - a sync command with a hold would
+    // freeze the window for the hold's whole length, exactly what the
+    // look's wait avoids
     let hold = timeout
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_HOLD)
         .min(MAX_HOLD);
-    feed().wait(since, hold)
+    let handle = tauri::async_runtime::spawn_blocking(move || feed().wait(since, hold));
+    handle.await.expect("words wait task")
 }
 
 #[cfg(test)]
