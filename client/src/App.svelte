@@ -1492,6 +1492,7 @@
         if (deck && !marginaliaMode) {
           // h l move between slides; in history they step time (t-14)
           event.preventDefault();
+          console.log(`[viewer] deck key h (target=${(event.target as HTMLElement)?.tagName})`);
           void deckStep("older");
           return;
         }
@@ -1504,6 +1505,7 @@
         }
         if (deck && !marginaliaMode) {
           event.preventDefault();
+          console.log(`[viewer] deck key l (target=${(event.target as HTMLElement)?.tagName})`);
           void deckStep("newer");
           return;
         }
@@ -1574,6 +1576,7 @@
         // label mode consumes them first - this switch is normal mode)
         if (deck) {
           event.preventDefault();
+          console.log(`[viewer] deck digit ${event.key} (target=${(event.target as HTMLElement)?.tagName})`);
           void deckJump(Number(event.key));
           return;
         }
