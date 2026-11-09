@@ -304,9 +304,11 @@
       knownPart = attached.part;
       knownDrafts = attached.drafts ?? [];
       await applyPoolState(attached);
+      console.log("[viewer] pool: state applied");
       poolWatch = pool.watch(stateId, (state) => {
         void applyPoolState(state);
       });
+      console.log("[viewer] pool: watching");
       void pool.moveInterimDrafts();
       console.log(`[viewer] pool window bound: ${stateId}`);
     } catch (error) {
