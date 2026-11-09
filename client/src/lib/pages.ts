@@ -61,6 +61,21 @@ export type FigurePart = {
   file: string;
   location?: string;
 };
+/** The pipeline page's rows (the view grammar's seventh kind, landed
+ * with the pipeline page, t-24@r2). Cells are plain text; a row
+ * carries the location its primary act follows and the moment its age
+ * renders from. */
+export type TableRowPart = {
+  cells: string[];
+  location?: string;
+  at?: number;
+};
+export type TablePart = {
+  kind: "table";
+  columns: string[];
+  rows: TableRowPart[];
+  location?: string;
+};
 /** A kind this build does not know: the raw authored fields stay, and
  * the consumer falls back instead of breaking. */
 export type OtherPart = {
@@ -70,7 +85,7 @@ export type OtherPart = {
 };
 
 export type ViewPart =
-  TextPart | GroupPart | FactPart | TimePart | RefPart | FigurePart | OtherPart;
+  TextPart | GroupPart | FactPart | TimePart | RefPart | FigurePart | TablePart | OtherPart;
 
 export type HistoryEntryRef = { kind: "ref"; location: string; label: string };
 
@@ -199,6 +214,29 @@ function decodePart(raw: Record<string, unknown>): ViewPart {
         file: typeof raw.file === "string" ? raw.file : "",
         location: optionalString(raw, "location"),
       };
+    case "table": {
+      const columns = Array.isArray(raw.columns)
+        ? raw.columns.filter((c): c is string => typeof c === "string")
+        : [];
+      const rows = Array.isArray(raw.rows) ? raw.rows : [];
+      return {
+        kind: "table",
+        columns,
+        rows: rows.map((row) => {
+          const record = asRecord(row);
+          if (record === null) return { cells: [], location: undefined, at: undefined };
+          const cells = Array.isArray(record.cells)
+            ? record.cells.filter((c): c is string => typeof c === "string")
+            : [];
+          return {
+            cells,
+            location: optionalString(record, "location"),
+            at: typeof record.at === "number" ? record.at : undefined,
+          };
+        }),
+        location: optionalString(raw, "location"),
+      };
+    }
     default:
       return { kind: "other", name: String(raw.kind ?? "unknown"), raw };
   }
