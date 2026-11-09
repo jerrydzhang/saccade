@@ -1,6 +1,12 @@
 <script lang="ts">
   import { ViewerModel } from "./lib/board/viewmodel.ts";
-  import { tauriInvoke, SourceUnavailableError, type Machine, type Location } from "./lib/sources.ts";
+  import {
+    tauriInvoke,
+    SourceUnavailableError,
+    sourceFor,
+    type Machine,
+    type Location,
+  } from "./lib/sources.ts";
   import { projectBoard, searchUnits, type SearchOccurrence } from "./lib/board/projection.ts";
   import { renderBoard } from "./lib/render.ts";
   import { hydrate } from "./lib/board/hydrate.ts";
@@ -30,12 +36,16 @@
   import { formatLocation, parseLocation } from "./lib/location.ts";
   import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
   import { trackerSourcesForPicker } from "./lib/sources.ts";
+  import { HistoryMode, marginaliaRuns, type MarginaliaRun } from "./lib/historymode.ts";
+  import { ADD_CLOSE, ADD_OPEN, DEL_CLOSE, DEL_OPEN } from "./lib/history.ts";
+  import type { HistoryEntry } from "./lib/pages.ts";
+  import { parseTaskSpec } from "./lib/location.ts";
   import { inspect } from "./lib/board/inspection.ts";
   import type { CopyMode } from "./lib/copy.ts";
   import type { RenderOutcome, ViewerState } from "./lib/board/viewmodel.ts";
   import type { Board } from "./lib/board/model.ts";
   import type { Diagnostic } from "./lib/board/errors.ts";
-  import { serverHost, setServerHost } from "./lib/tracker.ts";
+  import { serverHost, setServerHost, TrackerSource } from "./lib/tracker.ts";
   import {
     applyLook,
     lookSummary,
@@ -332,6 +342,318 @@
     }
   }
 
+  // The history mode (t-14): a mode that engages with the board at a
+  // revision. The mode object sits outside the reactive graph and the
+  // shell repaints through a version counter; the margin (the full
+  // commit), the change ruler and the reading tick are its chrome.
+  // raw: assignments trigger, the mode object's internals stay
+  // non-reactive - repaints flow through the paint functions
+  let historyMode = $state.raw<HistoryMode | null>(null);
+  let historyCommit = $state<HistoryEntry | null>(null);
+  let historyPainted = false;
+
+  function historyTracker(): TrackerSource | null {
+    const location = view.location;
+    if (!location || !location.machine.startsWith("tracker:")) return null;
+    const source = sourceFor(location.machine);
+    return source instanceof TrackerSource ? source : null;
+  }
+
+  /** The block at the reading line, keyed by its top-level part: the
+   * anchor the mode keeps across its steps. */
+  function readingAnchorKey(): { key: string; offset: number } | null {
+    if (!contentHost) return null;
+    const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
+    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    let best: HTMLElement | null = null;
+    let bestDistance = Number.MAX_SAFE_INTEGER;
+    for (const block of blocks) {
+      const rect = block.getBoundingClientRect();
+      const distance = rect.top > readingLine ? rect.top - readingLine : readingLine - rect.bottom;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = block;
+      }
+    }
+    if (!best || !view.board) return null;
+    const index = blocks.indexOf(best);
+    const part = view.board.content[index];
+    if (!part) return null;
+    const key = partKeyForAnchor(part);
+    const rect = best.getBoundingClientRect();
+    return { key, offset: rect.top - readingLine };
+  }
+
+  function partKeyForAnchor(part: Board["content"][number]): string {
+    if (part.kind === "text" || part.kind === "annotation") return `t:${part.markdown.trim().slice(0, 200)}`;
+    if (part.kind === "group") return `g:${part.title ?? ""}`;
+    if (part.kind === "incorporation") return `i:${part.source.task}@${part.source.revision}`;
+    if (part.kind === "figure") return `f:${part.input}`;
+    return `u:${part.name}`;
+  }
+
+  /** Restore the reading anchor: the keyed part, or its nearest
+   * surviving neighbour, back at its viewport offset. */
+  function restoreReadingAnchor(anchor: { key: string; offset: number } | null): void {
+    if (!anchor || !contentHost) return;
+    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    if (!view.board) return;
+    let target: HTMLElement | null = null;
+    const keys = view.board.content.map(partKeyForAnchor);
+    const keyed = keys.indexOf(anchor.key);
+    if (keyed >= 0) {
+      target = blocks[keyed] ?? null;
+    } else {
+      // the nearest surviving neighbour by key order
+      let bestAt = -1;
+      keys.forEach((key, index) => {
+        void key;
+        if (index <= keyed) bestAt = index;
+      });
+      if (bestAt < 0) bestAt = 0;
+      target = blocks[bestAt] ?? null;
+    }
+    if (!target) return;
+    const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
+    const current = target.getBoundingClientRect().top - readingLine;
+    contentHost.scrollBy({ top: current - anchor.offset, behavior: "auto" });
+  }
+
+  /** Wrap the diff sentinels the marked markdown carries into real
+   * add/del spans; a mark never covers a line break because the
+   * pure half keeps the breaks outside. */
+  function wrapDiffSentinels(root: HTMLElement): void {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const touched: Text[] = [];
+    let node = walker.nextNode();
+    while (node) {
+      const text = node as Text;
+      if (text.data.includes(ADD_OPEN) || text.data.includes(DEL_OPEN)) touched.push(text);
+      node = walker.nextNode();
+    }
+    for (const text of touched) {
+      const fragment = document.createDocumentFragment();
+      let buffer = "";
+      let mode: "same" | "add" | "del" = "same";
+      const flush = (): void => {
+        if (buffer.length === 0) return;
+        if (mode === "same") fragment.append(document.createTextNode(buffer));
+        else fragment.append(Object.assign(document.createElement("span"), { className: mode === "add" ? "diff-add" : "diff-del", textContent: buffer }));
+        buffer = "";
+      };
+      for (const character of text.data) {
+        if (character === ADD_OPEN) {
+          flush();
+          mode = "add";
+        } else if (character === ADD_CLOSE || character === DEL_CLOSE) {
+          flush();
+          mode = "same";
+        } else if (character === DEL_OPEN) {
+          flush();
+          mode = "del";
+        } else {
+          buffer += character;
+        }
+      }
+      flush();
+      text.replaceWith(fragment);
+    }
+  }
+
+  async function paintHistoryRevision(): Promise<void> {
+    if (!historyMode || !contentHost) return;
+    const mode = historyMode;
+    const painted = await mode.boardAtPosition();
+    if (historyMode !== mode) return;
+    const generation = model.currentGeneration;
+    contentHost.textContent = "";
+    const units = projectBoard(painted.board);
+    const unitIndex = new Map<number, string>();
+    for (const unit of units) unitIndex.set(unit.pos.start.offset, unit.id);
+    const outcomes: RenderOutcome[] = [];
+    const hooks = {
+      unitIndex,
+      onDiagnostic: (diagnostic: Diagnostic) => {
+        outcomes.push({ kind: "html", status: "reported", message: diagnostic.message, line: diagnostic.line });
+      },
+    };
+    const rendered = renderBoard(painted.board, hooks);
+    wrapDiffSentinels(rendered);
+    contentHost.append(rendered);
+    paintHistoryRuler();
+    historyCommit = mode.commitOf(mode.at);
+    const historyLocation = view.location;
+    if (!historyLocation) return;
+    void hydrate(contentHost, model, historyLocation, generation, outcomes).then((all) => {
+      model.setRenderOutcomes(generation, all);
+    });
+    historyPainted = true;
+  }
+
+  function paintHistoryRuler(): void {
+    if (!contentHost) return;
+    let ruler = contentHost.querySelector(":scope > .history-ruler");
+    if (!ruler) {
+      ruler = document.createElement("div");
+      ruler.className = "history-ruler";
+      contentHost.append(ruler);
+    }
+    ruler.textContent = "";
+    for (const block of Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"))) {
+      if (block.querySelector(".diff-add, .diff-del") === null) continue;
+      const tick = document.createElement("span");
+      tick.className = "history-ruler-tick";
+      tick.style.top = `${block.offsetTop}px`;
+      tick.style.height = `${block.offsetHeight}px`;
+      ruler.append(tick);
+    }
+  }
+
+  async function enterHistory(): Promise<void> {
+    const location = view.location;
+    const source = historyTracker();
+    if (!location || !source) {
+      // history is a tracker board's mode; a file location has none
+      return;
+    }
+    const spec = parseTaskSpec(location.path);
+    if (!spec) return;
+    const mode = new HistoryMode(source, `t-${spec.task}`);
+    try {
+      await mode.load(spec.revision);
+    } catch {
+      historyMode = null;
+      return;
+    }
+    historyMode = mode;
+    const anchor = readingAnchorKey();
+    await paintHistoryRevision();
+    restoreReadingAnchor(anchor);
+  }
+
+  async function leaveHistory(): Promise<void> {
+    const mode = historyMode;
+    if (!mode) return;
+    historyMode = null;
+    historyCommit = null;
+    const location = view.location;
+    if (location && location.machine.startsWith("tracker:")) {
+      const anchor = readingAnchorKey();
+      await model.open({ machine: location.machine, path: mode.exitPath() }, { navigate: true });
+      restoreReadingAnchor(anchor);
+    }
+  }
+
+  async function toggleHistory(): Promise<void> {
+    if (historyMode) await leaveHistory();
+    else await enterHistory();
+  }
+
+  async function historyStep(direction: "older" | "newer"): Promise<void> {
+    if (!historyMode) return;
+    const anchor = readingAnchorKey();
+    historyMode.step(direction);
+    await paintHistoryRevision();
+    restoreReadingAnchor(anchor);
+  }
+
+  function jumpToChange(delta: number): void {
+    if (!contentHost) return;
+    const marks = Array.from(contentHost.querySelectorAll<HTMLElement>(".diff-add, .diff-del"));
+    if (marks.length === 0) return;
+    const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
+    const target =
+      delta > 0
+        ? marks.find((mark) => mark.getBoundingClientRect().top > readingLine)
+        : [...marks].reverse().find((mark) => mark.getBoundingClientRect().top < readingLine);
+    if (target) target.scrollIntoView({ block: "center", behavior: "auto" });
+  }
+
+  async function walkTracked(direction: "older" | "newer"): Promise<void> {
+    if (!historyMode) return;
+    if (historyMode.trackedKey === null) {
+      const anchor = readingAnchorKey();
+      if (anchor) historyMode.track(anchor.key);
+    }
+    const target = await historyMode.walkTracked(direction);
+    if (target === null) return;
+    const anchor = readingAnchorKey();
+    historyMode.at = target;
+    await paintHistoryRevision();
+    restoreReadingAnchor(anchor);
+  }
+
+  function trackReadingPart(): void {
+    if (!historyMode) return;
+    const anchor = readingAnchorKey();
+    if (anchor) historyMode.track(anchor.key);
+  }
+
+  let mainWrap: HTMLElement | undefined = $state(undefined);
+
+  let historyActive = $derived(historyMode !== null);
+
+  // Marginalia (space m): rows, each run of parts beside the full
+  // message of the commit that last changed it. The rows carry the
+  // revision their commit landed; the full message rides the margin.
+  let marginaliaMode = $state.raw<HistoryMode | null>(null);
+  let marginaliaRows = $state<MarginaliaRun[]>([]);
+  let marginaliaCommit = $state<HistoryEntry | null>(null);
+  let marginaliaAt = $state(0);
+
+  let marginaliaActive = $derived(marginaliaMode !== null);
+
+  async function toggleMarginalia(): Promise<void> {
+    if (marginaliaMode) {
+      marginaliaMode = null;
+      marginaliaRows = [];
+      marginaliaCommit = null;
+      return;
+    }
+    const location = view.location;
+    const source = historyTracker();
+    if (!location || !source) return;
+    const spec = parseTaskSpec(location.path);
+    if (!spec) return;
+    const mode = new HistoryMode(source, `t-${spec.task}`);
+    try {
+      await mode.load(spec.revision);
+      const runs = await marginaliaRuns(mode);
+      if (!view.board) return;
+      // a run's commit: the entry that landed its lastChanged revision
+      const first = runs[0];
+      marginaliaMode = mode;
+      marginaliaRows = runs;
+      marginaliaAt = mode.newest;
+      marginaliaCommit = first ? mode.commitOf(first.lastChanged) : null;
+    } catch {
+      marginaliaMode = null;
+    }
+  }
+
+  function marginaliaCommitFor(run: MarginaliaRun): HistoryEntry | null {
+    return marginaliaMode?.commitOf(run.lastChanged) ?? null;
+  }
+
+  function scrollToRun(run: MarginaliaRun): void {
+    if (!contentHost || !view.board) return;
+    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const target = blocks[run.indexes[0] ?? -1];
+    if (target) target.scrollIntoView({ block: "start", behavior: "auto" });
+  }
+
+  $effect(() => {
+    if (mainWrap && historyMode) {
+      const onScroll = (): void => {
+        // the reading tick rides the content's scroll
+        mainWrap?.style.setProperty("--tick-visible", "1");
+      };
+      contentHost?.addEventListener("scroll", onScroll);
+      return () => contentHost?.removeEventListener("scroll", onScroll);
+    }
+    return undefined;
+  });
+
   function onWindowKey(event: KeyboardEvent): void {
     if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "f") {
       event.preventDefault();
@@ -428,9 +750,13 @@
         // space leads this instrument's own commands only (t-14)
         if (event.key === " " && !pickerOpen) {
           openPicker();
+        } else if (event.key === "h") {
+          void toggleHistory();
+        } else if (event.key === "m") {
+          void toggleMarginalia();
         }
-        // the other leader commands (history, marginalia, publish)
-        // land with their own chapters
+        // the other leader commands (marginalia, publish) land with
+        // their own chapters
         return;
       }
       case "gg": {
@@ -444,6 +770,55 @@
     }
 
     switch (event.key) {
+      case "h":
+        if (historyMode) {
+          event.preventDefault();
+          void historyStep("older");
+          return;
+        }
+        break;
+      case "l":
+        if (historyMode) {
+          event.preventDefault();
+          void historyStep("newer");
+          return;
+        }
+        break;
+      case "n":
+        if (historyMode) {
+          event.preventDefault();
+          jumpToChange(1);
+          return;
+        }
+        break;
+      case "N":
+        if (historyMode) {
+          event.preventDefault();
+          jumpToChange(-1);
+          return;
+        }
+        break;
+      case "t":
+        if (historyMode) {
+          event.preventDefault();
+          trackReadingPart();
+          return;
+        }
+        break;
+      case "H":
+        if (historyMode) {
+          event.preventDefault();
+          void walkTracked("older");
+          return;
+        }
+        break;
+      case "L":
+        if (historyMode) {
+          event.preventDefault();
+          void walkTracked("newer");
+          return;
+        }
+        break;
       case "j":
         event.preventDefault();
         if (selected) moveSelection(1);
@@ -570,6 +945,9 @@
 
   $effect(() => {
     if (!contentHost) return;
+    // the history mode paints its own revisions; the plain render
+    // waits until the mode leaves
+    if (historyMode) return;
     const currentBoard = board;
     const currentLocation = location;
     contentHost.textContent = "";
@@ -839,5 +1217,26 @@
     </section>
   {/if}
 
-  <main class="content" bind:this={contentHost} aria-label="board content"></main>
+  <div class="board-wrap" class:history-active={historyActive} class:marginalia-active={marginaliaActive} bind:this={mainWrap}>
+    <main class="content" bind:this={contentHost} aria-label="board content"></main>
+    {#if historyActive && historyCommit}
+      <aside class="history-margin" data-control="history:margin">
+        <p class="history-position">revision r{historyMode?.at ?? ""} of r{historyMode?.newest ?? ""}</p>
+        <p class="history-commit">{historyCommit.message ?? historyCommit.grounds ?? historyCommit.explanation ?? ""}</p>
+        <p class="history-hint">h l step time | n N changes | t tracks | H L the tracked part | space h leaves</p>
+      </aside>
+    {/if}
+    {#if marginaliaActive}
+      <aside class="marginalia-margin" data-control="marginalia:margin">
+        {#each marginaliaRows as run, index (run.indexes[0] ?? index)}
+          {@const commit = marginaliaCommitFor(run)}
+          <button type="button" class="marginalia-row" data-control="marginalia:row" onclick={() => scrollToRun(run)}>
+            <p class="marginalia-parts">parts {run.indexes[0] !== undefined ? run.indexes[0] + 1 : ""}{run.indexes.length > 1 ? `-${(run.indexes[run.indexes.length - 1] ?? 0) + 1}` : ""} | r{run.lastChanged}</p>
+            <p class="marginalia-commit">{commit?.message ?? commit?.grounds ?? ""}</p>
+          </button>
+        {/each}
+        <p class="history-hint">space m leaves</p>
+      </aside>
+    {/if}
+  </div>
 </div>

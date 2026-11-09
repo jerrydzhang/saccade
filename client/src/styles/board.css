@@ -922,3 +922,155 @@ code.raw-html {
   font-size: var(--fs-small);
   color: var(--ink-3);
 }
+
+/* ---------- history mode: margin, ruler, tick, diff marks ---------- */
+
+.board-wrap {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 0;
+}
+
+.board-wrap.history-active {
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+.history-margin {
+  border-left: 1px solid var(--pop-line);
+  padding: 14px 16px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.history-position {
+  margin: 0 0 8px;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.history-commit {
+  margin: 0;
+  font-family: var(--f-world);
+  font-size: var(--fs-world);
+  line-height: var(--lh-world);
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.history-hint {
+  margin: 12px 0 0;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+@media (max-width: 900px) {
+  .board-wrap.history-active {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .board-wrap.history-active .history-margin {
+    order: -1;
+    border-left: none;
+    border-bottom: 1px solid var(--pop-line);
+    max-height: 30vh;
+  }
+}
+
+.content {
+  position: relative;
+}
+
+.history-ruler {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  pointer-events: none;
+}
+
+.history-ruler-tick {
+  position: absolute;
+  left: 0;
+  width: 4px;
+  background: var(--acc);
+  opacity: 0.7;
+}
+
+.diff-add {
+  background: var(--d-add-bg);
+  text-decoration: underline;
+  text-decoration-color: var(--d-add);
+  text-underline-offset: 3px;
+}
+
+.diff-del {
+  color: var(--ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--s-error);
+}
+
+/* ---------- marginalia ---------- */
+
+.board-wrap.marginalia-active {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.board-wrap.marginalia-active.history-active {
+  grid-template-columns: minmax(0, 1fr) 300px 320px;
+}
+
+.marginalia-margin {
+  border-left: 1px solid var(--pop-line);
+  padding: 14px 16px;
+  overflow: auto;
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.marginalia-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--line-soft);
+  padding: 8px 0 0;
+  color: var(--ink);
+}
+
+.marginalia-parts {
+  margin: 0 0 4px;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.marginalia-commit {
+  margin: 0;
+  font-family: var(--f-world);
+  font-size: var(--fs-world);
+  line-height: var(--lh-world);
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .board-wrap.marginalia-active {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .board-wrap.marginalia-active .marginalia-margin {
+    order: -1;
+    border-left: none;
+    border-bottom: 1px solid var(--pop-line);
+    max-height: 30vh;
+  }
+}
