@@ -694,7 +694,7 @@ fn deck_hold(name: &str) -> DeckFeedMessage {
                 reason: "the core closed the feed".into(),
             }
         }
-        Err(fail) if Subscription::timed_out(&fail) => {
+        Err(fail) if matches!(fail, CoreFail::HoldQuiet) => {
             // the hold's own deadline: quiet is a normal answer
             DeckFeedMessage::Quiet
         }
