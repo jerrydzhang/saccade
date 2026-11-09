@@ -181,7 +181,10 @@ nothing writes through `/view/v1`.
   or empty so absence means "cannot prove same machine", and the
   repository path; plain read-only host facts, the root stays no-Herdr -
   the view grammar majors and board grammar range, and the page
-  families),
+  families), `agents` (the registered native sessions: one group per
+  session with its terminal address, harness, owned tasks and the
+  workspace derived from the saved session's own header; waiting wakes
+  on the registration family and the claims),
   `t-N[@rK]` (a board page), `t-N[@rK]/history` (a timeline of
   commits interleaved with decisions in record order; a pinned
   revision cuts the timeline at the commit that landed it),

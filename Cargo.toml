@@ -6,10 +6,11 @@ resolver = "2"
 members = [
     "tracker",
     "grammar",
+    "companion",
     "client/src-tauri",
     "client/src-tauri/core-client",
 ]
-default-members = ["tracker", "grammar"]
+default-members = ["tracker", "grammar", "companion"]
 
 [profile.release]
 strip = true

@@ -18,6 +18,8 @@ use serde::Serialize;
 use crate::api::{AppState, ReadFail, Snapshot};
 use crate::boards::BoardsFail;
 use crate::db::StoredRecord;
+use crate::objects::incarnation::Incarnation;
+use crate::objects::incarnation::IncarnationId;
 use crate::objects::task::{Owner, TaskId, TaskState};
 use crate::record::views::{self, Target, WaitUntil};
 use crate::serve::board_wire::{HistoryEntry, board_history};
@@ -28,6 +30,20 @@ use board_grammar::{Component, SelectPath};
 /// The view grammar major this surface serves; the path's `v1` names
 /// it, and every document repeats it.
 pub const VIEW_MAJOR: u64 = 1;
+
+/// The host machine id's home: the root page reads it here, so a
+/// client can prove which hub a page came from (t-24@r14).
+const MACHINE_ID_PATH: &str = "/etc/machine-id";
+
+/// The host machine id: `/etc/machine-id`, trimmed. Missing, empty or
+/// unreadable is `None` - never defaulted, so two machines can never
+/// byte-equal on an empty id. The path is injectable: the suite pins
+/// the reader without touching the host.
+fn machine_id(path: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
 
 /// The hold a `?after=` request gets without `?timeout=`, and the
 /// ceiling any client may ask for.
@@ -158,11 +174,11 @@ fn refusal_doc(location: &str, code: &str, detail: &str, seq: Option<usize>) -> 
     PageDoc {
         view: ViewMajor { major: VIEW_MAJOR },
         kind: "refusal",
+        machine_id: None,
+        repo_path: None,
         location: location.to_string(),
         seq,
         tracker: None,
-        machine_id: None,
-        repo_path: None,
         view_majors: None,
         board_grammar: None,
         code: Some(code.to_string()),
@@ -229,6 +245,7 @@ impl From<BoardsFail> for PageFail {
 #[derive(Debug)]
 enum PageLocation {
     Root,
+    Agents,
     Board {
         task: usize,
         revision: Option<usize>,
@@ -324,6 +341,9 @@ fn parse_location(raw: &str) -> Result<PageLocation, PageFail> {
     if location.is_empty() {
         return Ok(PageLocation::Root);
     }
+    if location == "agents" {
+        return Ok(PageLocation::Agents);
+    }
     // the file family parses first: a tree file may be named
     // `history` or `diff`, and the /file/ marker is the route's own
     if let Some((head, path)) = location.split_once("/file/") {
@@ -410,6 +430,11 @@ fn parse_location(raw: &str) -> Result<PageLocation, PageFail> {
 enum Watch {
     Any,
     Task(usize),
+    /// The agents page's subject: the registration family and the
+    /// claims that move ownership. A landing whose kind is in the set
+    /// can change who the sessions are, where their terminals live, or
+    /// what each owns - the whole page's content.
+    Kinds(&'static [&'static str]),
 }
 
 enum Step {
@@ -422,6 +447,7 @@ enum Step {
 fn relevant(world: &World, watch: &Watch, row: &StoredRecord) -> bool {
     match watch {
         Watch::Any => true,
+        Watch::Kinds(kinds) => kinds.contains(&row.kind.as_str()),
         Watch::Task(task) => {
             let Ok(event) = wire::assemble(&row.kind, &row.payload) else {
                 return false;
@@ -473,6 +499,7 @@ enum Built {
 fn watch_of(location: &PageLocation) -> Watch {
     match location {
         PageLocation::Root => Watch::Any,
+        PageLocation::Agents => Watch::Kinds(AGENTS_WATCH),
         PageLocation::Board { task, .. }
         | PageLocation::History { task, .. }
         | PageLocation::Diff { task, .. }
@@ -530,6 +557,10 @@ fn build(app: &AppState, snapshot: &Snapshot, location: &str) -> Result<Built, B
     match parsed {
         PageLocation::Root => {
             let doc = root_page(app, snapshot);
+            Ok(Built::Doc(doc, StatusCode::OK, watch))
+        }
+        PageLocation::Agents => {
+            let doc = agents_page(snapshot);
             Ok(Built::Doc(doc, StatusCode::OK, watch))
         }
         PageLocation::Board { task, revision } => {
@@ -596,17 +627,111 @@ fn cursor(snapshot: &Snapshot) -> Option<usize> {
     snapshot.rows.last().map(|row| row.seq)
 }
 
-/// Where a host's machine id lives: one stable, read-only fact.
-const MACHINE_ID_PATH: &str = "/etc/machine-id";
+/// The record kinds whose landing can change the agents page: the
+/// registration family (who the sessions are, where their terminals
+/// and saved sessions live) and the claims that move ownership. The
+/// page's watch is exactly this set, so a parked hold wakes when any
+/// of them lands - and stays quiet through unrelated records.
+const AGENTS_WATCH: &[&str] = &[
+    "incarnation_registered",
+    "saved_session_bound",
+    "host_address_assigned",
+    "task_claimed",
+];
 
-/// The host's machine id, trimmed; None when the file is missing or
-/// unreadable, so a client treats itself as a spoke (t-24@r14: never
-/// guess toward the local device, and never default unknown ids equal).
-fn machine_id(path: &str) -> Option<String> {
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|text| text.trim().to_string())
-        .filter(|id| !id.is_empty())
+/// The tasks the incarnation currently owns, latest claim first: the
+/// record's claims are whole-task responsibility, so the latest claim
+/// names the task and the count of the rest rides the companion's
+/// title, not the page's facts.
+fn owned_tasks(world: &World, id: IncarnationId) -> Vec<usize> {
+    let mut owned: Vec<(RecordId, usize)> = world
+        .tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, ctx)| {
+            views::current_owner(ctx).and_then(|entry| match entry.owner {
+                Owner::Incarnation(owned) if owned == id => Some((entry.record, index)),
+                _ => None,
+            })
+        })
+        .collect();
+    owned.sort_by_key(|(record, _)| std::cmp::Reverse(*record));
+    owned.into_iter().map(|(_, index)| index).collect()
+}
+
+/// The agents page (t-24@r4): one group per registered native session,
+/// its location the incarnation, facts inside naming the terminal
+/// address, the harness, the owned tasks and the workspace. The
+/// workspace derives here, server-side, from the saved session file
+/// with the tracker's own header readers - the Pi header's cwd, the
+/// first cwd-bearing Claude Code transcript entry - never from Claude
+/// Code's project directory name. Pure record: no Herdr data, no
+/// liveness - a session that never saved, or whose header cannot be
+/// read, carries no workspace fact until it does.
+fn agents_page(snapshot: &Snapshot) -> PageDoc {
+    let world = &snapshot.world;
+    let mut content: Vec<Part> = Vec::new();
+    for (id, ctx) in &world.incarnations {
+        let Incarnation::Native { .. } = &ctx.incarnation else {
+            continue;
+        };
+        // a superseded holder no longer carries the address; the
+        // holder the fold names now is the one the page lists
+        if world.superseded.contains_key(id) {
+            continue;
+        }
+        let incarnation = format!(
+            "i-{}",
+            world
+                .incarnation_num(*id)
+                .expect("an iteration over the fold's own incarnations is resident",)
+        );
+        let mut facts = vec![fact("incarnation", incarnation.clone())];
+        if let Some(address) = ctx.incarnation.address() {
+            facts.push(fact("terminal address", address.to_string()));
+        }
+        if let Some(harness) = ctx.incarnation.harness() {
+            facts.push(fact("harness", harness.as_str().to_string()));
+        }
+        let owned = owned_tasks(world, *id);
+        if !owned.is_empty() {
+            facts.push(fact(
+                "tasks",
+                owned
+                    .iter()
+                    .map(|task| format!("t-{task}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
+        if let Some(harness) = ctx.incarnation.harness()
+            && let Some(locator) = ctx.incarnation.saved_session()
+            && let Ok(header) = harness.read_header(locator.as_path())
+        {
+            facts.push(fact("workspace", header.cwd));
+        }
+        content.push(Part::Group {
+            title: None,
+            content: facts,
+            location: Some(incarnation),
+        });
+    }
+    PageDoc {
+        view: ViewMajor { major: VIEW_MAJOR },
+        kind: "document",
+        location: "agents".to_string(),
+        seq: cursor(snapshot),
+        tracker: None,
+        view_majors: None,
+        board_grammar: None,
+        machine_id: None,
+        repo_path: None,
+        code: None,
+        task: None,
+        revision: None,
+        content: Some(content),
+        entries: None,
+    }
 }
 
 /// The page families this tracker serves, as the root names them. A
@@ -624,6 +749,7 @@ fn families_parts() -> Vec<Part> {
             "family",
             "components: /view/v1/t-N@rK/content/<select path>",
         ),
+        fact("family", "agents: /view/v1/agents"),
         Part::Text {
             text: "every ref in a page names a location in these forms; \
                    waiting is ?after=<seq> on any route, ?timeout= holds \
@@ -753,10 +879,10 @@ fn board_page(
         location: pinned,
         seq: cursor(snapshot),
         tracker: None,
-        machine_id: None,
-        repo_path: None,
         view_majors: None,
         board_grammar: None,
+        machine_id: None,
+        repo_path: None,
         code: None,
         task: None,
         revision: None,
@@ -895,10 +1021,10 @@ fn history_page(
         location,
         seq: cursor(snapshot),
         tracker: None,
-        machine_id: None,
-        repo_path: None,
         view_majors: None,
         board_grammar: None,
+        machine_id: None,
+        repo_path: None,
         code: None,
         task: Some(format!("t-{task}")),
         revision: Some(revision),
@@ -962,10 +1088,10 @@ fn diff_page(
         location: format!("t-{task}@r{from}..r{to}/diff"),
         seq: cursor(snapshot),
         tracker: None,
-        machine_id: None,
-        repo_path: None,
         view_majors: None,
         board_grammar: None,
+        machine_id: None,
+        repo_path: None,
         code: None,
         task: None,
         revision: None,
@@ -1012,10 +1138,10 @@ fn component_page(
         location: format!("t-{task}@r{revision}{location}"),
         seq: cursor(snapshot),
         tracker: None,
-        machine_id: None,
-        repo_path: None,
         view_majors: None,
         board_grammar: None,
+        machine_id: None,
+        repo_path: None,
         code: None,
         task: None,
         revision: None,
@@ -1381,26 +1507,26 @@ mod test {
     }
 
     #[test]
-    fn the_machine_id_is_the_trimmed_file_and_absent_when_unreadable_or_empty() {
-        let dir =
-            std::env::temp_dir().join(format!("saccade-machine-id-test-{}", std::process::id()));
+    fn the_machine_id_reader_trims_and_never_defaults() {
+        let dir = std::env::temp_dir().join(format!("sac-machine-id-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("machine-id");
-        std::fs::write(&path, "3a6f1c4e...\n").unwrap();
+        std::fs::write(&path, "b1f7c2e0a9d84e6f8a3c5d7e9f0b1c2d\n").unwrap();
         assert_eq!(
-            machine_id(path.to_str().unwrap()),
-            Some("3a6f1c4e...".to_string())
+            machine_id(path.to_str().unwrap()).as_deref(),
+            Some("b1f7c2e0a9d84e6f8a3c5d7e9f0b1c2d"),
+            "read and trimmed"
         );
         std::fs::write(&path, "   \n").unwrap();
         assert_eq!(
             machine_id(path.to_str().unwrap()),
             None,
-            "an empty id is absent, never an empty string two machines could share"
+            "an empty id is None, never defaulted: two machines can never byte-equal on it"
         );
         assert_eq!(
-            machine_id("/nonexistent/machine-id"),
+            machine_id(dir.join("missing").to_str().unwrap()),
             None,
-            "an unreadable id is absent: cannot prove same machine"
+            "unreadable is None"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
