@@ -151,7 +151,13 @@ def main() -> int:
 
         name = "deck-" + "cd" * 12
         rpc_b = Rpc(str(runtime / "herdr-core" / "b.sock"))
-        # B's own subscription exists BEFORE the document: if a meshed
+        # the LANE's creation shape: the app's deck_create goes through
+        # the relay (doc.set on=b via A), so the document is born on the
+        # hub's relayed write, not on B's own socket
+        rpc_a0 = Rpc(str(runtime / "herdr-core" / "a.sock"))
+        created = rpc_a0.call("doc.set", {"name": name, "value": [], "version": 0, "on": "b"})
+        print(f"doc created via the relay: {json.dumps(created)[:120]}", flush=True)
+        # B's own subscription exists BEFORE the landing: if a meshed
         # core stops emitting doc events locally, this shows it
         sub_b0 = Rpc(str(runtime / "herdr-core" / "b.sock"))
         sub_b0.next_id += 1
@@ -227,10 +233,28 @@ def main() -> int:
             print(f"B-stream line: {line.strip()[:300]}", flush=True)
             if '"doc"' in line:
                 break
-        # the lane's exact shape: the cue rides the HUB core's relay
-        # (doc.set on=b through A) while the FIRST subscription on A
-        # (the app's own) watches
+        # the lane's exact shape, whole: the document was CREATED
+        # through the relay (doc.set on=b, the app's deck_create), the
+        # viewer's subscription is on the LOCAL stream (no on - the
+        # stream that carries machine news), and the cue rides the
+        # relay again
         rpc_a = Rpc(str(runtime / "herdr-core" / "a.sock"))
+        local_sub = Rpc(str(runtime / "herdr-core" / "a.sock"))
+        local_sub.next_id += 1
+        local_sub.writer.write(
+            (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": local_sub.next_id,
+                        "method": "events.subscribe",
+                        "params": {},
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
+        print(f"local subscribe reply: {(local_sub.line() or 'NONE')[:160]}", flush=True)
         read = rpc_a.call("doc.get", {"name": name, "on": "b"})
         version = read.get("result", {}).get("version")
         written = rpc_a.call(
@@ -244,14 +268,18 @@ def main() -> int:
         )
         print(f"doc on b written via A: {json.dumps(written)[:160]}", flush=True)
         end = time.monotonic() + 12
+        seen_local = False
         while time.monotonic() < end:
-            line = sub.line(timeout=2.0)
+            line = local_sub.line(timeout=2.0)
             if line is None:
                 continue
-            print(f"A-stream line (relayed write): {line.strip()[:300]}", flush=True)
+            print(f"local-stream line (relayed write): {line.strip()[:300]}", flush=True)
             if '"doc"' in line:
+                seen_local = True
                 break
+        print(f"local stream saw the relayed cue: {seen_local}", flush=True)
         rpc_a.close()
+        local_sub.close()
         sub.close()
         sub_b.close()
         sub_b0.close()

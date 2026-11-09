@@ -679,7 +679,10 @@ def main() -> int:
                     state_now = deck_state()
                     if state_now is not None and DECK_LOCATION in (state_now.get("slides") or []):
                         cue_landed = True
-                        last_detail = f"slide shown at position {state_now.get('position')}"
+                        last_detail = (
+                            f"slide shown at position {state_now.get('position')}"
+                            f" feedLost={state_now.get('feedLost')!r}"
+                        )
                         break
                     time.sleep(0.5)
                 if cue_landed:

@@ -1135,6 +1135,7 @@
       deckFeedLost = String(error);
       return;
     }
+    let quietLogged = false;
     // the hold loops on the ADDRESS, not on a deck object: every
     // landing reassigns the deck state, and an identity loop would
     // stop watching after the first cue
@@ -1145,6 +1146,7 @@
       } catch (error) {
         if (deck === null || deck.name !== current.name) return;
         deckFeedLost = String(error);
+        console.log(`[viewer] deck feed invoke failed: ${deckFeedLost}`);
         return;
       }
       if (deck === null || deck.name !== current.name) return;
@@ -1154,9 +1156,16 @@
       }
       if (message.kind === "lost") {
         deckFeedLost = message.reason ?? "the feed ended";
+        console.log(`[viewer] deck feed lost: ${deckFeedLost}`);
         return;
       }
-      // Quiet: the hold expired with nothing cued; re-enter it
+      // Quiet: the hold expired with nothing cued; re-enter it. One
+      // line for the first cycle is the lanes' evidence that the feed
+      // cycles at all; the rest stay silent.
+      if (!quietLogged) {
+        quietLogged = true;
+        console.log("[viewer] deck feed cycling quiet (hold expired, re-entering)");
+      }
     }
   }
 
@@ -1169,7 +1178,8 @@
         name: before.name,
         on: deckMachine,
       })) as typeof doc;
-    } catch {
+    } catch (error) {
+      console.log(`[viewer] deck read failed: ${String(error)}`);
       return;
     }
     if (deck !== before) return;
