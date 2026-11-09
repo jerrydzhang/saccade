@@ -91,6 +91,26 @@ export function applyLook(root: HTMLElement, look: ResolvedLook): void {
   root.dataset.mode = look.polarity;
 }
 
+let loggedMisses = "";
+
+/** The signature of a miss set: the tokens that missed, joined. */
+export function missesSignature(look: ResolvedLook): string {
+  return look.misses.map((m) => `${m.token}@${m.requested}=${m.measured.toFixed(2)}`).join(",");
+}
+
+/** Note floor misses once in the client's log, per distinct miss set
+ * (t-24@r9): ship the best colour, never an on-screen surface; the log
+ * line is for the human whose fix is a different scheme. */
+export function noteFloorMisses(look: ResolvedLook): void {
+  const signature = missesSignature(look);
+  if (signature === "" || signature === loggedMisses) return;
+  loggedMisses = signature;
+  console.warn(
+    `[viewer] contrast floor unreachable for ${look.misses.length} role(s) ` +
+      `(${signature}); the best colour ships; a different scheme is the fix`,
+  );
+}
+
 /** Set the test override (inspection only, never human functionality). */
 export function setLookOverride(o: { schemeText?: string; weight?: LookWeight } | null): void {
   override = o;

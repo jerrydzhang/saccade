@@ -15,6 +15,7 @@
   import {
     applyLook,
     lookSummary,
+    noteFloorMisses,
     resolveLook,
     setLookOverride,
     type LookSource,
@@ -191,6 +192,7 @@
     const look = resolveLook(lastSource);
     applyLook(document.documentElement, look);
     lookNotice = look.notice;
+    noteFloorMisses(look);
   });
   $effect(() => {
     void startLook(lookChanged);

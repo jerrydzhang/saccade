@@ -9,7 +9,12 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { floor, hueDistance, parseScheme, ratio, schemeName, toOklchHue } from "../src/lib/look/scheme.ts";
 import { DEFAULT_SCHEME_TEXT, lookVars, polarity, WEIGHTS } from "../src/lib/look/lookVars.ts";
-import { resolveLook, setLookOverride, type LookSource } from "../src/lib/look/store.ts";
+import {
+  missesSignature,
+  resolveLook,
+  setLookOverride,
+  type LookSource,
+} from "../src/lib/look/store.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STYLES = join(HERE, "../src/styles");
@@ -296,6 +301,21 @@ test("an invalid configured scheme falls back and says so", () => {
   const look = resolveLook(bad);
   assert.equal(look.scheme.base00, "#100f0e");
   assert.match(look.notice ?? "", /not a complete base16 scheme/);
+});
+
+test("the floor miss signature dedupes the once-log", () => {
+  const look = lookVars(MID, "regular");
+  const resolved = { ...resolveLook(null), misses: look.misses };
+  assert.equal(resolved.misses.length > 0, true);
+  const signature = missesSignature(resolved);
+  assert.ok(signature.includes("c-task@4.5="), signature);
+  // the same miss set signs identically (the once-log suppresses it)
+  assert.equal(missesSignature({ ...resolveLook(null), misses: look.misses }), signature);
+  // a different miss set signs differently (the once-log reports it)
+  const other = { ...resolved, misses: [{ token: "ref", requested: 4.5, measured: 4.4 }] };
+  assert.notEqual(missesSignature(other), signature);
+  // no misses: an empty signature, nothing the once-log would print
+  assert.equal(missesSignature(resolveLook(null)), "");
 });
 
 test("the inspection override is a test surface, in memory only", () => {
