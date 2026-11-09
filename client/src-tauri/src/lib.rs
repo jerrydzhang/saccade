@@ -8,6 +8,7 @@ pub mod board_validate;
 pub mod commands;
 pub mod look_config;
 pub mod shell_probe;
+pub mod window_registry;
 
 pub fn run() {
     // The human surface opens through the header's location field and
@@ -39,6 +40,9 @@ pub fn run() {
             commands::write_clipboard,
             commands::shell_probe_active,
             commands::shell_probe_report,
+            window_registry::window_binding,
+            window_registry::bind_window_state,
+            window_registry::unbind_window_state,
             board_validate::validate_board,
             look_config::look_config,
             look_config::wait_look_config,
@@ -57,6 +61,9 @@ pub fn run() {
                     .unwrap_or_else(|| "unavailable".into())
             );
             look_config::init(dir);
+            // the window registry: which pool state each window shows
+            // (t-19); the shell's own memory, never a record fact
+            app.manage(window_registry::WindowRegistry::new());
             // the shell feasibility probe (t-19): test-only machinery,
             // inert unless the lane sets BOARD_VIEWER_SHELL_PROBE
             shell_probe::maybe_start(app.handle().clone());

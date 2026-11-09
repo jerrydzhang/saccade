@@ -62,22 +62,28 @@ them. `/api/v1` stays `sac`'s own API.
 **The suite's only write to the record is publishing task-board
 annotations** (t-14, ratified; the law of this package, landed with the
 commit that builds the act): `a` drafts in place on the current
-revision of a task board - drafts persist on the device keyed by task
-until the window-state pool lands (t-24@r11) and are never lost on a
-refused publish; `space p` publishes the drafts together as ONE commit
-with ONE message through the commit door, under the HUMAN's own
-identity: the human tier and, as the actor, the client configuration's
-override or the device account name as `sac` derives it without
-SACCADE_ACTOR (`$USER`, else "human"), never refusing for lack of it.
-The published board.yaml is the shown revision's authored text plus
-annotation components and nothing else - byte-level insertions at the
-parts' own positions. Before the POST the viewer re-reads the current
-revision and refuses, keeping the drafts, when a revision landed after
-its read; an offered board refuses, naming the reject-with-grounds CLI
-step. Only the current revision of a task board drafts; a pinned older
-revision refuses, saying where annotation is possible (t-24@r11).
-Explainer-file annotation writes and the deck are t-21, not this
-package's.
+revision of a task board - drafts ride the window's pool state since
+the window-state pool landed (t-24@r20; before that they persisted on
+the device, and the interim localStorage store left with the pool, its
+one-time mover landing in the same commit per t-24@r20: each device
+moves its interim drafts once, per task, into its attached state
+showing that task or into a new detached state, marking the interim
+store moved only after the pool confirms, the rows staying and nothing
+reading them again) - and a draft is never lost on a refused publish.
+`space p` publishes the drafts of the window it is pressed in, together
+as ONE commit with ONE message through the commit door, under the
+HUMAN's own identity: the human tier and, as the actor, the client
+configuration's override or the device account name as `sac` derives
+it without SACCADE_ACTOR (`$USER`, else "human"), never refusing for
+lack of it. The published board.yaml is the shown revision's authored
+text plus annotation components and nothing else - byte-level
+insertions at the parts' own positions. Before the POST the viewer
+re-reads the current revision and refuses, keeping the drafts, when a
+revision landed after its read; an offered board refuses, naming the
+reject-with-grounds CLI step. Only the current revision of a task
+board drafts; a pinned older revision refuses, saying where annotation
+is possible (t-24@r11). Explainer-file annotation writes and the deck
+are t-21, not this package's.
 
 The validation split: admission is the shared crate's job on the Tauri
 side (`validate_board`, a path dependency), and the native lanes refuse
@@ -103,7 +109,7 @@ Keys:
   resolves), `space h` history, `space m` marginalia, `space p` publish
 - in history: `h` `l` step time, `n` `N` jump to changes, `t` tracks the
   reading-height part, `H` `L` walk its changes
-- zoom: `+` `-` `=`, the window's own memory until the pool lands;
+- zoom: `+` `-` `=`, carried by the window's pool state (t-24@r20);
   figures and diagrams enlarge as their primary act; an incorporation
   expands to exactly its cited components
 - `Ctrl+F` opens the search bar; `Escape` closes it; `Enter` and
@@ -211,6 +217,34 @@ suite):
 - relative assets resolve at the declaration's location on the selected
   machine; traversal and absolute paths are refused on both the frontend
   and the host side
+
+## The pool-backed window (t-14 "The suite", t-24@r20)
+
+One window, one pool state: what the window shows, the part at the
+reading height, its zoom, its drafts - kept on the tracker's server,
+outside the record, under /pool/v1 (the tracker README carries that
+surface's law). The client's own half:
+
+- **The device is an opaque client-generated id**, generated once and
+  persisted on the device; the pool stores and compares it and never
+  interprets it (t-24@r20: not the machine id).
+- **The binding is the shell's**: the Tauri shell keeps one
+  label-to-state pairing per window, so a window's state survives a
+  frontend reload and the shell that closes, jumps and links windows
+  knows the pairing. A window that has bound no state creates one
+  (the id client-generated and opaque) and binds it. A page with no
+  shell (the browser lane) has no binding and runs unbacked.
+- **Sync waits, never polls**: the window long-polls its state with
+  `?after=` on the pool's own sequence, applies every answer that is
+  not its own echo (a write's landing sequence names it - a device
+  never jumps its own view), and on a dropped connection retries with
+  backoff and re-reads the state whole. Position writes settle first:
+  the reading height when it stops moving, zoom when the steps stop,
+  drafts when written - never per scroll frame or per key press. A
+  settled write that changes nothing is not sent.
+- **A window with no tracker server runs unbacked**, like every read
+  face without one; its drafts stay in memory, which is still never a
+  lost draft, and the move waits for a pooled start.
 
 ## Layout
 

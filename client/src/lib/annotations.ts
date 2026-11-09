@@ -3,51 +3,13 @@
 // commit with ONE message under the human's own identity. The published
 // board.yaml is the shown revision's authored text plus annotation
 // components and nothing else - byte-level insertions at the parts'
-// own positions, no re-serialisation. Drafts persist on the device
-// keyed by task until the window-state pool lands (t-24@r11) and are
-// never lost on a refused publish.
+// own positions. Drafts live in the window's pool state since the
+// window-state pool landed (t-24@r20); the interim localStorage store
+// left with the pool, its one-time mover living in pool.ts.
 
-// -- draft store -------------------------------------------------------
+// -- the draft and the payload ------------------------------------------
 
 export type Draft = { path: string; text: string };
-
-const DRAFTS_KEY = "saccade.annotation.drafts";
-
-function storeKey(tracker: string, task: string): string {
-  return `${DRAFTS_KEY}.${tracker}.${task}`;
-}
-
-export function loadDrafts(tracker: string, task: string): Draft[] {
-  try {
-    const raw = localStorage.getItem(storeKey(tracker, task));
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (entry): entry is Draft =>
-        typeof entry === "object" &&
-        entry !== null &&
-        typeof (entry as Draft).path === "string" &&
-        typeof (entry as Draft).text === "string",
-    );
-  } catch {
-    return [];
-  }
-}
-
-export function saveDrafts(tracker: string, task: string, drafts: Draft[]): void {
-  try {
-    localStorage.setItem(storeKey(tracker, task), JSON.stringify(drafts));
-  } catch {
-    // a full or unavailable store keeps the drafts in memory; the
-    // window still publishes from them
-  }
-}
-
-export function clearDrafts(tracker: string, task: string, paths: string[]): void {
-  const remaining = loadDrafts(tracker, task).filter((draft) => !paths.includes(draft.path));
-  saveDrafts(tracker, task, remaining);
-}
 
 // -- YAML insertion ----------------------------------------------------
 

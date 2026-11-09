@@ -36,13 +36,15 @@
   import { formatLocation, parseLocation } from "./lib/location.ts";
   import {
     annotatedBoard,
-    clearDrafts,
-    loadDrafts,
-    saveDrafts,
     publishPayload,
     publishAnnotations,
     type Draft,
   } from "./lib/annotations.ts";
+  import {
+    PoolClient,
+    fieldsDiffer,
+    type WindowState,
+  } from "./lib/pool.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
   import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
@@ -123,7 +125,192 @@
       console.error(`[viewer] test open board FAILED: ${String(error)}`);
     }
   }
+
+  // -- the pool-backed window (t-14 "The suite", t-24@r20) --------------
+  //
+  // One window, one pool state: what this window shows, the part at
+  // the reading height, its zoom, its drafts - on the tracker's
+  // server, outside the record. Writes settle before sending; the
+  // watcher applies every answer that is not this client's own echo.
+  // A window with no tracker server runs unbacked, like every read
+  // face without one.
+  let pool: PoolClient | null = null;
+  let poolStateId: string | null = null;
+  let poolWatch: { stop: () => void } | null = null;
+  // the mirrors this window applies and writes: a value already here
+  // is never written again, so no-op settles bump no sequences
+  let appliedLocation: string | null = null;
+  let knownPart: string | null = null;
+  let knownZoom: number | null = null;
+  let knownDrafts: Draft[] = [];
+  let poolDiscarded = false;
+  let zoomWriteTimer: ReturnType<typeof setTimeout> | null = null;
+  let partWriteTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** The part at the reading height, as the pool names it: the select
+   * path of the top-level block nearest the reading line. */
+  function poolReadingPart(): string | null {
+    if (!contentHost || !view.board) return null;
+    const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
+    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    let best: HTMLElement | null = null;
+    let bestDistance = Number.MAX_SAFE_INTEGER;
+    for (const block of blocks) {
+      const rect = block.getBoundingClientRect();
+      const distance = rect.top > readingLine ? rect.top - readingLine : readingLine - rect.bottom;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = block;
+      }
+    }
+    if (!best) return null;
+    const index = blocks.indexOf(best);
+    return index >= 0 ? `/content/${index}` : null;
+  }
+
+  /** Scroll so the named part sits at the reading height. The block
+   * may not exist for a few frames after an open; a handful of frames
+   * are tried before giving up quietly. */
+  function scrollToPoolPart(part: string, tries = 20): void {
+    if (!contentHost) return;
+    const match = /^\/content\/(\d+)$/.exec(part);
+    if (!match) return;
+    const index = Number(match[1]);
+    const block = contentHost.querySelectorAll<HTMLElement>(":scope > .block")[index];
+    if (!block) {
+      if (tries > 0) window.requestAnimationFrame(() => scrollToPoolPart(part, tries - 1));
+      return;
+    }
+    const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
+    const delta = block.getBoundingClientRect().top - readingLine;
+    contentHost.scrollTop += delta;
+  }
+
+  function applyZoom(value: number): void {
+    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+    if (contentHost) contentHost.style.zoom = String(zoom);
+  }
+
+  /** The state as the pool carries it, applied locally: zoom, drafts,
+   * the location to open, the part to scroll to. A discarded state
+   * (changed 0, nothing in it) leaves the window empty - the human
+   * opens anew or closes. */
+  async function applyPoolState(state: WindowState): Promise<void> {
+    if (state.changed === 0 && state.location === null) {
+      poolDiscarded = true;
+      console.log("[viewer] pool state discarded elsewhere; the window sits empty");
+      return;
+    }
+    const nextZoom = state.zoom ?? 1;
+    if (nextZoom !== knownZoom) {
+      knownZoom = nextZoom;
+      applyZoom(nextZoom);
+    }
+    const nextDrafts = state.drafts ?? [];
+    if (JSON.stringify(nextDrafts) !== JSON.stringify(knownDrafts)) {
+      knownDrafts = nextDrafts;
+      drafts = nextDrafts;
+    }
+    if (state.location !== null && state.location !== appliedLocation) {
+      appliedLocation = state.location;
+      await model.openInput(state.location);
+    }
+    if (state.part !== knownPart) {
+      knownPart = state.part;
+      if (state.part !== null) scrollToPoolPart(state.part);
+    }
+  }
+
+  /** The window's pool state: the shell names the binding (the state
+   * survives a reload); a first window creates its state, attaches
+   * this device, applies what the state carries, and watches. The
+   * one-time interim-draft move runs on the first pooled start. */
+  async function startPoolWindow(): Promise<void> {
+    let invoke: ReturnType<typeof tauriInvoke>;
+    try {
+      invoke = tauriInvoke();
+    } catch (error) {
+      if (error instanceof SourceUnavailableError) {
+        console.log("[viewer] pool: no bridge; the window runs unbacked");
+        return;
+      }
+      throw error;
+    }
+    pool = PoolClient.open();
+    if (pool === null) {
+      console.log("[viewer] pool: no tracker server set; the window runs unbacked");
+      return;
+    }
+    try {
+      const binding = (await invoke("window_binding")) as {
+        label: string;
+        state_id?: string | null;
+      };
+      let stateId = binding.state_id ?? null;
+      if (stateId === null) {
+        const fresh =
+          typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `w-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const created = await pool.create(fresh);
+        stateId = created.id;
+        await invoke("bind_window_state", { stateId });
+      }
+      poolStateId = stateId;
+      const attached = await pool.attach(stateId);
+      knownZoom = attached.zoom;
+      knownPart = attached.part;
+      knownDrafts = attached.drafts ?? [];
+      await applyPoolState(attached);
+      poolWatch = pool.watch(stateId, (state) => {
+        void applyPoolState(state);
+      });
+      void pool.moveInterimDrafts();
+      console.log(`[viewer] pool window bound: ${stateId}`);
+    } catch (error) {
+      console.error(`[viewer] pool window failed: ${String(error)}`);
+    }
+  }
   void openTestBoard();
+  void startPoolWindow();
+
+  /** A settled write: the location this window opened, with the
+   * reading position reset - new content, no part yet. */
+  $effect(() => {
+    const current = location;
+    if (!current || pool === null || poolStateId === null || poolDiscarded) return;
+    const spec = formatLocation(current);
+    if (spec === appliedLocation) return;
+    appliedLocation = spec;
+    knownPart = null;
+    void pool.patch(poolStateId, { location: spec, part: null }).catch(() => {
+      // an unreachable pool leaves the window readable; the next
+      // settled write retries
+    });
+  });
+
+  /** The reading height settles while reading: written when it stops
+   * moving, never per scroll frame (t-24@r20). */
+  function schedulePartWrite(): void {
+    if (pool === null || poolStateId === null || poolDiscarded) return;
+    if (partWriteTimer !== null) clearTimeout(partWriteTimer);
+    partWriteTimer = setTimeout(() => {
+      partWriteTimer = null;
+      if (pool === null || poolStateId === null || poolDiscarded) return;
+      const part = poolReadingPart();
+      if (part === null || part === knownPart) return;
+      knownPart = part;
+      void pool.patch(poolStateId, { part }).catch(() => {});
+    }, 600);
+  }
+
+  $effect(() => {
+    const host = contentHost;
+    if (!host) return;
+    const onScroll = (): void => schedulePartWrite();
+    host.addEventListener("scroll", onScroll);
+    return () => host.removeEventListener("scroll", onScroll);
+  });
 
   let hostPath = $state("");
   let query = $state("");
@@ -603,18 +790,34 @@
     if (anchor) historyMode.track(anchor.key);
   }
 
-  // Zoom (+ - =, t-14): the document's scale, the window's own
-  // in-memory state until the pool lands (t-24@r11).
+  // Zoom (+ - =, t-14): the document's scale, carried by the window's
+  // pool state since the pool landed (t-24@r20; it was memory-only
+  // before) - written when it settles, applied from the state on
+  // resume and on another device's change.
   let zoom = $state(1);
   const ZOOM_MIN = 0.7;
   const ZOOM_MAX = 2;
   function zoomBy(delta: number): void {
-    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((zoom + delta) * 100) / 100));
-    if (contentHost) contentHost.style.zoom = String(zoom);
+    applyZoom(zoom + delta);
+    scheduleZoomWrite();
   }
   function zoomReset(): void {
-    zoom = 1;
-    if (contentHost) contentHost.style.zoom = "1";
+    applyZoom(1);
+    scheduleZoomWrite();
+  }
+
+  /** A settled zoom write: sent when the steps stop, never per key
+   * press (t-24@r20). */
+  function scheduleZoomWrite(): void {
+    if (pool === null || poolStateId === null || poolDiscarded) return;
+    if (zoomWriteTimer !== null) clearTimeout(zoomWriteTimer);
+    zoomWriteTimer = setTimeout(() => {
+      zoomWriteTimer = null;
+      if (pool === null || poolStateId === null || poolDiscarded) return;
+      if (zoom === knownZoom) return;
+      knownZoom = zoom;
+      void pool.patch(poolStateId, { zoom }).catch(() => {});
+    }, 400);
   }
 
   $effect(() => {
@@ -725,12 +928,14 @@
   });
 
   // Draft annotations (t-14, ratified): `a` on the part at the reading
-  // height drafts in place; drafts persist on the device keyed by task
-  // (t-24@r11) and survive a closed window or a restart. `space p`
-  // publishes them together as ONE commit with ONE message under the
-  // human's own identity; the current revision of a task board only.
+  // height drafts in place; drafts ride the window's pool state since
+  // the pool landed (t-24@r20) - two devices showing one state share
+  // them, and the window's own drafts never lose on a refused
+  // publish. `space p` publishes them together as ONE commit with ONE
+  // message under the human's own identity; the current revision of a
+  // task board only. A window with no pool keeps its drafts in
+  // memory, which is still never a lost draft.
   let drafts = $state<Draft[]>([]);
-  let draftsFor = $state("");
   let draftEditor = $state<{ path: string; text: string } | null>(null);
   let draftEditorIndex = $state<number | null>(null);
   let publishOpen = $state(false);
@@ -750,24 +955,14 @@
     };
   }
 
-  function reloadDrafts(): void {
-    const current = currentTaskSpec();
-    if (!current) {
-      drafts = [];
-      draftsFor = "";
-      return;
-    }
-    const key = `${current.tracker}/${current.task}`;
-    if (key !== draftsFor) {
-      draftsFor = key;
-      drafts = loadDrafts(current.tracker, current.task);
-    }
-  }
-
   function updateDrafts(next: Draft[]): void {
     drafts = next;
-    const current = currentTaskSpec();
-    if (current) saveDrafts(current.tracker, current.task, next);
+    knownDrafts = next;
+    if (pool === null || poolStateId === null || poolDiscarded) return;
+    void pool.patch(poolStateId, { drafts: next }).catch(() => {
+      // an unreachable pool keeps the drafts in memory; the next
+      // settled draft write carries them
+    });
   }
 
   /** The part the act lands on: the selected block, else the one at
@@ -919,9 +1114,14 @@
         }
         return;
       }
-      // published: the drafts landed with the new revision
-      clearDrafts(current.tracker, current.task, drafts.map((draft) => draft.path));
+      // published: the drafts landed with the new revision; the
+      // window's pool state carries none now (t-24@r20: drafts ride
+      // the state)
+      knownDrafts = [];
       drafts = [];
+      if (pool !== null && poolStateId !== null && !poolDiscarded) {
+        void pool.patch(poolStateId, { drafts: [] }).catch(() => {});
+      }
       publishOpen = false;
       publishPanel = null;
       publishNote = `published as r${result.revision} under ${identity.actor}/human`;

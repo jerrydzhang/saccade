@@ -2,10 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   annotatedBoard,
-  clearDrafts,
-  loadDrafts,
   locateBlockSpan,
-  saveDrafts,
   type Draft,
 } from "../src/lib/annotations.ts";
 
@@ -84,26 +81,6 @@ test("the result parses as the same board plus annotations only", () => {
     const found = after.indexOf(line, cursor);
     assert.ok(found >= cursor, `line missing or reordered: ${line}`);
     cursor = found;
-  }
-});
-
-test("drafts store and reload keyed by tracker and task", () => {
-  const store = new Map<string, string>();
-  const saved = globalThis.localStorage;
-  (globalThis as Record<string, unknown>).localStorage = {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    removeItem: (key: string) => void store.delete(key),
-  };
-  saveDrafts("smoke", "t-7", [{ path: "/content/1", text: "kept" }]);
-  try {
-    assert.deepEqual(loadDrafts("smoke", "t-7"), [{ path: "/content/1", text: "kept" }]);
-    assert.deepEqual(loadDrafts("smoke", "t-8"), []);
-    assert.deepEqual(loadDrafts("other", "t-7"), []);
-    clearDrafts("smoke", "t-7", ["/content/1"]);
-    assert.deepEqual(loadDrafts("smoke", "t-7"), []);
-  } finally {
-    (globalThis as Record<string, unknown>).localStorage = saved;
   }
 });
 
