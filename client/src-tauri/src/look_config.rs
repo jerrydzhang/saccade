@@ -28,6 +28,12 @@ pub struct LookPayload {
     /// core. None on the hub, where the local core's own machine is
     /// read.
     pub tracker_machine: Option<String>,
+    /// The publish identity override (t-24@r11): the actor name the
+    /// suite's one record write records instead of the device account
+    /// name. None follows sac's own rule (the USER environment
+    /// variable, else "human"), and publish never refuses for lack of
+    /// it.
+    pub actor: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -40,6 +46,7 @@ struct ConfigFile {
     weight: Option<String>,
     #[serde(rename = "tracker-machine")]
     tracker_machine: Option<String>,
+    actor: Option<String>,
 }
 
 /// What a configuration load resolved to, before publication.
@@ -49,6 +56,7 @@ struct Loaded {
     weight: Option<String>,
     problem: Option<String>,
     tracker_machine: Option<String>,
+    actor: Option<String>,
 }
 
 const WEIGHTS: [&str; 3] = ["regular", "medium", "semibold"];
@@ -67,6 +75,7 @@ fn load_config(path: &Path) -> Loaded {
                 weight: None,
                 problem: None,
                 tracker_machine: None,
+                actor: None,
             };
         }
         Err(error) => {
@@ -76,6 +85,7 @@ fn load_config(path: &Path) -> Loaded {
                 weight: None,
                 problem: Some(format!("look configuration unreadable: {error}")),
                 tracker_machine: None,
+                actor: None,
             };
         }
     };
@@ -88,6 +98,7 @@ fn load_config(path: &Path) -> Loaded {
                 weight: None,
                 problem: Some(format!("look configuration invalid: {error}")),
                 tracker_machine: None,
+                actor: None,
             };
         }
     };
@@ -125,6 +136,10 @@ fn load_config(path: &Path) -> Loaded {
             .tracker_machine
             .map(|machine| machine.trim().to_string())
             .filter(|machine| !machine.is_empty()),
+        actor: config
+            .actor
+            .map(|actor| actor.trim().to_string())
+            .filter(|actor| !actor.is_empty()),
     }
 }
 
@@ -137,6 +152,7 @@ fn payload_of(path: Option<&Path>, loaded: Loaded, generation: u64) -> LookPaylo
         weight: loaded.weight,
         problem: loaded.problem,
         tracker_machine: loaded.tracker_machine,
+        actor: loaded.actor,
     }
 }
 
@@ -160,6 +176,7 @@ fn shared() -> &'static Shared {
             weight: None,
             problem: Some("the host has no look state yet".into()),
             tracker_machine: None,
+            actor: None,
         }),
         changed: Condvar::new(),
     })
@@ -178,6 +195,7 @@ fn reload(path: Option<&Path>) -> bool {
             weight: None,
             problem: None,
             tracker_machine: None,
+            actor: None,
         },
     };
     let mut guard = shared.payload.lock().expect("look payload mutex");
@@ -187,7 +205,8 @@ fn reload(path: Option<&Path>) -> bool {
         && guard.scheme_text == next.scheme_text
         && guard.weight == next.weight
         && guard.problem == next.problem
-        && guard.tracker_machine == next.tracker_machine;
+        && guard.tracker_machine == next.tracker_machine
+        && guard.actor == next.actor;
     if same {
         return false;
     }
@@ -310,6 +329,17 @@ pub fn current_tracker_machine() -> Option<String> {
         .lock()
         .expect("look payload mutex")
         .tracker_machine
+        .clone()
+}
+
+/// The publish identity override, read on demand (t-24@r11). None
+/// follows sac's own rule on the caller side.
+pub fn current_actor_override() -> Option<String> {
+    shared()
+        .payload
+        .lock()
+        .expect("look payload mutex")
+        .actor
         .clone()
 }
 

@@ -1074,3 +1074,94 @@ code.raw-html {
     max-height: 30vh;
   }
 }
+
+/* ---------- annotation drafts and the publish panel ---------- */
+
+.draft-annotation {
+  border-left: 2px dashed var(--acc);
+  padding-left: 12px;
+  margin-top: 4px;
+}
+
+.draft-text {
+  margin: 0;
+  font-family: var(--f-world);
+  font-size: var(--fs-world);
+  line-height: var(--lh-world);
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.draft-editor {
+  margin-top: 4px;
+  border-left: 2px dashed var(--acc);
+  padding-left: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.draft-editor-input {
+  font-family: var(--f-world);
+  font-size: var(--fs-world);
+  line-height: var(--lh-world);
+  color: var(--ink);
+  background: none;
+  border: 1px solid var(--pop-line);
+  padding: 6px 8px;
+  min-height: 3em;
+  resize: vertical;
+}
+
+.draft-editor-input:focus {
+  outline: none;
+  border-color: var(--acc);
+}
+
+.draft-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.draft-editor-actions button,
+.publish-panel button {
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink);
+  background: none;
+  border: 1px solid var(--pop-line);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.draft-editor-actions button:hover,
+.publish-panel button:hover:not(:disabled) {
+  background: var(--acc);
+  color: var(--acc-ink);
+}
+
+.publish-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 78;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  padding-top: 12vh;
+  background: rgb(0 0 0 / 0.3);
+}
+
+.publish-panel {
+  display: grid;
+  gap: 10px;
+  width: min(520px, 90vw);
+  padding: 14px 16px;
+  background: var(--app-bg);
+  border: 1px solid var(--pop-line);
+}
+
+.publish-note {
+  margin: 0;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink);
+}

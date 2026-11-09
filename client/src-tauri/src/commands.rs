@@ -39,6 +39,30 @@ pub fn tracker_machine() -> Option<String> {
     look_config::current_tracker_machine()
 }
 
+/// The identity the suite's one record write records (t-24@r11): the
+/// human tier and, as the actor, the configured override, else the
+/// device account name as `sac` derives it without SACCADE_ACTOR
+/// ($USER), else "human". Publish never refuses for lack of it.
+#[derive(Serialize)]
+pub struct PublishIdentity {
+    pub actor: String,
+    pub tier: String,
+}
+
+#[tauri::command]
+pub fn publish_identity() -> PublishIdentity {
+    let actor = look_config::current_actor_override()
+        .or_else(|| std::env::var("USER").ok())
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| name.trim().to_string())
+        .unwrap_or_else(|| "human".into());
+    eprintln!("[bridge] publish_identity: {actor}/human");
+    PublishIdentity {
+        actor,
+        tier: "human".into(),
+    }
+}
+
 /// This device's own machine id (t-24@r14): the trimmed
 /// `/etc/machine-id`, read on demand for the hub proof against the
 /// tracker root page's fact. None when unreadable or empty, so an

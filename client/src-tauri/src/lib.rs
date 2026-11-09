@@ -34,6 +34,7 @@ pub fn run() {
             commands::test_open,
             commands::tracker_machine,
             commands::machine_id,
+            commands::publish_identity,
             commands::write_clipboard,
             board_validate::validate_board,
             look_config::look_config,

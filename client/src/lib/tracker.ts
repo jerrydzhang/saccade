@@ -287,6 +287,14 @@ export class TrackerSource implements BoardSource {
     return this.boardPage(`t-${task}`);
   }
 
+  /** Raw bytes of a board-tree file at a pinned revision: the
+   * publish act re-posts the figures unchanged. */
+  async loadAssetBytes(pinned: string, path: string): Promise<Uint8Array> {
+    await this.checkContract();
+    const base = serverBase();
+    return fetchFileBytes(this.fetcher, viewUrl(base, `${pinned}/file/${path}`));
+  }
+
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
     const { pinned } = await this.resolvePinned(location.path);
     const resolved = resolveRelative("", relative);

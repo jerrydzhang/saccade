@@ -34,11 +34,22 @@
   } from "./lib/select.ts";
   import { openContextMenu, type MenuAct } from "./lib/menu.ts";
   import { formatLocation, parseLocation } from "./lib/location.ts";
+  import {
+    annotatedBoard,
+    clearDrafts,
+    loadDrafts,
+    saveDrafts,
+    publishPayload,
+    publishAnnotations,
+    type Draft,
+  } from "./lib/annotations.ts";
+  import { serverBase } from "./lib/tracker.ts";
+  import { resolveRelative } from "./lib/resolve.ts";
   import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
   import { trackerSourcesForPicker } from "./lib/sources.ts";
   import { HistoryMode, marginaliaRuns, type MarginaliaRun } from "./lib/historymode.ts";
   import { ADD_CLOSE, ADD_OPEN, DEL_CLOSE, DEL_OPEN } from "./lib/history.ts";
-  import type { HistoryEntry } from "./lib/pages.ts";
+  import { pageFact, type HistoryEntry } from "./lib/pages.ts";
   import { parseTaskSpec } from "./lib/location.ts";
   import { inspect } from "./lib/board/inspection.ts";
   import type { CopyMode } from "./lib/copy.ts";
@@ -589,6 +600,224 @@
     if (anchor) historyMode.track(anchor.key);
   }
 
+  // Draft annotations (t-14, ratified): `a` on the part at the reading
+  // height drafts in place; drafts persist on the device keyed by task
+  // (t-24@r11) and survive a closed window or a restart. `space p`
+  // publishes them together as ONE commit with ONE message under the
+  // human's own identity; the current revision of a task board only.
+  let drafts = $state<Draft[]>([]);
+  let draftsFor = $state("");
+  let draftEditor = $state<{ path: string; text: string } | null>(null);
+  let draftEditorIndex = $state<number | null>(null);
+  let publishOpen = $state(false);
+  let publishMessage = $state("");
+  let publishBusy = $state(false);
+  let publishNote = $state<string | null>(null);
+
+  function currentTaskSpec(): { tracker: string; task: string; taskNumber: number } | null {
+    const location = view.location;
+    if (!location || !location.machine.startsWith("tracker:")) return null;
+    const spec = parseTaskSpec(location.path);
+    if (!spec) return null;
+    return {
+      tracker: location.machine.slice("tracker:".length),
+      task: `t-${spec.task}`,
+      taskNumber: spec.task,
+    };
+  }
+
+  function reloadDrafts(): void {
+    const current = currentTaskSpec();
+    if (!current) {
+      drafts = [];
+      draftsFor = "";
+      return;
+    }
+    const key = `${current.tracker}/${current.task}`;
+    if (key !== draftsFor) {
+      draftsFor = key;
+      drafts = loadDrafts(current.tracker, current.task);
+    }
+  }
+
+  function updateDrafts(next: Draft[]): void {
+    drafts = next;
+    const current = currentTaskSpec();
+    if (current) saveDrafts(current.tracker, current.task, next);
+  }
+
+  /** The part the act lands on: the selected block, else the one at
+   * the reading height - a top-level part, as the select path names. */
+  function actPartIndex(): number | null {
+    if (!contentHost || !view.board) return null;
+    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    let element: HTMLElement | null = selected?.element ?? null;
+    if (!element) {
+      const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
+      let best = Number.MAX_SAFE_INTEGER;
+      for (const block of blocks) {
+        const rect = block.getBoundingClientRect();
+        const distance = rect.top > readingLine ? rect.top - readingLine : readingLine - rect.bottom;
+        if (distance < best) {
+          best = distance;
+          element = block;
+        }
+      }
+    }
+    if (!element) return null;
+    const index = blocks.indexOf(element);
+    return index >= 0 && index < view.board.content.length ? index : null;
+  }
+
+  function beginDraft(): void {
+    if (!view.board) return;
+    const location = view.location;
+    const spec = parseTaskSpec(location?.path ?? "");
+    if (!location || !spec) {
+      publishNote = "annotations draft on a task board; this location is not one";
+      return;
+    }
+    if (spec.revision !== null) {
+      // t-24@r11: only the current revision drafts; a pinned older
+      // revision refuses, saying where annotation is possible
+      publishNote = "only the current revision of a task board drafts; open the task bare (tracker/t-N) and annotate there";
+      return;
+    }
+    const index = actPartIndex();
+    if (index === null) return;
+    const existing = drafts.find((draft) => draft.path === `/content/${index}`);
+    draftEditorIndex = index;
+    draftEditor = { path: `/content/${index}`, text: existing?.text ?? "" };
+  }
+
+  function saveDraft(): void {
+    const editor = draftEditor;
+    if (!editor) return;
+    const text = editor.text;
+    const next = drafts.filter((draft) => draft.path !== editor.path);
+    if (text.trim().length > 0) next.push({ path: editor.path, text: text.replace(/\s+$/, "") });
+    updateDrafts(next);
+    draftEditor = null;
+    draftEditorIndex = null;
+  }
+
+  function cancelDraft(): void {
+    draftEditor = null;
+    draftEditorIndex = null;
+  }
+
+  let publishPanel: { open: boolean } | null = null;
+
+  function openPublish(): void {
+    if (!view.board) return;
+    if (drafts.length === 0) {
+      publishNote = "no drafts to publish; press a on a part first";
+      return;
+    }
+    publishMessage = `annotations on ${view.board.task ?? "the board"}: ${drafts.length} draft${drafts.length === 1 ? "" : "s"}`;
+    publishNote = null;
+    publishOpen = true;
+    publishPanel = { open: true };
+    void publishPanel;
+  }
+
+  function cancelPublish(): void {
+    publishOpen = false;
+    publishPanel = null;
+  }
+
+  async function publishDrafts(): Promise<void> {
+    const current = currentTaskSpec();
+    if (!current || publishBusy) return;
+    publishBusy = true;
+    publishNote = null;
+    try {
+      const location = view.location;
+      const source = historyTracker();
+      if (!location || !source) {
+        publishNote = "annotations publish on a task board served by a tracker";
+        return;
+      }
+      const spec = parseTaskSpec(location.path);
+      if (!spec) return;
+      if (spec.revision !== null) {
+        publishNote = "only the current revision of a task board publishes; open the task bare (tracker/t-N)";
+        return;
+      }
+      // the board page carries the state: an offered board refuses,
+      // naming the CLI step
+      const page = await source.currentBoardPage(spec.task);
+      const state = pageFact(page, "state");
+      if (state !== null && state !== "open") {
+        publishNote = `the board is ${state}; publishing refuses - reject it with grounds first (sac reject t-${spec.task} --grounds "..."), then publish`;
+        return;
+      }
+      // the concurrency guard: the shown text must still be current
+      // (t-24@r11: a draft is never lost on a refused publish)
+      const currentBoard = await source.currentBoardText(spec.task);
+      const shown = model.snapshot.rawText ?? "";
+      if (shown.length > 0 && shown !== currentBoard.text) {
+        publishNote = `the board moved (a revision landed after this window read r${spec.revision ?? "current"}); the drafts are kept - reopen the task and review, then publish`;
+        return;
+      }
+      // the figures ride unchanged, fetched fresh at their pinned paths
+      const pinned = currentBoard.pinned;
+      const figures: Array<{ path: string; bytes: Uint8Array }> = [];
+      const shownBoard = model.snapshot.board;
+      if (!shownBoard) return;
+      for (const block of shownBoard.content) {
+        if (block.kind !== "figure") continue;
+        const resolved = resolveRelative("", block.input);
+        if (!resolved.ok) continue;
+        const bytes = await source.loadAssetBytes(pinned, resolved.joined);
+        figures.push({ path: resolved.joined, bytes });
+      }
+      const identity = await bridgePublishIdentity();
+      const payload = publishPayload({
+        task: spec.task,
+        boardText: shown,
+        drafts,
+        message: publishMessage,
+        identity,
+        figures,
+      });
+      if ("failure" in payload) {
+        publishNote = payload.failure;
+        return;
+      }
+      const base = serverBase();
+      const result = await publishAnnotations(base, payload.payload);
+      if (!result.ok) {
+        if (result.code === "invalid_state_transition") {
+          publishNote = `the board is offered; publishing refuses - reject it with grounds first (sac reject t-${spec.task} --grounds "..."), then publish`;
+        } else {
+          publishNote = `the publish refused: ${result.code} ${result.detail}`;
+        }
+        return;
+      }
+      // published: the drafts landed with the new revision
+      clearDrafts(current.tracker, current.task, drafts.map((draft) => draft.path));
+      drafts = [];
+      publishOpen = false;
+      publishPanel = null;
+      publishNote = `published as r${result.revision} under ${identity.actor}/human`;
+      await model.open({ machine: location.machine, path: `t-${spec.task}` });
+    } finally {
+      publishBusy = false;
+    }
+  }
+
+  async function bridgePublishIdentity(): Promise<{ actor: string; tier: "human" }> {
+    try {
+      const invoke = tauriInvoke();
+      const identity = (await invoke("publish_identity")) as { actor: string; tier: string };
+      return { actor: identity.actor, tier: "human" };
+    } catch {
+      // no host: the fallback sac itself uses, never a refusal
+      return { actor: "human", tier: "human" };
+    }
+  }
+
   let mainWrap: HTMLElement | undefined = $state(undefined);
 
   let historyActive = $derived(historyMode !== null);
@@ -754,6 +983,8 @@
           void toggleHistory();
         } else if (event.key === "m") {
           void toggleMarginalia();
+        } else if (event.key === "p") {
+          openPublish();
         }
         // the other leader commands (marginalia, publish) land with
         // their own chapters
@@ -848,6 +1079,10 @@
       case "s":
         event.preventDefault();
         enterLabelMode();
+        return;
+      case "a":
+        event.preventDefault();
+        beginDraft();
         return;
       case "?":
         event.preventDefault();
@@ -1010,6 +1245,81 @@
     if (contentHost) bindDiagramExpansion(contentHost);
   });
 
+  // The drafts and the draft editor paint in place, after the parts
+  // they annotate; a drafts change repaints only the draft blocks,
+  // never the document.
+  function paintDrafts(): void {
+    if (!contentHost) return;
+    contentHost.querySelectorAll(":scope > .draft-annotation").forEach((element) => element.remove());
+    if (!view.board) return;
+    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    for (const draft of drafts) {
+      const match = /^\/content\/(\d+)$/.exec(draft.path);
+      const index = match?.[1] === undefined ? -1 : Number(match[1]);
+      const block = blocks[index];
+      if (!block) continue;
+      const el = document.createElement("div");
+      el.className = "block draft-annotation";
+      el.setAttribute("data-draft-path", draft.path);
+      const text = document.createElement("p");
+      text.className = "draft-text";
+      text.textContent = draft.text;
+      el.append(text);
+      block.insertAdjacentElement("afterend", el);
+    }
+    if (draftEditor && draftEditorIndex !== null) {
+      const block = blocks[draftEditorIndex];
+      if (block) {
+        const existing = contentHost.querySelector(":scope > .draft-editor");
+        existing?.remove();
+        const el = document.createElement("div");
+        el.className = "draft-editor";
+        const area = document.createElement("textarea");
+        area.className = "draft-editor-input";
+        area.value = draftEditor.text;
+        area.setAttribute("aria-label", "annotation draft");
+        area.dataset.control = "draft:input";
+        area.addEventListener("input", () => {
+          if (draftEditor) draftEditor.text = area.value;
+        });
+        area.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            cancelDraft();
+          } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            saveDraft();
+          }
+          event.stopPropagation();
+        });
+        const actions = document.createElement("div");
+        actions.className = "draft-editor-actions";
+        const save = document.createElement("button");
+        save.type = "button";
+        save.textContent = "save";
+        save.dataset.control = "draft:save";
+        save.addEventListener("click", () => saveDraft());
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.textContent = "cancel";
+        cancel.dataset.control = "draft:cancel";
+        cancel.addEventListener("click", () => cancelDraft());
+        actions.append(save, cancel);
+        el.append(area, actions);
+        block.insertAdjacentElement("afterend", el);
+        window.requestAnimationFrame(() => area.focus());
+      }
+    }
+  }
+
+  $effect(() => {
+    void drafts;
+    void draftEditor;
+    void draftEditorIndex;
+    void view.renderGeneration;
+    paintDrafts();
+  });
+
   $effect(() =>
     installCopyHandler(() => view.copyMode, {
       // the bridge write exists only inside the native shell; the
@@ -1134,6 +1444,29 @@
     </span>
     <button type="button" data-control="search:prev" onclick={() => nextMatch(-1)} aria-label="previous match">prev</button>
     <button type="button" data-control="search:next" onclick={() => nextMatch(1)} aria-label="next match">next</button>
+  </div>
+  {/if}
+
+  {#if publishOpen}
+  <div class="publish-overlay" role="dialog" aria-label="publish annotations" data-control="publish:overlay">
+    <div class="publish-panel">
+      <p class="history-position">publish {drafts.length} draft{drafts.length === 1 ? "" : "s"} as one commit, under your own identity</p>
+      <input
+        type="text"
+        class="picker-input"
+        placeholder="the commit's one message"
+        aria-label="publish message"
+        data-control="publish:message"
+        bind:value={publishMessage}
+      />
+      {#if publishNote}
+        <p class="publish-note" data-control="publish:note">{publishNote}</p>
+      {/if}
+      <div class="draft-editor-actions">
+        <button type="button" data-control="publish:go" disabled={publishBusy} onclick={() => void publishDrafts()}>publish</button>
+        <button type="button" data-control="publish:cancel" onclick={cancelPublish}>cancel</button>
+      </div>
+    </div>
   </div>
   {/if}
 

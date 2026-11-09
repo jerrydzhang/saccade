@@ -51,13 +51,33 @@ authored source beside a diagnostic.
 
 The read surface is `/view/v1` only (t-14 "Pages", t-24@r2): the root
 page is the version contract (the tracker name, the view majors, the
-board grammar range), the board page resolves a bare task location to
-its pinned revision and names the task, and the authored `board.yaml`
-and its figures ride the file family at that pinned revision - so one
-open's text and figures are one immutable tree, and a revision landing
-mid-open cannot split them. `/api/v1` stays `sac`'s own API; the
-viewer's only write is annotation publication (t-14, ratified), which
-uses the commit door and lands in its own change.
+board grammar range, and the host facts - the machine id and the
+repository path - a bare-path read needs to prove the hub, t-24@r14),
+the board page resolves a bare task location to its pinned revision and
+names the task, and the authored `board.yaml` and its figures ride the
+file family at that pinned revision - so one open's text and figures
+are one immutable tree, and a revision landing mid-open cannot split
+them. `/api/v1` stays `sac`'s own API.
+
+**The suite's only write to the record is publishing task-board
+annotations** (t-14, ratified; the law of this package, landed with the
+commit that builds the act): `a` drafts in place on the current
+revision of a task board - drafts persist on the device keyed by task
+until the window-state pool lands (t-24@r11) and are never lost on a
+refused publish; `space p` publishes the drafts together as ONE commit
+with ONE message through the commit door, under the HUMAN's own
+identity: the human tier and, as the actor, the client configuration's
+override or the device account name as `sac` derives it without
+SACCADE_ACTOR (`$USER`, else "human"), never refusing for lack of it.
+The published board.yaml is the shown revision's authored text plus
+annotation components and nothing else - byte-level insertions at the
+parts' own positions. Before the POST the viewer re-reads the current
+revision and refuses, keeping the drafts, when a revision landed after
+its read; an offered board refuses, naming the reject-with-grounds CLI
+step. Only the current revision of a task board drafts; a pinned older
+revision refuses, saying where annotation is possible (t-24@r11).
+Explainer-file annotation writes and the deck are t-21, not this
+package's.
 
 The validation split: admission is the shared crate's job on the Tauri
 side (`validate_board`, a path dependency), and the native lanes refuse
