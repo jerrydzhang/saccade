@@ -106,7 +106,22 @@ Keys:
 - `space` leads the viewer's own commands: `space space` the picker
   (id, name, word start, substring, scattered letters; recency ties;
   the open item last; kind and name only; a typed location always
-  resolves), `space h` history, `space m` marginalia, `space p` publish
+  resolves), `space h` history, `space m` marginalia, `space p`
+  publish, `space l` link this window by labels, `space u` unlink
+- the window jump: `'` labels on every visible suite window, typing
+  one jumps (the key is a placeholder, t-14); `"` windows on this
+  device, then detached ones - Enter focuses an attached window or
+  resumes a detached state here, `^x` twice discards a state on every
+  device
+- the two acts, never a mode (t-14): `Enter` (or a plain click) is
+  the primary act and the viewer follows here; `o` (or shift- or
+  middle-click) opens elsewhere through the link - with no link it
+  asks once (labels on visible windows, `n` new, `/` a detached one)
+  and the answer becomes the link; `i` opens elsewhere once without
+  changing the link; `w` always opens a new window. The routing is
+  the instrument's declaration (lib/acts.ts): the viewer follows
+  here; the tasks and agents instruments (t-18) declare
+  Enter-through-the-link and arrive without rework
 - in history: `h` `l` step time, `n` `N` jump to changes, `t` tracks the
   reading-height part, `H` `L` walk its changes
 - zoom: `+` `-` `=`, carried by the window's pool state (t-24@r20);
