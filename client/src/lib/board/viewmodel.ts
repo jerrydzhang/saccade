@@ -13,10 +13,20 @@ import {
   type Location,
   type Machine,
 } from "../sources.ts";
-import { parseLocation } from "../location.ts";
+import { instrumentPath, parseLocation } from "../location.ts";
 import type { CopyMode } from "../copy.ts";
+import type { ViewPage } from "../pages.ts";
 
 export type ViewerStatus = "empty" | "loading" | "loaded" | "invalid";
+
+/** The entry-page instruments (t-14 step 3): the pipeline and the
+ * glance. The view carries the page document whole - the pure models
+ * in lib/instruments restate it, and the live words join at render
+ * time. */
+export type InstrumentView = {
+  kind: "tasks" | "agents";
+  page: ViewPage;
+};
 
 export type RenderOutcome = {
   kind: "math" | "mermaid" | "figure" | "image" | "html" | "node";
@@ -29,6 +39,9 @@ export type ViewerState = {
   status: ViewerStatus;
   location: Location | null;
   board: Board | null;
+  /** The instrument the window shows, when the location is an entry
+   * page; a board open clears it. */
+  instrument: InstrumentView | null;
   rawText: string | null;
   errors: StructuredIssue[];
   diagnostics: Diagnostic[];
@@ -44,6 +57,7 @@ export class ViewerModel {
     status: "empty",
     location: null,
     board: null,
+    instrument: null,
     rawText: null,
     errors: [],
     diagnostics: [],
@@ -122,6 +136,7 @@ export class ViewerModel {
       status: "loading",
       location,
       board: null,
+      instrument: null,
       rawText: null,
       errors: [],
       diagnostics: [],
@@ -129,6 +144,46 @@ export class ViewerModel {
       renderOutcomes: [],
       renderGeneration: null,
     });
+    // an entry page loads as an instrument: the page document whole,
+    // fresh - never the board text path (t-14: the instruments read
+    // /view/v1 only, and these locations name the record's now)
+    const instrument = instrumentPath(location.path);
+    if (instrument !== null) {
+      if (!location.machine.startsWith("tracker:")) {
+        const message = `the instrument pages ride a tracker location (tracker/<name>/${instrument})`;
+        this.set({
+          status: "invalid",
+          board: null,
+          instrument: null,
+          rawText: null,
+          errors: [{ code: "asset-denied", message }],
+          laneMessage: message,
+        });
+        return;
+      }
+      try {
+        const source = sourceFor(location.machine);
+        if (!(source instanceof (await import("../tracker.ts")).TrackerSource)) {
+          throw new SourceUnavailableError("asset-denied", `'${location.machine}' is not a tracker`);
+        }
+        const page = await source.instrumentPage(instrument);
+        if (token !== this.generation) return;
+        this.set({ status: "loaded", location, instrument: { kind: instrument, page }, rawText: null });
+        this.remember(location);
+      } catch (error) {
+        if (token !== this.generation) return;
+        const message = error instanceof SourceUnavailableError ? error.message : String(error);
+        this.set({
+          status: "invalid",
+          board: null,
+          instrument: null,
+          rawText: null,
+          errors: [{ code: "asset-missing", message }],
+          laneMessage: message,
+        });
+      }
+      return;
+    }
     let text: string;
     let resolvedLocation: Location = location;
     try {
@@ -217,11 +272,17 @@ export class ViewerModel {
       renderOutcomes: [],
       renderGeneration: token,
     });
+    this.remember(resolvedLocation);
+  }
+
+  /** The window's own recency (t-24@r11): newest first, the picker's
+   * tie-breaker, not a record fact. */
+  private remember(location: Location): void {
     const seen = this.recent.findIndex(
-      (candidate) => candidate.machine === resolvedLocation.machine && candidate.path === resolvedLocation.path,
+      (candidate) => candidate.machine === location.machine && candidate.path === location.path,
     );
     if (seen >= 0) this.recent.splice(seen, 1);
-    this.recent.unshift(resolvedLocation);
+    this.recent.unshift(location);
   }
 
   /** Ctrl-o: the location behind, keeping the current one ahead. */

@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { decodePage, type ViewPage } from "../src/lib/pages.ts";
 import {
   agentsSections,
+  type AgentRow,
   attachCommand,
   rowDetail,
   rowTask,
@@ -130,8 +131,10 @@ test("the pipeline page restates as sections and rows in order", () => {
     ["waiting", "in flight", "awaiting judgment", "concluded last 24h"],
   );
   const inFlight = sections[1];
+  assert.ok(inFlight, "in flight is the second section");
   assert.equal(inFlight.rows.length, 1);
   const row = inFlight.rows[0];
+  assert.ok(row, "the in-flight section carries its row");
   assert.deepEqual(
     { ...row, latestCommit: row.latestCommit.slice(0, 1) },
     {
@@ -143,7 +146,7 @@ test("the pipeline page restates as sections and rows in order", () => {
       location: "t-1",
     },
   );
-  assert.equal(sections[2].rows.length, 0, "the empty sections hold");
+  assert.equal(sections[2]?.rows.length, 0, "the empty sections hold");
 });
 
 test("the age renders terse against now and empty without a moment", () => {
@@ -169,19 +172,29 @@ test("the agents view joins the live words by the terminal address", () => {
   assert.ok(working, "the working section exists");
   assert.equal(working.rows.length, 1);
   const row = working.rows[0];
+  assert.ok(row, "the working row is i-9");
   assert.equal(row.incarnation, "i-9");
   assert.equal(row.word?.msg, "editing src");
   assert.equal(row.word?.progress, "42");
   assert.equal(rowDetail(row), "editing src \u00b7 42", "the detail exactly as sent, joined");
   assert.equal(rowTime(row), 5_000);
   const blocked = sections.find((s) => s.word === "blocked");
-  assert.equal(blocked?.rows[0].word?.msg, null, "nothing when nothing was sent");
-  assert.equal(rowDetail(blocked?.rows[0] ?? rowTaskAgent()), "");
+  const blockedRow = blocked?.rows[0];
+  assert.equal(blockedRow?.word?.msg ?? null, null, "nothing when nothing was sent");
+  assert.equal(rowDetail(blockedRow ?? rowTaskAgent()), "");
 });
 
 // a helper for the empty-detail assertion
-function rowTaskAgent(): { word: null } {
-  return { word: null };
+function rowTaskAgent(): AgentRow {
+  return {
+    incarnation: "i-0",
+    address: null,
+    harness: null,
+    tasks: [],
+    workspace: null,
+    lastCommit: null,
+    word: null,
+  };
 }
 
 test("the sections follow the spec's word order and the absent rides last", () => {
@@ -202,12 +215,13 @@ test("the sections follow the spec's word order and the absent rides last", () =
     "error, working, then the absent section last",
   );
   const absent = populated[2];
+  assert.ok(absent, "the absent section rides last");
   assert.deepEqual(
     absent.rows.map((r) => r.incarnation),
     ["i-2"],
     "the session with no word and no address sits absent, shapeless",
   );
-  assert.equal(rowTime(absent.rows[0]), null);
+  assert.equal(rowTime(absent.rows[0] ?? rowTaskAgent()), null);
 });
 
 test("within a section rows order by task then workspace", () => {
@@ -253,7 +267,7 @@ test("within a section rows order by task then workspace", () => {
   const sections = agentsSections(page, words());
   const idle = sections.find((s) => s.word === "idle");
   assert.deepEqual(
-    idle?.rows.map((r) => r.incarnation),
+    (idle?.rows ?? []).map((r) => r.incarnation),
     ["i-3", "i-5", "i-7"],
     "t-2 before the t-9s; within t-9, workspace /ws/a before /ws/b",
   );
@@ -263,13 +277,13 @@ test("the row's task is the newest claim and the attach command rides the addres
   setWords({}, 4);
   const sections = agentsSections(agentsPage(), words());
   const anyRow = sections.flatMap((s) => s.rows).find((r) => r.incarnation === "i-9");
-  assert.ok(anyRow);
+  assert.ok(anyRow, "the joined session's row");
   assert.equal(rowTask(anyRow), "t-5", "latest claim first, the page's order");
   assert.equal(attachCommand(anyRow), "hc attach t3");
   const addressless = sections
     .flatMap((s) => s.rows)
     .find((r) => r.incarnation === "i-2");
-  assert.ok(addressless);
+  assert.ok(addressless, "the addressless session's row");
   assert.equal(attachCommand(addressless), null);
 });
 
@@ -289,6 +303,7 @@ test("the lane's last six hours take the right two thirds", () => {
   assert.equal(layout.sixHourMark, 1 / 3);
   assert.equal(layout.spanHours, 24);
   const [created, claimed, offered, threeHours, oneHour] = layout.positions;
+  assert.ok(created && claimed && offered && threeHours && oneHour, "the five events laid out");
   assert.equal(created.x, 0, "the axis's own start sits at its left edge");
   assert.equal(offered.x, 1 / 3, "the six-hour mark sits at one third");
   assert.ok(claimed.x > 0 && claimed.x < 1 / 3, "the 12h event rides the left third");
@@ -297,7 +312,7 @@ test("the lane's last six hours take the right two thirds", () => {
   assert.ok(oneHour.x <= 1);
   // the recent segment's midpoint (3h ago) sits at 2/3 of the axis
   const half = laneLayout([{ at: now - 3 * HOUR, label: "x", kind: "x" }], now);
-  assert.ok(Math.abs(half.positions[0].x - 2 / 3) < 1 / 100, "3h ago lands at about 2/3");
+  assert.ok(Math.abs((half.positions[0]?.x ?? 0) - 2 / 3) < 1 / 100, "3h ago lands at about 2/3");
 });
 
 test("events older than the axis clamp at the left edge, named so", () => {
@@ -308,6 +323,7 @@ test("events older than the axis clamp at the left edge, named so", () => {
     now,
   );
   const [birth] = layout.positions;
+  assert.ok(birth, "the clamped event laid out");
   assert.equal(birth.x, 0);
   assert.equal(birth.clamped, true, "the clamp is named, never silent");
 });

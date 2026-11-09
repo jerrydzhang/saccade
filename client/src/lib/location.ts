@@ -13,9 +13,19 @@
 export type ParsedLocation = { machine: string; path: string } | null;
 
 // The tracker-named form: a repository directory name, then a task
-// spec. The name carries no colon or slash, so it never collides with
-// the machine:/path form.
-const TRACKER_LOCATION = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?)$/;
+// spec or an entry page (tasks, agents - the pipeline and the glance,
+// t-14 step 3). The name carries no colon or slash, so it never
+// collides with the machine:/path form.
+const TRACKER_LOCATION = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|tasks|agents)$/;
+
+/** The entry pages the instruments read: the pipeline (tasks) and the
+ * glance (agents), per t-14 "Tasks and agents". */
+export type InstrumentPath = "tasks" | "agents";
+
+export function instrumentPath(path: string): InstrumentPath | null {
+  const trimmed = path.trim();
+  return trimmed === "tasks" || trimmed === "agents" ? trimmed : null;
+}
 
 export function trackerLocation(input: string): ParsedLocation {
   const match = TRACKER_LOCATION.exec(input.trim());
