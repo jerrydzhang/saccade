@@ -264,6 +264,12 @@ button::selection {
   transform: translateY(1px);
 }
 
+/* the row is shape + one body cell: exactly two grid items */
+.err-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .render-error strong {
   font-weight: 600;
 }

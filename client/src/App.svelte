@@ -341,10 +341,10 @@
   {#if view.errors.length > 0}
     <section class="errors" aria-label="load errors">
       {#each view.errors as issue}
-        <p class="render-error"><strong>{issue.code}</strong> {issue.message}{#if issue.line !== undefined} (line {issue.line}, column {issue.column ?? 0}){/if}</p>
+        <p class="render-error"><span class="err-body"><strong>{issue.code}</strong> {issue.message}{#if issue.line !== undefined} (line {issue.line}, column {issue.column ?? 0}){/if}</span></p>
       {/each}
       {#if view.laneMessage}
-        <p class="render-error">{view.laneMessage}</p>
+        <p class="render-error"><span class="err-body">{view.laneMessage}</span></p>
       {/if}
     </section>
   {/if}
