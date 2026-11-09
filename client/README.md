@@ -30,9 +30,12 @@ tracker), `machine:/absolute/path` (a machine from the local herdr-core's
 list), or a bare `/absolute/path` (a file on the TRACKER's machine,
 read through Herdr core: the machine that hosts the tracker is declared
 once in the client configuration as `tracker-machine`; on the tracker's
-own machine - the server host being loopback - the local core's own
-machine is read, and without a declaration on a spoke the open refuses
-saying what to set). The same grammar is every open surface's, picker
+own machine - proven by machine identity, the root page's machine id
+equaling this device's own /etc/machine-id (t-24@r14), never the server
+address's shape - the local core's own machine is read, and without a
+declaration when the proof fails or an id is unavailable the open
+refuses saying what to set). The same grammar is every open surface's,
+picker
 included; there is no launch argument and no path on the device the
 human sits at. Fixtures live in `fixtures/` and remain a dev/test path
 (the lanes address them through the inspection surface and the

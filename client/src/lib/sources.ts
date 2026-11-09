@@ -6,7 +6,11 @@
 // adapter swapping.
 
 import { resolveRelative } from "./resolve.ts";
-import { TrackerSource, serverHost, trackerHostIsLocal } from "./tracker.ts";
+import {
+  TrackerSource,
+  serverHost,
+  trackerIsThisMachine,
+} from "./tracker.ts";
 import {
   LANE_CODES,
   SourceUnavailableError,
@@ -256,12 +260,13 @@ export class RemoteSource implements BoardSource {
 
 // A bare path is a file on the TRACKER's machine (t-24@r12), read
 // through Herdr core like any named machine - never the device the
-// human sits at. The client configuration declares which Herdr machine
-// hosts the tracker (t-16's config file, `tracker-machine`); on the
-// tracker's own machine (the hub, the server host being loopback) the
-// declaration is unnecessary and the local core's own machine is read.
-// Without the declaration on a spoke, a bare path refuses saying what
-// to set. No bridge (no local core), no tracker-machine read at all.
+// human sits at. The hub proof is machine identity (t-24@r14): the
+// tracker root page's machine id equals this device's own
+// /etc/machine-id, and then the local core's own machine is read with
+// no declaration. Otherwise - a different machine, or an unavailable
+// id on either side - the client configuration's `tracker-machine`
+// declaration applies, and without it the open refuses saying what to
+// set. No bridge (no local core), no tracker-machine read at all.
 export class TrackerMachineSource implements BoardSource {
   readonly machine = "tracker-machine" as const;
 
@@ -280,6 +285,12 @@ export class TrackerMachineSource implements BoardSource {
       }
       throw error;
     }
+    let ownId: string | null = null;
+    try {
+      ownId = (await invoke("machine_id")) as string | null;
+    } catch (error) {
+      throw bridgeFailure(error);
+    }
     let declared: string | null = null;
     try {
       declared = (await invoke("tracker_machine")) as string | null;
@@ -293,13 +304,12 @@ export class TrackerMachineSource implements BoardSource {
         "a bare path reads on the tracker's machine; no tracker server is set - set the tracker server host, or tracker-machine in the client configuration",
       );
     }
-    if (!trackerHostIsLocal()) {
-      throw new SourceUnavailableError(
-        "lane-unavailable",
-        "a bare path reads on the tracker's machine, which this device is not; set tracker-machine in the client configuration to the Herdr machine that hosts the tracker",
-      );
-    }
-    return ""; // the local core's own machine: the hub itself
+    const hub = await trackerIsThisMachine(async () => ownId);
+    if (hub) return ""; // the local core's own machine: the hub itself
+    throw new SourceUnavailableError(
+      "lane-unavailable",
+      "a bare path reads on the tracker's machine, which this device is not; set tracker-machine in the client configuration to the Herdr machine that hosts the tracker",
+    );
   }
 
   private async resolve(): Promise<string> {

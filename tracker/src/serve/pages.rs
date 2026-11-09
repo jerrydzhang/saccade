@@ -60,6 +60,18 @@ struct PageDoc {
     seq: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tracker: Option<String>,
+    /// The server host's /etc/machine-id, trimmed (t-24@r14): the fact
+    /// a client compares with its own machine id to prove it is on the
+    /// tracker's machine before a bare-path read through the local
+    /// core. A plain host fact, not Herdr data; absent when the file is
+    /// unreadable or the id is empty, so absence means "cannot prove
+    /// same machine" and never defaults two machines equal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    machine_id: Option<String>,
+    /// The tracker's repository path (t-24@r16): with the machine id it
+    /// names the tracker, so a consumer can address it without a name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     view_majors: Option<Vec<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,6 +161,8 @@ fn refusal_doc(location: &str, code: &str, detail: &str, seq: Option<usize>) -> 
         location: location.to_string(),
         seq,
         tracker: None,
+        machine_id: None,
+        repo_path: None,
         view_majors: None,
         board_grammar: None,
         code: Some(code.to_string()),
@@ -563,6 +577,8 @@ fn root_page(app: &AppState, snapshot: &Snapshot) -> PageDoc {
         location: "/".to_string(),
         seq: cursor(snapshot),
         tracker: app.repo_root().map(crate::paths::repo_basename),
+        machine_id: machine_id(MACHINE_ID_PATH),
+        repo_path: app.repo_root().map(|path| path.display().to_string()),
         view_majors: Some(vec![VIEW_MAJOR]),
         board_grammar: Some(GrammarRange {
             min: *board_grammar::SUPPORTED_GRAMMAR_VERSIONS.start(),
@@ -578,6 +594,19 @@ fn root_page(app: &AppState, snapshot: &Snapshot) -> PageDoc {
 
 fn cursor(snapshot: &Snapshot) -> Option<usize> {
     snapshot.rows.last().map(|row| row.seq)
+}
+
+/// Where a host's machine id lives: one stable, read-only fact.
+const MACHINE_ID_PATH: &str = "/etc/machine-id";
+
+/// The host's machine id, trimmed; None when the file is missing or
+/// unreadable, so a client treats itself as a spoke (t-24@r14: never
+/// guess toward the local device, and never default unknown ids equal).
+fn machine_id(path: &str) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|id| !id.is_empty())
 }
 
 /// The page families this tracker serves, as the root names them. A
@@ -724,6 +753,8 @@ fn board_page(
         location: pinned,
         seq: cursor(snapshot),
         tracker: None,
+        machine_id: None,
+        repo_path: None,
         view_majors: None,
         board_grammar: None,
         code: None,
@@ -864,6 +895,8 @@ fn history_page(
         location,
         seq: cursor(snapshot),
         tracker: None,
+        machine_id: None,
+        repo_path: None,
         view_majors: None,
         board_grammar: None,
         code: None,
@@ -929,6 +962,8 @@ fn diff_page(
         location: format!("t-{task}@r{from}..r{to}/diff"),
         seq: cursor(snapshot),
         tracker: None,
+        machine_id: None,
+        repo_path: None,
         view_majors: None,
         board_grammar: None,
         code: None,
@@ -977,6 +1012,8 @@ fn component_page(
         location: format!("t-{task}@r{revision}{location}"),
         seq: cursor(snapshot),
         tracker: None,
+        machine_id: None,
+        repo_path: None,
         view_majors: None,
         board_grammar: None,
         code: None,
@@ -1341,5 +1378,37 @@ mod test {
         assert_eq!(content_type_of("figures/plot.svg"), "image/svg+xml");
         assert_eq!(content_type_of("paper.pdf"), "application/pdf");
         assert_eq!(content_type_of("data.bin"), "application/octet-stream");
+    }
+
+    #[test]
+    fn the_machine_id_is_the_trimmed_file_and_absent_when_unreadable_or_empty() {
+        let dir =
+            std::env::temp_dir().join(format!("saccade-machine-id-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("machine-id");
+        std::fs::write(&path, "3a6f1c4e...\n").unwrap();
+        assert_eq!(
+            machine_id(path.to_str().unwrap()),
+            Some("3a6f1c4e...".to_string())
+        );
+        std::fs::write(&path, "   \n").unwrap();
+        assert_eq!(
+            machine_id(path.to_str().unwrap()),
+            None,
+            "an empty id is absent, never an empty string two machines could share"
+        );
+        assert_eq!(
+            machine_id("/nonexistent/machine-id"),
+            None,
+            "an unreadable id is absent: cannot prove same machine"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_root_refusal_and_every_family_page_carry_no_host_identity() {
+        let refusal = refusal_doc("t-9", "unknown_task", "no such task", Some(1));
+        assert_eq!(refusal.machine_id, None);
+        assert_eq!(refusal.repo_path, None);
     }
 }

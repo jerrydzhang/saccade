@@ -9087,7 +9087,17 @@ fn view_page_sac(
 /// board at two revisions (text, then group + figure + annotation), a
 /// claim with the offer, reject and grounds between them, and a
 /// consumer board incorporating the source's second revision.
-fn view_page_fixture(tag: &str) -> (ScratchDir, ServerProc, String, usize, usize, String) {
+fn view_page_fixture(
+    tag: &str,
+) -> (
+    ScratchDir,
+    ServerProc,
+    String,
+    usize,
+    usize,
+    String,
+    std::path::PathBuf,
+) {
     let (dir, project, serve, url) = view_page_project(tag);
     let _ = dir;
     let saved = project.parent().unwrap().join("viewpage01.jsonl");
@@ -9221,12 +9231,14 @@ fn view_page_fixture(tag: &str) -> (ScratchDir, ServerProc, String, usize, usize
         inc_num,
         inc_seq,
         src.join("board.yaml").display().to_string(),
+        project,
     )
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn view_v1_pages_serve_boards_history_components_and_files() {
-    let (_scratch, _serve, url, inc_num, _inc_seq, authored) = view_page_fixture("view-docs");
+    let (_scratch, _serve, url, inc_num, _inc_seq, authored, repo_root) =
+        view_page_fixture("view-docs");
 
     // the root page: what an instrument reads first
     let (status, body) = get_json(&url, "/view/v1");
@@ -9238,6 +9250,20 @@ async fn view_v1_pages_serve_boards_history_components_and_files() {
     assert_eq!(root["tracker"], json!("project"));
     assert_eq!(root["view_majors"], json!([1]));
     assert_eq!(root["board_grammar"], json!({"min": 1, "max": 1}));
+    // the host facts a consumer needs to prove hub identity (t-24@r14,
+    // t-24@r16): the machine id is the trimmed /etc/machine-id or
+    // absent, and the repository path names the tracker beside it
+    let expected_id = std::fs::read_to_string("/etc/machine-id")
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|id| !id.is_empty());
+    assert_eq!(
+        root["machine_id"],
+        expected_id
+            .map(|id| json!(id))
+            .unwrap_or(serde_json::Value::Null)
+    );
+    assert_eq!(root["repo_path"], json!(repo_root.display().to_string()));
     assert!(root["seq"].as_u64().is_some(), "{root}");
     let families: Vec<&str> = root["content"]
         .as_array()
@@ -9610,7 +9636,8 @@ async fn view_v1_pages_serve_boards_history_components_and_files() {
 // on the command face.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_parked_page_wakes_when_the_other_write_doors_land_records() {
-    let (_scratch, _serve, url, inc_num, _inc_seq, _authored) = view_page_fixture("view-wakes");
+    let (_scratch, _serve, url, inc_num, _inc_seq, _authored, _repo_root) =
+        view_page_fixture("view-wakes");
 
     // the board-commit door: a parked task page wakes on the commit
     let (_, body) = get_json(&url, "/view/v1/");
@@ -9755,7 +9782,8 @@ async fn a_parked_page_wakes_when_the_other_write_doors_land_records() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn view_v1_wait_parks_until_a_relevant_record_lands() {
-    let (_scratch, _serve, url, _inc_num, _inc_seq, _authored) = view_page_fixture("view-wait");
+    let (_scratch, _serve, url, _inc_num, _inc_seq, _authored, _repo_root) =
+        view_page_fixture("view-wait");
 
     // the cursor the waits hang from
     let (_, body) = get_json(&url, "/view/v1/");

@@ -10,7 +10,7 @@ import {
 import {
   TrackerSource,
   serverBase,
-  trackerHostIsLocal,
+  trackerIsThisMachine,
 } from "../src/lib/tracker.ts";
 
 // the one viewer setting rides localStorage in the app; node tests run
@@ -439,24 +439,50 @@ test("a file refusal raises with its code", async () => {
   );
 });
 
-test("the hub judgment reads the loopback host, not a remote one", () => {
-  const restoreLocal = withHost("127.0.0.1:8811");
+test("the hub proof is machine identity, never address shape", async () => {
+  // t-24@r14: the root page's machine id compared with this device's
+  // own; a loopback server address proves nothing, an unavailable or
+  // empty id on either side proves nothing, and absent never equals
+  // absent.
+  const restore = withHost("127.0.0.1:8811");
   try {
-    assert.equal(trackerHostIsLocal(), true);
+    const equal: Fetcher = wire(
+      { "/view/v1/": { body: () => ({ ...ROOT, machine_id: "id-9" }) } },
+      [],
+    );
+    assert.equal(
+      await trackerIsThisMachine(async () => "id-9", equal),
+      true,
+      "equal ids are the hub",
+    );
+    const other: Fetcher = wire(
+      { "/view/v1/": { body: () => ({ ...ROOT, machine_id: "other" }) } },
+      [],
+    );
+    assert.equal(
+      await trackerIsThisMachine(async () => "id-9", other),
+      false,
+      "a different machine id is a spoke even over a loopback address",
+    );
+    const absent: Fetcher = wire({ "/view/v1/": { body: () => ({ ...ROOT }) } }, []);
+    assert.equal(
+      await trackerIsThisMachine(async () => "id-9", absent),
+      false,
+      "an absent tracker id never proves the hub",
+    );
+    const absentBoth: Fetcher = wire({ "/view/v1/": { body: () => ({ ...ROOT }) } }, []);
+    assert.equal(
+      await trackerIsThisMachine(async () => null, absentBoth),
+      false,
+      "null never equals null",
+    );
+    assert.equal(
+      await trackerIsThisMachine(async () => "", equal),
+      false,
+      "an empty own id is never the hub",
+    );
   } finally {
-    restoreLocal();
-  }
-  const restoreRemote = withHost("192.168.0.51:8811");
-  try {
-    assert.equal(trackerHostIsLocal(), false);
-  } finally {
-    restoreRemote();
-  }
-  const restoreNone = withHost(null);
-  try {
-    assert.equal(trackerHostIsLocal(), false);
-  } finally {
-    restoreNone();
+    restore();
   }
 });
 

@@ -33,6 +33,7 @@ pub fn run() {
             commands::viewer_identity,
             commands::test_open,
             commands::tracker_machine,
+            commands::machine_id,
             commands::write_clipboard,
             board_validate::validate_board,
             look_config::look_config,

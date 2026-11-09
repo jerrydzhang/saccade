@@ -175,8 +175,13 @@ depend on Herdr. `/api/v1` stays `sac`'s own API and changes freely;
 nothing writes through `/view/v1`.
 
 - **A page belongs to a location, not an endpoint.** The location
-  grammar v1 serves: `` (the root, naming the tracker, the view
-  grammar majors and board grammar range, and the page families),
+  grammar v1 serves: `` (the root, naming the tracker, the host facts
+  a consumer needs to prove hub identity per t-24@r14 and t-24@r16 -
+  the machine id, the trimmed `/etc/machine-id`, absent when unreadable
+  or empty so absence means "cannot prove same machine", and the
+  repository path; plain read-only host facts, the root stays no-Herdr -
+  the view grammar majors and board grammar range, and the page
+  families),
   `t-N[@rK]` (a board page), `t-N[@rK]/history` (a timeline of
   commits interleaved with decisions in record order; a pinned
   revision cuts the timeline at the commit that landed it),

@@ -100,6 +100,12 @@ export type ViewPage = {
   location: string;
   seq: number | null;
   tracker?: string;
+  /** The tracker host's trimmed /etc/machine-id (t-24@r14): the fact
+   * a bare-path read compares with this device's own machine id.
+   * Absent means "cannot prove same machine". */
+  machineId?: string;
+  /** The tracker's repository path (t-24@r16), beside the machine id. */
+  repoPath?: string;
   viewMajors?: number[];
   boardGrammar?: GrammarRange;
   code?: string;
@@ -254,6 +260,8 @@ export function decodePage(value: unknown): ViewPage {
     location: typeof raw.location === "string" ? raw.location : "",
     seq: typeof raw.seq === "number" ? raw.seq : null,
     tracker: optionalString(raw, "tracker"),
+    machineId: optionalString(raw, "machine_id"),
+    repoPath: optionalString(raw, "repo_path"),
     viewMajors:
       majors === undefined
         ? undefined

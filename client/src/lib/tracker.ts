@@ -28,6 +28,12 @@ import {
   type ViewPage,
 } from "./pages.ts";
 
+// The tracker's identity facts, from the root page (t-24@r14, r16).
+export type TrackerIdentity = {
+  machineId: string | null;
+  repoPath: string | null;
+};
+
 // The one viewer setting: the tracker server's host. The value is the
 // address the tracker publishes beside its database (the runtime
 // address hint), pasted once.
@@ -65,19 +71,24 @@ export function serverBase(): URL {
 
 /** True when the tracker host is this machine's loopback: the hub, where
  * the local core reads the tracker's own files (t-24@r12). */
-export function trackerHostIsLocal(): boolean {
-  const host = serverHost();
-  if (!host || host.trim().length === 0) return false;
-  const base = baseFromHost(host);
-  if (base === null) return false;
-  const name = base.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  return (
-    name === "localhost" || name === "::1" || /^127\.\d+\.\d+\.\d+$/.test(name)
-  );
+/** The hub proof, per t-24@r14: the root page's machine id equals this
+ * device's own machine id. Never address shape; null never equals
+ * null; an unavailable id on either side means not the hub. */
+export async function trackerIsThisMachine(
+  ownMachineId: () => Promise<string | null>,
+  fetcher: Fetcher = (url) => fetch(url),
+): Promise<boolean> {
+  const own = (await ownMachineId()) ?? "";
+  if (own.length === 0) return false;
+  const root = await fetchPage(fetcher, viewUrl(serverBase(), ""));
+  const trackerId = root.machineId ?? "";
+  if (trackerId.length === 0) return false;
+  return trackerId === own;
 }
 
 type Contract = {
   tracker: string | null;
+  identity: TrackerIdentity;
   boardGrammar: { min: number; max: number };
   viewMajors: number[];
 };
@@ -159,6 +170,10 @@ export class TrackerSource implements BoardSource {
       }
       return {
         tracker: root.tracker ?? null,
+        identity: {
+          machineId: root.machineId ?? null,
+          repoPath: root.repoPath ?? null,
+        },
         boardGrammar: range,
         viewMajors: root.viewMajors ?? [root.view.major],
       };

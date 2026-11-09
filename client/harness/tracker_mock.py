@@ -257,6 +257,8 @@ class TrackerMock:
                 "location": "/",
                 "seq": 1,
                 "tracker": mock.name,
+                "machine_id": "mock-machine-id",
+                "repo_path": "/mock/repo",
                 "view_majors": [1],
                 "board_grammar": {"min": mock.min_version, "max": mock.max_version},
                 "content": [

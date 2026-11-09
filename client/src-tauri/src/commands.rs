@@ -39,6 +39,23 @@ pub fn tracker_machine() -> Option<String> {
     look_config::current_tracker_machine()
 }
 
+/// This device's own machine id (t-24@r14): the trimmed
+/// `/etc/machine-id`, read on demand for the hub proof against the
+/// tracker root page's fact. None when unreadable or empty, so an
+/// unavailable id never proves anything.
+#[tauri::command]
+pub fn machine_id() -> Option<String> {
+    let id = std::fs::read_to_string("/etc/machine-id")
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|id| !id.is_empty());
+    eprintln!(
+        "[bridge] machine_id invoked: {}",
+        if id.is_some() { "present" } else { "absent" }
+    );
+    id
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct DeclaredText {
     pub text: String,
