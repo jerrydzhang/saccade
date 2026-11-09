@@ -1803,11 +1803,20 @@
     }
     if (draftEditor && draftEditorIndex !== null) {
       const block = blocks[draftEditorIndex];
+      // the mounted editor for THIS path stays exactly as it is: it
+      // self-syncs draftEditor.text through its own input listener, and
+      // rebuilding it per keystroke replaces the textarea under the
+      // typing hand. Only a genuinely different editor (a new path)
+      // re-renders.
+      const existingEditor = contentHost.querySelector(":scope > .board > .draft-editor");
+      if (existingEditor && existingEditor.getAttribute("data-editor-path") === draftEditor.path) {
+        return;
+      }
+      existingEditor?.remove();
       if (block) {
-        const existing = contentHost.querySelector(":scope > .board > .draft-editor");
-        existing?.remove();
         const el = document.createElement("div");
         el.className = "draft-editor";
+        el.dataset.editorPath = draftEditor.path;
         const area = document.createElement("textarea");
         area.className = "draft-editor-input";
         area.value = draftEditor.text;
