@@ -271,11 +271,13 @@
       return;
     }
     try {
+      console.log("[viewer] pool: bootstrap starts");
       const binding = (await invoke("window_binding")) as {
         label: string;
         state_id?: string | null;
       };
       windowLabel = binding.label;
+      console.log(`[viewer] pool: binding ${binding.label} ${binding.state_id ?? "(none)"}`);
       let stateId = binding.state_id ?? null;
       if (stateId === null) {
         const fresh =
@@ -286,7 +288,9 @@
         stateId = created.id;
       }
       poolStateId = stateId;
+      console.log(`[viewer] pool: state ${stateId}`);
       const attached = await pool.attach(stateId);
+      console.log("[viewer] pool: attached");
       // the shell's binding carries the pool's address and this
       // device's id: the close detach needs them after the webview is
       // gone
@@ -295,6 +299,7 @@
         server: pool.base.toString(),
         device: pool.device,
       });
+      console.log("[viewer] pool: shell bound");
       knownZoom = attached.zoom;
       knownPart = attached.part;
       knownDrafts = attached.drafts ?? [];
