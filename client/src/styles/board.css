@@ -1165,3 +1165,39 @@ code.raw-html {
   font-size: var(--fs-small);
   color: var(--ink);
 }
+
+/* ---------- zoom, figure overlay, incorporation expand ---------- */
+
+.figure-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--app-bg);
+  cursor: zoom-out;
+}
+
+.figure-overlay img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.incorporation-expanded {
+  border-left: 1px solid var(--pop-line);
+  margin: 4px 0 8px 12px;
+  padding-left: 12px;
+}
+
+.incorporation-provenance {
+  margin: 0 0 6px;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.incorporation-cited .md {
+  margin: 0;
+}

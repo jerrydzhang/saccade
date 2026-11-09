@@ -295,6 +295,14 @@ export class TrackerSource implements BoardSource {
     return fetchFileBytes(this.fetcher, viewUrl(base, `${pinned}/file/${path}`));
   }
 
+  /** The cited components at a select path: the incorporation expand's
+   * only source - expanding shows just the cited parts. */
+  async citedComponents(pinned: string, selectPath: string): Promise<ViewPage> {
+    await this.checkContract();
+    const base = serverBase();
+    return fetchPage(this.fetcher, viewUrl(base, `${pinned}/content${selectPath}`));
+  }
+
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
     const { pinned } = await this.resolvePinned(location.path);
     const resolved = resolveRelative("", relative);

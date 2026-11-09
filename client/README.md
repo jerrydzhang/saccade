@@ -89,6 +89,23 @@ tests on both sides: this repository's node tests and the
 
 Keys:
 
+- `s` puts labels on what can be selected (lowercase on prose, uppercase
+  on the rest); typing a label selects its target and opens its one
+  context menu beside it; typing anything else narrows the text targets
+  by their text; right-click opens the same menu at the pointer; `Enter`
+  opens the selected target's acts; `?` lists keys and commands on
+  demand
+- motion: `j` `k` lines, `Ctrl-f` `Ctrl-b` pages, `Ctrl-d` `Ctrl-u` and
+  `d` `u` half pages, `gg` `G` ends, `Ctrl-o` `Ctrl-i` back and forward
+- `space` leads the viewer's own commands: `space space` the picker
+  (id, name, word start, substring, scattered letters; recency ties;
+  the open item last; kind and name only; a typed location always
+  resolves), `space h` history, `space m` marginalia, `space p` publish
+- in history: `h` `l` step time, `n` `N` jump to changes, `t` tracks the
+  reading-height part, `H` `L` walk its changes
+- zoom: `+` `-` `=`, the window's own memory until the pool lands;
+  figures and diagrams enlarge as their primary act; an incorporation
+  expands to exactly its cited components
 - `Ctrl+F` opens the search bar; `Escape` closes it; `Enter` and
   `Shift+Enter` walk the matches
 - copy is Source by default; `Ctrl+Shift+C` toggles Plain; `Ctrl+C`

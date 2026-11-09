@@ -220,6 +220,9 @@
       { key: "s", label: "labels on what can be selected", onAct: () => enterLabelMode() },
       { key: "/", label: "search", onAct: () => openSearch() },
       { key: "?", label: "help", onAct: () => (helpOpen = true) },
+      { key: "+", label: "zoom in", onAct: () => zoomBy(0.1) },
+      { key: "-", label: "zoom out", onAct: () => zoomBy(-0.1) },
+      { key: "=", label: "zoom reset", onAct: () => zoomReset() },
       {
         key: "m",
         label: view.copyMode === "plain" ? "copy plain (now source)" : "copy source (now plain)",
@@ -599,6 +602,127 @@
     const anchor = readingAnchorKey();
     if (anchor) historyMode.track(anchor.key);
   }
+
+  // Zoom (+ - =, t-14): the document's scale, the window's own
+  // in-memory state until the pool lands (t-24@r11).
+  let zoom = $state(1);
+  const ZOOM_MIN = 0.7;
+  const ZOOM_MAX = 2;
+  function zoomBy(delta: number): void {
+    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((zoom + delta) * 100) / 100));
+    if (contentHost) contentHost.style.zoom = String(zoom);
+  }
+  function zoomReset(): void {
+    zoom = 1;
+    if (contentHost) contentHost.style.zoom = "1";
+  }
+
+  $effect(() => {
+    void zoom;
+    if (contentHost && contentHost.style.zoom === "") contentHost.style.zoom = String(zoom);
+  });
+
+  /** The primary act of a figure: enlarge, in the document's own
+   * overlay - the image at its natural size on the app background. */
+  function enlargeFigure(frame: HTMLElement): void {
+    const image = frame.querySelector("img");
+    if (!image) return;
+    closeFigureOverlay();
+    const overlay = document.createElement("div");
+    overlay.className = "figure-overlay";
+    overlay.dataset.control = "figure:overlay";
+    const clone = image.cloneNode(true) as HTMLImageElement;
+    overlay.append(clone);
+    const close = (): void => {
+      overlay.remove();
+      window.removeEventListener("keydown", onKey, true);
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    };
+    overlay.addEventListener("click", close);
+    window.addEventListener("keydown", onKey, true);
+    document.body.append(overlay);
+  }
+
+  function closeFigureOverlay(): void {
+    document.querySelectorAll(".figure-overlay").forEach((element) => element.remove());
+  }
+
+  /** Expand an incorporation: only the cited components, fetched from
+   * the cited revision's component page. The provenance stays; a
+   * refusal keeps the collapse. */
+  async function expandIncorporation(block: HTMLElement): Promise<void> {
+    const existing = block.nextElementSibling;
+    if (existing?.classList.contains("incorporation-expanded")) {
+      existing.remove();
+      return;
+    }
+    const location = view.location;
+    const source = historyTracker();
+    if (!location || !source) return;
+    const spec = parseTaskSpec(location.path);
+    if (!spec || spec.revision === null) return;
+    const blockIndex = Array.from(contentHost?.querySelectorAll<HTMLElement>(":scope > .block") ?? []).indexOf(block);
+    if (blockIndex < 0 || !view.board) return;
+    const part = view.board.content[blockIndex];
+    if (!part || part.kind !== "incorporation") return;
+    const selectPaths = part.source.select;
+    const container = document.createElement("div");
+    container.className = "incorporation-expanded";
+    container.dataset.control = "incorporation:expanded";
+    const provenance = document.createElement("p");
+    provenance.className = "incorporation-provenance";
+    provenance.textContent = `${part.source.task}@r${part.source.revision}, the cited parts only`;
+    container.append(provenance);
+    for (const path of selectPaths) {
+      try {
+        const page = await source.citedComponents(`${part.source.task}@r${part.source.revision}`, path);
+        for (const citedPart of page.content ?? []) {
+          if (citedPart.kind !== "text") continue;
+          const el = document.createElement("div");
+          el.className = "block incorporation-cited";
+          const rendered = renderBoard(
+            { grammar: 1, task: "", content: [{ kind: "text", markdown: citedPart.text, pos: { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } } }], diagnostics: [] },
+            { unitIndex: new Map(), onDiagnostic: () => {} },
+          );
+          el.append(rendered);
+          container.append(el);
+        }
+      } catch (error) {
+        const note = document.createElement("p");
+        note.className = "incorporation-provenance";
+        note.textContent = `the cited part refused: ${String(error)}`;
+        container.append(note);
+      }
+    }
+    block.insertAdjacentElement("afterend", container);
+  }
+
+  /** The click and primary acts the document carries: figures enlarge,
+   * incorporations expand, citations open - pointer complete. */
+  function onContentClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    const figure = target.closest<HTMLElement>(".block-figure .figure-frame, .block-figure img");
+    if (figure) {
+      const frame = figure.closest<HTMLElement>(".block-figure") ?? figure;
+      enlargeFigure(frame);
+      return;
+    }
+    const incorporation = target.closest<HTMLElement>(".block-incorporation");
+    if (incorporation && !target.closest("a")) {
+      void expandIncorporation(incorporation);
+    }
+  }
+
+  $effect(() => {
+    contentHost?.addEventListener("click", onContentClick);
+    return () => contentHost?.removeEventListener("click", onContentClick);
+  });
 
   // Draft annotations (t-14, ratified): `a` on the part at the reading
   // height drafts in place; drafts persist on the device keyed by task
@@ -1083,6 +1207,18 @@
       case "a":
         event.preventDefault();
         beginDraft();
+        return;
+      case "+":
+        event.preventDefault();
+        zoomBy(0.1);
+        return;
+      case "-":
+        event.preventDefault();
+        zoomBy(-0.1);
+        return;
+      case "=":
+        event.preventDefault();
+        zoomReset();
         return;
       case "?":
         event.preventDefault();
