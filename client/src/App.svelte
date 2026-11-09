@@ -142,7 +142,6 @@
     }
   }
   void openTestBoard();
-  void ensureDeck();
 
   let hostPath = $state("");
   let query = $state("");
@@ -398,7 +397,7 @@
   function readingAnchorKey(): { key: string; offset: number } | null {
     if (!contentHost) return null;
     const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     let best: HTMLElement | null = null;
     let bestDistance = Number.MAX_SAFE_INTEGER;
     for (const block of blocks) {
@@ -430,7 +429,7 @@
    * surviving neighbour, back at its viewport offset. */
   function restoreReadingAnchor(anchor: { key: string; offset: number } | null): void {
     if (!anchor || !contentHost) return;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     if (!view.board) return;
     let target: HTMLElement | null = null;
     const keys = view.board.content.map(partKeyForAnchor);
@@ -533,7 +532,7 @@
       contentHost.append(ruler);
     }
     ruler.textContent = "";
-    for (const block of Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"))) {
+    for (const block of contentBlocks()) {
       if (block.querySelector(".diff-add, .diff-del") === null) continue;
       const tick = document.createElement("span");
       tick.className = "history-ruler-tick";
@@ -686,7 +685,7 @@
     if (!location || !source) return;
     const spec = parseTaskSpec(location.path);
     if (!spec || spec.revision === null) return;
-    const blockIndex = Array.from(contentHost?.querySelectorAll<HTMLElement>(":scope > .block") ?? []).indexOf(block);
+    const blockIndex = contentBlocks().indexOf(block);
     if (blockIndex < 0 || !view.board) return;
     const part = view.board.content[blockIndex];
     if (!part || part.kind !== "incorporation") return;
@@ -798,7 +797,7 @@
    * the reading height - a top-level part, as the select path names. */
   function actPartIndex(): number | null {
     if (!contentHost || !view.board) return null;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     let element: HTMLElement | null = selected?.element ?? null;
     if (!element) {
       const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
@@ -1075,6 +1074,12 @@
 
   let mainWrap: HTMLElement | undefined = $state(undefined);
 
+  /** The rendered top-level blocks: one render root (div.board) sits
+   * between the content host and the blocks renderBoard appended. */
+  function contentBlocks(): HTMLElement[] {
+    return Array.from(contentHost?.querySelectorAll<HTMLElement>(":scope > .board > .block") ?? []);
+  }
+
   // -- the deck (t-21, t-24@r21) -----------------------------------------
   // The address is a herdr-core document per window: deck- plus 96
   // random bits, created on the machine the bare-path rule resolves
@@ -1265,6 +1270,12 @@
     return deckWaiting !== null ? `slide ${deckWaiting} waiting` : "";
   });
 
+  // The deck offers itself once the shell is up: at mount, and again
+  // on the next open after a failed reach. Not at the script's top -
+  // the deck state and the bridge marker are declared later, and a
+  // call there reads them before initialization (the remote lane's
+  // first run caught exactly that).
+
   let historyActive = $derived(historyMode !== null);
 
   // Marginalia (space m): rows, each run of parts beside the full
@@ -1311,7 +1322,7 @@
 
   function scrollToRun(run: MarginaliaRun): void {
     if (!contentHost || !view.board) return;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     const target = blocks[run.indexes[0] ?? -1];
     if (target) target.scrollIntoView({ block: "start", behavior: "auto" });
   }
@@ -1737,7 +1748,7 @@
     if (!contentHost) return;
     contentHost.querySelectorAll(":scope > .draft-annotation").forEach((element) => element.remove());
     if (!view.board) return;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     for (const draft of drafts) {
       const match = /^\/content\/(\d+)$/.exec(draft.path);
       const index = match?.[1] === undefined ? -1 : Number(match[1]);
@@ -1854,6 +1865,11 @@
       },
       deckShow: (index: number) => void showSlide(index),
     };
+  });
+
+  // the deck's mount-time offer (see the note at deckStateText)
+  $effect(() => {
+    void ensureDeck();
   });
 
   async function openHost(): Promise<void> {

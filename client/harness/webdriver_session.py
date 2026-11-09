@@ -659,6 +659,46 @@ def run_tracker_sequence(state: SessionState) -> int:
     if not ok:
         return tracker_finish(state)
 
+    # the annotation act on a task board (t-17, re-pinned here because
+    # t-21's lanes caught the act-part walk matching nothing): a opens
+    # the draft editor, its cancel closes it
+    try:
+        perform_input(state.client, {"kind": "key", "keys": ["a"]})
+    except WebDriverError as error:
+        check("a on a task board opens the draft editor", False, str(error)[:200])
+        return tracker_finish(state)
+    editor_up = False
+    editor_deadline = time.monotonic() + 10
+    while time.monotonic() < editor_deadline:
+        editor_up = (
+            state.client.execute(
+                "return document.querySelector('[data-control=\"draft:input\"]') !== null;"
+            )
+            is True
+        )
+        if editor_up:
+            break
+        time.sleep(0.5)
+    check("a on a task board opens the draft editor", editor_up)
+    if editor_up:
+        try:
+            perform_input(state.client, {"kind": "click", "target": "draft:cancel"})
+        except WebDriverError as error:
+            check("the draft editor's cancel closes it", False, str(error)[:200])
+        editor_closed = True
+        closed_deadline = time.monotonic() + 5
+        while time.monotonic() < closed_deadline:
+            editor_closed = (
+                state.client.execute(
+                    "return document.querySelector('[data-control=\"draft:input\"]') === null;"
+                )
+                is True
+            )
+            if editor_closed:
+                break
+            time.sleep(0.3)
+        check("the draft editor's cancel closes it", editor_closed)
+
     cited_ok = False
     cited = inspect_bounded(lambda i: "board:open-citation" in [t.get("id", "") for t in i.get("targets", [])], 10.0)
     if isinstance(cited, dict) and "board:open-citation" in [t.get("id", "") for t in cited.get("targets", [])]:
