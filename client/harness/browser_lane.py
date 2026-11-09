@@ -917,15 +917,18 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             "bare path" in str(note),
             str(note)[:160],
         )
-        # space p refuses the pooled publish outside a task board
+        # space p refuses the pooled publish outside a task board; on a
+        # fixture (not a bare path) the honest refusal is the task
+        # branch's - the explainer's own pooled-publish refusal names a
+        # bare-path window, pinned in the remote lane's live explainer
         key(" ")
         key("p")
         publish_open = page.evaluate("() => document.querySelector('[data-control=\"publish:overlay\"]') !== null")
         check("space p opens no publish outside a task board", not publish_open)
         note = page.evaluate("() => document.querySelector('[data-control=\"action:note\"]')?.textContent ?? ''")
         check(
-            "the pooled-publish refusal names the explainer's own write rule",
-            "no pooled publish" in str(note),
+            "the pooled-publish refusal is visible and names the act",
+            "no drafts to publish" in str(note),
             str(note)[:160],
         )
 

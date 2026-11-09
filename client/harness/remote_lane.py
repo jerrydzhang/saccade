@@ -781,6 +781,25 @@ def main() -> int:
         editor_up = False
 
         if opened is not None:
+            # the explainer's own pooled-publish refusal: space p on a
+            # bare-path window names the write rule instead
+            perform_input(state.client, {"kind": "key", "keys": [" "]})
+            perform_input(state.client, {"kind": "key", "keys": ["p"]})
+            publish_open = client.execute(
+                "return document.querySelector('[data-control=\"publish:overlay\"]') !== null;"
+            )
+            pooled_note = str(
+                client.execute(
+                    "return document.querySelector('[data-control=\"action:note\"]')?.textContent ?? '';"
+                )
+                or ""
+            )
+            check(
+                "space p on the explainer refuses the pooled publish, naming the rule",
+                publish_open is not True and "no pooled publish" in pooled_note,
+                f"overlay={publish_open} note={pooled_note[:120]}",
+            )
+
             perform_input(state.client, {"kind": "key", "keys": ["a"]})
             editor_deadline = time.monotonic() + 10
             editor_up = False
