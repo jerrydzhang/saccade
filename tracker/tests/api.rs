@@ -9036,6 +9036,18 @@ fn view_page_project(tag: &str) -> (ScratchDir, std::path::PathBuf, ServerProc, 
         "user.name",
         "smoke",
     ]);
+    // a HEAD on the project repo: the workspace doors resolve their
+    // default base from it
+    std::fs::write(project.join("README.md"), "the smoke project\n").unwrap();
+    git(&["-C", project.to_str().unwrap(), "add", "README.md"]);
+    git(&[
+        "-C",
+        project.to_str().unwrap(),
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+    ]);
     let (serve, url) = spawn_serve(
         bin,
         scratch.db.as_path(),
@@ -9558,6 +9570,141 @@ async fn view_v1_pages_serve_boards_history_components_and_files() {
             .unwrap(),
         "http://tauri.localhost"
     );
+}
+
+// The landing wake fires wherever a door lands a write outside
+// execute: a parked page hold wakes on the workspace, attach,
+// registration and address doors, and on the board commit - not just
+// on the command face.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_parked_page_wakes_when_the_other_write_doors_land_records() {
+    let (_scratch, _serve, url, inc_num, _inc_seq, _authored) = view_page_fixture("view-wakes");
+
+    // the board-commit door: a parked task page wakes on the commit
+    let (_, body) = get_json(&url, "/view/v1/");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let commit_wait = {
+        let url = url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, &format!("/view/v1/t-0?after={cursor}&timeout=8"))
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let work = std::env::temp_dir().join(format!("sac-view-wakes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).unwrap();
+    let (ok, out, err) = view_page_sac(
+        &url,
+        None,
+        None,
+        &["board", "edit", "t-0", work.to_str().unwrap()],
+    );
+    assert!(ok, "{out}{err}");
+    std::fs::write(
+        work.join("board.yaml"),
+        "grammar: 1\ntask: t-0\ncontent:\n  - text: the wake test board\n",
+    )
+    .unwrap();
+    let (ok, _, err) = view_page_sac(
+        &url,
+        None,
+        None,
+        &[
+            "board",
+            "commit",
+            "t-0",
+            work.to_str().unwrap(),
+            "-m",
+            "wake the parked page",
+        ],
+    );
+    assert!(ok, "{err}");
+    let started = std::time::Instant::now();
+    let (status, body) = commit_wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        json_of(&body)["seq"].as_u64().unwrap() > cursor,
+        "the board commit woke the parked page"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "the commit's landing woke the hold, not the deadline"
+    );
+
+    // the workspace create door
+    let (_, body) = get_json(&url, "/view/v1/");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let root_wait = {
+        let url = url.clone();
+        std::thread::spawn(move || get_json(&url, &format!("/view/v1/?after={cursor}&timeout=8")))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/workspace/create",
+        &json!({"label": "wake-test"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let started = std::time::Instant::now();
+    let (status, body) = root_wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        json_of(&body)["seq"].as_u64().unwrap() > cursor,
+        "the workspace birth woke the parked root"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+
+    // the attach door: a new session registers, the parked root wakes
+    let (_, body) = get_json(&url, "/view/v1/");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let root_wait = {
+        let url = url.clone();
+        std::thread::spawn(move || get_json(&url, &format!("/view/v1/?after={cursor}&timeout=8")))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let saved = work.join("wakesession.jsonl");
+    std::fs::write(
+        &saved,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"wakesession1\",\"timestamp\":\"t\",\"cwd\":\"/tmp\"}\n",
+    )
+    .unwrap();
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "wakesession1", "session_file": saved.to_str().unwrap()}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let started = std::time::Instant::now();
+    let (status, body) = root_wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        json_of(&body)["seq"].as_u64().unwrap() > cursor,
+        "the registration woke the parked root"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+
+    // the address door: the address assignment wakes the parked root
+    let (_, body) = get_json(&url, "/view/v1/");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let root_wait = {
+        let url = url.clone();
+        std::thread::spawn(move || get_json(&url, &format!("/view/v1/?after={cursor}&timeout=8")))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/address",
+        &json!({"incarnation": inc_num, "address": "wake-tty", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let started = std::time::Instant::now();
+    let (status, body) = root_wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        json_of(&body)["seq"].as_u64().unwrap() > cursor,
+        "the address assignment woke the parked root"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
 
 #[tokio::test(flavor = "multi_thread")]
