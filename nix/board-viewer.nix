@@ -87,6 +87,11 @@ in {
     cargoSrc = lib.sourceByRegex repoRoot [
       "^Cargo\.toml$"
       "^Cargo\.lock$"
+      # the workspace manifest names the companion member: cargo
+      # refuses to load the workspace without its manifest, though the
+      # app builds nothing of it
+      "^companion$"
+      "^companion/Cargo\.toml$"
       "^tracker$"
       "^tracker/Cargo\.toml$"
       "^client$"

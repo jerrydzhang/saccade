@@ -210,6 +210,126 @@ HISTORY_T1 = {
 LANDING_TASK = 3
 LANDING_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
+# the instruments' entry pages (t-14 step 3): the pipeline and the
+# glance, the exact shapes the real server pins (the cargo api tests
+# hold those); here the instruments' reading is the thing under test
+TASKS_PAGE = {
+    "view": {"major": 1},
+    "kind": "document",
+    "location": "tasks",
+    "seq": 9,
+    "content": [
+        {
+            "kind": "group",
+            "title": "waiting",
+            "content": [
+                {
+                    "kind": "table",
+                    "columns": ["task", "title", "agents", "latest commit"],
+                    "rows": [
+                        {"cells": ["t-1", "the unknown kind", "", ""], "location": "t-1", "at": 1},
+                    ],
+                }
+            ],
+        },
+        {
+            "kind": "group",
+            "title": "in flight",
+            "content": [
+                {
+                    "kind": "table",
+                    "columns": ["task", "title", "agents", "latest commit"],
+                    "rows": [
+                        {"cells": ["t-0", "the citing account", "i-2", SOURCE_COMMIT], "location": "t-0", "at": 2},
+                    ],
+                }
+            ],
+        },
+        {
+            "kind": "group",
+            "title": "awaiting judgment",
+            "content": [
+                {"kind": "table", "columns": ["task", "title", "agents", "latest commit"], "rows": []}
+            ],
+        },
+        {
+            "kind": "group",
+            "title": "concluded last 24h",
+            "content": [
+                {"kind": "table", "columns": ["task", "title", "agents", "latest commit"], "rows": []}
+            ],
+        },
+    ],
+}
+
+AGENTS_PAGE = {
+    "view": {"major": 1},
+    "kind": "document",
+    "location": "agents",
+    "seq": 10,
+    "content": [
+        {
+            "kind": "group",
+            "location": "i-2",
+            "content": [
+                {"kind": "fact", "label": "incarnation", "value": "i-2"},
+                {"kind": "fact", "label": "terminal address", "value": "tA"},
+                {"kind": "fact", "label": "harness", "value": "pi"},
+                {"kind": "fact", "label": "tasks", "value": "t-0"},
+                {"kind": "fact", "label": "workspace", "value": "/mock/worktrees/one"},
+                {"kind": "fact", "label": "last commit", "value": SOURCE_COMMIT},
+            ],
+        },
+        {
+            "kind": "group",
+            "location": "i-5",
+            "content": [
+                {"kind": "fact", "label": "incarnation", "value": "i-5"},
+                {"kind": "fact", "label": "harness", "value": "pi"},
+            ],
+        },
+    ],
+}
+
+HISTORY_T0 = {
+    "view": {"major": 1},
+    "kind": "timeline",
+    "location": "t-0/history",
+    "seq": 6,
+    "task": "t-0",
+    "revision": 1,
+    "entries": [
+        {
+            "seq": 1,
+            "event": "task_created",
+            "actor": "smoke",
+            "tier": "agent",
+            "at": 1,
+            "revision": None,
+            "commit": None,
+            "message": None,
+            "grounds": None,
+            "explanation": None,
+            "session": None,
+            "refs": [],
+        },
+        {
+            "seq": 2,
+            "event": "task_committed",
+            "actor": "smoke",
+            "tier": "agent",
+            "at": 2,
+            "revision": 1,
+            "commit": SOURCE_COMMIT,
+            "message": "the smoke's first account",
+            "grounds": None,
+            "explanation": None,
+            "session": None,
+            "refs": [],
+        },
+    ],
+}
+
 # the landing task: a revision landing between one open's revision
 # resolution and a re-open. r1 embeds the image in prose and carries
 # the file; r2 carries the figure component and the same file. The
@@ -318,10 +438,18 @@ class TrackerMock:
                     self._reply(json.dumps(root_page()).encode(), origin=origin)
                     return
                 pages = board_pages()
+                if route == "tasks":
+                    self._reply(json.dumps(TASKS_PAGE).encode(), origin=origin)
+                    return
+                if route == "agents":
+                    self._reply(json.dumps(AGENTS_PAGE).encode(), origin=origin)
+                    return
                 if route.endswith("/history"):
                     spec = route[: -len("/history")]
                     if spec == "t-1" or spec == "t-1@r1":
                         self._reply(json.dumps(HISTORY_T1).encode(), origin=origin)
+                    elif spec == "t-0":
+                        self._reply(json.dumps(HISTORY_T0).encode(), origin=origin)
                     else:
                         self._reply(refusal(route, "unknown_location", "no history for this location"), 404, origin=origin)
                     return

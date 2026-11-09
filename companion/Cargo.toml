@@ -1,0 +1,17 @@
+[package]
+name = "saccade-companion"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "sac-companion"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.6", features = ["derive", "env"] }
+libc = "0.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+ureq = { version = "3", features = ["json"] }
+
+[dev-dependencies]

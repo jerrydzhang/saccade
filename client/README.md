@@ -87,6 +87,55 @@ behaves identically. Parity over the shared fixture corpus is pinned by
 tests on both sides: this repository's node tests and the
 `viewer-native-check` cargo suite read the same `fixtures/` files.
 
+## The instruments: the pipeline and the glance (t-14 step 3)
+
+The entry pages are tracker locations too: `<tracker>/tasks` and
+`<tracker>/agents`. They render as instruments - the pipeline and the
+agents glance - reading `/view/v1` only; `/api/v1` stays `sac`'s own.
+
+- **Tasks** (`t-14 "Tasks and agents"`): the page's four recorded
+  states section the view - waiting, in flight, awaiting judgment,
+  concluded last 24h (the window the page computes; staleness is
+  rendering). A row is task, title, agents (each agent's live state
+  shape joined through the agents page's terminal addresses and the
+  words), latest commit, age. A row selects on click or by label;
+  Enter goes through the link to the board; the row menu's `e` shows
+  the task's activity - a lane on a 6h/24h axis (the last 6 hours
+  taking the right two thirds) and the events beside it, from the
+  history page. No dispatch: the suite never launches an agent
+  (ratified).
+- **Agents**: the page's sessions, sectioned by Herdr's word - error,
+  blocked, working, idle, done - within a section ordered by task,
+  then workspace. A row is the state shape, the incarnation, Herdr's
+  msg and progress exactly as the program sent them (nothing when
+  nothing was sent, t-24@r19), the task, and the time. Enter opens the
+  owned task's board through the link; the row menu's `e` shows the
+  session's details (workspace, harness, last commit); the copies are
+  `a` the attach command, `w` the workspace path, `b` the branch - the
+  branch read from the workspace's own `.git/HEAD` through the
+  tracker's machine, never invented. Proposed and built as proposed:
+  available workspaces with no agent hold no row - the view is the
+  sessions, nothing else keeps it open.
+- **The live words ride one shared subscription, by the client's own
+  design** (t-24@r23: subscriptions are per connection and unlimited
+  on herdr-core 0.1.17 - the earlier one-subscription rule is
+  withdrawn; sharing one across windows remains allowed where
+  simpler, and simpler is what this client holds): the shell keeps
+  exactly one subscription per core per app process, and every window
+  and instrument reads the table it keeps - one reconnect, one
+  backoff, one table to trust, however many windows read it. The
+  table clears on every (re)connect and
+  on the core's restart vocabulary; words refill from the stream.
+  Consumers wake through one bounded hold (the wait_look_config
+  pattern, never a timer poll). A word Herdr does not report is shown
+  as absent: those sessions ride the absent section, shapeless. The
+  feed dials nothing when setup resolved no core. The lanes inject
+  words through the inspection setter (`setWords`), test-only
+  machinery named as such.
+- Neither instrument opens terminals; an agent's attach command, a
+  workspace's path and a branch are copied (`a`/`w`/`b` in the row's
+  menu).
+
 Keys:
 
 - `s` puts labels on what can be selected (lowercase on prose, uppercase

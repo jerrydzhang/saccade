@@ -15,10 +15,12 @@
 pub mod base64;
 pub mod client;
 pub mod error;
+pub mod events;
 pub mod guard;
 pub mod transport;
 
 pub use client::{CoreClient, ExecOutput, ASSET_CAP};
 pub use error::CoreFail;
+pub use events::{CoreEvent, EventsConnection, SnapshotTerminal};
 pub use guard::guard_relative;
 pub use transport::{CoreTransport, SocketTransport};

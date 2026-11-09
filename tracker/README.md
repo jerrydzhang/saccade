@@ -181,7 +181,17 @@ nothing writes through `/view/v1`.
   or empty so absence means "cannot prove same machine", and the
   repository path; plain read-only host facts, the root stays no-Herdr -
   the view grammar majors and board grammar range, and the page
-  families),
+  families), `agents` (the registered native sessions: one group per
+  session with its terminal address, harness, owned tasks, the workspace
+  derived from the saved session's own header, and the session's last
+  board commit from the scope recorded on each commit; waiting wakes on
+  the registration family, the claims and the commits), `tasks` (the
+  pipeline: one table per recorded state - waiting, in flight,
+  awaiting judgment, concluded last 24h - each row task, title,
+  agents, latest commit, with the task's birth moment riding the row
+  and its location the board; the window is read-time, staleness is
+  rendering; the agents' state shapes are the client's live join, never
+  page data; the watch is the whole fold),
   `t-N[@rK]` (a board page), `t-N[@rK]/history` (a timeline of
   commits interleaved with decisions in record order; a pinned
   revision cuts the timeline at the commit that landed it),
@@ -190,8 +200,11 @@ nothing writes through `/view/v1`.
   `t-N@rK/content/<select path>` (one pinned component). Only the
   file family answers with bytes; every other answer is a view
   document in `application/json`.
-- **The view grammar v1 has six kinds**: text, group, fact, time,
-  ref, figure. A kind added in a later minor carries a text fallback,
+- **The view grammar v1 has seven kinds**: text, group, fact, time,
+  ref, figure, table (the table landed with the pipeline page,
+  t-24@r2's "table waits for the pipeline page"; its cells are plain
+  text, its rows carry the row's location and moment). A kind added in
+  a later minor carries a text fallback,
   so older instruments degrade instead of breaking. Two location
   rules hold in every family: a part's own `location` names what it
   is in the tracker's addressing grammar (a wrapped board part is

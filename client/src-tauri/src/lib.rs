@@ -7,6 +7,7 @@
 pub mod board_validate;
 pub mod commands;
 pub mod look_config;
+pub mod words;
 
 pub fn run() {
     // The human surface opens through the header's location field and
@@ -39,6 +40,7 @@ pub fn run() {
             board_validate::validate_board,
             look_config::look_config,
             look_config::wait_look_config,
+            words::words_wait,
         ])
         .setup(move |app| {
             // the look follows the human's own configuration file in the
@@ -54,6 +56,14 @@ pub fn run() {
                     .unwrap_or_else(|| "unavailable".into())
             );
             look_config::init(dir);
+            // the app's ONE Herdr event feed (t-24@r22): the socket
+            // resolved once here; none, it dials nothing and the
+            // instruments read an empty table
+            words::start(
+                board_viewer_core::SocketTransport::default_path()
+                    .map(|path| path.to_path_buf())
+                    .ok(),
+            );
             if console_requested {
                 use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {

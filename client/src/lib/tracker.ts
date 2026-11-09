@@ -17,7 +17,7 @@ import type {
   Location,
 } from "./sources.ts";
 import { SourceUnavailableError } from "./board/errors.ts";
-import { baseFromHost, parseTaskSpec } from "./location.ts";
+import { baseFromHost, instrumentPath, parseTaskSpec } from "./location.ts";
 import { viewUrl } from "./location.ts";
 import { resolveRelative } from "./resolve.ts";
 import {
@@ -262,7 +262,37 @@ export class TrackerSource implements BoardSource {
     this.seenTasks.unshift({ spec, name });
   }
 
+  /** The entry pages the instruments read: the pipeline (tasks) and
+   * the glance (agents), fetched fresh every time - they are views of
+   * the record's now, never cached (a bare location re-resolves on
+   * every open, and these are the barest of them all). */
+  async instrumentPage(path: "tasks" | "agents"): Promise<ViewPage> {
+    await this.checkContract();
+    const base = serverBase();
+    const page = await fetchPage(this.fetcher, viewUrl(base, path));
+    if (page.kind !== "document" || page.location !== path) {
+      throw new SourceUnavailableError(
+        "core-protocol",
+        `'${path}' answered a ${page.kind} page at '${page.location}'`,
+      );
+    }
+    return page;
+  }
+
+  /** The agents page, for the tasks instrument's live join: the
+   * rows' agent ids reach the words only through the sessions'
+   * terminal addresses, which this page carries. */
+  async agentsPage(): Promise<ViewPage> {
+    return this.instrumentPage("agents");
+  }
+
   async loadText(location: Location): Promise<LoadedText> {
+    if (instrumentPath(location.path)) {
+      throw new SourceUnavailableError(
+        "asset-denied",
+        `'${location.path}' is an instrument page, not board text; the instruments read it as a view document`,
+      );
+    }
     const { pinned, page } = await this.resolvePinned(location.path);
     const base = serverBase();
     const bytes = await fetchFileBytes(
