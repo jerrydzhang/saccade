@@ -1676,8 +1676,10 @@ def run_session_checks(socket_path: str, resolved: dict, query: str, log_path: s
 
     board_path = resolved["board_sandbox"]
 
-    # 1: the board opened through the launch argument - the header shows
-    # the loaded path and the projection reports a loaded resource
+    # 1: the board opened through the lanes' test-open channel
+    # (t-24@r11: the launch argument left the human surface) - the
+    # header shows the loaded path and the projection reports a loaded
+    # resource
     opened = wait_response(
         {"cmd": "inspect"},
         lambda r: (i := inspection_of(r)) is not None
@@ -1685,7 +1687,7 @@ def run_session_checks(socket_path: str, resolved: dict, query: str, log_path: s
         and i.get("errors") == [],
         45.0,
     )
-    check("board opens through the launch board", opened is not None, board_path)
+    check("board opens through the test-open channel", opened is not None, board_path)
     header = None
     if opened is not None:
         try:

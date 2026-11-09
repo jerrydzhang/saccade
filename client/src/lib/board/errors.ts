@@ -30,6 +30,16 @@ export const LANE_CODES = [
 
 export type LaneCode = (typeof LANE_CODES)[number];
 
+/** One structured lane failure: a code from the closed list and the
+ * human message. Raised by every source adapter and the page client. */
+export class SourceUnavailableError extends Error {
+  readonly code: LaneCode;
+  constructor(code: LaneCode, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
 // The decode codes mirror the board-grammar crate's ErrorKind families
 // one for one, plus the two bridge verdict codes (board-refused for a
 // crate refusal, decoder-mismatch for the never-expected case where the

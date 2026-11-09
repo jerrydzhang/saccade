@@ -9,30 +9,11 @@ pub mod commands;
 pub mod look_config;
 
 pub fn run() {
-    // The explicit board location handed to the foreground launch, if
-    // any: `saccade-board-viewer <board.yaml>` or
-    // `saccade-board-viewer --on <machine> <board.yaml>`. The composed
-    // location string is the same grammar the open control parses. Never
-    // a registry, never a fallback - without it the app starts empty.
-    let mut args = std::env::args().skip(1);
-    let mut on: Option<String> = None;
-    let mut board: Option<String> = None;
-    while let Some(arg) = args.next() {
-        if arg == "--on" {
-            match args.next() {
-                Some(machine) if !machine.is_empty() => on = Some(machine),
-                _ => break, // malformed launch: never guess a location
-            }
-        } else if !arg.starts_with('-') && !arg.is_empty() {
-            board = Some(arg);
-            break;
-        }
-    }
-    let location = board.map(|path| match &on {
-        Some(machine) => format!("{machine}:{path}"),
-        None => path,
-    });
-    commands::set_initial_board(location);
+    // The human surface opens through the header's location field and
+    // the picker (t-24@r11): the launch argument and the local-device
+    // path form left with them. The lanes open their boards through the
+    // test-open channel (BOARD_VIEWER_TEST_OPEN), test-only machinery
+    // named as such.
 
     // Webview console observability is opt-in per environment: only the
     // native lane sets BOARD_VIEWER_WEBVIEW_CONSOLE, so a human run's
@@ -50,7 +31,8 @@ pub fn run() {
             commands::read_declaration,
             commands::read_asset,
             commands::viewer_identity,
-            commands::initial_board,
+            commands::test_open,
+            commands::tracker_machine,
             commands::write_clipboard,
             board_validate::validate_board,
             look_config::look_config,

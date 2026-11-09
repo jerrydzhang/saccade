@@ -6,11 +6,17 @@
 // adapter swapping.
 
 import { resolveRelative } from "./resolve.ts";
-import { TrackerSource } from "./tracker.ts";
-import { LANE_CODES, type LaneCode } from "./board/errors.ts";
+import { TrackerSource, serverHost, trackerHostIsLocal } from "./tracker.ts";
+import {
+  LANE_CODES,
+  SourceUnavailableError,
+  type LaneCode,
+} from "./board/errors.ts";
 
-// "fixture" and "host" are this viewer's own machines; any other
-// non-empty name is a machine from the local core's list.
+// "fixture" and "host" are this viewer's own machines; "host" is the
+// test-only local-file reader (t-24@r11: the lanes' fixture reader,
+// never presented as human functionality); any other non-empty name is
+// a machine from the local core's list.
 export type Machine = string;
 
 export type Location = {
@@ -35,13 +41,7 @@ export interface BoardSource {
   loadAsset(location: Location, relative: string): Promise<LoadedAsset>;
 }
 
-export class SourceUnavailableError extends Error {
-  readonly code: LaneCode;
-  constructor(code: LaneCode, message: string) {
-    super(message);
-    this.code = code;
-  }
-}
+export { SourceUnavailableError };
 
 // Fixture boards and companions are bundled as raw text; binary assets
 // are bundled as URLs and fetched, so bytes reach the read model exactly
@@ -70,7 +70,11 @@ function fixtureKey(name: string): string | null {
 
 function fixtureText(key: string): string {
   const text = fixtureRaw[key];
-  if (text === undefined) throw new SourceUnavailableError("asset-missing", `fixture content vanished for ${key}`);
+  if (text === undefined)
+    throw new SourceUnavailableError(
+      "asset-missing",
+      `fixture content vanished for ${key}`,
+    );
   return text;
 }
 
@@ -80,7 +84,10 @@ export class FixtureSource implements BoardSource {
   async loadText(location: Location): Promise<LoadedText> {
     const key = fixtureKey(location.path);
     if (key === null) {
-      throw new SourceUnavailableError("asset-missing", `no fixture named ${JSON.stringify(location.path)}`);
+      throw new SourceUnavailableError(
+        "asset-missing",
+        `no fixture named ${JSON.stringify(location.path)}`,
+      );
     }
     return { text: fixtureText(key), location };
   }
@@ -89,10 +96,16 @@ export class FixtureSource implements BoardSource {
     // Relative assets resolve against the declaration's directory, exactly
     // as the host lane does on the selected machine.
     const dirIndex = location.path.lastIndexOf("/");
-    const baseDir = dirIndex < 0 ? fixtureBase : `${fixtureBase}/${location.path.slice(0, dirIndex)}`;
+    const baseDir =
+      dirIndex < 0
+        ? fixtureBase
+        : `${fixtureBase}/${location.path.slice(0, dirIndex)}`;
     const joined = resolveRelative(baseDir, relative);
     if (!joined.ok) {
-      throw new SourceUnavailableError(joined.failure.code, joined.failure.reason);
+      throw new SourceUnavailableError(
+        joined.failure.code,
+        joined.failure.reason,
+      );
     }
     const key = joined.joined;
     const url = fixtureAssetUrls[key];
@@ -100,14 +113,23 @@ export class FixtureSource implements BoardSource {
       // A text asset referenced as a figure still comes through its
       // bundled URL so bytes stay byte-exact.
       if (!(key in fixtureRaw)) {
-        throw new SourceUnavailableError("asset-missing", `fixture asset not found: ${relative}`);
+        throw new SourceUnavailableError(
+          "asset-missing",
+          `fixture asset not found: ${relative}`,
+        );
       }
     }
     const response = await fetch(url ?? key);
     if (!response.ok) {
-      throw new SourceUnavailableError("asset-missing", `fixture asset not found: ${relative}`);
+      throw new SourceUnavailableError(
+        "asset-missing",
+        `fixture asset not found: ${relative}`,
+      );
     }
-    return { bytes: new Uint8Array(await response.arrayBuffer()), path: relative };
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      path: relative,
+    };
   }
 }
 
@@ -116,7 +138,9 @@ interface TauriInvoke {
 }
 
 export function tauriInvoke(): TauriInvoke {
-  const w = window as unknown as { __TAURI_INTERNALS__?: { invoke: TauriInvoke } };
+  const w = window as unknown as {
+    __TAURI_INTERNALS__?: { invoke: TauriInvoke };
+  };
   const invoke = w.__TAURI_INTERNALS__?.invoke;
   if (!invoke) {
     throw new SourceUnavailableError(
@@ -133,7 +157,10 @@ export function tauriInvoke(): TauriInvoke {
 function bridgeFailure(error: unknown): SourceUnavailableError {
   if (typeof error === "object" && error !== null) {
     const candidate = error as { code?: unknown; message?: unknown };
-    if (typeof candidate.code === "string" && typeof candidate.message === "string") {
+    if (
+      typeof candidate.code === "string" &&
+      typeof candidate.message === "string"
+    ) {
       const known = (LANE_CODES as readonly string[]).includes(candidate.code);
       const code = known ? (candidate.code as LaneCode) : "bridge-invalid";
       return new SourceUnavailableError(code, candidate.message);
@@ -148,7 +175,9 @@ export class HostFileSource implements BoardSource {
   async loadText(location: Location): Promise<LoadedText> {
     const invoke = tauriInvoke();
     try {
-      const result = (await invoke("read_declaration", { path: location.path })) as { text: string };
+      const result = (await invoke("read_declaration", {
+        path: location.path,
+      })) as { text: string };
       return { text: result.text, location };
     } catch (error) {
       throw bridgeFailure(error);
@@ -160,10 +189,16 @@ export class HostFileSource implements BoardSource {
     const baseDir = location.path.replace(/\/[^/]*$/, "");
     const resolved = resolveRelative(baseDir, relative);
     if (!resolved.ok) {
-      throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
+      throw new SourceUnavailableError(
+        resolved.failure.code,
+        resolved.failure.reason,
+      );
     }
     try {
-      const bytes = (await invoke("read_asset", { base: baseDir, relative })) as number[];
+      const bytes = (await invoke("read_asset", {
+        base: baseDir,
+        relative,
+      })) as number[];
       return { bytes: new Uint8Array(bytes), path: relative };
     } catch (error) {
       throw bridgeFailure(error);
@@ -201,7 +236,10 @@ export class RemoteSource implements BoardSource {
     const baseDir = location.path.replace(/\/[^/]*$/, "");
     const resolved = resolveRelative(baseDir, relative);
     if (!resolved.ok) {
-      throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
+      throw new SourceUnavailableError(
+        resolved.failure.code,
+        resolved.failure.reason,
+      );
     }
     try {
       const bytes = (await invoke("read_asset", {
@@ -216,15 +254,107 @@ export class RemoteSource implements BoardSource {
   }
 }
 
-// One tracker source per machine: its tree cache must live across the
-// text and figure loads of one open, so one open issues one boards/get
-// and text and figures read one tree.
+// A bare path is a file on the TRACKER's machine (t-24@r12), read
+// through Herdr core like any named machine - never the device the
+// human sits at. The client configuration declares which Herdr machine
+// hosts the tracker (t-16's config file, `tracker-machine`); on the
+// tracker's own machine (the hub, the server host being loopback) the
+// declaration is unnecessary and the local core's own machine is read.
+// Without the declaration on a spoke, a bare path refuses saying what
+// to set. No bridge (no local core), no tracker-machine read at all.
+export class TrackerMachineSource implements BoardSource {
+  readonly machine = "tracker-machine" as const;
+
+  /** The Herdr machine name the read rides: the declared tracker
+   * machine, or "" for the local core's own machine on the hub. */
+  private async trackerCoreMachine(): Promise<string> {
+    let invoke: TauriInvoke;
+    try {
+      invoke = tauriInvoke();
+    } catch (error) {
+      if (error instanceof SourceUnavailableError) {
+        throw new SourceUnavailableError(
+          "lane-unavailable",
+          "a bare path reads on the tracker's machine through Herdr core; no Herdr connection exists here - name a machine explicitly (machine:/path)",
+        );
+      }
+      throw error;
+    }
+    let declared: string | null = null;
+    try {
+      declared = (await invoke("tracker_machine")) as string | null;
+    } catch (error) {
+      throw bridgeFailure(error);
+    }
+    if (declared !== null && declared.trim().length > 0) return declared.trim();
+    if (serverHost() === null) {
+      throw new SourceUnavailableError(
+        "lane-unavailable",
+        "a bare path reads on the tracker's machine; no tracker server is set - set the tracker server host, or tracker-machine in the client configuration",
+      );
+    }
+    if (!trackerHostIsLocal()) {
+      throw new SourceUnavailableError(
+        "lane-unavailable",
+        "a bare path reads on the tracker's machine, which this device is not; set tracker-machine in the client configuration to the Herdr machine that hosts the tracker",
+      );
+    }
+    return ""; // the local core's own machine: the hub itself
+  }
+
+  private async resolve(): Promise<string> {
+    return this.trackerCoreMachine();
+  }
+
+  async loadText(location: Location): Promise<LoadedText> {
+    const coreMachine = await this.resolve();
+    const invoke = tauriInvoke();
+    try {
+      const result = (await invoke("read_declaration", {
+        path: location.path,
+        on: coreMachine,
+      })) as { text: string };
+      return { text: result.text, location };
+    } catch (error) {
+      throw bridgeFailure(error);
+    }
+  }
+
+  async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
+    const coreMachine = await this.resolve();
+    const invoke = tauriInvoke();
+    const baseDir = location.path.replace(/\/[^/]*$/, "");
+    const resolved = resolveRelative(baseDir, relative);
+    if (!resolved.ok) {
+      throw new SourceUnavailableError(
+        resolved.failure.code,
+        resolved.failure.reason,
+      );
+    }
+    try {
+      const bytes = (await invoke("read_asset", {
+        base: baseDir,
+        relative,
+        on: coreMachine,
+      })) as number[];
+      return { bytes: new Uint8Array(bytes), path: relative };
+    } catch (error) {
+      throw bridgeFailure(error);
+    }
+  }
+}
+
+// One tracker source per machine: its page and contract caches must
+// live across the text and figure loads of one open, so one open
+// resolves its revision once and text and figures read one immutable
+// tree.
 const trackerSources = new Map<Machine, TrackerSource>();
 
 export function sourceFor(machine: Machine): BoardSource {
   if (machine === "fixture") return new FixtureSource();
   if (machine === "host") return new HostFileSource();
-  // A tracker-named board rides that tracker's own HTTP API.
+  if (machine === "tracker-machine") return new TrackerMachineSource();
+  // A tracker-named board rides that tracker's own read surface.
   if (machine.startsWith("tracker:")) {
     let source = trackerSources.get(machine);
     if (source === undefined) {

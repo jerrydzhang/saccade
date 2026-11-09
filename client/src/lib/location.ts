@@ -1,9 +1,11 @@
 // The explicit location grammar, one parser for every input surface
-// (launch argument, open control, inspection open): "machine:/absolute/
-// path" names a machine from the local core's list, "/absolute/path" is
-// the machine this viewer runs on, "tracker/t-N[@rK]" names a task
-// board served by that tracker's own server, and nothing else is a
-// location. A bare relative path is refused, loudly, never guessed.
+// (open control, picker, inspection open): "machine:/absolute/path"
+// names a machine from the local core's list, a bare "/absolute/path"
+// is a file on the TRACKER's machine (t-24@r12: never the device the
+// human sits at - the host reader is test-only machinery),
+// "tracker/t-N[@rK]" names a task board served by that tracker's own
+// read surface, and nothing else is a location. A bare relative path
+// is refused, loudly, never guessed.
 //
 // Machine names may carry colons themselves (user@host:port), so the
 // separator is the first colon whose remainder starts with "/".
@@ -35,7 +37,7 @@ export function parseTaskSpec(path: string): TaskSpec | null {
 export function parseLocation(input: string): ParsedLocation {
   const raw = input.trim();
   if (raw.length === 0) return null;
-  if (raw.startsWith("/")) return { machine: "host", path: raw };
+  if (raw.startsWith("/")) return { machine: "tracker-machine", path: raw };
   const tracker = trackerLocation(raw);
   if (tracker) return tracker;
   for (let i = 0; i < raw.length; i++) {
@@ -65,4 +67,9 @@ export function baseFromHost(host: string): URL | null {
  * form ends in a slash, so string concatenation would double it. */
 export function apiUrl(base: URL, route: string): string {
   return new URL(route, base).toString();
+}
+
+/** The route tail after /view/v1/ for a page or file location. */
+export function viewUrl(base: URL, route: string): string {
+  return new URL(`/view/v1/${route.replace(/^\//, "")}`, base).toString();
 }

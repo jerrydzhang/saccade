@@ -13,24 +13,30 @@
 
 use board_viewer_core::{guard_relative, CoreClient, CoreFail, SocketTransport};
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
 
-static INITIAL_BOARD: OnceLock<Option<String>> = OnceLock::new();
+use crate::look_config;
 
-pub fn set_initial_board(path: Option<String>) {
-    let _ = INITIAL_BOARD.set(path);
+/// The lanes' test-open channel (BOARD_VIEWER_TEST_OPEN): the one
+/// location the app opens at startup, riding the same model.open the
+/// inspection surface uses. Test-only machinery, named as such
+/// (t-24@r11); a human run has the variable unset and starts empty -
+/// the launch argument and the local-device path form left the human
+/// surface with it.
+#[tauri::command]
+pub fn test_open() -> Option<String> {
+    let spec = std::env::var("BOARD_VIEWER_TEST_OPEN")
+        .ok()
+        .filter(|s| !s.is_empty());
+    eprintln!("[bridge] test_open invoked: {:?}", spec);
+    spec
 }
 
-/// The explicit board location handed to the foreground launch, if any:
-/// `/path/to/board.yaml` or `machine:/path/to/board.yaml`. Never a
-/// registry, never a fallback - without it the app starts empty.
+/// The declared tracker machine (t-24@r12): the Herdr machine that
+/// hosts this tracker, read on demand by a bare-path open. None on the
+/// hub, where the local core's own machine is read.
 #[tauri::command]
-pub fn initial_board() -> Option<String> {
-    eprintln!(
-        "[bridge] initial_board invoked: {:?}",
-        INITIAL_BOARD.get().cloned().flatten()
-    );
-    INITIAL_BOARD.get().cloned().flatten()
+pub fn tracker_machine() -> Option<String> {
+    look_config::current_tracker_machine()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -70,9 +76,22 @@ fn core_client() -> Result<CoreClient<SocketTransport>, BridgeError> {
     Ok(CoreClient::new(SocketTransport::new(path)))
 }
 
-/// The machine argument of a command, present and non-empty.
-fn machine_of(on: &Option<String>) -> Option<&str> {
-    on.as_deref().filter(|machine| !machine.is_empty())
+/// The Herdr machine a command rides. `Some("")` is the local core's
+/// own machine (t-24@r12: the hub's bare-path reads go through the
+/// local core, never std::fs); `Some(name)` is a named machine; None
+/// is the host file reader, test-only machinery since t-24@r11.
+enum CoreRead {
+    Local,
+    Named(String),
+    HostFile,
+}
+
+fn core_read_of(on: &Option<String>) -> CoreRead {
+    match on.as_deref() {
+        None => CoreRead::HostFile,
+        Some("") => CoreRead::Local,
+        Some(machine) => CoreRead::Named(machine.to_string()),
+    }
 }
 
 /// The frontend already applied these rules; repeat them here so the
@@ -133,7 +152,7 @@ fn read_declaration_remote(machine: &str, path: &str) -> Result<DeclaredText, Br
         Err(fail) => {
             let _ = log_bridge(
                 "read_declaration",
-                &format!("{machine}:{path}"),
+                &format!("{}{path}", core_machine_label(machine)),
                 &format!("failed: {}", fail.code()),
             );
             return Err(core_failure(fail));
@@ -141,10 +160,20 @@ fn read_declaration_remote(machine: &str, path: &str) -> Result<DeclaredText, Br
     };
     let _ = log_bridge(
         "read_declaration",
-        &format!("{machine}:{path}"),
+        &format!("{}{path}", core_machine_label(machine)),
         &format!("{} bytes", text.len()),
     );
     Ok(DeclaredText { text })
+}
+
+/// The log label of a core machine: the local core's own machine has
+/// no name, and the log says so plainly.
+fn core_machine_label(machine: &str) -> String {
+    if machine.is_empty() {
+        "(local core)".to_string()
+    } else {
+        format!("{machine}:")
+    }
 }
 
 #[tauri::command]
@@ -152,9 +181,10 @@ pub fn read_declaration(path: String, on: Option<String>) -> Result<DeclaredText
     if path.is_empty() {
         return Err(deny("empty path"));
     }
-    match machine_of(&on) {
-        Some(machine) => read_declaration_remote(machine, &path),
-        None => read_text_resolved(&path, None),
+    match core_read_of(&on) {
+        CoreRead::Named(machine) => read_declaration_remote(&machine, &path),
+        CoreRead::Local => read_declaration_remote("", &path),
+        CoreRead::HostFile => read_text_resolved(&path, None),
     }
 }
 
@@ -192,9 +222,10 @@ pub fn read_asset(
     on: Option<String>,
 ) -> Result<Vec<u8>, BridgeError> {
     guard_relative(&relative).map_err(deny)?;
-    match machine_of(&on) {
-        Some(machine) => read_asset_remote(machine, &base, &relative),
-        None => {
+    match core_read_of(&on) {
+        CoreRead::Named(machine) => read_asset_remote(&machine, &base, &relative),
+        CoreRead::Local => read_asset_local_core(&base, &relative),
+        CoreRead::HostFile => {
             let base_path = std::path::Path::new(&base);
             let target = base_path.join(&relative);
             if !canonical_prefix_holds(base_path, &target) {
@@ -214,6 +245,36 @@ pub fn read_asset(
     }
 }
 
+/// One asset through the local core's own machine (t-24@r12): the same
+/// fixed-argv read the named machines use, with containment proven on
+/// the core side, never a std::fs shortcut.
+fn read_asset_local_core(base: &str, relative: &str) -> Result<Vec<u8>, BridgeError> {
+    if !base.starts_with('/') {
+        return Err(deny("remote base path must be absolute"));
+    }
+    if base.contains('\0') {
+        return Err(deny("NUL byte in base path"));
+    }
+    let client = core_client()?;
+    let bytes = match client.asset_bytes("", base, relative) {
+        Ok(bytes) => bytes,
+        Err(fail) => {
+            let _ = log_bridge(
+                "read_asset",
+                &format!("(local core){base}/{relative}"),
+                &format!("failed: {}", fail.code()),
+            );
+            return Err(core_failure(fail));
+        }
+    };
+    let _ = log_bridge(
+        "read_asset",
+        &format!("(local core){base}/{relative}"),
+        &format!("{} bytes", bytes.len()),
+    );
+    Ok(bytes)
+}
+
 /// A static identity statement for the machine-readable surface: what this
 /// binary is, never a claim about any session or tracker state.
 #[tauri::command]
@@ -227,7 +288,16 @@ pub fn viewer_identity() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use board_viewer_core::guard_relative;
+    use super::{core_read_of, guard_relative, CoreRead};
+
+    #[test]
+    fn the_read_target_follows_the_machine_argument() {
+        assert!(matches!(core_read_of(&None), CoreRead::HostFile));
+        assert!(matches!(core_read_of(&Some("".into())), CoreRead::Local));
+        assert!(
+            matches!(core_read_of(&Some("tired".into())), CoreRead::Named(name) if name == "tired")
+        );
+    }
 
     #[test]
     fn parent_traversal_is_denied() {

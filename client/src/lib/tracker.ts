@@ -1,26 +1,37 @@
 // Tracker-named boards: "<tracker>/t-N[@rK]" served by that tracker's
-// own HTTP API. The tracker is named by its repository directory; the
-// server is found through one setting, the server host, whose value is
-// the address the tracker publishes beside its database. Boards ride
-// the /api/v1/boards routes - never a file-system read of any state
-// directory. The version contract is checked on every open: the server
-// must serve the named tracker, and its grammar range must overlap the
-// versions this viewer decodes.
+// own read surface, /view/v1 (t-14 "Pages", t-24@r2). The tracker is
+// named by its repository directory; the server is found through one
+// setting, the server host, whose value is the address the tracker
+// publishes beside its database. The viewer reads /view/v1 only - the
+// root page is the version contract, the board page resolves a bare
+// location to its pinned revision and names the task, and the authored
+// board.yaml and its figures ride the file family at that pinned
+// revision, so one open's text and figures are one immutable tree.
+// /api/v1 stays sac's own API; nothing here touches it.
 
 import { SUPPORTED_GRAMMAR_VERSIONS } from "./board/decode.ts";
-import type { BoardSource, LoadedAsset, LoadedText, Location } from "./sources.ts";
-import { SourceUnavailableError } from "./sources.ts";
-import { apiUrl, baseFromHost, parseTaskSpec } from "./location.ts";
+import type {
+  BoardSource,
+  LoadedAsset,
+  LoadedText,
+  Location,
+} from "./sources.ts";
+import { SourceUnavailableError } from "./board/errors.ts";
+import { baseFromHost, parseTaskSpec } from "./location.ts";
+import { viewUrl } from "./location.ts";
 import { resolveRelative } from "./resolve.ts";
+import {
+  fetchFileBytes,
+  fetchPage,
+  pageFact,
+  type Fetcher,
+  type ViewPage,
+} from "./pages.ts";
 
 // The one viewer setting: the tracker server's host. The value is the
 // address the tracker publishes beside its database (the runtime
 // address hint), pasted once.
 const SERVER_KEY = "saccade.server.host";
-
-// One wire request's whole patience: past this, the server is down and
-// the answer is a structured refusal.
-const REQUEST_BOUND_MS = 10_000;
 
 export function serverHost(): string | null {
   try {
@@ -34,7 +45,7 @@ export function setServerHost(host: string): void {
   localStorage.setItem(SERVER_KEY, host.trim());
 }
 
-function serverBase(): URL {
+export function serverBase(): URL {
   const host = serverHost();
   if (!host || host.trim().length === 0) {
     throw new SourceUnavailableError(
@@ -44,70 +55,53 @@ function serverBase(): URL {
   }
   const base = baseFromHost(host);
   if (base === null) {
-    throw new SourceUnavailableError("lane-unavailable", `the tracker server '${host}' is not a host or URL`);
+    throw new SourceUnavailableError(
+      "lane-unavailable",
+      `the tracker server '${host}' is not a host or URL`,
+    );
   }
   return base;
 }
 
-type VersionReply = {
+/** True when the tracker host is this machine's loopback: the hub, where
+ * the local core reads the tracker's own files (t-24@r12). */
+export function trackerHostIsLocal(): boolean {
+  const host = serverHost();
+  if (!host || host.trim().length === 0) return false;
+  const base = baseFromHost(host);
+  if (base === null) return false;
+  const name = base.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    name === "localhost" || name === "::1" || /^127\.\d+\.\d+\.\d+$/.test(name)
+  );
+}
+
+type Contract = {
   tracker: string | null;
-  board_grammar: { min: number; max: number } | null;
+  boardGrammar: { min: number; max: number };
+  viewMajors: number[];
 };
 
-async function fetchJson(url: string): Promise<unknown> {
-  // the wire answers or the request dies in bounded time: a tracker
-  // that never answers is a structured refusal, never an endless load
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_BOUND_MS);
-  let response: Response;
-  try {
-    response = await fetch(url, { signal: controller.signal });
-  } catch (error) {
-    throw new SourceUnavailableError("core-unavailable", `the tracker server did not answer at ${url}: ${String(error)}`);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!response.ok) {
-    let detail = `status ${response.status}`;
-    try {
-      const body = (await response.json()) as { error?: { code?: string; detail?: string } };
-      if (body.error?.code) detail = `${body.error.code}: ${body.error.detail ?? ""}`;
-    } catch {
-      // a non-JSON body still refuses with the status
-    }
-    throw new SourceUnavailableError("core-protocol", `the tracker server refused ${url}: ${detail}`);
-  }
-  try {
-    return await response.json();
-  } catch (error) {
-    throw new SourceUnavailableError("core-protocol", `the tracker server answered ${url} with non-JSON: ${String(error)}`);
-  }
-}
+/** The task facts a window has seen, for the picker (t-24@r11: the
+ * picker enumerates what the window can know). */
+export type TaskFact = { spec: string; name: string | null };
 
-type TreeFile = { path: string; content: string };
-// the server nests the list: {"files": {"files": [...]}, commit, revision}
-type TreeReply = { files: { files: TreeFile[] }; commit: string; revision: number };
-
-function decodeBase64(content: string): Uint8Array {
-  const binary = atob(content);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-/** One tracker's boards over the wire: the tree arrives once per
- * revision and both the board text and its figures read from it. */
 export class TrackerSource implements BoardSource {
-  private trees = new Map<string, Promise<TreeReply>>();
-  // in-flight loads, keyed by the requested path: the text and the
-  // figures of one open join the same fetch, so they read one tree
-  // even when a revision lands mid-open
-  private pending = new Map<string, Promise<TreeReply>>();
+  private contract: Promise<Contract> | null = null;
+  // bare path -> the pinned spec that answered (t-N@rK): the open's
+  // text and figures all read that one immutable revision
+  private pinned = new Map<string, string>();
+  // pinned spec -> the board page
+  private pages = new Map<string, Promise<ViewPage>>();
+  // every task the window has seen, newest resolution first
+  readonly seenTasks: TaskFact[] = [];
 
   readonly tracker: string;
+  private readonly fetcher: Fetcher;
 
-  constructor(tracker: string) {
+  constructor(tracker: string, fetcher: Fetcher = (url) => fetch(url)) {
     this.tracker = tracker;
+    this.fetcher = fetcher;
   }
 
   get machine(): string {
@@ -115,106 +109,221 @@ export class TrackerSource implements BoardSource {
   }
 
   /** The version contract, checked before any board read: the server
-   * must serve this tracker, and its grammar range must overlap the
-   * versions this viewer decodes. */
-  private async checkContract(): Promise<void> {
-    const base = serverBase();
-    const version = (await fetchJson(apiUrl(base, "/api/v1/version"))) as Partial<VersionReply>;
-    if (version.tracker !== null && version.tracker !== undefined && version.tracker !== this.tracker) {
-      throw new SourceUnavailableError(
-        "machine-unknown",
-        `the server serves tracker '${version.tracker}', not '${this.tracker}'; name the tracker by its repository directory`,
-      );
-    }
-    const range = version.board_grammar;
-    if (!range) {
-      throw new SourceUnavailableError(
-        "core-protocol",
-        "the server's version answer carries no grammar range; move the binaries in step",
-      );
-    }
-    const viewer = SUPPORTED_GRAMMAR_VERSIONS;
-    const lowest = viewer[0];
-    const highest = viewer[viewer.length - 1];
-    const overlaps = lowest !== undefined && highest !== undefined && range.min <= highest && range.max >= lowest;
-    if (!overlaps) {
-      throw new SourceUnavailableError(
-        "core-protocol",
-        `the tracker's grammar range is [${range.min},${range.max}], this viewer supports [${viewer[0]},${viewer[viewer.length - 1]}]; no version works on both sides - move the binaries in step`,
-      );
-    }
-  }
-
-  private tree(location: Location): Promise<TreeReply> {
-    const spec = parseTaskSpec(location.path);
-    if (!spec) {
-      return Promise.reject(
-        new SourceUnavailableError("asset-missing", `'${location.path}' is not a task spec (t-N or t-N@rK)`),
-      );
-    }
-    // a pinned revision is immutable: its tree, once fetched, is exact
-    if (spec.revision !== null) {
-      const cached = this.trees.get(location.path);
-      if (cached) return cached;
-    }
-    const inflight = this.pending.get(location.path);
-    if (inflight) return inflight;
+   * must serve this tracker, its grammar range must overlap the
+   * versions this viewer decodes, and it must serve a view major this
+   * viewer reads. */
+  private async checkContract(): Promise<Contract> {
+    if (this.contract !== null) return this.contract;
     const load = (async () => {
-      await this.checkContract();
       const base = serverBase();
-      const suffix = spec.revision === null ? "" : `&revision=${spec.revision}`;
-      const reply = (await fetchJson(apiUrl(base, `/api/v1/boards/get?task=${spec.task}${suffix}`))) as TreeReply;
-      if (!Array.isArray(reply.files?.files)) {
-        throw new SourceUnavailableError("core-protocol", "the boards/get answer carries no file list");
+      const root = await fetchPage(this.fetcher, viewUrl(base, ""));
+      if (
+        root.tracker !== null &&
+        root.tracker !== undefined &&
+        root.tracker !== this.tracker
+      ) {
+        throw new SourceUnavailableError(
+          "machine-unknown",
+          `the server serves tracker '${root.tracker}', not '${this.tracker}'; name the tracker by its repository directory`,
+        );
       }
-      return reply;
+      const range = root.boardGrammar;
+      if (!range) {
+        throw new SourceUnavailableError(
+          "core-protocol",
+          "the tracker's root page carries no grammar range; move the binaries in step",
+        );
+      }
+      const viewer = SUPPORTED_GRAMMAR_VERSIONS;
+      const lowest = viewer[0];
+      const highest = viewer[viewer.length - 1];
+      const overlaps =
+        lowest !== undefined &&
+        highest !== undefined &&
+        range.min <= highest &&
+        range.max >= lowest;
+      if (!overlaps) {
+        throw new SourceUnavailableError(
+          "core-protocol",
+          `the tracker's grammar range is [${range.min},${range.max}], this viewer supports [${viewer[0]},${viewer[viewer.length - 1]}]; no version works on both sides - move the binaries in step`,
+        );
+      }
+      if (
+        root.viewMajors !== undefined &&
+        !root.viewMajors.includes(root.view.major)
+      ) {
+        throw new SourceUnavailableError(
+          "core-protocol",
+          `the tracker serves view majors [${root.viewMajors.join(",")}], not the major its own pages carry - move the binaries in step`,
+        );
+      }
+      return {
+        tracker: root.tracker ?? null,
+        boardGrammar: range,
+        viewMajors: root.viewMajors ?? [root.view.major],
+      };
     })();
-    this.pending.set(location.path, load);
-    void load.then(
-      (reply) => {
-        this.pending.delete(location.path);
-        // a location without a revision resolved: the tree caches
-        // under the revision it answered, never under the bare path -
-        // a later open re-resolves instead of replaying an old current
-        const key = spec.revision === null ? `t-${spec.task}@r${reply.revision}` : location.path;
-        this.trees.set(key, Promise.resolve(reply));
-      },
-      () => {
-        // a failed read is not a fact about the tracker: drop it, so
-        // the next open tries the wire again
-        this.pending.delete(location.path);
-      },
-    );
+    this.contract = load;
+    void load.catch(() => {
+      // a refused contract is not a fact about the tracker: drop it,
+      // so the next open tries the wire again
+      if (this.contract === load) this.contract = null;
+    });
     return load;
   }
 
-  async loadText(location: Location): Promise<LoadedText> {
-    const reply = await this.tree(location);
-    const board = reply.files.files.find((file) => file.path === "board.yaml");
-    if (!board) {
-      throw new SourceUnavailableError("asset-missing", `${location.path} holds no board.yaml`);
+  /** The board page at a pinned revision: the open's resolver and the
+   * task-facts source. Cached per revision; a failure clears. */
+  private boardPage(pinned: string): Promise<ViewPage> {
+    const cached = this.pages.get(pinned);
+    if (cached) return cached;
+    const load = (async () => {
+      await this.checkContract();
+      const base = serverBase();
+      const page = await fetchPage(this.fetcher, viewUrl(base, pinned));
+      if (page.kind !== "document") {
+        throw new SourceUnavailableError(
+          "core-protocol",
+          `'${pinned}' answered a ${page.kind} page, not a board`,
+        );
+      }
+      this.rememberTask(pinned, page);
+      return page;
+    })();
+    this.pages.set(pinned, load);
+    void load.catch(() => {
+      if (this.pages.get(pinned) === load) this.pages.delete(pinned);
+    });
+    return load;
+  }
+
+  /** The pinned spec a location reads at: a pinned location is itself;
+   * a bare location resolves through the board page. The page rides
+   * along only for a bare resolution; a pinned read never blocks on
+   * one - its facts are learned in the background. */
+  private async resolvePinned(
+    path: string,
+  ): Promise<{ pinned: string; page: ViewPage | null }> {
+    const spec = parseTaskSpec(path);
+    if (!spec) {
+      throw new SourceUnavailableError(
+        "asset-missing",
+        `'${path}' is not a task spec (t-N or t-N@rK)`,
+      );
     }
-    const bytes = decodeBase64(board.content);
+    if (spec.revision !== null) {
+      const pinned = path.trim();
+      // the facts a pinned open contributes to the picker arrive
+      // out of band; the read itself rides the pinned file routes
+      void this.boardPage(pinned).catch(() => {});
+      return { pinned, page: null };
+    }
+    const bare = `t-${spec.task}`;
+    const cached = this.pinned.get(bare);
+    if (cached) return { pinned: cached, page: await this.boardPage(cached) };
+    const page = await this.boardPage(bare);
+    const pinned = page.location;
+    this.pinned.set(bare, pinned);
+    return { pinned, page };
+  }
+
+  private rememberTask(pinned: string, page: ViewPage): void {
+    const spec = page.location || pinned;
+    const task = page.task ?? pageFact(page, "task");
+    if (!task) return;
+    const name = pageFact(page, "name");
+    this.seenTasks.splice(
+      0,
+      this.seenTasks.length,
+      ...this.seenTasks.filter((fact) => fact.spec !== spec),
+    );
+    this.seenTasks.unshift({ spec, name });
+  }
+
+  async loadText(location: Location): Promise<LoadedText> {
+    const { pinned, page } = await this.resolvePinned(location.path);
+    const base = serverBase();
+    const bytes = await fetchFileBytes(
+      this.fetcher,
+      viewUrl(base, `${pinned}/file/board.yaml`),
+    );
     const text = new TextDecoder().decode(bytes);
     // a bare location resolved: the caller renders the revision that
-    // answered, so its figures read the same tree
-    const spec = parseTaskSpec(location.path);
+    // answered, and its figures read the same immutable revision
     const resolved =
-      spec && spec.revision === null ? { ...location, path: `t-${spec.task}@r${reply.revision}` } : location;
+      location.path.trim() === pinned
+        ? location
+        : { ...location, path: pinned };
+    void page;
     return { text, location: resolved };
   }
 
-  async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
-    const tree = await this.tree(location);
-    const resolved = resolveRelative("", relative);
-    if (!resolved.ok) {
-      throw new SourceUnavailableError(resolved.failure.code, resolved.failure.reason);
-    }
-    const file = tree.files.files.find((entry) => entry.path === resolved.joined);
-    if (!file) {
-      throw new SourceUnavailableError("asset-missing", `revision ${location.path} holds no file '${relative}'`);
-    }
-    return { bytes: decodeBase64(file.content), path: relative };
+  /** Re-read the current revision's board page right now: the publish
+   * guard compares against it (a stale window never overwrites a
+   * revision that landed after its load). */
+  async currentBoardPage(task: number): Promise<ViewPage> {
+    return this.boardPage(`t-${task}`);
   }
 
+  async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
+    const { pinned } = await this.resolvePinned(location.path);
+    const resolved = resolveRelative("", relative);
+    if (!resolved.ok) {
+      throw new SourceUnavailableError(
+        resolved.failure.code,
+        resolved.failure.reason,
+      );
+    }
+    const base = serverBase();
+    const bytes = await fetchFileBytes(
+      this.fetcher,
+      viewUrl(base, `${pinned}/file/${resolved.joined}`),
+    );
+    return { bytes, path: relative };
+  }
+
+  /** The history page of a task, current or pinned: the timeline the
+   * history mode walks. */
+  async history(path: string): Promise<ViewPage> {
+    const spec = parseTaskSpec(path);
+    if (!spec) {
+      throw new SourceUnavailableError(
+        "asset-missing",
+        `'${path}' is not a task spec (t-N or t-N@rK)`,
+      );
+    }
+    await this.checkContract();
+    const base = serverBase();
+    return fetchPage(this.fetcher, viewUrl(base, `${path.trim()}/history`));
+  }
+
+  /** The authored board.yaml at a pinned revision, as text: the source
+   * the history mode diffs and the annotations edit. */
+  async boardTextAt(pinned: string): Promise<string> {
+    const spec = parseTaskSpec(pinned);
+    if (!spec || spec.revision === null) {
+      throw new SourceUnavailableError(
+        "asset-missing",
+        `'${pinned}' is not a pinned task spec (t-N@rK)`,
+      );
+    }
+    const base = serverBase();
+    const bytes = await fetchFileBytes(
+      this.fetcher,
+      viewUrl(base, `${pinned}/file/board.yaml`),
+    );
+    return new TextDecoder().decode(bytes);
+  }
+
+  /** Re-read the current revision's board text right now: the
+   * publish guard compares against it (t-17: a stale window never
+   * overwrites a revision that landed after its load). */
+  async currentBoardText(
+    task: number,
+  ): Promise<{ pinned: string; text: string }> {
+    const page = await this.boardPage(`t-${task}`);
+    const pinned = page.location;
+    const text = await this.boardTextAt(pinned);
+    return { pinned, text };
+  }
 }

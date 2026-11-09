@@ -839,8 +839,12 @@ def main() -> int:
                 # the app is spawned by WebKitWebDriver, not by us: its
                 # display name must ride the chain env (launcher
                 # inheritance), the way the native lane hands it to the
-                # app directly
-                env={**os.environ, "WAYLAND_DISPLAY": state.wayland_name},
+                # app directly; the test-open channel rides with it
+                env={
+                    **os.environ,
+                    "WAYLAND_DISPLAY": state.wayland_name,
+                    "BOARD_VIEWER_TEST_OPEN": f"host:{state.board}",
+                },
                 stdout=driver_log,
                 stderr=driver_log,
             )
@@ -854,7 +858,10 @@ def main() -> int:
 
         client = WebDriver(DRIVER_PORT, timeout=60.0)
         state.client = client
-        session_id = client.new_session(app_bin, [board])
+        # the app starts on the lanes' test-open channel (t-24@r11): the
+        # launch argument left the human surface, and the host reader is
+        # test-only machinery. The env rides tauri-driver to the app.
+        session_id = client.new_session(app_bin, [])
         check("webdriver session created for the packaged app", True, f"session {session_id[:8]}")
 
         ready_deadline = time.monotonic() + APP_READY_SECONDS

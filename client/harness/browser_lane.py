@@ -642,7 +642,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
     phase("grammar version range", phase_grammar)
 
     # phase 8: tracker-named locations over the tracker contract stand-in
-    # (harness/tracker_mock.py): the one server setting, the version
+    # (harness/tracker_mock.py): the one server setting, the root-page
     # handshake, the unknown-kind lenient render, the unsupported major,
     # the wrong-tracker refusal, and the citation link navigating to the
     # cited revision. The real wire is pinned on the server side by the
@@ -728,18 +728,27 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 str(inspection["errors"])[:200],
             )
             save_server(f"127.0.0.1:{tracker.port}")
+            inspection = open_location("/some/research-file.md")
+            check(
+                "a bare path refuses where no Herdr core exists",
+                inspection["resource"]["status"] == "invalid"
+                and any("tracker's machine" in e["message"] for e in inspection["errors"]),
+                str(inspection["errors"])[:200],
+            )
         finally:
             tracker.stop()
             future.stop()
 
     phase("tracker locations", phase_tracker)
 
-    # the straddle the human hit: a revision landing between the text
-    # fetch and the figure fetch of ONE open. The stand-in answers the
-    # new tree (caption, figure component, the file) to the first
-    # boards/get and the old tree (image embedded in text, no file)
-    # afterwards. One open must issue one boards/get and render
-    # caption and figure from that one tree
+    # the straddle the human hit, adapted to the pinned reads: a
+    # revision landing between one open's revision resolution and the
+    # next open. The stand-in's bare page answers r1 once (image
+    # embedded in prose, the file present) and r2 afterwards (the
+    # figure component). One open resolves its revision once and reads
+    # text and figures at that one immutable revision, so a landing
+    # mid-open cannot split the tree; the re-open answers the new
+    # revision and its committed figure renders.
     def phase_landing() -> None:
         def open_landing(spec: str) -> dict:
             page.fill('[data-control="open:host-path"]', spec)
@@ -757,24 +766,37 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             page.fill('[data-control="server:host"]', f"127.0.0.1:{tracker.port}")
             page.click('[data-control="server:save"]')
             tracker.landing_gets = 0
+            tracker.landing_served = False
             inspection = open_landing("smoke/t-3")
             page.wait_for_function(
-                f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'figure')"
+                f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'image' || o.kind === 'figure')"
             )
             inspection = page.evaluate(f"() => {viewer}.inspection()")
             outcomes = inspection["renderOutcomes"]
-            missing = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "missing"]
-            ok = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "ok"]
+            missing = [o for o in outcomes if o["kind"] in ("image", "figure") and o["status"] == "missing"]
+            ok = [o for o in outcomes if o["kind"] in ("image", "figure") and o["status"] == "ok"]
             check(
                 "a landing mid-open never reports a committed figure as missing",
                 missing == [],
                 str(outcomes)[:200],
             )
-            check("the committed figure renders", len(ok) == 1, str(outcomes)[:200])
+            check("the first revision's image renders from its own tree", len(ok) == 1, str(outcomes)[:200])
             check(
-                "one open issues one boards/get",
+                "one open resolves its revision once",
                 tracker.landing_gets == 1,
-                f"landing boards/get count: {tracker.landing_gets}",
+                f"landing board-page count: {tracker.landing_gets}",
+            )
+            inspection = open_landing("smoke/t-3")
+            page.wait_for_function(
+                f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'figure' && o.status === 'ok')"
+            )
+            inspection = page.evaluate(f"() => {viewer}.inspection()")
+            outcomes = inspection["renderOutcomes"]
+            ok = [o for o in outcomes if o["kind"] == "figure" and o["status"] == "ok"]
+            check(
+                "the committed figure renders on re-open after the landing",
+                len(ok) == 1 and inspection["resource"]["path"].startswith("t-3@r2"),
+                f"{outcomes} {inspection['resource']}",
             )
             screenshot_at(".figure-frame", "landing-figure.png")
         finally:

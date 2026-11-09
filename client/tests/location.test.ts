@@ -1,11 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { apiUrl, baseFromHost, parseLocation, parseTaskSpec, trackerLocation } from "../src/lib/location.ts";
+import {
+  baseFromHost,
+  parseLocation,
+  parseTaskSpec,
+  trackerLocation,
+  viewUrl,
+} from "../src/lib/location.ts";
 
-test("a plain absolute path is the machine this viewer runs on", () => {
+test("a bare absolute path is a file on the tracker's machine", () => {
   assert.deepEqual(parseLocation("/srv/boards/first.yaml"), {
-    machine: "host",
+    machine: "tracker-machine",
     path: "/srv/boards/first.yaml",
   });
 });
@@ -28,9 +34,9 @@ test("the separator is the first colon whose remainder starts with a slash", () 
     machine: "tired",
     path: "/srv/a:b/c.yaml",
   });
-  // an absolute local path with colons never becomes a machine name
+  // a tracker-machine path with colons never becomes a machine name
   assert.deepEqual(parseLocation("/srv/weird:colon/b.yaml"), {
-    machine: "host",
+    machine: "tracker-machine",
     path: "/srv/weird:colon/b.yaml",
   });
 });
@@ -52,33 +58,55 @@ test("anything that is not a location is refused, never guessed", () => {
 
 test("surrounding whitespace is not part of the location", () => {
   assert.deepEqual(parseLocation("  /srv/b.yaml  "), {
-    machine: "host",
+    machine: "tracker-machine",
     path: "/srv/b.yaml",
   });
 });
 
-test("the composed launch form round-trips", () => {
-  // the shell composes "--on <machine> <path>" the same way the
-  // bridge does: machine, colon, path
-  const composed = "user@host:22:/srv/b.yaml";
-  const parsed = parseLocation(composed);
-  assert.ok(parsed);
-  assert.equal(`${parsed.machine}:${parsed.path}`, composed);
+test("the parser never names the host reader; the explicit form is the inspection surface's", () => {
+  // t-24@r11: local-device paths left the human surface; the host
+  // reader is the lanes' test-only machinery. The parser produces the
+  // tracker-machine form for bare paths and never invents "host";
+  // the explicit host: form keeps its name only for the inspection
+  // surface's own calls.
+  assert.equal(parseLocation("/srv/b.yaml")?.machine, "tracker-machine");
+  assert.equal(parseLocation("host:/srv/b.yaml")?.machine, "host");
 });
 
 test("a tracker location names the tracker and the task spec", () => {
-  assert.deepEqual(trackerLocation("saccade/t-56"), { machine: "tracker:saccade", path: "t-56" });
-  assert.deepEqual(trackerLocation("saccade/t-56@r3"), { machine: "tracker:saccade", path: "t-56@r3" });
-  assert.equal(trackerLocation("/saccade/t-56"), null, "a leading slash is a host path");
-  assert.equal(trackerLocation("host:/saccade/t-56"), null, "a machine path keeps its colon form");
+  assert.deepEqual(trackerLocation("saccade/t-56"), {
+    machine: "tracker:saccade",
+    path: "t-56",
+  });
+  assert.deepEqual(trackerLocation("saccade/t-56@r3"), {
+    machine: "tracker:saccade",
+    path: "t-56@r3",
+  });
+  assert.equal(
+    trackerLocation("/saccade/t-56"),
+    null,
+    "a leading slash is a tracker-machine path",
+  );
+  assert.equal(
+    trackerLocation("host:/saccade/t-56"),
+    null,
+    "a machine path keeps its colon form",
+  );
   assert.equal(trackerLocation("saccade/t-56/extra"), null);
-  assert.deepEqual(parseLocation("saccade/t-56"), trackerLocation("saccade/t-56"));
+  assert.deepEqual(
+    parseLocation("saccade/t-56"),
+    trackerLocation("saccade/t-56"),
+  );
   assert.equal(
     parseLocation("saccade/t-56")?.machine,
     "tracker:saccade",
     "the folded parser answers the tracker form",
   );
-  assert.equal(parseLocation("machine:/path.yaml")?.machine, "machine", "the machine form survives");
+  assert.equal(
+    parseLocation("machine:/path.yaml")?.machine,
+    "machine",
+    "the machine form survives",
+  );
 });
 
 test("a task spec parses the bare and revisioned forms", () => {
@@ -89,17 +117,37 @@ test("a task spec parses the bare and revisioned forms", () => {
   assert.equal(parseTaskSpec("t-5/r2"), null);
 });
 
-test("tracker routes resolve against the server host with one slash", () => {
-  for (const host of ["192.168.0.51:8811", "127.0.0.1:8811/", "http://127.0.0.1:8811"]) {
+test("view routes resolve against the server host with one slash", () => {
+  for (const host of [
+    "192.168.0.51:8811",
+    "127.0.0.1:8811/",
+    "http://127.0.0.1:8811",
+  ]) {
     const base = baseFromHost(host);
     assert.ok(base !== null, host);
-    const url = apiUrl(base, "/api/v1/version");
-    assert.equal(new URL(url).pathname, "/api/v1/version", url);
+    const url = viewUrl(base, "t-7/file/board.yaml");
+    assert.equal(new URL(url).pathname, "/view/v1/t-7/file/board.yaml", url);
+    const root = viewUrl(base, "");
+    assert.equal(new URL(root).pathname, "/view/v1/", root);
+    const nested = viewUrl(
+      base,
+      "/t-7@r2/file/figures/deep/nested history.png",
+    );
+    assert.equal(
+      new URL(nested).pathname,
+      "/view/v1/t-7@r2/file/figures/deep/nested%20history.png",
+      nested,
+    );
   }
 });
 
 test("the native shell's policy lets the webview reach a tracker server", () => {
-  const conf = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  const conf = JSON.parse(
+    readFileSync(
+      new URL("../src-tauri/tauri.conf.json", import.meta.url),
+      "utf8",
+    ),
+  );
   const connect = String(conf.app.security.csp)
     .split(";")
     .map((part: string) => part.trim())

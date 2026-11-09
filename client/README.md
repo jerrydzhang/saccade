@@ -24,13 +24,19 @@ section below is their contract.
 ## Reading a board
 
 The standing control is the header location field: give an explicit
-location and open it. A location is `/absolute/path` (the machine this
-viewer runs on) or `machine:/absolute/path` (a machine from the local
-herdr-core's list, as `hc machine ls` shows); the same grammar is the
-launch argument, `board-viewer /path/b.yaml` or `board-viewer --on
-machine /path/b.yaml`. Fixtures live in `fixtures/` and remain a
-dev/test path (the browser lane and the tests address them through the
-inspection surface, not the human UI).
+location and open it. The viewer is never a local opener (t-24@r11,
+t-24@r12): a location is `tracker/t-N[@rK]` (a task board on that
+tracker), `machine:/absolute/path` (a machine from the local herdr-core's
+list), or a bare `/absolute/path` (a file on the TRACKER's machine,
+read through Herdr core: the machine that hosts the tracker is declared
+once in the client configuration as `tracker-machine`; on the tracker's
+own machine - the server host being loopback - the local core's own
+machine is read, and without a declaration on a spoke the open refuses
+saying what to set). The same grammar is every open surface's, picker
+included; there is no launch argument and no path on the device the
+human sits at. Fixtures live in `fixtures/` and remain a dev/test path
+(the lanes address them through the inspection surface and the
+lanes' test-open channel, never the human UI).
 
 Grammar versions: the viewer declares the versions it renders - exactly
 1 today, the same range the shared `board-grammar` crate parses. A board
@@ -39,6 +45,16 @@ a message that names the supported versions; there is no legacy
 interpretation. A component kind the build does not know (a newer minor
 grammar's admission) never refuses the board: it renders as its raw
 authored source beside a diagnostic.
+
+The read surface is `/view/v1` only (t-14 "Pages", t-24@r2): the root
+page is the version contract (the tracker name, the view majors, the
+board grammar range), the board page resolves a bare task location to
+its pinned revision and names the task, and the authored `board.yaml`
+and its figures ride the file family at that pinned revision - so one
+open's text and figures are one immutable tree, and a revision landing
+mid-open cannot split them. `/api/v1` stays `sac`'s own API; the
+viewer's only write is annotation publication (t-14, ratified), which
+uses the commit door and lands in its own change.
 
 The validation split: admission is the shared crate's job on the Tauri
 side (`validate_board`, a path dependency), and the native lanes refuse
@@ -123,7 +139,14 @@ check runs on the remote side: one `realpath -e -- <base> <candidate>`
 answers with both canonical forms, the prefix relation is checked
 there, and the read itself uses the canonical path. Bytes over the 8 MB
 exec cap, or flagged `truncated`, and text reads that stopped inside
-the file, are refused with an error - never partially rendered.
+the file, are refused with an error - never partially rendered. The
+local-device host reader (`read_declaration`/`read_asset` with no
+machine) is test-only machinery since t-24@r11: the lanes' fixture
+reader, carrying the same path guards, never presented as human
+functionality. The lanes open their boards through the test-open
+channel (`BOARD_VIEWER_TEST_OPEN`, one location at startup riding the
+same open path the inspection surface uses) - the launch argument left
+the human surface with the local-path form.
 
 Contracts this reader holds (pinned by `tests/` and the bridge's cargo
 suite):
@@ -153,7 +176,8 @@ suite):
 
 - `src/lib/` - read model, decode, Markdown pipeline, projection, copy
   semantics, sources, view model, inspection projection, DOM renderer,
-  hydration, diagram overlay
+  hydration, diagram overlay, the /view/v1 page client (`pages.ts`)
+  and the tracker read source over it (`tracker.ts`)
 - `src/App.svelte` - the shell; one view model feeds the human UI, the
   machine-readable inspection (`window.__boardViewer`) and the copy
   handler
@@ -256,18 +280,23 @@ SACCADE_DB=<absolute db> nix develop .#board-viewer -c \
 python3 client/harness/entry.py --board <absolute board.yaml> session up
 ```
 
+The lanes' `--board` is the harness's own argument, not the app's: it
+selects the fixture the lane opens through the test-open channel
+(`BOARD_VIEWER_TEST_OPEN`, t-24@r11) - the launch argument left the
+human surface with the local-path form.
+
 Session commands ride the run-root socket from the last `up`:
 `session status | inspect | input click|type|key|wheel|drag |
 coords | observe | shot | checks | down`. Acting is real WebDriver
 input only, addressed semantically through the inspection
 projection's `targets` (stable `data-control` ids); raw coordinates
 are an explicit escape hatch. Open happens only the ways a real user
-opens: the launch `--board` or the UI's own open controls.
+opens: the UI's own open controls, or the lanes' test-open channel.
 
 The remote lane's fixture board and its escape symlink live in
-`harness/remote_fixture/`; the tracker-location wire stand-in lives
-in `harness/tracker_mock.py` and speaks exactly the `/api/v1` routes
-the real server pins on the server side.
+`harness/remote_fixture/`; the tracker wire stand-in lives in
+`harness/tracker_mock.py` and speaks exactly the `/view/v1` page
+shapes the real server pins on the server side.
 
 What this harness is not: no production probes, no host socket or
 status calls, no tracker database access, no SSH to real machines, no

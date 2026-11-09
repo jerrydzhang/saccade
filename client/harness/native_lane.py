@@ -9,8 +9,10 @@ Order, enforced here:
      display socket beyond the fresh private XDG_RUNTIME_DIR); the
      screenshooter protocol is core in weston 16 - no module flags
   3. the pinned Tauri application binary in the foreground, opened on
-     the explicit board passed as its launch argument, sharing the
-     compositor's WAYLAND_DISPLAY (one name, computed here)
+     the test-open channel's location (BOARD_VIEWER_TEST_OPEN: the
+     lanes' test-only machinery, riding the same model.open the
+     inspection surface uses, t-24@r11), sharing the compositor's
+     WAYLAND_DISPLAY (one name, computed here)
   4. bounded frame captures: weston-screenshooter 16 takes no output
      argument and writes wayland-screenshot-output-*.png to its CWD, so
      captures run with cwd=SHOTS_DIR and the lane collects new files
@@ -138,16 +140,21 @@ def main() -> int:
     # FILES
     app_env = {**os.environ, "WAYLAND_DISPLAY": wayland_name}
 
-    def run_app(board_arg: str, log_name: str) -> tuple[str, list[str], bool, int | None]:
+    def run_app(test_open: str, log_name: str) -> tuple[str, list[str], bool, int | None]:
         """One foreground launch with bounded captures, then owned
         teardown of the app alone: the log text, the frames, the
         liveness at capture start, and the exit code read BEFORE our
         teardown."""
         log_path = logs / log_name
         log = open(log_path, "wb")
-        child = subprocess.Popen([app_bin, board_arg], env=app_env, stdout=log, stderr=log)
+        child = subprocess.Popen(
+            [app_bin],
+            env={**app_env, "BOARD_VIEWER_TEST_OPEN": test_open},
+            stdout=log,
+            stderr=log,
+        )
         log.close()
-        print(f"[native] app launched in foreground on {board_arg}", flush=True)
+        print(f"[native] app launched in foreground on test open {test_open}", flush=True)
         frames: list[str] = []
         alive = child.poll() is None
         code: int | None = None
@@ -191,9 +198,11 @@ def main() -> int:
                     child.wait(timeout=5)
         return log_path.read_text(errors="replace"), frames, alive, code
 
-    # launch 1: the file board through the bridge, the lane's standing
-    # contract
-    app_log_text, frame_paths, alive_at_start, exit_code = run_app(board, "app.log")
+    # launch 1: the fixture board through the host reader - the lanes'
+    # test-only local-file reader (t-24@r11), through the bridge's real
+    # read_declaration with its real guards. The standing contract: the
+    # board renders and the bridge outcome is on the log.
+    app_log_text, frame_paths, alive_at_start, exit_code = run_app(f"host:{board}", "app.log")
 
     # liveness is recorded separately from the frame count: poll state
     # at capture start, the exit code read BEFORE our teardown, then the
@@ -242,12 +251,12 @@ def main() -> int:
         )
         check(
             "the unset server refuses with the teaching line",
-            "[viewer] initial board FAILED" in tracker_log
+            "[viewer] test open board FAILED" in tracker_log
             and "no tracker server set" in tracker_log,
             tracker_log[-400:],
         )
         for line in tracker_log.splitlines():
-            if "[viewer] initial board" in line:
+            if "[viewer] test open board" in line:
                 print(f"[native]   {line}", flush=True)
     finally:
         mock.stop()

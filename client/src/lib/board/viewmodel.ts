@@ -7,7 +7,12 @@ import type { Diagnostic, StructuredIssue } from "./errors.ts";
 import { decodeBoard } from "./decode.ts";
 import type { Board, FigureBlock } from "./model.ts";
 import { crateVerdict } from "./validate.ts";
-import { sourceFor, SourceUnavailableError, type Location, type Machine } from "../sources.ts";
+import {
+  sourceFor,
+  SourceUnavailableError,
+  type Location,
+  type Machine,
+} from "../sources.ts";
 import { parseLocation } from "../location.ts";
 import type { CopyMode } from "../copy.ts";
 
@@ -109,7 +114,8 @@ export class ViewerModel {
       resolvedLocation = loaded.location;
     } catch (error) {
       if (token !== this.generation) return;
-      const message = error instanceof SourceUnavailableError ? error.message : String(error);
+      const message =
+        error instanceof SourceUnavailableError ? error.message : String(error);
       this.set({
         status: "invalid",
         board: null,
@@ -127,7 +133,10 @@ export class ViewerModel {
     // The crate's refusal is final in the native lanes; the presentation
     // decoder never overrides it.
     if (verdict && verdict.verdict === "refused") {
-      const issue: StructuredIssue = { code: "board-refused", message: verdict.message };
+      const issue: StructuredIssue = {
+        code: "board-refused",
+        message: verdict.message,
+      };
       if (verdict.line !== undefined) {
         issue.line = verdict.line;
         issue.column = verdict.column ?? 0;
@@ -188,11 +197,14 @@ export class ViewerModel {
    * Null in the browser lane, where the mirror decoder alone decides. A
    * bridge that fails to answer refuses the board loudly; it never
    * degrades silently to mirror-only admission. */
-  private async validate(text: string): Promise<Awaited<ReturnType<typeof crateVerdict>>> {
+  private async validate(
+    text: string,
+  ): Promise<Awaited<ReturnType<typeof crateVerdict>>> {
     try {
       return await crateVerdict(text);
     } catch (error) {
-      const message = error instanceof SourceUnavailableError ? error.message : String(error);
+      const message =
+        error instanceof SourceUnavailableError ? error.message : String(error);
       return { verdict: "refused", kind: "bridge-invalid", message };
     }
   }
@@ -202,8 +214,7 @@ export class ViewerModel {
   async openInput(raw: string): Promise<void> {
     const parsed = parseLocation(raw);
     if (!parsed) {
-      const message =
-        `not a location: ${JSON.stringify(raw)}; use /absolute/path, machine:/absolute/path, or tracker/t-N`;
+      const message = `not a location: ${JSON.stringify(raw)}; use a tracker location (saccade/t-N), a path on the tracker's machine (/absolute/path), or machine:/absolute/path`;
       this.set({
         status: "invalid",
         board: null,
@@ -219,10 +230,16 @@ export class ViewerModel {
     await this.open(parsed);
   }
 
-  async loadFigureAsset(location: Location, block: FigureBlock): Promise<Uint8Array | string> {
+  async loadFigureAsset(
+    location: Location,
+    block: FigureBlock,
+  ): Promise<Uint8Array | string> {
     const token = this.generation;
     try {
-      const asset = await sourceFor(location.machine).loadAsset(location, block.input);
+      const asset = await sourceFor(location.machine).loadAsset(
+        location,
+        block.input,
+      );
       if (token !== this.generation) return "stale";
       return asset.bytes;
     } catch (error) {

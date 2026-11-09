@@ -49,11 +49,13 @@ impl<T: CoreTransport> CoreClient<T> {
 
     /// One whole-file text read: `file.read` with no paging. A read
     /// that stopped inside the file (first != 1 or last != lines) is
-    /// refused; partial text never becomes a board.
+    /// refused; partial text never becomes a board. An empty machine
+    /// is the local core's own machine: `on` is omitted, the same read
+    /// the CLI's no-`--on` form makes (t-24@r12).
     pub fn read_text(&self, machine: &str, path: &str) -> Result<String, CoreFail> {
         let result = self.request(
             "file.read",
-            &json!({"path": path, "on": machine}),
+            &file_read_params(machine, path),
             machine,
             Some(path),
         )?;
@@ -74,14 +76,14 @@ impl<T: CoreTransport> CoreClient<T> {
 
     /// One fixed-argv program on a machine: argv as given, no shell,
     /// bounded time. A nonzero exit or a timeout is a result, not an
-    /// error.
+    /// error. An empty machine is the local core's own machine: `on`
+    /// is omitted (t-24@r12).
     pub fn exec(&self, machine: &str, argv: &[&str]) -> Result<ExecOutput, CoreFail> {
-        let result = self.request(
-            "machine.exec",
-            &json!({"argv": argv, "on": machine, "timeout": EXEC_TIMEOUT_SECONDS}),
-            machine,
-            None,
-        )?;
+        let mut params = json!({"argv": argv, "timeout": EXEC_TIMEOUT_SECONDS});
+        if !machine.is_empty() {
+            params["on"] = json!(machine);
+        }
+        let result = self.request("machine.exec", &params, machine, None)?;
         let stdout =
             base64::decode(str_field(&result, "stdout")?).map_err(|e| CoreFail::Protocol {
                 detail: format!("exec stdout: {e}"),
@@ -318,6 +320,17 @@ impl<T: CoreTransport> CoreClient<T> {
     }
 }
 
+/// The `file.read` params: `on` names the machine and is omitted for
+/// the local core's own machine (t-24@r12), the same read the CLI's
+/// no-`--on` form makes.
+fn file_read_params(machine: &str, path: &str) -> Value {
+    let mut params = json!({"path": path});
+    if !machine.is_empty() {
+        params["on"] = json!(machine);
+    }
+    params
+}
+
 fn str_field<'a>(value: &'a Value, key: &str) -> Result<&'a str, CoreFail> {
     value
         .get(key)
@@ -489,6 +502,22 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "file.read");
         assert_eq!(calls[0].1, json!({"path": "/srv/b.yaml", "on": "tired"}));
+    }
+
+    #[test]
+    fn a_local_core_read_omits_on_and_reads_the_core_s_own_machine() {
+        let fake = Fake::new(&[json!({"result": file_read_ok("# hub\n", 1)})]);
+        let client = CoreClient::new(&fake);
+        let text = client.read_text("", "/srv/hub.yaml").unwrap();
+        assert_eq!(text, "# hub\n");
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "file.read");
+        assert_eq!(
+            calls[0].1,
+            json!({"path": "/srv/hub.yaml"}),
+            "no on: the local core reads its own machine"
+        );
     }
 
     #[test]

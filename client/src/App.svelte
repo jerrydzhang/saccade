@@ -40,12 +40,14 @@
     return unsubscribe;
   });
 
-  // Foreground explicit-board open: the shell hands the launch argument
-  // over the bridge and the app opens it through the host lane - the
-  // same handlers the controls use. Each step logs a marker so the
-  // native evidence can tell "webview never loaded" (no startup line),
-  // "invoke failed", and "open failed" apart.
-  async function openInitialBoard(): Promise<void> {
+  // The lanes' test-open channel: the one startup open, riding the
+  // same model.openInput the controls use. Test-only machinery
+  // (t-24@r11) - the launch argument and the local-device path form
+  // left the human surface with them, and a human run starts empty.
+  // Each step logs a marker so the native evidence can tell "webview
+  // never loaded" (no startup line), "invoke failed", and "open
+  // failed" apart.
+  async function openTestBoard(): Promise<void> {
     let invoke: ReturnType<typeof tauriInvoke>;
     try {
       invoke = tauriInvoke();
@@ -58,25 +60,25 @@
     }
     try {
       console.log("[viewer] startup: bridge present");
-      const path = (await invoke("initial_board")) as string | null;
-      if (!path) {
-        console.log("[viewer] no initial board; starting empty");
+      const spec = (await invoke("test_open")) as string | null;
+      if (!spec) {
+        console.log("[viewer] no test open; starting empty");
         return;
       }
-      console.log(`[viewer] initial board requested: ${path}`);
-      await model.openInput(path);
+      console.log(`[viewer] test open requested: ${spec}`);
+      await model.openInput(spec);
       const snap = model.snapshot;
       if (snap.board) {
-        console.log(`[viewer] initial board opened: ${snap.board.content.length} blocks`);
+        console.log(`[viewer] test open board opened: ${snap.board.content.length} blocks`);
       } else {
         const detail = snap.laneMessage ?? snap.errors.map((e) => e.message).join("; ");
-        console.error(`[viewer] initial board FAILED: ${detail || "no board"}`);
+        console.error(`[viewer] test open board FAILED: ${detail || "no board"}`);
       }
     } catch (error) {
-      console.error(`[viewer] initial board FAILED: ${String(error)}`);
+      console.error(`[viewer] test open board FAILED: ${String(error)}`);
     }
   }
-  void openInitialBoard();
+  void openTestBoard();
 
   let hostPath = $state("");
   let query = $state("");
@@ -297,7 +299,7 @@
     </span>
     <span class="controls">
       <label class="control">location
-        <input type="text" bind:value={hostPath} placeholder="/local/path.yaml, machine:/path, or tracker/t-N" aria-label="board location" data-control="open:host-path" />
+        <input type="text" bind:value={hostPath} placeholder="saccade/t-N, /path on the tracker's machine, or machine:/path" aria-label="board location" data-control="open:host-path" />
       </label>
       <button type="button" data-control="open:host" onclick={() => void openHost()}>open</button>
       <label class="control">tracker server

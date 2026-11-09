@@ -23,6 +23,11 @@ pub struct LookPayload {
     pub scheme_text: Option<String>,
     pub weight: Option<String>,
     pub problem: Option<String>,
+    /// The Herdr machine that hosts this tracker, as the local core
+    /// lists it (t-24@r12): a bare path reads there through the local
+    /// core. None on the hub, where the local core's own machine is
+    /// read.
+    pub tracker_machine: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -33,6 +38,8 @@ struct ConfigFile {
     #[serde(rename = "scheme-inline")]
     scheme_inline: Option<String>,
     weight: Option<String>,
+    #[serde(rename = "tracker-machine")]
+    tracker_machine: Option<String>,
 }
 
 /// What a configuration load resolved to, before publication.
@@ -41,6 +48,7 @@ struct Loaded {
     scheme_text: Option<String>,
     weight: Option<String>,
     problem: Option<String>,
+    tracker_machine: Option<String>,
 }
 
 const WEIGHTS: [&str; 3] = ["regular", "medium", "semibold"];
@@ -58,6 +66,7 @@ fn load_config(path: &Path) -> Loaded {
                 scheme_text: None,
                 weight: None,
                 problem: None,
+                tracker_machine: None,
             };
         }
         Err(error) => {
@@ -66,6 +75,7 @@ fn load_config(path: &Path) -> Loaded {
                 scheme_text: None,
                 weight: None,
                 problem: Some(format!("look configuration unreadable: {error}")),
+                tracker_machine: None,
             };
         }
     };
@@ -77,6 +87,7 @@ fn load_config(path: &Path) -> Loaded {
                 scheme_text: None,
                 weight: None,
                 problem: Some(format!("look configuration invalid: {error}")),
+                tracker_machine: None,
             };
         }
     };
@@ -110,6 +121,10 @@ fn load_config(path: &Path) -> Loaded {
         scheme_text,
         weight,
         problem,
+        tracker_machine: config
+            .tracker_machine
+            .map(|machine| machine.trim().to_string())
+            .filter(|machine| !machine.is_empty()),
     }
 }
 
@@ -121,6 +136,7 @@ fn payload_of(path: Option<&Path>, loaded: Loaded, generation: u64) -> LookPaylo
         scheme_text: loaded.scheme_text,
         weight: loaded.weight,
         problem: loaded.problem,
+        tracker_machine: loaded.tracker_machine,
     }
 }
 
@@ -143,6 +159,7 @@ fn shared() -> &'static Shared {
             scheme_text: None,
             weight: None,
             problem: Some("the host has no look state yet".into()),
+            tracker_machine: None,
         }),
         changed: Condvar::new(),
     })
@@ -160,6 +177,7 @@ fn reload(path: Option<&Path>) -> bool {
             scheme_text: None,
             weight: None,
             problem: None,
+            tracker_machine: None,
         },
     };
     let mut guard = shared.payload.lock().expect("look payload mutex");
@@ -168,7 +186,8 @@ fn reload(path: Option<&Path>) -> bool {
         && guard.config_path == next.config_path
         && guard.scheme_text == next.scheme_text
         && guard.weight == next.weight
-        && guard.problem == next.problem;
+        && guard.problem == next.problem
+        && guard.tracker_machine == next.tracker_machine;
     if same {
         return false;
     }
@@ -282,6 +301,18 @@ pub fn look_config() -> LookPayload {
     shared().payload.lock().expect("look payload mutex").clone()
 }
 
+/// The declared tracker machine, read on demand: a bare path resolves
+/// through it (t-24@r12). None without a declaration - the hub case
+/// reads the local core's own machine.
+pub fn current_tracker_machine() -> Option<String> {
+    shared()
+        .payload
+        .lock()
+        .expect("look payload mutex")
+        .tracker_machine
+        .clone()
+}
+
 #[tauri::command]
 pub async fn wait_look_config(since: u64) -> LookPayload {
     // the bounded hold rides a blocking thread; the async command never
@@ -332,6 +363,32 @@ mod tests {
         assert!(!loaded.config_found);
         assert!(loaded.problem.is_none());
         assert!(loaded.scheme_text.is_none());
+    }
+
+    #[test]
+    fn the_tracker_machine_declaration_rides_the_same_file() {
+        let dir = temp_dir("tracker-machine");
+        let config = dir.join("config.toml");
+        write(
+            &config,
+            "scheme-path = \"/a.yaml\"\ntracker-machine = \" hub-core \"\n",
+        );
+        let loaded = load_config(&config);
+        assert!(loaded.config_found);
+        assert_eq!(
+            loaded.tracker_machine.as_deref(),
+            Some("hub-core"),
+            "the declaration is trimmed"
+        );
+        write(&config, "tracker-machine = \"   \"\n");
+        let loaded = load_config(&config);
+        assert_eq!(loaded.tracker_machine, None, "an empty declaration is none");
+        write(&config, "scheme-path = \"/a.yaml\"\n");
+        let loaded = load_config(&config);
+        assert_eq!(
+            loaded.tracker_machine, None,
+            "no declaration is none, never a guess"
+        );
     }
 
     #[test]
