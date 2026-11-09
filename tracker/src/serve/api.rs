@@ -735,6 +735,64 @@ pub(crate) async fn origin_policy(
         )
             .into_response();
     }
+    if request.method() == axum::http::Method::OPTIONS {
+        // a browser preflights every cross-origin write (a POST, PATCH,
+        // PUT or DELETE naming Content-Type: application/json is not a
+        // simple request): an allowed origin's preflight answers with
+        // its own origin echoed and the verbs the doors carry, so the
+        // suite's writes can leave the shells. The write boundary is
+        // unchanged - any device that reaches the port may write - this
+        // only lets the already-allowed pages complete one.
+        let allowed_response = |origin: &str| {
+            let mut response = (StatusCode::NO_CONTENT, "").into_response();
+            if let Ok(value) = axum::http::HeaderValue::from_str(origin) {
+                response
+                    .headers_mut()
+                    .insert("access-control-allow-origin", value);
+            }
+            response.headers_mut().insert(
+                "access-control-allow-methods",
+                axum::http::HeaderValue::from_static("GET, POST, PATCH, PUT, DELETE, OPTIONS"),
+            );
+            response.headers_mut().insert(
+                "access-control-allow-headers",
+                axum::http::HeaderValue::from_static("Content-Type"),
+            );
+            response
+                .headers_mut()
+                .append("vary", axum::http::HeaderValue::from_static("Origin"));
+            response
+        };
+        if let Some(origin) = origin.as_deref() {
+            if allowed.iter().any(|candidate| candidate == origin) {
+                return allowed_response(origin);
+            }
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": {
+                        "code": "origin_forbidden",
+                        "detail": format!(
+                            "origin '{origin}' is not allowed here; the server allows its shells and the origins configured at serve time"
+                        ),
+                    }
+                })),
+            )
+                .into_response();
+        }
+        // a preflight naming no origin is no browser's: refuse it like
+        // any other request
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "code": "bad_request",
+                    "detail": "an OPTIONS preflight names its origin; this one named none"
+                }
+            })),
+        )
+            .into_response();
+    }
     if request.method() == axum::http::Method::POST {
         let json = request
             .headers()
@@ -757,12 +815,14 @@ pub(crate) async fn origin_policy(
                 .into_response();
         }
     }
-    let is_read = request.method() == axum::http::Method::GET;
     let mut response = next.run(request).await;
     if let Some(origin) = &origin
-        && is_read
+        && allowed.iter().any(|candidate| candidate == origin)
         && let Ok(value) = axum::http::HeaderValue::from_str(origin)
     {
+        // the echo rides every answered request, reads and writes
+        // alike: a write's answer carries the sequence the client's
+        // echo filter and its next settled write need
         response
             .headers_mut()
             .insert("access-control-allow-origin", value);

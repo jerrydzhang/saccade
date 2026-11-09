@@ -2094,6 +2094,69 @@ fn board_wire_routes_hold_their_contracts() {
         "the answer varies by origin"
     );
 
+    // a browser preflights every cross-origin write (Content-Type:
+    // application/json is not a simple request): an allowed origin's
+    // preflight answers 204 with its origin echoed and the verbs the
+    // doors carry; a stranger's refuses; a preflight naming no origin
+    // is no browser's
+    let preflight = |origin: Option<&str>| {
+        let request = ureq::options(&format!("{url}/pool/v1/states"))
+            .config()
+            .http_status_as_error(false)
+            .build();
+        let request = match origin {
+            Some(value) => request
+                .header("origin", value)
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type"),
+            None => request,
+        };
+        request.call().unwrap()
+    };
+    let shell_preflight = preflight(Some("tauri://localhost"));
+    assert_eq!(
+        shell_preflight.status().as_u16(),
+        204,
+        "the shell's preflight answers"
+    );
+    assert_eq!(
+        shell_preflight
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("tauri://localhost")
+    );
+    assert_eq!(
+        shell_preflight
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|v| v.to_str().ok()),
+        Some("GET, POST, PATCH, PUT, DELETE, OPTIONS")
+    );
+    let stranger_preflight = preflight(Some("https://evil.example"));
+    assert_eq!(stranger_preflight.status().as_u16(), 403);
+    let bare_preflight = preflight(None);
+    assert_eq!(bare_preflight.status().as_u16(), 400);
+
+    // the echo rides writes: a write from an allowed origin carries its
+    // origin on the answer, so the client reads the sequence its echo
+    // filter and its next settled write need
+    let write = ureq::post(&format!("{url}/pool/v1/states"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .header("origin", "tauri://localhost")
+        .send_json(json!({"id": "w-cors", "device": "dev-1"}))
+        .unwrap();
+    assert_eq!(write.status().as_u16(), 200);
+    assert_eq!(
+        write
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("tauri://localhost")
+    );
+
     // the rebinding guard: a domain name that is not this server
     // refuses before routing, and an allowlisted page can read why; an
     // IP literal never comes from a rebinding and answers

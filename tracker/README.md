@@ -279,6 +279,13 @@ record authority.
   under informative statuses (`bad_query`, `state_missing` 404,
   `state_exists` 409, `not_attached` 409, `self_link` 422, `storage`
   500, `pool_too_new` 500).
+- **The browser's preflight is answered**: a cross-origin write
+  naming Content-Type: application/json is not a simple request, so
+  the origin policy answers an allowed origin's OPTIONS with its own
+  origin echoed and the verbs the doors carry, and the echo rides
+  every answered request, reads and writes alike - the write boundary
+  itself is unchanged (any device that reaches the port may write);
+  this only lets the already-allowed pages complete one.
 - **Links are per device, one out of a window, only between windows
   attached on that device, and a link lapses when its target
   detaches** (t-14) - enforced here in the same write as the detach;
