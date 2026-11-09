@@ -34,6 +34,7 @@ from webdriver_client import WebDriver, WebDriverError  # noqa: E402
 from webdriver_session import (  # noqa: E402
     INSPECT_SCRIPT,
     capture_compositor_frame,
+    perform_input,
     wait_listening,
 )
 
@@ -727,6 +728,182 @@ def main() -> int:
 
         frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote-deck")
         check("deck compositor frame captured", frame is not None, "screenshooter produced no frame")
+
+        # -- the explainer annotation write end-to-end (t-21, t-24@r21) --
+        # A live bare-path board in the run root - writable, unlike the
+        # read-only fixture binds - annotated through the real flow:
+        # real input, the shown text's edit plan decoded before sending,
+        # the whole-file re-read, one file.edit on machine b through the
+        # declared machine, and the landed annotation rendered. Then the
+        # stale guard: the file changes under the window, the next
+        # submit refuses, the text is kept, and the note says so.
+        live_path = pathlib.Path.cwd() / "live-explainer.yaml"
+        live_path.write_text(
+            "grammar: 1\n"
+            "task: t-42\n"
+            "content:\n"
+            "  - text: |\n"
+            "      the first part of the live explainer\n"
+            "  - text: |\n"
+            "      the second part of the live explainer\n"
+        )
+
+        def type_and_open(spec: str) -> None:
+            perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": spec})
+            perform_input(state.client, {"kind": "click", "target": "open:host"})
+
+        def inspection_bounded(predicate, timeout: float, what: str):
+            deadline = time.monotonic() + timeout
+            last = "no read"
+            while time.monotonic() < deadline:
+                try:
+                    candidate = client.execute(INSPECT_SCRIPT)
+                except WebDriverError as error:
+                    last = str(error)[:160]
+                    candidate = None
+                got = candidate if isinstance(candidate, dict) else None
+                if got is not None:
+                    last = json.dumps(candidate)[:200]
+                    if predicate(got):
+                        return got
+                time.sleep(0.5)
+            check(what, False, last)
+            return None
+
+        type_and_open(str(live_path))
+        opened = inspection_bounded(
+            lambda item: (item.get("resource") or {}).get("machine") == "tracker-machine"
+            and (item.get("resource") or {}).get("path") == str(live_path)
+            and (item.get("resource") or {}).get("status") == "loaded",
+            CONNECT_WAIT_SECONDS,
+            "the live bare-path board opens through the declared machine",
+        )
+        editor_up = False
+
+        if opened is not None:
+            perform_input(state.client, {"kind": "key", "keys": ["a"]})
+            editor_deadline = time.monotonic() + 10
+            editor_up = False
+            while time.monotonic() < editor_deadline:
+                editor_up = (
+                    client.execute(
+                        "return document.querySelector('[data-control=\"draft:input\"]') !== null;"
+                    )
+                    is True
+                )
+                if editor_up:
+                    break
+                time.sleep(0.5)
+            check("a on the explainer opens the draft editor", editor_up)
+
+        if editor_up:
+            perform_input(
+                state.client,
+                {"kind": "type", "target": "draft:input", "text": "a note from the lane"},
+            )
+            perform_input(state.client, {"kind": "hotkey", "keys": ["ctrl", "enter"]})
+
+            written_deadline = time.monotonic() + CONNECT_WAIT_SECONDS
+            written = False
+            file_now = ""
+            while time.monotonic() < written_deadline:
+                file_now = live_path.read_text()
+                if "annotation: |" in file_now and "a note from the lane" in file_now:
+                    written = True
+                    break
+                time.sleep(0.5)
+            check(
+                "the submit wrote the annotation component into the file",
+                written,
+                file_now[:300],
+            )
+
+            landed = inspection_bounded(
+                lambda item: any(
+                    part.get("kind") == "annotation" for part in item.get("outline") or []
+                ),
+                CONNECT_WAIT_SECONDS,
+                "the landed annotation renders in the reopened board",
+            )
+            check("landed annotation outline carries annotation", landed is not None)
+
+            # the stale guard: the file changes under this window
+            live_path.write_text(live_path.read_text() + "  - text: |\n      a later part\n")
+            perform_input(state.client, {"kind": "key", "keys": ["a"]})
+            editor_up = False
+            editor_deadline = time.monotonic() + 10
+            while time.monotonic() < editor_deadline:
+                editor_up = (
+                    client.execute(
+                        "return document.querySelector('[data-control=\"draft:input\"]') !== null;"
+                    )
+                    is True
+                )
+                if editor_up:
+                    break
+                time.sleep(0.5)
+            check("a after the write opens the editor again", editor_up)
+            if editor_up:
+                perform_input(
+                    state.client,
+                    {"kind": "type", "target": "draft:input", "text": "a second note"},
+                )
+                perform_input(state.client, {"kind": "hotkey", "keys": ["ctrl", "enter"]})
+                refused_deadline = time.monotonic() + CONNECT_WAIT_SECONDS
+                refused = False
+                note = ""
+                while time.monotonic() < refused_deadline:
+                    note = str(
+                        client.execute(
+                            "return document.querySelector('[data-control=\"action:note\"]')?.textContent ?? '';"
+                        )
+                        or ""
+                    )
+                    if "file changed" in note:
+                        refused = True
+                        break
+                    time.sleep(0.5)
+                check(
+                    "the changed file refuses the write and the note says so",
+                    refused,
+                    note[:200],
+                )
+                file_after = live_path.read_text()
+                check(
+                    "the refused write touched nothing",
+                    "a second note" not in file_after,
+                    file_after[-200:],
+                )
+
+                # the kept text rides: reopen the freshly read file and
+                # press a - the editor opens with the kept text
+                type_and_open(str(live_path))
+                inspection_bounded(
+                    lambda item: (item.get("resource") or {}).get("status") == "loaded",
+                    CONNECT_WAIT_SECONDS,
+                    "the file reopens after the refusal",
+                )
+                perform_input(state.client, {"kind": "key", "keys": ["a"]})
+                kept_deadline = time.monotonic() + 10
+                kept = ""
+                while time.monotonic() < kept_deadline:
+                    kept = str(
+                        client.execute(
+                            "return document.querySelector('[data-control=\"draft:input\"]')?.value ?? '';"
+                        )
+                        or ""
+                    )
+                    if kept:
+                        break
+                    time.sleep(0.5)
+                check(
+                    "the kept annotation text pre-fills the next editor",
+                    kept == "a second note",
+                    kept[:100],
+                )
+
+        frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote-explainer")
+        check("explainer compositor frame captured", frame is not None, "screenshooter produced no frame")
 
         passed = sum(1 for ok, _name, _detail in RESULTS if ok)
         code = 0 if passed == len(RESULTS) else 1
