@@ -15,10 +15,10 @@ viewer-check:
     python3 client/harness/entry.py check-fast
 
 viewer-native-check:
-    nix develop .#board-viewer -c bash -c 'cd client/src-tauri && cargo test'
+    nix develop .#saccade-app -c bash -c 'cd client/src-tauri && cargo test'
 
 viewer-shell:
-    nix develop .#board-viewer
+    nix develop .#saccade-app
 
 native-test: typecheck
     node --experimental-strip-types --test tracker/native/saccade.test.ts

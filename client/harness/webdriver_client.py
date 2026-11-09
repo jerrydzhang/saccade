@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The minimal W3C WebDriver client for the board-viewer session: stdlib
+"""The minimal W3C WebDriver client for the saccade-app session: stdlib
 urllib only, no framework. One remote end (tauri-driver) at 127.0.0.1.
 
 Every command goes through request(); the W3C envelope ({"value": ...},

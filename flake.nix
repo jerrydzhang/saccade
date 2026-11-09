@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     # the client nixpkgs: the revision the human's system flake is
-    # built from. The board-viewer package and app build against it so
+    # built from. The saccade-app package and app build against it so
     # the build agents test is the build the client runs; the tracker's
     # own packages, checks, and devshells stay on nixpkgs.
     nixpkgs-client.url = "github:NixOS/nixpkgs/c59305bab2065cfecc4944690d9eedbb56f3a9fa";

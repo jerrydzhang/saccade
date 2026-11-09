@@ -23,7 +23,7 @@ review of f53330d):
   unavailable, or when the pidfd API is missing. There is no weaker
   fallback and no silent downgrade.
 - Runtime authorization is procedural: gated lanes refuse unless
-  BOARD_VIEWER_RUNTIME_AUTHORIZED names the review record authorizing
+  SAC_APP_RUNTIME_AUTHORIZED names the review record authorizing
   this exact harness code.
 """
 
@@ -39,7 +39,7 @@ import sys
 import tempfile
 import time
 
-RUNTIME_ROOT = "/var/tmp/saccade-board-viewer"
+RUNTIME_ROOT = "/var/tmp/saccade-app"
 PR_SET_PDEATHSIG = 1
 # One byte: the gate's os.read(fd, 1) can only ever return one byte.
 RELEASE_BYTE = b"R"
@@ -328,7 +328,7 @@ def make_run_root(label: str) -> pathlib.Path:
 
 
 def authorized() -> bool:
-    return bool(os.environ.get("BOARD_VIEWER_RUNTIME_AUTHORIZED", ""))
+    return bool(os.environ.get("SAC_APP_RUNTIME_AUTHORIZED", ""))
 
 
 def gate_or_exit(lane: str) -> None:
@@ -336,7 +336,7 @@ def gate_or_exit(lane: str) -> None:
         print(
             f"containment refusal: lane {lane!r} launches processes; runtime is gated "
             "until the reviewed harness code is authorized "
-            "(set BOARD_VIEWER_RUNTIME_AUTHORIZED=<review record>)",
+            "(set SAC_APP_RUNTIME_AUTHORIZED=<review record>)",
             file=sys.stderr,
         )
         sys.exit(2)

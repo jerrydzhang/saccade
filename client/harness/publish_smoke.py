@@ -128,7 +128,7 @@ def main() -> int:
                 "files": {"files": [{"path": "board.yaml",
                                      "content": base64.b64encode(annotated.encode()).decode()}]},
                 "message": "annotations: the reviewer's concern, drafted in place",
-                "client": "board-viewer",
+                "client": "saccade-app",
             },
         )
         assert status == 200, f"publish refused: {status} {reply}"
@@ -180,7 +180,7 @@ def main() -> int:
                 "files": {"files": [{"path": "board.yaml",
                                      "content": base64.b64encode((annotated + "  - text: more\n").encode()).decode()}]},
                 "message": "should refuse",
-                "client": "board-viewer",
+                "client": "saccade-app",
             },
         )
         assert status != 200, f"the offered board published: {reply}"

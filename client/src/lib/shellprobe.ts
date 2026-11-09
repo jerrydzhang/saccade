@@ -1,6 +1,6 @@
 // The shell feasibility probe (t-19): test-only machinery, named as
 // such, never presented as human functionality. When the shell probe
-// is active (the native lane sets BOARD_VIEWER_SHELL_PROBE and the
+// is active (the native lane sets SAC_APP_SHELL_PROBE and the
 // shell's probe module created the probe-second window), each window
 // writes its probe key into localStorage, reads both probe keys, and
 // reports what it sees through the bridge; the lane's app log answers

@@ -171,7 +171,7 @@ OBSERVE_SCRIPT = (
     " transform: cs.transform, text: (el.textContent || '').trim(), style};"
 )
 
-INSPECT_SCRIPT = "return (window.__boardViewer && window.__boardViewer.inspection()) || null;"
+INSPECT_SCRIPT = "return (window.__saccadeApp && window.__saccadeApp.inspection()) || null;"
 
 
 def perform_input(client: WebDriver, request: dict) -> dict:
@@ -550,9 +550,9 @@ def run_tracker_sequence(state: SessionState) -> int:
     navigated, and a stopped server answered by a structured refusal in
     bounded time - never an endless load. Runs under the real CSP."""
     assert state.client is not None
-    serve_bin = os.environ.get("BOARD_VIEWER_SERVE_BIN", "")
+    serve_bin = os.environ.get("SAC_APP_SERVE_BIN", "")
     if not serve_bin.startswith("/"):
-        print("containment refusal: BOARD_VIEWER_SERVE_BIN must be an absolute sandbox path", file=sys.stderr)
+        print("containment refusal: SAC_APP_SERVE_BIN must be an absolute sandbox path", file=sys.stderr)
         teardown(state)
         return 1
     root = state.shots.parent / "tracker"
@@ -843,7 +843,7 @@ def main() -> int:
                 env={
                     **os.environ,
                     "WAYLAND_DISPLAY": state.wayland_name,
-                    "BOARD_VIEWER_TEST_OPEN": f"host:{state.board}",
+                    "SAC_APP_TEST_OPEN": f"host:{state.board}",
                 },
                 stdout=driver_log,
                 stderr=driver_log,

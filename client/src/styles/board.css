@@ -1,4 +1,4 @@
-/* Board viewer shared stylesheet - the ledger design language
+/* Saccade app shared stylesheet - the ledger design language
    (t-14, "The design language"), reading the runtime colour tokens
    from the look pipeline (client/src/lib/look/) and the static tokens
    in tokens.css. The rules of the language this file holds:

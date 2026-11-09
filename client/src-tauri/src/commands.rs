@@ -11,12 +11,12 @@
 //! socket is the only door here, and it opens read-only calls; the
 //! renderer gets no socket, no shell and no machine management.
 
-use board_viewer_core::{guard_relative, CoreClient, CoreFail, SocketTransport};
+use saccade_app_core::{guard_relative, CoreClient, CoreFail, SocketTransport};
 use serde::{Deserialize, Serialize};
 
 use crate::look_config;
 
-/// The lanes' test-open channel (BOARD_VIEWER_TEST_OPEN): the one
+/// The lanes' test-open channel (SAC_APP_TEST_OPEN): the one
 /// location the app opens at startup, riding the same model.open the
 /// inspection surface uses. Test-only machinery, named as such
 /// (t-24@r11); a human run has the variable unset and starts empty -
@@ -24,7 +24,7 @@ use crate::look_config;
 /// surface with it.
 #[tauri::command]
 pub fn test_open() -> Option<String> {
-    let spec = std::env::var("BOARD_VIEWER_TEST_OPEN")
+    let spec = std::env::var("SAC_APP_TEST_OPEN")
         .ok()
         .filter(|s| !s.is_empty());
     eprintln!("[bridge] test_open invoked: {:?}", spec);
@@ -45,10 +45,10 @@ pub fn tracker_machine() -> Option<String> {
 /// ($USER), else "human". Publish never refuses for lack of it.
 /// Whether the shell feasibility probe is active (t-19, test-only
 /// machinery): the main window probes its localStorage only when the
-/// lane set BOARD_VIEWER_SHELL_PROBE, so a human run writes nothing.
+/// lane set SAC_APP_SHELL_PROBE, so a human run writes nothing.
 #[tauri::command]
 pub fn shell_probe_active() -> bool {
-    std::env::var("BOARD_VIEWER_SHELL_PROBE")
+    std::env::var("SAC_APP_SHELL_PROBE")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false)
 }
@@ -350,7 +350,7 @@ fn read_asset_local_core(base: &str, relative: &str) -> Result<Vec<u8>, BridgeEr
 #[tauri::command]
 pub fn viewer_identity() -> serde_json::Value {
     serde_json::json!({
-        "component": "saccade-board-viewer",
+        "component": "saccade-app",
         "version": env!("CARGO_PKG_VERSION"),
         "read_only": true,
     })

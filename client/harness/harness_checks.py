@@ -160,8 +160,8 @@ def main() -> int:
 
     # --- remote mesh lane: the via program and argv shapes (pure) -------
     via_env = {
-        "BOARD_VIEWER_HERDR_CORE_BIN": "/pin/core/bin/herdr-core",
-        "BOARD_VIEWER_COREUTILS_BIN": "/pin/coreutils/bin",
+        "SAC_APP_HERDR_CORE_BIN": "/pin/core/bin/herdr-core",
+        "SAC_APP_COREUTILS_BIN": "/pin/coreutils/bin",
         "HC_SESSION": "a",
         "PATH": "/usr/bin:/bin",
     }
@@ -209,20 +209,20 @@ def main() -> int:
     except via_b.ViaRefused:
         check("via refuses a NUL byte in the line", True)
     try:
-        via_b.shell_argv("hc connect", {"HC_SESSION": "a", "BOARD_VIEWER_COREUTILS_BIN": "/pin/coreutils/bin"})
+        via_b.shell_argv("hc connect", {"HC_SESSION": "a", "SAC_APP_COREUTILS_BIN": "/pin/coreutils/bin"})
         check("via refuses a missing core pin", False, "no refusal raised")
     except via_b.ViaRefused as refusal:
-        check("via refuses a missing core pin", "BOARD_VIEWER_HERDR_CORE_BIN" in str(refusal), str(refusal))
+        check("via refuses a missing core pin", "SAC_APP_HERDR_CORE_BIN" in str(refusal), str(refusal))
     try:
         via_b.shell_argv(
             "hc connect",
-            {"BOARD_VIEWER_HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a"},
+            {"SAC_APP_HERDR_CORE_BIN": "/pin/core/bin/herdr-core", "HC_SESSION": "a"},
         )
         check("via refuses a missing coreutils pin", False, "no refusal raised")
     except via_b.ViaRefused as refusal:
-        check("via refuses a missing coreutils pin", "BOARD_VIEWER_COREUTILS_BIN" in str(refusal), str(refusal))
+        check("via refuses a missing coreutils pin", "SAC_APP_COREUTILS_BIN" in str(refusal), str(refusal))
     try:
-        via_b.shell_argv("hc connect", {"BOARD_VIEWER_HERDR_CORE_BIN": "relative/hc"})
+        via_b.shell_argv("hc connect", {"SAC_APP_HERDR_CORE_BIN": "relative/hc"})
         check("via refuses a relative core pin", False, "no refusal raised")
     except via_b.ViaRefused:
         check("via refuses a relative core pin", True)
@@ -496,7 +496,7 @@ def main() -> int:
         reference_dir = pathlib.Path(tempfile.mkdtemp(prefix="lane-reference-"))
         reference = reference_dir / "reference.html"
         reference.write_text("<html><head><title>Reference</title></head><body></body></html>")
-        os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"] = str(reference)
+        os.environ["SAC_APP_BROWSER_REFERENCE_HTML"] = str(reference)
         browser_lane.REFERENCE_SANDBOX_PATH = str(reference)
         browser_lane.RESULTS.clear()
         lane_calls["goto"].clear()
@@ -516,7 +516,7 @@ def main() -> int:
             and (shots_dir / "reference-webkit.png").is_file(),
             str(lane_calls) + str(reference_records),
         )
-        del os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"]
+        del os.environ["SAC_APP_BROWSER_REFERENCE_HTML"]
         browser_lane.RESULTS.clear()
         lane_calls["goto"].clear()
         lane_calls["shots"].clear()
@@ -527,7 +527,7 @@ def main() -> int:
         lane_calls["engines"] = ["webkit"]
         # a set-but-invalid reference refuses the lane loudly: the env is
         # set but no readable file is bound at the sandbox path
-        os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"] = str(reference_dir / "missing.html")
+        os.environ["SAC_APP_BROWSER_REFERENCE_HTML"] = str(reference_dir / "missing.html")
         browser_lane.REFERENCE_SANDBOX_PATH = str(reference_dir / "missing.html")
         browser_lane.RESULTS.clear()
         lane_calls["goto"].clear()
@@ -540,7 +540,7 @@ def main() -> int:
             code == 1 and len(refusal_records) == 1 and refusal_records[0][0] is False,
             str(refusal_records),
         )
-        del os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"]
+        del os.environ["SAC_APP_BROWSER_REFERENCE_HTML"]
         browser_lane.RESULTS.clear()
         lane_calls["goto"].clear()
         FakePage.gotos.clear()
@@ -584,15 +584,15 @@ def main() -> int:
         FakeCanary.code = 0
         browser_lane.RESULTS.clear()
         lane_calls["webkit_rejects_grant"] = False
-        triage_flag_before = os.environ.get("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM")
-        os.environ["BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM"] = "1"
+        triage_flag_before = os.environ.get("SAC_APP_BROWSER_TRIAGE_CHROMIUM")
+        os.environ["SAC_APP_BROWSER_TRIAGE_CHROMIUM"] = "1"
         try:
             code = browser_lane.main()
         finally:
             if triage_flag_before is None:
-                os.environ.pop("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM", None)
+                os.environ.pop("SAC_APP_BROWSER_TRIAGE_CHROMIUM", None)
             else:
-                os.environ["BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM"] = triage_flag_before
+                os.environ["SAC_APP_BROWSER_TRIAGE_CHROMIUM"] = triage_flag_before
         triage_records = [r for r in browser_lane.RESULTS if r[1].startswith("[chromium]")]
         check(
             "chromium triage failures never gate the lane",
@@ -1018,7 +1018,7 @@ def main() -> int:
         check("clearing with a foreign token keeps the record", entry.load_session_record() is not None)
         check("clearing with the own token deletes", entry.clear_session_record("tok-1") is True and entry.load_session_record() is None)
         check("clearing an absent record is a clean no", entry.clear_session_record("tok-1") is False)
-        entry.process_env_value = lambda pid, name: "tok-1" if name == "BOARD_VIEWER_SESSION_TOKEN" else None
+        entry.process_env_value = lambda pid, name: "tok-1" if name == "SAC_APP_SESSION_TOKEN" else None
         check("a record whose pid carries the token is alive", entry.record_alive({"token": "tok-1", "daemon_pid": 7}) is True)
         check("a record with a foreign token is not alive", entry.record_alive({"token": "zzz", "daemon_pid": 7}) is False)
     finally:
@@ -1033,7 +1033,7 @@ def main() -> int:
     real_environ_reader = entry.process_env_value
     entry.process_env_value = (
         lambda pid, name: "tok-self"
-        if pid == os.getpid() and name == "BOARD_VIEWER_SESSION_TOKEN"
+        if pid == os.getpid() and name == "SAC_APP_SESSION_TOKEN"
         else None
     )
     try:

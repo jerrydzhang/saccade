@@ -1,9 +1,12 @@
-# Board viewer
+# Saccade app
 
-A retained, read-only research reader: it renders an explicitly supplied
-board declaration and nothing else. Loading a board never touches tracker
-storage, authority, or workflow; the `task` field in a declaration is
-authored metadata, not a tracker association.
+The Saccade suite's native app (Svelte 5 inside Tauri). Its windows
+hold the instruments - the viewer, tasks and agents (t-14). It reads the
+record through `/view/v1`, keeps window states in the tracker's window
+store (`/api/v1/windows`), and writes only what t-14 ratified: task-board
+annotations published as one commit, and annotation components into
+explainer files. The viewer is the instrument that reads boards and
+files; the app is the whole.
 
 ## Run
 
@@ -13,7 +16,7 @@ authored metadata, not a tracker association.
 python3 harness/entry.py check-fast
 
 # the native client's own guard tests (Tauri shell, no UI start)
-nix develop .#board-viewer -c bash -c 'cd src-tauri && cargo test'
+nix develop .#saccade-app -c bash -c 'cd src-tauri && cargo test'
 ```
 
 Measured warm cost of the fast loop: about 9 seconds. Service lanes
@@ -141,7 +144,7 @@ from a file, never chosen in the app: there is no preference UI and no
 in-app persistence.
 
 - The configuration file is `<platform config
-  directory>/dev.saccade.board-viewer/config.toml`. It names exactly
+  directory>/dev.saccade.app/config.toml`. It names exactly
   one of `scheme-path` (a path to a base16 scheme file, so a
   Stylix-generated scheme can be followed live) or `scheme-inline`
   (the scheme text itself), and optionally `weight` (`regular`,
@@ -205,7 +208,7 @@ local-device host reader (`read_declaration`/`read_asset` with no
 machine) is test-only machinery since t-24@r11: the lanes' fixture
 reader, carrying the same path guards, never presented as human
 functionality. The lanes open their boards through the test-open
-channel (`BOARD_VIEWER_TEST_OPEN`, one location at startup riding the
+channel (`SAC_APP_TEST_OPEN`, one location at startup riding the
 same open path the inspection surface uses) - the launch argument left
 the human surface with the local-path form.
 
@@ -271,7 +274,7 @@ surface's law). The client's own half:
   hydration, diagram overlay, the /view/v1 page client (`pages.ts`)
   and the tracker read source over it (`tracker.ts`)
 - `src/App.svelte` - the shell; one view model feeds the human UI, the
-  machine-readable inspection (`window.__boardViewer`) and the copy
+  machine-readable inspection (`window.__saccadeApp`) and the copy
   handler
 - `src/styles/board.css` - the centrally shared stylesheet
 - `src-tauri/` - the narrow Tauri 2 shell: read-only declaration and
@@ -295,7 +298,7 @@ spawn the app, a browser, a compositor, a server or SSH processes by
 hand; everything sandboxed goes through the harness.
 
 Standing authorization: routine lane and session runs use the standing
-authorization recorded on t-71 (`BOARD_VIEWER_RUNTIME_AUTHORIZED=3030`
+authorization recorded on t-71 (`SAC_APP_RUNTIME_AUTHORIZED=3030`
 or its successor record), with no per-run check-in, while its
 conditions hold: a committed clean HEAD, the frozen containment
 boundary, run roots kept, sessions end with an explicit `down`.
@@ -313,7 +316,7 @@ Lanes:
 - `browser` - the gated WebKit check list over the real frontend and
   fixture boards (Chromium triage behind an explicit flag, never
   gating), plus the tracker-location contract over a wire stand-in.
-  Behind `BOARD_VIEWER_BROWSER_REFERENCE_HTML` (an absolute, readable
+  Behind `SAC_APP_BROWSER_REFERENCE_HTML` (an absolute, readable
   `.html` file) the same sandboxed engine additionally navigates that
   one reference page after the product pass and retains its screenshot
   in the run root: the contained way to render a visual reference
@@ -347,34 +350,34 @@ supervisor per run: cleanup is TERM -> bounded grace -> KILL through
 child, `PR_SET_PDEATHSIG` plus a `getppid` re-check, `--die-with-parent`.
 A missing capability is a refusal; there is no weaker fallback. Logs
 and screenshots survive under the run root
-(`/var/tmp/saccade-board-viewer-<uid>/<run>/`).
+(`/var/tmp/saccade-app-<uid>/<run>/`).
 
 Invocations (each bounded; on timeout the supervisor is stopped and
 the run is a refusal; no automatic retry):
 
 ```sh
-BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<absolute db> \
-nix develop .#board-viewer -c python3 client/harness/entry.py preflight
+SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<absolute db> \
+nix develop .#saccade-app -c python3 client/harness/entry.py preflight
 
-BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<absolute db> \
-nix develop .#board-viewer -c python3 client/harness/entry.py browser
+SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<absolute db> \
+nix develop .#saccade-app -c python3 client/harness/entry.py browser
 
-BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 BOARD_VIEWER_APP_BIN=<pinned app> \
-SACCADE_DB=<absolute db> nix develop .#board-viewer -c \
+SAC_APP_RUNTIME_AUTHORIZED=3030 SAC_APP_BIN=<pinned app> \
+SACCADE_DB=<absolute db> nix develop .#saccade-app -c \
 python3 client/harness/entry.py native --board <absolute board.yaml>
 
-BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 BOARD_VIEWER_APP_BIN=<pinned app> \
-SACCADE_DB=<absolute db> nix develop .#board-viewer -c \
+SAC_APP_RUNTIME_AUTHORIZED=3030 SAC_APP_BIN=<pinned app> \
+SACCADE_DB=<absolute db> nix develop .#saccade-app -c \
 python3 client/harness/entry.py remote
 
-BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 BOARD_VIEWER_APP_BIN=<pinned app> \
-SACCADE_DB=<absolute db> nix develop .#board-viewer -c \
+SAC_APP_RUNTIME_AUTHORIZED=3030 SAC_APP_BIN=<pinned app> \
+SACCADE_DB=<absolute db> nix develop .#saccade-app -c \
 python3 client/harness/entry.py --board <absolute board.yaml> session up
 ```
 
 The lanes' `--board` is the harness's own argument, not the app's: it
 selects the fixture the lane opens through the test-open channel
-(`BOARD_VIEWER_TEST_OPEN`, t-24@r11) - the launch argument left the
+(`SAC_APP_TEST_OPEN`, t-24@r11) - the launch argument left the
 human surface with the local-path form.
 
 Session commands ride the run-root socket from the last `up`:
@@ -396,13 +399,13 @@ automatic restarts, no supervision beyond one run's lifetime.
 
 ## Packaging and the real-client run path
 
-The viewer's packaging lives in `nix/board-viewer.nix`: one
+The viewer's packaging lives in `nix/saccade-app.nix`: one
 callPackage-able file whose dependencies come from the pkgs it is
-called on. The flake builds `packages.board-viewer`,
-`packages.board-viewer-web`, the flake checks, and the
-`apps.board-viewer` entry through that one derivation, and exposes
-the same app as `overlays.default`. `packages.board-viewer` and
-`apps.board-viewer` build against the `nixpkgs-client` input, the
+called on. The flake builds `packages.saccade-app`,
+`packages.saccade-app-web`, the flake checks, and the
+`apps.saccade-app` entry through that one derivation, and exposes
+the same app as `overlays.default`. `packages.saccade-app` and
+`apps.saccade-app` build against the `nixpkgs-client` input, the
 nixpkgs revision the human's system flake is built from, so the build
 agents test is the build the client runs; the devshell's WebKitGTK
 block rides the same input so its `WebKitWebDriver` matches the
@@ -420,7 +423,7 @@ Consumer (NixOS configuration):
 nixpkgs.overlays = [ inputs.saccade.overlays.default ];
 ```
 
-then `pkgs.saccade-board-viewer` is the packaged app (main program
-`saccade-board-viewer`, opened on an explicit board path). The
-board-viewer devshell's lane runs use the packaged wrapper from
-`nix build .#board-viewer` as `BOARD_VIEWER_APP_BIN`.
+then `pkgs.saccade-app` is the packaged app (main program
+`saccade-app`, opened on an explicit board path). The
+saccade-app devshell's lane runs use the packaged wrapper from
+`nix build .#saccade-app` as `SAC_APP_BIN`.

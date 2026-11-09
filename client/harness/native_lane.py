@@ -9,7 +9,7 @@ Order, enforced here:
      display socket beyond the fresh private XDG_RUNTIME_DIR); the
      screenshooter protocol is core in weston 16 - no module flags
   3. the pinned Tauri application binary in the foreground, opened on
-     the test-open channel's location (BOARD_VIEWER_TEST_OPEN: the
+     the test-open channel's location (SAC_APP_TEST_OPEN: the
      lanes' test-only machinery, riding the same model.open the
      inspection surface uses, t-24@r11), sharing the compositor's
      WAYLAND_DISPLAY (one name, computed here)
@@ -149,7 +149,7 @@ def main() -> int:
         log = open(log_path, "wb")
         child = subprocess.Popen(
             [app_bin],
-            env={**app_env, "BOARD_VIEWER_TEST_OPEN": test_open},
+            env={**app_env, "SAC_APP_TEST_OPEN": test_open},
             stdout=log,
             stderr=log,
         )

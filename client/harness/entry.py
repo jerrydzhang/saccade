@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The single documented entry point for board-viewer development.
+"""The single documented entry point for saccade-app development.
 
 Lanes:
   check-fast   plain tool runs: svelte-check, pure contract tests, build.
@@ -67,7 +67,7 @@ FAST_STEPS = [
 
 PREFLIGHT_TIMEOUT_SECONDS = 30
 # the gate engine is WebKit alone (record 2926); Chromium runs only
-# behind BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM and never gates
+# behind SAC_APP_BROWSER_TRIAGE_CHROMIUM and never gates
 BROWSER_TIMEOUT_SECONDS = 180
 NATIVE_TIMEOUT_SECONDS = 120
 SESSION_UP_TIMEOUT_SECONDS = 90
@@ -263,7 +263,7 @@ def browser_lane() -> int:
     the loopback server or the Playwright driver. WebKit gates the lane
     (the default engine); one reused headless WPE browser runs the
     check list over the built frontend, and Chromium joins only behind
-    BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM as a triage pass that never
+    SAC_APP_BROWSER_TRIAGE_CHROMIUM as a triage pass that never
     gates; screenshots land in the run root for later inspection.
     Bounded by BROWSER_TIMEOUT_SECONDS; pidfd-only cleanup on all
     paths.
@@ -313,10 +313,10 @@ def browser_lane() -> int:
     # the WPE browser's display-less EGL: same software-GL pin as the
     # native lane (pinned mesa vendor dir + forced software rendering);
     # the sandbox env carries them so the browser process inherits both
-    mesa_dir = os.environ.get("BOARD_VIEWER_MESA_EGL_VENDOR_DIR", "")
+    mesa_dir = os.environ.get("SAC_APP_MESA_EGL_VENDOR_DIR", "")
     if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
         print(
-            "containment refusal: BOARD_VIEWER_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
+            "containment refusal: SAC_APP_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
             file=sys.stderr,
         )
         return 1
@@ -360,7 +360,7 @@ def browser_lane() -> int:
     env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
     # cross-engine triage opt-in: chromium results never gate the lane
-    env["BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM"] = os.environ.get("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM", "")
+    env["SAC_APP_BROWSER_TRIAGE_CHROMIUM"] = os.environ.get("SAC_APP_BROWSER_TRIAGE_CHROMIUM", "")
 
     # the env-gated reference page (test plumbing, same containment): an
     # absolute .html file bound read-only at the fixed sandbox path and
@@ -369,17 +369,17 @@ def browser_lane() -> int:
     # as plain source), navigated once after the product pass, screenshot
     # retained in the run root. Set but invalid refuses; unset changes
     # nothing.
-    reference_raw = os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", "")
+    reference_raw = os.environ.get("SAC_APP_BROWSER_REFERENCE_HTML", "")
     reference: pathlib.Path | None = None
     if reference_raw:
         reference = pathlib.Path(reference_raw)
         if not (reference.is_absolute() and reference.is_file() and reference.suffix == ".html"):
             print(
-                "containment refusal: BOARD_VIEWER_BROWSER_REFERENCE_HTML must be an absolute, readable .html file",
+                "containment refusal: SAC_APP_BROWSER_REFERENCE_HTML must be an absolute, readable .html file",
                 file=sys.stderr,
             )
             return 1
-        env["BOARD_VIEWER_BROWSER_REFERENCE_HTML"] = str(reference)
+        env["SAC_APP_BROWSER_REFERENCE_HTML"] = str(reference)
 
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),
@@ -468,10 +468,10 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     weston_bin = str(pathlib.Path(weston).resolve())
     shooter_bin = str(pathlib.Path(shooter).resolve())
 
-    app = os.environ.get("BOARD_VIEWER_APP_BIN", "")
+    app = os.environ.get("SAC_APP_BIN", "")
     if not app.startswith("/nix/store/") or not os.access(app, os.X_OK):
         print(
-            "containment refusal: BOARD_VIEWER_APP_BIN must be an executable pinned app binary",
+            "containment refusal: SAC_APP_BIN must be an executable pinned app binary",
             file=sys.stderr,
         )
         return 1
@@ -481,10 +481,10 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     # and the compiled-in /usr paths do not exist), so the lane pins
     # mesa's egl_vendor.d - llvmpipe/swrast, never /run/opengl-driver,
     # never /dev/dri, never a host GPU path
-    mesa_dir = os.environ.get("BOARD_VIEWER_MESA_EGL_VENDOR_DIR", "")
+    mesa_dir = os.environ.get("SAC_APP_MESA_EGL_VENDOR_DIR", "")
     if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
         print(
-            "containment refusal: BOARD_VIEWER_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
+            "containment refusal: SAC_APP_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
             file=sys.stderr,
         )
         return 1
@@ -539,11 +539,11 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     env["SHOTS_DIR"] = str(run_root / "shots")
     env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    env["BOARD_VIEWER_WEBVIEW_CONSOLE"] = "1"
+    env["SAC_APP_WEBVIEW_CONSOLE"] = "1"
     # the shell feasibility probe (t-19, test-only machinery): passed
     # through only when the caller set it, so a routine lane run without
     # it stays exactly as before
-    env["BOARD_VIEWER_SHELL_PROBE"] = os.environ.get("BOARD_VIEWER_SHELL_PROBE", "")
+    env["SAC_APP_SHELL_PROBE"] = os.environ.get("SAC_APP_SHELL_PROBE", "")
     env["GDK_SCALE"] = "1"
     env["GDK_DPI_SCALE"] = "1"
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
@@ -668,18 +668,18 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
         )
         return None
 
-    app = os.environ.get("BOARD_VIEWER_APP_BIN", "")
+    app = os.environ.get("SAC_APP_BIN", "")
     if not app.startswith("/nix/store/") or not os.access(app, os.X_OK):
         print(
-            "containment refusal: BOARD_VIEWER_APP_BIN must be an executable pinned app binary",
+            "containment refusal: SAC_APP_BIN must be an executable pinned app binary",
             file=sys.stderr,
         )
         return None
 
-    core = os.environ.get("BOARD_VIEWER_HERDR_CORE_BIN", "")
+    core = os.environ.get("SAC_APP_HERDR_CORE_BIN", "")
     if not core.startswith("/nix/store/") or not os.access(core, os.X_OK):
         print(
-            "containment refusal: BOARD_VIEWER_HERDR_CORE_BIN must be an executable pinned herdr-core binary",
+            "containment refusal: SAC_APP_HERDR_CORE_BIN must be an executable pinned herdr-core binary",
             file=sys.stderr,
         )
         return None
@@ -696,10 +696,10 @@ def remote_resolved(tracker_db_candidate: str) -> dict | None:
         )
         return None
 
-    mesa_dir = os.environ.get("BOARD_VIEWER_MESA_EGL_VENDOR_DIR", "")
+    mesa_dir = os.environ.get("SAC_APP_MESA_EGL_VENDOR_DIR", "")
     if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
         print(
-            "containment refusal: BOARD_VIEWER_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
+            "containment refusal: SAC_APP_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
             file=sys.stderr,
         )
         return None
@@ -769,18 +769,18 @@ def remote_env(resolved: dict, run_root: pathlib.Path) -> dict[str, str]:
     env["SHOTS_DIR"] = str(run_root / "shots")
     env["__EGL_VENDOR_LIBRARY_DIRS"] = resolved["mesa_dir"]
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    env["BOARD_VIEWER_WEBVIEW_CONSOLE"] = "1"
+    env["SAC_APP_WEBVIEW_CONSOLE"] = "1"
     env["GDK_SCALE"] = "1"
     env["GDK_DPI_SCALE"] = "1"
-    env["BOARD_VIEWER_HERDR_CORE_BIN"] = resolved["herdr_core"]
-    env["BOARD_VIEWER_VIA_PY"] = resolved["python"]
+    env["SAC_APP_HERDR_CORE_BIN"] = resolved["herdr_core"]
+    env["SAC_APP_VIA_PY"] = resolved["python"]
     env["HC_SESSION"] = "a"
     env["BOARD_LOCATION"] = REMOTE_LOCATION
     # the mesh's shell lines locate herdr-core on PATH (command -v) and
     # the fixed-argv readers resolve there too: the pinned core's bin
     # dir and the pinned coreutils bin dir lead, so a resolved name is
     # the tested bytes and nothing else
-    env["BOARD_VIEWER_COREUTILS_BIN"] = resolved["coreutils_bin"]
+    env["SAC_APP_COREUTILS_BIN"] = resolved["coreutils_bin"]
     env["PATH"] = (
         f"{os.path.dirname(resolved['herdr_core'])}:{resolved['coreutils_bin']}:{env['PATH']}"
     )
@@ -939,7 +939,7 @@ def open_verified_pidfd(pid: int, token: str) -> int | None:
     except OSError:
         return None
     try:
-        if process_env_value(pid, "BOARD_VIEWER_SESSION_TOKEN") != token:
+        if process_env_value(pid, "SAC_APP_SESSION_TOKEN") != token:
             os.close(fd)
             return None
         signal.pidfd_send_signal(fd, 0)  # alive probe through the pin
@@ -1051,18 +1051,18 @@ def session_resolved(board_arg: str, tracker_db_candidate: str, require_serve_bi
         )
         return None
 
-    app = os.environ.get("BOARD_VIEWER_APP_BIN", "")
+    app = os.environ.get("SAC_APP_BIN", "")
     if not app.startswith("/nix/store/") or not os.access(app, os.X_OK):
         print(
-            "containment refusal: BOARD_VIEWER_APP_BIN must be an executable pinned app binary",
+            "containment refusal: SAC_APP_BIN must be an executable pinned app binary",
             file=sys.stderr,
         )
         return None
 
-    mesa_dir = os.environ.get("BOARD_VIEWER_MESA_EGL_VENDOR_DIR", "")
+    mesa_dir = os.environ.get("SAC_APP_MESA_EGL_VENDOR_DIR", "")
     if not mesa_dir.startswith("/nix/store/") or not os.path.isdir(mesa_dir):
         print(
-            "containment refusal: BOARD_VIEWER_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
+            "containment refusal: SAC_APP_MESA_EGL_VENDOR_DIR must be a pinned mesa egl_vendor.d directory",
             file=sys.stderr,
         )
         return None
@@ -1155,7 +1155,7 @@ def session_env(resolved: dict, run_root: pathlib.Path, token: str, lifetime: fl
     env["SHOTS_DIR"] = str(run_root / "shots")
     env["__EGL_VENDOR_LIBRARY_DIRS"] = resolved["mesa_dir"]
     env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    env["BOARD_VIEWER_WEBVIEW_CONSOLE"] = "1"
+    env["SAC_APP_WEBVIEW_CONSOLE"] = "1"
     env["GDK_SCALE"] = "1"
     env["GDK_DPI_SCALE"] = "1"
     env["SESSION_CONTROL_SOCKET"] = str(run_root / SESSION_SOCKET_NAME)
@@ -1164,7 +1164,7 @@ def session_env(resolved: dict, run_root: pathlib.Path, token: str, lifetime: fl
     # the ownership token the host later verifies in /proc environ
     # before any pidfd signal; never SACCADE_-prefixed (the canary
     # refuses that namespace by design)
-    env["BOARD_VIEWER_SESSION_TOKEN"] = token
+    env["SAC_APP_SESSION_TOKEN"] = token
     (run_root / "shots").mkdir(parents=True, exist_ok=True)
     return env
 
@@ -1203,7 +1203,7 @@ def record_alive(record: dict | None) -> bool:
         return False
     for key in ("daemon_pid", "supervisor_pid"):
         pid = record.get(key)
-        if isinstance(pid, int) and pid > 0 and process_env_value(pid, "BOARD_VIEWER_SESSION_TOKEN") == token:
+        if isinstance(pid, int) and pid > 0 and process_env_value(pid, "SAC_APP_SESSION_TOKEN") == token:
             return True
     return False
 
@@ -1428,7 +1428,7 @@ def session_tracker(board_arg: str, tracker_db_candidate: str) -> int:
     token = uuid.uuid4().hex
     env = session_env(resolved, run_root, token, SESSION_DEFAULT_LIFETIME_SECONDS)
     env["SESSION_MODE"] = "tracker"
-    env["BOARD_VIEWER_SERVE_BIN"] = "/lane/sac"
+    env["SAC_APP_SERVE_BIN"] = "/lane/sac"
     (run_root / "logs").mkdir(exist_ok=True)
     cmd = isolation.build_command(
         resolved["bwrap"],
@@ -1890,7 +1890,7 @@ def run_session_checks(socket_path: str, resolved: dict, query: str, log_path: s
     try:
         session_request(
             socket_path,
-            {"cmd": "evaluate", "script": "window.__boardViewer.setCopyMode('plain'); return true;"},
+            {"cmd": "evaluate", "script": "window.__saccadeApp.setCopyMode('plain'); return true;"},
             timeout=30.0,
         )
     except (OSError, RuntimeError, ValueError):
@@ -2107,7 +2107,7 @@ def isolation_gate(lane: str) -> None:
 
 def main() -> int:
     global tracker_db_arg
-    parser = argparse.ArgumentParser(description="board viewer harness")
+    parser = argparse.ArgumentParser(description="Saccade app harness")
     parser.add_argument(
         "lane",
         choices=["check-fast", "preflight", "browser", "native", "session", "remote", "serve"],

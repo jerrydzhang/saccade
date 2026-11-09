@@ -2,7 +2,7 @@
 resolver = "2"
 # bare cargo commands cover the tracker and the grammar crate; the
 # client's Tauri crate joins the workspace for the single lock but
-# needs the board-viewer shell's GTK/WebKit inputs to build
+# needs the saccade-app shell's GTK/WebKit inputs to build
 members = [
     "tracker",
     "grammar",

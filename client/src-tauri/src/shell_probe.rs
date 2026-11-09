@@ -1,6 +1,6 @@
 //! The shell feasibility probe (t-19): test-only machinery, named as
 //! such, never presented as human functionality. The native lane sets
-//! BOARD_VIEWER_SHELL_PROBE and this module then creates one second
+//! SAC_APP_SHELL_PROBE and this module then creates one second
 //! webview window beside the main one and issues one focus activation
 //! request, so the lane's app log answers the two feasibility facts the
 //! shell stands on: a second first-class window comes up over
@@ -16,7 +16,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 const PROBE_LABEL: &str = "probe-second";
 
 pub fn maybe_start(handle: tauri::AppHandle) {
-    let active = std::env::var("BOARD_VIEWER_SHELL_PROBE")
+    let active = std::env::var("SAC_APP_SHELL_PROBE")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
     if !active {

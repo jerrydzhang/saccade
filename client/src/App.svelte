@@ -2343,7 +2343,7 @@
 
   $effect(() => {
     const w = window as unknown as Record<string, unknown>;
-    w.__boardViewer = {
+    w.__saccadeApp = {
       inspection: () => inspect(model),
       open: (machine: Machine, path: string) => void model.open({ machine, path }),
       setCopyMode: (mode: CopyMode) => model.setCopyMode(mode),
