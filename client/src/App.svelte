@@ -378,7 +378,15 @@
       const row = rowFromElement(target.element);
       if (row) showDetailsOverlay(row);
     } });
-    const attach = target.element.getAttribute("data-attach");
+    const attach = attachCommand(rowFromElement(target.element) ?? {
+      incarnation: "",
+      address: target.element.getAttribute("data-address"),
+      harness: null,
+      tasks: [],
+      workspace: null,
+      lastCommit: null,
+      word: null,
+    });
     const workspace = target.element.getAttribute("data-workspace");
     acts.push({
       key: "a",

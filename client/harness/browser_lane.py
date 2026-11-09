@@ -900,7 +900,8 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             )
             check(
                 "the row shows Herdr's msg and progress exactly as sent",
-                "editing the smoke" in detail and any("42" in d for d in detail),
+                any("editing the smoke" in d for d in detail)
+                and any("42" in d for d in detail),
                 str(detail),
             )
             wordless = page.evaluate(
