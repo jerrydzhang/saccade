@@ -360,6 +360,11 @@ export class TrackerMachineSource implements BoardSource {
 // tree.
 const trackerSources = new Map<Machine, TrackerSource>();
 
+/** Every tracker the window has touched, for the picker's candidates. */
+export function trackerSourcesForPicker(): TrackerSource[] {
+  return [...trackerSources.values()];
+}
+
 export function sourceFor(machine: Machine): BoardSource {
   if (machine === "fixture") return new FixtureSource();
   if (machine === "host") return new HostFileSource();

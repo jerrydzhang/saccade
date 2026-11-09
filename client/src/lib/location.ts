@@ -73,3 +73,15 @@ export function apiUrl(base: URL, route: string): string {
 export function viewUrl(base: URL, route: string): string {
   return new URL(`/view/v1/${route.replace(/^\//, "")}`, base).toString();
 }
+
+/** The parseable string form of a location: the form the header field,
+ * the picker and the inspection open all take back. */
+export function formatLocation(location: { machine: string; path: string }): string {
+  if (location.machine.startsWith("tracker:")) {
+    return `${location.machine.slice("tracker:".length)}/${location.path}`;
+  }
+  if (location.machine === "tracker-machine") {
+    return location.path;
+  }
+  return `${location.machine}:${location.path}`;
+}

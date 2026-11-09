@@ -66,6 +66,10 @@ export class ViewerModel {
   private backStack: Location[] = [];
   private forwardStack: Location[] = [];
 
+  // the window's own recency (t-24@r11): what this window opened,
+  // newest first - the picker's tie-breaker, not a record fact
+  readonly recent: Location[] = [];
+
   /** The locations behind and ahead, for the inspection surface. */
   get history(): { back: Location[]; forward: Location[] } {
     return { back: [...this.backStack], forward: [...this.forwardStack] };
@@ -213,6 +217,11 @@ export class ViewerModel {
       renderOutcomes: [],
       renderGeneration: token,
     });
+    const seen = this.recent.findIndex(
+      (candidate) => candidate.machine === resolvedLocation.machine && candidate.path === resolvedLocation.path,
+    );
+    if (seen >= 0) this.recent.splice(seen, 1);
+    this.recent.unshift(resolvedLocation);
   }
 
   /** Ctrl-o: the location behind, keeping the current one ahead. */

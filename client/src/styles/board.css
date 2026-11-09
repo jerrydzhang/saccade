@@ -839,3 +839,86 @@ code.raw-html {
   font-family: var(--f-ui);
   font-size: var(--fs-small);
 }
+
+/* ---------- the picker ---------- */
+
+.picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  display: grid;
+  justify-items: center;
+  align-items: start;
+  padding-top: 10vh;
+  background: rgb(0 0 0 / 0.3);
+}
+
+.picker-panel {
+  display: grid;
+  width: min(560px, 90vw);
+  background: var(--app-bg);
+  border: 1px solid var(--pop-line);
+}
+
+.picker-input {
+  padding: 8px 10px;
+  font-family: var(--f-ui);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--pop-line);
+}
+
+.picker-input:focus {
+  outline: none;
+}
+
+.picker-list {
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.picker-row {
+  display: grid;
+  grid-template-columns: 4.5em 1fr;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 4px 10px;
+  text-align: left;
+  font-family: var(--f-ui);
+  font-size: var(--fs-ui);
+  color: var(--ink);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.picker-row.picker-active {
+  background: var(--acc);
+  color: var(--acc-ink);
+}
+
+.picker-kind {
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.picker-row.picker-active .picker-kind {
+  color: var(--acc-ink);
+}
+
+.picker-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-empty {
+  margin: 6px 10px;
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}

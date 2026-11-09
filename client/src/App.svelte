@@ -27,6 +27,9 @@
     type TargetKind,
   } from "./lib/select.ts";
   import { openContextMenu, type MenuAct } from "./lib/menu.ts";
+  import { formatLocation, parseLocation } from "./lib/location.ts";
+  import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
+  import { trackerSourcesForPicker } from "./lib/sources.ts";
   import { inspect } from "./lib/board/inspection.ts";
   import type { CopyMode } from "./lib/copy.ts";
   import type { RenderOutcome, ViewerState } from "./lib/board/viewmodel.ts";
@@ -241,6 +244,94 @@
     }
   }
 
+  // The picker (t-14): space space opens it; match quality before
+  // recency, the open item last; a result shows only kind and name;
+  // a typed location always resolves even when nothing enumerated it.
+  let pickerOpen = $state(false);
+  let pickerQuery = $state("");
+  let pickerActive = $state(0);
+  let pickerInput: HTMLInputElement | undefined = $state(undefined);
+
+  function pickerCandidates(): PickerItem[] {
+    const items: PickerItem[] = [];
+    for (const source of trackerSourcesForPicker()) {
+      for (const fact of source.seenTasks) {
+        items.push({ location: fact.spec.startsWith("t-") ? `${source.tracker}/${fact.spec}` : fact.spec, kind: "task", name: fact.name ?? fact.spec });
+      }
+    }
+    // the locations the shown page references: the citations carry
+    // their target in data-open-path
+    for (const element of document.querySelectorAll<HTMLElement>("[data-open-path]")) {
+      const path = element.getAttribute("data-open-path");
+      const location = view.location;
+      if (path && location) {
+        items.push({ location: `${location.machine.startsWith("tracker:") ? location.machine.slice("tracker:".length) : location.machine}/${path}`, kind: "board", name: path });
+      }
+    }
+    return items;
+  }
+
+  let pickerResults = $derived.by(() => {
+    const openKey = view.location ? formatLocation(view.location) : null;
+    const candidates = pickerCandidates();
+    const query = pickerQuery.trim();
+    // a typed location always resolves even when nothing enumerated it
+    if (query.length > 0 && parseLocation(query)) {
+      const known = candidates.some((candidate) => candidate.location === query);
+      if (!known) {
+        const typed = { location: query, kind: "board" as const, name: "" };
+        return rankedPicker(query, [typed, ...candidates], model.recent.map(formatLocation), openKey);
+      }
+    }
+    return rankedPicker(query, candidates, model.recent.map(formatLocation), openKey);
+  });
+
+  function openPicker(): void {
+    pickerOpen = true;
+    pickerQuery = "";
+    pickerActive = 0;
+    window.requestAnimationFrame(() => pickerInput?.focus());
+  }
+
+  function closePicker(): void {
+    pickerOpen = false;
+  }
+
+  function pickerMove(delta: number): void {
+    const count = pickerResults.length;
+    if (count === 0) return;
+    pickerActive = (pickerActive + delta + count) % count;
+  }
+
+  async function pickerOpenResult(item: PickerItem): Promise<void> {
+    closePicker();
+    await model.openInput(item.location);
+  }
+
+  function onPickerKey(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePicker();
+      return;
+    }
+    if (event.key === "ArrowDown" || (event.key === "j" && !event.ctrlKey)) {
+      event.preventDefault();
+      pickerMove(1);
+      return;
+    }
+    if (event.key === "ArrowUp" || (event.key === "k" && !event.ctrlKey)) {
+      event.preventDefault();
+      pickerMove(-1);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const typed = pickerQuery.trim();
+      const item = pickerResults[pickerActive] ?? (typed.length > 0 && parseLocation(typed) ? { location: typed, kind: "board" as const, name: "" } : undefined);
+      if (item) void pickerOpenResult(item);
+    }
+  }
+
   function onWindowKey(event: KeyboardEvent): void {
     if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "f") {
       event.preventDefault();
@@ -253,6 +344,11 @@
       return;
     }
     if (event.key === "Escape") {
+      if (pickerOpen) {
+        event.preventDefault();
+        closePicker();
+        return;
+      }
       if (searchOpen) {
         event.preventDefault();
         closeSearch();
@@ -265,7 +361,7 @@
       }
     }
     if (closeMenu || inTextField(event)) return;
-    if (helpOpen) return;
+    if (helpOpen || pickerOpen) return;
 
     if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "o") {
       event.preventDefault();
@@ -329,8 +425,12 @@
       case "leader": {
         event.preventDefault();
         keyMode = "normal";
-        // space leads the viewer's own commands; each command lands
-        // with its own chapter (picker, history, marginalia, publish)
+        // space leads this instrument's own commands only (t-14)
+        if (event.key === " " && !pickerOpen) {
+          openPicker();
+        }
+        // the other leader commands (history, marginalia, publish)
+        // land with their own chapters
         return;
       }
       case "gg": {
@@ -685,6 +785,40 @@
         <p class="help-row"><span class="ctx-menu-key">Ctrl+f</span> search (Escape closes)</p>
         <p class="help-row"><span class="ctx-menu-key">Ctrl+Shift+C</span> copy source / plain</p>
         <p class="help-row"><span class="ctx-menu-key">?</span> this list</p>
+      </div>
+    </div>
+  </div>
+  {/if}
+
+  {#if pickerOpen}
+  <div class="picker-overlay" role="dialog" aria-label="picker" data-control="picker:overlay">
+    <div class="picker-panel">
+      <input
+        type="text"
+        class="picker-input"
+        placeholder="tasks, boards, files - a typed location always resolves"
+        aria-label="picker query"
+        data-control="picker:input"
+        bind:this={pickerInput}
+        bind:value={pickerQuery}
+        onkeydown={onPickerKey}
+      />
+      <div class="picker-list" data-control="picker:list">
+        {#each pickerResults as item, index (item.location)}
+          <button
+            type="button"
+            class="picker-row"
+            class:picker-active={index === pickerActive}
+            data-control="picker:result"
+            onclick={() => void pickerOpenResult(item)}
+            onmouseenter={() => (pickerActive = index)}
+          >
+            <span class="picker-kind">{pickerLabelKind(item).kind}</span>
+            <span class="picker-name">{pickerLabelKind(item).label}</span>
+          </button>
+        {:else}
+          <p class="picker-empty">nothing matches</p>
+        {/each}
       </div>
     </div>
   </div>
