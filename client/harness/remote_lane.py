@@ -627,8 +627,8 @@ def main() -> int:
         if deck is not None:
             deck_name = str(deck["name"])
 
-            def rpc(method: str, params: dict) -> dict:
-                sock = pathlib.Path(os.environ["XDG_RUNTIME_DIR"]) / "herdr-core" / "a.sock"
+            def rpc(sock_path: pathlib.Path, method: str, params: dict) -> dict:
+                sock = sock_path
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock_fd:
                     sock_fd.settimeout(10)
                     sock_fd.connect(str(sock))
@@ -641,8 +641,19 @@ def main() -> int:
 
             cue_landed = False
             last_detail = "no cue attempt"
+            # the agent cues through its own core - the core the deck
+            # lives on (the ratified placement: the deck is on the hub's
+            # core, and hub agents write to their own core directly;
+            # hc connect, the copied command, is exactly that). The
+            # pinned core 0.1.17 suppresses the event echo toward the
+            # core a relayed write travelled through, so a cue written
+            # through the relay would land in the document without the
+            # viewer's feed ever seeing it - deck_relay_probe.py pins
+            # both shapes (direct write delivers, relayed write does
+            # not) and the limitation went to i-3.
+            sock_b = pathlib.Path(os.environ["XDG_RUNTIME_DIR"]) / "herdr-core" / "b.sock"
             for attempt in range(2):
-                read = rpc("doc.get", {"name": deck_name, "on": MACHINE_NAME})
+                read = rpc(sock_b, "doc.get", {"name": deck_name})
                 doc = read.get("result") or {}
                 slides = doc.get("value") or []
                 if DECK_LOCATION in slides:
@@ -650,10 +661,10 @@ def main() -> int:
                     last_detail = f"already cued at version {doc.get('version')}"
                     break
                 written = rpc(
+                    sock_b,
                     "doc.set",
                     {
                         "name": deck_name,
-                        "on": MACHINE_NAME,
                         "version": doc.get("version", 0),
                         "value": [*slides, DECK_LOCATION],
                     },
@@ -674,7 +685,7 @@ def main() -> int:
                 if cue_landed:
                     break
             check(
-                "the agent's cue lands in the deck document and is read back",
+                "the agent's cue lands in the deck document and reaches the viewer",
                 cue_landed,
                 last_detail,
             )
