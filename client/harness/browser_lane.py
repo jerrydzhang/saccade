@@ -737,11 +737,48 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 
 
+def reference_document() -> pathlib.Path | None:
+    """The env-gated reference page: an absolute .html file, bound into
+    the sandbox read-only at its host path by the entry point. Unset
+    means absent; set-but-invalid means the lane refuses loudly (the
+    caller wanted a reference and did not get one)."""
+    raw = os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", "")
+    if not raw:
+        return None
+    candidate = pathlib.Path(raw)
+    if not candidate.is_absolute() or not candidate.is_file() or candidate.suffix != ".html":
+        return None
+    return candidate
+
+
+def run_reference(page, shots_dir: pathlib.Path, engine: str) -> None:
+    """One navigation of the reference page after the main pass: render
+    it, keep a screenshot under the run root. Test plumbing within the
+    existing containment - no new capability, no second server, no
+    product surface."""
+    doc = reference_document()
+    if doc is None:
+        record_check(
+            f"[{engine}] reference page is a readable absolute .html file",
+            False,
+            os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", ""),
+        )
+        return
+    try:
+        page.goto(doc.as_uri())
+        title = page.title()
+        record_check(f"[{engine}] reference page renders with its own title", bool(title), str(title))
+        shot = shots_dir / f"reference-{engine}.png"
+        page.screenshot(path=str(shot), full_page=True)
+        record_check(f"[{engine}] reference page screenshot retained", shot.is_file(), str(shot))
+    except Exception as error:
+        record_check(f"[{engine}] reference page renders", False, f"{type(error).__name__}: {str(error)[:160]}")
+
+
 def main() -> int:
     started = time.monotonic()
     if not run_canary_first():
         return 1
-
     shots_raw = os.environ.get("SHOTS_DIR", "")
     if not shots_raw.startswith("/"):
         print("containment refusal: SHOTS_DIR must be an absolute run-root path", file=sys.stderr)
@@ -786,6 +823,10 @@ def main() -> int:
                         pass
                     continue
                 run_checks(page, base_url, shots_dir, engine)
+                # the env-gated reference page rides the same sandboxed
+                # engine after the product pass
+                if os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", ""):
+                    run_reference(page, shots_dir, engine)
                 browser.close()
     finally:
         server.shutdown()

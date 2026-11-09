@@ -373,6 +373,13 @@ def main() -> int:
         def wait_for_function(self, fn):
             pass
 
+        def title(self):
+            return "Reference"
+
+        def screenshot(self, path=None, **kwargs):
+            pathlib.Path(path).write_bytes(b"")
+            lane_calls["shots"].append(path)
+
     class FakeContext:
         def grant_permissions(self, *args, **kwargs):
             pass
@@ -476,6 +483,60 @@ def main() -> int:
             str(lane_calls),
         )
         check("screenshots land under the run-root shots dir", lane_calls["shots"] == [] and shots_dir.is_dir(), str(shots_dir))
+
+        # the env-gated reference page: one extra navigation to the bound
+        # file after the product pass, screenshot retained under the run
+        # root; unset keeps the default single navigation (above)
+        reference_dir = pathlib.Path(tempfile.mkdtemp(prefix="lane-reference-"))
+        reference = reference_dir / "reference.html"
+        reference.write_text("<html><head><title>Reference</title></head><body></body></html>")
+        os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"] = str(reference)
+        browser_lane.RESULTS.clear()
+        lane_calls["goto"].clear()
+        lane_calls["shots"].clear()
+        FakePage.gotos.clear()
+        FakeCanary.code = 0
+        code = browser_lane.main()
+        reference_records = [r for r in browser_lane.RESULTS if "reference page" in r[1]]
+        check(
+            "the reference page rides the same engine after the product pass",
+            code == 0
+            and lane_calls["goto"] == [f"http://127.0.0.1:{browser_lane.SERVER_PORT}", reference.as_uri()]
+            and len(reference_records) == 2
+            and all(ok for ok, _n, _d in reference_records)
+            and lane_calls["shots"] == [str(shots_dir / "reference-webkit.png")]
+            and (shots_dir / "reference-webkit.png").is_file(),
+            str(lane_calls) + str(reference_records),
+        )
+        del os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"]
+        browser_lane.RESULTS.clear()
+        lane_calls["goto"].clear()
+        lane_calls["shots"].clear()
+        FakePage.gotos.clear()
+        # the later cases count engines and checks absolutely: the
+        # original traversal's single webkit pass must survive mine
+        lane_calls["checks"] = 1
+        lane_calls["engines"] = ["webkit"]
+        # a set-but-invalid reference refuses the lane loudly
+        os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"] = str(reference_dir / "missing.html")
+        browser_lane.RESULTS.clear()
+        lane_calls["goto"].clear()
+        FakePage.gotos.clear()
+        FakeCanary.code = 0
+        code = browser_lane.main()
+        refusal_records = [r for r in browser_lane.RESULTS if "readable absolute .html" in r[1]]
+        check(
+            "a set-but-invalid reference is a recorded refusal, not a silent skip",
+            code == 1 and len(refusal_records) == 1 and refusal_records[0][0] is False,
+            str(refusal_records),
+        )
+        del os.environ["BOARD_VIEWER_BROWSER_REFERENCE_HTML"]
+        browser_lane.RESULTS.clear()
+        lane_calls["goto"].clear()
+        FakePage.gotos.clear()
+        # restore the count the original traversal left behind
+        lane_calls["checks"] = 1
+        lane_calls["engines"] = ["webkit"]
 
         # a dead engine launch is recorded with its full stderr and
         # fails the lane - never a silent pass

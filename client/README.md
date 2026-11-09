@@ -193,6 +193,12 @@ Lanes:
 - `browser` - the gated WebKit check list over the real frontend and
   fixture boards (Chromium triage behind an explicit flag, never
   gating), plus the tracker-location contract over a wire stand-in.
+  Behind `BOARD_VIEWER_BROWSER_REFERENCE_HTML` (an absolute, readable
+  `.html` file) the same sandboxed engine additionally navigates that
+  one reference page after the product pass and retains its screenshot
+  in the run root: the contained way to render a visual reference
+  (the entry point binds the file read-only; set-but-invalid refuses;
+  unset changes nothing about the default single navigation).
 - `native` - the gated native/WebKitGTK lane: the packaged app in the
   foreground on an explicit board, private headless Weston, bounded
   frame captures, bridge log evidence.
