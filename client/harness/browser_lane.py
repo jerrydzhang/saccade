@@ -693,8 +693,11 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             page.wait_for_selector('[data-control="draft:input"]')
             check("a on a task board opens the draft editor", True)
             page.click('[data-control="draft:cancel"]')
-            page.wait_for_selector('[data-control="draft:input"]', state="detached")
-            check("the draft editor's cancel closes it", True)
+            page.wait_for_timeout(500)
+            cancel_state = page.evaluate(
+                "() => document.querySelector('[data-control=\"draft:input\"]') !== null"
+            )
+            check("the draft editor's cancel closes it", cancel_state is False, f"editor still open={cancel_state}")
 
             # a pinned revision the human actually asked for refuses
             # (t-24@r11), naming where annotation is possible
