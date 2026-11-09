@@ -393,7 +393,7 @@ pub fn viewer_identity() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{core_read_of, guard_relative, CoreRead};
+    use super::{core_read_of, guard_relative, CoreRead, DeckFeedMessage};
 
     #[test]
     fn an_edit_refuses_non_absolute_and_nul_paths_before_any_wire() {
@@ -451,6 +451,17 @@ mod tests {
             let failure = super::deck_machine_guard(bad).expect_err("refused");
             assert_eq!(failure.code, "asset-denied", "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_feed_message_tags_are_lowercase_on_the_wire() {
+        let doc = serde_json::to_value(DeckFeedMessage::Doc { version: 2 }).unwrap();
+        assert_eq!(doc["kind"], "doc");
+        assert_eq!(doc["version"], 2);
+        let lost = serde_json::to_value(DeckFeedMessage::Lost { reason: "x".into() }).unwrap();
+        assert_eq!(lost["kind"], "lost");
+        let quiet = serde_json::to_value(DeckFeedMessage::Quiet).unwrap();
+        assert_eq!(quiet["kind"], "quiet");
     }
 
     #[test]
@@ -628,9 +639,10 @@ static DECK_FEED: std::sync::Mutex<Option<Subscription>> = std::sync::Mutex::new
 
 /// One feed answer: a document landing for the deck's name, the feed
 /// ending, or the hold expiring quiet (a normal answer - the cue feed
-/// waits with the window, never a timer).
+/// waits with the window, never a timer). The tags are lowercase: the
+/// frontend's watch loop matches these exact strings.
 #[derive(Serialize, Clone)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum DeckFeedMessage {
     Doc { version: u64 },
     Lost { reason: String },
