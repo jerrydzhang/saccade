@@ -373,6 +373,9 @@ def main() -> int:
         def wait_for_function(self, fn):
             pass
 
+        def wait_for_load_state(self, state):
+            pass
+
         def title(self):
             return "Reference"
 

@@ -766,10 +766,13 @@ def run_reference(page, shots_dir: pathlib.Path, engine: str) -> None:
         return
     try:
         page.goto(doc.as_uri())
+        page.wait_for_load_state("load")
         title = page.title()
         record_check(f"[{engine}] reference page renders with its own title", bool(title), str(title))
+        # a viewport capture: a reference page may lay out taller than
+        # the engine's screenshot bound in full-page mode
         shot = shots_dir / f"reference-{engine}.png"
-        page.screenshot(path=str(shot), full_page=True)
+        page.screenshot(path=str(shot))
         record_check(f"[{engine}] reference page screenshot retained", shot.is_file(), str(shot))
     except Exception as error:
         record_check(f"[{engine}] reference page renders", False, f"{type(error).__name__}: {str(error)[:160]}")
