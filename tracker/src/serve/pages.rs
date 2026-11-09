@@ -310,14 +310,8 @@ fn parse_location(raw: &str) -> Result<PageLocation, PageFail> {
     if location.is_empty() {
         return Ok(PageLocation::Root);
     }
-    if let Some(prefix) = location.strip_suffix("/diff") {
-        let (task, from, to) = parse_range(prefix)?;
-        return Ok(PageLocation::Diff { task, from, to });
-    }
-    if let Some(prefix) = location.strip_suffix("/history") {
-        let (task, revision) = parse_task_spec(prefix)?;
-        return Ok(PageLocation::History { task, revision });
-    }
+    // the file family parses first: a tree file may be named
+    // `history` or `diff`, and the /file/ marker is the route's own
     if let Some((head, path)) = location.split_once("/file/") {
         let (task, revision) = parse_task_spec(head)?;
         if path.is_empty() || path.ends_with('/') {
@@ -342,6 +336,14 @@ fn parse_location(raw: &str) -> Result<PageLocation, PageFail> {
             revision,
             path: path.to_string(),
         });
+    }
+    if let Some(prefix) = location.strip_suffix("/diff") {
+        let (task, from, to) = parse_range(prefix)?;
+        return Ok(PageLocation::Diff { task, from, to });
+    }
+    if let Some(prefix) = location.strip_suffix("/history") {
+        let (task, revision) = parse_task_spec(prefix)?;
+        return Ok(PageLocation::History { task, revision });
     }
     if let Some((head, rest)) = location.split_once("/content/") {
         let (task, revision) = parse_task_spec(head)?;
@@ -845,9 +847,15 @@ fn history_page(
     } else {
         format!("t-{task}/history")
     };
+    // only a pinned revision cuts the timeline at its commit; the
+    // current history is the whole timeline, the decisions that
+    // landed after the last commit included
     let entries: Vec<serde_json::Value> = entries
         .into_iter()
-        .filter(|entry| entry.seq <= cut)
+        .filter(|entry| match requested {
+            None => true,
+            Some(_) => entry.seq <= cut,
+        })
         .map(|entry| entry_value(&entry, task))
         .collect();
     Ok(PageDoc {
@@ -1193,6 +1201,24 @@ mod test {
             PageLocation::File {
                 task: 14,
                 revision: None,
+                ..
+            }
+        ));
+        let reserved = parse_location("t-5@r1/file/nested/history").unwrap();
+        assert!(matches!(
+            reserved,
+            PageLocation::File {
+                task: 5,
+                revision: Some(1),
+                ..
+            }
+        ));
+        let reserved_diff = parse_location("t-5@r1/file/nested/diff").unwrap();
+        assert!(matches!(
+            reserved_diff,
+            PageLocation::File {
+                task: 5,
+                revision: Some(1),
                 ..
             }
         ));

@@ -9170,9 +9170,10 @@ fn view_page_fixture(tag: &str) -> (ScratchDir, ServerProc, String, usize, usize
     let figures = src.join("figures");
     std::fs::create_dir_all(&figures).unwrap();
     std::fs::write(figures.join("plot.png"), b"\x89PNG-rusttest-bytes").unwrap();
+    std::fs::write(figures.join("history"), b"a tree file named history").unwrap();
     std::fs::write(
         src.join("board.yaml"),
-        "grammar: 1\ntask: t-0\ncontent:\n  - text: the loop holds for every input\n  - group:\n      title: evidence\n      content:\n        - figure:\n            input: figures/plot.png\n            caption: the plotted loop\n  - annotation: the boundary case is covered in the appendix\n",
+        "grammar: 1\ntask: t-0\ncontent:\n  - text: the loop holds for every input\n  - group:\n      title: evidence\n      content:\n        - figure:\n            input: figures/plot.png\n            caption: the plotted loop\n        - figure:\n            input: figures/history\n            caption: the lane's history note\n  - annotation: the boundary case is covered in the appendix\n",
     )
     .unwrap();
     let reply = sac_json(
@@ -9208,6 +9209,11 @@ fn view_page_fixture(tag: &str) -> (ScratchDir, ServerProc, String, usize, usize
         ],
     );
     assert_eq!(reply["revision"], json!(1));
+
+    // a decision after the last commit: the current history carries
+    // it, the pinned history at r2 cuts before it
+    let (ok, out, _) = sac(Some("t-0"), &["offer", "t-0"]);
+    assert!(ok, "{out}");
     (
         dir,
         serve,
@@ -9266,7 +9272,8 @@ async fn view_v1_pages_serve_boards_history_components_and_files() {
     };
     assert_eq!(labeled("task")["value"], json!("t-0"));
     assert_eq!(labeled("name")["value"], json!("prove the loop"));
-    assert_eq!(labeled("state")["value"], json!("open"));
+    // the fixture ends with t-0 offered after its second commit
+    assert_eq!(labeled("state")["value"], json!("offered"));
     assert_eq!(labeled("owner")["value"], json!(format!("i-{inc_num}")));
     assert_eq!(labeled("revision")["value"], json!("r2 of 2"));
     assert!(labeled("commit").is_object());
@@ -9489,6 +9496,31 @@ async fn view_v1_pages_serve_boards_history_components_and_files() {
         "the cut runs at the revision's commit: {pinned_events:?}"
     );
 
+    // the pinned r2 history: r1's offer is inside the cut, the
+    // post-commit offer is outside it
+    let (status, body) = get_json(&url, "/view/v1/t-0@r2/history");
+    assert_eq!(status, 200, "{body}");
+    let pinned_r2 = json_of(&body);
+    assert_eq!(pinned_r2["location"], json!("t-0@r2/history"));
+    let pinned_r2_events: Vec<&str> = pinned_r2["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        pinned_r2_events
+            .iter()
+            .filter(|event| **event == "task_offered")
+            .count(),
+        1,
+        "only the offer inside the cut: {pinned_r2_events:?}"
+    );
+    assert!(
+        pinned_r2_events.last() == Some(&"task_committed"),
+        "the pinned timeline ends at its revision's commit: {pinned_r2_events:?}"
+    );
+
     // the diff page: the stored unified diff, one text part
     let (status, body) = get_json(&url, "/view/v1/t-0@r1..r2/diff");
     assert_eq!(status, 200, "{body}");
@@ -9593,6 +9625,20 @@ async fn a_parked_page_wakes_when_the_other_write_doors_land_records() {
     let work = std::env::temp_dir().join(format!("sac-view-wakes-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).unwrap();
+    // the fixture leaves t-0 offered: the wake test's commit needs
+    // the offer rejected first
+    let (ok, _, err) = view_page_sac(
+        &url,
+        None,
+        None,
+        &[
+            "reject",
+            "t-0",
+            "--grounds",
+            "the wake test revises the board",
+        ],
+    );
+    assert!(ok, "{err}");
     let (ok, out, err) = view_page_sac(
         &url,
         None,
