@@ -145,10 +145,21 @@ only - never the human's position or history; reading it is the
 agent's read-back, a slide's number is its position in the list. The
 cue feed is wake-driven: one `events.subscribe` connection read
 through bounded holds (`deck_wait`, the hold pattern the look's wait
-rides), never a timer poll; the core's heartbeat keeps the read alive.
-The viewer deletes the document when the window closes (the shell's
-close hook, best effort and logged); the address is dead from then on,
-and a document deleted from outside ends the deck.
+rides), never a timer poll. The subscription is per connection and
+unlimited (pinned against the pinned core: plain and hello-identified
+subscribers coexist and fan out), so the companion's own feed and the
+deck's coexist as separate processes. Two pinned-core 0.1.17 limits
+shape the deck, both probed (`harness/deck_probe.py`,
+`harness/deck_relay_probe.py`, retained logs under /var/tmp/saccade-t21):
+the promised 15 s heartbeats flow only while the feed is being read,
+and a relayed write reaches the owning core's document but never the
+viewer's feed when the write travelled through another core's relay
+(t-24@r22: unsupported, no polling workaround). The ratified shape is
+unaffected: the deck lives on the hub's core and the hub's agents cue
+through their own core - `hc connect`, the copied command. The viewer
+deletes the document when the window closes (the shell's close hook,
+best effort and logged); the address is dead from then on, and a
+document deleted from outside ends the deck.
 
 A cue waits unless the human is on the latest slide - "on the latest"
 only while the window shows that slide as cued; after following a ref
