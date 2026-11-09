@@ -1775,9 +1775,13 @@
     contentHost.querySelectorAll(":scope > .draft-annotation").forEach((element) => element.remove());
     // a cleared editor (cancel, save) leaves its element behind unless
     // the paint removes it: the element tracks the state exactly. The
-    // editor sits in the render root beside the blocks, one level below
-    // the content host, like the blocks themselves.
-    contentHost.querySelectorAll(":scope > .board > .draft-editor").forEach((element) => element.remove());
+    // removal runs only when the state holds no editor - a paint that
+    // rides a render-outcome landing mid-typing must not replace the
+    // mounted textarea under the typing hand. The editor sits in the
+    // render root beside the blocks, one level below the content host.
+    if (!draftEditor || draftEditorIndex === null) {
+      contentHost.querySelectorAll(":scope > .board > .draft-editor").forEach((element) => element.remove());
+    }
     if (!view.board) return;
     const blocks = contentBlocks();
     for (const draft of drafts) {
@@ -1797,7 +1801,7 @@
     if (draftEditor && draftEditorIndex !== null) {
       const block = blocks[draftEditorIndex];
       if (block) {
-        const existing = contentHost.querySelector(":scope > .draft-editor");
+        const existing = contentHost.querySelector(":scope > .board > .draft-editor");
         existing?.remove();
         const el = document.createElement("div");
         el.className = "draft-editor";
