@@ -267,57 +267,56 @@ export class RemoteSource implements BoardSource {
 // id on either side - the client configuration's `tracker-machine`
 // declaration applies, and without it the open refuses saying what to
 // set. No bridge (no local core), no tracker-machine read at all.
+
+/** The Herdr machine a bare-path read or edit rides (t-24@r12, r14):
+ * "" for the local core's own machine on the hub, else the declared
+ * tracker machine. One rule for the reads and the suite's one write
+ * (the explainer annotation submit, t-24@r21). */
+export async function trackerCoreMachine(): Promise<string> {
+  let invoke: TauriInvoke;
+  try {
+    invoke = tauriInvoke();
+  } catch (error) {
+    if (error instanceof SourceUnavailableError) {
+      throw new SourceUnavailableError(
+        "lane-unavailable",
+        "a bare path reads on the tracker's machine through Herdr core; no Herdr connection exists here - name a machine explicitly (machine:/path)",
+      );
+    }
+    throw error;
+  }
+  let ownId: string | null = null;
+  try {
+    ownId = (await invoke("machine_id")) as string | null;
+  } catch (error) {
+    throw bridgeFailure(error);
+  }
+  let declared: string | null = null;
+  try {
+    declared = (await invoke("tracker_machine")) as string | null;
+  } catch (error) {
+    throw bridgeFailure(error);
+  }
+  if (declared !== null && declared.trim().length > 0) return declared.trim();
+  if (serverHost() === null) {
+    throw new SourceUnavailableError(
+      "lane-unavailable",
+      "a bare path reads on the tracker's machine; no tracker server is set - set the tracker server host, or tracker-machine in the client configuration",
+    );
+  }
+  const hub = await trackerIsThisMachine(async () => ownId);
+  if (hub) return ""; // the local core's own machine: the hub itself
+  throw new SourceUnavailableError(
+    "lane-unavailable",
+    "a bare path reads on the tracker's machine, which this device is not; set tracker-machine in the client configuration to the Herdr machine that hosts the tracker",
+  );
+}
+
 export class TrackerMachineSource implements BoardSource {
   readonly machine = "tracker-machine" as const;
 
-  /** The Herdr machine name the read rides: the declared tracker
-   * machine, or "" for the local core's own machine on the hub. */
-  private async trackerCoreMachine(): Promise<string> {
-    let invoke: TauriInvoke;
-    try {
-      invoke = tauriInvoke();
-    } catch (error) {
-      if (error instanceof SourceUnavailableError) {
-        throw new SourceUnavailableError(
-          "lane-unavailable",
-          "a bare path reads on the tracker's machine through Herdr core; no Herdr connection exists here - name a machine explicitly (machine:/path)",
-        );
-      }
-      throw error;
-    }
-    let ownId: string | null = null;
-    try {
-      ownId = (await invoke("machine_id")) as string | null;
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
-    let declared: string | null = null;
-    try {
-      declared = (await invoke("tracker_machine")) as string | null;
-    } catch (error) {
-      throw bridgeFailure(error);
-    }
-    if (declared !== null && declared.trim().length > 0) return declared.trim();
-    if (serverHost() === null) {
-      throw new SourceUnavailableError(
-        "lane-unavailable",
-        "a bare path reads on the tracker's machine; no tracker server is set - set the tracker server host, or tracker-machine in the client configuration",
-      );
-    }
-    const hub = await trackerIsThisMachine(async () => ownId);
-    if (hub) return ""; // the local core's own machine: the hub itself
-    throw new SourceUnavailableError(
-      "lane-unavailable",
-      "a bare path reads on the tracker's machine, which this device is not; set tracker-machine in the client configuration to the Herdr machine that hosts the tracker",
-    );
-  }
-
-  private async resolve(): Promise<string> {
-    return this.trackerCoreMachine();
-  }
-
   async loadText(location: Location): Promise<LoadedText> {
-    const coreMachine = await this.resolve();
+    const coreMachine = await trackerCoreMachine();
     const invoke = tauriInvoke();
     try {
       const result = (await invoke("read_declaration", {
@@ -331,7 +330,7 @@ export class TrackerMachineSource implements BoardSource {
   }
 
   async loadAsset(location: Location, relative: string): Promise<LoadedAsset> {
-    const coreMachine = await this.resolve();
+    const coreMachine = await trackerCoreMachine();
     const invoke = tauriInvoke();
     const baseDir = location.path.replace(/\/[^/]*$/, "");
     const resolved = resolveRelative(baseDir, relative);

@@ -31,17 +31,42 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::read_declaration,
             commands::read_asset,
+            commands::edit_declaration,
             commands::viewer_identity,
             commands::test_open,
             commands::tracker_machine,
             commands::machine_id,
             commands::publish_identity,
             commands::write_clipboard,
+            commands::deck_create,
+            commands::deck_read,
+            commands::deck_delete,
+            commands::deck_watch,
+            commands::deck_wait,
             board_validate::validate_board,
             look_config::look_config,
             look_config::wait_look_config,
             words::words_wait,
         ])
+        // the deck's address dies with the window (t-24@r21 B1): on
+        // close the document is deleted through the same core face it
+        // was created on - bounded, best effort, logged; the window
+        // still closes if the core is gone.
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some((name, on)) = commands::deck_address() {
+                    let deletion = std::panic::catch_unwind(|| commands::deck_delete(name, on));
+                    eprintln!(
+                        "[bridge] deck delete at close: {}",
+                        match deletion {
+                            Ok(Ok(())) => "deleted".to_string(),
+                            Ok(Err(error)) => format!("failed: {} {}", error.code, error.message),
+                            Err(_) => "panicked".to_string(),
+                        }
+                    );
+                }
+            }
+        })
         .setup(move |app| {
             // the look follows the human's own configuration file in the
             // platform config directory (t-24@r3); the directory may not

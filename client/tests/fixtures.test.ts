@@ -26,6 +26,7 @@ const VALID_FIXTURES = [
   "long-code.yaml",
   "large-diagram.yaml",
   "saccade-and-migration.yaml",
+  "explainer-board.yaml",
 ];
 
 const REFUSED_FIXTURES: Array<[string, string]> = [

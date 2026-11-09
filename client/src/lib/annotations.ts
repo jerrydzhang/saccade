@@ -145,6 +145,13 @@ export function locateBlockSpan(lines: string[], path: string): BlockSpan | null
   return locateBlockSpanDepth(lines, path)?.span ?? null;
 }
 
+/** The block a select path names, with the indentation its own `- `
+ * carries: everything the explainer edit needs to place an annotation
+ * beside it. */
+export function locateComponent(lines: string[], path: string): { span: BlockSpan; indent: number } | null {
+  return locateBlockSpanDepth(lines, path);
+}
+
 function insertAnnotation(lines: string[], span: BlockSpan, text: string, indent: number): string[] {
   const pad = " ".repeat(indent);
   const bodyPad = " ".repeat(indent + 4);

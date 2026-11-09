@@ -55,7 +55,7 @@ impl<T: CoreTransport> CoreClient<T> {
     pub fn read_text(&self, machine: &str, path: &str) -> Result<String, CoreFail> {
         let result = self.request(
             "file.read",
-            &file_read_params(machine, path),
+            &file_params(machine, path),
             machine,
             Some(path),
         )?;
@@ -72,6 +72,75 @@ impl<T: CoreTransport> CoreClient<T> {
             });
         }
         Ok(text.to_string())
+    }
+
+    /// Exact-text replacements into one file: the pinned `file.edit`
+    /// call, each old found exactly once in the file as it stands, all
+    /// edits made or none. The suite's one file write (the explainer
+    /// annotation submit, t-24@r21) rides this: the exact-once rule is
+    /// the wire's half of the staleness guard, and a refusal here
+    /// leaves the file byte-identical. An empty machine is the local
+    /// core's own machine: `on` is omitted, like every call here.
+    pub fn edit_text(
+        &self,
+        machine: &str,
+        path: &str,
+        edits: &[FileEdit],
+    ) -> Result<FileEditOutcome, CoreFail> {
+        if edits.is_empty() {
+            return Err(CoreFail::InvalidParams {
+                detail: "an edit carries no replacements".into(),
+            });
+        }
+        let mut params = json!({
+            "path": path,
+            "edits": edits
+                .iter()
+                .map(|edit| json!({"old": edit.old, "new": edit.new}))
+                .collect::<Vec<Value>>(),
+        });
+        if !machine.is_empty() {
+            params["on"] = json!(machine);
+        }
+        let result = self.request("file.edit", &params, machine, Some(path))?;
+        let bytes = number_field(&result, "bytes")?;
+        Ok(FileEditOutcome { bytes })
+    }
+
+    /// One opaque document read: the deck's read-back (t-24@r21 B1) -
+    /// the value as it stands and its version, zero when never
+    /// written. A deleted document answers value null with its
+    /// retained version.
+    pub fn doc_get(&self, machine: &str, name: &str) -> Result<DeckDoc, CoreFail> {
+        let result = self.request(
+            "doc.get",
+            &subject_params(machine, name),
+            machine,
+            Some(name),
+        )?;
+        Ok(DeckDoc {
+            value: result.get("value").cloned().unwrap_or(Value::Null),
+            version: number_field(&result, "version")?,
+        })
+    }
+
+    /// One versioned document write: the whole value, the caller's
+    /// version must still match. A lost race is a `conflict` refusal -
+    /// the cue protocol's retry is the caller's (read again, set
+    /// again); nothing here retries.
+    pub fn doc_set(
+        &self,
+        machine: &str,
+        name: &str,
+        value: &Value,
+        version: u64,
+    ) -> Result<u64, CoreFail> {
+        let mut params = json!({"name": name, "value": value, "version": version});
+        if !machine.is_empty() {
+            params["on"] = json!(machine);
+        }
+        let result = self.request("doc.set", &params, machine, Some(name))?;
+        Ok(number_field(&result, "version")?)
     }
 
     /// One fixed-argv program on a machine: argv as given, no shell,
@@ -275,6 +344,11 @@ impl<T: CoreTransport> CoreClient<T> {
                 detail,
             },
             "invalid_params" => CoreFail::InvalidParams { detail },
+            "edit_failed" => CoreFail::EditFailed {
+                path: subject.unwrap_or("(the core did not name it)").into(),
+                machine: machine.into(),
+                detail,
+            },
             "spawn_failed" => CoreFail::SpawnFailed { detail },
             "" => CoreFail::Protocol {
                 detail: format!("the core error carries no kind: {detail}"),
@@ -320,10 +394,42 @@ impl<T: CoreTransport> CoreClient<T> {
     }
 }
 
-/// The `file.read` params: `on` names the machine and is omitted for
-/// the local core's own machine (t-24@r12), the same read the CLI's
+/// One exact-text replacement: `old` must be found exactly once in
+/// the file as it stands, `new` replaces it. All-or-none across the
+/// whole edit list.
+pub struct FileEdit {
+    pub old: String,
+    pub new: String,
+}
+
+/// What one landed edit answers: the file's new size in bytes.
+#[derive(Debug)]
+pub struct FileEditOutcome {
+    pub bytes: u64,
+}
+
+/// One document read-back: the value as it stands and its version.
+#[derive(Debug)]
+pub struct DeckDoc {
+    pub value: Value,
+    pub version: u64,
+}
+
+/// The subject-call params: the named subject, with `on` omitted for
+/// the local core's own machine (t-24@r12), the same call the CLI's
 /// no-`--on` form makes.
-fn file_read_params(machine: &str, path: &str) -> Value {
+fn subject_params(machine: &str, subject: &str) -> Value {
+    let mut params = json!({"name": subject});
+    if !machine.is_empty() {
+        params["on"] = json!(machine);
+    }
+    params
+}
+
+/// The file-call params: `on` names the machine and is omitted for
+/// the local core's own machine (t-24@r12), the same call the CLI's
+/// no-`--on` form makes.
+fn file_params(machine: &str, path: &str) -> Value {
     let mut params = json!({"path": path});
     if !machine.is_empty() {
         params["on"] = json!(machine);
@@ -502,6 +608,113 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "file.read");
         assert_eq!(calls[0].1, json!({"path": "/srv/b.yaml", "on": "tired"}));
+    }
+
+    #[test]
+    fn an_edit_sends_the_exact_once_replacements_and_omits_on_for_the_local_machine() {
+        let fake = Fake::new(&[json!({"result": {"path": "/srv/x.yaml", "bytes": 115}})]);
+        let client = CoreClient::new(&fake);
+        let outcome = client
+            .edit_text(
+                "",
+                "/srv/x.yaml",
+                &[FileEdit {
+                    old: "  - text: |\n      first part".into(),
+                    new: "  - text: |\n      first part\n  - annotation: |\n      note".into(),
+                }],
+            )
+            .unwrap();
+        assert_eq!(outcome.bytes, 115);
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "file.edit");
+        assert_eq!(
+            calls[0].1,
+            json!({
+                "path": "/srv/x.yaml",
+                "edits": [{
+                    "old": "  - text: |\n      first part",
+                    "new": "  - text: |\n      first part\n  - annotation: |\n      note"
+                }]
+            }),
+            "no on: the local core edits its own machine"
+        );
+    }
+
+    #[test]
+    fn an_edit_on_a_named_machine_carries_on_and_the_byte_answer() {
+        let fake = Fake::new(&[json!({"result": {"path": "/srv/x.yaml", "bytes": 9}})]);
+        let client = CoreClient::new(&fake);
+        let outcome = client
+            .edit_text(
+                "tired",
+                "/srv/x.yaml",
+                &[
+                    FileEdit {
+                        old: "a".into(),
+                        new: "b".into(),
+                    },
+                    FileEdit {
+                        old: "c".into(),
+                        new: "d".into(),
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(outcome.bytes, 9);
+        assert_eq!(
+            fake.calls()[0].1,
+            json!({
+                "path": "/srv/x.yaml",
+                "edits": [
+                    {"old": "a", "new": "b"},
+                    {"old": "c", "new": "d"}
+                ],
+                "on": "tired"
+            })
+        );
+    }
+
+    #[test]
+    fn an_edit_failed_answer_is_the_wire_half_of_the_staleness_guard() {
+        let fake = Fake::new(&[json!({"error": {
+            "code": -32000,
+            "data": {"kind": "edit_failed", "hint": "add lines around it"},
+            "message": "the old text is in the file 2 times"
+        }})]);
+        let client = CoreClient::new(&fake);
+        let failure = client
+            .edit_text(
+                "tired",
+                "/srv/x.yaml",
+                &[FileEdit {
+                    old: "x".into(),
+                    new: "y".into(),
+                }],
+            )
+            .unwrap_err();
+        match &failure {
+            CoreFail::EditFailed {
+                path,
+                machine,
+                detail,
+            } => {
+                assert_eq!(path, "/srv/x.yaml");
+                assert_eq!(machine, "tired");
+                assert!(detail.contains("2 times"), "{detail}");
+            }
+            other => panic!("expected EditFailed, got {other:?}"),
+        }
+        assert_eq!(failure.code(), "edit-failed");
+    }
+
+    #[test]
+    fn an_edit_with_no_replacements_is_refused_before_the_wire() {
+        let fake = Fake::new(&[]);
+        let client = CoreClient::new(&fake);
+        let failure = client.edit_text("", "/srv/x.yaml", &[]).unwrap_err();
+        assert_eq!(failure.code(), "bridge-invalid");
+        assert!(fake.calls().is_empty(), "nothing was sent");
     }
 
     #[test]

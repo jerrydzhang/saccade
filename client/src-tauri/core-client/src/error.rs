@@ -66,6 +66,23 @@ pub enum CoreFail {
         got_last: u64,
         total_lines: u64,
     },
+    /// The core refused an edit because its exact-once rule failed:
+    /// some old text is not in the file, or is there more than once.
+    /// The file is untouched (all-or-none); to the caller this is the
+    /// wire's half of the staleness guard.
+    EditFailed {
+        path: String,
+        machine: String,
+        detail: String,
+    },
+    /// A versioned document write lost its race: the document moved
+    /// between the caller's read and write. The cue protocol's retry
+    /// (read again, set again) is the caller's.
+    Conflict { name: String, detail: String },
+    /// A bounded read expired without an answer: the hold's own
+    /// deadline, quiet being a normal answer. Internal to the deck's
+    /// feed hold - it never reaches the renderer as a load code.
+    HoldQuiet,
 }
 
 impl CoreFail {
@@ -91,6 +108,9 @@ impl CoreFail {
             CoreFail::Containment { .. } => "asset-denied",
             CoreFail::Denied { .. } => "asset-denied",
             CoreFail::TextTruncated { .. } => "text-truncated",
+            CoreFail::EditFailed { .. } => "edit-failed",
+            CoreFail::Conflict { .. } => "core-conflict",
+            CoreFail::HoldQuiet => "core-unavailable",
         }
     }
 }
@@ -198,6 +218,14 @@ impl fmt::Display for CoreFail {
                 "the text read stopped inside {path:?} on machine {machine:?}: \
                  it got through line {got_last} of {total_lines}"
             ),
+            CoreFail::EditFailed { path, machine, detail } => write!(
+                f,
+                "the edit into {path:?} on machine {machine:?} was refused, the file is untouched: {detail}"
+            ),
+            CoreFail::Conflict { name, detail } => {
+                write!(f, "the document {name:?} moved before the write landed: {detail}")
+            }
+            CoreFail::HoldQuiet => write!(f, "the bounded read expired quiet"),
         }
     }
 }
@@ -318,6 +346,22 @@ mod tests {
                 },
                 "text-truncated",
             ),
+            (
+                CoreFail::EditFailed {
+                    path: "/p".into(),
+                    machine: "m".into(),
+                    detail: "d".into(),
+                },
+                "edit-failed",
+            ),
+            (
+                CoreFail::Conflict {
+                    name: "deck-ab".into(),
+                    detail: "d".into(),
+                },
+                "core-conflict",
+            ),
+            (CoreFail::HoldQuiet, "core-unavailable"),
         ];
         for (fail, code) in &inventory {
             assert_eq!(&fail.code(), code, "{fail:?}");

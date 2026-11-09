@@ -43,6 +43,24 @@
     publishAnnotations,
     type Draft,
   } from "./lib/annotations.ts";
+  import {
+    explainerEdit,
+    loadKeptExplainer,
+    saveKeptExplainer,
+    clearKeptExplainer,
+    submitExplainerEdit,
+  } from "./lib/explainer.ts";
+  import {
+    applyDocument,
+    cueCommand,
+    deckNameFromBytes,
+    jumpDeck,
+    newDeck,
+    stepDeck,
+    waitingSlide,
+    type DeckState,
+  } from "./lib/deck.ts";
+  import { trackerCoreMachine } from "./lib/sources.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
   import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
@@ -614,6 +632,7 @@
 
   async function pickerOpenResult(item: PickerItem): Promise<void> {
     closePicker();
+    void ensureDeck();
     await model.openInput(item.location);
   }
 
@@ -663,7 +682,7 @@
   function readingAnchorKey(): { key: string; offset: number } | null {
     if (!contentHost) return null;
     const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     let best: HTMLElement | null = null;
     let bestDistance = Number.MAX_SAFE_INTEGER;
     for (const block of blocks) {
@@ -695,7 +714,7 @@
    * surviving neighbour, back at its viewport offset. */
   function restoreReadingAnchor(anchor: { key: string; offset: number } | null): void {
     if (!anchor || !contentHost) return;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     if (!view.board) return;
     let target: HTMLElement | null = null;
     const keys = view.board.content.map(partKeyForAnchor);
@@ -798,7 +817,7 @@
       contentHost.append(ruler);
     }
     ruler.textContent = "";
-    for (const block of Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"))) {
+    for (const block of contentBlocks()) {
       if (block.querySelector(".diff-add, .diff-del") === null) continue;
       const tick = document.createElement("span");
       tick.className = "history-ruler-tick";
@@ -951,7 +970,7 @@
     if (!location || !source) return;
     const spec = parseTaskSpec(location.path);
     if (!spec || spec.revision === null) return;
-    const blockIndex = Array.from(contentHost?.querySelectorAll<HTMLElement>(":scope > .block") ?? []).indexOf(block);
+    const blockIndex = contentBlocks().indexOf(block);
     if (blockIndex < 0 || !view.board) return;
     const part = view.board.content[blockIndex];
     if (!part || part.kind !== "incorporation") return;
@@ -1014,10 +1033,14 @@
   // (t-24@r11) and survive a closed window or a restart. `space p`
   // publishes them together as ONE commit with ONE message under the
   // human's own identity; the current revision of a task board only.
+  // On an explainer - a bare-path file that decodes as a board - the
+  // editor's save IS the submit: one annotation written straight into
+  // the file (t-24@r21), nothing pooled.
   let drafts = $state<Draft[]>([]);
   let draftsFor = $state("");
   let draftEditor = $state<{ path: string; text: string } | null>(null);
   let draftEditorIndex = $state<number | null>(null);
+  let draftKind = $state<"task" | "explainer">("task");
   let publishOpen = $state(false);
   let publishMessage = $state("");
   let publishBusy = $state(false);
@@ -1059,7 +1082,7 @@
    * the reading height - a top-level part, as the select path names. */
   function actPartIndex(): number | null {
     if (!contentHost || !view.board) return null;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     let element: HTMLElement | null = selected?.element ?? null;
     if (!element) {
       const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
@@ -1081,14 +1104,34 @@
   function beginDraft(): void {
     if (!view.board) return;
     const location = view.location;
-    const spec = parseTaskSpec(location?.path ?? "");
-    if (!location || !spec) {
-      publishNote = "annotations draft on a task board; this location is not one";
+    if (!location) return;
+    if (location.machine === "tracker-machine") {
+      // the explainer write (t-24@r21): bare paths only - the file
+      // this window decoded as a board. The text of a refused
+      // annotation is kept on the device keyed by the path; the next
+      // `a` opens the editor with it, placement dropped.
+      draftKind = "explainer";
+      publishNote = null;
+      const index = actPartIndex();
+      if (index === null) return;
+      draftEditorIndex = index;
+      draftEditor = { path: `/content/${index}`, text: loadKeptExplainer(location.path) ?? "" };
       return;
     }
+    // the revision gate reads the ASKED location: a bare open is the
+    // human asking for the current board, and the view naming its
+    // resolved revision does not make it pinned (t-24@r11 refuses a
+    // revision the human actually pinned)
+    const spec = parseTaskSpec((view.askedLocation ?? location).path);
+    if (!spec) {
+      publishNote =
+        "annotations draft on a task board or on a bare path on the tracker's machine; this location is neither - bare paths only for the explainer write (t-24@r21)";
+      return;
+    }
+    draftKind = "task";
     if (spec.revision !== null) {
-      // t-24@r11: only the current revision drafts; a pinned older
-      // revision refuses, saying where annotation is possible
+      // t-24@r11: only the current revision drafts; a pinned revision
+      // refuses, saying where annotation is possible
       publishNote = "only the current revision of a task board drafts; open the task bare (tracker/t-N) and annotate there";
       return;
     }
@@ -1103,11 +1146,97 @@
     const editor = draftEditor;
     if (!editor) return;
     const text = editor.text;
+    if (draftKind === "explainer") {
+      // the submit IS the save (t-24@r21 A5): one annotation into the
+      // file, nothing pooled; an empty save just closes
+      if (text.trim().length === 0) {
+        cancelDraft();
+        return;
+      }
+      void submitExplainer(text);
+      return;
+    }
     const next = drafts.filter((draft) => draft.path !== editor.path);
     if (text.trim().length > 0) next.push({ path: editor.path, text: text.replace(/\s+$/, "") });
     updateDrafts(next);
     draftEditor = null;
     draftEditorIndex = null;
+  }
+
+  /** The explainer annotation submit: the edit computed against the
+   * shown text and decoded before anything is sent (t-24@r21 A1), the
+   * whole file re-read and byte-compared with what this window shows
+   * (A4), then one file.edit through the bridge. A refusal keeps the
+   * annotation TEXT, drops the placement, and says where to place it
+   * again; the wire's exact-once answer is the same refusal reached
+   * through the other half of the guard. */
+  async function submitExplainer(text: string): Promise<void> {
+    const location = view.location;
+    const shown = model.snapshot.rawText ?? "";
+    if (!location || location.machine !== "tracker-machine" || shown.length === 0) return;
+    const editorPath = draftEditor?.path;
+    if (!editorPath) return;
+    const generation = model.currentGeneration;
+    const stale = (): boolean => {
+      // the human navigated while the act awaited: the submit is void,
+      // nothing is written, nothing is noted
+      return model.currentGeneration !== generation;
+    };
+    const plan = explainerEdit(shown, editorPath, text);
+    if ("failure" in plan) {
+      // nothing was sent; the editor stays open with the reason
+      publishNote = plan.failure;
+      return;
+    }
+    let machine: string;
+    try {
+      machine = await trackerCoreMachine();
+    } catch (error) {
+      publishNote = error instanceof Error ? error.message : String(error);
+      return;
+    }
+    if (stale()) return;
+    let current: string;
+    try {
+      const source = sourceFor("tracker-machine");
+      current = (await source.loadText(location)).text;
+    } catch (error) {
+      publishNote = error instanceof Error ? error.message : String(error);
+      return;
+    }
+    if (stale()) return;
+    if (current !== shown) {
+      saveKeptExplainer(location.path, text);
+      draftEditor = null;
+      draftEditorIndex = null;
+      publishNote =
+        "the file changed since this window read it; the annotation text is kept - reopen the file and press a on the part you want, the editor opens with the kept text";
+      return;
+    }
+    const outcome = await submitExplainerEdit(tauriInvoke(), {
+      path: location.path,
+      old: plan.edit.old,
+      new: plan.edit.new,
+      on: machine,
+    });
+    if (stale()) return;
+    if (!outcome.ok) {
+      if (outcome.code === "edit-failed") {
+        saveKeptExplainer(location.path, text);
+        draftEditor = null;
+        draftEditorIndex = null;
+        publishNote =
+          "the file moved under this window - the edit's exact-once guard refused and the file is untouched; the annotation text is kept - reopen the file and press a on the part you want";
+        return;
+      }
+      publishNote = `the write refused: ${outcome.code} ${outcome.detail}`;
+      return;
+    }
+    clearKeptExplainer(location.path);
+    draftEditor = null;
+    draftEditorIndex = null;
+    publishNote = `annotation written into ${location.path}`;
+    await model.open({ machine: location.machine, path: location.path });
   }
 
   function cancelDraft(): void {
@@ -1119,6 +1248,11 @@
 
   function openPublish(): void {
     if (!view.board) return;
+    if (view.location?.machine === "tracker-machine" || draftKind === "explainer") {
+      publishNote =
+        "an explainer has no pooled publish; each annotation is written straight into its file on save (t-24@r21)";
+      return;
+    }
     if (drafts.length === 0) {
       publishNote = "no drafts to publish; press a on a part first";
       return;
@@ -1147,7 +1281,9 @@
         publishNote = "annotations publish on a task board served by a tracker";
         return;
       }
-      const spec = parseTaskSpec(location.path);
+      // the revision gate reads the ASKED location, exactly as the
+      // draft gate does: a bare open is the current board
+      const spec = parseTaskSpec((view.askedLocation ?? location).path);
       if (!spec) return;
       if (spec.revision !== null) {
         publishNote = "only the current revision of a task board publishes; open the task bare (tracker/t-N)";
@@ -1229,6 +1365,228 @@
 
   let mainWrap: HTMLElement | undefined = $state(undefined);
 
+  /** The rendered top-level blocks: one render root (div.board) sits
+   * between the content host and the blocks renderBoard appended. */
+  function contentBlocks(): HTMLElement[] {
+    return Array.from(contentHost?.querySelectorAll<HTMLElement>(":scope > .board > .block") ?? []);
+  }
+
+  // -- the deck (t-21, t-24@r21) -----------------------------------------
+  // The address is a herdr-core document per window: deck- plus 96
+  // random bits, created on the machine the bare-path rule resolves
+  // (the hub's own core there, the declared tracker machine
+  // elsewhere). Holding the address is the permission; the document
+  // holds locations only, never the human's position; the shell
+  // deletes it when the window closes. The cue feed is the wake-driven
+  // hold (deck_wait), never a timer: every answer re-enters the hold
+  // while this window's deck stands.
+  let deck = $state.raw<DeckState | null>(null);
+  let deckMachine = "";
+  const deckSnapshots = new Map<number, string>();
+  let deckFeedLost = $state<string | null>(null);
+
+  function deckInvoke(): ReturnType<typeof tauriInvoke> {
+    return tauriInvoke();
+  }
+
+  async function ensureDeck(): Promise<void> {
+    if (deck || !bridgePresent) return;
+    let machine: string;
+    try {
+      machine = await trackerCoreMachine();
+    } catch (error) {
+      // no core, no server set, or not the hub without a declaration:
+      // the deck is absent, the reason on the app log for the lanes
+      console.log(
+        `[viewer] deck absent: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    const bytes = new Uint8Array(12);
+    crypto.getRandomValues(bytes);
+    const name = deckNameFromBytes(bytes);
+    try {
+      await deckInvoke()("deck_create", { name, on: machine });
+    } catch (error) {
+      console.log(`[viewer] deck refused: ${String(error)}`);
+      return;
+    }
+    deckMachine = machine;
+    deck = newDeck(name);
+    console.log(`[viewer] deck offered: ${name}`);
+    void watchDeck();
+  }
+
+  async function watchDeck(): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    try {
+      await deckInvoke()("deck_watch", { name: current.name, on: deckMachine });
+    } catch (error) {
+      deckFeedLost = String(error);
+      return;
+    }
+    let quietLogged = false;
+    // the hold loops on the ADDRESS, not on a deck object: every
+    // landing reassigns the deck state, and an identity loop would
+    // stop watching after the first cue
+    while (deck !== null && deck.name === current.name) {
+      let message: { kind?: string; version?: number; reason?: string };
+      try {
+        message = (await deckInvoke()("deck_wait", { name: current.name })) as typeof message;
+      } catch (error) {
+        if (deck === null || deck.name !== current.name) return;
+        deckFeedLost = String(error);
+        console.log(`[viewer] deck feed invoke failed: ${deckFeedLost}`);
+        return;
+      }
+      if (deck === null || deck.name !== current.name) return;
+      if (message.kind === "doc") {
+        await deckDocument();
+        continue;
+      }
+      if (message.kind === "lost") {
+        deckFeedLost = message.reason ?? "the feed ended";
+        console.log(`[viewer] deck feed lost: ${deckFeedLost}`);
+        return;
+      }
+      // Quiet: the hold expired with nothing cued; re-enter it. One
+      // line for the first cycle is the lanes' evidence that the feed
+      // cycles at all; the rest stay silent.
+      if (!quietLogged) {
+        quietLogged = true;
+        console.log("[viewer] deck feed cycling quiet (hold expired, re-entering)");
+      }
+    }
+  }
+
+  async function deckDocument(): Promise<void> {
+    const before = deck;
+    if (!before) return;
+    let doc: { value: unknown; version: number };
+    try {
+      doc = (await deckInvoke()("deck_read", {
+        name: before.name,
+        on: deckMachine,
+      })) as typeof doc;
+    } catch (error) {
+      console.log(`[viewer] deck read failed: ${String(error)}`);
+      return;
+    }
+    if (deck !== before) return;
+    const onLatest = view.slideIndex !== null && view.slideIndex === before.position;
+    const event = applyDocument(before, onLatest, doc.value, doc.version);
+    if (event.dead) {
+      // the address is dead: the document was deleted from outside
+      deck = null;
+      deckSnapshots.clear();
+      publishNote = "the deck's document was deleted; the address is dead";
+      return;
+    }
+    deck = event.state;
+    console.log(
+      `[viewer] cue landing: arrived=${event.arrived.length} show=${event.show} slides=${event.state.slides.length}`,
+    );
+    // file slides snapshot when the cue lands; boards pin by revision
+    // when shown (their location already carries @rK if the agent
+    // cued it, else the open pins what answers)
+    for (const index of event.arrived) {
+      const spec = event.state.slides[index];
+      if (spec === undefined) continue;
+      const location = parseLocation(spec);
+      if (!location || location.machine.startsWith("tracker:")) continue;
+      void snapshotFor(index, location);
+    }
+    if (event.show) {
+      await showSlide(event.state.slides.length - 1);
+    }
+  }
+
+  async function snapshotFor(index: number, location: Location): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    try {
+      const loaded = await sourceFor(location.machine).loadText(location);
+      if (deck !== current) return;
+      deckSnapshots.set(index, loaded.text);
+    } catch {
+      // no snapshot held: showing the slide answers with the live
+      // read's own structured refusal
+    }
+  }
+
+  async function showSlide(index: number): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    const spec = current.slides[index];
+    if (spec === undefined) return;
+    const location = parseLocation(spec);
+    if (!location) {
+      publishNote = `slide ${index + 1} is a location this viewer cannot parse: ${spec}`;
+      return;
+    }
+    console.log(`[viewer] show slide ${index + 1}: ${spec} via ${(new Error().stack ?? "").split("\n")[2]?.trim() ?? "?"}`);
+    if (location.machine.startsWith("tracker:")) {
+      await model.open(location, { deck: true, slideIndex: index });
+    } else {
+      const snapshot = deckSnapshots.get(index);
+      if (typeof snapshot === "string") {
+        await model.openSnapshot(location, snapshot, index);
+      } else {
+        await model.open(location, { deck: true, slideIndex: index });
+      }
+    }
+    console.log(
+      `[viewer] slide shown: index=${index} view=${model.snapshot.location?.path ?? "none"} status=${model.snapshot.status}`,
+    );
+    if (deck !== current) return;
+    deck = { ...current, position: index, entered: true };
+  }
+
+  async function deckStep(direction: "older" | "newer"): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    const step = stepDeck(current, direction);
+    deck = step.state;
+    if (step.target !== null) await showSlide(step.target);
+  }
+
+  async function deckJump(digit: number): Promise<void> {
+    const current = deck;
+    if (!current) return;
+    const jump = jumpDeck(current, digit);
+    deck = jump.state;
+    if (jump.target !== null) await showSlide(jump.target);
+  }
+
+  function copyCueCommand(): void {
+    const current = deck;
+    if (!current) return;
+    const command = cueCommand(current.name, "<location>");
+    if (bridgePresent) void bridgeWrite(command);
+    else void navigator.clipboard?.writeText(command).catch(() => {});
+  }
+
+  let deckOnLatest = $derived(
+    deck !== null && view.slideIndex !== null && view.slideIndex === deck.position,
+  );
+  let deckWaiting = $derived(deck === null ? null : waitingSlide(deck, deckOnLatest));
+  let deckStateText = $derived.by(() => {
+    const current = deck;
+    if (!current) return "";
+    if (view.slideIndex !== null) {
+      const shown = `slide ${view.slideIndex + 1}/${current.slides.length}`;
+      return deckWaiting !== null ? `${shown}, slide ${deckWaiting} waiting` : shown;
+    }
+    return deckWaiting !== null ? `slide ${deckWaiting} waiting` : "";
+  });
+
+  // The deck offers itself once the shell is up: at mount, and again
+  // on the next open after a failed reach. Not at the script's top -
+  // the deck state and the bridge marker are declared later, and a
+  // call there reads them before initialization (the remote lane's
+  // first run caught exactly that).
+
   let historyActive = $derived(historyMode !== null);
 
   // Marginalia (space m): rows, each run of parts beside the full
@@ -1275,7 +1633,7 @@
 
   function scrollToRun(run: MarginaliaRun): void {
     if (!contentHost || !view.board) return;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     const target = blocks[run.indexes[0] ?? -1];
     if (target) target.scrollIntoView({ block: "start", behavior: "auto" });
   }
@@ -1421,11 +1779,24 @@
           void historyStep("older");
           return;
         }
+        if (deck && !marginaliaMode) {
+          // h l move between slides; in history they step time (t-14)
+          event.preventDefault();
+          console.log(`[viewer] deck key h (target=${(event.target as HTMLElement)?.tagName})`);
+          void deckStep("older");
+          return;
+        }
         break;
       case "l":
         if (historyMode) {
           event.preventDefault();
           void historyStep("newer");
+          return;
+        }
+        if (deck && !marginaliaMode) {
+          event.preventDefault();
+          console.log(`[viewer] deck key l (target=${(event.target as HTMLElement)?.tagName})`);
+          void deckStep("newer");
           return;
         }
         break;
@@ -1482,6 +1853,24 @@
         event.preventDefault();
         scrollByPages(scroller(), -0.5);
         return;
+      case "1":
+      case "2":
+      case "3":
+      case "4":
+      case "5":
+      case "6":
+      case "7":
+      case "8":
+      case "9":
+        // digits jump to slide numbers in normal mode (t-14, t-24@r21:
+        // label mode consumes them first - this switch is normal mode)
+        if (deck) {
+          event.preventDefault();
+          console.log(`[viewer] deck digit ${event.key} (target=${(event.target as HTMLElement)?.tagName})`);
+          void deckJump(Number(event.key));
+          return;
+        }
+        break;
       case "g":
         event.preventDefault();
         keyMode = "gg";
@@ -1682,8 +2071,17 @@
   function paintDrafts(): void {
     if (!contentHost) return;
     contentHost.querySelectorAll(":scope > .draft-annotation").forEach((element) => element.remove());
+    // a cleared editor (cancel, save) leaves its element behind unless
+    // the paint removes it: the element tracks the state exactly. The
+    // removal runs only when the state holds no editor - a paint that
+    // rides a render-outcome landing mid-typing must not replace the
+    // mounted textarea under the typing hand. The editor sits in the
+    // render root beside the blocks, one level below the content host.
+    if (!draftEditor || draftEditorIndex === null) {
+      contentHost.querySelectorAll(":scope > .board > .draft-editor").forEach((element) => element.remove());
+    }
     if (!view.board) return;
-    const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
+    const blocks = contentBlocks();
     for (const draft of drafts) {
       const match = /^\/content\/(\d+)$/.exec(draft.path);
       const index = match?.[1] === undefined ? -1 : Number(match[1]);
@@ -1700,11 +2098,20 @@
     }
     if (draftEditor && draftEditorIndex !== null) {
       const block = blocks[draftEditorIndex];
+      // the mounted editor for THIS path stays exactly as it is: it
+      // self-syncs draftEditor.text through its own input listener, and
+      // rebuilding it per keystroke replaces the textarea under the
+      // typing hand. Only a genuinely different editor (a new path)
+      // re-renders.
+      const existingEditor = contentHost.querySelector(":scope > .board > .draft-editor");
+      if (existingEditor && existingEditor.getAttribute("data-editor-path") === draftEditor.path) {
+        return;
+      }
+      existingEditor?.remove();
       if (block) {
-        const existing = contentHost.querySelector(":scope > .draft-editor");
-        existing?.remove();
         const el = document.createElement("div");
         el.className = "draft-editor";
+        el.dataset.editorPath = draftEditor.path;
         const area = document.createElement("textarea");
         area.className = "draft-editor-input";
         area.value = draftEditor.text;
@@ -1774,10 +2181,43 @@
       look: () => lookSummary(resolveLook(lastSource)),
       // the words' test surface: the lanes' injection, named as such
       setWords: (next: WordsTable) => setWords(next),
+      // the deck's test surface (t-21): the standing deck state for
+      // HUD and key checks in the browser lane, where no core exists.
+      // Test-only machinery, named as such, never human functionality.
+      deck: () =>
+        deck === null
+          ? null
+          : {
+              name: deck.name,
+              slides: [...deck.slides],
+              position: deck.position,
+              entered: deck.entered,
+              feedLost: deckFeedLost,
+            },
+      deckTest: (patch: {
+        slides?: string[];
+        position?: number | null;
+        entered?: boolean;
+      }) => {
+        const current = deck ?? newDeck("deck-" + "0".repeat(24));
+        deck = {
+          ...current,
+          slides: patch.slides ?? current.slides,
+          position: patch.position ?? current.position,
+          entered: patch.entered ?? current.entered,
+        };
+      },
+      deckShow: (index: number) => void showSlide(index),
     };
   });
 
+  // the deck's mount-time offer (see the note at deckStateText)
+  $effect(() => {
+    void ensureDeck();
+  });
+
   async function openHost(): Promise<void> {
+    void ensureDeck();
     if (hostPath) await model.openInput(hostPath);
   }
 
@@ -1839,6 +2279,13 @@
         {/if}
       {:else}
         <span class="status status-empty">no board open</span>
+      {/if}
+      {#if deck}
+        <span class="task-meta" data-control="deck:line">deck: <code>{deck.name}</code></span>
+        <button type="button" data-control="deck:copy" onclick={copyCueCommand}>copy cue command</button>
+      {/if}
+      {#if deckStateText}
+        <span class="task-meta deck-state" data-control="deck:state">{deckStateText}</span>
       {/if}
     </span>
     <span class="controls">
@@ -2024,6 +2471,10 @@
 
   {#if lookNotice}
     <p class="look-notice" aria-live="polite">{lookNotice}</p>
+  {/if}
+
+  {#if publishNote && !publishOpen}
+    <p class="look-notice" data-control="action:note" aria-live="polite">{publishNote}</p>
   {/if}
 
   {#if view.errors.length > 0}

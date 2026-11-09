@@ -676,6 +676,54 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 str(inspection["resource"]),
             )
 
+            # the annotation act on a task board: a opens the draft
+            # editor beside the part at the reading height (re-pinned
+            # here because t-21's lanes caught the act-part walk
+            # matching nothing)
+            probe = page.evaluate("""() => ({
+                blocksBoard: document.querySelectorAll('.content > .board > .block').length,
+                status: window.__boardViewer.inspection().resource.status,
+                focused: document.activeElement ? document.activeElement.tagName : 'none',
+                note: document.querySelector('[data-control="action:note"]')?.textContent ?? '',
+                editorOpen: document.querySelector('[data-control="draft:input"]') !== null,
+            })""")
+            print(f"[browser] pre-press probe: {json.dumps(probe)}", flush=True)
+            page.keyboard.press("a")
+            page.wait_for_timeout(500)
+            page.wait_for_selector('[data-control="draft:input"]')
+            check("a on a task board opens the draft editor", True)
+            page.click('[data-control="draft:cancel"]')
+            page.wait_for_timeout(500)
+            cancel_state = page.evaluate(
+                "() => document.querySelector('[data-control=\"draft:input\"]') !== null"
+            )
+            check("the draft editor's cancel closes it", cancel_state is False, f"editor still open={cancel_state}")
+
+            # a pinned revision the human actually asked for refuses
+            # (t-24@r11), naming where annotation is possible
+            inspection = open_location("smoke/t-0@r1")
+            check(
+                "the pinned location opens at its revision",
+                inspection["resource"]["status"] == "loaded"
+                and inspection["resource"]["path"] == "t-0@r1",
+                str(inspection["resource"]),
+            )
+            page.keyboard.press("a")
+            page.wait_for_timeout(500)
+            pinned_note = str(
+                page.evaluate(
+                    "() => document.querySelector('[data-control=\"action:note\"]')?.textContent ?? ''"
+                )
+            )
+            pinned_editor = page.evaluate(
+                "() => document.querySelector('[data-control=\"draft:input\"]') !== null"
+            )
+            check(
+                "a pinned open refuses drafting, saying where annotation is possible",
+                pinned_editor is not True and "only the current revision" in pinned_note,
+                f"editor={pinned_editor} note={pinned_note[:140]}",
+            )
+
             page.wait_for_selector('[data-control="board:open-citation"]')
             label = page.text_content('[data-control="board:open-citation"]')
             check(
@@ -1117,6 +1165,123 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         check("equals resets the zoom", abs(float(reset) - 1.0) < 0.001, reset)
 
     phase("interaction", phase_interaction)
+
+    # phase 10: the explainer annotation gates (t-21, t-24@r21). The
+    # browser lane has no bridge and no core, so the write itself cannot
+    # run here; what is pinned over the real frontend is the boundary:
+    # a fixture is never written (the refusal names the bare-path rule),
+    # the refusal is visible as a note, no editor opens, and space p
+    # refuses the pooled publish on a non-task location.
+    def phase_explainer() -> None:
+        def key(key: str, modifiers: list[str] | None = None) -> None:
+            for modifier in modifiers or []:
+                page.keyboard.down(modifier)
+            page.keyboard.press(key)
+            for modifier in reversed(modifiers or []):
+                page.keyboard.up(modifier)
+
+        open_board("explainer-board.yaml")
+        inspection = page.evaluate(f"() => {viewer}.inspection()")
+        check(
+            "the explainer fixture opens as a board",
+            inspection["resource"]["status"] == "loaded" and inspection["resource"]["machine"] == "fixture",
+            str(inspection["resource"]),
+        )
+        key("a")
+        editor_open = page.evaluate("() => document.querySelector('[data-control=\"draft:input\"]') !== null")
+        check("a on a fixture opens no draft editor (fixtures are never written)", not editor_open)
+        note = page.evaluate("() => document.querySelector('[data-control=\"action:note\"]')?.textContent ?? ''")
+        check(
+            "the fixture refusal names the bare-path rule and is visible",
+            "bare path" in str(note),
+            str(note)[:160],
+        )
+        # space p refuses the pooled publish outside a task board; on a
+        # fixture (not a bare path) the honest refusal is the task
+        # branch's - the explainer's own pooled-publish refusal names a
+        # bare-path window, pinned in the remote lane's live explainer
+        key(" ")
+        key("p")
+        publish_open = page.evaluate("() => document.querySelector('[data-control=\"publish:overlay\"]') !== null")
+        check("space p opens no publish outside a task board", not publish_open)
+        note = page.evaluate("() => document.querySelector('[data-control=\"action:note\"]')?.textContent ?? ''")
+        check(
+            "the pooled-publish refusal is visible and names the act",
+            "no drafts to publish" in str(note),
+            str(note)[:160],
+        )
+
+    phase("explainer", phase_explainer)
+
+    # phase 11: the deck's HUD and keys (t-21, t-24@r21). No core
+    # exists in this lane, so the standing deck state rides the test
+    # surface (deckTest, named test machinery); what is pinned is the
+    # UI contract: the waiting statement, the slide indicator, digit
+    # jumps, h l motion, and the deck line with its copy act.
+    def phase_deck() -> None:
+        def key(key: str, modifiers: list[str] | None = None) -> None:
+            for modifier in modifiers or []:
+                page.keyboard.down(modifier)
+            page.keyboard.press(key)
+            for modifier in reversed(modifiers or []):
+                page.keyboard.up(modifier)
+
+        def set_deck(slides: list[str], position: int | None, entered: bool) -> None:
+            page.evaluate(
+                f"() => {viewer}.deckTest({{slides: {json.dumps(slides)}, position: {json.dumps(position)}, entered: {json.dumps(entered)}}})"
+            )
+
+        def state_text() -> str:
+            return str(
+                page.evaluate("() => document.querySelector('[data-control=\"deck:state\"]')?.textContent ?? ''")
+            )
+
+        # a waiting cue is stated plainly in the HUD's own text
+        set_deck(["tracker/x/t-1", "tracker/x/t-2", "tracker/x/t-3"], 0, True)
+        state = state_text()
+        check(
+            "a waiting cue is stated in the HUD",
+            "slide 2 waiting" in state,
+            state,
+        )
+        # digits jump to slide numbers
+        key("3")
+        deck_after = page.evaluate(f"() => {viewer}.deck()")
+        check(
+            "digit 3 jumps to slide 3",
+            deck_after is not None and deck_after["position"] == 2,
+            str(deck_after),
+        )
+        # this lane cannot open the slide's view (no bridge, no core),
+        # so the shown-state text (slide 3/3) pins in the remote lane's
+        # end-to-end; here the honest outcome is that on the latest
+        # nothing waits
+        state = state_text()
+        check(
+            "on the latest nothing waits",
+            "waiting" not in state,
+            state,
+        )
+        # h steps back through the slides
+        key("h")
+        deck_after = page.evaluate(f"() => {viewer}.deck()")
+        check("h steps back a slide", deck_after is not None and deck_after["position"] == 1, str(deck_after))
+        # l steps forward again
+        key("l")
+        deck_after = page.evaluate(f"() => {viewer}.deck()")
+        check("l steps forward a slide", deck_after is not None and deck_after["position"] == 2, str(deck_after))
+        # on the latest, nothing waits
+        check("on the latest nothing waits", "waiting" not in state_text())
+        # the deck line carries the address and the copy act
+        line = page.evaluate("() => document.querySelector('[data-control=\"deck:line\"]')?.textContent ?? ''")
+        copy_button = page.evaluate("() => document.querySelector('[data-control=\"deck:copy\"]') !== null")
+        check(
+            "the header states the deck's address with its copy act",
+            line.startswith("deck: deck-") and copy_button,
+            f"{line!r} button={copy_button}",
+        )
+
+    phase("deck", phase_deck)
 
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 

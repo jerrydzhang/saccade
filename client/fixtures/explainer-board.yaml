@@ -1,0 +1,26 @@
+grammar: 1
+task: t-42
+content:
+  - text: |
+      ## The explainer under annotation
+
+      This file is a stand-in for a workspace explainer: an ordinary
+      board file on the tracker's machine, opened by its bare path, not
+      a task board. The lanes use it to open a file location without
+      touching any real workspace file.
+
+  - group:
+      title: How this file is used
+      content:
+        - text: |
+            The native and session lanes open it through the test-open
+            channel as a bare path on the host reader (test-only
+            machinery): the file location renders exactly as a task
+            board does. An annotation submit on it is refused in the
+            lanes - the host reader is test machinery and never written
+            (t-24@r21: bare paths on the tracker's machine, through the
+            core, only); the refusal is itself the pinned behaviour.
+
+  - text: |
+      The two parts above give the annotation act two placements to
+      target in lane checks.

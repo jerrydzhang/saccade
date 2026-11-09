@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import socket
 import subprocess
 import sys
 import time
@@ -33,6 +34,7 @@ from webdriver_client import WebDriver, WebDriverError  # noqa: E402
 from webdriver_session import (  # noqa: E402
     INSPECT_SCRIPT,
     capture_compositor_frame,
+    perform_input,
     wait_listening,
 )
 
@@ -388,6 +390,16 @@ def main() -> int:
     started = time.monotonic()
     state = LaneState()
     wayland_name = f"wayland-{os.getpid() % 97}"
+
+    # the client configuration declares the tracker machine (t-24@r12):
+    # the deck's address rides the same bare-path rule, so the deck
+    # document lands on machine b through core a's relay. Written before
+    # the app launches; the config reader follows it at start.
+    config_dir = pathlib.Path("config/dev.saccade.board-viewer")
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.toml").write_text(f'tracker-machine = "{MACHINE_NAME}"\n')
+    check("client configuration written (tracker-machine b)", True, str(config_dir))
+
     try:
         # the private mesh, before anything that needs it
         core_a = start_core(core_bin, "a", logs)
@@ -579,6 +591,367 @@ def main() -> int:
 
         frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote")
         check("compositor frame captured", frame is not None, "screenshooter produced no frame")
+
+        # -- the explainer annotation write end-to-end (t-21, t-24@r21) --
+        # A live bare-path board in the run root - writable, unlike the
+        # read-only fixture binds - annotated through the real flow:
+        # real input, the shown text's edit plan decoded before sending,
+        # the whole-file re-read, one file.edit on machine b through the
+        # declared machine, and the landed annotation rendered. Then the
+        # stale guard: the file changes under the window, the next
+        # submit refuses, the text is kept, and the note says so.
+        live_path = pathlib.Path.cwd() / "live-explainer.yaml"
+        live_path.write_text(
+            "grammar: 1\n"
+            "task: t-42\n"
+            "content:\n"
+            "  - text: |\n"
+            "      the first part of the live explainer\n"
+            "  - text: |\n"
+            "      the second part of the live explainer\n"
+        )
+
+        def type_and_open(spec: str) -> None:
+            perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": spec})
+            perform_input(state.client, {"kind": "click", "target": "open:host"})
+
+        def click_open() -> None:
+            # the field already names the file: WebKit's clear-then-retype
+            # raced its own input events on the second pass, so the
+            # reopen re-clicks the standing field instead
+            perform_input(state.client, {"kind": "click", "target": "open:host"})
+
+        def inspection_bounded(predicate, timeout: float, what: str):
+            deadline = time.monotonic() + timeout
+            last = "no read"
+            while time.monotonic() < deadline:
+                try:
+                    candidate = client.execute(INSPECT_SCRIPT)
+                except WebDriverError as error:
+                    last = str(error)[:160]
+                    candidate = None
+                got = candidate if isinstance(candidate, dict) else None
+                if got is not None:
+                    last = json.dumps(candidate)[:200]
+                    if predicate(got):
+                        return got
+                time.sleep(0.5)
+            check(what, False, last)
+            return None
+
+        type_and_open(str(live_path))
+        opened = inspection_bounded(
+            lambda item: (item.get("resource") or {}).get("machine") == "tracker-machine"
+            and (item.get("resource") or {}).get("path") == str(live_path)
+            and (item.get("resource") or {}).get("status") == "loaded",
+            CONNECT_WAIT_SECONDS,
+            "the live bare-path board opens through the declared machine",
+        )
+        editor_up = False
+
+        if opened is not None:
+            # the explainer's own pooled-publish refusal: space p on a
+            # bare-path window names the write rule instead
+            perform_input(state.client, {"kind": "key", "keys": [" "]})
+            perform_input(state.client, {"kind": "key", "keys": ["p"]})
+            publish_open = client.execute(
+                "return document.querySelector('[data-control=\"publish:overlay\"]') !== null;"
+            )
+            pooled_note = str(
+                client.execute(
+                    "return document.querySelector('[data-control=\"action:note\"]')?.textContent ?? '';"
+                )
+                or ""
+            )
+            check(
+                "space p on the explainer refuses the pooled publish, naming the rule",
+                publish_open is not True and "no pooled publish" in pooled_note,
+                f"overlay={publish_open} note={pooled_note[:120]}",
+            )
+
+            perform_input(state.client, {"kind": "key", "keys": ["a"]})
+            editor_deadline = time.monotonic() + 10
+            editor_up = False
+            while time.monotonic() < editor_deadline:
+                editor_up = (
+                    client.execute(
+                        "return document.querySelector('[data-control=\"draft:input\"]') !== null;"
+                    )
+                    is True
+                )
+                if editor_up:
+                    break
+                time.sleep(0.5)
+            check("a on the explainer opens the draft editor", editor_up)
+
+        if editor_up:
+            perform_input(
+                state.client,
+                {"kind": "type", "target": "draft:input", "text": "a note from the lane"},
+            )
+            perform_input(state.client, {"kind": "hotkey", "keys": ["ctrl", "enter"]})
+
+            written_deadline = time.monotonic() + CONNECT_WAIT_SECONDS
+            written = False
+            file_now = ""
+            while time.monotonic() < written_deadline:
+                file_now = live_path.read_text()
+                if "annotation: |" in file_now and "a note from the lane" in file_now:
+                    written = True
+                    break
+                time.sleep(0.5)
+            check(
+                "the submit wrote the annotation component into the file",
+                written,
+                file_now[:300],
+            )
+
+            landed = inspection_bounded(
+                lambda item: any(
+                    part.get("kind") == "annotation" for part in item.get("outline") or []
+                ),
+                CONNECT_WAIT_SECONDS,
+                "the landed annotation renders in the reopened board",
+            )
+            check("landed annotation outline carries annotation", landed is not None)
+
+            # the stale guard: the file changes under this window
+            live_path.write_text(live_path.read_text() + "  - text: |\n      a later part\n")
+            perform_input(state.client, {"kind": "key", "keys": ["a"]})
+            editor_up = False
+            editor_deadline = time.monotonic() + 10
+            while time.monotonic() < editor_deadline:
+                editor_up = (
+                    client.execute(
+                        "return document.querySelector('[data-control=\"draft:input\"]') !== null;"
+                    )
+                    is True
+                )
+                if editor_up:
+                    break
+                time.sleep(0.5)
+            check("a after the write opens the editor again", editor_up)
+            if editor_up:
+                perform_input(
+                    state.client,
+                    {"kind": "type", "target": "draft:input", "text": "a second note"},
+                )
+                perform_input(state.client, {"kind": "hotkey", "keys": ["ctrl", "enter"]})
+                refused_deadline = time.monotonic() + CONNECT_WAIT_SECONDS
+                refused = False
+                note = ""
+                while time.monotonic() < refused_deadline:
+                    note = str(
+                        client.execute(
+                            "return document.querySelector('[data-control=\"action:note\"]')?.textContent ?? '';"
+                        )
+                        or ""
+                    )
+                    if "file changed" in note:
+                        refused = True
+                        break
+                    time.sleep(0.5)
+                check(
+                    "the changed file refuses the write and the note says so",
+                    refused,
+                    note[:200],
+                )
+                file_after = live_path.read_text()
+                check(
+                    "the refused write touched nothing",
+                    "a second note" not in file_after,
+                    file_after[-200:],
+                )
+
+                # the kept text rides: reopen the freshly read file and
+                # press a - the editor opens with the kept text. The
+                # freshness marker is the render generation: the click
+                # re-opens the standing location, and a new generation
+                # that settles loaded is the fresh read.
+                generation_before = client.execute(
+                    "return window.__boardViewer.inspection().renderGeneration;"
+                )
+                click_open()
+                inspection_bounded(
+                    lambda item: (item.get("resource") or {}).get("status") == "loaded"
+                    and item.get("renderGeneration") != generation_before,
+                    CONNECT_WAIT_SECONDS,
+                    "the file reopens after the refusal",
+                )
+                perform_input(state.client, {"kind": "key", "keys": ["a"]})
+                kept_deadline = time.monotonic() + 10
+                kept = ""
+                while time.monotonic() < kept_deadline:
+                    kept = str(
+                        client.execute(
+                            "return document.querySelector('[data-control=\"draft:input\"]')?.value ?? '';"
+                        )
+                        or ""
+                    )
+                    if kept:
+                        break
+                    time.sleep(0.5)
+                check(
+                    "the kept annotation text pre-fills the next editor",
+                    kept == "a second note",
+                    kept[:100],
+                )
+
+        frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote-explainer")
+        check("explainer compositor frame captured", frame is not None, "screenshooter produced no frame")
+
+        # -- the deck end-to-end (t-21, t-24@r21) ------------------------
+        # The app offered its deck on machine b through the relay; the
+        # lane now plays the agent: append the slide to the deck
+        # document on the real doc store (core a's socket, on=b), and
+        # the viewer's wake-driven feed picks the landing up and shows
+        # the slide - a view whose path differs from the startup open,
+        # so a passing check names the cue.
+        DECK_LOCATION = "b:/board/deck-slide.yaml"
+
+        def deck_state() -> dict | None:
+            try:
+                candidate = client.execute(
+                    "return (window.__boardViewer && window.__boardViewer.deck()) || null;"
+                )
+            except WebDriverError as error:
+                check("deck state readable", False, str(error)[:160])
+                return None
+            return candidate if isinstance(candidate, dict) else None
+
+        deck: dict | None = None
+        deck_deadline = time.monotonic() + APP_READY_SECONDS
+        while time.monotonic() < deck_deadline:
+            deck = deck_state()
+            if deck is not None:
+                break
+            time.sleep(0.5)
+        check(
+            "the app offered its deck on the declared machine",
+            deck is not None and str(deck.get("name", "")).startswith("deck-"),
+            str(deck)[:200],
+        )
+
+        if deck is not None:
+            deck_name = str(deck["name"])
+
+            def rpc(sock_path: pathlib.Path, method: str, params: dict) -> dict:
+                sock = sock_path
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock_fd:
+                    sock_fd.settimeout(10)
+                    sock_fd.connect(str(sock))
+                    reader = sock_fd.makefile("rb")
+                    writer = sock_fd.makefile("wb")
+                    request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+                    writer.write((json.dumps(request) + "\n").encode())
+                    writer.flush()
+                    return json.loads(reader.readline())
+
+            cue_landed = False
+            app_processed = False
+            last_detail = "no cue attempt"
+            # the agent cues through its own core - the core the deck
+            # lives on (the ratified placement: the deck is on the hub's
+            # core, and hub agents write to their own core directly;
+            # hc connect, the copied command, is exactly that). The
+            # pinned core 0.1.17 suppresses the event echo toward the
+            # core a relayed write travelled through, so a cue written
+            # through the relay would land in the document without the
+            # viewer's feed ever seeing it - deck_relay_probe.py pins
+            # both shapes (direct write delivers, relayed write does
+            # not) and the limitation went to i-3.
+            sock_b = pathlib.Path(os.environ["XDG_RUNTIME_DIR"]) / "herdr-core" / "b.sock"
+            # the pass condition is the VIEWER's state: the document
+            # holding the location is necessary, not sufficient - a
+            # landing the feed delivers late must not yank the view
+            # during a later phase
+            processed_deadline = time.monotonic() + 60
+            attempt = 0
+            while time.monotonic() < processed_deadline:
+                state_now = deck_state()
+                if state_now is not None and DECK_LOCATION in (state_now.get("slides") or []):
+                    cue_landed = True
+                    app_processed = True
+                    last_detail = (
+                        f"slide at position {state_now.get('position')}"
+                        f" feedLost={state_now.get('feedLost')!r}"
+                    )
+                    break
+                if attempt < 2:
+                    read = rpc(sock_b, "doc.get", {"name": deck_name})
+                    doc = read.get("result") or {}
+                    slides = doc.get("value") or []
+                    if DECK_LOCATION not in slides:
+                        written = rpc(
+                            sock_b,
+                            "doc.set",
+                            {
+                                "name": deck_name,
+                                "version": doc.get("version", 0),
+                                "value": [*slides, DECK_LOCATION],
+                            },
+                        )
+                        if "error" in written:
+                            last_detail = f"doc.set refused: {json.dumps(written['error'])[:160]}"
+                        attempt += 1
+                        continue
+                last_detail = "the document holds the cue; the viewer's feed has not carried it yet"
+                time.sleep(0.5)
+            check(
+                "the agent's cue lands and the viewer's feed carries it",
+                cue_landed and app_processed,
+                last_detail,
+            )
+
+            # the slide is the shown view: a fresh inspection names the
+            # cued location, not the startup open
+            slide_shown = False
+            shown_detail = "no fresh inspection"
+            shown_deadline = time.monotonic() + CONNECT_WAIT_SECONDS
+            while time.monotonic() < shown_deadline:
+                try:
+                    fresh = client.execute(INSPECT_SCRIPT)
+                except WebDriverError as error:
+                    shown_detail = str(error)[:160]
+                    time.sleep(0.5)
+                    continue
+                resource = (fresh or {}).get("resource") or {}
+                if (
+                    resource.get("machine") == MACHINE_NAME
+                    and resource.get("path") == "/board/deck-slide.yaml"
+                    and resource.get("status") == "loaded"
+                ):
+                    slide_shown = True
+                    shown_detail = str(resource)[:160]
+                    break
+                shown_detail = f"status={resource.get('status')!r} path={resource.get('path')!r}"
+                time.sleep(0.5)
+            check(
+                "the cued slide is the shown view through the mesh",
+                slide_shown,
+                shown_detail,
+            )
+
+            hud = ""
+            hud_deadline = time.monotonic() + 10
+            while time.monotonic() < hud_deadline:
+                hud = str(
+                    client.execute(
+                        "return document.querySelector('[data-control=\"deck:state\"]')?.textContent ?? '';"
+                    )
+                    or ""
+                )
+                if "slide 1/" in hud:
+                    break
+                time.sleep(0.5)
+            check(
+                "the HUD states the shown slide",
+                "slide 1/1" in hud,
+                hud,
+            )
+
+        frame = capture_compositor_frame(shooter_bin, wayland_name, shots, "remote-deck")
+        check("deck compositor frame captured", frame is not None, "screenshooter produced no frame")
 
         passed = sum(1 for ok, _name, _detail in RESULTS if ok)
         code = 0 if passed == len(RESULTS) else 1
