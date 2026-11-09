@@ -224,11 +224,12 @@ test("every colour variable the stylesheets read, the map produces", () => {
 });
 
 test("configuration resolution falls back with one plain notice", () => {
-  // no host at all (the browser lane)
+  // no host at all (the browser lane): the built-in default, silently
+  // - there is nothing here the human can fix (t-24@r7)
   const none = resolveLook(null);
   assert.equal(none.scheme.base00, "#100f0e");
   assert.equal(none.weight, "regular");
-  assert.match(none.notice ?? "", /no local look configuration/);
+  assert.equal(none.notice, null);
 
   // a missing config file
   const missing: LookSource = {
@@ -266,7 +267,7 @@ test("the inspection override is a test surface, in memory only", () => {
   const overridden = resolveLook(null);
   assert.equal(overridden.polarity, "light");
   assert.equal(overridden.fromOverride, true);
-  assert.match(overridden.notice ?? "", /overridden scheme|no local look configuration/);
+  assert.equal(overridden.notice, null);
   setLookOverride({ weight: "semibold" });
   assert.equal(resolveLook(null).weight, "semibold");
   setLookOverride(null);

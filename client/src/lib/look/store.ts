@@ -66,13 +66,13 @@ export function resolveLook(source: LookSource | null): ResolvedLook {
     notice = "the overridden scheme is not a complete base16 scheme; the built-in scheme is in use";
   } else if (parsed === null) {
     notice = "the configured scheme is not a complete base16 scheme; the built-in scheme is in use";
-  } else if (source === null) {
-    notice = "no local look configuration (this window has no host); the built-in scheme is in use";
-  } else if (!source.configFound) {
+  } else if (source !== null && !source.configFound) {
     notice = `no look configuration at ${source.configPath ?? "the platform configuration directory"}; the built-in scheme is in use`;
-  } else if (source.problem !== null) {
+  } else if (source !== null && source.problem !== null) {
     notice = `${source.problem}; the built-in scheme is in use`;
   }
+  // a window with no host at all has nothing to fix: it uses the
+  // built-in default silently (t-24@r7)
   return {
     scheme: parseScheme(useText) as Base16,
     schemeText: useText,

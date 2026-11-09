@@ -83,9 +83,9 @@ in-app persistence.
 - A missing or invalid configuration falls back to the built-in
   default (the user's Mountain (Boosted), the round 16 reference
   scheme) and the client says so once, plainly, in a quiet notice
-  line; the notice clears when a valid configuration arrives. In a
-  window with no host (the browser lane) the same fallback applies
-  with its own notice.
+  line; the notice clears when a valid configuration arrives. A
+  window with no host at all (the browser lane) has no configuration
+  to fix, so it uses the default silently (t-24@r8).
 - Meaning-bearing roles keep their hue and are floored in OKLCH
   against the background: about 3:1 for the state shapes, 4.5:1 for
   state text, 3:1 for muted ink, the accent and the selection label.
