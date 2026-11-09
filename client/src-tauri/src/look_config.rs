@@ -199,25 +199,31 @@ fn wait_for_change(since: u64, hold: Duration) -> LookPayload {
     guard.clone()
 }
 
-/// A change fingerprint of the files that feed the look: the config
-/// file and the scheme file it names. Mtime and size; content is read
-/// only when the fingerprint moves. A file that cannot be stat'ed is
-/// None on both sides, so recovery reads as a change like anything
-/// else.
-type Stat = Option<(i64, u64)>;
+/// A change fingerprint of the files that feed the look: a content
+/// hash of the config file and of the scheme file it names. Identity
+/// by content, not stat: same-length edits inside one mtime second and
+/// symlink retargets between identical-length, equal-mtime files (a
+/// Nix store swap) both change the hash, and reading follows the link.
+/// An unreadable file is None, so recovery reads as a change like
+/// anything else.
+type Fingerprint = Option<u64>;
 
-fn stat(path: &Path) -> Stat {
-    let meta = std::fs::metadata(path).ok()?;
-    use std::os::unix::fs::MetadataExt;
-    Some((meta.mtime(), meta.len()))
+fn content_hash(path: &Path) -> Fingerprint {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = DefaultHasher::new();
+    hasher.write(&bytes);
+    hasher.write(&(bytes.len() as u64).to_le_bytes());
+    Some(hasher.finish())
 }
 
-fn fingerprint(path: Option<&Path>) -> (Stat, Stat) {
-    let config = path.and_then(stat);
+fn fingerprint(path: Option<&Path>) -> (Fingerprint, Fingerprint) {
+    let config = path.and_then(content_hash);
     let scheme = path
         .and_then(load_config_public)
         .and_then(|loaded| loaded.scheme_path)
-        .and_then(|named| stat(Path::new(&named)));
+        .and_then(|named| content_hash(Path::new(&named)));
     (config, scheme)
 }
 
@@ -234,27 +240,40 @@ fn load_config_public(path: &Path) -> Option<LoadedPublic> {
     })
 }
 
+/// One poll of the follow loop: sample, compare against the last
+/// fingerprint, reload when it moved. Returns whether a reload ran, so
+/// the tests can hold actual follow behaviour without the thread.
+fn follow_tick(last: &mut (Fingerprint, Fingerprint), path: Option<&Path>) -> bool {
+    let now = fingerprint(path);
+    let changed = now != *last;
+    *last = now;
+    if changed {
+        reload(path);
+    }
+    changed
+}
+
 /// Initialise the look state and start the follow thread. Called once
-/// from the shell's setup, before the webview loads.
+/// from the shell's setup, before the webview loads. The first
+/// fingerprint is sampled before the initial reload, so a change racing
+/// the start lands in the follower's `last` as already-seen only after
+/// the reload published it - anything written between sample and
+/// publish moves the fingerprint again and the first tick reloads.
 pub fn init(config_dir: Option<PathBuf>) {
     let path = config_dir.map(|dir| dir.join("config.toml"));
     let _ = CONFIG_PATH.set(path.clone());
+    let first = fingerprint(path.as_deref());
     reload(path.as_deref());
     std::thread::Builder::new()
         .name("look-follow".into())
-        .spawn(move || follow_loop(path))
+        .spawn(move || follow_loop(first, path))
         .expect("look follow thread");
 }
 
-fn follow_loop(path: Option<PathBuf>) {
-    let mut last = fingerprint(path.as_deref());
+fn follow_loop(mut last: (Fingerprint, Fingerprint), path: Option<PathBuf>) {
     loop {
         std::thread::sleep(Duration::from_secs(1));
-        let now = fingerprint(path.as_deref());
-        if now != last {
-            last = now;
-            reload(path.as_deref());
-        }
+        follow_tick(&mut last, path.as_deref());
     }
 }
 
@@ -278,10 +297,26 @@ mod tests {
     use super::*;
     use std::fs;
 
+    // the tests that publish through the module's shared state run in
+    // one process and must not interleave their generation assertions
+    static SHARED_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     fn temp_dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("saccade-look-test-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
+        // unique creation, artifacts retained: no preemptive recursive
+        // delete, no predictable PID-keyed path (process id, a counter,
+        // and nanos make collisions implausible; a collision just fails
+        // the test loudly instead of reusing another run's files)
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::SeqCst);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "saccade-look-test-{name}-{}-{n}-{nanos}",
+            std::process::id()
+        ));
         fs::create_dir_all(&dir).expect("temp dir");
         dir
     }
@@ -389,35 +424,121 @@ mod tests {
 
     #[test]
     fn reload_publishes_once_per_change_and_the_wait_wakes() {
+        let _guard = SHARED_TEST_LOCK.lock().unwrap();
         let dir = temp_dir("reload");
         let config = dir.join("config.toml");
         write(&config, "scheme-inline = \"base00: \\\"101010\\\"\"\n");
         let path = Some(config.as_path());
+        // generations accumulate across the process's shared look state;
+        // the assertions are relative to this test's starting point
+        let before = shared().payload.lock().unwrap().generation;
         assert!(reload(path), "first publish");
         let first = shared().payload.lock().unwrap().clone();
-        assert_eq!(first.generation, 1);
+        assert_eq!(first.generation, before + 1);
         assert_eq!(first.scheme_text.as_deref(), Some("base00: \"101010\""));
         assert!(!reload(path), "identical reload publishes nothing");
-        assert_eq!(shared().payload.lock().unwrap().generation, 1);
+        assert_eq!(shared().payload.lock().unwrap().generation, before + 1);
 
-        // a wait against the current generation holds; a change wakes it
+        // a wait against the current generation holds; a change wakes it.
+        // The test drives the reload the follower's tick would do.
         let waiter = {
-            let handle = std::thread::spawn(|| wait_for_change(1, Duration::from_secs(10)));
+            let since = before + 1;
+            let handle =
+                std::thread::spawn(move || wait_for_change(since, Duration::from_secs(10)));
             std::thread::sleep(Duration::from_millis(80));
             write(&config, "scheme-inline = \"base00: \\\"202020\\\"\"\n");
-            // the fingerprint's mtime granularity can swallow a fast
-            // rewrite; force the reload the watcher would do
             reload(path);
             handle
         };
         let woke = waiter.join().expect("waiter");
-        assert_eq!(woke.generation, 2);
+        assert_eq!(woke.generation, before + 2);
         assert_eq!(woke.scheme_text.as_deref(), Some("base00: \"202020\""));
 
         // an up-to-date wait answers after its hold, unchanged
         let start = std::time::Instant::now();
         let held = wait_for_change(woke.generation, Duration::from_millis(120));
-        assert_eq!(held.generation, 2);
+        assert_eq!(held.generation, before + 2);
         assert!(start.elapsed() >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn the_follow_tick_publishes_same_length_replacements_and_symlink_swaps() {
+        let _guard = SHARED_TEST_LOCK.lock().unwrap();
+        let dir = temp_dir("follow");
+
+        // a same-length replacement: identity is content, so an edit
+        // inside one mtime second moves the fingerprint
+        let config = dir.join("config.toml");
+        write(&config, "scheme-inline = \"base00: \\\"101010\\\"\"\n");
+        let mut last = fingerprint(Some(config.as_path()));
+        reload(Some(config.as_path()));
+        let generation = shared().payload.lock().unwrap().generation;
+        write(&config, "scheme-inline = \"base00: \\\"202020\\\"\"\n");
+        assert!(
+            follow_tick(&mut last, Some(config.as_path())),
+            "same-length edit must publish"
+        );
+        assert_eq!(shared().payload.lock().unwrap().generation, generation + 1);
+        assert_eq!(
+            shared().payload.lock().unwrap().scheme_text.as_deref(),
+            Some("base00: \"202020\"")
+        );
+
+        // an unchanged poll publishes nothing
+        assert!(!follow_tick(&mut last, Some(config.as_path())));
+
+        // a symlink retarget between identical-length files (the Nix
+        // store swap pattern): reading follows the link, so the hash
+        // moves whatever the mtimes and the inode say
+        let scheme_dir = dir.join("schemes");
+        fs::create_dir_all(&scheme_dir).expect("schemes dir");
+        let a = scheme_dir.join("a.yaml");
+        let b = scheme_dir.join("b.yaml");
+        write(&a, "scheme: \"A\"\nbase00: \"111111\"\n");
+        write(&b, "scheme: \"B\"\nbase00: \"222222\"\n");
+        let link = dir.join("scheme.yaml");
+        std::os::unix::fs::symlink(&a, &link).expect("symlink");
+        write(&config, &format!("scheme-path = \"{}\"\n", link.display()));
+        assert!(
+            follow_tick(&mut last, Some(config.as_path())),
+            "new scheme path must publish"
+        );
+        assert_eq!(
+            shared().payload.lock().unwrap().scheme_text.as_deref(),
+            Some("scheme: \"A\"\nbase00: \"111111\"\n")
+        );
+
+        // the swap itself: rename the new link over the old one, the
+        // way a generation switch does
+        let link2 = dir.join("scheme.yaml.new");
+        std::os::unix::fs::symlink(&b, &link2).expect("symlink");
+        fs::rename(&link2, &link).expect("rename over link");
+        assert!(
+            follow_tick(&mut last, Some(config.as_path())),
+            "symlink swap must publish"
+        );
+        assert_eq!(
+            shared().payload.lock().unwrap().scheme_text.as_deref(),
+            Some("scheme: \"B\"\nbase00: \"222222\"\n")
+        );
+    }
+
+    #[test]
+    fn a_change_racing_the_start_is_caught_on_the_first_tick() {
+        let _guard = SHARED_TEST_LOCK.lock().unwrap();
+        let dir = temp_dir("race");
+        let config = dir.join("config.toml");
+        write(&config, "scheme-inline = \"base00: \\\"101010\\\"\"\n");
+        // init's order: sample the fingerprint first, then load and
+        // publish; the write races between the sample and the publish
+        let mut last = fingerprint(Some(config.as_path()));
+        reload(Some(config.as_path()));
+        write(&config, "scheme-inline = \"base00: \\\"202020\\\"\"\n");
+        // the first tick sees the moved fingerprint and reloads
+        assert!(follow_tick(&mut last, Some(config.as_path())));
+        assert_eq!(
+            shared().payload.lock().unwrap().scheme_text.as_deref(),
+            Some("base00: \"202020\"")
+        );
     }
 }
