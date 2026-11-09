@@ -2,7 +2,7 @@
 
 Saccade is a tracker for agent work. The packages: `tracker` (the `sac`
 binary: event log, server, CLI, boards), `grammar` (the board format),
-`client` (the board viewer), `tools/herdr-ui` (the desktop-app
+`client` (the Saccade app), `tools/herdr-ui` (the desktop-app
 sandbox). Each package owns its version and its docs. `AXIOMS.md`
 carries world belief - read it before proposing anything
 architectural. Using the tracker is not required to develop this
@@ -64,8 +64,8 @@ do, and `tracker/README.md` carries the tracker's law.
   code); the full suite runs once before a commit lands.
 - A phase gate: the suites, fmt, every prek hook on each commit, and
   the viewer lanes under
-  `BOARD_VIEWER_RUNTIME_AUTHORIZED=3030`:
-  `nix develop .#board-viewer -c env BOARD_VIEWER_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<db> python3 client/harness/entry.py browser|remote`,
+  `SAC_APP_RUNTIME_AUTHORIZED=3030`:
+  `nix develop .#saccade-app -c env SAC_APP_RUNTIME_AUTHORIZED=3030 SACCADE_DB=<db> python3 client/harness/entry.py browser|remote`,
   with `--board <yaml>` and the built app for native and for the
   session lane's tracker sequence
   (`... entry.py --board <yaml> session tracker`, with the built `sac`

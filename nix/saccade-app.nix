@@ -1,4 +1,4 @@
-# The board viewer's packaging: the frontend dist, its checks, and the
+# The Saccade app's packaging: the frontend dist, its checks, and the
 # retained native Tauri app - one callPackage-able file whose
 # dependencies come from the pkgs it is called on. The flake's
 # overlays.default calls it against a consumer's own nixpkgs: the
@@ -49,10 +49,10 @@
     "^tsconfig\\.json$"
   ];
   npm = {
-    pname = "saccade-board-viewer";
+    pname = "saccade-app-web";
     version = "0.1.0";
     inherit src;
-    npmDepsHash = "sha256-v7PrzqHrGOLwK5xyq4AQvhMb8Va0MomRzI1zjaOEpcM=";
+    npmDepsHash = "sha256-ECVFBsVVhFoSKAyCuzQ/22Za/+3B4T/iOXEVLsGJBKs=";
   };
   webDist = buildNpmPackage (npm
     // {
@@ -117,7 +117,7 @@ in {
     ];
   in
     rustPlatform.buildRustPackage {
-      pname = "saccade-board-viewer-app";
+      pname = "saccade-app";
       version = "0.1.0";
       src = cargoSrc;
       # no tests inside nix: the parity suite runs in the devshell
@@ -153,10 +153,10 @@ in {
         cp -r ${webDist}/. client/dist/
       '';
       postInstall = ''
-        wrapProgram $out/bin/saccade-board-viewer \
+        wrapProgram $out/bin/saccade-app \
           --prefix LD_LIBRARY_PATH : ${webkitLibs}
       '';
-      meta.mainProgram = "saccade-board-viewer";
+      meta.mainProgram = "saccade-app";
     };
 
   # the WebDriver intermediary node for the native interaction lane:

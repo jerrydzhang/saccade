@@ -1,4 +1,4 @@
-//! The board viewer's herdr-core client.
+//! The Saccade app's herdr-core client.
 //!
 //! One wire contract, pinned here against the pinned herdr-core 0.1.17
 //! schema (`hc schema`): JSON-RPC 2.0, one message per line on the

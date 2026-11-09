@@ -86,8 +86,8 @@ def start_core(core_bin: str, session: str, runtime: pathlib.Path, logs: pathlib
             "HOME": str(runtime.parent / "home"),
             # the via program resolves the tested bytes itself (its own
             # pinned-path guard, the lane's shape)
-            "BOARD_VIEWER_HERDR_CORE_BIN": _core_bin_abs,
-            "BOARD_VIEWER_COREUTILS_BIN": _coreutils_bin,
+            "SAC_APP_HERDR_CORE_BIN": _core_bin_abs,
+            "SAC_APP_COREUTILS_BIN": _coreutils_bin,
             "PATH": f"{os.path.dirname(_core_bin_abs)}:{_coreutils_bin}:{os.environ.get('PATH', '')}",
         },
         stdout=core_log,

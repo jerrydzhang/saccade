@@ -1,3 +1,3 @@
 fn main() {
-    saccade_board_viewer_lib::run()
+    saccade_app_lib::run()
 }

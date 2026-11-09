@@ -221,7 +221,7 @@ def start_core(core_bin: str, session: str, logs: pathlib.Path) -> subprocess.Po
     core's own spawns (the mesh's fixed argv) would otherwise not find
     the pinned readers."""
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    coreutils_bin = os.environ.get("BOARD_VIEWER_COREUTILS_BIN", "")
+    coreutils_bin = os.environ.get("SAC_APP_COREUTILS_BIN", "")
     path_parts = [
         os.path.dirname(core_bin),
         coreutils_bin,
@@ -369,13 +369,13 @@ def main() -> int:
     if not run_canary_first():
         return 1
 
-    core_bin = pinned("BOARD_VIEWER_HERDR_CORE_BIN")
+    core_bin = pinned("SAC_APP_HERDR_CORE_BIN")
     weston_bin = pinned("WESTON_BIN")
     shooter_bin = pinned("SCREENSHOOTER_BIN")
     tauri_driver_bin = pinned("TAURI_DRIVER_BIN")
     webkit_driver_bin = pinned("WEBKIT_DRIVER_BIN")
     app_bin = pinned("APP_BIN")
-    via_py = pinned("BOARD_VIEWER_VIA_PY")
+    via_py = pinned("SAC_APP_VIA_PY")
     shots = pathlib.Path(pinned("SHOTS_DIR"))
     location = os.environ.get("BOARD_LOCATION", "")
     if not location.startswith(f"{MACHINE_NAME}:/") or "\0" in location:
@@ -395,7 +395,7 @@ def main() -> int:
     # the deck's address rides the same bare-path rule, so the deck
     # document lands on machine b through core a's relay. Written before
     # the app launches; the config reader follows it at start.
-    config_dir = pathlib.Path("config/dev.saccade.board-viewer")
+    config_dir = pathlib.Path("config/dev.saccade.app")
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "config.toml").write_text(f'tracker-machine = "{MACHINE_NAME}"\n')
     check("client configuration written (tracker-machine b)", True, str(config_dir))
@@ -446,7 +446,7 @@ def main() -> int:
         # viewer assertions that follow. The readers resolve from the
         # env pin, not from which(): bwrap's --setenv overrides PATH
         # inside the sandbox, and the pin rides the inherited environ.
-        coreutils_bin = pathlib.Path(pinned("BOARD_VIEWER_COREUTILS_BIN"))
+        coreutils_bin = pathlib.Path(pinned("SAC_APP_COREUTILS_BIN"))
         probes = [
             ("bare realpath on b", ["realpath", "--version"]),
             ("pinned absolute realpath on b", [str(coreutils_bin / "realpath"), "--version"]),
@@ -495,7 +495,7 @@ def main() -> int:
                     # launch argument left the human surface, so the
                     # machine-named location opens through the same
                     # model.open the inspection surface uses
-                    "BOARD_VIEWER_TEST_OPEN": location,
+                    "SAC_APP_TEST_OPEN": location,
                 },
                 stdout=driver_log,
                 stderr=driver_log,
@@ -769,7 +769,7 @@ def main() -> int:
                 # re-opens the standing location, and a new generation
                 # that settles loaded is the fresh read.
                 generation_before = client.execute(
-                    "return window.__boardViewer.inspection().renderGeneration;"
+                    "return window.__saccadeApp.inspection().renderGeneration;"
                 )
                 click_open()
                 inspection_bounded(
@@ -812,7 +812,7 @@ def main() -> int:
         def deck_state() -> dict | None:
             try:
                 candidate = client.execute(
-                    "return (window.__boardViewer && window.__boardViewer.deck()) || null;"
+                    "return (window.__saccadeApp && window.__saccadeApp.deck()) || null;"
                 )
             except WebDriverError as error:
                 check("deck state readable", False, str(error)[:160])

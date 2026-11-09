@@ -16,15 +16,15 @@ pub fn run() {
     // The human surface opens through the header's location field and
     // the picker (t-24@r11): the launch argument and the local-device
     // path form left with them. The lanes open their boards through the
-    // test-open channel (BOARD_VIEWER_TEST_OPEN), test-only machinery
+    // test-open channel (SAC_APP_TEST_OPEN), test-only machinery
     // named as such.
 
     // Webview console observability is opt-in per environment: only the
-    // native lane sets BOARD_VIEWER_WEBVIEW_CONSOLE, so a human run's
+    // native lane sets SAC_APP_WEBVIEW_CONSOLE, so a human run's
     // webview stays silent. weston runs with --renderer=pixman in the
     // lane; this setting only routes console lines to stdout for the
     // app.log evidence.
-    let console_requested = std::env::var("BOARD_VIEWER_WEBVIEW_CONSOLE").is_ok();
+    let console_requested = std::env::var("SAC_APP_WEBVIEW_CONSOLE").is_ok();
     println!(
         "[bridge] webview console-to-stdout: {}",
         if console_requested { "on" } else { "off" }
@@ -105,7 +105,7 @@ pub fn run() {
             // resolved once here; none, it dials nothing and the
             // instruments read an empty table
             words::start(
-                board_viewer_core::SocketTransport::default_path()
+                saccade_app_core::SocketTransport::default_path()
                     .map(|path| path.to_path_buf())
                     .ok(),
             );
@@ -113,7 +113,7 @@ pub fn run() {
             // (t-19); the shell's own memory, never a record fact
             app.manage(registry);
             // the shell feasibility probe (t-19): test-only machinery,
-            // inert unless the lane sets BOARD_VIEWER_SHELL_PROBE
+            // inert unless the lane sets SAC_APP_SHELL_PROBE
             shell_probe::maybe_start(app.handle().clone());
             if console_requested {
                 use tauri::Manager;
@@ -167,5 +167,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running the board viewer");
+        .expect("error while running the Saccade app");
 }

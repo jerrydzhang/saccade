@@ -273,13 +273,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "board-viewer-core"
-version = "0.1.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
 name = "brotli"
 version = "9.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3188,12 +3181,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "saccade-board-viewer"
+name = "saccade-app"
 version = "0.1.0"
 dependencies = [
  "board-grammar",
- "board-viewer-core",
  "gtk",
+ "saccade-app-core",
  "serde",
  "serde_json",
  "tauri",
@@ -3201,6 +3194,13 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "ureq",
  "webkit2gtk",
+]
+
+[[package]]
+name = "saccade-app-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

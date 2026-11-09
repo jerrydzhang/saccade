@@ -15,7 +15,7 @@
 //! The socket is resolved once by the shell's setup and handed in; a
 //! device with no core hands in none, and the feed dials nothing.
 
-use board_viewer_core::{CoreEvent, EventsConnection, SocketTransport};
+use saccade_app_core::{CoreEvent, EventsConnection, SocketTransport};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;

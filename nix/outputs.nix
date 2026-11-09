@@ -292,7 +292,7 @@
         };
     # the native integration the composed harness loads
     saccadePiExtensions = ["tracker/native/saccade.ts"];
-    # the board viewer's packaging lives in nix/board-viewer.nix: one
+    # the Saccade app's packaging lives in nix/saccade-app.nix: one
     # callPackage-able file taking every dependency from the pkgs it
     # is called on, so overlays.default can build it against a
     # consumer's own nixpkgs - the packaged binary then shares the
@@ -300,15 +300,15 @@
     # in explicitly: the app's cargo tree spans client/src-tauri and
     # the shared grammar crate, and package paths are rooted explicitly
     # would stay an unnormalized ".." path inside flake evaluation.
-    boardViewer =
+    saccadeApp =
       pkgs: root:
-        pkgs.callPackage ./board-viewer.nix {repoRoot = root;};
+        pkgs.callPackage ./saccade-app.nix {repoRoot = root;};
   in {
     # the consumer-facing overlay: a NixOS configuration sets
     # nixpkgs.overlays = [ inputs.saccade.overlays.default ] and gets
-    # pkgs.saccade-board-viewer built against its own nixpkgs
+    # pkgs.saccade-app built against its own nixpkgs
     overlays.default = final: prev: {
-      saccade-board-viewer = (final.callPackage ./board-viewer.nix {repoRoot = ../.;}).app;
+      saccade-app = (final.callPackage ./saccade-app.nix {repoRoot = ../.;}).app;
     };
 
     devShells = forAllSystems (
@@ -327,7 +327,7 @@
         };
         devHerdrCore = herdrCore system pkgs;
       in {
-        # the board viewer's native dev shell: its own dependency graph,
+        # the Saccade app's native dev shell: its own dependency graph,
         # separate from the tracker devshell and the tracker crate. The
         # WebKitGTK/GTK build inputs here serve the viewer's Tauri crate
         # only; nothing here touches the tracker's build.
@@ -335,7 +335,7 @@
         # DejaVu fonts, both pure store paths - the sandbox already binds
         # /nix/store read-only, so no host /etc/fonts or font dirs are
         # ever mounted
-        board-viewer = let
+        saccade-app = let
           laneFontsConf = pkgs.writeText "saccade-lane-fonts.conf" ''
             <?xml version="1.0"?>
             <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
@@ -360,7 +360,7 @@
               pkgs.mesa
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-              (boardViewer pkgs ../.).driver
+              (saccadeApp pkgs ../.).driver
               # the Tauri/GTK block rides nixpkgs-client so the shell's
               # WebKitWebDriver matches the packaged app's WebKitGTK
               # (the two pins carry different webkitgtk releases);
@@ -382,10 +382,10 @@
           # the native lane's software-GL pin: glvnd vendor dir whose
           # 50_mesa.json carries the absolute store path of
           # libEGL_mesa.so.0 (llvmpipe/swrast live in the same output)
-          env.BOARD_VIEWER_MESA_EGL_VENDOR_DIR = "${pkgs.mesa}/share/glvnd/egl_vendor.d";
+          env.SAC_APP_MESA_EGL_VENDOR_DIR = "${pkgs.mesa}/share/glvnd/egl_vendor.d";
           # the remote lane's pinned core: the flake's 0.1.17 binary,
           # sha-checked at build; the lane verifies --version again
-          env.BOARD_VIEWER_HERDR_CORE_BIN = "${devHerdrCore}/bin/herdr-core";
+          env.SAC_APP_HERDR_CORE_BIN = "${devHerdrCore}/bin/herdr-core";
         };
         default = devenv.lib.mkShell {
           inherit inputs pkgs;
@@ -558,9 +558,9 @@
 
               # the app the client runs: built against nixpkgs-client, the
               # revision the human's system flake is built from
-              board-viewer = (boardViewer clientPkgs ../.).app;
-              board-viewer-web = (boardViewer pkgs ../.).web;
-              board-viewer-tauri-driver = (boardViewer pkgs ../.).driver;
+              saccade-app = (saccadeApp clientPkgs ../.).app;
+              saccade-app-web = (saccadeApp pkgs ../.).web;
+              saccade-app-tauri-driver = (saccadeApp pkgs ../.).driver;
 
               default = pkgs.symlinkJoin {
                 name = "saccade";
@@ -617,15 +617,15 @@
     );
 
     apps = forAllSystems (system: let
-      boardViewerApp = (boardViewer nixpkgs-client.legacyPackages.${system} ../.).app;
+      saccadeAppBin = (saccadeApp nixpkgs-client.legacyPackages.${system} ../.).app;
     in {
-      board-viewer = {
+      saccade-app = {
         type = "app";
-        program = "${boardViewerApp}/bin/saccade-board-viewer";
+        program = "${saccadeAppBin}/bin/saccade-app";
       };
       default = {
         type = "app";
-        program = "${boardViewerApp}/bin/saccade-board-viewer";
+        program = "${saccadeAppBin}/bin/saccade-app";
       };
     });
 

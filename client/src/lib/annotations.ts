@@ -203,7 +203,7 @@ export function publishPayload(request: PublishRequest): { payload: PublishPaylo
       task: request.task,
       files: { files },
       message: request.message,
-      client: "board-viewer",
+      client: "saccade-app",
     },
   };
 }

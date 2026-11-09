@@ -327,7 +327,7 @@ test("configuration resolution falls back with one plain notice", () => {
   const missing: LookSource = {
     generation: 1,
     configFound: false,
-    configPath: "/home/me/.config/dev.saccade.board-viewer/config.toml",
+    configPath: "/home/me/.config/dev.saccade.app/config.toml",
     schemeText: null,
     weight: null,
     problem: null,

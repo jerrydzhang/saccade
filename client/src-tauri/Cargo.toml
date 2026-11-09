@@ -1,17 +1,17 @@
 [package]
-name = "saccade-board-viewer"
+name = "saccade-app"
 version = "0.1.0"
-description = "Saccade read-only board viewer"
+description = "The Saccade app: the suite's windows and instruments"
 edition = "2021"
 
 [lib]
-name = "saccade_board_viewer_lib"
+name = "saccade_app_lib"
 path = "src/lib.rs"
 # the core-client crate below: its contract tests run in the fast
 # check loop without any GUI dependency
 
 [[bin]]
-name = "saccade-board-viewer"
+name = "saccade-app"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -31,7 +31,7 @@ webkit2gtk = { version = "2" }
 gtk = "0.18"
 serde_json = "1"
 toml = "0.9"
-board-viewer-core = { path = "core-client" }
+saccade-app-core = { path = "core-client" }
 # the shared board grammar: admission runs here, on the Tauri side, so
 # the frontend never grows a second validator
 board-grammar = { path = "../../grammar" }

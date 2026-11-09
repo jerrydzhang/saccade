@@ -14,7 +14,7 @@ containment. The one shell this program ever runs is that pinned
 /bin/sh, for exactly the handed-over line.
 
 Runs inside the sandbox as
-[<BOARD_VIEWER_VIA_PY>, /pin/via_b.py, <line words...>]. The decision
+[<SAC_APP_VIA_PY>, /pin/via_b.py, <line words...>]. The decision
 lives in shell_argv so the contract runs against fakes in the fast
 check loop.
 """
@@ -49,12 +49,12 @@ def shell_argv(line: str, env: dict[str, str]) -> tuple[list[str], dict[str, str
         raise ViaRefused(f"via: refusing line with a NUL byte: {line!r}")
     if not line.strip():
         raise ViaRefused(f"via: refusing an empty handover: {line!r}")
-    core_bin = env.get("BOARD_VIEWER_HERDR_CORE_BIN", "")
+    core_bin = env.get("SAC_APP_HERDR_CORE_BIN", "")
     if not core_bin.startswith("/"):
-        raise ViaRefused("via: BOARD_VIEWER_HERDR_CORE_BIN must be an absolute pinned path")
-    coreutils_bin = env.get("BOARD_VIEWER_COREUTILS_BIN", "")
+        raise ViaRefused("via: SAC_APP_HERDR_CORE_BIN must be an absolute pinned path")
+    coreutils_bin = env.get("SAC_APP_COREUTILS_BIN", "")
     if not coreutils_bin.startswith("/"):
-        raise ViaRefused("via: BOARD_VIEWER_COREUTILS_BIN must be an absolute pinned path")
+        raise ViaRefused("via: SAC_APP_COREUTILS_BIN must be an absolute pinned path")
     child_env = dict(env)
     child_env["PATH"] = (
         f"{os.path.dirname(core_bin)}:{coreutils_bin}:{child_env.get('PATH', '')}"

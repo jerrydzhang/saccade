@@ -1,7 +1,7 @@
 [package]
-name = "board-viewer-core"
+name = "saccade-app-core"
 version = "0.1.0"
-description = "The board viewer's read-only herdr-core client: request shapes, error mapping and remote containment, pure over a transport"
+description = "The Saccade app's read-only herdr-core client: request shapes, error mapping and remote containment, pure over a transport"
 edition = "2021"
 
 [dependencies]

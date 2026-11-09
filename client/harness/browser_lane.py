@@ -25,7 +25,7 @@ Order, enforced here:
      product's copy handler writes into the copy event (a window-bubble
      listener reads clipboardData after the product handler ran), not a
      system-clipboard round-trip; Chromium is not in the default run -
-     BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM adds it as a triage pass
+     SAC_APP_BROWSER_TRIAGE_CHROMIUM adds it as a triage pass
      whose results never gate the exit
   5. owned teardown: the server thread shuts down before exit
 
@@ -237,7 +237,7 @@ def start_server() -> ThreadingHTTPServer | None:
 
 def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int:
     started_records = len(RESULTS)
-    viewer = "window.__boardViewer"
+    viewer = "window.__saccadeApp"
 
     def check(name: str, condition: bool, detail: str = "") -> None:
         record_check(f"[{engine}] {name}", condition, detail)
@@ -367,7 +367,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         open_board("repeated-math.yaml")
         page.wait_for_function("() => document.querySelector('.block-text .math-inline') !== null")
         mounted = page.query_selector(".block-text")
-        page.evaluate("() => window.__boardViewer.setCopyMode('source')")
+        page.evaluate("() => window.__saccadeApp.setCopyMode('source')")
         check(
             "copy mode preserves the mounted document",
             mounted is not None and mounted.evaluate("el => el.isConnected && el === document.querySelector('.block-text')"),
@@ -393,7 +393,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
     def phase_copy_plain() -> None:
         open_board("repeated-math.yaml")
         page.wait_for_function("() => document.querySelector('.block-text .math-inline') !== null")
-        page.evaluate("() => window.__boardViewer.setCopyMode('plain')")
+        page.evaluate("() => window.__saccadeApp.setCopyMode('plain')")
         page.evaluate("() => { window.__copy = {state: 'pending'}; }")
         select_first_formula_paragraph()
         ok, evidence = await_clipboard()
@@ -413,7 +413,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         # formula exactly once and the connecting prose present
         open_board("repeated-math.yaml")
         page.wait_for_function("() => document.querySelectorAll('.block-text .math-inline').length >= 2")
-        page.evaluate("() => window.__boardViewer.setCopyMode('source')")
+        page.evaluate("() => window.__saccadeApp.setCopyMode('source')")
         page.evaluate("() => { window.__copy = {state: 'pending'}; }")
         page.evaluate("""() => {
             const math = document.querySelectorAll('.block-text .math-inline');
@@ -479,14 +479,14 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     # phase 4: theme and narrow width
     def phase_theme() -> None:
-        page.evaluate("() => window.__boardViewer.setTheme('dark')")
+        page.evaluate("() => window.__saccadeApp.setTheme('dark')")
         theme = page.evaluate("() => document.documentElement.dataset.theme")
         check("dark theme applies to the document root", theme == "dark", str(theme))
         page.set_viewport_size({"width": 520, "height": 800})
         overflow = page.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
         check("narrow window has no page-level horizontal overflow", overflow <= 0, str(overflow))
         screenshot_at(".block-text", "dark-narrow.png")
-        page.evaluate("() => window.__boardViewer.setTheme('system')")
+        page.evaluate("() => window.__saccadeApp.setTheme('system')")
         page.set_viewport_size({"width": 1100, "height": 800})
 
     phase("theme and width", phase_theme)
@@ -682,7 +682,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             # matching nothing)
             probe = page.evaluate("""() => ({
                 blocksBoard: document.querySelectorAll('.content > .board > .block').length,
-                status: window.__boardViewer.inspection().resource.status,
+                status: window.__saccadeApp.inspection().resource.status,
                 focused: document.activeElement ? document.activeElement.tagName : 'none',
                 note: document.querySelector('[data-control="action:note"]')?.textContent ?? '',
                 editorOpen: document.querySelector('[data-control="draft:input"]') !== null,
@@ -1291,7 +1291,7 @@ def reference_document() -> pathlib.Path | None:
     path (absolute, readable, .html) and bound it at the fixed sandbox
     path; unset means absent, a missing bind means the lane refuses
     loudly (the caller wanted a reference and did not get one)."""
-    doc_raw = os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", "")
+    doc_raw = os.environ.get("SAC_APP_BROWSER_REFERENCE_HTML", "")
     if not doc_raw:
         return None
     bound = pathlib.Path(REFERENCE_SANDBOX_PATH)
@@ -1310,7 +1310,7 @@ def run_reference(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> 
         record_check(
             f"[{engine}] reference page is bound and readable",
             False,
-            os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", ""),
+            os.environ.get("SAC_APP_BROWSER_REFERENCE_HTML", ""),
         )
         return
     try:
@@ -1356,7 +1356,7 @@ def main() -> int:
             # only behind the explicit triage flag and never gates - the
             # identical check list runs under each engine either way
             engines = ("webkit",)
-            if os.environ.get("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM", ""):
+            if os.environ.get("SAC_APP_BROWSER_TRIAGE_CHROMIUM", ""):
                 engines = ("webkit", "chromium")
             for engine in engines:
                 setup = setup_engine_page(playwright, engine, base_url)
@@ -1366,7 +1366,7 @@ def main() -> int:
                 try:
                     page.set_default_timeout(10000)
                     page.goto(base_url)
-                    page.wait_for_function("() => window.__boardViewer !== undefined")
+                    page.wait_for_function("() => window.__saccadeApp !== undefined")
                 except Exception as error:
                     record_check(
                         f"[{engine}] navigates to the served frontend",
@@ -1381,7 +1381,7 @@ def main() -> int:
                 run_checks(page, base_url, shots_dir, engine)
                 # the env-gated reference page rides the same sandboxed
                 # engine and the same loopback server after the product pass
-                if os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", ""):
+                if os.environ.get("SAC_APP_BROWSER_REFERENCE_HTML", ""):
                     run_reference(page, base_url, shots_dir, engine)
                 browser.close()
     finally:
