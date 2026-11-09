@@ -56,6 +56,61 @@ Keys:
   copies the selection in the current mode (a formula is copied whole
   in its current mode whatever fraction of it is selected)
 
+## The look (t-14 "The design language", as clarified by t-24@r3)
+
+The viewer renders in the ledger design language, on the user's own
+base16 scheme. The scheme and the text weight are configuration, read
+from a file, never chosen in the app: there is no preference UI and no
+in-app persistence.
+
+- The configuration file is `<platform config
+  directory>/dev.saccade.board-viewer/config.toml`. It names exactly
+  one of `scheme-path` (a path to a base16 scheme file, so a
+  Stylix-generated scheme can be followed live) or `scheme-inline`
+  (the scheme text itself), and optionally `weight` (`regular`,
+  `medium`, `semibold`; regular by default). Unknown keys, a bad
+  weight, both scheme keys, or an unreadable scheme file are stated
+  problems.
+- The host reads the file at start and follows changes: a poll thread
+  re-reads the config and the named scheme file when their fingerprint
+  (mtime, size) moves, republishes, and the frontend re-applies the
+  tokens. The frontend waits over the bridge (`look_config`,
+  `wait_look_config`); there are no events and no renderer-chosen
+  paths.
+- Light or dark is the scheme's own: a light base16 scheme (a light
+  `base00`) gives a light suite; the ramp always reads in base16
+  order. Nothing in the client reverses a scheme or selects a mode.
+- A missing or invalid configuration falls back to the built-in
+  default (the user's Mountain (Boosted), the round 16 reference
+  scheme) and the client says so once, plainly, in a quiet notice
+  line; the notice clears when a valid configuration arrives. A
+  window with no host at all (the browser lane) has no configuration
+  to fix, so it uses the default silently (t-24@r8).
+- Meaning-bearing roles keep their hue and are floored in OKLCH
+  against the background: about 3:1 for the state shapes, 4.5:1 for
+  state text, 3:1 for muted ink, the accent and the selection label.
+  The floor is always reachable (white or black clears about 4.58:1
+  against any background): the walk goes in the natural direction
+  first and falls back to the opposite direction when that cannot
+  reach the ratio (t-24@r10). A miss is a defect, caught by the tests
+  over dark, light, mid-luminance, hostile and grayscale schemes -
+  never a shipped state and never a log line.
+- The colour tokens live only in `src/lib/look/` (scheme parsing, the
+  floor, the map, the store); the stylesheets read tokens and never
+  name a colour. `styles/tokens.css` holds the static tokens (faces,
+  the 13px-minimum type scale, rhythm, one motion speed, and the
+  radius tokens, which exist and are zero - no rounded corners);
+  `styles/board.css` holds the ledger component rules. A node test
+  pins both directions of that split: every colour variable the
+  styles read, the map produces; every token the map produces is read
+  by the styles or named as waiting for a later step's component.
+- The inspection surface carries the look's test tools, named as
+  such, never human functionality: `setLook({ schemeText, weight })`
+  overrides in memory for one run; `look()` answers the resolved
+  scheme name, weight, polarity and the active notice. The older
+  `setTheme` remains as a DOM marker for the lane contract only; it
+  no longer selects colours (t-24@r3 removed the mode feature).
+
 A machine-named board reads through the local core's read-only face:
 `file.read` for declaration text, fixed-argv `exec` (`realpath -e`, then
 `cat`) for figure bytes over base64 - no shell strings anywhere. The
@@ -105,8 +160,9 @@ suite):
 - `src/styles/board.css` - the centrally shared stylesheet
 - `src-tauri/` - the narrow Tauri 2 shell: read-only declaration and
   asset commands with mirrored path guards; board admission through the
-  shared `board-grammar` crate (`validate_board`); no shell, no eval, no
-  generic filesystem surface, no plugins. `src-tauri/core-client/` is
+  shared `board-grammar` crate (`validate_board`); the look's local
+  configuration reader and follower (`look_config.rs`); no shell, no
+  eval, no generic filesystem surface, no plugins. `src-tauri/core-client/` is
   the pure read-only herdr-core client (JSON-RPC over the local core's
   socket, machine-named reads, remote containment), contract-tested in
   the fast loop against fakes
@@ -141,6 +197,12 @@ Lanes:
 - `browser` - the gated WebKit check list over the real frontend and
   fixture boards (Chromium triage behind an explicit flag, never
   gating), plus the tracker-location contract over a wire stand-in.
+  Behind `BOARD_VIEWER_BROWSER_REFERENCE_HTML` (an absolute, readable
+  `.html` file) the same sandboxed engine additionally navigates that
+  one reference page after the product pass and retains its screenshot
+  in the run root: the contained way to render a visual reference
+  (the entry point binds the file read-only; set-but-invalid refuses;
+  unset changes nothing about the default single navigation).
 - `native` - the gated native/WebKitGTK lane: the packaged app in the
   foreground on an explicit board, private headless Weston, bounded
   frame captures, bridge log evidence.

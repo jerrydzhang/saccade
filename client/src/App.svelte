@@ -12,6 +12,15 @@
   import type { Board } from "./lib/board/model.ts";
   import type { Diagnostic } from "./lib/board/errors.ts";
   import { serverHost, setServerHost } from "./lib/tracker.ts";
+  import {
+    applyLook,
+    lookSummary,
+    resolveLook,
+    setLookOverride,
+    type LookSource,
+  } from "./lib/look/store.ts";
+  import { startLook } from "./lib/look/bridge.ts";
+  import type { LookWeight } from "./lib/look/lookVars.ts";
 
   const model = new ViewerModel();
 
@@ -162,6 +171,38 @@
     document.documentElement.dataset.theme = view.theme;
   });
 
+  // The look: configuration from the platform config file (t-24@r3),
+  // applied to the document root as the colour token map. The theme
+  // marker above stays for the inspection contract only; light or dark
+  // is the scheme's own. Any change to the source or the test override
+  // re-resolves and re-applies.
+  let lookVersion = $state(0);
+  let lookNotice = $state<string | null>(null);
+  let lastSource: LookSource | null = null;
+  function lookChanged(source: LookSource | null): void {
+    lastSource = source;
+    const look = resolveLook(source);
+    applyLook(document.documentElement, look);
+    lookNotice = look.notice;
+    lookVersion += 1;
+  }
+  $effect(() => {
+    void lookVersion; // re-apply when the override changes
+    const look = resolveLook(lastSource);
+    applyLook(document.documentElement, look);
+    lookNotice = look.notice;
+  });
+  $effect(() => {
+    void startLook(lookChanged);
+  });
+
+  // Inspection test surfaces (t-24@r3): in-memory, never presented as
+  // human functionality.
+  function setInspectedLook(o: { schemeText?: string; weight?: LookWeight } | null): void {
+    setLookOverride(o);
+    lookVersion += 1;
+  }
+
   $effect(() => {
     if (contentHost) bindDiagramExpansion(contentHost);
   });
@@ -184,6 +225,9 @@
       open: (machine: Machine, path: string) => void model.open({ machine, path }),
       setCopyMode: (mode: CopyMode) => model.setCopyMode(mode),
       setTheme: (theme: ViewerState["theme"]) => model.setTheme(theme),
+      // the look's test surfaces: in-memory overrides and a summary
+      setLook: setInspectedLook,
+      look: () => lookSummary(resolveLook(lastSource)),
     };
   });
 
@@ -290,13 +334,17 @@
   </div>
   {/if}
 
+  {#if lookNotice}
+    <p class="look-notice" aria-live="polite">{lookNotice}</p>
+  {/if}
+
   {#if view.errors.length > 0}
     <section class="errors" aria-label="load errors">
       {#each view.errors as issue}
-        <p class="render-error"><strong>{issue.code}</strong> {issue.message}{#if issue.line !== undefined} (line {issue.line}, column {issue.column ?? 0}){/if}</p>
+        <p class="render-error"><span class="err-body"><strong>{issue.code}</strong> {issue.message}{#if issue.line !== undefined} (line {issue.line}, column {issue.column ?? 0}){/if}</span></p>
       {/each}
       {#if view.laneMessage}
-        <p class="render-error">{view.laneMessage}</p>
+        <p class="render-error"><span class="err-body">{view.laneMessage}</span></p>
       {/if}
     </section>
   {/if}

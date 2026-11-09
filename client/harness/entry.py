@@ -362,12 +362,38 @@ def browser_lane() -> int:
     # cross-engine triage opt-in: chromium results never gate the lane
     env["BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM"] = os.environ.get("BOARD_VIEWER_BROWSER_TRIAGE_CHROMIUM", "")
 
+    # the env-gated reference page (test plumbing, same containment): an
+    # absolute .html file bound read-only at the fixed sandbox path and
+    # served by the lane's own loopback server at /reference.html (a
+    # scrubbed sandbox has no mime database, so a file:// page renders
+    # as plain source), navigated once after the product pass, screenshot
+    # retained in the run root. Set but invalid refuses; unset changes
+    # nothing.
+    reference_raw = os.environ.get("BOARD_VIEWER_BROWSER_REFERENCE_HTML", "")
+    reference: pathlib.Path | None = None
+    if reference_raw:
+        reference = pathlib.Path(reference_raw)
+        if not (reference.is_absolute() and reference.is_file() and reference.suffix == ".html"):
+            print(
+                "containment refusal: BOARD_VIEWER_BROWSER_REFERENCE_HTML must be an absolute, readable .html file",
+                file=sys.stderr,
+            )
+            return 1
+        env["BOARD_VIEWER_BROWSER_REFERENCE_HTML"] = str(reference)
+
     ro_binds = [
         (canary, CANARY_SANDBOX_PATH),
         (lane, BROWSER_LANE_SANDBOX_PATH),
         (str((HERE / "tracker_mock.py").resolve()), TRACKER_MOCK_SANDBOX_PATH),
         (str(dist), DIST_SANDBOX),
     ]
+    if reference is not None:
+        ro_binds.append((str(reference), "/app/reference.html"))
+        # the reference may vendor its pinned libraries in a sibling
+        # reference-assets/ directory; bound read-only when present
+        assets = reference.parent / "reference-assets"
+        if assets.is_dir():
+            ro_binds.append((str(assets), "/app/reference-assets"))
     cmd = isolation.build_command(bwrap, run_root, [python, BROWSER_LANE_SANDBOX_PATH], ro_binds)
 
     print("[browser] gate command:", " ".join(cmd), flush=True)

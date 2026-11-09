@@ -29,6 +29,7 @@ serde = { version = "1", features = ["derive"] }
 webkit2gtk = { version = "2" }
 gtk = "0.18"
 serde_json = "1"
+toml = "0.9"
 board-viewer-core = { path = "core-client" }
 # the shared board grammar: admission runs here, on the Tauri side, so
 # the frontend never grows a second validator
