@@ -84,7 +84,24 @@ async function hydrateCitations(
     );
     link.addEventListener("click", (event) => {
       event.preventDefault();
-      void model.open({ machine: location.machine, path });
+      // the shell routes every citation activation (t-14's two acts):
+      // a plain click is the primary act, a shifted click opens
+      // elsewhere through the link
+      window.dispatchEvent(
+        new CustomEvent("suite-open-citation", {
+          detail: { machine: location.machine, path, shifted: event.shiftKey },
+        }),
+      );
+    });
+    link.addEventListener("auxclick", (event) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      // a middle click opens elsewhere, exactly as a shifted click
+      window.dispatchEvent(
+        new CustomEvent("suite-open-citation", {
+          detail: { machine: location.machine, path, shifted: true },
+        }),
+      );
     });
     span.replaceChildren(link);
   }

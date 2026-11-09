@@ -1312,3 +1312,12 @@ code.raw-html {
 .incorporation-cited .md {
   margin: 0;
 }
+
+/* the link's target in the HUD: -> name */
+
+.link-target {
+  font-family: var(--f-ui);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+  white-space: nowrap;
+}

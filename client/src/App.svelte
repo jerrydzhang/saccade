@@ -52,6 +52,7 @@
     shortLocation,
     type JumpEntry,
   } from "./lib/suite.ts";
+  import { citationSpec, VIEWER_ROUTING, type ElsewhereAct } from "./lib/acts.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
   import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
@@ -227,6 +228,10 @@
       knownPart = state.part;
       if (state.part !== null) scrollToPoolPart(state.part);
     }
+    // the link: a new target refreshes the HUD's name and watches it
+    if (state.link !== linkTargetId) {
+      void refreshLink(state.link);
+    }
   }
 
   /** The window's pool state: the shell names the binding (the state
@@ -300,6 +305,7 @@
   // placeholders (t-14, "Open and deferred").
   type JumpMode =
     | { kind: "labels"; chips: { window: string; chip: string }[]; typed: string }
+    | { kind: "link"; chips: { window: string; chip: string }[]; typed: string }
     | {
         kind: "picker";
         entries: JumpEntry[];
@@ -437,7 +443,8 @@
   async function onJumpKey(event: KeyboardEvent): Promise<void> {
     const mode = jumpMode;
     if (mode === null) return;
-    if (mode.kind === "labels") {
+    if (mode.kind === "labels" || mode.kind === "link") {
+      const binding = mode.kind === "link";
       if (event.key === "Escape") {
         exitJump();
         return;
@@ -458,9 +465,14 @@
           const target = landed.window;
           exitJump();
           try {
-            await jumpFocus(target);
+            if (binding) {
+              await linkToWindow(target);
+            } else {
+              // the jump: focus moves because the human asked
+              await jumpFocus(target);
+            }
           } catch (error) {
-            jumpNote = `the jump failed: ${String(error)}`;
+            jumpNote = `${binding ? "the link" : "the jump"} failed: ${String(error)}`;
           }
         }
       }
@@ -516,6 +528,314 @@
   function visibleJumpEntries(mode: Extract<JumpMode, { kind: "picker" }>): JumpEntry[] {
     return mode.entries.filter((entry) => entryMatches(entry, mode.query));
   }
+
+  // -- the link (t-14 "The suite") ---------------------------------------
+  //
+  // Per device, one per window, many windows may link to one target,
+  // only between windows attached on this device - the pool enforces
+  // the shape and lapses the link when its target detaches. A linked
+  // window shows its target; space l links by labels, space u
+  // unlinks; links never travel devices.
+  let linkTargetId = $state<string | null>(null);
+  let linkTargetName = $state<string | null>(null);
+  let linkTargetWindowLabel = $state<string | null>(null);
+  let linkWatch: { stop: () => void } | null = null;
+
+  async function refreshLink(targetId: string | null): Promise<void> {
+    linkTargetId = targetId;
+    linkWatch?.stop();
+    linkWatch = null;
+    if (targetId === null || pool === null) {
+      linkTargetName = null;
+      linkTargetWindowLabel = null;
+      return;
+    }
+    try {
+      const target = await pool.getState(targetId);
+      linkTargetName = shortLocation(target.location);
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as {
+        label: string;
+        state_id?: string | null;
+      }[];
+      linkTargetWindowLabel =
+        windows.find((window) => window.state_id === targetId)?.label ?? null;
+      // the target's own changes follow: its name in this window's
+      // HUD moves when the target moves, without any polling
+      linkWatch = pool.watch(targetId, (targetState) => {
+        linkTargetName = shortLocation(targetState.location);
+      });
+    } catch {
+      // the target left the pool: the link lapses server-side; this
+      // window shows no target until a new link is set
+      linkTargetName = null;
+      linkTargetWindowLabel = null;
+    }
+  }
+
+  async function enterLinkLabels(): Promise<void> {
+    blurForJump();
+    jumpNote = null;
+    if (pool === null || poolStateId === null || poolDiscarded) {
+      jumpNote = "no tracker server; the pool is not serving this window";
+      return;
+    }
+    try {
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as {
+        label: string;
+        state_id?: string | null;
+      }[];
+      const chips = assignChips(windows.map((window) => window.label));
+      const list = [...chips].map(([windowLabel, chip]) => ({ window: windowLabel, chip }));
+      await invoke("broadcast_jump_labels", { labels: list });
+      jumpMode = { kind: "link", chips: list, typed: "" };
+    } catch (error) {
+      jumpNote = `the labels failed: ${String(error)}`;
+    }
+  }
+
+  async function linkToWindow(windowLabel: string): Promise<void> {
+    if (pool === null || poolStateId === null) return;
+    const invoke = await shellInvoke();
+    const windows = (await invoke("suite_windows")) as {
+      label: string;
+      state_id?: string | null;
+    }[];
+    const target = windows.find((window) => window.label === windowLabel);
+    if (!target?.state_id) {
+      jumpNote = `no state bound to ${windowLabel} yet`;
+      return;
+    }
+    try {
+      await pool.setLink(poolStateId, target.state_id);
+      exitJump();
+    } catch (error) {
+      jumpNote = `the link refused: ${String(error)}`;
+      exitJump();
+    }
+  }
+
+  async function unlinkHere(): Promise<void> {
+    if (pool === null || poolStateId === null || poolDiscarded) return;
+    try {
+      await pool.clearLink(poolStateId);
+    } catch (error) {
+      jumpNote = `the unlink refused: ${String(error)}`;
+    }
+  }
+
+  // -- the two acts (t-14 "The suite") -----------------------------------
+  //
+  // Enter (or a click) is the primary act; o (or shift- or
+  // middle-click) opens elsewhere through the link. With no link,
+  // opening elsewhere asks once - labels on visible windows, n new,
+  // / a detached one - and the answer becomes the link; i opens
+  // elsewhere once without changing the link; w always opens a new
+  // window. The viewer's Enter follows here (the declaration is the
+  // instrument's: acts.ts); the tasks and agents instruments (t-18)
+  // declare their own and arrive without rework.
+  type AskOnce = {
+    act: ElsewhereAct;
+    spec: string;
+    chips: { window: string; chip: string }[];
+    typed: string;
+    detached: JumpEntry[];
+    detachedSelected: number;
+    showDetached: boolean;
+  };
+  let askOnce = $state<AskOnce | null>(null);
+
+  async function openElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
+    if (pool === null || poolStateId === null || poolDiscarded) {
+      jumpNote = "no tracker server; the pool is not serving this window";
+      return;
+    }
+    if (act === "link" && linkTargetWindowLabel !== null) {
+      // through the link: the target opens it here, focus never moves
+      const target = linkTargetWindowLabel;
+      await openInWindow(target, spec);
+      return;
+    }
+    if (act === "new") {
+      await openInNewWindow(spec, false);
+      return;
+    }
+    // no link (or a once act): ask once
+    blurForJump();
+    jumpNote = null;
+    try {
+      const invoke = await shellInvoke();
+      const windows = (await invoke("suite_windows")) as { label: string }[];
+      const chips = assignChips(windows.map((window) => window.label));
+      const list = [...chips].map(([windowLabel, chip]) => ({ window: windowLabel, chip }));
+      await invoke("broadcast_jump_labels", { labels: list });
+      const states = await pool.list();
+      const detached = states
+        .filter((state) => !state.attachedHere)
+        .map((state) => ({
+          kind: "detached" as const,
+          chip: null,
+          windowLabel: null,
+          stateId: state.id,
+          name: shortLocation(state.location),
+        }));
+      askOnce = {
+        act,
+        spec,
+        chips: list,
+        typed: "",
+        detached,
+        detachedSelected: 0,
+        showDetached: false,
+      };
+    } catch (error) {
+      jumpNote = `the ask failed: ${String(error)}`;
+    }
+  }
+
+  async function openInWindow(label: string, spec: string): Promise<void> {
+    const invoke = await shellInvoke();
+    await invoke("open_in_window", { label, location: spec });
+  }
+
+  /** A new window shows a new pool state: the caller creates the
+   * state (so it can link to it) and the window's bootstrap attaches
+   * what it finds. The optional answer of an ask-once becomes the
+   * link when the act was o. */
+  async function openInNewWindow(spec: string, becomeLink: boolean): Promise<void> {
+    if (pool === null || poolStateId === null) return;
+    const fresh =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `w-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    await pool.create(fresh);
+    const invoke = await shellInvoke();
+    const label = (await invoke("open_suite_window", { stateId: fresh })) as string;
+    await invoke("open_in_window", { label, location: spec });
+    if (becomeLink) {
+      await pool.setLink(poolStateId, fresh);
+    }
+  }
+
+  async function askOnceAnswer(location: "window" | "new" | "detached", pick?: JumpEntry): Promise<void> {
+    const asking = askOnce;
+    if (asking === null) return;
+    askOnce = null;
+    void clearJumpBroadcast();
+    const becomeLink = asking.act === "link";
+    try {
+      if (location === "window") {
+        const chip = asking.typed;
+        const match = asking.chips.find((entry) => entry.chip === chip);
+        if (!match) return;
+        await openInWindow(match.window, asking.spec);
+        if (becomeLink && pool !== null && poolStateId !== null) {
+          const invoke = await shellInvoke();
+          const windows = (await invoke("suite_windows")) as {
+            label: string;
+            state_id?: string | null;
+          }[];
+          const target = windows.find((window) => window.label === match.window);
+          if (target?.state_id) await pool.setLink(poolStateId, target.state_id);
+        }
+        return;
+      }
+      if (location === "new") {
+        await openInNewWindow(asking.spec, becomeLink);
+        return;
+      }
+      if (pick) {
+        // a detached state: it resumes here in a new window and opens
+        // the citation there
+        const invoke = await shellInvoke();
+        const label = (await invoke("open_suite_window", { stateId: pick.stateId })) as string;
+        await invoke("open_in_window", { label, location: asking.spec });
+        if (becomeLink && pool !== null && poolStateId !== null) {
+          await pool.setLink(poolStateId, pick.stateId);
+        }
+      }
+    } catch (error) {
+      jumpNote = `the open failed: ${String(error)}`;
+    }
+  }
+
+  async function onAskOnceKey(event: KeyboardEvent): Promise<void> {
+    const asking = askOnce;
+    if (asking === null) return;
+    if (asking.showDetached) {
+      if (event.key === "Escape") {
+        askOnce = null;
+        void clearJumpBroadcast();
+        return;
+      }
+      if (event.key === "ArrowUp" || event.key === "k") {
+        asking.detachedSelected = Math.max(0, asking.detachedSelected - 1);
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "j") {
+        asking.detachedSelected = Math.min(asking.detached.length - 1, asking.detachedSelected + 1);
+        return;
+      }
+      if (event.key === "Enter") {
+        const alive = asking.detached;
+        await askOnceAnswer("detached", alive[asking.detachedSelected]);
+        return;
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      askOnce = null;
+      void clearJumpBroadcast();
+      return;
+    }
+    if (event.key === "/") {
+      asking.showDetached = true;
+      return;
+    }
+    if (event.key === "n") {
+      await askOnceAnswer("new");
+      return;
+    }
+    if (event.key === "Backspace") {
+      asking.typed = asking.typed.slice(0, -1);
+      return;
+    }
+    if (/^[a-z]$/.test(event.key)) {
+      asking.typed += event.key;
+      const matches = asking.chips.filter((entry) => entry.chip.startsWith(asking.typed));
+      const landed = matches.length === 1 ? matches[0] : undefined;
+      if (matches.length === 0) {
+        askOnce = null;
+        void clearJumpBroadcast();
+        return;
+      }
+      if (matches.length === 1 && landed && landed.chip === asking.typed) {
+        await askOnceAnswer("window");
+      }
+    }
+  }
+
+  /** The elsewhere half of a citation act: the spec the target window
+   * opens, routed per the two acts. */
+  async function openSpecElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
+    await openElsewhere(spec, act);
+  }
+
+  // the citation click's routing: hydrate signals every citation
+  // activation; the shell routes it per the instrument's declaration -
+  // the viewer follows here, a shifted or middle click opens
+  // elsewhere through the link (the answer becoming the link when
+  // there is none)
+  window.addEventListener("suite-open-citation", ((event: CustomEvent<{ machine: string; path: string; shifted: boolean }>) => {
+    const spec = citationSpec(event.detail, event.detail.path);
+    if (spec === null) return;
+    if (event.detail.shifted || VIEWER_ROUTING.primary === "link") {
+      void openElsewhere(spec, "link");
+      return;
+    }
+    void model.openInput(spec);
+  }) as EventListener);
 
   /** A settled write: the location this window opened, with the
    * reading position reset - new content, no part yet. */
@@ -629,6 +949,44 @@
     };
     if (target.kind === "citation" || target.kind === "incorporation") {
       acts.push({ key: "Enter", label: "open the cited revision", onAct: open });
+      // the two acts, pointer-reachable (t-14: every act is reachable
+      // by the pointer too)
+      acts.push({
+        key: "o",
+        label: "open elsewhere through the link",
+        onAct: () => {
+          const current = view.location;
+          const path = target.element.getAttribute("data-open-path");
+          if (current && path) {
+            const spec = citationSpec(current, path);
+            if (spec !== null) void openSpecElsewhere(spec, "link");
+          }
+        },
+      });
+      acts.push({
+        key: "i",
+        label: "open elsewhere once, the link unchanged",
+        onAct: () => {
+          const current = view.location;
+          const path = target.element.getAttribute("data-open-path");
+          if (current && path) {
+            const spec = citationSpec(current, path);
+            if (spec !== null) void openSpecElsewhere(spec, "once");
+          }
+        },
+      });
+      acts.push({
+        key: "w",
+        label: "open in a new window",
+        onAct: () => {
+          const current = view.location;
+          const path = target.element.getAttribute("data-open-path");
+          if (current && path) {
+            const spec = citationSpec(current, path);
+            if (spec !== null) void openSpecElsewhere(spec, "new");
+          }
+        },
+      });
     }
     if (target.kind === "diagram") {
       acts.push({ key: "Enter", label: "enlarge", onAct: enlarge });
@@ -1497,6 +1855,12 @@
       void onJumpKey(event);
       return;
     }
+    if (askOnce !== null) {
+      // the ask-once owns the keyboard while it is on
+      event.preventDefault();
+      void onAskOnceKey(event);
+      return;
+    }
 
     switch (keyMode) {
       case "labels": {
@@ -1558,6 +1922,12 @@
           void toggleMarginalia();
         } else if (event.key === "p") {
           openPublish();
+        } else if (event.key === "l") {
+          // space l: link this window by labels (t-14)
+          void enterLinkLabels();
+        } else if (event.key === "u") {
+          // space u: unlink this window
+          void unlinkHere();
         }
         // the other leader commands (marginalia, publish) land with
         // their own chapters
@@ -1690,6 +2060,23 @@
           const rect = target.element.getBoundingClientRect();
           openTargetMenu(target, { x: rect.right + 8, y: rect.top });
         }
+        return;
+      }
+      case "o":
+      case "i":
+      case "w": {
+        // the elsewhere acts on the selected citation (t-14): o opens
+        // through the link, i elsewhere once, w always a new window
+        const target = selected;
+        const path = target?.element.getAttribute("data-open-path");
+        const current = view.location;
+        if (!target || !path || !current) return;
+        const spec = citationSpec(current, path);
+        if (spec === null) return;
+        event.preventDefault();
+        if (event.key === "o") void openSpecElsewhere(spec, "link");
+        else if (event.key === "i") void openSpecElsewhere(spec, "once");
+        else void openSpecElsewhere(spec, "new");
         return;
       }
       case " ":
@@ -1994,6 +2381,9 @@
     {#if jumpChipShown !== null}
       <span class="jump-chip-self" data-control="jump:self">{jumpChipShown}</span>
     {/if}
+    {#if linkTargetName !== null}
+      <span class="link-target" data-control="link:target" title="this window's link">-&gt; {linkTargetName}</span>
+    {/if}
     <span class="identity">
       {#if view.location}
         <strong>{view.location.machine}</strong>
@@ -2099,6 +2489,15 @@
         <p class="help-title">windows</p>
         <p class="help-row"><span class="ctx-menu-key">'</span> labels on every suite window; type a label to jump</p>
         <p class="help-row"><span class="ctx-menu-key">"</span> windows here, then detached; enter resumes; ^x twice discards</p>
+        <p class="help-row"><span class="ctx-menu-key">space l</span> link this window by labels</p>
+        <p class="help-row"><span class="ctx-menu-key">space u</span> unlink this window</p>
+      </div>
+      <div class="help-section">
+        <p class="help-title">two acts</p>
+        <p class="help-row"><span class="ctx-menu-key">Enter</span> the primary act, here</p>
+        <p class="help-row"><span class="ctx-menu-key">o</span> open elsewhere through the link (shift- or middle-click too)</p>
+        <p class="help-row"><span class="ctx-menu-key">i</span> open elsewhere once, the link unchanged</p>
+        <p class="help-row"><span class="ctx-menu-key">w</span> open in a new window</p>
       </div>
     </div>
   </div>
@@ -2147,6 +2546,9 @@
       {#if jumpMode.kind === "labels"}
         <p class="jump-title">window jump: type a label</p>
         <p class="jump-typed" data-control="jump:typed">{jumpMode.typed.length > 0 ? jumpMode.typed : "..."}</p>
+      {:else if jumpMode.kind === "link"}
+        <p class="jump-title">link this window to: type a label</p>
+        <p class="jump-typed" data-control="link:typed">{jumpMode.typed.length > 0 ? jumpMode.typed : "..."}</p>
       {:else}
         <p class="jump-title">windows here, then detached</p>
         <div class="jump-list" data-control="jump:list">
@@ -2174,6 +2576,38 @@
       {/if}
       {#if jumpNote}
         <p class="jump-note" data-control="jump:note">{jumpNote}</p>
+      {/if}
+    </div>
+  {/if}
+
+  {#if askOnce !== null}
+    <div class="jump-overlay" role="dialog" aria-label="open elsewhere" data-control="ask:overlay">
+      {#if askOnce.showDetached}
+        <p class="jump-title">open in a detached state</p>
+        <div class="jump-list" data-control="ask:detached">
+          {#each askOnce.detached as entry, index}
+            <button
+              type="button"
+              class="jump-row"
+              class:jump-active={index === askOnce.detachedSelected}
+              data-control="ask:row"
+              onclick={() => void askOnceAnswer("detached", entry)}
+            >
+              <span class="jump-entry-kind">detached</span>
+              <span class="jump-entry-name">{entry.name}</span>
+            </button>
+          {:else}
+            <p class="picker-empty">no detached states</p>
+          {/each}
+        </div>
+        <p class="jump-hint">enter opens there{askOnce.act === "link" ? " and becomes the link" : ""} | escape leaves</p>
+      {:else}
+        <p class="jump-title">open elsewhere: a label, n new, / a detached one</p>
+        <p class="jump-typed" data-control="ask:typed">{askOnce.typed.length > 0 ? askOnce.typed : "..."}</p>
+        <p class="jump-hint">the answer {askOnce.act === "link" ? "becomes the link" : "changes no link"} | escape leaves</p>
+      {/if}
+      {#if jumpNote}
+        <p class="jump-note" data-control="ask:note">{jumpNote}</p>
       {/if}
     </div>
   {/if}

@@ -196,6 +196,25 @@ pub fn broadcast_jump_labels(app: tauri::AppHandle, labels: Vec<JumpLabel>) {
     }
 }
 
+/// The elsewhere door: one window opens the location another chose -
+/// the shell evals the receiver, focus never moves. The window is
+/// opaque; the shell is the messenger, exactly as for the labels.
+#[tauri::command]
+pub fn open_in_window(
+    app: tauri::AppHandle,
+    label: String,
+    location: String,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("no suite window {label}"))?;
+    let spec = serde_json::to_string(&location).map_err(|error| error.to_string())?;
+    let script = format!("window.__suiteOpenAt && window.__suiteOpenAt({spec});");
+    window
+        .eval(&script)
+        .map_err(|error| format!("the open could not reach {label}: {error}"))
+}
+
 /// Clear the labels everywhere (the jump answered, or escape).
 #[tauri::command]
 pub fn broadcast_jump_labels_clear(app: tauri::AppHandle) {
