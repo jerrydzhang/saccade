@@ -140,6 +140,42 @@ test("extreme schemes measure their floors; misses are reported, never silent", 
   }
 });
 
+// The one structural impossibility, measured and disclosed (i-3 review,
+// t-16): a scheme whose base00 sits near the contrast nadir (relative
+// luminance about 0.19) caps white-side contrast at about 4.31:1, so no
+// colour can meet a 4.5:1 text floor against it. The floor walks to the
+// clamp and reports; the state shapes' 3:1 floors still hold.
+const MID = `scheme: "Mid"
+base00: "7a7a76"
+base01: "6e6e6a"
+base02: "85857f"
+base03: "5c5c58"
+base04: "9a9a94"
+base05: "a8a8a2"
+base06: "b8b8b2"
+base07: "c8c8c2"
+base08: "7a5c5c"
+base09: "7a6e4c"
+base0A: "74744c"
+base0B: "4c7a4c"
+base0C: "4c7a78"
+base0D: "4c4c7a"
+base0E: "7a4c7a"
+base0F: "7a5c5c"`;
+
+test("a mid-luminance scheme cannot reach a 4.5 text floor; the miss is exact", () => {
+  const look = lookVars(MID, "regular");
+  const bg = parseScheme(MID)!.base00 as string;
+  assert.ok(look.misses.length > 0, "the nadir scheme must report its misses");
+  for (const miss of look.misses) {
+    assert.equal(miss.requested, 4.5, "only the text floors miss");
+    assert.ok(miss.measured >= 4.28 && miss.measured <= 4.32, `${miss.token} measured ${miss.measured.toFixed(2)}`);
+  }
+  // the shape floors hold even at the nadir
+  assert.ok(ratio(look.vars["--s-working"] as string, bg) >= 3.2);
+  assert.ok(ratio(look.vars["--s-error"] as string, bg) >= 3.2);
+});
+
 test("light or dark is the scheme's own; nothing reverses", () => {
   const dark = lookVars(MOUNTAIN, "regular");
   const light = lookVars(LIGHT, "regular");
