@@ -116,7 +116,7 @@ pub struct TaskView {
     pub owner: Option<String>,
 }
 
-fn state_str(state: &TaskState) -> &'static str {
+pub fn state_str(state: &TaskState) -> &'static str {
     match state {
         TaskState::Open => "open",
         TaskState::Offered => "offered",

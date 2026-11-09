@@ -9002,3 +9002,679 @@ async fn a_resume_at_its_own_address_never_supersedes_the_incarnation() {
     let _ = server.kill();
     let _ = server.wait();
 }
+
+// -- the /view/v1 pages --------------------------------------------------
+//
+// The instruments' read surface: every answer a view document or raw
+// file bytes, every wrapped part carrying its own location, waiting a
+// cursor on the same route. The settled shapes are t-24@r2's.
+
+fn view_page_project(tag: &str) -> (ScratchDir, std::path::PathBuf, ServerProc, String) {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let scratch = scratch_db(tag);
+    let project = scratch.dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let git = |args: &[&str]| {
+        saccade::boards::git_command()
+            .args(args)
+            .current_dir(&project)
+            .output()
+            .expect("git init");
+    };
+    git(&["init", "--quiet", project.to_str().unwrap()]);
+    git(&[
+        "-C",
+        project.to_str().unwrap(),
+        "config",
+        "user.email",
+        "smoke@saccade.invalid",
+    ]);
+    git(&[
+        "-C",
+        project.to_str().unwrap(),
+        "config",
+        "user.name",
+        "smoke",
+    ]);
+    let (serve, url) = spawn_serve(
+        bin,
+        scratch.db.as_path(),
+        &["--repo", project.to_str().unwrap()],
+        &[],
+    );
+    (scratch, project, serve, url)
+}
+
+fn view_page_sac(
+    url: &str,
+    incarnation_seq: Option<u64>,
+    task: Option<&str>,
+    args: &[&str],
+) -> (bool, String, String) {
+    let bin = env!("CARGO_BIN_EXE_sac");
+    let mut cmd = scrubbed(std::process::Command::new(bin));
+    cmd.arg("--server")
+        .arg(url)
+        .env("SACCADE_ACTOR", "pi")
+        .args(args);
+    if let Some(seq) = incarnation_seq {
+        cmd.env("SACCADE_INCARNATION_SEQ", seq.to_string());
+    }
+    if let Some(task) = task {
+        cmd.env("SACCADE_TASK", task);
+    }
+    let out = cmd.output().expect("spawn sac");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The fixture the pages read: a session behind the author, a source
+/// board at two revisions (text, then group + figure + annotation), a
+/// claim with the offer, reject and grounds between them, and a
+/// consumer board incorporating the source's second revision.
+fn view_page_fixture(tag: &str) -> (ScratchDir, ServerProc, String, usize, usize, String) {
+    let (dir, project, serve, url) = view_page_project(tag);
+    let _ = dir;
+    let saved = project.parent().unwrap().join("viewpage01.jsonl");
+    std::fs::write(
+        &saved,
+        format!(
+            "{{\"type\":\"session\",\"version\":3,\"id\":\"viewpage01\",\"timestamp\":\"t\",\"cwd\":\"{}\"}}\n",
+            project.display()
+        ),
+    )
+    .unwrap();
+    let (_, body) = post_json(
+        &url,
+        "/api/v1/native/attach",
+        &json!({"native_id": "viewpage01", "session_file": saved.to_str().unwrap()}),
+    );
+    let attach = json_of(&body);
+    assert_eq!(attach["registered"], json!(true), "{attach}");
+    let inc_num = attach["num"].as_u64().unwrap() as usize;
+    let inc_seq = attach["incarnation"].as_u64().unwrap() as usize;
+
+    let sac =
+        |task: Option<&str>, args: &[&str]| view_page_sac(&url, Some(inc_seq as u64), task, args);
+    let sac_json = |task: Option<&str>, args: &[&str]| {
+        let mut full = vec!["--json"];
+        full.extend_from_slice(args);
+        let (ok, out, err) = sac(task, &full);
+        assert!(ok, "{}: {err}", args.join(" "));
+        json_of(&out)
+    };
+    // the creates ride no scope: their records name no session
+    let (ok, out, err) = view_page_sac(
+        &url,
+        None,
+        None,
+        &["--json", "create", "task", "prove the loop"],
+    );
+    assert!(ok, "{err}");
+    let _ = out;
+    let (ok, _, err) = view_page_sac(
+        &url,
+        None,
+        None,
+        &["--json", "create", "task", "use the proof"],
+    );
+    assert!(ok, "{err}");
+    let _ = sac_json(Some("t-0"), &["claim", "t-0"]);
+
+    let src = project.join("src-dir");
+    let (ok, out, _) = sac(
+        Some("t-0"),
+        &["board", "edit", "t-0", src.to_str().unwrap()],
+    );
+    assert!(ok, "{out}");
+    std::fs::write(
+        src.join("board.yaml"),
+        "grammar: 1\ntask: t-0\ncontent:\n  - text: the loop holds for every input\n",
+    )
+    .unwrap();
+    let reply = sac_json(
+        Some("t-0"),
+        &[
+            "board",
+            "commit",
+            "t-0",
+            src.to_str().unwrap(),
+            "-m",
+            "first account",
+        ],
+    );
+    assert_eq!(reply["revision"], json!(1));
+    let (ok, out, _) = sac(Some("t-0"), &["offer", "t-0"]);
+    assert!(ok, "{out}");
+    let (ok, out, _) = sac(
+        None,
+        &["reject", "t-0", "--grounds", "the boundary case is missing"],
+    );
+    assert!(ok, "{out}");
+
+    let figures = src.join("figures");
+    std::fs::create_dir_all(&figures).unwrap();
+    std::fs::write(figures.join("plot.png"), b"\x89PNG-rusttest-bytes").unwrap();
+    std::fs::write(
+        src.join("board.yaml"),
+        "grammar: 1\ntask: t-0\ncontent:\n  - text: the loop holds for every input\n  - group:\n      title: evidence\n      content:\n        - figure:\n            input: figures/plot.png\n            caption: the plotted loop\n  - annotation: the boundary case is covered in the appendix\n",
+    )
+    .unwrap();
+    let reply = sac_json(
+        Some("t-0"),
+        &[
+            "board",
+            "commit",
+            "t-0",
+            src.to_str().unwrap(),
+            "-m",
+            "annotate the boundary",
+        ],
+    );
+    assert_eq!(reply["revision"], json!(2));
+
+    let con = project.join("con-dir");
+    let (ok, out, _) = sac(None, &["board", "edit", "t-1", con.to_str().unwrap()]);
+    assert!(ok, "{out}");
+    std::fs::write(
+        con.join("board.yaml"),
+        "grammar: 1\ntask: t-1\ncontent:\n  - incorporation:\n      source:\n        task: t-0\n        revision: 2\n        select: [\"/content/1\"]\n      content:\n        - text: relying on the proof\n",
+    )
+    .unwrap();
+    let reply = sac_json(
+        None,
+        &[
+            "board",
+            "commit",
+            "t-1",
+            con.to_str().unwrap(),
+            "-m",
+            "cite the proof",
+        ],
+    );
+    assert_eq!(reply["revision"], json!(1));
+    (
+        dir,
+        serve,
+        url,
+        inc_num,
+        inc_seq,
+        src.join("board.yaml").display().to_string(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn view_v1_pages_serve_boards_history_components_and_files() {
+    let (_scratch, _serve, url, inc_num, _inc_seq, authored) = view_page_fixture("view-docs");
+
+    // the root page: what an instrument reads first
+    let (status, body) = get_json(&url, "/view/v1");
+    assert_eq!(status, 200, "{body}");
+    let root = json_of(&body);
+    assert_eq!(root["view"]["major"], json!(1));
+    assert_eq!(root["kind"], json!("root"));
+    assert_eq!(root["location"], json!("/"));
+    assert_eq!(root["tracker"], json!("project"));
+    assert_eq!(root["view_majors"], json!([1]));
+    assert_eq!(root["board_grammar"], json!({"min": 1, "max": 1}));
+    assert!(root["seq"].as_u64().is_some(), "{root}");
+    let families: Vec<&str> = root["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|part| part["kind"] == json!("fact"))
+        .filter_map(|part| part["value"].as_str())
+        .collect();
+    assert!(
+        families.iter().any(|value| value.starts_with("boards:")),
+        "{root}"
+    );
+    // the trailing-slash root is the same page
+    let (status, body) = get_json(&url, "/view/v1/");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["kind"], json!("root"));
+
+    // the current board page: facts, refs, and every authored part
+    // carrying its own location
+    let (status, body) = get_json(&url, "/view/v1/t-0");
+    assert_eq!(status, 200, "{body}");
+    let page = json_of(&body);
+    assert_eq!(page["kind"], json!("document"));
+    assert_eq!(page["location"], json!("t-0@r2"));
+    let content = page["content"].as_array().unwrap();
+    let labeled = |label: &str| {
+        content
+            .iter()
+            .find(|part| part["kind"] == json!("fact") && part["label"] == json!(label))
+            .unwrap_or_else(|| panic!("no {label} fact: {page}"))
+            .clone()
+    };
+    assert_eq!(labeled("task")["value"], json!("t-0"));
+    assert_eq!(labeled("name")["value"], json!("prove the loop"));
+    assert_eq!(labeled("state")["value"], json!("open"));
+    assert_eq!(labeled("owner")["value"], json!(format!("i-{inc_num}")));
+    assert_eq!(labeled("revision")["value"], json!("r2 of 2"));
+    assert!(labeled("commit").is_object());
+    let refs: Vec<&Value> = content
+        .iter()
+        .filter(|part| part["kind"] == json!("ref"))
+        .collect();
+    assert!(
+        refs.iter()
+            .any(|r| r["location"] == json!("t-0/history") && r["label"] == json!("history")),
+        "{refs:?}"
+    );
+    assert!(
+        refs.iter()
+            .any(|r| r["location"] == json!("t-0@r2/file/board.yaml")),
+        "{refs:?}"
+    );
+    let text = content
+        .iter()
+        .find(|part| part["kind"] == json!("text"))
+        .unwrap();
+    assert_eq!(text["text"], json!("the loop holds for every input"));
+    assert_eq!(text["location"], json!("t-0@r2:/content/0"));
+    let group = content
+        .iter()
+        .find(|part| part["kind"] == json!("group") && part["title"] == json!("evidence"))
+        .unwrap();
+    assert_eq!(group["location"], json!("t-0@r2:/content/1"));
+    let figure = &group["content"][0];
+    assert_eq!(figure["kind"], json!("figure"));
+    assert_eq!(figure["caption"], json!("the plotted loop"));
+    assert_eq!(figure["file"], json!("t-0@r2/file/figures/plot.png"));
+    assert_eq!(
+        figure["location"],
+        json!("t-0@r2:/content/1/group/content/0")
+    );
+    let annotation = content
+        .iter()
+        .find(|part| part["title"] == json!("annotation"))
+        .unwrap();
+    assert_eq!(annotation["location"], json!("t-0@r2:/content/2"));
+    assert_eq!(
+        annotation["content"][0]["location"],
+        json!("t-0@r2:/content/2")
+    );
+
+    // the pinned board page: r1, with the switch to the current revision
+    let (status, body) = get_json(&url, "/view/v1/t-0@r1");
+    assert_eq!(status, 200, "{body}");
+    let pinned = json_of(&body);
+    assert_eq!(pinned["location"], json!("t-0@r1"));
+    let content = pinned["content"].as_array().unwrap();
+    let labeled = |label: &str| {
+        content
+            .iter()
+            .find(|part| part["kind"] == json!("fact") && part["label"] == json!(label))
+            .unwrap_or_else(|| panic!("no {label} fact: {pinned}"))
+            .clone()
+    };
+    assert_eq!(labeled("revision")["value"], json!("r1 of 2"));
+    assert!(
+        content.iter().any(|part| part["kind"] == json!("ref")
+            && part["location"] == json!("t-0")
+            && part["label"] == json!("current revision r2")),
+        "{content:?}"
+    );
+    assert!(
+        content.iter().any(|part| part["kind"] == json!("ref")
+            && part["location"] == json!("t-0@r1/history")),
+        "{content:?}"
+    );
+    assert_eq!(
+        content
+            .iter()
+            .filter(|p| p["kind"] == json!("text"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        content.iter().find(|p| p["kind"] == json!("text")).unwrap()["location"],
+        json!("t-0@r1:/content/0")
+    );
+
+    // the component page: a select path names one part, pinned
+    let (status, body) = get_json(&url, "/view/v1/t-0@r2/content/1/group/content/0");
+    assert_eq!(status, 200, "{body}");
+    let component = json_of(&body);
+    assert_eq!(component["kind"], json!("document"));
+    assert_eq!(
+        component["location"],
+        json!("t-0@r2/content/1/group/content/0")
+    );
+    assert_eq!(component["content"][0]["kind"], json!("figure"));
+    assert_eq!(
+        component["content"][0]["location"],
+        json!("t-0@r2:/content/1/group/content/0")
+    );
+    let (status, body) = get_json(&url, "/view/v1/t-0@r2/content/9");
+    assert_eq!(status, 404, "{body}");
+    let refusal = json_of(&body);
+    assert_eq!(refusal["kind"], json!("refusal"));
+    assert_eq!(refusal["code"], json!("component_missing"));
+    assert!(refusal["content"][0]["kind"] == json!("fact"), "{refusal}");
+    assert!(
+        refusal["content"][1]["text"].as_str().is_some(),
+        "{refusal}"
+    );
+
+    // the consumer's board page: the incorporation collapsed, its
+    // receiving text and citation refs riding inside
+    let (status, body) = get_json(&url, "/view/v1/t-1");
+    assert_eq!(status, 200, "{body}");
+    let consumer = json_of(&body);
+    let incorporation = consumer["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|part| part["title"] == json!("incorporates t-0@r2"))
+        .unwrap_or_else(|| panic!("no incorporation group: {consumer}"));
+    assert_eq!(incorporation["location"], json!("t-1@r1:/content/0"));
+    assert_eq!(incorporation["content"][0]["kind"], json!("ref"));
+    assert_eq!(incorporation["content"][0]["location"], json!("t-0@r2"));
+    assert_eq!(
+        incorporation["content"][1]["location"],
+        json!("t-1@r1:/content/0/incorporation/content/0")
+    );
+    assert_eq!(incorporation["content"][2]["kind"], json!("ref"));
+    assert_eq!(
+        incorporation["content"][2]["location"],
+        json!("t-0@r2/content/1")
+    );
+
+    // the history page: the full story in record order, commits with
+    // their messages, decisions with their grounds, the session behind
+    // the record, and the page refs
+    let (status, body) = get_json(&url, "/view/v1/t-0/history");
+    assert_eq!(status, 200, "{body}");
+    let history = json_of(&body);
+    assert_eq!(history["kind"], json!("timeline"));
+    assert_eq!(history["location"], json!("t-0/history"));
+    assert_eq!(history["task"], json!("t-0"));
+    assert_eq!(history["revision"], json!(2));
+    let entries = history["entries"].as_array().unwrap();
+    let events: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["event"].as_str().unwrap())
+        .collect();
+    assert!(
+        events.contains(&"task_created")
+            && events.contains(&"task_claimed")
+            && events.contains(&"task_committed")
+            && events.contains(&"task_offered")
+            && events.contains(&"task_rejected"),
+        "{events:?}"
+    );
+    let committed = entries
+        .iter()
+        .find(|entry| entry["event"] == json!("task_committed") && entry["revision"] == json!(2))
+        .unwrap();
+    assert_eq!(committed["message"], json!("annotate the boundary"));
+    assert_eq!(
+        committed["session"]["location"],
+        json!(format!("i-{inc_num}"))
+    );
+    let entry_refs = committed["refs"].as_array().unwrap();
+    assert!(
+        entry_refs
+            .iter()
+            .any(|r| r["location"] == json!("t-0@r2") && r["label"] == json!("revision r2")),
+        "{entry_refs:?}"
+    );
+    assert!(
+        entry_refs
+            .iter()
+            .any(|r| r["location"] == json!("t-0@r1..r2/diff")),
+        "{entry_refs:?}"
+    );
+    let rejected = entries
+        .iter()
+        .find(|entry| entry["event"] == json!("task_rejected"))
+        .unwrap();
+    assert_eq!(rejected["grounds"], json!("the boundary case is missing"));
+    // the deciding session rode the reject too
+    assert_eq!(
+        rejected["session"]["location"],
+        json!(format!("i-{inc_num}"))
+    );
+    // entries whose author carried no scope name none
+    let created = entries
+        .iter()
+        .find(|entry| entry["event"] == json!("task_created"))
+        .unwrap();
+    assert_eq!(created["session"], json!(Value::Null));
+    let claimed = entries
+        .iter()
+        .find(|entry| entry["event"] == json!("task_claimed"))
+        .unwrap();
+    assert_eq!(
+        claimed["session"]["location"],
+        json!(format!("i-{inc_num}"))
+    );
+
+    // the pinned history: the record cut at the revision's own commit
+    let (status, body) = get_json(&url, "/view/v1/t-0@r1/history");
+    assert_eq!(status, 200, "{body}");
+    let pinned_history = json_of(&body);
+    assert_eq!(pinned_history["location"], json!("t-0@r1/history"));
+    let pinned_events: Vec<&str> = pinned_history["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["event"].as_str().unwrap())
+        .collect();
+    assert!(
+        pinned_events.contains(&"task_committed"),
+        "{pinned_events:?}"
+    );
+    assert!(
+        !pinned_events.contains(&"task_offered") && !pinned_events.contains(&"task_rejected"),
+        "the cut runs at the revision's commit: {pinned_events:?}"
+    );
+
+    // the diff page: the stored unified diff, one text part
+    let (status, body) = get_json(&url, "/view/v1/t-0@r1..r2/diff");
+    assert_eq!(status, 200, "{body}");
+    let diff = json_of(&body);
+    assert_eq!(diff["kind"], json!("document"));
+    assert_eq!(diff["location"], json!("t-0@r1..r2/diff"));
+    assert_eq!(diff["content"][0]["kind"], json!("text"));
+    let diff_text = diff["content"][0]["text"].as_str().unwrap();
+    assert!(diff_text.contains("annotation"), "{diff_text}");
+    let (_, api_body) = get_json(&url, "/api/v1/boards/diff?task=0&from=1&to=2");
+    assert_eq!(
+        diff_text,
+        json_of(&api_body)["diff"].as_str().unwrap(),
+        "the page carries the stored diff"
+    );
+
+    // the file family: raw bytes, typed by extension
+    let mut response = ureq::get(&format!("{url}/view/v1/t-0@r2/file/board.yaml"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(response.headers().get("content-type").unwrap(), "text/yaml");
+    let bytes = response.body_mut().read_to_vec().unwrap();
+    assert_eq!(
+        bytes,
+        std::fs::read(&authored).unwrap(),
+        "the authored bytes"
+    );
+    let mut response = ureq::get(&format!("{url}/view/v1/t-0@r2/file/figures/plot.png"))
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+    let bytes = response.body_mut().read_to_vec().unwrap();
+    assert_eq!(bytes, b"\x89PNG-rusttest-bytes");
+    let (status, body) = get_json(&url, "/view/v1/t-0@r2/file/figures/absent.png");
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(json_of(&body)["code"], json!("file_missing"));
+
+    // the refusals are documents with informative statuses
+    let (status, body) = get_json(&url, "/view/v1/t-99");
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(json_of(&body)["code"], json!("invalid_task_id"));
+    let (status, body) = get_json(&url, "/view/v1/nonsense");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["code"], json!("unknown_location"));
+    let (status, body) = get_json(&url, "/view/v1/t-0@r9");
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(json_of(&body)["code"], json!("revision_missing"));
+    let (status, body) = get_json(&url, "/view/v1/t-0/content/0");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["code"], json!("unknown_location"));
+    let (status, body) = get_json(&url, "/view/v1/t-0@r2/file/%2E%2E/secret.yaml");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["code"], json!("bad_file_path"));
+    let (status, body) = get_json(&url, "/view/v1/t-0?after=notaseq");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(json_of(&body)["code"], json!("bad_query"));
+
+    // the page reads ride the same origin policy as every route
+    let response = ureq::get(&format!("{url}/view/v1/t-0"))
+        .header("Origin", "http://tauri.localhost")
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .unwrap(),
+        "http://tauri.localhost"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn view_v1_wait_parks_until_a_relevant_record_lands() {
+    let (_scratch, _serve, url, _inc_num, _inc_seq, _authored) = view_page_fixture("view-wait");
+
+    // the cursor the waits hang from
+    let (_, body) = get_json(&url, "/view/v1/");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+
+    // a wait on the board page parks: an unrelated task's birth does
+    // not wake it
+    let (tx, rx) = std::sync::mpsc::channel::<(u16, String)>();
+    let wait_url = url.clone();
+    let waiter = std::thread::spawn(move || {
+        let (status, body) = get_json(&wait_url, &format!("/view/v1/t-0?after={cursor}&timeout=8"));
+        tx.send((status, body)).unwrap();
+    });
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let (status, body) = post_command(
+        &url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"create_task": {"name": "an unrelated task"}}),
+        ),
+    );
+    assert_eq!(status, 200, "{body}");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    assert!(
+        rx.try_recv().is_err(),
+        "an unrelated record must not wake the page's wait"
+    );
+
+    // a record the fold attributes to t-0 wakes it, and the answer is
+    // the fresh page
+    let (status, body) = post_command(
+        &url,
+        &envelope(
+            "pi",
+            "agent",
+            json!({"claim_task": {"id": 0, "incarnation": null}}),
+        ),
+    );
+    assert_eq!(status, 200, "{body}");
+    let started = std::time::Instant::now();
+    waiter.join().unwrap();
+    let _ = started;
+    let (status, body) = rx.try_recv().expect("the wait woke");
+    assert_eq!(status, 200, "{body}");
+    let page = json_of(&body);
+    assert_eq!(page["kind"], json!("document"));
+    let woke_seq = page["seq"].as_u64().unwrap();
+    assert!(woke_seq > cursor, "{page}");
+    let content = page["content"].as_array().unwrap();
+    assert!(
+        content.iter().any(|part| part["label"] == json!("owner")),
+        "the fresh page carries the claim: {page}"
+    );
+
+    // a cursor already passed answers at once
+    let started = std::time::Instant::now();
+    let (status, body) = get_json(&url, &format!("/view/v1/t-0?after={}&timeout=8", cursor));
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "a passed cursor answers at once"
+    );
+
+    // the hold expiring is quiet: the page as it stands, a normal answer
+    let (_, body) = get_json(&url, "/view/v1/");
+    let fresh = json_of(&body)["seq"].as_u64().unwrap();
+    let started = std::time::Instant::now();
+    let (status, body) = get_json(&url, &format!("/view/v1/t-0?after={fresh}&timeout=1"));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(json_of(&body)["kind"], json!("document"));
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(900),
+        "the quiet answer held for its bound"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "the quiet answer did not over-hold"
+    );
+
+    // the root wakes on any record
+    let root_url = url.clone();
+    let root_wait = std::thread::spawn(move || {
+        get_json(&root_url, &format!("/view/v1/?after={fresh}&timeout=8"))
+    });
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let (status, body) = post_command(
+        &url,
+        &envelope(
+            "human person",
+            "human",
+            json!({"create_task": {"name": "wake the root"}}),
+        ),
+    );
+    assert_eq!(status, 200, "{body}");
+    let started = std::time::Instant::now();
+    let (status, body) = root_wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        json_of(&body)["seq"].as_u64().unwrap() > fresh,
+        "the root woke on any record"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+
+    // a refusal parks through its watch: a page that answers nothing
+    // today answers as it stands when the hold expires
+    let started = std::time::Instant::now();
+    let (status, body) = get_json(&url, &format!("/view/v1/t-99?after={fresh}&timeout=1"));
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(json_of(&body)["kind"], json!("refusal"));
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(900),
+        "the refusal parked for its bound first"
+    );
+}

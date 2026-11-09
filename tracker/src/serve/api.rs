@@ -77,6 +77,15 @@ pub struct LandingWake {
     notify: Arc<tokio::sync::Notify>,
 }
 
+impl LandingWake {
+    /// A parked read's registration: it resolves when this server's
+    /// own door lands a write. Every wake (or re-check floor) re-reads
+    /// the fold, so a spurious wake costs one read.
+    pub async fn notified(&self) {
+        self.notify.notified().await
+    }
+}
+
 /// The sole writer's state: every face loads the log fresh under the
 /// one lock, so no read can serve a world the file contradicts.
 #[derive(Clone)]
@@ -754,6 +763,11 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/boards/discard", post(board_discard))
         .route("/api/v1/boards/update", post(board_update))
         .route("/api/v1/version", get(version))
+        // the pages: the instruments' read surface, one door per route
+        // tail, every answer a view document or raw file bytes
+        .route("/view/v1", get(crate::serve::pages::view_root))
+        .route("/view/v1/", get(crate::serve::pages::view_root))
+        .route("/view/v1/{*location}", get(crate::serve::pages::view_page))
 }
 
 // -- the task-free workspace controller ----------------------------------

@@ -3,6 +3,7 @@
 pub mod api;
 pub mod board_wire;
 pub mod client;
+pub mod pages;
 pub mod wire;
 
 use tracing::info;
