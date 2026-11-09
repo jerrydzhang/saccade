@@ -130,7 +130,12 @@ impl Subscription {
             }
             let data = params.get("data").cloned().unwrap_or(Value::Null);
             let event_name = data.get("name").and_then(Value::as_str).unwrap_or("");
-            if event_name != name {
+            // across a core-to-core hop the news is machine-qualified
+            // (the pinned schema's hello: "news about t7 reaches it as
+            // rohan/t7"), so the deck's own event arrives as
+            // <machine>/<name> there; both forms match
+            let matches = event_name == name || event_name.ends_with(&format!("/{name}"));
+            if !matches {
                 continue;
             }
             let version = data.get("version").and_then(Value::as_u64).unwrap_or(0);
@@ -253,6 +258,33 @@ mod tests {
         );
         let opened = Subscription::open(&path, "");
         assert!(opened.is_err(), "{opened:?}");
+    }
+
+    #[test]
+    fn a_relayed_event_names_the_document_through_its_machine_prefix() {
+        let relayed = json!({
+            "jsonrpc": "2.0", "method": "event",
+            "params": {"type": "doc", "seq": 2,
+                       "data": {"name": "b/deck-ab", "version": 4}}
+        });
+        let (path, _requests) = framed_socket(
+            json!({"jsonrpc": "2.0", "id": 1, "result": {"terminals": [], "seq": 1}}),
+            vec![relayed],
+        );
+        let mut subscription = Subscription::open(&path, "").unwrap();
+        let event = subscription.next_doc_event("deck-ab").unwrap().unwrap();
+        assert_eq!(event.version, 4);
+        // another machine's document still does not match
+        let (path2, _requests2) = framed_socket(
+            json!({"jsonrpc": "2.0", "id": 1, "result": {"terminals": [], "seq": 1}}),
+            vec![json!({
+                "jsonrpc": "2.0", "method": "event",
+                "params": {"type": "doc", "seq": 2,
+                           "data": {"name": "b/deck-cd", "version": 4}}
+            })],
+        );
+        let mut subscription2 = Subscription::open(&path2, "").unwrap();
+        assert!(subscription2.next_doc_event("deck-ab").unwrap().is_none());
     }
 
     #[test]
