@@ -139,6 +139,42 @@ test("extreme schemes reach every floor", () => {
   }
 });
 
+test("the regression: an accent already at a lightness endpoint reaches everywhere", () => {
+  // independently found by i-9 on the fixed-budget walk: white on the
+  // nadir background never moved (clamped at L=1) and the opposite walk
+  // stopped partway; the walk now runs to the clamp itself
+  const white = floor("#ffffff", "#7a7a76", 4.5, 0);
+  assert.ok(white.reached, `white on nadir measured ${white.ratio.toFixed(2)}`);
+  for (const source of ["#ffffff", "#fefefe", "#fafafa", "#000000", "#010101", "#0a0a0a"]) {
+    for (const bg of ["#000000", "#101010", "#7a7a76", "#909090", "#f2f2f0", "#ffffff"]) {
+      const out = floor(source, bg, 4.5, 0);
+      assert.ok(out.reached, `${source} on ${bg}: measured ${out.ratio.toFixed(2)}`);
+    }
+  }
+});
+
+test("every accent hue reaches every background at every floor", () => {
+  const bgs = ["#000000", "#101010", "#303030", "#5c5c58", "#7a7a76", "#909090", "#c8c8c2", "#f2f2f0", "#ffffff"];
+  const dark = parseScheme(MOUNTAIN)!;
+  const mid = parseScheme(MID)!;
+  const light = parseScheme(LIGHT)!;
+  const accents = ["#ffffff", "#000000"];
+  for (const scheme of [dark, mid, light]) {
+    for (const key of ["08", "09", "0A", "0B", "0C", "0D", "0E", "0F"]) {
+      const hex = scheme[`base${key}`];
+      if (hex !== undefined) accents.push(hex);
+    }
+  }
+  for (const bg of bgs) {
+    for (const source of accents) {
+      for (const minRatio of [3.0, 3.2, 4.5]) {
+        const out = floor(source, bg, minRatio, 0.1);
+        assert.ok(out.reached, `${source} on ${bg} at ${minRatio}: measured ${out.ratio.toFixed(2)}`);
+      }
+    }
+  }
+});
+
 // The nadir background, measured: the natural-direction walk (against a
 // background near the contrast nadir, relative luminance about 0.19)
 // caps white-side contrast at about 4.31:1, so the floor falls back to

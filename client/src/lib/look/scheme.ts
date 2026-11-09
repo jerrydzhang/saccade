@@ -170,9 +170,14 @@ function walk(hex: string, bg: string, minRatio: number, minChroma: number, step
     return rgbHex(rgb);
   };
   let out = make();
-  for (let i = 0; i < 60 && ratio(out, bg) < minRatio; i++) {
-    L += step;
-    L = Math.max(0, Math.min(1, L));
+  // walk to the ratio or to the endpoint of the lightness axis: a fixed
+  // step budget cannot span [0, 1] from an extreme (an accent already at
+  // L=1 walking down needs the whole range), so the only stop is the
+  // clamp itself (independently found on the white-on-nadir case)
+  for (let i = 0; i < 200 && ratio(out, bg) < minRatio; i++) {
+    const prev = L;
+    L = Math.max(0, Math.min(1, L + step));
+    if (L === prev) break;
     out = make();
   }
   const measured = ratio(out, bg);
