@@ -205,9 +205,11 @@ nothing writes through `/view/v1`.
   cursor `seq` (the fold's last record the page was computed at);
   `?after=<seq>` answers at once when a record relevant to the
   location has landed past the cursor, else parks on the landing wake
-  with a 250 ms re-check floor (a spurious wake costs one read, an
-  out-of-process writer costs no more than the floor) until one lands
-  or the hold expires. Quiet is a normal answer: the page as it
+  until one lands or the hold expires. The hold is wake-driven: the
+  registration enters the wake's wait list before the deciding read
+  runs, so a write landing between the read and the park can never
+  be missed, and the wait's only timer is the wait's own deadline.
+  Quiet is a normal answer: the page as it
   stands, with its current cursor. The hold defaults to 25 s and
   `?timeout=` caps at 55 s. Relevant means the records the fold
   attributes to the page's task (the wait filter's activity set); the

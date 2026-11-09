@@ -33,10 +33,6 @@ pub const VIEW_MAJOR: u64 = 1;
 /// ceiling any client may ask for.
 const DEFAULT_HOLD: Duration = Duration::from_secs(25);
 const MAX_HOLD: Duration = Duration::from_secs(55);
-/// The parked read's re-check floor. The landing wake is the fast
-/// path; the re-check bounds a missed wake or an out-of-process writer
-/// to one extra read, the same patience the CLI wait keeps.
-const PARK_RECHECK: Duration = Duration::from_millis(250);
 
 // -- the page document --------------------------------------------------
 
@@ -1084,7 +1080,10 @@ fn parse_query(raw: Option<&str>) -> Result<(Option<u64>, Duration), PageFail> {
 
 /// The page door: build, park on the landing wake until a relevant
 /// record lands past the cursor or the hold expires, answer the page
-/// as it stands. Quiet is a normal answer.
+/// as it stands. Quiet is a normal answer. The hold is wake-driven:
+/// the registration enters the wake before the deciding read runs, so
+/// a write landing between the read and the park wakes the hold, and
+/// the wait's only timer is the deadline itself.
 async fn serve_page(app: &AppState, location: &str, raw_query: Option<&str>) -> Response {
     let (after, hold) = match parse_query(raw_query) {
         Ok(parsed) => parsed,
@@ -1092,20 +1091,26 @@ async fn serve_page(app: &AppState, location: &str, raw_query: Option<&str>) -> 
     };
     let deadline = Instant::now() + hold;
     loop {
-        match evaluate(app, location, after) {
-            Step::Serve(response) => return response,
-            Step::Park => {
-                let now = Instant::now();
-                if now >= deadline {
-                    // the hold expired quiet: answer the page as it stands
-                    return match evaluate(app, location, None) {
-                        Step::Serve(response) => response,
-                        Step::Park => unreachable!("a wait-free evaluation serves"),
-                    };
-                }
-                let bound = deadline.saturating_duration_since(now).min(PARK_RECHECK);
-                let _ = tokio::time::timeout(bound, app.landing.notified()).await;
-            }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let served = app
+            .landing
+            .hold(
+                || match evaluate(app, location, after) {
+                    Step::Serve(response) => Some(response),
+                    Step::Park => None,
+                },
+                remaining,
+            )
+            .await;
+        if let Some(response) = served {
+            return response;
+        }
+        if Instant::now() >= deadline {
+            // the hold expired quiet: answer the page as it stands
+            return match evaluate(app, location, None) {
+                Step::Serve(response) => response,
+                Step::Park => unreachable!("a wait-free evaluation serves"),
+            };
         }
     }
 }
