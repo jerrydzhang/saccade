@@ -324,7 +324,7 @@ pub struct HistoryEntry {
 
 /// The incarnation a record's recorded scope names, as the public
 /// i-N; a scope naming no resident incarnation names no session.
-fn session_of(world: &World, row: &crate::db::StoredRecord) -> Option<String> {
+pub(crate) fn session_of(world: &World, row: &crate::db::StoredRecord) -> Option<String> {
     let scope: crate::store::Scope = serde_json::from_str(row.scope.as_ref()?).ok()?;
     let num = world.incarnation_num(scope.incarnation?);
     num.map(|num| format!("i-{num}"))

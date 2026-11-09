@@ -10077,3 +10077,265 @@ async fn the_agents_page_names_sessions_ownership_and_workspaces() {
         "the hold stayed quiet for its bound first"
     );
 }
+
+// The pipeline page (t-14 "Tasks and agents"): one view, sectioned by
+// recorded state - waiting (open, not claimed), in flight (open and
+// claimed), awaiting judgment (offered), concluded in the last 24
+// hours. A row is task, title, agents, latest commit, with the task's
+// birth moment riding the row and its location the board Enter opens
+// through the link. The page's watch is the whole fold: any landing
+// can move some row.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pipeline_page_sections_the_recorded_state() {
+    let (_scratch, _serve, url, inc_num, inc_seq, _authored, _project) =
+        view_page_fixture("pipeline-page");
+
+    let section_table = |doc: &Value, title: &str| -> Value {
+        doc["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["kind"] == "group" && g["title"] == json!(title))
+            .unwrap_or_else(|| panic!("the {title} section is on the page"))["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["kind"] == "table")
+            .expect("the section holds one table")
+            .clone()
+    };
+    let row_of = |table: &Value, task: &str| -> Option<Value> {
+        table["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["cells"].as_array().unwrap().first() == Some(&json!(task)))
+            .cloned()
+    };
+
+    let (_, body) = get_json(&url, "/view/v1/tasks");
+    let doc = json_of(&body);
+    assert_eq!(doc["kind"], "document");
+    assert_eq!(doc["location"], "tasks");
+    let waiting = section_table(&doc, "waiting");
+    assert_eq!(
+        waiting["columns"],
+        json!(["task", "title", "agents", "latest commit"])
+    );
+    // the fixture's end state: t-1 open and unclaimed, t-0 offered
+    let t1 = row_of(&waiting, "t-1").expect("t-1 waits");
+    assert_eq!(t1["cells"][1], json!("use the proof"));
+    assert_eq!(t1["cells"][2], json!(""), "unclaimed: no agents");
+    assert_eq!(t1["location"], json!("t-1"));
+    assert!(
+        t1["at"].as_u64().is_some(),
+        "the row carries its birth moment"
+    );
+    let offered = section_table(&doc, "awaiting judgment");
+    let t0 = row_of(&offered, "t-0").expect("t-0 is offered");
+    assert_eq!(t0["cells"][2], json!(format!("i-{inc_num}")));
+    assert_eq!(t0["location"], json!("t-0"));
+    // the latest commit is the board page's own commit fact
+    let (_, body) = get_json(&url, "/view/v1/t-0");
+    let commit = json_of(&body)["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "fact" && p["label"] == "commit")
+        .unwrap()["value"]
+        .clone();
+    assert_eq!(t0["cells"][3], commit);
+    // the empty sections are present, plain and empty
+    assert!(
+        section_table(&doc, "in flight")["rows"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        section_table(&doc, "concluded last 24h")["rows"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // a claim moves the task into flight, naming its agent
+    let (ok, _, err) = view_page_sac(&url, Some(inc_seq as u64), Some("t-1"), &["claim", "t-1"]);
+    assert!(ok, "{err}");
+    let (_, body) = get_json(&url, "/view/v1/tasks");
+    let doc = json_of(&body);
+    let t1 = row_of(&section_table(&doc, "in flight"), "t-1").expect("t-1 is in flight");
+    assert_eq!(t1["cells"][2], json!(format!("i-{inc_num}")));
+    assert!(row_of(&section_table(&doc, "waiting"), "t-1").is_none());
+
+    // the acceptance concludes, inside the 24h window - accepted by
+    // another actor, never the claimer (self_acceptance refuses)
+    let (status, body) = post_command(
+        &url,
+        &envelope("hub", "human", json!({"accept_board": {"task": 0}})),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (_, body) = get_json(&url, "/view/v1/tasks");
+    let doc = json_of(&body);
+    assert!(row_of(&section_table(&doc, "concluded last 24h"), "t-0").is_some());
+    assert!(row_of(&section_table(&doc, "awaiting judgment"), "t-0").is_none());
+
+    // the page's watch is the whole fold: a parked hold wakes on the
+    // next landing, and the answer carries the landing's row
+    let (_, body) = get_json(&url, "/view/v1/tasks");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let wait = {
+        let url = url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, &format!("/view/v1/tasks?after={cursor}&timeout=8"))
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let (ok, out, _) = view_page_sac(&url, None, None, &["create", "task", "a new waiting row"]);
+    assert!(ok, "{out}");
+    let started = std::time::Instant::now();
+    let (status, body) = wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(7),
+        "the landing woke the hold, the deadline did not"
+    );
+    let doc = json_of(&body);
+    let fresh = row_of(&section_table(&doc, "waiting"), "t-2").expect("the new task waits");
+    assert_eq!(fresh["cells"][1], json!("a new waiting row"));
+}
+
+// The agents page's one t-18 addition (t-24@r4): each session's last
+// board commit, from the scope recorded on each commit. Nothing where
+// the session landed no commit; a commit moves only its own session's
+// fact; the commit landing wakes the page.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agents_page_names_each_sessions_last_commit() {
+    let (_scratch, _serve, url, inc_num, _inc_seq, _authored, _project) =
+        view_page_fixture("agents-last-commit");
+    let fact_value = |doc: &Value, incarnation: &str, label: &str| -> Option<String> {
+        doc["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["kind"] == "group" && g["location"] == json!(incarnation))
+            .expect("the session's group is on the page")["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["kind"] == "fact" && p["label"] == label)
+            .map(|f| f["value"].as_str().unwrap().to_string())
+    };
+    let board_commit = |task: &str| -> String {
+        let (_, body) = get_json(&url, &format!("/view/v1/{task}"));
+        json_of(&body)["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["kind"] == "fact" && p["label"] == "commit")
+            .unwrap()["value"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // the fixture's last session-scoped commit is t-1's r1, after
+    // t-0's two revisions
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let doc = json_of(&body);
+    let me = format!("i-{inc_num}");
+    assert_eq!(
+        fact_value(&doc, &me, "last commit").as_deref(),
+        Some(board_commit("t-1").as_str()),
+        "the last commit the session's scope rode"
+    );
+
+    // a second session lands no commit: no fact
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "agents-last-commit-second", "address": "tB", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let second_seq = json_of(&body)["incarnation"].as_u64().unwrap();
+    let theirs = format!("i-{}", inc_num + 1);
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let doc = json_of(&body);
+    assert_eq!(fact_value(&doc, &theirs, "last commit"), None);
+
+    // the second session's own commit moves only its own fact
+    let (ok, _, err) = view_page_sac(&url, None, None, &["create", "task", "a fresh board"]);
+    assert!(ok, "{err}");
+    let (ok, _, err) = view_page_sac(&url, Some(second_seq), Some("t-2"), &["claim", "t-2"]);
+    assert!(ok, "{err}");
+    let src = _project.join("lastcommit-dir");
+    let (ok, out, _) = view_page_sac(
+        &url,
+        Some(second_seq),
+        Some("t-2"),
+        &["board", "edit", "t-2", src.to_str().unwrap()],
+    );
+    assert!(ok, "{out}");
+    std::fs::write(
+        src.join("board.yaml"),
+        "grammar: 1\ntask: t-2\ncontent:\n  - text: the second session's own commit\n",
+    )
+    .unwrap();
+    let (ok, _, err) = view_page_sac(
+        &url,
+        Some(second_seq),
+        Some("t-2"),
+        &[
+            "board",
+            "commit",
+            "t-2",
+            src.to_str().unwrap(),
+            "-m",
+            "the second session commits",
+        ],
+    );
+    assert!(ok, "{err}");
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let doc = json_of(&body);
+    assert_eq!(
+        fact_value(&doc, &theirs, "last commit").as_deref(),
+        Some(board_commit("t-2").as_str())
+    );
+    assert_eq!(
+        fact_value(&doc, &me, "last commit").as_deref(),
+        Some(board_commit("t-1").as_str()),
+        "the first session's fact is its own last commit"
+    );
+
+    // a commit landing wakes the page: the watch grew the commit kind
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let wait = {
+        let url = url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, &format!("/view/v1/agents?after={cursor}&timeout=8"))
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let (ok, _, err) = view_page_sac(
+        &url,
+        Some(second_seq),
+        Some("t-2"),
+        &[
+            "board",
+            "commit",
+            "t-2",
+            src.to_str().unwrap(),
+            "-m",
+            "the waking commit",
+        ],
+    );
+    assert!(ok, "{err}");
+    let started = std::time::Instant::now();
+    let (status, body) = wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(7),
+        "the commit landing woke the hold"
+    );
+}
