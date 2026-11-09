@@ -1135,18 +1135,21 @@
       deckFeedLost = String(error);
       return;
     }
-    while (deck === current) {
+    // the hold loops on the ADDRESS, not on a deck object: every
+    // landing reassigns the deck state, and an identity loop would
+    // stop watching after the first cue
+    while (deck !== null && deck.name === current.name) {
       let message: { kind?: string; version?: number; reason?: string };
       try {
         message = (await deckInvoke()("deck_wait", { name: current.name })) as typeof message;
       } catch (error) {
-        if (deck !== current) return;
+        if (deck === null || deck.name !== current.name) return;
         deckFeedLost = String(error);
         return;
       }
-      if (deck !== current) return;
+      if (deck === null || deck.name !== current.name) return;
       if (message.kind === "doc") {
-        await deckDocument(current);
+        await deckDocument();
         continue;
       }
       if (message.kind === "lost") {
@@ -1157,21 +1160,21 @@
     }
   }
 
-  async function deckDocument(expected: DeckState): Promise<void> {
-    const current = deck;
-    if (!current || current !== expected) return;
+  async function deckDocument(): Promise<void> {
+    const before = deck;
+    if (!before) return;
     let doc: { value: unknown; version: number };
     try {
       doc = (await deckInvoke()("deck_read", {
-        name: current.name,
+        name: before.name,
         on: deckMachine,
       })) as typeof doc;
     } catch {
       return;
     }
-    if (deck !== current) return;
-    const onLatest = view.slideIndex !== null && view.slideIndex === current.position;
-    const event = applyDocument(current, onLatest, doc.value, doc.version);
+    if (deck !== before) return;
+    const onLatest = view.slideIndex !== null && view.slideIndex === before.position;
+    const event = applyDocument(before, onLatest, doc.value, doc.version);
     if (event.dead) {
       // the address is dead: the document was deleted from outside
       deck = null;
@@ -1180,6 +1183,9 @@
       return;
     }
     deck = event.state;
+    console.log(
+      `[viewer] cue landing: arrived=${event.arrived.length} show=${event.show} slides=${event.state.slides.length}`,
+    );
     // file slides snapshot when the cue lands; boards pin by revision
     // when shown (their location already carries @rK if the agent
     // cued it, else the open pins what answers)
@@ -1218,6 +1224,7 @@
       publishNote = `slide ${index + 1} is a location this viewer cannot parse: ${spec}`;
       return;
     }
+    console.log(`[viewer] show slide ${index + 1}: ${spec}`);
     if (location.machine.startsWith("tracker:")) {
       await model.open(location, { deck: true, slideIndex: index });
     } else {
@@ -1228,6 +1235,9 @@
         await model.open(location, { deck: true, slideIndex: index });
       }
     }
+    console.log(
+      `[viewer] slide shown: index=${index} view=${model.snapshot.location?.path ?? "none"} status=${model.snapshot.status}`,
+    );
     if (deck !== current) return;
     deck = { ...current, position: index, entered: true };
   }

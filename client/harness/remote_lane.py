@@ -752,6 +752,12 @@ def main() -> int:
             perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": spec})
             perform_input(state.client, {"kind": "click", "target": "open:host"})
 
+        def click_open() -> None:
+            # the field already names the file: WebKit's clear-then-retype
+            # raced its own input events on the second pass, so the
+            # reopen re-clicks the standing field instead
+            perform_input(state.client, {"kind": "click", "target": "open:host"})
+
         def inspection_bounded(predicate, timeout: float, what: str):
             deadline = time.monotonic() + timeout
             last = "no read"
@@ -895,10 +901,17 @@ def main() -> int:
                 )
 
                 # the kept text rides: reopen the freshly read file and
-                # press a - the editor opens with the kept text
-                type_and_open(str(live_path))
+                # press a - the editor opens with the kept text. The
+                # freshness marker is the render generation: the click
+                # re-opens the standing location, and a new generation
+                # that settles loaded is the fresh read.
+                generation_before = client.execute(
+                    "return window.__boardViewer.inspection().renderGeneration;"
+                )
+                click_open()
                 inspection_bounded(
-                    lambda item: (item.get("resource") or {}).get("status") == "loaded",
+                    lambda item: (item.get("resource") or {}).get("status") == "loaded"
+                    and item.get("renderGeneration") != generation_before,
                     CONNECT_WAIT_SECONDS,
                     "the file reopens after the refusal",
                 )
