@@ -41,6 +41,11 @@ export type ViewerState = {
    * slide: a human open always clears it, a deck show always sets it
    * (t-24@r21: on the latest slide only while showing it as cued). */
   slideIndex: number | null;
+  /** The location the open ASKED for - a bare tracker location stays
+   * bare here while `location` names the resolved revision, so the
+   * annotation act can tell "the human opened the current board" from
+   * "the human pinned a revision" (t-24@r11's rule). */
+  askedLocation: Location | null;
 };
 
 export class ViewerModel {
@@ -57,6 +62,7 @@ export class ViewerModel {
     copyMode: "source",
     theme: "system",
     slideIndex: null,
+    askedLocation: null,
   };
 
   /** Monotonic open generation: stale loads and hydrations are dropped
@@ -131,6 +137,7 @@ export class ViewerModel {
     this.set({
       status: "loading",
       location,
+      askedLocation: location,
       board: null,
       rawText: null,
       errors: [],
@@ -183,6 +190,7 @@ export class ViewerModel {
       renderOutcomes: [],
       renderGeneration: null,
       slideIndex,
+      askedLocation: location,
     });
     await this.admit(location, text, token);
   }

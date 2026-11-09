@@ -833,7 +833,11 @@
       draftEditor = { path: `/content/${index}`, text: loadKeptExplainer(location.path) ?? "" };
       return;
     }
-    const spec = parseTaskSpec(location.path);
+    // the revision gate reads the ASKED location: a bare open is the
+    // human asking for the current board, and the view naming its
+    // resolved revision does not make it pinned (t-24@r11 refuses a
+    // revision the human actually pinned)
+    const spec = parseTaskSpec((view.askedLocation ?? location).path);
     if (!spec) {
       publishNote =
         "annotations draft on a task board or on a bare path on the tracker's machine; this location is neither - bare paths only for the explainer write (t-24@r21)";
@@ -841,8 +845,8 @@
     }
     draftKind = "task";
     if (spec.revision !== null) {
-      // t-24@r11: only the current revision drafts; a pinned older
-      // revision refuses, saying where annotation is possible
+      // t-24@r11: only the current revision drafts; a pinned revision
+      // refuses, saying where annotation is possible
       publishNote = "only the current revision of a task board drafts; open the task bare (tracker/t-N) and annotate there";
       return;
     }
@@ -992,7 +996,9 @@
         publishNote = "annotations publish on a task board served by a tracker";
         return;
       }
-      const spec = parseTaskSpec(location.path);
+      // the revision gate reads the ASKED location, exactly as the
+      // draft gate does: a bare open is the current board
+      const spec = parseTaskSpec((view.askedLocation ?? location).path);
       if (!spec) return;
       if (spec.revision !== null) {
         publishNote = "only the current revision of a task board publishes; open the task bare (tracker/t-N)";

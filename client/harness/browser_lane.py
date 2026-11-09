@@ -676,6 +676,51 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 str(inspection["resource"]),
             )
 
+            # the annotation act on a task board: a opens the draft
+            # editor beside the part at the reading height (re-pinned
+            # here because t-21's lanes caught the act-part walk
+            # matching nothing)
+            probe = page.evaluate("""() => ({
+                blocksBoard: document.querySelectorAll('.content > .board > .block').length,
+                status: window.__boardViewer.inspection().resource.status,
+                focused: document.activeElement ? document.activeElement.tagName : 'none',
+                note: document.querySelector('[data-control="action:note"]')?.textContent ?? '',
+                editorOpen: document.querySelector('[data-control="draft:input"]') !== null,
+            })""")
+            print(f"[browser] pre-press probe: {json.dumps(probe)}", flush=True)
+            page.keyboard.press("a")
+            page.wait_for_timeout(500)
+            page.wait_for_selector('[data-control="draft:input"]')
+            check("a on a task board opens the draft editor", True)
+            page.click('[data-control="draft:cancel"]')
+            page.wait_for_selector('[data-control="draft:input"]', state="detached")
+            check("the draft editor's cancel closes it", True)
+
+            # a pinned revision the human actually asked for refuses
+            # (t-24@r11), naming where annotation is possible
+            inspection = open_location("smoke/t-0@r1")
+            check(
+                "the pinned location opens at its revision",
+                inspection["resource"]["status"] == "loaded"
+                and inspection["resource"]["path"] == "t-0@r1",
+                str(inspection["resource"]),
+            )
+            page.keyboard.press("a")
+            page.wait_for_timeout(500)
+            pinned_note = str(
+                page.evaluate(
+                    "() => document.querySelector('[data-control=\"action:note\"]')?.textContent ?? ''"
+                )
+            )
+            pinned_editor = page.evaluate(
+                "() => document.querySelector('[data-control=\"draft:input\"]') !== null"
+            )
+            check(
+                "a pinned open refuses drafting, saying where annotation is possible",
+                pinned_editor is not True and "only the current revision" in pinned_note,
+                f"editor={pinned_editor} note={pinned_note[:140]}",
+            )
+
             page.wait_for_selector('[data-control="board:open-citation"]')
             label = page.text_content('[data-control="board:open-citation"]')
             check(
