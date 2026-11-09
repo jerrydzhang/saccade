@@ -18,6 +18,28 @@ export const DEL_CLOSE = "\uE003";
 
 // -- part alignment ----------------------------------------------------
 
+/** The LCS length table for two sequences under a key function: the
+ * one table both the part alignment and the line diff walk. */
+function lcsLengths<A, B>(a: A[], b: B[], equal: (x: A, y: B) => boolean): number[][] {
+  const table: number[][] = Array.from({ length: a.length + 1 }, () =>
+    new Array<number>(b.length + 1).fill(0),
+  );
+  for (let r = a.length - 1; r >= 0; r--) {
+    const row = table[r];
+    const below = table[r + 1];
+    if (!row || !below) continue;
+    for (let c = b.length - 1; c >= 0; c--) {
+      const diagonal = below[c + 1] ?? 0;
+      const down = below[c] ?? 0;
+      const right = row[c + 1] ?? 0;
+      const x = a[r];
+      const y = b[c];
+      row[c] = x !== undefined && y !== undefined && equal(x, y) ? diagonal + 1 : Math.max(down, right);
+    }
+  }
+  return table;
+}
+
 function partKey(block: Block): string {
   if (block.kind === "text" || block.kind === "annotation") return `t:${block.markdown.trim()}`;
   if (block.kind === "group") return `g:${block.title ?? ""}`;
@@ -41,26 +63,20 @@ export type PartAlignment = {
 export function alignParts(oldBlocks: Block[], newBlocks: Block[]): PartAlignment[] {
   const oldKeys = oldBlocks.map(partKey);
   const newKeys = newBlocks.map(partKey);
+  const table = lcsLengths(oldKeys, newKeys, (x, y) => x === y);
   const rows = oldKeys.length;
   const cols = newKeys.length;
-  const table: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(cols + 1).fill(0));
-  for (let r = rows - 1; r >= 0; r--) {
-    for (let c = cols - 1; c >= 0; c--) {
-      table[r][c] =
-        oldKeys[r] === newKeys[c]
-          ? (table[r + 1][c + 1] ?? 0) + 1
-          : Math.max(table[r + 1][c] ?? 0, table[r][c + 1] ?? 0);
-    }
-  }
   const alignment: PartAlignment[] = [];
   let r = 0;
   let c = 0;
   while (r < rows && c < cols) {
-    if (oldKeys[r] === newKeys[c]) {
+    const below = table[r + 1]?.[c] ?? 0;
+    const right = table[r]?.[c + 1] ?? 0;
+    if (oldKeys[r] !== undefined && oldKeys[r] === newKeys[c]) {
       alignment.push({ op: "same", oldIndex: r, newIndex: c });
       r++;
       c++;
-    } else if ((table[r + 1][c] ?? 0) >= (table[r][c + 1] ?? 0)) {
+    } else if (below >= right) {
       alignment.push({ op: "removed", oldIndex: r });
       r++;
     } else {
@@ -80,7 +96,7 @@ export function alignParts(oldBlocks: Block[], newBlocks: Block[]): PartAlignmen
   // and an addition of the SAME content anywhere are a move
   const merged: PartAlignment[] = [];
   for (const step of alignment) {
-    const last = merged[merged.length - 1];
+    const last = merged.at(-1);
     if (
       last &&
       last.op === "removed" &&
@@ -89,14 +105,14 @@ export function alignParts(oldBlocks: Block[], newBlocks: Block[]): PartAlignmen
       step.newIndex !== undefined
     ) {
       const removed = merged.pop();
+      const removedIndex = removed?.oldIndex;
       if (
-        removed &&
-        removed.oldIndex !== undefined &&
-        oldKeys[removed.oldIndex] === newKeys[step.newIndex]
+        removedIndex !== undefined &&
+        oldKeys[removedIndex] === newKeys[step.newIndex]
       ) {
-        merged.push({ op: "moved", oldIndex: removed.oldIndex, newIndex: step.newIndex });
-      } else {
-        merged.push({ op: "changed", oldIndex: removed.oldIndex, newIndex: step.newIndex });
+        merged.push({ op: "moved", oldIndex: removedIndex, newIndex: step.newIndex });
+      } else if (removedIndex !== undefined) {
+        merged.push({ op: "changed", oldIndex: removedIndex, newIndex: step.newIndex });
       }
       continue;
     }
@@ -107,25 +123,29 @@ export function alignParts(oldBlocks: Block[], newBlocks: Block[]): PartAlignmen
   const openRemovals = new Map<string, number>();
   for (const step of merged) {
     if (step.op === "removed" && step.oldIndex !== undefined) {
-      openRemovals.set(oldKeys[step.oldIndex] ?? "", step.oldIndex);
+      const key = oldKeys[step.oldIndex];
+      if (key !== undefined) openRemovals.set(key, step.oldIndex);
     }
   }
-  for (let index = 0; index < merged.length; index++) {
-    const step = merged[index];
+  const result: PartAlignment[] = [];
+  for (const step of merged) {
     if (step.op === "added" && step.newIndex !== undefined) {
-      const key = newKeys[step.newIndex] ?? "";
-      const removedAt = openRemovals.get(key);
+      const key = newKeys[step.newIndex];
+      const removedAt = key === undefined ? undefined : openRemovals.get(key);
       if (removedAt !== undefined) {
-        merged[index] = { op: "moved", oldIndex: removedAt, newIndex: step.newIndex };
-        const removalIndex = merged.findIndex(
+        // drop the paired removal, keep the move
+        const removalIndex = result.findIndex(
           (candidate) => candidate.op === "removed" && candidate.oldIndex === removedAt,
         );
-        if (removalIndex >= 0) merged.splice(removalIndex, 1);
-        openRemovals.delete(key);
+        if (removalIndex >= 0) result.splice(removalIndex, 1);
+        if (key !== undefined) openRemovals.delete(key);
+        result.push({ op: "moved", oldIndex: removedAt, newIndex: step.newIndex });
+        continue;
       }
     }
+    result.push(step);
   }
-  return merged;
+  return result;
 }
 
 // -- markers -----------------------------------------------------------
@@ -162,14 +182,9 @@ function words(text: string): string[] {
 export function wordDiff(oldText: string, newText: string): Marked[] {
   const a = words(oldText);
   const b = words(newText);
+  const table = lcsLengths(a, b, (x, y) => x === y);
   const rows = a.length;
   const cols = b.length;
-  const table: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(cols + 1).fill(0));
-  for (let r = rows - 1; r >= 0; r--) {
-    for (let c = cols - 1; c >= 0; c--) {
-      table[r][c] = a[r] === b[c] ? (table[r + 1][c + 1] ?? 0) + 1 : Math.max(table[r + 1][c] ?? 0, table[r][c + 1] ?? 0);
-    }
-  }
   const marks: Marked[] = [];
   const push = (type: Marked["type"], text: string): void => {
     const last = marks[marks.length - 1];
@@ -179,11 +194,13 @@ export function wordDiff(oldText: string, newText: string): Marked[] {
   let r = 0;
   let c = 0;
   while (r < rows && c < cols) {
-    if (a[r] === b[c]) {
+    const below = table[r + 1]?.[c] ?? 0;
+    const right = table[r]?.[c + 1] ?? 0;
+    if (a[r] !== undefined && a[r] === b[c]) {
       push("same", a[r] ?? "");
       r++;
       c++;
-    } else if ((table[r + 1][c] ?? 0) >= (table[r][c + 1] ?? 0)) {
+    } else if (below >= right) {
       push("del", a[r] ?? "");
       r++;
     } else {
@@ -208,17 +225,9 @@ export function wordDiff(oldText: string, newText: string): Marked[] {
 export function structuredLineDiff(oldText: string, newText: string): Marked[] {
   const oldLines = oldText.split("\n");
   const newLines = newText.split("\n");
+  const table = lcsLengths(oldLines, newLines, (x, y) => x === y);
   const rows = oldLines.length;
   const cols = newLines.length;
-  const table: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(cols + 1).fill(0));
-  for (let r = rows - 1; r >= 0; r--) {
-    for (let c = cols - 1; c >= 0; c--) {
-      table[r][c] =
-        oldLines[r] === newLines[c]
-          ? (table[r + 1][c + 1] ?? 0) + 1
-          : Math.max(table[r + 1][c] ?? 0, table[r][c + 1] ?? 0);
-    }
-  }
   const out: Marked[] = [];
   const pushLine = (marks: Marked[]): void => {
     if (out.length > 0 && marks.length > 0) {
