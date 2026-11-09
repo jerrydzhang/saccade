@@ -1240,7 +1240,7 @@
       publishNote = `slide ${index + 1} is a location this viewer cannot parse: ${spec}`;
       return;
     }
-    console.log(`[viewer] show slide ${index + 1}: ${spec}`);
+    console.log(`[viewer] show slide ${index + 1}: ${spec} via ${(new Error().stack ?? "").split("\n")[2]?.trim() ?? "?"}`);
     if (location.machine.startsWith("tracker:")) {
       await model.open(location, { deck: true, slideIndex: index });
     } else {
