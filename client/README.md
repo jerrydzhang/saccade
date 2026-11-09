@@ -89,8 +89,12 @@ in-app persistence.
 - Meaning-bearing roles keep their hue and are floored in OKLCH
   against the background: about 3:1 for the state shapes, 4.5:1 for
   state text, 3:1 for muted ink, the accent and the selection label.
-  A role that cannot reach its floor is measured and reported by the
-  tests, never silently shipped.
+  The floor is always reachable (white or black clears about 4.58:1
+  against any background): the walk goes in the natural direction
+  first and falls back to the opposite direction when that cannot
+  reach the ratio (t-24@r10). A miss is a defect, caught by the tests
+  over dark, light, mid-luminance, hostile and grayscale schemes -
+  never a shipped state and never a log line.
 - The colour tokens live only in `src/lib/look/` (scheme parsing, the
   floor, the map, the store); the stylesheets read tokens and never
   name a colour. `styles/tokens.css` holds the static tokens (faces,

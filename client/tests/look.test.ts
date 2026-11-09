@@ -10,7 +10,6 @@ import { dirname, join } from "node:path";
 import { floor, hueDistance, parseScheme, ratio, schemeName, toOklchHue } from "../src/lib/look/scheme.ts";
 import { DEFAULT_SCHEME_TEXT, lookVars, polarity, WEIGHTS } from "../src/lib/look/lookVars.ts";
 import {
-  missesSignature,
   resolveLook,
   setLookOverride,
   type LookSource,
@@ -130,26 +129,21 @@ test("the token map reaches every floored role on the default and light schemes"
   }
 });
 
-test("extreme schemes measure their floors; misses are reported, never silent", () => {
+test("extreme schemes reach every floor", () => {
   const look = lookVars(EXTREME, "regular");
-  // whatever cannot be reached is named with its measured ratio
-  for (const miss of look.misses) {
-    assert.ok(miss.measured > 0 && miss.measured < miss.requested, `nonsense miss: ${JSON.stringify(miss)}`);
-  }
-  // and the roles that are reachable must genuinely reach
+  assert.deepEqual(look.misses, [], `hostile scheme misses: ${JSON.stringify(look.misses)}`);
   const bg = parseScheme(EXTREME)!.base00 as string;
   for (const token of ["--s-working", "--s-done", "--c-task", "--ref"]) {
-    if (look.misses.some((m) => `--${m.token}` === token)) continue;
     const measured = ratio(look.vars[token] as string, bg);
     assert.ok(measured >= 3.0, `${token} measured ${measured.toFixed(2)}`);
   }
 });
 
-// The one structural impossibility, measured and disclosed (i-3 review,
-// t-16): a scheme whose base00 sits near the contrast nadir (relative
-// luminance about 0.19) caps white-side contrast at about 4.31:1, so no
-// colour can meet a 4.5:1 text floor against it. The floor walks to the
-// clamp and reports; the state shapes' 3:1 floors still hold.
+// The nadir background, measured: the natural-direction walk (against a
+// background near the contrast nadir, relative luminance about 0.19)
+// caps white-side contrast at about 4.31:1, so the floor falls back to
+// the opposite direction, where black side clears the floor. The floor
+// is always reachable; a miss would be a defect (t-24@r10).
 const MID = `scheme: "Mid"
 base00: "7a7a76"
 base01: "6e6e6a"
@@ -168,17 +162,38 @@ base0D: "4c4c7a"
 base0E: "7a4c7a"
 base0F: "7a5c5c"`;
 
-test("a mid-luminance scheme cannot reach a 4.5 text floor; the miss is exact", () => {
+test("the nadir background reaches every floor via the opposite walk", () => {
   const look = lookVars(MID, "regular");
+  assert.deepEqual(look.misses, [], `the nadir scheme must reach: ${JSON.stringify(look.misses)}`);
   const bg = parseScheme(MID)!.base00 as string;
-  assert.ok(look.misses.length > 0, "the nadir scheme must report its misses");
-  for (const miss of look.misses) {
-    assert.equal(miss.requested, 4.5, "only the text floors miss");
-    assert.ok(miss.measured >= 4.28 && miss.measured <= 4.32, `${miss.token} measured ${miss.measured.toFixed(2)}`);
+  // the text floors hold (reached through the fallback direction)
+  for (const token of ["--c-task", "--c-sess", "--ref", "--w-ui-error"]) {
+    const measured = ratio(look.vars[token] as string, bg);
+    assert.ok(measured >= 4.5, `${token} measured ${measured.toFixed(2)}`);
   }
-  // the shape floors hold even at the nadir
+  // and the shape floors hold
   assert.ok(ratio(look.vars["--s-working"] as string, bg) >= 3.2);
   assert.ok(ratio(look.vars["--s-error"] as string, bg) >= 3.2);
+});
+
+test("white or black clears 4.5 against any background; the sweep reaches everywhere", () => {
+  // the arithmetic r10 names: the worse side of white vs black bottoms
+  // out at about 4.58:1 at the luminance crossover (about 0.179)
+  for (const bg of ["#000000", "#101010", "#303030", "#4a4a46", "#5c5c58", "#6e6e6a", "#7a7a76", "#85857f", "#909090", "#9a9a94", "#c8c8c2", "#d8d2c4", "#e6e1d6", "#f2f2f0", "#f4f1ea", "#ffffff"]) {
+    const white = ratio("#ffffff", bg);
+    const black = ratio("#000000", bg);
+    assert.ok(Math.max(white, black) >= 4.58, `${bg}: white ${white.toFixed(2)} black ${black.toFixed(2)}`);
+  }
+  // and the whole token map reaches every floor across broad schemes:
+  // dark and light, mid-luminance, hostile hues, grayscale
+  for (const schemeText of [MOUNTAIN, LIGHT, EXTREME, MID]) {
+    const look = lookVars(schemeText, "regular");
+    assert.deepEqual(
+      look.misses,
+      [],
+      `${schemeName(schemeText) ?? "scheme"}: ${JSON.stringify(look.misses)}`,
+    );
+  }
 });
 
 test("light or dark is the scheme's own; nothing reverses", () => {
@@ -301,21 +316,6 @@ test("an invalid configured scheme falls back and says so", () => {
   const look = resolveLook(bad);
   assert.equal(look.scheme.base00, "#100f0e");
   assert.match(look.notice ?? "", /not a complete base16 scheme/);
-});
-
-test("the floor miss signature dedupes the once-log", () => {
-  const look = lookVars(MID, "regular");
-  const resolved = { ...resolveLook(null), misses: look.misses };
-  assert.equal(resolved.misses.length > 0, true);
-  const signature = missesSignature(resolved);
-  assert.ok(signature.includes("c-task@4.5="), signature);
-  // the same miss set signs identically (the once-log suppresses it)
-  assert.equal(missesSignature({ ...resolveLook(null), misses: look.misses }), signature);
-  // a different miss set signs differently (the once-log reports it)
-  const other = { ...resolved, misses: [{ token: "ref", requested: 4.5, measured: 4.4 }] };
-  assert.notEqual(missesSignature(other), signature);
-  // no misses: an empty signature, nothing the once-log would print
-  assert.equal(missesSignature(resolveLook(null)), "");
 });
 
 test("the inspection override is a test surface, in memory only", () => {

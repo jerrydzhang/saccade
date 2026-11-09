@@ -133,20 +133,32 @@ export type FloorOutcome = {
 
 /**
  * The contrast floor. Keep the hue; raise saturation to at least
- * `minChroma` (OKLCH units) and walk lightness in the direction that
+ * `minChroma` (OKLCH units); walk lightness in the direction that
  * increases contrast against `bg` (dark backgrounds push lightness up,
  * light backgrounds push it down) until the colour meets `minRatio`.
- * Out of gamut colours give up chroma first, never hue. When the bound
- * is exhausted the best colour found is returned and `reached` says so:
- * the caller discloses the miss, it is never papered over.
+ * Out of gamut colours give up chroma first, never hue. When the
+ * natural direction cannot reach the ratio (a background near the
+ * contrast nadir), the walk falls back to the opposite direction: the
+ * floor is always reachable, because white or black clears 4.58:1
+ * against any background (t-24@r10). A miss is a defect, reported for
+ * the tests to fail on - never a shipped state and never a log line.
  */
 export function floor(hex: string, bg: string, minRatio: number, minChroma: number): FloorOutcome {
+  const dark = lum(bg) < 0.2;
+  const natural = walk(hex, bg, minRatio, minChroma, dark ? 0.012 : -0.012);
+  if (natural.reached) return natural;
+  const opposite = walk(hex, bg, minRatio, minChroma, dark ? -0.012 : 0.012);
+  if (opposite.reached) return opposite;
+  // both walks exhausted: a defect, reported with the better outcome
+  return natural.ratio >= opposite.ratio ? natural : opposite;
+}
+
+function walk(hex: string, bg: string, minRatio: number, minChroma: number, step: number): FloorOutcome {
   const source = toOklch(hex);
   let L = source[0];
   let C = source[1];
   const H = source[2];
   const sourceChroma = C;
-  const dark = lum(bg) < 0.2;
   if (C < minChroma) C = minChroma;
   const make = (): string => {
     let c = C;
@@ -159,7 +171,7 @@ export function floor(hex: string, bg: string, minRatio: number, minChroma: numb
   };
   let out = make();
   for (let i = 0; i < 60 && ratio(out, bg) < minRatio; i++) {
-    L += dark ? 0.012 : -0.012;
+    L += step;
     L = Math.max(0, Math.min(1, L));
     out = make();
   }
