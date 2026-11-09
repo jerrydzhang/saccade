@@ -1,7 +1,7 @@
 // The suite shell's pure half (t-14 "The suite"): the window jump's
 // label assignment, the picker's entries (this device's attached
 // windows first, then the detached states), and the names the HUD
-// shows. The wire and the window acts ride the pool client and the
+// shows. The wire and the window acts ride the window store client and the
 // bridge; what is here is only what a test can pin without either.
 
 export type SuiteWindowInfo = { label: string; stateId?: string | null };
@@ -41,7 +41,7 @@ export type JumpEntry = {
   name: string;
 };
 
-export type PoolStateLite = {
+export type WindowStateLite = {
   id: string;
   location: string | null;
   attachedHere: boolean;
@@ -53,7 +53,7 @@ export type PoolStateLite = {
  * attachedHere names this device. */
 export function jumpPickerEntries(
   windows: SuiteWindowInfo[],
-  states: PoolStateLite[],
+  states: WindowStateLite[],
 ): JumpEntry[] {
   const chips = assignChips(windows.map((window) => window.label));
   const stateById = new Map(states.map((state) => [state.id, state]));

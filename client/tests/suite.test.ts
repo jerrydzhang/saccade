@@ -1,7 +1,7 @@
 // The suite shell's pure contracts (t-14 "The suite"): the jump
 // labels' assignment, the picker's entries (windows here, then
 // detached), the names the HUD shows, and the coarse narrowing. The
-// window acts themselves ride the bridge and the pool client.
+// window acts themselves ride the bridge and the window store client.
 
 import test from "node:test";
 import assert from "node:assert/strict";

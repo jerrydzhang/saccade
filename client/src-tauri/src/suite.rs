@@ -1,10 +1,10 @@
 //! The suite shell's window acts (t-14 "The suite"): one app, many
 //! first-class windows, the window manager owning all layout. The
 //! shell creates windows (`w`, the ask-once answer's new-window act,
-//! and resuming a detached pool state here), focuses one only when the
+//! and resuming a detached window state here), focuses one only when the
 //! human asks (the window jump, through the platform's activation
 //! request), broadcasts the window jump's labels to every suite
-//! window, and detaches a closing window's pool state - closing
+//! window, and detaches a closing window's state - closing
 //! detaches, the state stays (t-24@r20). Placement is never set: a
 //! new window gets whatever the window manager gives, and a new
 //! window never asks for focus.
@@ -28,7 +28,7 @@ fn detach_async(server: String, device: String, state: String) {
             .build()
             .new_agent();
         let url = format!(
-            "{}/pool/v1/devices/{}/detach",
+            "{}/api/v1/windows/devices/{}/detach",
             server.trim_end_matches('/'),
             device
         );
@@ -77,7 +77,7 @@ pub fn on_window_event(
 }
 
 /// A fresh, unique window label: the windows this shell creates are
-/// the suite's own, and their labels are opaque to the pool.
+/// the suite's own, and their labels are opaque to the window store.
 fn fresh_label(app: &tauri::AppHandle) -> String {
     let mut counter = 0u64;
     loop {
@@ -96,7 +96,7 @@ fn seconds_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// What one suite window carries: its label and the pool state it
+/// What one suite window carries: its label and the window store state it
 /// shows, when known.
 #[derive(serde::Serialize)]
 pub struct SuiteWindow {
@@ -142,7 +142,7 @@ pub fn open_suite_window(
         state_id
             .as_deref()
             .map(|id| format!(" resuming {id}"))
-            .unwrap_or_else(|| " empty (a new pool state)".to_string())
+            .unwrap_or_else(|| " empty (a new window state)".to_string())
     );
     let built_label = label.clone();
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::default())

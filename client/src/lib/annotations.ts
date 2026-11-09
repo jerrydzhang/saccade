@@ -3,9 +3,9 @@
 // commit with ONE message under the human's own identity. The published
 // board.yaml is the shown revision's authored text plus annotation
 // components and nothing else - byte-level insertions at the parts'
-// own positions. Drafts live in the window's pool state since the
-// window-state pool landed (t-24@r20); the interim localStorage store
-// left with the pool, its one-time mover living in pool.ts.
+// own positions. Drafts live in the window's state since the
+// window store landed (t-24@r20); the interim localStorage store
+// left with the window store, its one-time mover living in windows.ts.
 
 // -- the draft and the payload ------------------------------------------
 

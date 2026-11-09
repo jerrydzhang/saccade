@@ -132,9 +132,9 @@ pub struct AppState {
     /// time: loopback names and the bind address are always accepted,
     /// anything else is a rebound name and refuses before routing.
     pub(crate) allowed_hosts: Arc<[String]>,
-    /// The suite's window-state pool (t-14, t-24@r20): its own file
-    /// beside the db, opened on first /pool/v1 use, with its own wake.
-    pub pool_door: crate::serve::pool::PoolDoor,
+    /// The suite's window store (t-14, t-24@r20): its own file
+    /// beside the db, opened on first /api/v1/windows use, with its own wake.
+    pub windows_door: crate::serve::windows::WindowsDoor,
 }
 
 /// The shells the viewer ships in; their origins are fixed by the
@@ -216,7 +216,7 @@ impl AppState {
                 .map(|origin| origin.to_string())
                 .collect(),
             allowed_hosts: Arc::from([]),
-            pool_door: crate::serve::pool::PoolDoor::default(),
+            windows_door: crate::serve::windows::WindowsDoor::default(),
         })
     }
 
@@ -863,32 +863,34 @@ pub fn routes() -> Router<AppState> {
         .route("/view/v1", get(crate::serve::pages::view_root))
         .route("/view/v1/", get(crate::serve::pages::view_root))
         .route("/view/v1/{*location}", get(crate::serve::pages::view_page))
-        // the pool: the suite's window-state door, outside the record
+        // the window store: the suite's window-state door, outside the record
         // (t-14 ratified, t-24@r20); same edge, same origin policy, the
         // same conceded write boundary as /api/v1
-        .route("/pool/v1", get(crate::serve::pool::pool_root))
-        .route("/pool/v1/", get(crate::serve::pool::pool_root))
+        .route("/api/v1/windows", get(crate::serve::windows::windows_root))
+        .route("/api/v1/windows/", get(crate::serve::windows::windows_root))
         .route(
-            "/pool/v1/states",
-            get(crate::serve::pool::pool_states).post(crate::serve::pool::pool_state_create),
+            "/api/v1/windows/states",
+            get(crate::serve::windows::window_states)
+                .post(crate::serve::windows::window_state_create),
         )
         .route(
-            "/pool/v1/states/{id}",
-            get(crate::serve::pool::pool_state_get)
-                .patch(crate::serve::pool::pool_state_patch)
-                .delete(crate::serve::pool::pool_state_discard),
+            "/api/v1/windows/states/{id}",
+            get(crate::serve::windows::window_state_get)
+                .patch(crate::serve::windows::window_state_patch)
+                .delete(crate::serve::windows::window_state_discard),
         )
         .route(
-            "/pool/v1/devices/{device}/attach",
-            post(crate::serve::pool::pool_attach),
+            "/api/v1/windows/devices/{device}/attach",
+            post(crate::serve::windows::windows_attach),
         )
         .route(
-            "/pool/v1/devices/{device}/detach",
-            post(crate::serve::pool::pool_detach),
+            "/api/v1/windows/devices/{device}/detach",
+            post(crate::serve::windows::windows_detach),
         )
         .route(
-            "/pool/v1/devices/{device}/links/{from}",
-            put(crate::serve::pool::pool_link_set).delete(crate::serve::pool::pool_link_clear),
+            "/api/v1/windows/devices/{device}/links/{from}",
+            put(crate::serve::windows::window_link_set)
+                .delete(crate::serve::windows::window_link_clear),
         )
 }
 

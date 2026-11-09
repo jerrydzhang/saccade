@@ -41,10 +41,10 @@
     type Draft,
   } from "./lib/annotations.ts";
   import {
-    PoolClient,
+    WindowsClient,
     fieldsDiffer,
     type WindowState,
-  } from "./lib/pool.ts";
+  } from "./lib/windows.ts";
   import {
     assignChips,
     entryMatches,
@@ -134,32 +134,32 @@
     }
   }
 
-  // -- the pool-backed window (t-14 "The suite", t-24@r20) --------------
+  // -- the window and its stored state (t-14 "The suite", t-24@r20) --------------
   //
-  // One window, one pool state: what this window shows, the part at
+  // One window, one window state: what this window shows, the part at
   // the reading height, its zoom, its drafts - on the tracker's
   // server, outside the record. Writes settle before sending; the
   // watcher applies every answer that is not this client's own echo.
   // A window with no tracker server runs unbacked, like every read
   // face without one.
-  let pool: PoolClient | null = null;
-  let poolStateId: string | null = null;
-  let poolWatch: { stop: () => void } | null = null;
+  let windowStore: WindowsClient | null = null;
+  let windowStateId: string | null = null;
+  let windowWatch: { stop: () => void } | null = null;
   let windowLabel: string | null = null;
-  let poolRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let windowRetryTimer: ReturnType<typeof setTimeout> | null = null;
   // the mirrors this window applies and writes: a value already here
   // is never written again, so no-op settles bump no sequences
   let appliedLocation: string | null = null;
   let knownPart: string | null = null;
   let knownZoom: number | null = null;
   let knownDrafts: Draft[] = [];
-  let poolDiscarded = false;
+  let windowDiscarded = false;
   let zoomWriteTimer: ReturnType<typeof setTimeout> | null = null;
   let partWriteTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** The part at the reading height, as the pool names it: the select
+  /** The part at the reading height, as the window store names it: the select
    * path of the top-level block nearest the reading line. */
-  function poolReadingPart(): string | null {
+  function windowReadingPart(): string | null {
     if (!contentHost || !view.board) return null;
     const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
     const blocks = Array.from(contentHost.querySelectorAll<HTMLElement>(":scope > .block"));
@@ -181,14 +181,14 @@
   /** Scroll so the named part sits at the reading height. The block
    * may not exist for a few frames after an open; a handful of frames
    * are tried before giving up quietly. */
-  function scrollToPoolPart(part: string, tries = 20): void {
+  function scrollToStatePart(part: string, tries = 20): void {
     if (!contentHost) return;
     const match = /^\/content\/(\d+)$/.exec(part);
     if (!match) return;
     const index = Number(match[1]);
     const block = contentHost.querySelectorAll<HTMLElement>(":scope > .block")[index];
     if (!block) {
-      if (tries > 0) window.requestAnimationFrame(() => scrollToPoolPart(part, tries - 1));
+      if (tries > 0) window.requestAnimationFrame(() => scrollToStatePart(part, tries - 1));
       return;
     }
     const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
@@ -201,14 +201,14 @@
     if (contentHost) contentHost.style.zoom = String(zoom);
   }
 
-  /** The state as the pool carries it, applied locally: zoom, drafts,
+  /** The state as the window store carries it, applied locally: zoom, drafts,
    * the location to open, the part to scroll to. A discarded state
    * (changed 0, nothing in it) leaves the window empty - the human
    * opens anew or closes. */
-  async function applyPoolState(state: WindowState): Promise<void> {
+  async function applyWindowState(state: WindowState): Promise<void> {
     if (state.changed === 0 && state.location === null) {
-      poolDiscarded = true;
-      console.log("[viewer] pool state discarded elsewhere; the window sits empty");
+      windowDiscarded = true;
+      console.log("[viewer] windows state discarded elsewhere; the window sits empty");
       return;
     }
     const nextZoom = state.zoom ?? 1;
@@ -227,7 +227,7 @@
     }
     if (state.part !== knownPart) {
       knownPart = state.part;
-      if (state.part !== null) scrollToPoolPart(state.part);
+      if (state.part !== null) scrollToStatePart(state.part);
     }
     // the link: a new target refreshes the HUD's name and watches it
     if (state.link !== linkTargetId) {
@@ -235,93 +235,93 @@
     }
   }
 
-  /** The window's pool state: the shell names the binding (the state
+  /** The window's state: the shell names the binding (the state
    * survives a reload); a first window creates its state, attaches
    * this device, applies what the state carries, and watches. The
-   * one-time interim-draft move runs on the first pooled start. */
+   * one-time interim-draft move runs on the first start with the window store. */
   /** The retry for a window that started before any server existed:
    * one quiet timer, gone the moment the window binds. */
-  function schedulePoolRetry(): void {
-    if (poolRetryTimer !== null || poolStateId !== null) return;
-    poolRetryTimer = setTimeout(() => {
-      poolRetryTimer = null;
-      if (poolStateId !== null) return;
-      void startPoolWindow();
+  function scheduleWindowRetry(): void {
+    if (windowRetryTimer !== null || windowStateId !== null) return;
+    windowRetryTimer = setTimeout(() => {
+      windowRetryTimer = null;
+      if (windowStateId !== null) return;
+      void startStateWindow();
     }, 2000);
   }
 
-  async function startPoolWindow(): Promise<void> {
+  async function startStateWindow(): Promise<void> {
     let invoke: ReturnType<typeof tauriInvoke>;
     try {
       invoke = tauriInvoke();
     } catch (error) {
       if (error instanceof SourceUnavailableError) {
-        console.log("[viewer] pool: no bridge; the window runs unbacked");
+        console.log("[viewer] windows: no bridge; the window runs unbacked");
         return;
       }
       throw error;
     }
-    pool = PoolClient.open();
-    if (pool === null) {
+    windowStore = WindowsClient.open();
+    if (windowStore === null) {
       // no server YET: the server setting appears once, typed in the
       // header - a window that started before it retries, and the
-      // pool backing arrives without a restart
-      console.log("[viewer] pool: no tracker server set; the window retries when one appears");
-      schedulePoolRetry();
+      // window store arrives without a restart
+      console.log("[viewer] windows: no tracker server set; the window retries when one appears");
+      scheduleWindowRetry();
       return;
     }
     try {
-      console.log("[viewer] pool: bootstrap starts");
+      console.log("[viewer] windows: bootstrap starts");
       const binding = (await invoke("window_binding")) as {
         label: string;
         state_id?: string | null;
       };
       windowLabel = binding.label;
-      console.log(`[viewer] pool: binding ${binding.label} ${binding.state_id ?? "(none)"}`);
+      console.log(`[viewer] windows: binding ${binding.label} ${binding.state_id ?? "(none)"}`);
       let stateId = binding.state_id ?? null;
       if (stateId === null) {
         const fresh =
           typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
             : `w-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        const created = await pool.create(fresh);
+        const created = await windowStore.create(fresh);
         stateId = created.id;
       }
-      poolStateId = stateId;
-      console.log(`[viewer] pool: state ${stateId}`);
-      const attached = await pool.attach(stateId);
-      console.log("[viewer] pool: attached");
-      // the shell's binding carries the pool's address and this
+      windowStateId = stateId;
+      console.log(`[viewer] windows: state ${stateId}`);
+      const attached = await windowStore.attach(stateId);
+      console.log("[viewer] windows: attached");
+      // the shell's binding carries the window store's address and this
       // device's id: the close detach needs them after the webview is
       // gone
       await invoke("bind_window_state", {
         stateId,
-        server: pool.base.toString(),
-        device: pool.device,
+        server: windowStore.base.toString(),
+        device: windowStore.device,
       });
-      console.log("[viewer] pool: shell bound");
+      console.log("[viewer] windows: shell bound");
       knownZoom = attached.zoom;
       knownPart = attached.part;
       knownDrafts = attached.drafts ?? [];
-      await applyPoolState(attached);
-      console.log("[viewer] pool: state applied");
-      poolWatch = pool.watch(stateId, (state) => {
-        void applyPoolState(state);
+      await applyWindowState(attached);
+      console.log("[viewer] windows: state applied");
+      windowWatch = windowStore.watch(stateId, (state) => {
+        void applyWindowState(state);
       });
-      console.log("[viewer] pool: watching");
-      void pool.moveInterimDrafts();
-      console.log(`[viewer] pool window bound: ${stateId}`);
+      console.log("[viewer] windows: watching");
+      void windowStore.moveInterimDrafts();
+      console.log(`[viewer] windows window bound: ${stateId}`);
     } catch (error) {
-      console.error(`[viewer] pool window failed: ${String(error)}`);
+      console.error(`[viewer] windows window failed: ${String(error)}`);
       if (error instanceof Error && error.stack) {
-        console.error(`[viewer] pool window stack: ${error.stack}`);
+        console.error(`[viewer] windows window stack: ${error.stack}`);
       }
       // a transient failure retries on the same quiet timer
-      schedulePoolRetry();
+      scheduleWindowRetry();
     }
   }
   void openTestBoard();
-  void startPoolWindow();
+  void startStateWindow();
 
   // -- the window jump (t-14 "The suite") --------------------------------
   //
@@ -385,8 +385,8 @@
   async function enterJumpPicker(): Promise<void> {
     blurForJump();
     jumpNote = null;
-    if (pool === null) {
-      jumpNote = "no tracker server; the pool is not serving this window";
+    if (windowStore === null) {
+      jumpNote = "no tracker server; the window store is not serving this window";
       return;
     }
     try {
@@ -395,7 +395,7 @@
         label: string;
         state_id?: string | null;
       }[];
-      const states = await pool.list();
+      const states = await windowStore.list();
       const entries = jumpPickerEntries(
         windows.map((window) => ({ label: window.label, stateId: window.state_id ?? null })),
         states.map((state) => ({
@@ -430,13 +430,13 @@
   }
 
   async function refreshJumpPicker(mode: Extract<JumpMode, { kind: "picker" }>): Promise<void> {
-    if (pool === null) return;
+    if (windowStore === null) return;
     const invoke = await shellInvoke();
     const windows = (await invoke("suite_windows")) as {
       label: string;
       state_id?: string | null;
     }[];
-    const states = await pool.list();
+    const states = await windowStore.list();
     mode.entries = jumpPickerEntries(
       windows.map((window) => ({ label: window.label, stateId: window.state_id ?? null })),
       states.map((state) => ({
@@ -515,8 +515,8 @@
       const entry = mode.entries[mode.selected];
       if (!entry) return;
       if (mode.armed === entry.stateId) {
-        if (pool !== null) {
-          await pool.discard(entry.stateId);
+        if (windowStore !== null) {
+          await windowStore.discard(entry.stateId);
           await refreshJumpPicker(mode);
         }
         mode.armed = null;
@@ -560,7 +560,7 @@
   // -- the link (t-14 "The suite") ---------------------------------------
   //
   // Per device, one per window, many windows may link to one target,
-  // only between windows attached on this device - the pool enforces
+  // only between windows attached on this device - the window store enforces
   // the shape and lapses the link when its target detaches. A linked
   // window shows its target; space l links by labels, space u
   // unlinks; links never travel devices.
@@ -573,13 +573,13 @@
     linkTargetId = targetId;
     linkWatch?.stop();
     linkWatch = null;
-    if (targetId === null || pool === null) {
+    if (targetId === null || windowStore === null) {
       linkTargetName = null;
       linkTargetWindowLabel = null;
       return;
     }
     try {
-      const target = await pool.getState(targetId);
+      const target = await windowStore.getState(targetId);
       linkTargetName = shortLocation(target.location);
       const invoke = await shellInvoke();
       const windows = (await invoke("suite_windows")) as {
@@ -590,11 +590,11 @@
         windows.find((window) => window.state_id === targetId)?.label ?? null;
       // the target's own changes follow: its name in this window's
       // HUD moves when the target moves, without any polling
-      linkWatch = pool.watch(targetId, (targetState) => {
+      linkWatch = windowStore.watch(targetId, (targetState) => {
         linkTargetName = shortLocation(targetState.location);
       });
     } catch {
-      // the target left the pool: the link lapses server-side; this
+      // the target left the window store: the link lapses server-side; this
       // window shows no target until a new link is set
       linkTargetName = null;
       linkTargetWindowLabel = null;
@@ -604,8 +604,8 @@
   async function enterLinkLabels(): Promise<void> {
     blurForJump();
     jumpNote = null;
-    if (pool === null || poolStateId === null || poolDiscarded) {
-      jumpNote = "no tracker server; the pool is not serving this window";
+    if (windowStore === null || windowStateId === null || windowDiscarded) {
+      jumpNote = "no tracker server; the window store is not serving this window";
       return;
     }
     try {
@@ -624,7 +624,7 @@
   }
 
   async function linkToWindow(windowLabel: string): Promise<void> {
-    if (pool === null || poolStateId === null) return;
+    if (windowStore === null || windowStateId === null) return;
     const invoke = await shellInvoke();
     const windows = (await invoke("suite_windows")) as {
       label: string;
@@ -636,7 +636,7 @@
       return;
     }
     try {
-      await pool.setLink(poolStateId, target.state_id);
+      await windowStore.setLink(windowStateId, target.state_id);
       exitJump();
     } catch (error) {
       jumpNote = `the link refused: ${String(error)}`;
@@ -645,9 +645,9 @@
   }
 
   async function unlinkHere(): Promise<void> {
-    if (pool === null || poolStateId === null || poolDiscarded) return;
+    if (windowStore === null || windowStateId === null || windowDiscarded) return;
     try {
-      await pool.clearLink(poolStateId);
+      await windowStore.clearLink(windowStateId);
     } catch (error) {
       jumpNote = `the unlink refused: ${String(error)}`;
     }
@@ -675,8 +675,8 @@
   let askOnce = $state<AskOnce | null>(null);
 
   async function openElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
-    if (pool === null || poolStateId === null || poolDiscarded) {
-      jumpNote = "no tracker server; the pool is not serving this window";
+    if (windowStore === null || windowStateId === null || windowDiscarded) {
+      jumpNote = "no tracker server; the window store is not serving this window";
       return;
     }
     if (act === "link" && linkTargetWindowLabel !== null) {
@@ -698,7 +698,7 @@
       const chips = assignChips(windows.map((window) => window.label));
       const list = [...chips].map(([windowLabel, chip]) => ({ window: windowLabel, chip }));
       await invoke("broadcast_jump_labels", { labels: list });
-      const states = await pool.list();
+      const states = await windowStore.list();
       const detached = states
         .filter((state) => !state.attachedHere)
         .map((state) => ({
@@ -727,22 +727,22 @@
     await invoke("open_in_window", { label, location: spec });
   }
 
-  /** A new window shows a new pool state: the caller creates the
+  /** A new window shows a new window state: the caller creates the
    * state (so it can link to it) and the window's bootstrap attaches
    * what it finds. The optional answer of an ask-once becomes the
    * link when the act was o. */
   async function openInNewWindow(spec: string, becomeLink: boolean): Promise<void> {
-    if (pool === null || poolStateId === null) return;
+    if (windowStore === null || windowStateId === null) return;
     const fresh =
       typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
         : `w-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    await pool.create(fresh);
+    await windowStore.create(fresh);
     const invoke = await shellInvoke();
     const label = (await invoke("open_suite_window", { stateId: fresh })) as string;
     await invoke("open_in_window", { label, location: spec });
     if (becomeLink) {
-      await pool.setLink(poolStateId, fresh);
+      await windowStore.setLink(windowStateId, fresh);
     }
   }
 
@@ -758,14 +758,14 @@
         const match = asking.chips.find((entry) => entry.chip === chip);
         if (!match) return;
         await openInWindow(match.window, asking.spec);
-        if (becomeLink && pool !== null && poolStateId !== null) {
+        if (becomeLink && windowStore !== null && windowStateId !== null) {
           const invoke = await shellInvoke();
           const windows = (await invoke("suite_windows")) as {
             label: string;
             state_id?: string | null;
           }[];
           const target = windows.find((window) => window.label === match.window);
-          if (target?.state_id) await pool.setLink(poolStateId, target.state_id);
+          if (target?.state_id) await windowStore.setLink(windowStateId, target.state_id);
         }
         return;
       }
@@ -779,8 +779,8 @@
         const invoke = await shellInvoke();
         const label = (await invoke("open_suite_window", { stateId: pick.stateId })) as string;
         await invoke("open_in_window", { label, location: asking.spec });
-        if (becomeLink && pool !== null && poolStateId !== null) {
-          await pool.setLink(poolStateId, pick.stateId);
+        if (becomeLink && windowStore !== null && windowStateId !== null) {
+          await windowStore.setLink(windowStateId, pick.stateId);
         }
       }
     } catch (error) {
@@ -869,13 +869,13 @@
    * reading position reset - new content, no part yet. */
   $effect(() => {
     const current = location;
-    if (!current || pool === null || poolStateId === null || poolDiscarded) return;
+    if (!current || windowStore === null || windowStateId === null || windowDiscarded) return;
     const spec = formatLocation(current);
     if (spec === appliedLocation) return;
     appliedLocation = spec;
     knownPart = null;
-    void pool.patch(poolStateId, { location: spec, part: null }).catch(() => {
-      // an unreachable pool leaves the window readable; the next
+    void windowStore.patch(windowStateId, { location: spec, part: null }).catch(() => {
+      // an unreachable window store leaves the window readable; the next
       // settled write retries
     });
   });
@@ -883,15 +883,15 @@
   /** The reading height settles while reading: written when it stops
    * moving, never per scroll frame (t-24@r20). */
   function schedulePartWrite(): void {
-    if (pool === null || poolStateId === null || poolDiscarded) return;
+    if (windowStore === null || windowStateId === null || windowDiscarded) return;
     if (partWriteTimer !== null) clearTimeout(partWriteTimer);
     partWriteTimer = setTimeout(() => {
       partWriteTimer = null;
-      if (pool === null || poolStateId === null || poolDiscarded) return;
-      const part = poolReadingPart();
+      if (windowStore === null || windowStateId === null || windowDiscarded) return;
+      const part = windowReadingPart();
       if (part === null || part === knownPart) return;
       knownPart = part;
-      void pool.patch(poolStateId, { part }).catch(() => {});
+      void windowStore.patch(windowStateId, { part }).catch(() => {});
     }, 600);
   }
 
@@ -1420,7 +1420,7 @@
   }
 
   // Zoom (+ - =, t-14): the document's scale, carried by the window's
-  // pool state since the pool landed (t-24@r20; it was memory-only
+  // window state since the window store landed (t-24@r20; it was memory-only
   // before) - written when it settles, applied from the state on
   // resume and on another device's change.
   let zoom = $state(1);
@@ -1438,14 +1438,14 @@
   /** A settled zoom write: sent when the steps stop, never per key
    * press (t-24@r20). */
   function scheduleZoomWrite(): void {
-    if (pool === null || poolStateId === null || poolDiscarded) return;
+    if (windowStore === null || windowStateId === null || windowDiscarded) return;
     if (zoomWriteTimer !== null) clearTimeout(zoomWriteTimer);
     zoomWriteTimer = setTimeout(() => {
       zoomWriteTimer = null;
-      if (pool === null || poolStateId === null || poolDiscarded) return;
+      if (windowStore === null || windowStateId === null || windowDiscarded) return;
       if (zoom === knownZoom) return;
       knownZoom = zoom;
-      void pool.patch(poolStateId, { zoom }).catch(() => {});
+      void windowStore.patch(windowStateId, { zoom }).catch(() => {});
     }, 400);
   }
 
@@ -1557,12 +1557,12 @@
   });
 
   // Draft annotations (t-14, ratified): `a` on the part at the reading
-  // height drafts in place; drafts ride the window's pool state since
-  // the pool landed (t-24@r20) - two devices showing one state share
+  // height drafts in place; drafts ride the window's state since
+  // the window store landed (t-24@r20) - two devices showing one state share
   // them, and the window's own drafts never lose on a refused
   // publish. `space p` publishes them together as ONE commit with ONE
   // message under the human's own identity; the current revision of a
-  // task board only. A window with no pool keeps its drafts in
+  // task board only. A window with no window store keeps its drafts in
   // memory, which is still never a lost draft.
   let drafts = $state<Draft[]>([]);
   let draftEditor = $state<{ path: string; text: string } | null>(null);
@@ -1587,9 +1587,9 @@
   function updateDrafts(next: Draft[]): void {
     drafts = next;
     knownDrafts = next;
-    if (pool === null || poolStateId === null || poolDiscarded) return;
-    void pool.patch(poolStateId, { drafts: next }).catch(() => {
-      // an unreachable pool keeps the drafts in memory; the next
+    if (windowStore === null || windowStateId === null || windowDiscarded) return;
+    void windowStore.patch(windowStateId, { drafts: next }).catch(() => {
+      // an unreachable window store keeps the drafts in memory; the next
       // settled draft write carries them
     });
   }
@@ -1744,12 +1744,12 @@
         return;
       }
       // published: the drafts landed with the new revision; the
-      // window's pool state carries none now (t-24@r20: drafts ride
+      // window's state carries none now (t-24@r20: drafts ride
       // the state)
       knownDrafts = [];
       drafts = [];
-      if (pool !== null && poolStateId !== null && !poolDiscarded) {
-        void pool.patch(poolStateId, { drafts: [] }).catch(() => {});
+      if (windowStore !== null && windowStateId !== null && !windowDiscarded) {
+        void windowStore.patch(windowStateId, { drafts: [] }).catch(() => {});
       }
       publishOpen = false;
       publishPanel = null;

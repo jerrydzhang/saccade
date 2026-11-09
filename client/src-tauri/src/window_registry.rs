@@ -1,8 +1,8 @@
-//! The window binding: which pool state each webview window of this
+//! The window binding: which window state each webview window of this
 //! process shows, and - once the window's frontend has bound - where
-//! the pool lives and which device this is, so the shell can detach
+//! the window store lives and which device this is, so the shell can detach
 //! the state when the window closes. The registry is the shell's own
-//! memory, one entry per window label; the pool state itself lives on
+//! memory, one entry per window label; the window store state itself lives on
 //! the tracker's server (t-14, t-24@r20). A window that has not bound
 //! yet answers its label alone, and the frontend binds the state it
 //! created or resumed.
@@ -17,7 +17,7 @@ pub struct WindowRegistry {
     entries: Arc<Mutex<HashMap<String, RegistryEntry>>>,
 }
 
-/// One window's pairing: the pool state it shows and, when the
+/// One window's pairing: the window store state it shows and, when the
 /// frontend has bound, the server and device its detach needs.
 #[derive(Clone, Default)]
 pub struct RegistryEntry {
@@ -64,7 +64,7 @@ impl WindowRegistry {
             );
     }
 
-    /// Complete a window's binding: the state, where the pool lives,
+    /// Complete a window's binding: the state, where the window store lives,
     /// which device this is.
     pub fn bind(&self, label: &str, state_id: &str, server: &str, device: &str) {
         self.entries
@@ -90,7 +90,7 @@ impl WindowRegistry {
     }
 }
 
-/// The calling window's binding: its label and the pool state it
+/// The calling window's binding: its label and the window store state it
 /// shows, when one is known.
 #[tauri::command]
 pub fn window_binding(
@@ -110,8 +110,8 @@ pub fn window_binding(
     Binding { label, state_id }
 }
 
-/// Bind the calling window to the pool state it created or resumed,
-/// naming where the pool lives and which device this is - the facts
+/// Bind the calling window to the window store state it created or resumed,
+/// naming where the window store lives and which device this is - the facts
 /// the close detach needs.
 #[tauri::command]
 pub fn bind_window_state(

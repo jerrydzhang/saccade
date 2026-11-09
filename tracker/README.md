@@ -230,37 +230,37 @@ nothing writes through `/view/v1`.
   the root page's family list, its own arm of the watch enum - and
   never a second surface.
 
-## The pool (/pool/v1)
+## The window store (/api/v1/windows)
 
-The suite's window-state door, outside the record (t-14, ratified;
-wire and storage settled on t-24@r20). `/api/v1` stays `sac`'s own API,
-`/view/v1` stays the pure record pages, and `/pool/v1` carries the
-client workspace state: what each suite window shows, its position in
+The suite's window states, outside the record (t-14, ratified;
+storage settled on t-24@r20, the surface moved under `/api/v1` by
+t-28). `/view/v1` stays the pure record pages; `/api/v1/windows` is
+part of the tracker's own API and carries the client workspace state: what each suite window shows, its position in
 that content (the part at the reading height), its zoom, its
 annotation drafts, each device's attached set, and the per-device
-links. Nothing here reads or writes the record; the pool never names
+links. Nothing here reads or writes the record; the window store never names
 record authority.
 
-- **The pool file is the server's own SQLite file beside the event
-  log, `<db>.pool`**, never inside it: pool writes are frequent (the
+- **The window store file is the server's own SQLite file beside the event
+  log, `<db>.windows`**, never inside it: window store writes are frequent (the
   reading height settles while reading) and the event log is the one
   store that must never contend or be put at risk. The file carries
   its own schema version; opening is the bounded version-to-version
   step - a missing version inits schema 1 transactionally, a newer
   version refuses to serve rather than guessing. Whatever reproduces
-  the log (clone, import, a fresh db) carries no pool, which is
-  correct: losing the pool loses window arrangements, never the
+  the log (clone, import, a fresh db) carries no window store, which is
+  correct: losing the window store loses window arrangements, never the
   record.
-- **Sync is the pages' hold contract on the pool's own sequence**:
-  every write bumps a monotonic pool seq and fires the pool wake (a
+- **Sync is the pages' hold contract on the window store's own sequence**:
+  every write bumps a monotonic window store seq and fires the window store wake (a
   separate instance from the record's landing wake); `?after=<seq>` on
-  the reads parks wake-driven until a pool write lands past the cursor
+  the reads parks wake-driven until a window store write lands past the cursor
   or the hold expires (25 s default, 55 s cap), and quiet is a normal
   answer. Clients send position changes when they settle, never per
   scroll frame, and every write names its device, so a device
   recognises its own echo and never jumps its own view.
 - **The device is an opaque client-generated id**, persisted on the
-  device, stored and compared by the pool and never interpreted by it.
+  device, stored and compared by the window store and never interpreted by it.
   Not the machine id: a browser lane has none, and two app instances
   on one machine are two devices. No read ever answers one device
   another device's attached set.
@@ -268,17 +268,17 @@ record authority.
   device showing the same task hold separate drafts; two devices
   showing one state share them; the suite's publish commits the drafts
   of the window it is pressed in.
-- **The verbs**: `GET /pool/v1` (the surface facts),
-  `GET/POST /pool/v1/states`, `GET/PATCH/DELETE /pool/v1/states/<id>`
-  (the delete is the rare discard: the state leaves the pool on every
+- **The verbs**: `GET /api/v1/windows` (the surface facts),
+  `GET/POST /api/v1/windows/states`, `GET/PATCH/DELETE /api/v1/windows/states/<id>`
+  (the delete is the rare discard: the state leaves the window store on every
   device, its attachments and every link touching it with it),
-  `POST /pool/v1/devices/<device>/attach|detach`, and
-  `PUT/DELETE /pool/v1/devices/<device>/links/<from>`. Reads name
+  `POST /api/v1/windows/devices/<device>/attach|detach`, and
+  `PUT/DELETE /api/v1/windows/devices/<device>/links/<from>`. Reads name
   their device in the query and answer that device's `attached_here`
   and `link` with the state. Refusals carry the `/api/v1` error shape
   under informative statuses (`bad_query`, `state_missing` 404,
   `state_exists` 409, `not_attached` 409, `self_link` 422, `storage`
-  500, `pool_too_new` 500).
+  500, `windows_too_new` 500).
 - **The browser's preflight is answered**: a cross-origin write
   naming Content-Type: application/json is not a simple request, so
   the origin policy answers an allowed origin's OPTIONS with its own

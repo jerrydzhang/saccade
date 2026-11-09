@@ -74,7 +74,7 @@ pub fn run() {
                     .unwrap_or_else(|| "unavailable".into())
             );
             look_config::init(dir);
-            // the window registry: which pool state each window shows
+            // the window registry: which window state each window shows
             // (t-19); the shell's own memory, never a record fact
             app.manage(registry);
             // the shell feasibility probe (t-19): test-only machinery,

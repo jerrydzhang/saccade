@@ -1,4 +1,4 @@
-// The window-state pool's client contracts (t-14 "The suite",
+// The window store's client contracts (t-14 "The suite",
 // t-24@r20): the route grammar, the echo rule, the no-op write rule,
 // the merge and move rules, and the interim store's read. The wire
 // itself is pinned on the server side by the tracker's api tests;
@@ -13,12 +13,12 @@ import {
   isOwnEcho,
   markMoved,
   mergeDrafts,
-  poolUrl,
+  windowsUrl,
   readInterimDrafts,
   stateShowingTask,
-  type PoolDraft,
+  type WindowDraft,
   type WindowState,
-} from "../src/lib/pool.ts";
+} from "../src/lib/windows.ts";
 
 function state(patch: Partial<WindowState>): WindowState {
   return {
@@ -35,17 +35,17 @@ function state(patch: Partial<WindowState>): WindowState {
   };
 }
 
-test("pool routes resolve against the base without doubling the slash", () => {
+test("window store routes resolve against the base without doubling the slash", () => {
   const base = new URL("http://127.0.0.1:8811");
-  assert.equal(poolUrl(base, ""), "http://127.0.0.1:8811/pool/v1/");
-  assert.equal(poolUrl(base, "states"), "http://127.0.0.1:8811/pool/v1/states");
+  assert.equal(windowsUrl(base, ""), "http://127.0.0.1:8811/api/v1/windows/");
+  assert.equal(windowsUrl(base, "states"), "http://127.0.0.1:8811/api/v1/windows/states");
   assert.equal(
-    poolUrl(base, "states/w-1"),
-    "http://127.0.0.1:8811/pool/v1/states/w-1",
+    windowsUrl(base, "states/w-1"),
+    "http://127.0.0.1:8811/api/v1/windows/states/w-1",
   );
   assert.equal(
-    poolUrl(new URL("http://host.example:8811/"), "devices/dev-1/attach"),
-    "http://host.example:8811/pool/v1/devices/dev-1/attach",
+    windowsUrl(new URL("http://host.example:8811/"), "devices/dev-1/attach"),
+    "http://host.example:8811/api/v1/windows/devices/dev-1/attach",
   );
 });
 
@@ -78,7 +78,7 @@ test("a settled write that changes nothing is not sent", () => {
     location: "tracker/smoke/t-5",
     part: "/content/2",
     zoom: 1.2,
-    drafts: [{ path: "/content/2", text: "note" }] as PoolDraft[] | null,
+    drafts: [{ path: "/content/2", text: "note" }] as WindowDraft[] | null,
   };
   assert.equal(fieldsDiffer({ location: "tracker/smoke/t-5" }, current), false);
   assert.equal(fieldsDiffer({ part: "/content/2" }, current), false);
@@ -96,11 +96,11 @@ test("a settled write that changes nothing is not sent", () => {
 });
 
 test("the move merges drafts by path, the state's own keeping untouched paths", () => {
-  const existing: PoolDraft[] = [
-    { path: "/content/0", text: "pool's own" },
-    { path: "/content/5", text: "pool keeps this" },
+  const existing: WindowDraft[] = [
+    { path: "/content/0", text: "window store's own" },
+    { path: "/content/5", text: "window store keeps this" },
   ];
-  const moved: PoolDraft[] = [
+  const moved: WindowDraft[] = [
     { path: "/content/0", text: "the interim draft wins its slot" },
     { path: "/content/2", text: "carried over" },
   ];
@@ -108,7 +108,7 @@ test("the move merges drafts by path, the state's own keeping untouched paths", 
   assert.deepEqual(merged, [
     { path: "/content/0", text: "the interim draft wins its slot" },
     { path: "/content/2", text: "carried over" },
-    { path: "/content/5", text: "pool keeps this" },
+    { path: "/content/5", text: "window store keeps this" },
   ]);
   assert.deepEqual(mergeDrafts(null, moved), moved);
   assert.equal(mergeDrafts(existing, []).length, 2);
@@ -162,7 +162,7 @@ test("the interim store reads only well-shaped drafts, and the move marks only c
   }
 });
 
-import { normalizeState } from "../src/lib/pool.ts";
+import { normalizeState } from "../src/lib/windows.ts";
 
 test("the wire's absent fields normalize to null: undefined never reads as a value", () => {
   // the answered doc omits every cleared field (t-24@r20's shape), so

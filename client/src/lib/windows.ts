@@ -1,5 +1,5 @@
-// The window-state pool's client (t-14 "The suite", t-24@r20): every
-// suite window shows one pool state - what it shows, the part at the
+// The window store's client (t-14 "The suite", t-24@r20): every
+// suite window shows one window state - what it shows, the part at the
 // reading height, its zoom, its annotation drafts - and the state
 // lives on the tracker's server, outside the record. Two devices
 // showing the same state stay in sync: writes settle before sending,
@@ -10,36 +10,36 @@
 import { serverBase } from "./tracker.ts";
 import { SourceUnavailableError } from "./board/errors.ts";
 
-export type PoolDraft = { path: string; text: string };
+export type WindowDraft = { path: string; text: string };
 
-/** One pooled window state, as the wire answers it with this device's
+/** One stored window state, as the wire answers it with this device's
  * view beside it. Cleared fields arrive absent. */
 export type WindowState = {
   id: string;
   location: string | null;
   part: string | null;
   zoom: number | null;
-  drafts: PoolDraft[] | null;
+  drafts: WindowDraft[] | null;
   lastDevice: string | null;
   changed: number;
   attachedHere: boolean;
   link: string | null;
 };
 
-export type PoolFields = {
+export type WindowFields = {
   location?: string | null;
   part?: string | null;
   zoom?: number | null;
-  drafts?: PoolDraft[] | null;
+  drafts?: WindowDraft[] | null;
 };
 
 type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
 
-/** The route on the pool surface, resolved against the base: a URL's
+/** The route on the window store surface, resolved against the base: a URL's
  * string form ends in a slash, so string concatenation would double
  * it (the t-2 defect, still the rule). */
-export function poolUrl(base: URL, route: string): string {
-  return new URL(`pool/v1/${route.replace(/^\//, "")}`, base).toString();
+export function windowsUrl(base: URL, route: string): string {
+  return new URL(`api/v1/windows/${route.replace(/^\//, "")}`, base).toString();
 }
 
 /** The device id: opaque, generated once, persisted on the device
@@ -80,7 +80,7 @@ export function normalizeState(state: WindowState): WindowState {
   };
 }
 
-/** The echo rule: a pool write returned the sequence it landed at; a
+/** The echo rule: a window store write returned the sequence it landed at; a
  * watch answer at or below the newest sequence this client produced is
  * its own echo or history it already applied - never re-applied, so a
  * device does not jump its own view. */
@@ -92,12 +92,12 @@ export function isOwnEcho(changed: number, lastWrittenSeq: number): boolean {
  * carries is not sent - it would bump the sequence and make every
  * other device re-apply identical values. */
 export function fieldsDiffer(
-  fields: PoolFields,
+  fields: WindowFields,
   current: {
     location: string | null;
     part: string | null;
     zoom: number | null;
-    drafts: PoolDraft[] | null;
+    drafts: WindowDraft[] | null;
   },
 ): boolean {
   if (fields.location !== undefined && fields.location !== current.location) return true;
@@ -112,10 +112,10 @@ export function fieldsDiffer(
 }
 
 /** The one-time interim-draft move (t-24@r20): each device moves its
- * interim drafts into the pool once, per task - into this device's
+ * interim drafts into the window store once, per task - into this device's
  * window state showing that task if there is one, otherwise into a
  * new detached state showing the task, which the window picker then
- * lists. The interim store is marked moved only after the pool
+ * lists. The interim store is marked moved only after the window store
  * confirms the write; the rows stay where they are and nothing reads
  * them again. Zoom owes nothing; it was never kept. */
 const MOVED_KEY = "saccade.annotation.moved";
@@ -134,18 +134,18 @@ export function interimDraftKeys(): string[] {
   return keys;
 }
 
-export function readInterimDrafts(key: string): PoolDraft[] {
+export function readInterimDrafts(key: string): WindowDraft[] {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
-      (entry): entry is PoolDraft =>
+      (entry): entry is WindowDraft =>
         typeof entry === "object" &&
         entry !== null &&
-        typeof (entry as PoolDraft).path === "string" &&
-        typeof (entry as PoolDraft).text === "string",
+        typeof (entry as WindowDraft).path === "string" &&
+        typeof (entry as WindowDraft).text === "string",
     );
   } catch {
     return [];
@@ -173,8 +173,8 @@ function movedKeys(): Set<string> {
 /** The draft lists merge by path: the moved drafts take their part's
  * slot, the state's own drafts keep every path the move does not
  * carry (t-24@r20: no draft is ever lost, none moved twice). */
-export function mergeDrafts(existing: PoolDraft[] | null, moved: PoolDraft[]): PoolDraft[] {
-  const byPath = new Map<string, PoolDraft>();
+export function mergeDrafts(existing: WindowDraft[] | null, moved: WindowDraft[]): WindowDraft[] {
+  const byPath = new Map<string, WindowDraft>();
   for (const draft of existing ?? []) byPath.set(draft.path, draft);
   for (const draft of moved) byPath.set(draft.path, draft);
   // the same order everywhere: the merged list reads by part position,
@@ -194,7 +194,7 @@ export function stateShowingTask(states: WindowState[], location: string): Windo
   );
 }
 
-export class PoolClient {
+export class WindowsClient {
   readonly device: string;
   readonly base: URL;
   private readonly fetcher: Fetcher;
@@ -208,10 +208,10 @@ export class PoolClient {
     this.fetcher = fetcher;
   }
 
-  /** The client for the tracker's pool, or null when no tracker
+  /** The client for the tracker's window store, or null when no tracker
    * server is set (the window runs unbacked, like every read face
    * without a server). */
-  static open(fetcher: Fetcher = (url, init) => fetch(url, init)): PoolClient | null {
+  static open(fetcher: Fetcher = (url, init) => fetch(url, init)): WindowsClient | null {
     let base: URL;
     try {
       base = serverBase();
@@ -219,14 +219,14 @@ export class PoolClient {
       if (error instanceof SourceUnavailableError) return null;
       return null;
     }
-    return new PoolClient(base, deviceId(), fetcher);
+    return new WindowsClient(base, deviceId(), fetcher);
   }
 
   private async call(
     route: string,
     init: RequestInit & { body?: string },
   ): Promise<{ status: number; doc: unknown }> {
-    const response = await this.fetcher(poolUrl(this.base, route), {
+    const response = await this.fetcher(windowsUrl(this.base, route), {
       ...init,
       headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
     });
@@ -243,16 +243,16 @@ export class PoolClient {
   private fail(route: string, status: number, doc: unknown): never {
     const detail =
       (doc as { error?: { detail?: string } } | null)?.error?.detail ?? "no detail";
-    throw new Error(`pool ${route} refused (${status}): ${detail}`);
+    throw new Error(`window store ${route} refused (${status}): ${detail}`);
   }
 
   private stateOf(doc: unknown): WindowState {
     const state = (doc as { state?: WindowState } | null)?.state;
-    if (!state) throw new Error("the pool answered no state");
+    if (!state) throw new Error("the window store answered no state");
     return normalizeState(state);
   }
 
-  /** The pool's own facts and standing sequence. */
+  /** The window store's own facts and standing sequence. */
   async seq(): Promise<number> {
     const { status, doc } = await this.call("", { method: "GET" });
     if (status !== 200) this.fail("root", status, doc);
@@ -272,7 +272,7 @@ export class PoolClient {
   /** Birth of the window's state: the id is client-generated and
    * opaque; an id that already exists is returned as it stands (the
    * caller re-reads instead of clobbering). */
-  async create(id: string, fields: PoolFields = {}): Promise<WindowState> {
+  async create(id: string, fields: WindowFields = {}): Promise<WindowState> {
     const { status, doc } = await this.call("states", {
       method: "POST",
       body: JSON.stringify({ id, device: this.device, ...fields }),
@@ -316,11 +316,11 @@ export class PoolClient {
   /** A settled change to the window's own fields. Absent fields stay;
    * null clears. The landed sequence is remembered for the echo
    * filter; a write that changes nothing is not sent. */
-  async patch(id: string, fields: PoolFields, current?: {
+  async patch(id: string, fields: WindowFields, current?: {
     location: string | null;
     part: string | null;
     zoom: number | null;
-    drafts: PoolDraft[] | null;
+    drafts: WindowDraft[] | null;
   }): Promise<number | null> {
     if (current && !fieldsDiffer(fields, current)) return null;
     const { status, doc } = await this.call(`states/${encodeURIComponent(id)}`, {
@@ -332,7 +332,7 @@ export class PoolClient {
     return (doc as { seq: number }).seq;
   }
 
-  /** The rare act: the state leaves the pool on every device. */
+  /** The rare act: the state leaves the window store on every device. */
   async discard(id: string): Promise<void> {
     const { status, doc } = await this.call(`states/${encodeURIComponent(id)}`, {
       method: "DELETE",
@@ -397,7 +397,7 @@ export class PoolClient {
               });
               return;
             }
-            throw new Error(`pool watch refused (${status})`);
+            throw new Error(`window store watch refused (${status})`);
           }
           backoff = 500;
           const seq = (doc as { seq: number }).seq;
@@ -428,7 +428,7 @@ export class PoolClient {
     };
   }
 
-  /** The one-time interim-draft move (t-24@r20), per pooled start. */
+  /** The one-time interim-draft move (t-24@r20), per start with the window store. */
   async moveInterimDrafts(): Promise<void> {
     const keys = interimDraftKeys().filter((key) => !movedKeys().has(key));
     if (keys.length === 0) return;
@@ -459,10 +459,10 @@ export class PoolClient {
         }
         confirmed.push(key);
       } catch {
-        // this task moves on the next pooled start; nothing is lost
+        // this task moves on the next start with the window store; nothing is lost
       }
     }
-    // the interim store is marked moved only after the pool confirmed
+    // the interim store is marked moved only after the window store confirmed
     markMoved(confirmed);
   }
 }

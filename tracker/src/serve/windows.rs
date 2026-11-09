@@ -1,13 +1,13 @@
-//! The /pool/v1 doors: the suite's window-state pool, the third
+//! The /api/v1/windows doors: the suite's window store, the third
 //! surface beside /api/v1 (sac's own) and /view/v1 (the pure record
-//! pages). The pool is client workspace state OUTSIDE the record
+//! pages). The window store is client workspace state OUTSIDE the record
 //! (t-14, ratified item 1; the wire and storage settled on t-24@r20):
 //! what each suite window shows, its reading height, its zoom, its
 //! annotation drafts, each device's attached set and per-device links,
-//! kept in the pool's own SQLite file beside the event log and
+//! kept in the window store's own SQLite file beside the event log and
 //! versioned on its own. Sync is the pages' hold contract on the
-//! pool's own change sequence: `?after=<seq>` parks wake-driven until
-//! a pool write lands or the hold expires, quiet is a normal answer,
+//! window store's own change sequence: `?after=<seq>` parks wake-driven until
+//! a window store write lands or the hold expires, quiet is a normal answer,
 //! and every write names its device so a device recognises its own
 //! echo. Nothing here reads or writes the record.
 
@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::api::{AppState, LandingWake};
-use crate::serve::pool_store::{
-    self, LinkFail, OpenFail, Pool, StatePatch, StateRow, StateValue, StoreFail,
+use crate::serve::window_store::{
+    self, LinkFail, OpenFail, StatePatch, StateRow, StateValue, StoreFail, WindowStore,
 };
 
 /// The hold a `?after=` request gets without `?timeout=`, and the
@@ -32,115 +32,115 @@ use crate::serve::pool_store::{
 const DEFAULT_HOLD: Duration = Duration::from_secs(25);
 const MAX_HOLD: Duration = Duration::from_secs(55);
 
-/// The pool major this surface serves; the path's `v1` names it.
-pub const POOL_MAJOR: u64 = 1;
+/// The window store major this surface serves; the path's `v1` names it.
+pub const WINDOWS_MAJOR: u64 = 1;
 
-/// One shared handle per server: the pool file opened on first use
-/// beside the db. Other doors never touch the pool, so a tracker that
-/// serves no pool traffic creates no pool file.
-pub struct PoolShared {
-    pool: Mutex<Pool>,
+/// One shared handle per server: the window store file opened on first use
+/// beside the db. Other doors never touch the window store, so a tracker that
+/// serves no window store traffic creates no window store file.
+pub struct WindowsShared {
+    store: Mutex<WindowStore>,
 }
 
-impl PoolShared {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Pool> {
-        self.pool.lock().expect("the pool lock holds")
+impl WindowsShared {
+    fn lock(&self) -> std::sync::MutexGuard<'_, WindowStore> {
+        self.store.lock().expect("the window store lock holds")
     }
 }
 
-/// The pool doors' shared state, held by AppState: the lazily opened
-/// pool file and the pool's own landing wake. The record's landing
-/// wake is a different instance - record writes never wake a pool
-/// hold, pool writes never wake a page hold.
+/// The window store doors' shared state, held by AppState: the lazily opened
+/// window store file and the window store's own landing wake. The record's landing
+/// wake is a different instance - record writes never wake a window store
+/// hold, window store writes never wake a page hold.
 #[derive(Clone)]
-pub struct PoolDoor {
-    shared: Arc<Mutex<Option<Arc<PoolShared>>>>,
+pub struct WindowsDoor {
+    shared: Arc<Mutex<Option<Arc<WindowsShared>>>>,
     pub wake: LandingWake,
 }
 
-impl Default for PoolDoor {
-    fn default() -> PoolDoor {
-        PoolDoor {
+impl Default for WindowsDoor {
+    fn default() -> WindowsDoor {
+        WindowsDoor {
             shared: Arc::new(Mutex::new(None)),
             wake: LandingWake::default(),
         }
     }
 }
 
-impl PoolDoor {
-    /// The open pool, opening the file on first use at `<db>.pool`.
+impl WindowsDoor {
+    /// The open window store, opening the file on first use at `<db>.windows`.
     /// A file that refuses (a newer schema, unreadable) refuses the
     /// request with its reason and is retried on the next one.
-    fn open(&self, db_path: &std::path::Path) -> Result<Arc<PoolShared>, PoolFail> {
-        let mut guard = self.shared.lock().expect("the pool cell holds");
+    fn open(&self, db_path: &std::path::Path) -> Result<Arc<WindowsShared>, WindowsFail> {
+        let mut guard = self.shared.lock().expect("the window store cell holds");
         if let Some(shared) = guard.as_ref() {
             return Ok(shared.clone());
         }
         let mut path = db_path.to_path_buf().into_os_string();
-        path.push(".pool");
-        let pool = Pool::open(std::path::Path::new(&path)).map_err(|fail| match fail {
-            OpenFail::TooNew { found } => PoolFail::refused(
+        path.push(".windows");
+        let store = WindowStore::open(std::path::Path::new(&path)).map_err(|fail| match fail {
+            OpenFail::TooNew { found } => WindowsFail::refused(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "pool_too_new",
+                "windows_too_new",
                 format!(
-                    "the pool file {} carries schema version {found}, newer than this \
+                    "the window store file {} carries schema version {found}, newer than this \
                      tracker writes ({}) - serve it with a newer tracker",
                     path.display(),
-                    pool_store::SCHEMA_VERSION
+                    window_store::SCHEMA_VERSION
                 ),
             ),
             OpenFail::Storage(reason) => {
-                PoolFail::refused(StatusCode::INTERNAL_SERVER_ERROR, "storage", reason)
+                WindowsFail::refused(StatusCode::INTERNAL_SERVER_ERROR, "storage", reason)
             }
         })?;
-        let shared = Arc::new(PoolShared {
-            pool: Mutex::new(pool),
+        let shared = Arc::new(WindowsShared {
+            store: Mutex::new(store),
         });
         *guard = Some(shared.clone());
         Ok(shared)
     }
 
-    /// Fire the pool wake: every landed pool write calls this, so a
+    /// Fire the window store wake: every landed window store write calls this, so a
     /// parked `?after=` hold re-reads.
     pub fn wake_writes(&self) {
         self.wake.fire();
     }
 }
 
-/// A pool refusal: the same shape the /api/v1 door answers.
-struct PoolFail {
+/// A window store refusal: the same shape the /api/v1 door answers.
+struct WindowsFail {
     status: StatusCode,
     code: &'static str,
     detail: String,
 }
 
-impl PoolFail {
-    fn refused(status: StatusCode, code: &'static str, detail: String) -> PoolFail {
-        PoolFail {
+impl WindowsFail {
+    fn refused(status: StatusCode, code: &'static str, detail: String) -> WindowsFail {
+        WindowsFail {
             status,
             code,
             detail,
         }
     }
 
-    fn bad_query(detail: String) -> PoolFail {
-        PoolFail::refused(StatusCode::BAD_REQUEST, "bad_query", detail)
+    fn bad_query(detail: String) -> WindowsFail {
+        WindowsFail::refused(StatusCode::BAD_REQUEST, "bad_query", detail)
     }
 
-    fn malformed(detail: String) -> PoolFail {
-        PoolFail::refused(StatusCode::BAD_REQUEST, "malformed_request", detail)
+    fn malformed(detail: String) -> WindowsFail {
+        WindowsFail::refused(StatusCode::BAD_REQUEST, "malformed_request", detail)
     }
 
-    fn state_missing(id: &str) -> PoolFail {
-        PoolFail::refused(
+    fn state_missing(id: &str) -> WindowsFail {
+        WindowsFail::refused(
             StatusCode::NOT_FOUND,
             "state_missing",
-            format!("no pool state {id}"),
+            format!("no window state {id}"),
         )
     }
 
-    fn storage(reason: String) -> PoolFail {
-        PoolFail::refused(StatusCode::INTERNAL_SERVER_ERROR, "storage", reason)
+    fn storage(reason: String) -> WindowsFail {
+        WindowsFail::refused(StatusCode::INTERNAL_SERVER_ERROR, "storage", reason)
     }
 
     fn response(&self) -> Response {
@@ -152,42 +152,42 @@ impl PoolFail {
     }
 }
 
-impl From<String> for PoolFail {
-    fn from(reason: String) -> PoolFail {
-        PoolFail::storage(reason)
+impl From<String> for WindowsFail {
+    fn from(reason: String) -> WindowsFail {
+        WindowsFail::storage(reason)
     }
 }
 
-impl From<StoreFail> for PoolFail {
-    fn from(fail: StoreFail) -> PoolFail {
+impl From<StoreFail> for WindowsFail {
+    fn from(fail: StoreFail) -> WindowsFail {
         match fail {
-            StoreFail::Missing(id) => PoolFail::state_missing(&id),
-            StoreFail::Exists(id) => PoolFail::refused(
+            StoreFail::Missing(id) => WindowsFail::state_missing(&id),
+            StoreFail::Exists(id) => WindowsFail::refused(
                 StatusCode::CONFLICT,
                 "state_exists",
-                format!("pool state {id} already exists"),
+                format!("window state {id} already exists"),
             ),
-            StoreFail::Storage(reason) => PoolFail::storage(reason),
+            StoreFail::Storage(reason) => WindowsFail::storage(reason),
         }
     }
 }
 
-impl From<LinkFail> for PoolFail {
-    fn from(fail: LinkFail) -> PoolFail {
+impl From<LinkFail> for WindowsFail {
+    fn from(fail: LinkFail) -> WindowsFail {
         match fail {
-            LinkFail::SelfLink(id) => PoolFail::refused(
+            LinkFail::SelfLink(id) => WindowsFail::refused(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "self_link",
                 format!("a window never links to itself: {id}"),
             ),
-            LinkFail::NotAttached(id) => PoolFail::refused(
+            LinkFail::NotAttached(id) => WindowsFail::refused(
                 StatusCode::CONFLICT,
                 "not_attached",
                 format!(
                     "links run only between windows attached on the device; {id} is not attached"
                 ),
             ),
-            LinkFail::Storage(reason) => PoolFail::storage(reason),
+            LinkFail::Storage(reason) => WindowsFail::storage(reason),
         }
     }
 }
@@ -197,7 +197,7 @@ impl From<LinkFail> for PoolFail {
 /// One annotation draft riding a state (t-24@r20): the part's path and
 /// the draft text.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct PoolDraft {
+pub struct WindowDraft {
     pub path: String,
     pub text: String,
 }
@@ -216,7 +216,7 @@ struct StateDoc {
     #[serde(skip_serializing_if = "Option::is_none")]
     zoom: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    drafts: Option<Vec<PoolDraft>>,
+    drafts: Option<Vec<WindowDraft>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_device: Option<String>,
     changed: u64,
@@ -225,22 +225,22 @@ struct StateDoc {
     link: Option<String>,
 }
 
-fn parse_drafts(raw: Option<&str>) -> Result<Option<Vec<PoolDraft>>, PoolFail> {
+fn parse_drafts(raw: Option<&str>) -> Result<Option<Vec<WindowDraft>>, WindowsFail> {
     let Some(raw) = raw else {
         return Ok(None);
     };
     serde_json::from_str(raw)
         .map(Some)
-        .map_err(|e| PoolFail::storage(format!("stored drafts do not decode: {e}")))
+        .map_err(|e| WindowsFail::storage(format!("stored drafts do not decode: {e}")))
 }
 
-fn state_doc(row: StateRow, device: &str, pool: &Pool) -> Result<StateDoc, PoolFail> {
-    let attached_here = pool
+fn state_doc(row: StateRow, device: &str, store: &WindowStore) -> Result<StateDoc, WindowsFail> {
+    let attached_here = store
         .attached(device)
-        .map_err(PoolFail::storage)?
+        .map_err(WindowsFail::storage)?
         .iter()
         .any(|id| id == &row.id);
-    let link = pool.link(device, &row.id).map_err(PoolFail::storage)?;
+    let link = store.link(device, &row.id).map_err(WindowsFail::storage)?;
     Ok(StateDoc {
         id: row.id,
         location: row.location,
@@ -255,8 +255,8 @@ fn state_doc(row: StateRow, device: &str, pool: &Pool) -> Result<StateDoc, PoolF
 }
 
 /// One annotation-draft list, validated and serialised for storage.
-fn drafts_json(drafts: &[PoolDraft]) -> Result<String, PoolFail> {
-    serde_json::to_string(drafts).map_err(|e| PoolFail::malformed(e.to_string()))
+fn drafts_json(drafts: &[WindowDraft]) -> Result<String, WindowsFail> {
+    serde_json::to_string(drafts).map_err(|e| WindowsFail::malformed(e.to_string()))
 }
 
 // -- the query -----------------------------------------------------------
@@ -264,15 +264,15 @@ fn drafts_json(drafts: &[PoolDraft]) -> Result<String, PoolFail> {
 /// The query a read accepts: `device=` names the reading device (its
 /// attached flag and links are answered to it alone), `after=<seq>`
 /// waits, `?timeout=` bounds the hold. The pages' hold contract, on
-/// the pool's own sequence.
+/// the window store's own sequence.
 fn parse_query(
     params: &HashMap<String, String>,
-) -> Result<(String, Option<u64>, Duration), PoolFail> {
+) -> Result<(String, Option<u64>, Duration), WindowsFail> {
     let device = match params.get("device") {
         Some(device) if !device.trim().is_empty() => device.clone(),
         _ => {
-            return Err(PoolFail::bad_query(
-                "device= names the reading device; the pool answers its attached set and \
+            return Err(WindowsFail::bad_query(
+                "device= names the reading device; the window store answers its attached set and \
                  links to it alone"
                     .to_string(),
             ));
@@ -283,8 +283,8 @@ fn parse_query(
         Some(value) => match value.parse::<u64>() {
             Ok(parsed) => Some(parsed),
             Err(_) => {
-                return Err(PoolFail::bad_query(format!(
-                    "'{value}' is not a pool sequence; after= names a cursor"
+                return Err(WindowsFail::bad_query(format!(
+                    "'{value}' is not a window store sequence; after= names a cursor"
                 )));
             }
         },
@@ -294,7 +294,7 @@ fn parse_query(
         Some(value) => match value.parse::<u64>() {
             Ok(parsed) => Some(parsed),
             Err(_) => {
-                return Err(PoolFail::bad_query(format!(
+                return Err(WindowsFail::bad_query(format!(
                     "'{value}' is not a seconds bound; timeout= names seconds"
                 )));
             }
@@ -312,33 +312,33 @@ fn parse_query(
 
 // -- the doors -----------------------------------------------------------
 
-/// The pool root: what the surface is and the verbs it serves.
-pub async fn pool_root(State(app): State<AppState>) -> Response {
-    let shared = match app.pool_door.open(app.db_path()) {
+/// The window store root: what the surface is and the verbs it serves.
+pub async fn windows_root(State(app): State<AppState>) -> Response {
+    let shared = match app.windows_door.open(app.db_path()) {
         Ok(shared) => shared,
         Err(fail) => return fail.response(),
     };
     let guard = shared.lock();
     let seq = match guard.seq() {
         Ok(seq) => seq,
-        Err(reason) => return PoolFail::storage(reason).response(),
+        Err(reason) => return WindowsFail::storage(reason).response(),
     };
     Json(json!({
-        "pool": POOL_MAJOR,
-        "schema": pool_store::SCHEMA_VERSION,
+        "windows": WINDOWS_MAJOR,
+        "schema": window_store::SCHEMA_VERSION,
         "seq": seq,
         "verbs": [
-            "GET /pool/v1/states?device=<id>[&after=<seq>&timeout=<s>]",
-            "POST /pool/v1/states {id, device[, location, part, zoom, drafts]}",
-            "GET /pool/v1/states/<id>?device=<id>[&after=<seq>&timeout=<s>]",
-            "PATCH /pool/v1/states/<id> {device[, location, part, zoom, drafts]}",
-            "DELETE /pool/v1/states/<id>",
-            "POST /pool/v1/devices/<device>/attach {state}",
-            "POST /pool/v1/devices/<device>/detach {state}",
-            "PUT /pool/v1/devices/<device>/links/<from> {to}",
-            "DELETE /pool/v1/devices/<device>/links/<from>"
+            "GET /api/v1/windows/states?device=<id>[&after=<seq>&timeout=<s>]",
+            "POST /api/v1/windows/states {id, device[, location, part, zoom, drafts]}",
+            "GET /api/v1/windows/states/<id>?device=<id>[&after=<seq>&timeout=<s>]",
+            "PATCH /api/v1/windows/states/<id> {device[, location, part, zoom, drafts]}",
+            "DELETE /api/v1/windows/states/<id>",
+            "POST /api/v1/windows/devices/<device>/attach {state}",
+            "POST /api/v1/windows/devices/<device>/detach {state}",
+            "PUT /api/v1/windows/devices/<device>/links/<from> {to}",
+            "DELETE /api/v1/windows/devices/<device>/links/<from>"
         ],
-        "note": "the suite's window-state pool, outside the record: waiting is \
+        "note": "the suite's window-state store, outside the record: waiting is \
                  ?after=<seq> on the reads, every write names its device"
     }))
     .into_response()
@@ -352,21 +352,21 @@ enum Built {
     Park,
 }
 
-/// The pool reads' wait loop: parse the waiting query, open, park on
-/// the pool wake until a pool write lands past the cursor or the hold
+/// The window store reads' wait loop: parse the waiting query, open, park on
+/// the window store wake until a window store write lands past the cursor or the hold
 /// expires, answer as it stands. Quiet is a normal answer. The hold is
 /// wake-driven: the registration enters the wake before the deciding
 /// read runs, so a write landing between the read and the park can
 /// never be missed. `expired` tells the build the hold is over: a
 /// still-parked subject answers its refusal then.
 async fn serve_read<F>(
-    door: &PoolDoor,
+    door: &WindowsDoor,
     db_path: &std::path::Path,
     params: &HashMap<String, String>,
     build: F,
 ) -> Response
 where
-    F: Fn(&Pool, &str, u64, bool) -> Result<Built, PoolFail>,
+    F: Fn(&WindowStore, &str, u64, bool) -> Result<Built, WindowsFail>,
 {
     let (device, after, hold) = match parse_query(params) {
         Ok(parsed) => parsed,
@@ -386,7 +386,7 @@ where
                     let guard = shared.lock();
                     let seq = match guard.seq() {
                         Ok(seq) => seq,
-                        Err(reason) => return Some(PoolFail::storage(reason).response()),
+                        Err(reason) => return Some(WindowsFail::storage(reason).response()),
                     };
                     if after.is_some_and(|cursor| seq <= cursor) {
                         return None;
@@ -408,7 +408,7 @@ where
             let guard = shared.lock();
             let seq = match guard.seq() {
                 Ok(seq) => seq,
-                Err(reason) => return PoolFail::storage(reason).response(),
+                Err(reason) => return WindowsFail::storage(reason).response(),
             };
             return match build(&guard, &device, seq, true) {
                 Ok(Built::Serve(response)) => response,
@@ -419,57 +419,57 @@ where
     }
 }
 
-/// GET /pool/v1/states: every state, with the reading device's
+/// GET /api/v1/windows/states: every state, with the reading device's
 /// attached flag and its links beside them.
-pub async fn pool_states(
+pub async fn window_states(
     State(app): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     serve_read(
-        &app.pool_door,
+        &app.windows_door,
         app.db_path(),
         &params,
-        |pool, device, seq, _expired| {
-            let rows = pool.states().map_err(PoolFail::storage)?;
+        |store, device, seq, _expired| {
+            let rows = store.states().map_err(WindowsFail::storage)?;
             let mut docs = Vec::with_capacity(rows.len());
             for row in rows {
-                docs.push(state_doc(row, device, pool)?);
+                docs.push(state_doc(row, device, store)?);
             }
             Ok(Built::Serve(
-                Json(json!({"pool": POOL_MAJOR, "seq": seq, "states": docs})).into_response(),
+                Json(json!({"windows": WINDOWS_MAJOR, "seq": seq, "states": docs})).into_response(),
             ))
         },
     )
     .await
 }
 
-/// GET /pool/v1/states/<id>: one state, waitable.
-pub async fn pool_state_get(
+/// GET /api/v1/windows/states/<id>: one state, waitable.
+pub async fn window_state_get(
     State(app): State<AppState>,
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     serve_read(
-        &app.pool_door,
+        &app.windows_door,
         app.db_path(),
         &params,
-        move |pool, device, seq, expired| match pool.state(&id).map_err(PoolFail::storage)? {
+        move |store, device, seq, expired| match store.state(&id).map_err(WindowsFail::storage)? {
             Some(row) => Ok(Built::Serve(
                 Json(json!({
-                    "pool": POOL_MAJOR,
+                    "windows": WINDOWS_MAJOR,
                     "seq": seq,
-                    "state": state_doc(row, device, pool)?
+                    "state": state_doc(row, device, store)?
                 }))
                 .into_response(),
             )),
-            None if expired => Err(PoolFail::state_missing(&id)),
+            None if expired => Err(WindowsFail::state_missing(&id)),
             None => Ok(Built::Park),
         },
     )
     .await
 }
 
-/// POST /pool/v1/states: birth of a state. An id that already exists
+/// POST /api/v1/windows/states: birth of a state. An id that already exists
 /// refuses - the caller re-reads instead of clobbering.
 #[derive(Deserialize)]
 pub struct CreateBody {
@@ -482,10 +482,10 @@ pub struct CreateBody {
     #[serde(default)]
     zoom: Option<f64>,
     #[serde(default)]
-    drafts: Option<Vec<PoolDraft>>,
+    drafts: Option<Vec<WindowDraft>>,
 }
 
-pub async fn pool_state_create(State(app): State<AppState>, body: Json<CreateBody>) -> Response {
+pub async fn window_state_create(State(app): State<AppState>, body: Json<CreateBody>) -> Response {
     let drafts = match body.drafts.as_deref().map(drafts_json) {
         None => None,
         Some(Ok(json)) => Some(json),
@@ -502,10 +502,10 @@ pub async fn pool_state_create(State(app): State<AppState>, body: Json<CreateBod
         )?;
         let row = guard
             .state(&body.id)
-            .map_err(PoolFail::storage)?
-            .ok_or_else(|| PoolFail::state_missing(&body.id))?;
+            .map_err(WindowsFail::storage)?
+            .ok_or_else(|| WindowsFail::state_missing(&body.id))?;
         let doc = state_doc(row, &body.device, guard)?;
-        Ok(json!({"pool": POOL_MAJOR, "seq": seq, "state": doc}))
+        Ok(json!({"windows": WINDOWS_MAJOR, "seq": seq, "state": doc}))
     })
     .await
 }
@@ -524,7 +524,7 @@ where
     Deserialize::deserialize(deserializer).map(Some)
 }
 
-/// PATCH /pool/v1/states/<id>: a settled change to the state's own
+/// PATCH /api/v1/windows/states/<id>: a settled change to the state's own
 /// fields. Absent fields stay; null clears.
 #[derive(Deserialize)]
 pub struct PatchBody {
@@ -536,10 +536,10 @@ pub struct PatchBody {
     #[serde(default, deserialize_with = "double_option")]
     zoom: Option<Option<f64>>,
     #[serde(default, deserialize_with = "double_option")]
-    drafts: Option<Option<Vec<PoolDraft>>>,
+    drafts: Option<Option<Vec<WindowDraft>>>,
 }
 
-pub async fn pool_state_patch(
+pub async fn window_state_patch(
     State(app): State<AppState>,
     Path(id): Path<String>,
     body: Json<PatchBody>,
@@ -574,33 +574,33 @@ pub async fn pool_state_patch(
         let seq = guard.update(&id, &body.device, &patch)?;
         let row = guard
             .state(&id)
-            .map_err(PoolFail::storage)?
-            .ok_or_else(|| PoolFail::state_missing(&id))?;
+            .map_err(WindowsFail::storage)?
+            .ok_or_else(|| WindowsFail::state_missing(&id))?;
         let doc = state_doc(row, &body.device, guard)?;
-        Ok(json!({"pool": POOL_MAJOR, "seq": seq, "state": doc}))
+        Ok(json!({"windows": WINDOWS_MAJOR, "seq": seq, "state": doc}))
     })
     .await
 }
 
-/// DELETE /pool/v1/states/<id>: the rare act - the state leaves the
-/// pool on every device, its attachments and every link touching it
+/// DELETE /api/v1/windows/states/<id>: the rare act - the state leaves the
+/// window store on every device, its attachments and every link touching it
 /// with it.
-pub async fn pool_state_discard(State(app): State<AppState>, Path(id): Path<String>) -> Response {
+pub async fn window_state_discard(State(app): State<AppState>, Path(id): Path<String>) -> Response {
     write_door(app, |guard| {
         let seq = guard.discard(&id)?;
-        Ok(json!({"pool": POOL_MAJOR, "seq": seq}))
+        Ok(json!({"windows": WINDOWS_MAJOR, "seq": seq}))
     })
     .await
 }
 
-/// POST /pool/v1/devices/<device>/attach: this device starts showing
+/// POST /api/v1/windows/devices/<device>/attach: this device starts showing
 /// the state.
 #[derive(Deserialize)]
 pub struct StateRef {
     state: String,
 }
 
-pub async fn pool_attach(
+pub async fn windows_attach(
     State(app): State<AppState>,
     Path(device): Path<String>,
     body: Json<StateRef>,
@@ -609,18 +609,18 @@ pub async fn pool_attach(
         let seq = guard.attach(&device, &body.state)?;
         let row = guard
             .state(&body.state)
-            .map_err(PoolFail::storage)?
-            .ok_or_else(|| PoolFail::state_missing(&body.state))?;
+            .map_err(WindowsFail::storage)?
+            .ok_or_else(|| WindowsFail::state_missing(&body.state))?;
         let doc = state_doc(row, &device, guard)?;
-        Ok(json!({"pool": POOL_MAJOR, "seq": seq, "state": doc}))
+        Ok(json!({"windows": WINDOWS_MAJOR, "seq": seq, "state": doc}))
     })
     .await
 }
 
-/// POST /pool/v1/devices/<device>/detach: this device stops showing
+/// POST /api/v1/windows/devices/<device>/detach: this device stops showing
 /// the state; the state stays. Links on this device pointing at it
 /// lapse in the same write (t-14).
-pub async fn pool_detach(
+pub async fn windows_detach(
     State(app): State<AppState>,
     Path(device): Path<String>,
     body: Json<StateRef>,
@@ -629,42 +629,42 @@ pub async fn pool_detach(
         let seq = guard.detach(&device, &body.state)?;
         let row = guard
             .state(&body.state)
-            .map_err(PoolFail::storage)?
-            .ok_or_else(|| PoolFail::state_missing(&body.state))?;
+            .map_err(WindowsFail::storage)?
+            .ok_or_else(|| WindowsFail::state_missing(&body.state))?;
         let doc = state_doc(row, &device, guard)?;
-        Ok(json!({"pool": POOL_MAJOR, "seq": seq, "state": doc}))
+        Ok(json!({"windows": WINDOWS_MAJOR, "seq": seq, "state": doc}))
     })
     .await
 }
 
-/// PUT /pool/v1/devices/<device>/links/<from>: set or replace this
+/// PUT /api/v1/windows/devices/<device>/links/<from>: set or replace this
 /// device's one outgoing link.
 #[derive(Deserialize)]
 pub struct LinkBody {
     to: String,
 }
 
-pub async fn pool_link_set(
+pub async fn window_link_set(
     State(app): State<AppState>,
     Path((device, from)): Path<(String, String)>,
     body: Json<LinkBody>,
 ) -> Response {
     write_door(app, |guard| {
         let seq = guard.set_link(&device, &from, &body.to)?;
-        Ok(json!({"pool": POOL_MAJOR, "seq": seq, "from": from, "to": body.to}))
+        Ok(json!({"windows": WINDOWS_MAJOR, "seq": seq, "from": from, "to": body.to}))
     })
     .await
 }
 
-/// DELETE /pool/v1/devices/<device>/links/<from>: unlink. Unlinking a
+/// DELETE /api/v1/windows/devices/<device>/links/<from>: unlink. Unlinking a
 /// window that carries no link answers the standing sequence.
-pub async fn pool_link_clear(
+pub async fn window_link_clear(
     State(app): State<AppState>,
     Path((device, from)): Path<(String, String)>,
 ) -> Response {
     write_door(app, |guard| {
         let seq = guard.clear_link(&device, &from)?;
-        Ok(json!({"pool": POOL_MAJOR, "seq": seq}))
+        Ok(json!({"windows": WINDOWS_MAJOR, "seq": seq}))
     })
     .await
 }
@@ -673,9 +673,9 @@ pub async fn pool_link_clear(
 /// answer.
 async fn write_door<F>(app: AppState, act: F) -> Response
 where
-    F: FnOnce(&Pool) -> Result<serde_json::Value, PoolFail>,
+    F: FnOnce(&WindowStore) -> Result<serde_json::Value, WindowsFail>,
 {
-    let door = &app.pool_door;
+    let door = &app.windows_door;
     let shared = match door.open(app.db_path()) {
         Ok(shared) => shared,
         Err(fail) => return fail.response(),
