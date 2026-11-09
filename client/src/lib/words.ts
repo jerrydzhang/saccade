@@ -1,6 +1,8 @@
 // The live words store: the frontend half of the app's ONE Herdr
-// event feed. The native shell holds the subscription (one per core
-// per app process, t-24@r22) and keeps the table; windows read it
+// event feed. The native shell holds the subscription - one per
+// process by this client's own design (t-24@r23: the core allows
+// more; sharing one where simpler is what the client holds) - and
+// keeps the table; windows read it
 // through the bounded hold (`words_wait`, the wait_look_config
 // pattern: the loop parks, wakes on a landing, re-enters - never a
 // timer). A window with no host (the browser lane) has no feed; the

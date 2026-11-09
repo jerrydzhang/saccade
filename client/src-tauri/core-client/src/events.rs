@@ -1,10 +1,10 @@
 //! The event stream's read face: `events.subscribe` over the local
-//! core's socket, one persistent connection per opener. The client
-//! holds ONE subscription per core per app process (t-24@r22: on
-//! herdr-core 0.1.17 a second concurrent `events.subscribe` on one
-//! core never answers), and fans what arrives out to every window and
-//! instrument; nothing else here may open a second one. Read-only by
-//! construction: a subscription sends nothing to any terminal.
+//! core's socket, one persistent connection per opener. The core
+//! allows concurrent subscriptions (t-24@r23: per connection,
+//! unlimited on 0.1.17); this client holds ONE per process by its own
+//! design and fans what arrives out to every window and instrument.
+//! Read-only by construction: a subscription sends nothing to any
+//! terminal.
 
 use crate::error::CoreFail;
 use crate::transport::SocketTransport;

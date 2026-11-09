@@ -116,11 +116,15 @@ agents glance - reading `/view/v1` only; `/api/v1` stays `sac`'s own.
   tracker's machine, never invented. Proposed and built as proposed:
   available workspaces with no agent hold no row - the view is the
   sessions, nothing else keeps it open.
-- **The live words ride ONE subscription** (t-24@r22): on herdr-core
-  0.1.17 a second concurrent `events.subscribe` on one core never
-  answers, so the shell holds exactly one subscription per core per
-  app process and every window and instrument reads the table it
-  keeps - never their own. The table clears on every (re)connect and
+- **The live words ride one shared subscription, by the client's own
+  design** (t-24@r23: subscriptions are per connection and unlimited
+  on herdr-core 0.1.17 - the earlier one-subscription rule is
+  withdrawn; sharing one across windows remains allowed where
+  simpler, and simpler is what this client holds): the shell keeps
+  exactly one subscription per core per app process, and every window
+  and instrument reads the table it keeps - one reconnect, one
+  backoff, one table to trust, however many windows read it. The
+  table clears on every (re)connect and
   on the core's restart vocabulary; words refill from the stream.
   Consumers wake through one bounded hold (the wait_look_config
   pattern, never a timer poll). A word Herdr does not report is shown

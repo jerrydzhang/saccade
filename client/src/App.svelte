@@ -98,7 +98,9 @@
   });
 
   // The instruments' live half: the app's ONE feed lands its words in
-  // the shell's table; windows read it here (t-24@r22). A window with
+  // the shell's table; windows read it here (one subscription per
+  // process by the client's own design; the core allows more,
+  // t-24@r23). A window with
   // no host starts it anyway - it resolves false and the lanes inject
   // through the inspection setter, test-only machinery.
   let wordsTable: WordsTable = $state.raw({});

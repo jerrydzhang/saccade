@@ -1,8 +1,11 @@
-//! The app's ONE Herdr event feed (t-24@r22): on herdr-core 0.1.17 a
-//! second concurrent `events.subscribe` on one core never answers, so
-//! this process holds exactly one subscription per core, and every
-//! window and instrument reads the table it keeps - never their own
-//! subscription. The feed owns the connection's life: one persistent
+//! The app's ONE Herdr event feed, by this client's own design
+//! (t-24@r23: subscriptions are per connection and unlimited on
+//! herdr-core 0.1.17 - the earlier one-subscription rule is
+//! withdrawn; sharing one across windows remains allowed where
+//! simpler, and simpler is what this client holds): every window and
+//! instrument reads the table this feed keeps - one reconnect, one
+//! backoff, one table to trust. The feed owns the connection's life:
+//! one persistent
 //! subscribe on the local core's socket, the table updated as events
 //! arrive, every consumer waking through one bounded hold (the
 //! wait_look_config pattern: no timer poll, quiet is a normal answer).
