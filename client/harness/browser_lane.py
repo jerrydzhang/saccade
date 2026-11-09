@@ -804,6 +804,89 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("landing straddle", phase_landing)
 
+    # phase 9: select first, the picker, help, zoom - the interaction
+    # chapter over the real frontend. The acts ride real key events; the
+    # inspection surface observes the DOM state.
+    def phase_interaction() -> None:
+        def key(key: str, modifiers: list[str] | None = None) -> None:
+            for modifier in modifiers or []:
+                page.keyboard.down(modifier)
+            page.keyboard.press(key)
+            for modifier in reversed(modifiers or []):
+                page.keyboard.up(modifier)
+
+        def inspect_now() -> dict:
+            return page.evaluate(f"() => {viewer}.inspection()")
+
+        # labels on what can be selected
+        key("s")
+        chips = page.evaluate("() => document.querySelectorAll('.select-label').length")
+        check(
+            "s puts labels on what can be selected",
+            chips > 0,
+            f"chips: {chips}",
+        )
+        key("Escape")
+        chips_after = page.evaluate("() => document.querySelectorAll('.select-label').length")
+        check("escape leaves the label mode", chips_after == 0, f"chips: {chips_after}")
+
+        # right-click opens the document menu with its acts
+        page.evaluate("""
+          () => {
+            const target = document.querySelector('.content');
+            const rect = target.getBoundingClientRect();
+            target.dispatchEvent(new MouseEvent('contextmenu', {
+              bubbles: true, cancelable: true,
+              clientX: rect.left + 40, clientY: rect.top + 40,
+            }));
+          }
+        """)
+        menu_visible = page.evaluate("() => document.querySelector('.ctx-menu') !== null")
+        check("right-click opens the same menu at the pointer", menu_visible)
+        acts = page.evaluate(
+            "() => Array.from(document.querySelectorAll('.ctx-menu-act .ctx-menu-label')).map(e => e.textContent)"
+        )
+        check(
+            "the menu carries the acts with their keys",
+            any("zoom" in str(act) for act in acts) and any("search" in str(act) for act in acts),
+            str(acts)[:120],
+        )
+        key("Escape")
+
+        # the picker opens over space space and resolves a typed location
+        key(" ")
+        key(" ")
+        picker_open = page.evaluate("() => document.querySelector('[data-control=\"picker:overlay\"]') !== null")
+        check("space space opens the picker", picker_open)
+        page.fill('[data-control="picker:input"]', "smoke/t-0")
+        page.wait_for_selector('[data-control="picker:result"]')
+        rows = page.evaluate(
+            "() => Array.from(document.querySelectorAll('[data-control=\"picker:result\"] .picker-name')).map(e => e.textContent)"
+        )
+        check(
+            "a typed location resolves in the picker even unenumerated",
+            any("t-0" in str(row) for row in rows),
+            str(rows)[:120],
+        )
+        key("Escape")
+
+        # help on demand
+        key("?")
+        help_visible = page.evaluate("() => document.querySelector('[data-control=\"help:overlay\"]') !== null")
+        check("? lists the keys and commands", help_visible)
+        key("Escape")
+
+        # zoom
+        before = page.evaluate("() => document.querySelector('.content').style.zoom || '1'")
+        key("+")
+        after = page.evaluate("() => document.querySelector('.content').style.zoom")
+        check("plus zooms the document", float(after) > float(before), f"{before} -> {after}")
+        key("=")
+        reset = page.evaluate("() => document.querySelector('.content').style.zoom")
+        check("equals resets the zoom", abs(float(reset) - 1.0) < 0.001, reset)
+
+    phase("interaction", phase_interaction)
+
     return sum(1 for ok, _name, _detail in RESULTS[started_records:] if not ok)
 
 
