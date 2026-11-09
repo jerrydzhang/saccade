@@ -530,6 +530,18 @@
           cargoLock.lockFile = ../Cargo.lock;
           meta.mainProgram = "board-grammar";
         };
+        # the agents companion: same workspace-member shape as the
+        # grammar, one binary per hub
+        companion = pkgs.rustPlatform.buildRustPackage {
+          pname = "saccade-companion";
+          version = "0.1.0";
+          doCheck = false;
+          src = ../.;
+          cargoRoot = ".";
+          buildAndTestSubdir = "companion";
+          cargoLock.lockFile = ../Cargo.lock;
+          meta.mainProgram = "sac-companion";
+        };
       in
         let
           pkgSet =
@@ -539,6 +551,8 @@
               sac-archive = sac-archive;
 
               board-grammar = board-grammar;
+
+              companion = companion;
 
               saccade-pi = saccadePi;
 

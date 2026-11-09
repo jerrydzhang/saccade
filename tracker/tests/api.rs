@@ -9871,3 +9871,180 @@ async fn view_v1_wait_parks_until_a_relevant_record_lands() {
         "the refusal parked for its bound first"
     );
 }
+
+// The agents page (t-24@r4): one group per registered native session,
+// its location the incarnation, facts inside naming the terminal
+// address, the harness, the owned tasks and the workspace - the
+// workspace derived server-side from the saved session's own header.
+// The hold wakes on the registration family and the claims, not on
+// unrelated records.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agents_page_names_sessions_ownership_and_workspaces() {
+    let (_scratch, _serve, url, inc_num, inc_seq, _authored) = view_page_fixture("agents-page");
+    let fact_value = |doc: &Value, incarnation: &str, label: &str| -> Option<String> {
+        doc["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["kind"] == "group" && g["location"] == json!(incarnation))
+            .expect("the session's group is on the page")["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["kind"] == "fact" && p["label"] == label)
+            .map(|f| f["value"].as_str().unwrap().to_string())
+    };
+
+    // the root names the hub: the machine id equals the host's file
+    // (or is absent when the host carries none) and the repo path is
+    // the served repository
+    let (_, body) = get_json(&url, "/view/v1/");
+    let root = json_of(&body);
+    let host_id = std::fs::read_to_string("/etc/machine-id")
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|id| !id.is_empty());
+    assert_eq!(
+        root["machine_id"].as_str(),
+        host_id.as_deref(),
+        "the root's machine id is the host's, never defaulted"
+    );
+    assert!(root["repo_path"].as_str().is_some());
+
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let doc = json_of(&body);
+    assert_eq!(doc["kind"], "document");
+    assert_eq!(doc["location"], "agents");
+    let me = format!("i-{inc_num}");
+    assert_eq!(
+        fact_value(&doc, &me, "incarnation").as_deref(),
+        Some(me.as_str())
+    );
+    assert_eq!(fact_value(&doc, &me, "harness").as_deref(), Some("pi"));
+    assert_eq!(fact_value(&doc, &me, "tasks").as_deref(), Some("t-0"));
+    // the workspace came from the saved pi header's own cwd
+    assert!(fact_value(&doc, &me, "workspace").is_some());
+
+    // a second registration: an address and a harness, nothing saved
+    // and nothing claimed - the facts that exist are the only facts
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "agents-page-second", "address": "tA", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let second_num = inc_num + 1;
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let doc = json_of(&body);
+    let theirs = format!("i-{second_num}");
+    assert_eq!(
+        fact_value(&doc, &theirs, "terminal address").as_deref(),
+        Some("tA")
+    );
+    assert_eq!(fact_value(&doc, &theirs, "tasks"), None);
+    assert_eq!(fact_value(&doc, &theirs, "workspace"), None);
+
+    // ownership: the page carries every owned task, latest claim first
+    let (ok, _, err) = view_page_sac(&url, Some(inc_seq as u64), Some("t-1"), &["claim", "t-1"]);
+    assert!(ok, "{err}");
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let doc = json_of(&body);
+    assert_eq!(
+        fact_value(&doc, &me, "tasks").as_deref(),
+        Some("t-1 t-0"),
+        "latest claim first"
+    );
+
+    // supersession: a fresh holder of the same address removes the
+    // older holder from the page - the fold names one live holder
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "agents-page-third", "address": "tA", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let third_num = inc_num + 2;
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let doc = json_of(&body);
+    let locations: Vec<String> = doc["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|g| g["location"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        locations.contains(&format!("i-{third_num}")),
+        "{locations:?}"
+    );
+    assert!(
+        !locations.contains(&format!("i-{second_num}")),
+        "the superseded holder is off the page: {locations:?}"
+    );
+
+    // the hold wakes when a registration lands
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let wait = {
+        let url = url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, &format!("/view/v1/agents?after={cursor}&timeout=8"))
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let (status, body) = post_json(
+        &url,
+        "/api/v1/incarnations/register",
+        &json!({"native_id": "agents-page-fourth", "address": "tB", "adopted": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        json_of(&body)["seq"].as_u64().unwrap() > cursor,
+        "the hold answered past its cursor"
+    );
+
+    // and when a claim lands: the ownership facts are the page's too
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let wait = {
+        let url = url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, &format!("/view/v1/agents?after={cursor}&timeout=8"))
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let (ok, _, err) = view_page_sac(&url, Some(inc_seq as u64), Some("t-1"), &["claim", "t-0"]);
+    assert!(ok, "{err}");
+    let (status, body) = wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(json_of(&body)["seq"].as_u64().unwrap() > cursor);
+
+    // an unrelated landing keeps the hold quiet for its bound: a task
+    // creation is not the agents page's subject
+    let (_, body) = get_json(&url, "/view/v1/agents");
+    let cursor = json_of(&body)["seq"].as_u64().unwrap();
+    let hold_started = std::time::Instant::now();
+    let wait = {
+        let url = url.clone();
+        std::thread::spawn(move || {
+            get_json(&url, &format!("/view/v1/agents?after={cursor}&timeout=3"))
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let (ok, _, err) = view_page_sac(
+        &url,
+        None,
+        None,
+        &["create", "task", "unrelated to the agents"],
+    );
+    assert!(ok, "{err}");
+    let (status, body) = wait.join().unwrap();
+    assert_eq!(status, 200, "{body}");
+    // the unrelated landing landed mid-hold: the answer is the bound
+    // expiring, not the landing waking it
+    assert!(
+        hold_started.elapsed() >= std::time::Duration::from_millis(2800),
+        "the hold stayed quiet for its bound first"
+    );
+}

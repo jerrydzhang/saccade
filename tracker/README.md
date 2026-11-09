@@ -177,7 +177,11 @@ nothing writes through `/view/v1`.
 - **A page belongs to a location, not an endpoint.** The location
   grammar v1 serves: `` (the root, naming the tracker, the view
   grammar majors and board grammar range, and the page families),
-  `t-N[@rK]` (a board page), `t-N[@rK]/history` (a timeline of
+  `agents` (the registered native sessions: one group per session
+  with its terminal address, harness, owned tasks and the workspace
+  derived from the saved session's own header; waiting wakes on the
+  registration family and the claims), `t-N[@rK]` (a board page),
+  `t-N[@rK]/history` (a timeline of
   commits interleaved with decisions in record order; a pinned
   revision cuts the timeline at the commit that landed it),
   `t-N@rA..rB/diff` (the stored unified diff, one text part),
