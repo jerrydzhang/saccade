@@ -11,7 +11,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -78,6 +78,12 @@ pub struct LandingWake {
 }
 
 impl LandingWake {
+    /// Fire the wake: parked holds re-evaluate. Called where a write
+    /// this wake watches has landed.
+    pub fn fire(&self) {
+        self.notify.notify_waiters();
+    }
+
     /// A parked read's hold on the landing wake, used by the page
     /// door. `decide` runs once the registration has entered the
     /// wake's wait list, so a write landing between the deciding read
@@ -126,6 +132,9 @@ pub struct AppState {
     /// time: loopback names and the bind address are always accepted,
     /// anything else is a rebound name and refuses before routing.
     pub(crate) allowed_hosts: Arc<[String]>,
+    /// The suite's window-state pool (t-14, t-24@r20): its own file
+    /// beside the db, opened on first /pool/v1 use, with its own wake.
+    pub pool_door: crate::serve::pool::PoolDoor,
 }
 
 /// The shells the viewer ships in; their origins are fixed by the
@@ -207,6 +216,7 @@ impl AppState {
                 .map(|origin| origin.to_string())
                 .collect(),
             allowed_hosts: Arc::from([]),
+            pool_door: crate::serve::pool::PoolDoor::default(),
         })
     }
 
@@ -793,6 +803,33 @@ pub fn routes() -> Router<AppState> {
         .route("/view/v1", get(crate::serve::pages::view_root))
         .route("/view/v1/", get(crate::serve::pages::view_root))
         .route("/view/v1/{*location}", get(crate::serve::pages::view_page))
+        // the pool: the suite's window-state door, outside the record
+        // (t-14 ratified, t-24@r20); same edge, same origin policy, the
+        // same conceded write boundary as /api/v1
+        .route("/pool/v1", get(crate::serve::pool::pool_root))
+        .route("/pool/v1/", get(crate::serve::pool::pool_root))
+        .route(
+            "/pool/v1/states",
+            get(crate::serve::pool::pool_states).post(crate::serve::pool::pool_state_create),
+        )
+        .route(
+            "/pool/v1/states/{id}",
+            get(crate::serve::pool::pool_state_get)
+                .patch(crate::serve::pool::pool_state_patch)
+                .delete(crate::serve::pool::pool_state_discard),
+        )
+        .route(
+            "/pool/v1/devices/{device}/attach",
+            post(crate::serve::pool::pool_attach),
+        )
+        .route(
+            "/pool/v1/devices/{device}/detach",
+            post(crate::serve::pool::pool_detach),
+        )
+        .route(
+            "/pool/v1/devices/{device}/links/{from}",
+            put(crate::serve::pool::pool_link_set).delete(crate::serve::pool::pool_link_clear),
+        )
 }
 
 // -- the task-free workspace controller ----------------------------------

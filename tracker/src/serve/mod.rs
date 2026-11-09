@@ -4,6 +4,8 @@ pub mod api;
 pub mod board_wire;
 pub mod client;
 pub mod pages;
+pub mod pool;
+pub mod pool_store;
 pub mod wire;
 
 use tracing::info;

@@ -230,6 +230,62 @@ nothing writes through `/view/v1`.
   the root page's family list, its own arm of the watch enum - and
   never a second surface.
 
+## The pool (/pool/v1)
+
+The suite's window-state door, outside the record (t-14, ratified;
+wire and storage settled on t-24@r20). `/api/v1` stays `sac`'s own API,
+`/view/v1` stays the pure record pages, and `/pool/v1` carries the
+client workspace state: what each suite window shows, its position in
+that content (the part at the reading height), its zoom, its
+annotation drafts, each device's attached set, and the per-device
+links. Nothing here reads or writes the record; the pool never names
+record authority.
+
+- **The pool file is the server's own SQLite file beside the event
+  log, `<db>.pool`**, never inside it: pool writes are frequent (the
+  reading height settles while reading) and the event log is the one
+  store that must never contend or be put at risk. The file carries
+  its own schema version; opening is the bounded version-to-version
+  step - a missing version inits schema 1 transactionally, a newer
+  version refuses to serve rather than guessing. Whatever reproduces
+  the log (clone, import, a fresh db) carries no pool, which is
+  correct: losing the pool loses window arrangements, never the
+  record.
+- **Sync is the pages' hold contract on the pool's own sequence**:
+  every write bumps a monotonic pool seq and fires the pool wake (a
+  separate instance from the record's landing wake); `?after=<seq>` on
+  the reads parks wake-driven until a pool write lands past the cursor
+  or the hold expires (25 s default, 55 s cap), and quiet is a normal
+  answer. Clients send position changes when they settle, never per
+  scroll frame, and every write names its device, so a device
+  recognises its own echo and never jumps its own view.
+- **The device is an opaque client-generated id**, persisted on the
+  device, stored and compared by the pool and never interpreted by it.
+  Not the machine id: a browser lane has none, and two app instances
+  on one machine are two devices. No read ever answers one device
+  another device's attached set.
+- **Drafts ride the window state** (t-24@r20): two windows on one
+  device showing the same task hold separate drafts; two devices
+  showing one state share them; the suite's publish commits the drafts
+  of the window it is pressed in.
+- **The verbs**: `GET /pool/v1` (the surface facts),
+  `GET/POST /pool/v1/states`, `GET/PATCH/DELETE /pool/v1/states/<id>`
+  (the delete is the rare discard: the state leaves the pool on every
+  device, its attachments and every link touching it with it),
+  `POST /pool/v1/devices/<device>/attach|detach`, and
+  `PUT/DELETE /pool/v1/devices/<device>/links/<from>`. Reads name
+  their device in the query and answer that device's `attached_here`
+  and `link` with the state. Refusals carry the `/api/v1` error shape
+  under informative statuses (`bad_query`, `state_missing` 404,
+  `state_exists` 409, `not_attached` 409, `self_link` 422, `storage`
+  500, `pool_too_new` 500).
+- **Links are per device, one out of a window, only between windows
+  attached on that device, and a link lapses when its target
+  detaches** (t-14) - enforced here in the same write as the detach;
+  a link whose source detaches survives for the resume. A wait parks
+  through a missing state the way a page parks through a missing
+  board; an expired hold answers the refusal.
+
 ## Test placement
 
 Placement is by entry point, not by invariant-hood; unit tests also
