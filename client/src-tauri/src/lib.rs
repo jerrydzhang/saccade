@@ -6,6 +6,7 @@
 
 pub mod board_validate;
 pub mod commands;
+pub mod look_config;
 
 pub fn run() {
     // The explicit board location handed to the foreground launch, if
@@ -52,8 +53,23 @@ pub fn run() {
             commands::initial_board,
             commands::write_clipboard,
             board_validate::validate_board,
+            look_config::look_config,
+            look_config::wait_look_config,
         ])
         .setup(move |app| {
+            // the look follows the human's own configuration file in the
+            // platform config directory (t-24@r3); the directory may not
+            // exist yet, in which case the built-in scheme is in use and
+            // the follow thread picks the file up the moment it appears
+            use tauri::Manager;
+            let dir = app.path().app_config_dir().ok();
+            eprintln!(
+                "[bridge] look config dir: {}",
+                dir.as_ref()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_else(|| "unavailable".into())
+            );
+            look_config::init(dir);
             if console_requested {
                 use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {
