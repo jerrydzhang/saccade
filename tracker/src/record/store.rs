@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::Reject;
 use crate::decide::{decide, enforce_tier};
 use crate::events::{Command, Event};
-use crate::objects::incarnation::{Incarnation, IncarnationContext, IncarnationId};
+use crate::objects::incarnation::{Incarnation, IncarnationContext, IncarnationId, Supersession};
 use crate::objects::message::{Message, MessageContext, MessageId, MessageState};
 use crate::objects::task::{BoardCommit, Owner, OwnerEntry, Task, TaskContext, TaskId, TaskState};
 use crate::objects::workspace::{
@@ -214,6 +214,11 @@ pub struct World {
     /// still exists. No residency - the named record stays the event
     /// it is.
     pub provenance: BTreeMap<RecordId, Option<TaskId>>,
+    /// The superseded incarnations: the fold's derivation of the law
+    /// of one live holder. Each entry names the superseding evidence
+    /// (the assignment record that took the address); the log keeps
+    /// the older assignment untouched.
+    pub superseded: BTreeMap<IncarnationId, Supersession>,
 }
 
 impl World {
@@ -226,6 +231,7 @@ impl World {
             workspace_changes: BTreeMap::new(),
             root_space: None,
             provenance: BTreeMap::new(),
+            superseded: BTreeMap::new(),
         }
     }
 
@@ -400,6 +406,38 @@ impl World {
             Tier::Agent => Ok(Owner::External(context.actor.clone())),
             // machinery holds no whole-task responsibility
             Tier::System => Err(Reason::InvalidStateTransition),
+        }
+    }
+
+    /// The law of one live holder, applied wherever an assignment
+    /// lands: a birth or reassignment that carries an address another
+    /// incarnation holds supersedes that holder, whatever the
+    /// workspace, whatever the address kind. A resume at the holder's
+    /// own address never supersedes: the assignee is exempt. And the
+    /// assignee's own fresh assignment clears any supersession it
+    /// carried - it holds a live address again, so delivery reaches
+    /// it there; its old slot stays with whoever took it. The
+    /// supersession's evidence is the assignment record itself.
+    fn supersede_address_holders(&mut self, assignee: IncarnationId, address: &str, at: RecordId) {
+        // a fresh assignment of one's own is the way back: the
+        // superseded incarnation holds a live address again, so its
+        // supersession clears; its old slot stays with whoever took it
+        self.superseded.remove(&assignee);
+        let holders: Vec<IncarnationId> = self
+            .incarnations
+            .iter()
+            .filter(|(id, ctx)| **id != assignee && ctx.incarnation.address() == Some(address))
+            .map(|(id, _)| *id)
+            .collect();
+        for holder in holders {
+            self.superseded.insert(
+                holder,
+                Supersession {
+                    by: assignee,
+                    at,
+                    address: address.to_string(),
+                },
+            );
         }
     }
 
@@ -759,6 +797,11 @@ impl World {
                 }
                 // a birth without a home still exists
                 self.provenance.insert(record.id, None);
+                // the birth's carried pair is an assignment: one live
+                // holder per address, the same law a reassignment obeys
+                if let Some(address) = address.as_deref() {
+                    self.supersede_address_holders(IncarnationId(record.id), address, record.id);
+                }
                 self.incarnations.insert(
                     IncarnationId(record.id),
                     IncarnationContext {
@@ -801,7 +844,14 @@ impl World {
                 adopted,
             } => {
                 // the association's address moves with a relaunch; the
-                // incarnation must stand and be native
+                // incarnation must stand and be native. The move obeys
+                // the law of one live holder: whoever held the address
+                // is superseded by this assignment's record - unless
+                // the mover is the holder, a resume never supersedes
+                // itself
+                if let Some(address) = address.as_deref() {
+                    self.supersede_address_holders(incarnation, address, record.id);
+                }
                 let ctx = self
                     .incarnations
                     .get_mut(&incarnation)
