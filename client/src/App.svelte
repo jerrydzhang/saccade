@@ -146,6 +146,7 @@
   let poolStateId: string | null = null;
   let poolWatch: { stop: () => void } | null = null;
   let windowLabel: string | null = null;
+  let poolRetryTimer: ReturnType<typeof setTimeout> | null = null;
   // the mirrors this window applies and writes: a value already here
   // is never written again, so no-op settles bump no sequences
   let appliedLocation: string | null = null;
@@ -238,6 +239,17 @@
    * survives a reload); a first window creates its state, attaches
    * this device, applies what the state carries, and watches. The
    * one-time interim-draft move runs on the first pooled start. */
+  /** The retry for a window that started before any server existed:
+   * one quiet timer, gone the moment the window binds. */
+  function schedulePoolRetry(): void {
+    if (poolRetryTimer !== null || poolStateId !== null) return;
+    poolRetryTimer = setTimeout(() => {
+      poolRetryTimer = null;
+      if (poolStateId !== null) return;
+      void startPoolWindow();
+    }, 2000);
+  }
+
   async function startPoolWindow(): Promise<void> {
     let invoke: ReturnType<typeof tauriInvoke>;
     try {
@@ -251,7 +263,11 @@
     }
     pool = PoolClient.open();
     if (pool === null) {
-      console.log("[viewer] pool: no tracker server set; the window runs unbacked");
+      // no server YET: the server setting appears once, typed in the
+      // header - a window that started before it retries, and the
+      // pool backing arrives without a restart
+      console.log("[viewer] pool: no tracker server set; the window retries when one appears");
+      schedulePoolRetry();
       return;
     }
     try {
@@ -290,6 +306,8 @@
       console.log(`[viewer] pool window bound: ${stateId}`);
     } catch (error) {
       console.error(`[viewer] pool window failed: ${String(error)}`);
+      // a transient failure retries on the same quiet timer
+      schedulePoolRetry();
     }
   }
   void openTestBoard();

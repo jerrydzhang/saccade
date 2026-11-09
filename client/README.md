@@ -259,7 +259,10 @@ surface's law). The client's own half:
   settled write that changes nothing is not sent.
 - **A window with no tracker server runs unbacked**, like every read
   face without one; its drafts stay in memory, which is still never a
-  lost draft, and the move waits for a pooled start.
+  lost draft, and the move waits for a pooled start. The server
+  setting appears once, typed in the header - a window that started
+  before it retries on a quiet timer, and the pool backing arrives
+  without a restart.
 
 ## Layout
 
