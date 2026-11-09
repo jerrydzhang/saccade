@@ -2047,6 +2047,7 @@
                   class="row instrument-row"
                   role="row"
                   data-control="instrument:row"
+                  data-block-id={`instrument-row-${row.task}`}
                   data-instrument="tasks"
                   data-task={row.task}
                   data-open-path={row.location}
@@ -2084,6 +2085,7 @@
                   class="row instrument-row"
                   role="row"
                   data-control="instrument:row"
+                  data-block-id={`instrument-row-${row.incarnation}`}
                   data-instrument="agents"
                   onclick={(click) => selectInstrumentRow(click)}
                   data-incarnation={row.incarnation}

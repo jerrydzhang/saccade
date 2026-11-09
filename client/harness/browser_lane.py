@@ -793,7 +793,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             )
             check(
                 "the rows share one grid, the columns named once per section",
-                all("tasktitleagentslatest commitage" in h.replace(" ", "") for h in heads),
+                all("tasktitleagentslatest commitage" in "".join(h.split()) for h in heads),
                 str(heads)[:160],
             )
             # select first: s puts labels on what can be selected,
@@ -803,14 +803,16 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             page.wait_for_selector(".select-label")
             chips = page.eval_on_selector_all(
                 ".select-label",
-                "els => els.map(e => ({text: e.textContent.trim(), row: e.closest('.instrument-row')?.getAttribute('data-task')}))",
+                "els => els.map(e => ({text: e.textContent.trim(), block: e.getAttribute('data-target-block')}))",
             )
-            row_chips = [c for c in chips if c.get("row")]
+            row_chips = [c for c in chips if (c.get("block") or "").startswith("instrument-row-")]
             check(
                 "s puts labels on the rows",
                 len(row_chips) >= 2,
                 str(chips)[:160],
             )
+            # the label mode leaves with the phase, whatever the checks
+            # found: a later phase never inherits my modes
             page.keyboard.press("Escape")
             page.wait_for_function("() => document.querySelector('.select-label') === null")
             # the pointer's own path: click the waiting row, then the
@@ -835,9 +837,9 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             page.wait_for_selector(".select-label")
             chips = page.eval_on_selector_all(
                 ".select-label",
-                "els => els.map(e => ({text: e.textContent.trim(), row: e.closest('.instrument-row')?.getAttribute('data-task')}))",
+                "els => els.map(e => ({text: e.textContent.trim(), block: e.getAttribute('data-target-block')}))",
             )
-            t0_chip = next((c["text"] for c in chips if c.get("row") == "t-0"), None)
+            t0_chip = next((c["text"] for c in chips if c.get("block") == "instrument-row-t-0"), None)
             assert t0_chip is not None, f"no label chip rides the t-0 row: {chips}"
             page.keyboard.type(t0_chip)
             page.wait_for_selector(".ctx-menu")
@@ -915,9 +917,9 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             page.wait_for_selector(".select-label")
             chips = page.eval_on_selector_all(
                 ".select-label",
-                "els => els.map(e => ({text: e.textContent.trim(), row: e.closest('.instrument-row')?.getAttribute('data-incarnation')}))",
+                "els => els.map(e => ({text: e.textContent.trim(), block: e.getAttribute('data-target-block')}))",
             )
-            row_chip = next((c["text"] for c in chips if c.get("row") == "i-2"), None)
+            row_chip = next((c["text"] for c in chips if c.get("block") == "instrument-row-i-2"), None)
             assert row_chip is not None, f"no label chip rides the i-2 row: {chips}"
             page.keyboard.type(row_chip)
             page.wait_for_selector(".ctx-menu", timeout=3000)
@@ -931,12 +933,17 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 and any("the branch" in a for a in acts),
                 str(acts),
             )
-            for act in acts:
-                if "attach command" in act:
-                    key = act.split("attach")[0].strip()
-                    if key:
-                        page.keyboard.press(key)
-                        break
+            attach_key = page.evaluate("""() => {
+                const rows = [...document.querySelectorAll('.ctx-menu-act')];
+                for (const row of rows) {
+                    if ((row.textContent ?? '').includes('attach command')) {
+                        return row.querySelector('.ctx-menu-key')?.textContent?.trim() ?? null;
+                    }
+                }
+                return null;
+            }""")
+            assert attach_key is not None, f"the attach act carries no key: {acts}"
+            page.keyboard.press(attach_key)
             page.wait_for_selector('[data-control="instrument:note"]')
             note = page.text_content('[data-control="instrument:note"]')
             check(
@@ -954,6 +961,12 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             )
             page.keyboard.press("Escape")
         finally:
+            # my modes leave with my phase, whatever the checks found:
+            # three honest Escapes cover overlay, menu and labels; the
+            # extra ones land on nothing
+            page.keyboard.press("Escape")
+            page.keyboard.press("Escape")
+            page.keyboard.press("Escape")
             tracker.stop()
 
     phase("instruments", phase_instruments)

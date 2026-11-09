@@ -63,6 +63,13 @@ export function showLabels(targets: SelectableTarget[], labels: string[]): () =>
     const chip = document.createElement("span");
     chip.className = `select-label select-label-${isTextKind(target.kind) ? "text" : "other"}`;
     chip.textContent = label;
+    // the chip's own target, named: the chips live in a body layer,
+    // so ancestry never maps them back
+    chip.setAttribute("data-target-id", target.id);
+    chip.setAttribute(
+      "data-target-block",
+      target.element.getAttribute("data-block-id") ?? "",
+    );
     chip.style.left = `${Math.max(4, rect.left - 2)}px`;
     chip.style.top = `${Math.max(4, rect.top - 2)}px`;
     layer.append(chip);
