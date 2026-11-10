@@ -192,7 +192,9 @@ function walk(hex: string, bg: string, minRatio: number, minChroma: number, step
 /** Hex with alpha over a hex colour, as a CSS rgba() string. */
 export function rgba(hex: string, alpha: number): string {
   const [r, g, b] = hexRgb(hex);
-  return `rgba(${byte(r)},${byte(g)},${byte(b)},${alpha})`;
+  // rgba() takes decimal channels; byte() is the hex form for #rrggbb
+  const decimal = (v: number): number => Math.round(Math.max(0, Math.min(1, v)) * 255);
+  return `rgba(${decimal(r)},${decimal(g)},${decimal(b)},${alpha})`;
 }
 
 /** Linear-in-sRGB mix of two hex colours; t=0 is a, t=1 is b. */

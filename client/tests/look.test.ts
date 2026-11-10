@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { floor, hueDistance, parseScheme, ratio, schemeName, toOklchHue } from "../src/lib/look/scheme.ts";
+import { floor, hueDistance, parseScheme, ratio, rgba, schemeName, toOklchHue } from "../src/lib/look/scheme.ts";
 import { DEFAULT_SCHEME_TEXT, lookVars, polarity, WEIGHTS } from "../src/lib/look/lookVars.ts";
 import {
   resolveLook,
@@ -370,4 +370,11 @@ test("the inspection override is a test surface, in memory only", () => {
   setLookOverride(null);
   assert.equal(resolveLook(null).weight, "regular");
   assert.equal(resolveLook(null).fromOverride, false);
+});
+
+test("a translucent token is valid CSS: rgba() takes decimal channels", () => {
+  // rgba(1b,19,18,0.97) resolved to nothing, so every translucent token
+  // (popovers, the bar, selection, hover, diff backgrounds) was missing
+  assert.equal(rgba("#1b1918", 0.97), "rgba(27,25,24,0.97)");
+  assert.equal(rgba("#ffffff", 0.5), "rgba(255,255,255,0.5)");
 });
