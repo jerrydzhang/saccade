@@ -33,6 +33,12 @@
     type TargetKind,
   } from "./lib/select.ts";
   import { openContextMenu, type MenuAct } from "./lib/menu.ts";
+  import { helpKeys as windowHelpKeys, type WindowKind } from "./lib/commands.ts";
+  import Strip from "./components/Strip.svelte";
+  import Picker from "./components/Picker.svelte";
+  import Help from "./components/Help.svelte";
+  import TasksWindow from "./components/TasksWindow.svelte";
+  import AgentsWindow from "./components/AgentsWindow.svelte";
   import { formatLocation, parseLocation } from "./lib/location.ts";
   import {
     annotatedBoard,
@@ -73,7 +79,7 @@
   import { citationSpec, VIEWER_ROUTING, type ElsewhereAct } from "./lib/acts.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
-  import { pickerLabelKind, rankedPicker, type PickerItem } from "./lib/picker.ts";
+  import { rankedPicker, type PickerItem } from "./lib/picker.ts";
   import { trackerSourcesForPicker } from "./lib/sources.ts";
   import { HistoryMode, marginaliaRuns, type MarginaliaRun } from "./lib/historymode.ts";
   import { ADD_CLOSE, ADD_OPEN, DEL_CLOSE, DEL_OPEN } from "./lib/history.ts";
@@ -86,11 +92,9 @@
     agentsAddressMap,
     agentsSections,
     attachCommand,
-    rowDetail,
-    rowTime,
     type AgentRow,
   } from "./lib/instruments/agents.ts";
-  import { tasksSections, taskAge, type TasksSection } from "./lib/instruments/tasks.ts";
+  import { tasksSections } from "./lib/instruments/tasks.ts";
   import { laneLayout, type LaneEntry, type LaneLayout } from "./lib/instruments/lane.ts";
   import type { HistoryEntry as TimelineEntry } from "./lib/pages.ts";
   import type { RenderOutcome, ViewerState } from "./lib/board/viewmodel.ts";
@@ -1501,7 +1505,6 @@
   let pickerOpen = $state(false);
   let pickerQuery = $state("");
   let pickerActive = $state(0);
-  let pickerInput: HTMLInputElement | undefined = $state(undefined);
 
   function pickerCandidates(): PickerItem[] {
     const items: PickerItem[] = [];
@@ -1567,45 +1570,13 @@
     return cmds;
   }
 
-  /** The keys of this window for the help sheet (round 16's showHelp):
-   * the motion and acts, then the space commands from the one table. */
-  function helpKeys(): Array<[string, string]> {
-    if (view.instrument) {
-      const rows: Array<[string, string]> = [
-        ["s", "select (labels, then the menu)"],
-        ["Enter", view.instrument.kind === "agents" ? "open the session's task board (through the link)" : "open the board (through the link)"],
-        ["e", view.instrument.kind === "tasks" ? "the task's activity" : "the session's details"],
-        ["j k", "scroll"],
-        ["gg G", "top, bottom"],
-        ["' \"", "jump to a window, window picker"],
-        ["?", "this sheet"],
-      ];
-      if (view.instrument.kind === "agents") rows.splice(3, 0, ["a w b", "copy the attach command / workspace path / branch"]);
-      return rows;
-    }
-    return [
-      ["s", "select (labels, then the menu)"],
-      ["Enter", "the selected part's menu"],
-      ["o i w", "open elsewhere: through the link / once / a new window"],
-      ["j k", "scroll"],
-      ["Ctrl-f Ctrl-b", "page"],
-      ["d u", "half page (Ctrl-d Ctrl-u too)"],
-      ["gg G", "top, bottom"],
-      ["Ctrl-o Ctrl-i", "back, forward"],
-      ["+ - =", "zoom, reset"],
-      ["h l", historyMode ? "step time" : deck ? "slides" : "(in history: step time)"],
-      ["n N", "changes (history)"],
-      ["t H L", "track a part, walk its changes (history)"],
-      ["a", "annotate after the part at the reading line"],
-      ["Ctrl-Shift-c", "copy source / plain"],
-      ["' \"", "jump to a window, window picker"],
-      ["?", "this sheet"],
-    ];
+  /** What this window is, for the menu and help heads. */
+  function windowKind(): WindowKind {
+    return view.instrument ? view.instrument.kind : "viewer";
   }
 
-  /** What this window is, for the menu and help heads. */
-  function windowKind(): string {
-    return view.instrument ? view.instrument.kind : "viewer";
+  function helpKeys(): Array<[string, string]> {
+    return windowHelpKeys({ kind: windowKind(), history: historyMode !== null, deck: deck !== null });
   }
 
   /** space: the which-key menu of this window's commands, at the foot of
@@ -1639,7 +1610,6 @@
     pickerOpen = true;
     pickerQuery = "";
     pickerActive = 0;
-    window.requestAnimationFrame(() => pickerInput?.focus());
   }
 
   function closePicker(): void {
@@ -3352,37 +3322,21 @@
 </script>
 
 <div class="app">
-  <header class="strip" data-control="strip">
-    {#if view.instrument}
-      <span class="name">{view.instrument.kind}</span>
-      {#if stripTracker}<span class="chip">{stripTracker}</span>{/if}
-    {:else if stripLocation}
-      <span class="loc" data-control="board:location">{stripLocation}</span>
-      {#if stripCurrent}<span class="dim3">{stripCurrent}</span>{/if}
-    {:else}
-      <span class="dim3">no board - space space opens the picker</span>
-    {/if}
-    {#if stripState}<span class="chip warn" data-control="strip:state">{stripState}</span>{/if}
-    {#if copyNote}<span class="chip" role="status" data-control="instrument:note">{copyNote}</span>{/if}
-    {#if deck}
-      <span class="chip on" data-control="deck:line">deck: {deck.name}</span>
-      <button type="button" class="chip" data-control="deck:copy" onclick={copyCueCommand}>copy cue command</button>
-    {/if}
-    {#if deckStateText}
-      <span class="chip" data-control="deck:state">{deckStateText}</span>
-    {/if}
-    <span class="sp"></span>
-    {#if marginaliaActive}<span class="chip on">marginalia</span>{/if}
-    {#if zoom !== 1}<span class="dim3">{Math.round(zoom * 100)}%</span>{/if}
-    {#if jumpChipShown !== null}
-      <span class="jump-chip-self" data-control="jump:self">{jumpChipShown}</span>
-    {/if}
-    {#if linkTargetName !== null}
-      <span class="lnk" data-control="link:target">-&gt; {linkTargetName}</span>
-    {:else if view.instrument}
-      <span class="lnk none">unlinked</span>
-    {/if}
-  </header>
+  <Strip
+    kind={view.instrument ? view.instrument.kind : "viewer"}
+    tracker={stripTracker}
+    location={stripLocation}
+    current={stripCurrent}
+    state={stripState}
+    note={copyNote}
+    deckName={deck ? deck.name : null}
+    deckState={deckStateText || null}
+    onCopyCue={copyCueCommand}
+    marginalia={marginaliaActive}
+    {zoom}
+    jumpChip={jumpChipShown}
+    link={linkTargetName}
+  />
 
   {#if searchOpen}
   <div class="search-bar" role="search">
@@ -3435,62 +3389,18 @@
   {/if}
 
   {#if helpOpen}
-  <div class="help-overlay" role="dialog" aria-label="keys and commands" data-control="help:overlay">
-    <div class="help-panel">
-      <div class="help-section">
-        <p class="help-title">keys - {windowKind()}</p>
-        {#each helpKeys() as [key, label] (key)}
-          <p class="help-row"><span class="ctx-menu-key">{key}</span> {label}</p>
-        {/each}
-      </div>
-      <div class="help-section">
-        <p class="help-title">space ...</p>
-        {#each spaceCommands() as command (command.key)}
-          <p class="help-row"><span class="ctx-menu-key">{command.key === " " ? "spc" : command.key}</span> {command.label}</p>
-        {/each}
-      </div>
-      {#if lookNotice}
-      <div class="help-section">
-        <p class="help-title">look</p>
-        <p class="help-row" data-control="help:look">{lookNotice}</p>
-      </div>
-      {/if}
-    </div>
-  </div>
+    <Help kind={windowKind()} keys={helpKeys()} commands={spaceCommands()} {lookNotice} />
   {/if}
 
   {#if pickerOpen}
-  <div class="picker-overlay" role="dialog" aria-label="picker" data-control="picker:overlay">
-    <div class="picker-panel">
-      <input
-        type="text"
-        class="picker-input"
-        placeholder={homeTracker() === null ? "no tracker yet - type its location with the host once: host:8811/saccade/tasks" : "tasks, boards, files - a typed location always resolves"}
-        aria-label="picker query"
-        data-control="picker:input"
-        bind:this={pickerInput}
-        bind:value={pickerQuery}
-        onkeydown={onPickerKey}
-      />
-      <div class="picker-list" data-control="picker:list">
-        {#each pickerResults as item, index (item.location)}
-          <button
-            type="button"
-            class="picker-row"
-            class:picker-active={index === pickerActive}
-            data-control="picker:result"
-            onclick={() => void pickerOpenResult(item)}
-            onmouseenter={() => (pickerActive = index)}
-          >
-            <span class="picker-kind">{pickerLabelKind(item).kind}</span>
-            <span class="picker-name">{pickerLabelKind(item).label}</span>
-          </button>
-        {:else}
-          <p class="picker-empty">nothing matches</p>
-        {/each}
-      </div>
-    </div>
-  </div>
+    <Picker
+      bind:query={pickerQuery}
+      bind:active={pickerActive}
+      results={pickerResults}
+      placeholder={homeTracker() === null ? "no tracker yet - type its location with the host once: host:8811/saccade/tasks" : "tasks, boards, files - a typed location always resolves"}
+      onKey={onPickerKey}
+      onChoose={(item) => void pickerOpenResult(item)}
+    />
   {/if}
 
   {#if overlay}
@@ -3628,83 +3538,9 @@
     {#if view.instrument}
       <main class="content instrument" bind:this={instrumentHost} aria-label="{view.instrument.kind} instrument" data-instrument={view.instrument.kind}>
         {#if view.instrument.kind === "tasks"}
-          {#each taskSections as section (section.title)}
-            <p class="sec instrument-label">{section.title}</p>
-            <div class="instrument-table" role="table" aria-label="{section.title} tasks" data-control="instrument:section">
-              {#each section.rows as row (row.task)}
-                <button
-                  type="button"
-                  class="row instrument-row"
-                  role="row"
-                  data-control="instrument:row"
-                  data-block-id={`instrument-row-${row.task}`}
-                  data-instrument="tasks"
-                  data-task={row.task}
-                  data-open-path={row.location}
-                  data-agents={row.agents}
-                  onclick={(click) => selectInstrumentRow(click)}
-                >
-                  <span class="tid">{row.task}</span>
-                  <span class="instrument-title">{row.title}</span>
-                  <span class="instrument-agents">
-                    {#each taskRowShapes(row.agents) as shape (shape.id)}
-                      <span class="agent-cell">
-                        {#if shape.word}<span class="st {shape.word}" title={shape.word}></span>{/if}
-                        <span class="sid">{shape.id}</span>
-                      </span>
-                    {/each}
-                  </span>
-                  <span class="commit-cell" title={row.latestCommit}>{row.latestCommit.slice(0, 7)}</span>
-                  <span class="num">{taskAge(row.at, Math.floor(Date.now() / 1000))}</span>
-                </button>
-              {:else}
-                <p class="dim3 instrument-empty">none</p>
-              {/each}
-            </div>
-          {/each}
+          <TasksWindow sections={taskSections} shapes={taskRowShapes} onSelect={selectInstrumentRow} />
         {:else}
-          {#if agentSections.every((section) => section.rows.length === 0)}
-            <p class="sec instrument-label">agents</p>
-            <p class="dim3 instrument-empty">none - no session reports to this tracker</p>
-          {/if}
-          {#each agentSections.filter((section) => section.rows.length > 0) as section, index (section.word ?? "absent")}
-            <p class="sec instrument-label">{#if section.word}<span class="st {section.word}"></span>{/if}{section.word ?? "absent"}</p>
-            <div class="instrument-table" role="table" aria-label="{section.word ?? "absent"} sessions" data-control="instrument:section">
-              {#each section.rows as row (row.incarnation + String(index))}
-                <button
-                  type="button"
-                  class="row instrument-row"
-                  role="row"
-                  data-control="instrument:row"
-                  data-block-id={`instrument-row-${row.incarnation}`}
-                  data-instrument="agents"
-                  onclick={(click) => selectInstrumentRow(click)}
-                  data-incarnation={row.incarnation}
-                  data-address={row.address}
-                  data-harness={row.harness}
-                  data-tasks={row.tasks.join(" ")}
-                  data-workspace={row.workspace}
-                  data-last-commit={row.lastCommit}
-                  data-open-path={row.tasks[0] ?? ""}
-                  data-word={row.word?.state ?? ""}
-                  data-app={row.word?.app ?? ""}
-                  data-msg={row.word?.msg ?? ""}
-                  data-progress={row.word?.progress ?? ""}
-                  data-title={row.word?.title ?? ""}
-                  data-finished={row.word?.finished ?? ""}
-                  data-at={rowTime(row) ?? ""}
-                >
-                  <span class="st-cell">{#if row.word?.state}<span class="st {row.word.state}" title={row.word.state}></span>{/if}</span>
-                  <span class="sid">{row.incarnation}</span>
-                  <span class="instrument-detail">{rowDetail(row)}</span>
-                  <span class="tid">{row.tasks[0] ?? ""}</span>
-                  <span class="num">{rowTime(row) !== null ? taskAge(rowTime(row), Math.floor(Date.now() / 1000)) : ""}</span>
-                </button>
-              {:else}
-                <p class="dim3 instrument-empty">none</p>
-              {/each}
-            </div>
-          {/each}
+          <AgentsWindow sections={agentSections} onSelect={selectInstrumentRow} />
         {/if}
       </main>
     {/if}
