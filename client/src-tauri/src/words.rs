@@ -54,12 +54,16 @@ pub struct WordRow {
 pub struct WordsSnapshot {
     pub generation: u64,
     pub words: BTreeMap<String, WordRow>,
+    /// Whether the feed holds a live connection to Herdr core: the
+    /// strip says "Herdr unreachable" when it does not (t-34@r6 change 6).
+    pub connected: bool,
 }
 
 #[derive(Debug, Default)]
 struct Table {
     generation: u64,
     words: BTreeMap<String, WordRow>,
+    connected: bool,
 }
 
 #[derive(Debug)]
@@ -69,6 +73,18 @@ struct Shared {
 }
 
 impl Shared {
+    /// The connection's state; a change is news for the waiters.
+    fn set_connected(&self, connected: bool) {
+        let mut table = self.table.lock().expect("the words table is not poisoned");
+        if table.connected == connected {
+            return;
+        }
+        table.connected = connected;
+        table.generation += 1;
+        drop(table);
+        self.changed.notify_all();
+    }
+
     fn publish(&self, update: impl FnOnce(&mut BTreeMap<String, WordRow>)) {
         let mut table = self.table.lock().expect("the words table is not poisoned");
         table.generation += 1;
@@ -117,6 +133,7 @@ impl WordsFeed {
             return WordsSnapshot {
                 generation: table.generation,
                 words: table.words.clone(),
+                connected: table.connected,
             };
         }
         let deadline = std::time::Instant::now() + hold;
@@ -139,6 +156,7 @@ impl WordsFeed {
         WordsSnapshot {
             generation: table.generation,
             words: table.words.clone(),
+            connected: table.connected,
         }
     }
 }
@@ -170,10 +188,12 @@ fn feed_loop(shared: Arc<Shared>, socket: PathBuf, backoff: Duration) {
         let mut connection = match EventsConnection::open(&transport) {
             Ok(connection) => connection,
             Err(_) => {
+                shared.set_connected(false);
                 std::thread::sleep(backoff);
                 continue;
             }
         };
+        shared.set_connected(true);
         let mut first = true;
         loop {
             match connection.next_event(first) {
@@ -187,6 +207,7 @@ fn feed_loop(shared: Arc<Shared>, socket: PathBuf, backoff: Duration) {
                 Err(_) => break,
             }
         }
+        shared.set_connected(false);
         std::thread::sleep(backoff);
     }
 }
@@ -360,6 +381,10 @@ mod tests {
             );
             snapshot = feed.wait(snapshot.generation, Duration::from_secs(1));
         }
+        assert!(
+            snapshot.connected,
+            "a feed on a live core says it is connected"
+        );
         let row = snapshot.words.get("t1").expect("the terminal's row");
         assert_eq!(row.state.as_deref(), Some("working"));
         assert_eq!(row.msg.as_deref(), Some("editing src"));
@@ -376,5 +401,17 @@ mod tests {
         let snapshot = feed.wait(0, Duration::from_millis(80));
         assert_eq!(snapshot.generation, 0);
         assert!(snapshot.words.is_empty());
+        assert!(
+            !snapshot.connected,
+            "no core: the strip can say Herdr is unreachable"
+        );
+    }
+
+    #[test]
+    fn a_feed_whose_core_is_gone_says_it_is_not_connected() {
+        let socket = std::env::temp_dir().join(format!("sac-no-core-{}.sock", std::process::id()));
+        let feed = WordsFeed::spawn(Some(socket), Duration::from_millis(10));
+        let snapshot = feed.wait(0, Duration::from_millis(120));
+        assert!(!snapshot.connected);
     }
 }

@@ -87,7 +87,7 @@
   import { parseTaskSpec } from "./lib/location.ts";
   import { inspect } from "./lib/board/inspection.ts";
   import type { CopyMode } from "./lib/copy.ts";
-  import { startWords, onWords, setWords, type WordsTable } from "./lib/words.ts";
+  import { startWords, onWords, onWordsConnection, setWords, type WordsTable } from "./lib/words.ts";
   import {
     agentsAddressMap,
     agentsSections,
@@ -3432,8 +3432,12 @@
       ? view.location.machine.slice("tracker:".length)
       : null,
   );
+  let herdrConnected = $state<boolean | null>(null);
+  $effect(() => onWordsConnection((next) => (herdrConnected = next)));
+
   let stripState = $derived.by(() => {
     if (view.status === "loading") return "loading";
+    if (view.instrument && herdrConnected === false) return "Herdr unreachable - no live states";
     if (view.status === "invalid") return "refused - see below";
     if (lookNoticeKind === "problem") return "look configuration problem - see help";
     return null;

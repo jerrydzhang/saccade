@@ -22,6 +22,18 @@ export type WordRow = {
 export type WordsTable = Record<string, WordRow>;
 
 let table: WordsTable = {};
+// whether the shell's feed holds a live Herdr connection; null where
+// there is no shell (the browser) - nothing to report there
+let connected: boolean | null = null;
+const connectionListeners = new Set<(connected: boolean | null) => void>();
+
+/** Follow the feed's connection: the strip says "Herdr unreachable"
+ * when it is down (t-34@r6 change 6). */
+export function onWordsConnection(listener: (connected: boolean | null) => void): () => void {
+  connectionListeners.add(listener);
+  listener(connected);
+  return () => connectionListeners.delete(listener);
+}
 let generation = 0;
 let following = false;
 let started = false;
@@ -64,7 +76,13 @@ async function followLoop(): Promise<void> {
       const snapshot = (await invoke("words_wait", { since: generation })) as {
         generation: number;
         words: WordsTable;
+        connected?: boolean;
       };
+      const now = snapshot.connected ?? null;
+      if (now !== connected) {
+        connected = now;
+        for (const listener of connectionListeners) listener(connected);
+      }
       if (snapshot.generation > generation) {
         generation = snapshot.generation;
         publish(snapshot.words);
