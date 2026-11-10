@@ -307,3 +307,65 @@ export function marksToSentinelText(marks: Marked[]): string {
   }
   return out;
 }
+
+// -- the marked board (t-34@r6 change 1) ---------------------------------
+
+/** How a part changed between two revisions, carried on the part for
+ * the renderer: added whole, modified (its words, or inside a group),
+ * removed (kept where it was, struck). */
+export type ChangeMark = "add" | "mod" | "del";
+
+/** The change a marked part carries, if any. */
+export function changeOf(block: Block): ChangeMark | undefined {
+  return (block as Block & { change?: ChangeMark }).change;
+}
+
+function withChange(block: Block, change: ChangeMark): Block {
+  return Object.assign({}, block, { change }) as Block;
+}
+
+function isText(block: Block): block is Extract<Block, { kind: "text" | "annotation" }> {
+  return block.kind === "text" || block.kind === "annotation";
+}
+
+/** The newer revision's parts with the diff against the older painted
+ * in, at every depth: a group that pairs up (same title, or a changed
+ * title) is compared part by part inside; a changed text part carries
+ * its word diff; an added part is marked whole; a removed part stays
+ * where it was, marked. `changes` counts the changed leaf parts. */
+export function markBoard(oldBlocks: Block[], newBlocks: Block[]): { content: Block[]; changes: number } {
+  const content: Block[] = [];
+  let changes = 0;
+  for (const step of alignParts(oldBlocks, newBlocks)) {
+    const oldPart = step.oldIndex !== undefined ? oldBlocks[step.oldIndex] : undefined;
+    const newPart = step.newIndex !== undefined ? newBlocks[step.newIndex] : undefined;
+    if (step.op === "added" && newPart) {
+      content.push(withChange(newPart, "add"));
+      changes += 1;
+    } else if (step.op === "removed" && oldPart) {
+      content.push(withChange(oldPart, "del"));
+      changes += 1;
+    } else if (step.op === "moved" && newPart) {
+      content.push(withChange(newPart, "mod"));
+      changes += 1;
+    } else if ((step.op === "same" || step.op === "changed") && oldPart && newPart) {
+      if (oldPart.kind === "group" && newPart.kind === "group") {
+        const inner = markBoard(oldPart.content, newPart.content);
+        const retitled = (oldPart.title ?? "") !== (newPart.title ?? "");
+        const group = { ...newPart, content: inner.content };
+        content.push(inner.changes > 0 || retitled ? withChange(group, "mod") : group);
+        changes += inner.changes + (retitled ? 1 : 0);
+      } else if (step.op === "changed" && isText(oldPart) && isText(newPart)) {
+        const marked = marksToSentinelText(structuredLineDiff(oldPart.markdown, newPart.markdown));
+        content.push(withChange({ ...newPart, markdown: marked }, "mod"));
+        changes += 1;
+      } else if (step.op === "changed") {
+        content.push(withChange(oldPart, "del"), withChange(newPart, "add"));
+        changes += 1;
+      } else {
+        content.push(newPart);
+      }
+    }
+  }
+  return { content, changes };
+}

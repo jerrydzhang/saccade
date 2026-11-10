@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   alignParts,
+  changeOf,
+  markBoard,
   markerChange,
   markerSplit,
   marksToSentinelText,
@@ -94,4 +96,38 @@ test("a heading's marker change rides in front of the content", () => {
   const text = marksToSentinelText(structuredLineDiff("## The Question", "### The Question"));
   assert.match(text, /\uE002## \uE003\uE000### \uE001/);
   assert.match(text, /The Question/);
+});
+
+const POS = { start: { line: 0, column: 0, offset: 0 }, end: { line: 0, column: 0, offset: 0 } };
+function group(title: string, content: Block[]): Block {
+  return { kind: "group", title, content, pos: POS };
+}
+function para(markdown: string): Block {
+  return { kind: "text", markdown, pos: POS };
+}
+
+test("the history diff looks inside groups: real boards are groups (t-34@r6 change 1)", () => {
+  const older = [para("intro"), group("answers", [para("first answer"), para("second answer")])];
+  const newer = [para("intro"), group("answers", [para("first answer, revised"), para("second answer"), para("third answer")])];
+  const marked = markBoard(older, newer);
+  assert.equal(marked.changes, 2, "a revised part and an added part");
+  const answers = marked.content[1];
+  assert.ok(answers && answers.kind === "group");
+  assert.equal(changeOf(answers), "mod", "the group is marked as holding changes");
+  if (answers.kind !== "group") return;
+  assert.equal(changeOf(answers.content[0] as Block), "mod");
+  assert.match((answers.content[0] as { markdown: string }).markdown, /\uE000/, "the word diff is painted in");
+  assert.equal(changeOf(answers.content[1] as Block), undefined, "an unchanged part carries no mark");
+  assert.equal(changeOf(answers.content[2] as Block), "add");
+  assert.equal(changeOf(marked.content[0] as Block), undefined);
+});
+
+test("an added group is marked whole and a removed part stays where it was", () => {
+  const older = [para("a"), para("gone"), para("c")];
+  const newer = [para("a"), para("c"), group("new section", [para("x")])];
+  const marked = markBoard(older, newer);
+  const changes = marked.content.map((block) => changeOf(block) ?? "-");
+  assert.deepEqual(changes, ["-", "del", "-", "add"]);
+  assert.equal((marked.content[1] as { markdown: string }).markdown, "gone", "the removed part keeps its text");
+  assert.equal(marked.changes, 2);
 });

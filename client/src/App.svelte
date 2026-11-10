@@ -39,6 +39,7 @@
   import Help from "./components/Help.svelte";
   import TasksWindow from "./components/TasksWindow.svelte";
   import AgentsWindow from "./components/AgentsWindow.svelte";
+  import HistoryLog from "./components/HistoryLog.svelte";
   import { formatLocation, parseLocation } from "./lib/location.ts";
   import {
     annotatedBoard,
@@ -1664,6 +1665,17 @@
   // non-reactive - repaints flow through the paint functions
   let historyMode = $state.raw<HistoryMode | null>(null);
   let historyCommit = $state<HistoryEntry | null>(null);
+  let historyCommits = $state.raw<HistoryEntry[]>([]);
+  let historyChanges = $state<number | null>(null);
+
+  /** A log entry: go to that revision, the reading part kept. */
+  async function historyGo(revision: number): Promise<void> {
+    if (!historyMode) return;
+    const anchor = readingAnchorKey();
+    historyMode.at = revision;
+    await paintHistoryRevision();
+    restoreReadingAnchor(anchor);
+  }
   let historyPainted = false;
 
   function historyTracker(): TrackerSource | null {
@@ -1796,6 +1808,10 @@
     contentHost.append(rendered);
     paintHistoryRuler();
     historyCommit = mode.commitOf(mode.at);
+    historyChanges = painted.changes;
+    historyCommits = mode.entries
+      .filter((entry) => entry.event === "task_committed" && entry.revision !== null)
+      .sort((a, b) => (b.revision ?? 0) - (a.revision ?? 0));
     const historyLocation = view.location;
     if (!historyLocation) return;
     void hydrate(contentHost, model, historyLocation, generation, outcomes).then((all) => {
@@ -1804,6 +1820,8 @@
     historyPainted = true;
   }
 
+  /** The change ruler: one tick per changed part or word, at its
+   * height in the document, coloured by the change. */
   function paintHistoryRuler(): void {
     if (!contentHost) return;
     let ruler = contentHost.querySelector(":scope > .history-ruler");
@@ -1813,12 +1831,15 @@
       contentHost.append(ruler);
     }
     ruler.textContent = "";
-    for (const block of contentBlocks()) {
-      if (block.querySelector(".diff-add, .diff-del") === null) continue;
+    const hostTop = contentHost.getBoundingClientRect().top - contentHost.scrollTop;
+    for (const mark of contentHost.querySelectorAll<HTMLElement>(CHANGE_MARKS)) {
+      if (mark.closest(".history-ruler")) continue;
+      const rect = mark.getBoundingClientRect();
       const tick = document.createElement("span");
-      tick.className = "history-ruler-tick";
-      tick.style.top = `${block.offsetTop}px`;
-      tick.style.height = `${block.offsetHeight}px`;
+      const kind = mark.classList.contains("chg-add") || mark.classList.contains("diff-add") ? "add" : mark.classList.contains("chg-del") || mark.classList.contains("diff-del") ? "del" : "mod";
+      tick.className = `history-ruler-tick ${kind}`;
+      tick.style.top = `${rect.top - hostTop}px`;
+      tick.style.height = `${rect.height}px`;
       ruler.append(tick);
     }
   }
@@ -1871,9 +1892,14 @@
     restoreReadingAnchor(anchor);
   }
 
+  /** Every change in the painted revision at any depth: word marks and
+   * whole parts added, removed or moved (a modified group is its
+   * children's changes). */
+  const CHANGE_MARKS = ".diff-add, .diff-del, .chg-add, .chg-del, .chg-mod:not(.block-group)";
+
   function jumpToChange(delta: number): void {
     if (!contentHost) return;
-    const marks = Array.from(contentHost.querySelectorAll<HTMLElement>(".diff-add, .diff-del"));
+    const marks = Array.from(contentHost.querySelectorAll<HTMLElement>(CHANGE_MARKS));
     if (marks.length === 0) return;
     const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
     const target =
@@ -2384,7 +2410,8 @@
   /** The rendered top-level blocks: one render root (div.board) sits
    * between the content host and the blocks renderBoard appended. */
   function contentBlocks(): HTMLElement[] {
-    return Array.from(contentHost?.querySelectorAll<HTMLElement>(":scope > .board > .block") ?? []);
+    // a part the revision removed is shown, not part of the board
+    return Array.from(contentHost?.querySelectorAll<HTMLElement>(":scope > .board > .block:not(.chg-del)") ?? []);
   }
 
   // -- the deck (t-21, t-24@r21) -----------------------------------------
@@ -3545,11 +3572,13 @@
       </main>
     {/if}
     {#if historyActive && historyCommit}
-      <aside class="history-margin" data-control="history:margin">
-        <p class="history-position">revision r{historyMode?.at ?? ""} of r{historyMode?.newest ?? ""}</p>
-        <p class="history-commit">{historyCommit.message ?? historyCommit.grounds ?? historyCommit.explanation ?? ""}</p>
-        <p class="history-hint">h l step time | n N changes | t tracks | H L the tracked part | space h leaves</p>
-      </aside>
+      <HistoryLog
+        task={view.board?.task ?? ""}
+        commits={historyCommits}
+        at={historyCommit.revision ?? 0}
+        changes={historyChanges}
+        onGo={(revision) => void historyGo(revision)}
+      />
     {/if}
     {#if marginaliaActive}
       <aside class="marginalia-margin" data-control="marginalia:margin">

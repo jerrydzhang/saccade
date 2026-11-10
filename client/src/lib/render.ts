@@ -7,6 +7,7 @@ import type { Root, RootContent, PhrasingContent } from "mdast";
 import { parseMarkdown, docRange, promotedDisplayMath, authoredSlice } from "./markdown.ts";
 import type { Diagnostic } from "./board/errors.ts";
 import type { Board, Block, FigureBlock, UnknownBlock } from "./board/model.ts";
+import { changeOf } from "./history.ts";
 
 export type RenderHooks = {
   /** Document character offset -> projection unit id. */
@@ -71,7 +72,16 @@ export function renderBoard(board: Board, hooks: RenderHooks): HTMLElement {
   return root;
 }
 
+/** One part, styled by its change when the history diff marked it
+ * (chg-add, chg-mod, chg-del). */
 export function renderBlock(block: Block, blockId: string, hooks: RenderHooks): HTMLElement {
+  const element = renderBlockBody(block, blockId, hooks);
+  const change = changeOf(block);
+  if (change) element.classList.add(`chg-${change}`);
+  return element;
+}
+
+function renderBlockBody(block: Block, blockId: string, hooks: RenderHooks): HTMLElement {
   switch (block.kind) {
     case "text": {
       const article = el("article", { class: "block block-text", "data-block-id": blockId });

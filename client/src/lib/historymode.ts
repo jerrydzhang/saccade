@@ -8,11 +8,7 @@
 
 import { decodeBoard } from "./board/decode.ts";
 import type { Board, Block } from "./board/model.ts";
-import {
-  alignParts,
-  marksToSentinelText,
-  structuredLineDiff,
-} from "./history.ts";
+import { markBoard } from "./history.ts";
 import type { HistoryEntry, ViewPage } from "./pages.ts";
 import type { TrackerSource } from "./tracker.ts";
 
@@ -84,52 +80,24 @@ export class HistoryMode {
     return task === undefined ? 0 : Number(task);
   }
 
-  /** The board at the position, with the diff against the revision
-   * before it painted into the text parts' markdown. The board's
-   * decoded parts carry the sentinel-marked markdown in place of the
-   * changed parts' plain markdown; the shell renders it and wraps the
-   * sentinels. */
-  async boardAtPosition(): Promise<{ board: Board; changedKeys: Set<string>; markedPaths: Set<string> }> {
+  /** The board at the position with the diff against the revision
+   * before it marked in at every depth (history.ts markBoard): the
+   * shell renders it, wraps the word sentinels, and styles the parts by
+   * their change. The first revision has nothing before it. */
+  async boardAtPosition(): Promise<{ board: Board; changes: number }> {
     const current = await this.revisionBoard(this.at);
-    const changedKeys = new Set<string>();
-    const markedPaths = new Set<string>();
-    const board: Board = { ...current.board, content: current.board.content };
-    if (this.at <= 1) {
-      return { board, changedKeys, markedPaths };
-    }
+    if (this.at <= 1) return { board: current.board, changes: 0 };
     const previous = await this.revisionBoard(this.at - 1);
-    const alignment = alignParts(previous.board.content, current.board.content);
-    const markedContent: Block[] = [...current.board.content];
-    for (const step of alignment) {
-      if (step.op === "changed" && step.oldIndex !== undefined && step.newIndex !== undefined) {
-        const oldPart = previous.board.content[step.oldIndex];
-        const newPart = current.board.content[step.newIndex];
-        if (
-          newPart &&
-          oldPart &&
-          (newPart.kind === "text" || newPart.kind === "annotation") &&
-          (oldPart.kind === "text" || oldPart.kind === "annotation")
-        ) {
-          const marks = structuredLineDiff(oldPart.markdown, newPart.markdown);
-          const marked = marksToSentinelText(marks);
-          markedContent[step.newIndex] = { ...newPart, markdown: marked };
-          const key = partKeyOf(newPart);
-          changedKeys.add(key);
-          if (newPart.pos.start.line >= 0) {
-            markedPaths.add(`/content/${step.newIndex}`);
-          }
-        }
-      }
-      if ((step.op === "added" || step.op === "moved") && step.newIndex !== undefined) {
-        const newPart = current.board.content[step.newIndex];
-        if (newPart) changedKeys.add(partKeyOf(newPart));
-      }
-      if ((step.op === "removed" || step.op === "moved") && step.oldIndex !== undefined) {
-        const oldPart = previous.board.content[step.oldIndex];
-        if (oldPart) changedKeys.add(partKeyOf(oldPart));
-      }
-    }
-    return { board: { ...board, content: markedContent }, changedKeys, markedPaths };
+    const marked = markBoard(previous.board.content, current.board.content);
+    return { board: { ...current.board, content: marked.content }, changes: marked.changes };
+  }
+
+  /** How many parts each revision changed against the one before it,
+   * for the log; computed once per revision. */
+  async changesAt(revision: number): Promise<number> {
+    if (revision <= 1) return 0;
+    const [previous, current] = await Promise.all([this.revisionBoard(revision - 1), this.revisionBoard(revision)]);
+    return markBoard(previous.board.content, current.board.content).changes;
   }
 
   /** Step h (older) or l (newer); returns the new position. */
