@@ -14,6 +14,9 @@ export type TasksRow = {
   title: string;
   agents: string;
   latestCommit: string;
+  /** "rN": the revision the latest commit published ("" before any;
+   * absent from a tracker older than the column). */
+  latestRevision: string;
   /** The task's birth moment, epoch seconds; null when the row
    * carries none. */
   at: number | null;
@@ -47,6 +50,7 @@ function tasksRows(table: TablePart): TasksRow[] {
     title: row.cells[1] ?? "",
     agents: row.cells[2] ?? "",
     latestCommit: row.cells[3] ?? "",
+    latestRevision: row.cells[4] ?? "",
     at: row.at ?? null,
     location: row.location ?? null,
   }));

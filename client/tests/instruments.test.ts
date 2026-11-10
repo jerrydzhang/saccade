@@ -10,6 +10,7 @@ import {
   agentsSections,
   type AgentRow,
   attachCommand,
+  mergeAgentSections,
   rowDetail,
   rowTask,
   rowTime,
@@ -142,6 +143,8 @@ test("the pipeline page restates as sections and rows in order", () => {
       title: "the proof",
       agents: "i-9",
       latestCommit: "a",
+      // a four-column page (a tracker older than the column) reads none
+      latestRevision: "",
       at: 2_000,
       location: "t-1",
     },
@@ -336,4 +339,17 @@ test("the words store injects for the lanes and the join reads it", () => {
   // i-9 rides t3 (not injected): absent; no row in done
   const done = sections.find((s) => s.word === "done");
   assert.equal(done?.rows.length, 0);
+});
+
+test("agents span trackers: sections merge by word, every row names its project", () => {
+  const row = (incarnation: string, task: string): AgentRow => ({
+    incarnation, address: null, harness: null, tasks: [task], workspace: null, lastCommit: null, word: null,
+  });
+  const merged = mergeAgentSections([
+    { project: "saccade", sections: [{ word: "working", rows: [row("i-3", "t-3")] }, { word: null, rows: [row("i-5", "t-5")] }] },
+    { project: "pyrimel", sections: [{ word: "working", rows: [row("i-1", "t-1")] }] },
+  ]);
+  assert.deepEqual(merged.map((section) => section.word), ["working", null], "the absent-word section stays last");
+  const working = merged[0]?.rows ?? [];
+  assert.deepEqual(working.map((r) => `${r.project}/${r.incarnation}`), ["pyrimel/i-1", "saccade/i-3"]);
 });

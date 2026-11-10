@@ -913,13 +913,15 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 "t-1" in rows and "t-0" in rows,
                 str(rows),
             )
-            heads = page.eval_on_selector_all(
-                ".instrument-head", "els => els.map(e => e.textContent.trim())"
+            tracks = page.eval_on_selector_all(
+                '[data-instrument="tasks"].instrument-row',
+                "els => els.map(e => getComputedStyle(e).gridTemplateColumns.split(' ').length)",
             )
+            heads = page.eval_on_selector_all(".instrument-head", "els => els.length")
             check(
-                "the rows share one grid, the columns named once per section",
-                all("tasktitleagentslatestcommitage" in "".join(h.split()) for h in heads),
-                str(heads)[:160],
+                "the task rows share the ledger's five-column grid, with no column headers",
+                len(tracks) > 0 and all(t == 5 for t in tracks) and heads == 0,
+                f"tracks={tracks[:4]} heads={heads}",
             )
             # select first: s puts labels on what can be selected,
             # rows included; a click selects a row, Enter goes through
@@ -954,6 +956,26 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 and page.evaluate(f"() => {viewer}.inspection().resource.path") == "t-1@r1",
                 str(page.evaluate(f"() => {viewer}.inspection().resource")),
             )
+            # the row cursor (t-34@r6 change 2): j chooses the first
+            # row, j again the next; Enter opens the chosen row's board
+            open_location("smoke/tasks")
+            page.click('[data-control="strip"]')
+            page.keyboard.press("j")
+            first = page.evaluate("() => document.querySelector('.instrument-row.select-selected')?.getAttribute('data-task') ?? null")
+            page.keyboard.press("j")
+            second = page.evaluate("() => document.querySelector('.instrument-row.select-selected')?.getAttribute('data-task') ?? null")
+            rows = page.evaluate("() => [...document.querySelectorAll('.instrument-row')].map(r => r.getAttribute('data-task'))")
+            check(
+                "j moves a row cursor down the tasks",
+                first == (rows[0] if rows else None) and second == (rows[1] if len(rows) > 1 else None),
+                f"first={first} second={second} rows={rows[:3]}",
+            )
+            page.keyboard.press("Enter")
+            page.wait_for_function(
+                f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
+                f" && {viewer}.inspection().identity.task === {json.dumps(second)}"
+            )
+            check("Enter opens the row under the cursor", page.evaluate(f"() => {viewer}.inspection().identity.task") == second)
             # back to the pipeline: typing a row's label opens its one
             # menu, its acts keyed; the menu's e shows the activity -
             # the lane on its axis and the events beside it

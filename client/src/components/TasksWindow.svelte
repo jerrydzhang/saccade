@@ -40,7 +40,7 @@
             </span>
           {/each}
         </span>
-        <span class="commit-cell" title={row.latestCommit}>{row.latestCommit.slice(0, 7)}</span>
+        <span class="commit-cell" title={row.latestCommit}>{#if row.latestRevision}<span class="r">{row.latestRevision}</span> {/if}{row.latestCommit.slice(0, 7)}</span>
         <span class="num">{taskAge(row.at, now())}</span>
       </button>
     {:else}

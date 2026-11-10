@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickerLabelKind, rankedPicker, rankOf, type PickerItem } from "../src/lib/picker.ts";
+import { pickerLabelKind, pickerProject, projectCandidates, rankedPicker, rankOf, uniqueCandidates, type PickerItem } from "../src/lib/picker.ts";
 
 const ITEMS: PickerItem[] = [
   { location: "smoke/t-17", kind: "task", name: "the viewer to the t-14 spec" },
@@ -63,4 +63,15 @@ test("typed locations always resolve even when nothing enumerated them", () => {
   // item, ranked on its own id
   const typed: PickerItem = { location: "smoke/t-99", kind: "task", name: "" };
   assert.equal(rankOf("t-99", typed), "id");
+});
+
+test("the picker is about one project at a time (t-34@r6 change 5)", () => {
+  assert.equal(pickerProject("design", "saccade", ["saccade", "pyrimel"]), "saccade", "a plain query is about this window's project");
+  assert.equal(pickerProject("pyrimel/fit", "saccade", ["saccade", "pyrimel"]), "pyrimel", "a known project's name and a slash switch");
+  assert.equal(pickerProject("notes/x", "saccade", ["saccade"]), "saccade", "an unknown name is just text");
+  const items = projectCandidates("saccade", [{ task: "t-3", title: "Design the UX" }]);
+  assert.deepEqual(items.map((item) => item.location), ["saccade/tasks", "saccade/agents", "saccade/t-3"]);
+  assert.equal(items[2]?.name, "t-3 Design the UX");
+  const once = uniqueCandidates([...items, { location: "saccade/t-3", kind: "task", name: "saccade/t-3" }]);
+  assert.equal(once.length, 3, "a board listed twice shows once, keeping its title");
 });

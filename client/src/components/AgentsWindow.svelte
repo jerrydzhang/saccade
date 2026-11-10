@@ -7,10 +7,13 @@
 
   type Props = {
     sections: AgentsSection[];
+    /** This window's own project: rows from any other name theirs. */
+    here: string;
     onSelect: (click: MouseEvent) => void;
   };
 
-  let { sections, onSelect }: Props = $props();
+  let { sections, here, onSelect }: Props = $props();
+  const away = (project: string | undefined): boolean => project !== undefined && project !== "" && project !== here;
   const now = (): number => Math.floor(Date.now() / 1000);
   let shown = $derived(sections.filter((section) => section.rows.length > 0));
 </script>
@@ -38,6 +41,8 @@
         data-workspace={row.workspace}
         data-last-commit={row.lastCommit}
         data-open-path={row.tasks[0] ?? ""}
+        data-open-location={away(row.project) && row.tasks[0] ? `${row.project}/${row.tasks[0]}` : undefined}
+        data-project={row.project ?? ""}
         data-word={row.word?.state ?? ""}
         data-app={row.word?.app ?? ""}
         data-msg={row.word?.msg ?? ""}
@@ -49,7 +54,7 @@
         <span class="st-cell">{#if row.word?.state}<span class="st {row.word.state}" title={row.word.state}></span>{/if}</span>
         <span class="sid">{row.incarnation}</span>
         <span class="instrument-detail">{rowDetail(row)}</span>
-        <span class="tid">{row.tasks[0] ?? ""}</span>
+        <span class="tid" title={row.project}>{#if away(row.project)}{row.project}/{/if}{row.tasks[0] ?? ""}</span>
         <span class="num">{rowTime(row) !== null ? taskAge(rowTime(row), now()) : ""}</span>
       </button>
     {:else}

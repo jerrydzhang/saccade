@@ -17,6 +17,9 @@ import type { WordsTable } from "../words.ts";
 export const WORD_ORDER = ["error", "blocked", "working", "idle", "done"] as const;
 
 export type AgentRow = {
+  /** The project (tracker) the session reports to, when the window
+   * shows more than one (t-34@r6 change 5: agents spans trackers). */
+  project?: string;
   incarnation: string;
   /** The terminal address the live join rides; absent when the
    * record names none. */
@@ -199,4 +202,20 @@ export function rowDetail(row: AgentRow): string {
 export function rowTime(row: AgentRow): number | null {
   if (row.word === null) return null;
   return row.word.at;
+}
+
+/** Agents across trackers (t-34@r6 change 5): each tracker's sections
+ * merged by word, in the order the words first appear, every row
+ * naming its project. The one window that spans projects. */
+export function mergeAgentSections(perProject: Array<{ project: string; sections: AgentsSection[] }>): AgentsSection[] {
+  const merged = new Map<string | null, AgentRow[]>();
+  for (const { project, sections } of perProject) {
+    for (const section of sections) {
+      const rows = merged.get(section.word) ?? [];
+      rows.push(...section.rows.map((row) => ({ ...row, project })));
+      merged.set(section.word, rows);
+    }
+  }
+  const words = [...merged.keys()].sort((a, b) => (a === null ? 1 : b === null ? -1 : 0));
+  return words.map((word) => ({ word, rows: orderRows(merged.get(word) ?? []) }));
 }

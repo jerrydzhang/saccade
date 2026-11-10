@@ -80,8 +80,7 @@
   import { citationSpec, VIEWER_ROUTING, type ElsewhereAct } from "./lib/acts.ts";
   import { serverBase } from "./lib/tracker.ts";
   import { resolveRelative } from "./lib/resolve.ts";
-  import { rankedPicker, type PickerItem } from "./lib/picker.ts";
-  import { trackerSourcesForPicker } from "./lib/sources.ts";
+  import { pickerProject, projectCandidates, rankedPicker, uniqueCandidates, type PickerItem } from "./lib/picker.ts";
   import { HistoryMode, marginaliaRuns, type MarginaliaRun } from "./lib/historymode.ts";
   import { ADD_CLOSE, ADD_OPEN, DEL_CLOSE, DEL_OPEN } from "./lib/history.ts";
   import { pageFact, type HistoryEntry } from "./lib/pages.ts";
@@ -93,6 +92,7 @@
     agentsAddressMap,
     agentsSections,
     attachCommand,
+    mergeAgentSections,
     type AgentRow,
   } from "./lib/instruments/agents.ts";
   import { tasksSections } from "./lib/instruments/tasks.ts";
@@ -101,7 +101,8 @@
   import type { RenderOutcome, ViewerState } from "./lib/board/viewmodel.ts";
   import type { Board } from "./lib/board/model.ts";
   import type { Diagnostic } from "./lib/board/errors.ts";
-  import { homeTracker, TrackerSource } from "./lib/tracker.ts";
+  import { homeTracker, knownTrackers, TrackerSource } from "./lib/tracker.ts";
+  import type { ViewPage } from "./lib/pages.ts";
   import { formatLocation as stripFormat } from "./lib/location.ts";
   import {
     applyLook,
@@ -797,12 +798,18 @@
       await openInNewWindow(spec, false);
       return;
     }
-    // no link (or a once act): ask once
+    // no link (or a once act): ask once - unless this is the only
+    // window, where there is nothing to ask: a new window opens and,
+    // for o, becomes the link (t-34@r6 change 3)
     blurForJump();
     jumpNote = null;
     try {
       const invoke = await shellInvoke();
       const windows = (await invoke("suite_windows")) as { label: string }[];
+      if (windows.length <= 1) {
+        await openInNewWindow(spec, act === "link");
+        return;
+      }
       const chips = assignChips(windows.map((window) => window.label));
       const list = [...chips].map(([windowLabel, chip]) => ({ window: windowLabel, chip }));
       await invoke("broadcast_jump_labels", { labels: list });
@@ -1107,11 +1114,43 @@
       });
   }
 
-  /** The agents instrument's sections, from the page and the words. */
+  /** The agents window spans trackers (t-34@r6 change 5): every other
+   * tracker this device has reached contributes its agents page. */
+  let otherAgentPages = $state.raw<Array<{ project: string; page: ViewPage }>>([]);
+
+  $effect(() => {
+    const current = view;
+    if (current.instrument?.kind !== "agents" || !current.location) {
+      otherAgentPages = [];
+      return;
+    }
+    const here = current.location.machine.startsWith("tracker:") ? current.location.machine.slice("tracker:".length) : null;
+    const others = Object.keys(knownTrackers()).filter((name) => name !== here);
+    void Promise.all(
+      others.map(async (project) => {
+        const source = sourceFor(`tracker:${project}`);
+        if (!(source instanceof TrackerSource)) return null;
+        try {
+          return { project, page: await source.instrumentPage("agents") };
+        } catch {
+          return null;
+        }
+      }),
+    ).then((pages) => {
+      otherAgentPages = pages.filter((entry): entry is { project: string; page: ViewPage } => entry !== null);
+    });
+  });
+
+  /** The agents window's sections: this tracker's and every other
+   * reached tracker's, merged by word, each row naming its project. */
   let agentSections = $derived.by(() => {
     const current = view;
     if (current.instrument?.kind !== "agents") return [];
-    return agentsSections(current.instrument.page, wordsTable);
+    const here = current.location?.machine.startsWith("tracker:") ? current.location.machine.slice("tracker:".length) : "";
+    return mergeAgentSections([
+      { project: here, sections: agentsSections(current.instrument.page, wordsTable) },
+      ...otherAgentPages.map(({ project, page }) => ({ project, sections: agentsSections(page, wordsTable) })),
+    ]);
   });
 
   /** The tasks instrument's sections. */
@@ -1302,12 +1341,44 @@
 
   /** Enter in an instrument goes through the link (t-14: tasks and
    * agents have no here). */
+  /** Enter on a row (t-34@r6 change 3): the board opens through the
+   * link - in a new, linked window when this is the only one. A window
+   * with no shell or window store is the only window there is, so the
+   * board opens in it. With no row chosen, the first row is chosen. */
   function instrumentEnter(): void {
     const target = selected;
-    if (!target) return;
+    if (!target || !target.element.classList.contains("instrument-row")) {
+      moveRowCursor(1);
+      return;
+    }
     const path = target.element.getAttribute("data-open-path");
     const current = view.location;
-    if (path && current) void model.open({ machine: current.machine, path });
+    if (!path || !current) return;
+    // a row from another project names its full location
+    const elsewhere = target.element.getAttribute("data-open-location");
+    const spec = elsewhere ?? citationSpec(current, path);
+    if (windowStore === null || windowStateId === null || windowDiscarded || spec === null) {
+      if (elsewhere) void model.openInput(elsewhere);
+      else void model.open({ machine: current.machine, path });
+      return;
+    }
+    void openElsewhere(spec, "link");
+  }
+
+  /** j k in a list window: a row cursor (t-34@r6 change 2), the view
+   * following it; the first press chooses the first row. */
+  function moveRowCursor(delta: number): void {
+    const rows = Array.from(instrumentHost?.querySelectorAll<HTMLElement>(".instrument-row") ?? []);
+    if (rows.length === 0) return;
+    const at = selected ? rows.indexOf(selected.element) : -1;
+    const next = at < 0 ? (delta > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, at + delta));
+    const row = rows[next];
+    if (!row) return;
+    targets = collectTargets(document.body);
+    labels = labelsFor(targets);
+    const index = targets.findIndex((candidate) => candidate.element === row);
+    if (index >= 0) selectTarget(index);
+    row.scrollIntoView({ block: "nearest" });
   }
 
   /** The select path of a rendered part from its block id: b3 is
@@ -1507,23 +1578,58 @@
   let pickerQuery = $state("");
   let pickerActive = $state(0);
 
+  // the project the picker is about, and that project's boards: loaded
+  // from its tasks page when the picker opens or the typed project
+  // changes (one project at a time, t-34@r6 change 5)
+  let pickerProjectItems = $state.raw<PickerItem[]>([]);
+  let pickerLoadedProject: string | null = null;
+  let pickerProjectName = $derived(
+    pickerProject(
+      pickerQuery,
+      view.location?.machine.startsWith("tracker:") ? view.location.machine.slice("tracker:".length) : homeTracker(),
+      Object.keys(knownTrackers()),
+    ),
+  );
+
+  $effect(() => {
+    const project = pickerProjectName;
+    if (!pickerOpen || project === null) return;
+    if (project === pickerLoadedProject && pickerProjectItems.length > 0) return;
+    pickerLoadedProject = project;
+    const source = sourceFor(`tracker:${project}`);
+    if (!(source instanceof TrackerSource)) return;
+    void source
+      .instrumentPage("tasks")
+      .then((page) => {
+        if (pickerLoadedProject !== project) return;
+        const rows = tasksSections(page).flatMap((section) => section.rows);
+        pickerProjectItems = projectCandidates(project, rows);
+      })
+      .catch(() => {
+        if (pickerLoadedProject === project) pickerProjectItems = projectCandidates(project, []);
+      });
+  });
+
   function pickerCandidates(): PickerItem[] {
-    const items: PickerItem[] = [];
-    for (const source of trackerSourcesForPicker()) {
-      for (const fact of source.seenTasks) {
-        items.push({ location: fact.spec.startsWith("t-") ? `${source.tracker}/${fact.spec}` : fact.spec, kind: "task", name: fact.name ?? fact.spec });
-      }
+    const items: PickerItem[] = [...pickerProjectItems];
+    // recent places: files anywhere, boards of this project
+    const project = pickerProjectName;
+    for (const location of model.recent) {
+      const spec = formatLocation(location);
+      const tracker = location.machine.startsWith("tracker:") ? location.machine.slice("tracker:".length) : null;
+      if (tracker !== null && tracker !== project) continue;
+      items.push({ location: spec, kind: tracker !== null ? "task" : "file", name: spec });
     }
     // the locations the shown page references: the citations carry
     // their target in data-open-path
     for (const element of document.querySelectorAll<HTMLElement>("[data-open-path]")) {
       const path = element.getAttribute("data-open-path");
       const location = view.location;
-      if (path && location) {
-        items.push({ location: `${location.machine.startsWith("tracker:") ? location.machine.slice("tracker:".length) : location.machine}/${path}`, kind: "board", name: path });
+      if (path && location && location.machine.startsWith("tracker:")) {
+        items.push({ location: `${location.machine.slice("tracker:".length)}/${path}`, kind: "board", name: path });
       }
     }
-    return items;
+    return uniqueCandidates(items);
   }
 
   let pickerResults = $derived.by(() => {
@@ -2870,12 +2976,14 @@
         break;
       case "j":
         event.preventDefault();
-        if (selected) moveSelection(1);
+        if (view.instrument) moveRowCursor(1);
+        else if (selected) moveSelection(1);
         else scrollByLines(scroller(), 2);
         return;
       case "k":
         event.preventDefault();
-        if (selected) moveSelection(-1);
+        if (view.instrument) moveRowCursor(-1);
+        else if (selected) moveSelection(-1);
         else scrollByLines(scroller(), -2);
         return;
       case "d":
@@ -3567,7 +3675,7 @@
         {#if view.instrument.kind === "tasks"}
           <TasksWindow sections={taskSections} shapes={taskRowShapes} onSelect={selectInstrumentRow} />
         {:else}
-          <AgentsWindow sections={agentSections} onSelect={selectInstrumentRow} />
+          <AgentsWindow sections={agentSections} here={stripTracker ?? ""} onSelect={selectInstrumentRow} />
         {/if}
       </main>
     {/if}

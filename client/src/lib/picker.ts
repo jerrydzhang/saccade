@@ -90,3 +90,36 @@ export function rankedPicker(
   }
   return scored.map((entry) => entry.item);
 }
+
+// -- what the picker lists (t-34@r6 change 5) ---------------------------
+
+/** The project a picker query is about: a query that starts with a
+ * known project's name and a slash names that project; anything else is
+ * about the window's own project. One project at a time - the picker
+ * never lists every project's boards together. */
+export function pickerProject(query: string, current: string | null, known: string[]): string | null {
+  const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\//.exec(query.trim());
+  if (match && match[1] !== undefined && known.includes(match[1])) return match[1];
+  return current;
+}
+
+/** One project's candidates: its tasks window, its agents window and
+ * every task's board, named by title. */
+export function projectCandidates(project: string, tasks: Array<{ task: string; title: string }>): PickerItem[] {
+  return [
+    { location: `${project}/tasks`, kind: "board", name: `${project} tasks` },
+    { location: `${project}/agents`, kind: "board", name: `${project} agents` },
+    ...tasks.map((row) => ({ location: `${project}/${row.task}`, kind: "task" as const, name: `${row.task} ${row.title}` })),
+  ];
+}
+
+/** Candidates once each, the first naming kept (the project's own list
+ * comes first, so a task keeps its title). */
+export function uniqueCandidates(items: PickerItem[]): PickerItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.location)) return false;
+    seen.add(item.location);
+    return true;
+  });
+}

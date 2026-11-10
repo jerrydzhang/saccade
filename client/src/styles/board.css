@@ -1480,7 +1480,8 @@ main.instrument {
 }
 
 .instrument-row[data-instrument="agents"] {
-  grid-template-columns: 9px 3em minmax(0, 1fr) 4.5em 3.4em;
+  /* the task column widens for a row that names another project */
+  grid-template-columns: 9px 3em minmax(0, 1fr) minmax(4.5em, auto) 3.4em;
 }
 
 @media (max-width: 600px) {
@@ -1531,6 +1532,10 @@ main.instrument {
   font-family: var(--f-id);
   color: var(--ink-3);
   text-align: left;
+}
+
+.commit-cell .r {
+  color: var(--ink-2);
 }
 
 .agent-cell {
