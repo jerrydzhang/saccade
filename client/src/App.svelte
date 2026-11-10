@@ -366,6 +366,27 @@
       windowLabel = binding.label;
       console.log(`[viewer] windows: binding ${binding.label} ${binding.state_id ?? "(none)"}`);
       let stateId = binding.state_id ?? null;
+      let restored = false;
+      if (stateId === null && binding.label === "main") {
+        // launch restore (t-34@r6 change 4): the launch window takes the
+        // first state open at the last quit and opens a window for each
+        // of the rest; a state gone from the store is skipped
+        const last = ((await invoke("last_session")) as string[]) ?? [];
+        for (const id of last) {
+          try {
+            await windowStore.getState(id);
+          } catch {
+            continue;
+          }
+          if (stateId === null) {
+            stateId = id;
+            restored = true;
+          } else {
+            void invoke("open_suite_window", { stateId: id }).catch(() => {});
+          }
+        }
+        console.log(`[viewer] windows: launch restore ${restored ? `of ${last.length}` : "found nothing"}`);
+      }
       if (stateId === null) {
         const fresh =
           typeof crypto.randomUUID === "function"
@@ -392,7 +413,7 @@
       knownDrafts = attached.drafts ?? [];
       await applyWindowState(attached);
       console.log("[viewer] windows: state applied");
-      void launchDefault(binding.state_id ?? null);
+      void launchDefault(restored ? stateId : (binding.state_id ?? null));
       windowWatch = windowStore.watch(stateId, (state) => {
         void applyWindowState(state);
       });

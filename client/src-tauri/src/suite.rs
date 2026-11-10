@@ -64,6 +64,14 @@ pub fn on_window_event(
                 "[shell] window {label} destroyed; detaching {}",
                 entry.state_id
             );
+            use tauri::Manager;
+            let remaining = window
+                .app_handle()
+                .webview_windows()
+                .into_keys()
+                .filter(|other| *other != label)
+                .count();
+            crate::session::closed(&entry.state_id, remaining);
             if let (Some(server), Some(device)) = (entry.server, entry.device) {
                 detach_async(server, device, entry.state_id);
             } else {

@@ -7,6 +7,7 @@
 pub mod board_validate;
 pub mod commands;
 pub mod look_config;
+pub mod session;
 pub mod shell_probe;
 pub mod suite;
 pub mod window_registry;
@@ -63,6 +64,7 @@ pub fn run() {
             suite::broadcast_jump_labels,
             suite::broadcast_jump_labels_clear,
             suite::open_in_window,
+            session::last_session,
             board_validate::validate_board,
             look_config::look_config,
             look_config::wait_look_config,
@@ -101,6 +103,9 @@ pub fn run() {
                     .unwrap_or_else(|| "unavailable".into())
             );
             look_config::init(dir);
+            // launch restore (t-34@r6 change 4): the windows open at the
+            // last quit, remembered in the app's data directory
+            session::init(app.path().app_data_dir().ok());
             // the app's ONE Herdr event feed (t-24@r22): the socket
             // resolved once here; none, it dials nothing and the
             // instruments read an empty table

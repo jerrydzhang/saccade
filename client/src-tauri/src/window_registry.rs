@@ -124,6 +124,7 @@ pub fn bind_window_state(
     let label = window.label().to_string();
     eprintln!("[bridge] bind_window_state {label} -> {state_id}");
     registry.bind(&label, &state_id, &server, &device);
+    crate::session::bound(&state_id);
 }
 
 #[cfg(test)]
