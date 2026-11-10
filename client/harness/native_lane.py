@@ -228,7 +228,7 @@ def main() -> int:
 
     # launch 2: a tracker location. The tracker server is the lane's own
     # contract stand-in on the sandbox's loopback. Without input
-    # injection this lane cannot pre-seed the server setting, so the
+    # injection this lane cannot type the tracker's host once, so the
     # pinned behavior is the teaching refusal plus the boundary fact the
     # location form must hold everywhere: the tracker form never touches
     # the file bridge - no read_declaration, no state-directory read.
@@ -250,9 +250,9 @@ def main() -> int:
             "the tracker form read a file path",
         )
         check(
-            "the unset server refuses with the teaching line",
+            "an unreached tracker refuses with the teaching line",
             "[viewer] test open board FAILED" in tracker_log
-            and "no tracker server set" in tracker_log,
+            and "has not been reached from this device" in tracker_log,
             tracker_log[-400:],
         )
         for line in tracker_log.splitlines():

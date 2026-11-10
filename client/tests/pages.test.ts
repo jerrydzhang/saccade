@@ -9,7 +9,11 @@ import {
 } from "../src/lib/pages.ts";
 import {
   TrackerSource,
+  homeTracker,
+  knownTrackers,
+  registerTracker,
   serverBase,
+  trackerBase,
   trackerIsThisMachine,
 } from "../src/lib/tracker.ts";
 
@@ -513,11 +517,58 @@ test("the hub proof is machine identity, never address shape", async () => {
   }
 });
 
-test("serverBase refuses unset with the teaching line", () => {
+function withRegistry(): () => void {
+  const keys = ["saccade.trackers", "saccade.trackers.home"];
+  const saved = keys.map((key) => localStorage.getItem(key));
+  for (const key of keys) localStorage.removeItem(key);
+  return () => {
+    keys.forEach((key, i) => {
+      const value = saved[i];
+      if (value === null || value === undefined) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    });
+  };
+}
+
+test("serverBase refuses with the typed form when no tracker was reached", () => {
   const restore = withHost(null);
+  const restoreRegistry = withRegistry();
   try {
-    assert.throws(() => serverBase(), /no tracker server set/);
+    assert.throws(() => serverBase(), /no tracker reached yet; type a location with its host once/);
+    assert.throws(() => trackerBase("saccade"), /host:8811\/saccade\/tasks/);
   } finally {
+    restoreRegistry();
+    restore();
+  }
+});
+
+test("a reached tracker is remembered by name; the first is the home", () => {
+  const restore = withHost(null);
+  const restoreRegistry = withRegistry();
+  try {
+    registerTracker("saccade", "hub:8811");
+    registerTracker("pyrimel", "10.0.0.5:8812");
+    assert.deepEqual(knownTrackers(), { saccade: "hub:8811", pyrimel: "10.0.0.5:8812" });
+    assert.equal(homeTracker(), "saccade");
+    assert.equal(trackerBase("pyrimel").toString(), "http://10.0.0.5:8812/");
+    assert.equal(serverBase().toString(), "http://hub:8811/", "the window store lives on the home");
+    registerTracker("saccade", "hub.tail:8811");
+    assert.equal(trackerBase("saccade").toString(), "http://hub.tail:8811/", "retyping a host replaces it");
+  } finally {
+    restoreRegistry();
+    restore();
+  }
+});
+
+test("a device set up before the registry keeps its one server", () => {
+  const restore = withHost("127.0.0.1:8811");
+  const restoreRegistry = withRegistry();
+  try {
+    assert.equal(homeTracker(), null);
+    assert.equal(trackerBase("saccade").toString(), "http://127.0.0.1:8811/");
+    assert.equal(serverBase().toString(), "http://127.0.0.1:8811/");
+  } finally {
+    restoreRegistry();
     restore();
   }
 });

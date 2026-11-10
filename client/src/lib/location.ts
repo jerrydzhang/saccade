@@ -33,6 +33,23 @@ export function trackerLocation(input: string): ParsedLocation {
   return { machine: `tracker:${match[1]}`, path: match[2] };
 }
 
+// The reaching form (t-34@r6 change 5): the tracker location with the
+// host it answers at in front, "host[:port]/tracker/spec". Typing it
+// once reaches the tracker and remembers its host; afterwards the bare
+// "tracker/spec" form finds it. A missing port is sac serve's default.
+const HOSTED_LOCATION =
+  /^((?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9][A-Za-z0-9.-]*)(?::(\d{1,5}))?)\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(t-\d+(?:@r\d+)?|tasks|agents)$/;
+export const DEFAULT_TRACKER_PORT = 8811;
+
+export type HostedLocation = { host: string; tracker: string; path: string };
+
+export function hostedTrackerLocation(input: string): HostedLocation | null {
+  const match = HOSTED_LOCATION.exec(input.trim());
+  if (!match || match[1] === undefined || match[3] === undefined || match[4] === undefined) return null;
+  const host = match[2] === undefined ? `${match[1]}:${DEFAULT_TRACKER_PORT}` : match[1];
+  return { host, tracker: match[3], path: match[4] };
+}
+
 /** "t-N" or "t-N@rK": the task spec a tracker location's path carries. */
 export type TaskSpec = { task: number; revision: number | null };
 
@@ -50,6 +67,8 @@ export function parseLocation(input: string): ParsedLocation {
   if (raw.startsWith("/")) return { machine: "tracker-machine", path: raw };
   const tracker = trackerLocation(raw);
   if (tracker) return tracker;
+  const hosted = hostedTrackerLocation(raw);
+  if (hosted) return { machine: `tracker:${hosted.tracker}`, path: hosted.path };
   for (let i = 0; i < raw.length; i++) {
     if (raw[i] === ":" && raw[i + 1] === "/") {
       const machine = raw.slice(0, i);

@@ -26,10 +26,16 @@ section below is their contract.
 
 ## Reading a board
 
-The standing control is the header location field: give an explicit
-location and open it. The viewer is never a local opener (t-24@r11,
-t-24@r12): a location is `tracker/t-N[@rK]` (a task board on that
-tracker), `machine:/absolute/path` (a machine from the local herdr-core's
+A window's chrome is one strip (the round 16 ledger, t-34@r6): its
+location and only the state that matters, with no fields. Locations are
+opened from the picker (`space space`): type one and Enter. The viewer
+is never a local opener (t-24@r11, t-24@r12): a location is
+`tracker/t-N[@rK]` (a task board on that tracker, also `tasks` and
+`agents`), `host[:port]/tracker/t-N[@rK]` (the same, reaching the
+tracker at that host - typed once, the host is remembered for that
+tracker on this device, and the first tracker reached is the home that
+holds the device's window store; the port defaults to sac serve's
+8811), `machine:/absolute/path` (a machine from the local herdr-core's
 list), or a bare `/absolute/path` (a file on the TRACKER's machine,
 read through Herdr core: the machine that hosts the tracker is declared
 once in the client configuration as `tracker-machine`; on the tracker's
@@ -122,7 +128,7 @@ the hub's own core there, the declared tracker machine elsewhere.
 Holding the address is the permission: nothing lists documents and the
 name is unguessable, so an untold agent can never reach the deck. The
 viewer offers the deck when it can reach that core (at start and on the
-next open after a failure), shows the address in the header, and its
+next open after a failure), shows the address in the strip, and its
 copy act copies the exact cue command an agent runs verbatim -
 `doc.get`, append the location, `doc.set` with that version, retry on a
 conflict, the slide number printed back:
@@ -408,12 +414,17 @@ surface's law). The client's own half:
   the reading height when it stops moving, zoom when the steps stop,
   drafts when written - never per scroll frame or per key press. A
   settled write that changes nothing is not sent.
-- **A window with no tracker server runs unbacked**, like every read
-  face without one; its drafts stay in memory, which is still never a
-  lost draft, and the move waits for a start with the window store. The server
-  setting appears once, typed in the header - a window that started
-  before it retries on a quiet timer, and the window store arrives
-  without a restart.
+- **A window with no tracker reached yet runs unbacked**, like every
+  read face without one; its drafts stay in memory, which is still never
+  a lost draft, and the move waits for a start with the window store.
+  The first location typed with its host reaches the home tracker - a
+  window that started before it retries on a quiet timer, and the window
+  store arrives without a restart.
+- **A window never starts blank** (t-34@r6 change 4): the launch window
+  of a fresh start opens the home tracker's tasks; any other empty
+  window, or one with no tracker reached yet, opens the picker. A
+  device set up before trackers were remembered by name keeps its one
+  server host for every tracker until a host is typed.
 
 ## Layout
 

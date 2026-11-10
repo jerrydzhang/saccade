@@ -8,6 +8,7 @@
 import { resolveRelative } from "./resolve.ts";
 import {
   TrackerSource,
+  homeTracker,
   serverHost,
   trackerIsThisMachine,
 } from "./tracker.ts";
@@ -298,10 +299,10 @@ export async function trackerCoreMachine(): Promise<string> {
     throw bridgeFailure(error);
   }
   if (declared !== null && declared.trim().length > 0) return declared.trim();
-  if (serverHost() === null) {
+  if (homeTracker() === null && serverHost() === null) {
     throw new SourceUnavailableError(
       "lane-unavailable",
-      "a bare path reads on the tracker's machine; no tracker server is set - set the tracker server host, or tracker-machine in the client configuration",
+      "a bare path reads on the tracker's machine; no tracker has been reached from this device yet - type a tracker location with its host once (host:8811/saccade/tasks), or set tracker-machine in the client configuration",
     );
   }
   const hub = await trackerIsThisMachine(async () => ownId);

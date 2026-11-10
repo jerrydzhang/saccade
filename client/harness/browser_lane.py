@@ -235,6 +235,24 @@ def start_server() -> ThreadingHTTPServer | None:
     return server
 
 
+def open_via_picker(page, viewer: str, spec: str) -> dict:
+    """Open a location the way the human does since the strip replaced
+    the fields (t-34@r6 change 5): a click on the strip leaves any text
+    field, space space opens the picker, the location is typed, Enter
+    opens it. Waits for the load to settle and returns the inspection."""
+    page.click('[data-control="strip"]')
+    page.keyboard.press("Escape")
+    page.keyboard.press(" ")
+    page.keyboard.press(" ")
+    page.wait_for_selector('[data-control="picker:input"]')
+    page.fill('[data-control="picker:input"]', spec)
+    page.keyboard.press("Enter")
+    page.wait_for_function(
+        f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
+    )
+    return page.evaluate(f"() => {viewer}.inspection()")
+
+
 def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int:
     started_records = len(RESULTS)
     viewer = "window.__saccadeApp"
@@ -653,21 +671,12 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         future = tracker_mock.TrackerMock("future", min_version=2, max_version=2, allowed_origins=[base_url])
         future.start()
         try:
-            save_server = lambda value: (  # noqa: E731
-                page.fill('[data-control="server:host"]', value),
-                page.click('[data-control="server:save"]'),
-            )
-
             def open_location(spec: str) -> dict:
-                page.fill('[data-control="open:host-path"]', spec)
-                page.click('[data-control="open:host"]')
-                page.wait_for_function(
-                    f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
-                )
-                return page.evaluate(f"() => {viewer}.inspection()")
+                return open_via_picker(page, viewer, spec)
 
-            save_server(f"127.0.0.1:{tracker.port}")
-            inspection = open_location("smoke/t-0")
+            # the first open names the host: it reaches the tracker and
+            # remembers it (t-34@r6 change 5); later opens use the name
+            inspection = open_location(f"127.0.0.1:{tracker.port}/smoke/t-0")
             check(
                 "a tracker location loads through the server",
                 inspection["resource"]["status"] == "loaded"
@@ -759,7 +768,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 str(inspection["errors"])[:200],
             )
 
-            inspection = open_location("other/t-0")
+            inspection = open_location(f"127.0.0.1:{tracker.port}/other/t-0")
             check(
                 "a wrong tracker name refuses at the version handshake",
                 inspection["resource"]["status"] == "invalid"
@@ -767,15 +776,13 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
                 str(inspection["errors"])[:200],
             )
 
-            save_server(f"127.0.0.1:{future.port}")
-            inspection = open_location("future/t-0")
+            inspection = open_location(f"127.0.0.1:{future.port}/future/t-0")
             check(
                 "a server range excluding the viewer refuses before any board read",
                 inspection["resource"]["status"] == "invalid"
                 and any("move the binaries in step" in e["message"] for e in inspection["errors"]),
                 str(inspection["errors"])[:200],
             )
-            save_server(f"127.0.0.1:{tracker.port}")
             inspection = open_location("/some/research-file.md")
             check(
                 "a bare path refuses where no Herdr core exists",
@@ -801,18 +808,10 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         tracker = tracker_mock.TrackerMock("smoke", allowed_origins=[base_url])
         tracker.start()
         try:
-            page.fill('[data-control="server:host"]', f"127.0.0.1:{tracker.port}")
-            page.click('[data-control="server:save"]')
-
             def open_location(spec: str) -> dict:
-                page.fill('[data-control="open:host-path"]', spec)
-                page.click('[data-control="open:host"]')
-                page.wait_for_function(
-                    f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
-                )
-                return page.evaluate(f"() => {viewer}.inspection()")
+                return open_via_picker(page, viewer, spec)
 
-            inspection = open_location("smoke/tasks")
+            inspection = open_location(f"127.0.0.1:{tracker.port}/smoke/tasks")
             check(
                 "the pipeline page opens as the tasks instrument",
                 inspection["resource"]["status"] == "loaded"
@@ -1030,23 +1029,16 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
     # revision and its committed figure renders.
     def phase_landing() -> None:
         def open_landing(spec: str) -> dict:
-            page.fill('[data-control="open:host-path"]', spec)
-            page.click('[data-control="open:host"]')
-            page.wait_for_function(
-                f"() => ['loaded','invalid'].includes({viewer}.inspection().resource.status)"
-            )
-            return page.evaluate(f"() => {viewer}.inspection()")
+            return open_via_picker(page, viewer, spec)
 
         tracker = tracker_mock.TrackerMock("smoke", allowed_origins=[base_url])
         tracker.start()
         try:
-            # this phase serves its own mock: the header setting must
-            # point at it, not at the tracker phase's stopped one
-            page.fill('[data-control="server:host"]', f"127.0.0.1:{tracker.port}")
-            page.click('[data-control="server:save"]')
+            # this phase serves its own mock: its first open names the
+            # mock's host, replacing the tracker phase's stopped one
             tracker.landing_gets = 0
             tracker.landing_served = False
-            inspection = open_landing("smoke/t-3")
+            inspection = open_landing(f"127.0.0.1:{tracker.port}/smoke/t-3")
             page.wait_for_function(
                 f"() => {viewer}.inspection().renderOutcomes.some(o => o.kind === 'image' || o.kind === 'figure')"
             )
@@ -1276,7 +1268,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
         line = page.evaluate("() => document.querySelector('[data-control=\"deck:line\"]')?.textContent ?? ''")
         copy_button = page.evaluate("() => document.querySelector('[data-control=\"deck:copy\"]') !== null")
         check(
-            "the header states the deck's address with its copy act",
+            "the strip states the deck's address with its copy act",
             line.startswith("deck: deck-") and copy_button,
             f"{line!r} button={copy_button}",
         )

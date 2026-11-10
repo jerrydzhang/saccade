@@ -322,6 +322,7 @@ test("configuration resolution falls back with one plain notice", () => {
   assert.equal(none.scheme.base00, "#100f0e");
   assert.equal(none.weight, "regular");
   assert.equal(none.notice, null);
+  assert.equal(none.noticeKind, null);
 
   // a missing config file
   const missing: LookSource = {
@@ -333,16 +334,20 @@ test("configuration resolution falls back with one plain notice", () => {
     problem: null,
   };
   const missed = resolveLook(missing);
-  assert.match(missed.notice ?? "", /no look configuration at \/home\/me\/.*; the built-in scheme is in use/);
+  assert.match(missed.notice ?? "", /no look configuration at \/home\/me\/.*; the built-in scheme \(Mountain\) is in use/);
+  // absence is nothing to fix: help only, never the strip (t-34@r6 change 6)
+  assert.equal(missed.noticeKind, "absent");
 
   // a stated problem from the host
   const broken: LookSource = { generation: 2, configFound: true, configPath: "/x/config.toml", schemeText: null, weight: null, problem: "scheme file missing: /x/scheme.yaml" };
   assert.match(resolveLook(broken).notice ?? "", /scheme file missing/);
+  assert.equal(resolveLook(broken).noticeKind, "problem");
 
   // a complete valid configuration resolves cleanly, no notice
   const good: LookSource = { generation: 3, configFound: true, configPath: "/x/config.toml", schemeText: LIGHT, weight: "medium", problem: null };
   const resolved = resolveLook(good);
   assert.equal(resolved.notice, null);
+  assert.equal(resolved.noticeKind, null);
   assert.equal(resolved.weight, "medium");
   assert.equal(resolved.polarity, "light");
 });

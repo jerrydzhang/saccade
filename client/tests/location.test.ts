@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   baseFromHost,
+  hostedTrackerLocation,
   parseLocation,
   parseTaskSpec,
   trackerLocation,
@@ -155,4 +156,15 @@ test("the native shell's policy lets the webview reach a tracker server", () => 
   assert.ok(connect, "the policy names connect-src");
   const sources = connect.split(/\s+/);
   assert.ok(sources.includes("http:") && sources.includes("https:"), connect);
+});
+
+test("a tracker location typed with its host reaches that tracker (t-34@r6 change 5)", () => {
+  assert.deepEqual(hostedTrackerLocation("hub:8811/saccade/t-24"), { host: "hub:8811", tracker: "saccade", path: "t-24" });
+  assert.deepEqual(hostedTrackerLocation("10.0.0.5/pyrimel/tasks"), { host: "10.0.0.5:8811", tracker: "pyrimel", path: "tasks" }, "sac serve's default port");
+  assert.deepEqual(hostedTrackerLocation("hub.tail-net.ts.net:9000/saccade/t-3@r2"), { host: "hub.tail-net.ts.net:9000", tracker: "saccade", path: "t-3@r2" });
+  assert.deepEqual(hostedTrackerLocation("[fd7a::1]:8811/saccade/agents"), { host: "[fd7a::1]:8811", tracker: "saccade", path: "agents" });
+  assert.deepEqual(parseLocation("hub:8811/saccade/t-24"), { machine: "tracker:saccade", path: "t-24" });
+  assert.equal(hostedTrackerLocation("saccade/t-24"), null, "the bare form names no host");
+  assert.equal(hostedTrackerLocation("hub:8811/saccade/notes.md"), null, "only tracker paths take the host");
+  assert.deepEqual(parseLocation("hub:/srv/board.yaml"), { machine: "hub", path: "/srv/board.yaml" }, "machine:/path is unchanged");
 });

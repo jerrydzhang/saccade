@@ -43,6 +43,10 @@ export type ResolvedLook = {
   misses: FloorMiss[];
   /** The one plain notice, when the built-in default is in use. */
   notice: string | null;
+  /** absent: no configuration, the default is the design's own scheme,
+   * nothing to fix (shown in help only). problem: a configuration that
+   * could not be used (shown in the strip). t-34@r6 change 6. */
+  noticeKind: "absent" | "problem" | null;
   fromOverride: boolean;
 };
 
@@ -62,14 +66,19 @@ export function resolveLook(source: LookSource | null): ResolvedLook {
   const look = lookVars(useText, weight);
 
   let notice: string | null = null;
+  let noticeKind: "absent" | "problem" | null = null;
   if (parsed === null && overrideText !== undefined) {
     notice = "the overridden scheme is not a complete base16 scheme; the built-in scheme is in use";
+    noticeKind = "problem";
   } else if (parsed === null) {
     notice = "the configured scheme is not a complete base16 scheme; the built-in scheme is in use";
+    noticeKind = "problem";
   } else if (source !== null && !source.configFound) {
-    notice = `no look configuration at ${source.configPath ?? "the platform configuration directory"}; the built-in scheme is in use`;
+    notice = `no look configuration at ${source.configPath ?? "the platform configuration directory"}; the built-in scheme (Mountain) is in use`;
+    noticeKind = "absent";
   } else if (source !== null && source.problem !== null) {
     notice = `${source.problem}; the built-in scheme is in use`;
+    noticeKind = "problem";
   }
   // a window with no host at all has nothing to fix: it uses the
   // built-in default silently (t-24@r7)
@@ -81,6 +90,7 @@ export function resolveLook(source: LookSource | null): ResolvedLook {
     vars: look.vars,
     misses: look.misses,
     notice,
+    noticeKind,
     fromOverride,
   };
 }

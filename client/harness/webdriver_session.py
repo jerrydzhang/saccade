@@ -247,6 +247,27 @@ def perform_input(client: WebDriver, request: dict) -> dict:
     raise WebDriverError("invalid argument", f"unknown input kind: {kind!r}")
 
 
+def open_via_picker(client: WebDriver, spec: str, timeout: float = 10.0) -> None:
+    """Open a location the way the human does since the strip replaced
+    the fields (t-34@r6 change 5): a click on the strip leaves any text
+    field, space space opens the picker, the location is typed, Enter
+    opens it. Real input throughout; the load is the caller's to wait
+    for."""
+    perform_input(client, {"kind": "click", "target": "strip"})
+    perform_input(client, {"kind": "key", "keys": ["escape"]})
+    perform_input(client, {"kind": "key", "keys": [" "]})
+    perform_input(client, {"kind": "key", "keys": [" "]})
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if client.execute("return document.querySelector('[data-control=\"picker:input\"]') !== null;"):
+            break
+        time.sleep(0.2)
+    else:
+        raise WebDriverError("no such element", "the picker did not open on space space")
+    perform_input(client, {"kind": "type", "target": "picker:input", "text": spec})
+    perform_input(client, {"kind": "key", "keys": ["enter"]})
+
+
 def capture_compositor_frame(shooter_bin: str, wayland_name: str, shots: pathlib.Path, name: str) -> str | None:
     """weston-screenshooter 16 takes no output argument and writes into
     its CWD, so the capture runs in the shots dir and the lane collects
@@ -640,10 +661,9 @@ def run_tracker_sequence(state: SessionState) -> int:
     # the human path: type the server address once, then open the
     # tracker-named location; every stroke is real WebDriver input
     try:
-        perform_input(state.client, {"kind": "type", "target": "server:host", "text": f"{NATIVE_HOST}:{port}"})
-        perform_input(state.client, {"kind": "click", "target": "server:save"})
-        perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": f"lanetracker/t-{ids[1]}"})
-        perform_input(state.client, {"kind": "click", "target": "open:host"})
+        # the first open names the host: it reaches the tracker and
+        # remembers it (t-34@r6 change 5)
+        open_via_picker(state.client, f"{NATIVE_HOST}:{port}/lanetracker/t-{ids[1]}")
     except WebDriverError as error:
         check("the tracker UI takes real input", False, str(error)[:200])
         return tracker_finish(state)
@@ -747,8 +767,7 @@ def run_tracker_sequence(state: SessionState) -> int:
             reply.get("revision") == 1,
             str(reply)[:160],
         )
-        perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": f"lanetracker/t-{landing_task}"})
-        perform_input(state.client, {"kind": "click", "target": "open:host"})
+        open_via_picker(state.client, f"lanetracker/t-{landing_task}")
         loaded_seed = inspect_bounded(
             lambda i: i.get("resource", {}).get("status") == "loaded",
             20.0,
@@ -772,8 +791,7 @@ def run_tracker_sequence(state: SessionState) -> int:
             reply.get("revision") == 2,
             str(reply)[:160],
         )
-        perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": f"lanetracker/t-{landing_task}"})
-        perform_input(state.client, {"kind": "click", "target": "open:host"})
+        open_via_picker(state.client, f"lanetracker/t-{landing_task}")
         reopened = inspect_bounded(
             lambda i: i.get("resource", {}).get("status") == "loaded"
             and i.get("identity", {}).get("task") == f"t-{landing_task}"
@@ -808,8 +826,7 @@ def run_tracker_sequence(state: SessionState) -> int:
     check("the tracker server stopped", state.server.poll() is not None)
     stopped_at = time.monotonic()
     try:
-        perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": f"lanetracker/t-{ids[1]}"})
-        perform_input(state.client, {"kind": "click", "target": "open:host"})
+        open_via_picker(state.client, f"lanetracker/t-{ids[1]}")
     except WebDriverError as error:
         check("the stopped-server open takes input", False, str(error)[:200])
     refused = inspect_bounded(

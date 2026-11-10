@@ -96,7 +96,8 @@
   import type { RenderOutcome, ViewerState } from "./lib/board/viewmodel.ts";
   import type { Board } from "./lib/board/model.ts";
   import type { Diagnostic } from "./lib/board/errors.ts";
-  import { serverHost, setServerHost, TrackerSource } from "./lib/tracker.ts";
+  import { homeTracker, TrackerSource } from "./lib/tracker.ts";
+  import { formatLocation as stripFormat } from "./lib/location.ts";
   import {
     applyLook,
     lookSummary,
@@ -179,14 +180,14 @@
   // Each step logs a marker so the native evidence can tell "webview
   // never loaded" (no startup line), "invoke failed", and "open
   // failed" apart.
-  async function openTestBoard(): Promise<void> {
+  async function openTestBoard(): Promise<boolean> {
     let invoke: ReturnType<typeof tauriInvoke>;
     try {
       invoke = tauriInvoke();
     } catch (error) {
       if (error instanceof SourceUnavailableError) {
         console.log("[viewer] startup: no bridge; explicit controls only");
-        return;
+        return false;
       }
       throw error;
     }
@@ -195,7 +196,7 @@
       const spec = (await invoke("test_open")) as string | null;
       if (!spec) {
         console.log("[viewer] no test open; starting empty");
-        return;
+        return false;
       }
       console.log(`[viewer] test open requested: ${spec}`);
       await model.openInput(spec);
@@ -206,8 +207,10 @@
         const detail = snap.laneMessage ?? snap.errors.map((e) => e.message).join("; ");
         console.error(`[viewer] test open board FAILED: ${detail || "no board"}`);
       }
+      return true;
     } catch (error) {
       console.error(`[viewer] test open board FAILED: ${String(error)}`);
+      return true;
     }
   }
 
@@ -343,8 +346,9 @@
       // no server YET: the server setting appears once, typed in the
       // header - a window that started before it retries, and the
       // window store arrives without a restart
-      console.log("[viewer] windows: no tracker server set; the window retries when one appears");
+      console.log("[viewer] windows: no tracker reached yet; the window retries when one is");
       scheduleWindowRetry();
+      void launchDefault(null);
       return;
     }
     try {
@@ -382,6 +386,7 @@
       knownDrafts = attached.drafts ?? [];
       await applyWindowState(attached);
       console.log("[viewer] windows: state applied");
+      void launchDefault(binding.state_id ?? null);
       windowWatch = windowStore.watch(stateId, (state) => {
         void applyWindowState(state);
       });
@@ -397,8 +402,29 @@
       scheduleWindowRetry();
     }
   }
-  void openTestBoard();
+  const testOpening = openTestBoard();
   void startStateWindow();
+
+  /** What a window with nothing to show opens (t-34@r6 change 4): the
+   * launch window of a fresh start opens the home tracker's tasks; any
+   * other empty window - or one with no tracker reached yet - opens
+   * the picker, never a blank page or a field. The lanes' test open
+   * wins over both. */
+  let launchDefaultDone = false;
+  async function launchDefault(boundStateId: string | null): Promise<void> {
+    // once per window: the no-tracker retry must not reopen a picker
+    // the human closed
+    if (launchDefaultDone) return;
+    launchDefaultDone = true;
+    if (await testOpening) return;
+    if (view.location !== null || windowDiscarded || pickerOpen) return;
+    const home = homeTracker();
+    if (windowLabel === "main" && boundStateId === null && home !== null) {
+      await model.openInput(`${home}/tasks`);
+      return;
+    }
+    openPicker();
+  }
 
   // -- the window jump (t-14 "The suite") --------------------------------
   //
@@ -980,7 +1006,6 @@
     return () => host.removeEventListener("scroll", onScroll);
   });
 
-  let hostPath = $state("");
   let query = $state("");
   let activeMatch = $state(0);
   let searchOpen = $state(false);
@@ -1458,12 +1483,15 @@
       closePicker();
       return;
     }
-    if (event.key === "ArrowDown" || (event.key === "j" && !event.ctrlKey)) {
+    // every letter types (t-31, t-34@r6 change 2): the picker moves on
+    // arrows and Ctrl-n Ctrl-p (the mockup's keys), Ctrl-j Ctrl-k too
+    const ctrlOnly = event.ctrlKey && !event.altKey && !event.metaKey;
+    if (event.key === "ArrowDown" || (ctrlOnly && (event.key === "n" || event.key === "j"))) {
       event.preventDefault();
       pickerMove(1);
       return;
     }
-    if (event.key === "ArrowUp" || (event.key === "k" && !event.ctrlKey)) {
+    if (event.key === "ArrowUp" || (ctrlOnly && (event.key === "p" || event.key === "k"))) {
       event.preventDefault();
       pickerMove(-1);
       return;
@@ -2910,12 +2938,14 @@
   // re-resolves and re-applies.
   let lookVersion = $state(0);
   let lookNotice = $state<string | null>(null);
+  let lookNoticeKind = $state<"absent" | "problem" | null>(null);
   let lastSource: LookSource | null = null;
   function lookChanged(source: LookSource | null): void {
     lastSource = source;
     const look = resolveLook(source);
     applyLook(document.documentElement, look);
     lookNotice = look.notice;
+    lookNoticeKind = look.noticeKind;
     lookVersion += 1;
   }
   $effect(() => {
@@ -2923,6 +2953,7 @@
     const look = resolveLook(lastSource);
     applyLook(document.documentElement, look);
     lookNotice = look.notice;
+    lookNoticeKind = look.noticeKind;
   });
   $effect(() => {
     void startLook(lookChanged);
@@ -3090,18 +3121,34 @@
     void ensureDeck();
   });
 
-  async function openHost(): Promise<void> {
-    void ensureDeck();
-    if (hostPath) await model.openInput(hostPath);
-  }
-
-  // The one tracker setting: the server host, the address the tracker
-  // publishes beside its database. Set once; every tracker location
-  // rides it.
-  let serverInput = $state(serverHost() ?? "");
-  function saveServer(): void {
-    setServerHost(serverInput);
-  }
+  // -- the strip (round 16, t-34@r6 changes 5 and 6) -----------------------
+  //
+  // One line: the window's location (in history, the revision shown,
+  // with the current one beside it), then state only when it matters,
+  // then the link. No fields: a tracker is reached by typing its
+  // location in the picker.
+  let stripLocation = $derived.by(() => {
+    if (!view.location) return null;
+    const shown = stripFormat(view.location);
+    const revision = historyCommit?.revision ?? null;
+    return revision === null ? shown : `${shown.replace(/@r\d+$/, "")}@r${revision}`;
+  });
+  let stripCurrent = $derived.by(() => {
+    const revision = historyCommit?.revision ?? null;
+    if (revision === null || historyMode === null) return null;
+    return revision < historyMode.newest ? `current r${historyMode.newest}` : null;
+  });
+  let stripTracker = $derived(
+    view.location && view.location.machine.startsWith("tracker:")
+      ? view.location.machine.slice("tracker:".length)
+      : null,
+  );
+  let stripState = $derived.by(() => {
+    if (view.status === "loading") return "loading";
+    if (view.status === "invalid") return "refused - see below";
+    if (lookNoticeKind === "problem") return "look configuration problem - see help";
+    return null;
+  });
 
   function jumpToMatch(occurrence: SearchOccurrence): void {
     const elById = document.querySelector<HTMLElement>(`[data-unit-id="${occurrence.unit.id}"]`);
@@ -3142,42 +3189,35 @@
 </script>
 
 <div class="app">
-  <header class="app-header">
+  <header class="strip" data-control="strip">
+    {#if view.instrument}
+      <span class="name">{view.instrument.kind}</span>
+      {#if stripTracker}<span class="chip">{stripTracker}</span>{/if}
+    {:else if stripLocation}
+      <span class="loc" data-control="board:location">{stripLocation}</span>
+      {#if stripCurrent}<span class="dim3">{stripCurrent}</span>{/if}
+    {:else}
+      <span class="dim3">no board - space space opens the picker</span>
+    {/if}
+    {#if stripState}<span class="chip warn" data-control="strip:state">{stripState}</span>{/if}
+    {#if deck}
+      <span class="chip on" data-control="deck:line">deck: {deck.name}</span>
+      <button type="button" class="chip" data-control="deck:copy" onclick={copyCueCommand}>copy cue command</button>
+    {/if}
+    {#if deckStateText}
+      <span class="chip" data-control="deck:state">{deckStateText}</span>
+    {/if}
+    <span class="sp"></span>
+    {#if marginaliaActive}<span class="chip on">marginalia</span>{/if}
+    {#if zoom !== 1}<span class="dim3">{Math.round(zoom * 100)}%</span>{/if}
     {#if jumpChipShown !== null}
       <span class="jump-chip-self" data-control="jump:self">{jumpChipShown}</span>
     {/if}
     {#if linkTargetName !== null}
-      <span class="link-target" data-control="link:target" title="this window's link">-&gt; {linkTargetName}</span>
+      <span class="lnk" data-control="link:target">-&gt; {linkTargetName}</span>
+    {:else if view.instrument}
+      <span class="lnk none">unlinked</span>
     {/if}
-    <span class="identity">
-      {#if view.location}
-        <strong>{view.location.machine}</strong>
-        <code class="location-path" data-control="board:location">{view.location.path}</code>
-        <span class="status status-{view.status}">{view.status}</span>
-        {#if view.board?.task}
-          <span class="task-meta">task: <code>{view.board.task}</code> (authored reference)</span>
-        {/if}
-      {:else}
-        <span class="status status-empty">no board open</span>
-      {/if}
-      {#if deck}
-        <span class="task-meta" data-control="deck:line">deck: <code>{deck.name}</code></span>
-        <button type="button" data-control="deck:copy" onclick={copyCueCommand}>copy cue command</button>
-      {/if}
-      {#if deckStateText}
-        <span class="task-meta deck-state" data-control="deck:state">{deckStateText}</span>
-      {/if}
-    </span>
-    <span class="controls">
-      <label class="control">location
-        <input type="text" bind:value={hostPath} placeholder="saccade/t-N, /path on the tracker's machine, or machine:/path" aria-label="board location" data-control="open:host-path" />
-      </label>
-      <button type="button" data-control="open:host" onclick={() => void openHost()}>open</button>
-      <label class="control">tracker server
-        <input type="text" bind:value={serverInput} placeholder="127.0.0.1:8811" aria-label="tracker server host" data-control="server:host" />
-      </label>
-      <button type="button" data-control="server:save" onclick={saveServer}>save</button>
-    </span>
   </header>
 
   {#if searchOpen}
@@ -3282,6 +3322,12 @@
         <p class="help-row"><span class="ctx-menu-key">i</span> open elsewhere once, the link unchanged</p>
         <p class="help-row"><span class="ctx-menu-key">w</span> open in a new window</p>
       </div>
+      {#if lookNotice}
+      <div class="help-section">
+        <p class="help-title">look</p>
+        <p class="help-row" data-control="help:look">{lookNotice}</p>
+      </div>
+      {/if}
     </div>
   </div>
   {/if}
@@ -3292,7 +3338,7 @@
       <input
         type="text"
         class="picker-input"
-        placeholder="tasks, boards, files - a typed location always resolves"
+        placeholder={homeTracker() === null ? "no tracker yet - type its location with the host once: host:8811/saccade/tasks" : "tasks, boards, files - a typed location always resolves"}
         aria-label="picker query"
         data-control="picker:input"
         bind:this={pickerInput}
@@ -3363,9 +3409,6 @@
   </div>
   {/if}
 
-  {#if lookNotice}
-    <p class="look-notice" aria-live="polite">{lookNotice}</p>
-  {/if}
 
   {#if publishNote && !publishOpen}
     <p class="look-notice" data-control="action:note" aria-live="polite">{publishNote}</p>

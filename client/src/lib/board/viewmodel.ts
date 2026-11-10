@@ -13,7 +13,8 @@ import {
   type Location,
   type Machine,
 } from "../sources.ts";
-import { instrumentPath, parseLocation } from "../location.ts";
+import { hostedTrackerLocation, instrumentPath, parseLocation } from "../location.ts";
+import { registerTracker } from "../tracker.ts";
 import type { CopyMode } from "../copy.ts";
 import type { ViewPage } from "../pages.ts";
 
@@ -369,9 +370,13 @@ export class ViewerModel {
   /** Parse an explicit location string and open it; a string that is
    * not a location is a loud structured refusal, never a guess. */
   async openInput(raw: string): Promise<void> {
+    // a location typed with its host reaches that tracker and
+    // remembers it (t-34@r6 change 5)
+    const hosted = hostedTrackerLocation(raw);
+    if (hosted) registerTracker(hosted.tracker, hosted.host);
     const parsed = parseLocation(raw);
     if (!parsed) {
-      const message = `not a location: ${JSON.stringify(raw)}; use a tracker location (saccade/t-N), a path on the tracker's machine (/absolute/path), or machine:/absolute/path`;
+      const message = `not a location: ${JSON.stringify(raw)}; use a tracker location (saccade/t-N, or host:8811/saccade/t-N the first time), a path on the tracker's machine (/absolute/path), or machine:/absolute/path`;
       this.set({
         status: "invalid",
         board: null,

@@ -34,6 +34,7 @@ from webdriver_client import WebDriver, WebDriverError  # noqa: E402
 from webdriver_session import (  # noqa: E402
     INSPECT_SCRIPT,
     capture_compositor_frame,
+    open_via_picker,
     perform_input,
     wait_listening,
 )
@@ -611,15 +612,16 @@ def main() -> int:
             "      the second part of the live explainer\n"
         )
 
+        typed_locations: list[str] = []
+
         def type_and_open(spec: str) -> None:
-            perform_input(state.client, {"kind": "type", "target": "open:host-path", "text": spec})
-            perform_input(state.client, {"kind": "click", "target": "open:host"})
+            typed_locations.append(spec)
+            open_via_picker(state.client, spec)
 
         def click_open() -> None:
-            # the field already names the file: WebKit's clear-then-retype
-            # raced its own input events on the second pass, so the
-            # reopen re-clicks the standing field instead
-            perform_input(state.client, {"kind": "click", "target": "open:host"})
+            # the reopen names the last location again through the
+            # picker (the strip has no standing field to re-click)
+            open_via_picker(state.client, typed_locations[-1])
 
         def inspection_bounded(predicate, timeout: float, what: str):
             deadline = time.monotonic() + timeout

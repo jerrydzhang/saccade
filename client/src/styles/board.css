@@ -52,95 +52,65 @@ button {
   height: 100vh;
 }
 
-.app-header {
+/* The strip (round 16, the ledger): one line, the window's location
+   and only the state that matters; no fields, no repeated names
+   (t-34@r6 changes 5 and 6). */
+.strip {
   flex: none;
   display: flex;
-  flex-wrap: wrap;
-  gap: 2px 14px;
   align-items: center;
-  min-height: 30px;
-  padding: 2px var(--pad-x);
-  background: none;
-  border: none;
+  gap: 10px;
+  height: 30px;
+  padding: 0 var(--pad-x);
   color: var(--ink-2);
+  font: var(--fs-small) var(--f-ui);
   white-space: nowrap;
   overflow: hidden;
 }
 
-.identity {
-  display: inline-flex;
-  gap: 10px;
-  align-items: baseline;
-  min-width: 0;
+.strip .name {
+  color: var(--acc);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.location-path {
-  font-family: var(--f-id);
-  font-size: var(--fs-ui);
+.strip .loc {
   color: var(--ink);
+  font-family: var(--f-id);
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 34ch;
 }
 
-.task-meta {
-  color: var(--ink-3);
-  font-size: var(--fs-small);
+.strip .sp {
+  flex: 1;
 }
 
-.task-meta code {
-  font-family: var(--f-id);
-  color: var(--c-task);
-}
-
-/* the load status is plain text; only a failure spends colour */
-.status {
-  font-size: var(--fs-small);
+.strip .dim3,
+.strip .chip {
   color: var(--ink-3);
 }
 
-.status-invalid {
-  color: var(--w-ui-error);
-}
-
-.controls {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  font-size: var(--fs-small);
-  color: var(--ink-3);
-}
-
-.control {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  color: var(--ink-3);
-}
-
-.control input[type="text"] {
-  width: 24ch;
-  padding: 2px 0;
-  background: none;
-  border: none;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  outline: none;
-  font-family: var(--f-id);
-  font-size: var(--fs-small);
+.strip .chip.on {
   color: var(--ink);
-  user-select: text;
-  transition: border-color var(--dur), color var(--dur);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
-.control input[type="text"]:focus {
-  border-bottom-color: var(--acc);
+.strip .chip.warn {
+  color: var(--warn-ink);
 }
 
-.control input[type="text"]::placeholder {
+.strip .lnk {
+  color: var(--c-link);
+}
+
+.strip .lnk.none {
   color: var(--ink-3);
-  opacity: 0.75;
+}
+
+.strip button.chip {
+  padding: 0;
+  font: inherit;
 }
 
 button {
@@ -169,15 +139,6 @@ input::selection,
 button::selection {
   background: var(--acc);
   color: var(--acc-ink);
-}
-
-/* ---------- the look notice: said once, plainly, then quiet ---------- */
-
-.look-notice {
-  flex: none;
-  padding: 1px var(--pad-x) 5px;
-  color: var(--ink-3);
-  font-size: var(--fs-small);
 }
 
 /* ---------- search: a floating surface, an edge where one is needed ---------- */
