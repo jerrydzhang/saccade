@@ -21,6 +21,7 @@ function kindOf(element: HTMLElement): TargetKind {
   if (element.classList.contains("block-figure")) return "figure";
   if (element.classList.contains("block-incorporation")) return "incorporation";
   if (element.classList.contains("block-unknown")) return "unknown";
+  if (element.classList.contains("block-group")) return "group";
   if (element.classList.contains("diagram-frame")) return "diagram";
   if (element.classList.contains("citation-link")) return "citation";
   return "control";

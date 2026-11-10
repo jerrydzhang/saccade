@@ -1196,13 +1196,14 @@
     const task = target.element.getAttribute("data-task");
     const acts: MenuAct[] = [];
     if (kind === "tasks") {
-      acts.push({ key: "Enter", label: "open the board through the link", onAct: open });
+      acts.push(...openActs(target.element.getAttribute("data-open-path"), "board"));
       if (task) {
         acts.push({
           key: "e",
-          label: "the activity: a lane on the 6h/24h axis and the events",
+          label: "Show activity (the lane and the events)",
           onAct: () => showActivityOverlay(task),
         });
+        acts.push(copyAct("y", "Copy reference", () => task, "the reference"));
       }
       return acts;
     }
@@ -1304,77 +1305,133 @@
     if (path && current) void model.open({ machine: current.machine, path });
   }
 
+  /** The select path of a rendered part from its block id: b3 is
+   * /content/3, b3.0 is /content/3/group/content/0. */
+  function partPath(element: HTMLElement): string | null {
+    const id = element.getAttribute("data-block-id");
+    const match = id ? /^b(\d+(?:\.\d+)*)$/.exec(id) : null;
+    if (!match || match[1] === undefined) return null;
+    return match[1].split(".").map((index, depth) => (depth === 0 ? `/content/${index}` : `/group/content/${index}`)).join("");
+  }
+
+  /** The citation of a part: the window's location, then its path. */
+  function partCitation(element: HTMLElement): string {
+    const where = view.location ? formatLocation(view.location) : "";
+    const path = partPath(element);
+    return path ? `${where}:${path}` : where;
+  }
+
+  function copyAct(key: string, label: string, text: () => string | null, what: string): MenuAct {
+    return { key, label, onAct: () => copyText(text(), what) };
+  }
+
+  /** o i w on a location: through the link, once, a new window. */
+  function openActs(path: string | null, noun: string): MenuAct[] {
+    const go = (how: "link" | "once" | "new"): void => {
+      const current = view.location;
+      if (!current || !path) return;
+      const spec = citationSpec(current, path);
+      if (spec !== null) void openSpecElsewhere(spec, how);
+    };
+    return [
+      { key: "o", label: `Open ${noun} (through the link)`, onAct: () => go("link") },
+      { key: "i", label: `Open ${noun} elsewhere once`, onAct: () => go("once") },
+      { key: "w", label: `Open ${noun} in a new window`, onAct: () => go("new") },
+    ];
+  }
+
+  function annotateAct(element: HTMLElement): MenuAct {
+    return {
+      key: "a",
+      label: "Annotate after this part",
+      onAct: () => {
+        actElement = element;
+        beginDraft();
+      },
+    };
+  }
+
+  function historyAct(element: HTMLElement): MenuAct {
+    return { key: "t", label: "History of this part", onAct: () => void historyOfPart(element) };
+  }
+
+  /** t on a part: history, tracking that part (H L walk its changes). */
+  async function historyOfPart(element: HTMLElement): Promise<void> {
+    if (!view.board) return;
+    const blocks = contentBlocks();
+    const top = blocks.find((block) => block === element || block.contains(element));
+    const part = top ? view.board.content[blocks.indexOf(top)] : undefined;
+    if (!part) return;
+    if (!historyMode) await enterHistory();
+    if (!historyMode) return;
+    historyMode.track(partKeyForAnchor(part));
+    top?.scrollIntoView({ block: "center", behavior: "auto" });
+  }
+
+  /** The menu of a selected part, by kind (round 16's KINDS). */
   function actsFor(target: SelectableTarget): MenuAct[] {
-    const acts: MenuAct[] = [];
+    const element = target.element;
     const open = (): void => {
-      const path = target.element.getAttribute("data-open-path");
+      const path = element.getAttribute("data-open-path");
       const location = view.location;
       if (path && location) void model.open({ machine: location.machine, path });
     };
-    if (target.element.classList.contains("instrument-row")) {
+    if (element.classList.contains("instrument-row")) {
       return instrumentRowActs(target, open);
     }
-    const enlarge = (): void => target.element.click();
-    const copy = (): void => {
-      // the bridge write exists only inside the native shell; the
-      // browser keeps the engine's clipboard
-      if (bridgePresent) void bridgeWrite(target.text);
-      else void navigator.clipboard?.writeText(target.text).catch(() => {});
-    };
-    if (target.kind === "citation" || target.kind === "incorporation") {
-      acts.push({ key: "Enter", label: "open the cited revision", onAct: open });
-      // the two acts, pointer-reachable (t-14: every act is reachable
-      // by the pointer too)
-      acts.push({
-        key: "o",
-        label: "open elsewhere through the link",
-        onAct: () => {
-          const current = view.location;
-          const path = target.element.getAttribute("data-open-path");
-          if (current && path) {
-            const spec = citationSpec(current, path);
-            if (spec !== null) void openSpecElsewhere(spec, "link");
-          }
-        },
-      });
-      acts.push({
-        key: "i",
-        label: "open elsewhere once, the link unchanged",
-        onAct: () => {
-          const current = view.location;
-          const path = target.element.getAttribute("data-open-path");
-          if (current && path) {
-            const spec = citationSpec(current, path);
-            if (spec !== null) void openSpecElsewhere(spec, "once");
-          }
-        },
-      });
-      acts.push({
-        key: "w",
-        label: "open in a new window",
-        onAct: () => {
-          const current = view.location;
-          const path = target.element.getAttribute("data-open-path");
-          if (current && path) {
-            const spec = citationSpec(current, path);
-            if (spec !== null) void openSpecElsewhere(spec, "new");
-          }
-        },
-      });
+    const onTaskBoard = view.location?.machine.startsWith("tracker:") === true && Boolean(view.board?.task);
+    const canAnnotate = Boolean(view.board) && (onTaskBoard || view.location?.machine === "tracker-machine");
+    const cite = copyAct("y", "Copy citation", () => partCitation(element), "the citation");
+    switch (target.kind) {
+      case "citation": {
+        const path = element.getAttribute("data-open-path");
+        return [
+          { key: "f", label: "Follow here", onAct: open },
+          ...openActs(path, "the cited revision"),
+          copyAct("y", "Copy reference", () => path, "the reference"),
+        ];
+      }
+      case "incorporation": {
+        const path = element.querySelector<HTMLElement>("[data-open-path]")?.getAttribute("data-open-path") ?? null;
+        const acts: MenuAct[] = [];
+        if (canAnnotate) acts.push(annotateAct(element));
+        acts.push({ key: "e", label: "Show cited components", onAct: () => void expandIncorporation(element) });
+        if (path && view.location) {
+          const location = view.location;
+          acts.push({ key: "f", label: "Follow the source here", onAct: () => void model.open({ machine: location.machine, path }) });
+          acts.push(openActs(path, "the source")[0] as MenuAct);
+        }
+        if (onTaskBoard) acts.push(historyAct(element));
+        acts.push(cite);
+        return acts;
+      }
+      case "figure":
+        return [
+          { key: "x", label: "Enlarge", onAct: () => element.querySelector<HTMLElement>("img, .figure-frame")?.click() },
+          ...(canAnnotate ? [annotateAct(element)] : []),
+          copyAct("y", "Copy location", () => element.getAttribute("data-figure-input"), "the figure's location"),
+        ];
+      case "diagram":
+        return [{ key: "x", label: "Enlarge", onAct: () => element.click() }];
+      case "group":
+        return [
+          { key: "z", label: element.classList.contains("closed") ? "Unfold" : "Fold", onAct: () => element.classList.toggle("closed") },
+          ...(canAnnotate ? [annotateAct(element)] : []),
+          ...(onTaskBoard ? [historyAct(element)] : []),
+          cite,
+        ];
+      case "text":
+      case "annotation":
+      case "unknown":
+        return [
+          ...(canAnnotate ? [annotateAct(element)] : []),
+          ...(onTaskBoard ? [historyAct(element)] : []),
+          cite,
+          copyAct("c", "Copy the text", () => target.text, "the text"),
+        ];
+      default:
+        return [{ key: "Enter", label: "Activate", onAct: () => element.click() }];
     }
-    if (target.kind === "diagram") {
-      acts.push({ key: "Enter", label: "enlarge", onAct: enlarge });
-    }
-    if (target.kind === "control") {
-      acts.push({ key: "Enter", label: "activate", onAct: enlarge });
-    }
-    if (isTextKind(target.kind)) {
-      acts.push({ key: "c", label: "copy the part", onAct: copy });
-    }
-    if (acts.length === 0) {
-      acts.push({ key: "Enter", label: "open the menu", onAct: () => {} });
-    }
-    return acts;
   }
 
   function documentActs(): MenuAct[] {
@@ -1397,9 +1454,17 @@
   function openTargetMenu(target: SelectableTarget, at: { x: number; y: number }): void {
     if (closeMenu) closeMenu();
     const selection = selected;
+    const head =
+      target.element.classList.contains("instrument-row")
+        ? (target.element.getAttribute("data-task") ?? target.element.getAttribute("data-incarnation") ?? "")
+        : target.kind === "citation"
+          ? (target.element.getAttribute("data-open-path") ?? "citation")
+          : `${partPath(target.element) ?? target.kind}  ${target.text.slice(0, 48)}`;
     closeMenu = openContextMenu({
       ...at,
       acts: actsFor(target),
+      title: head.trim(),
+      enterFirst: true,
       onClose: () => {
         closeMenu = null;
         selectTarget(null);
@@ -2049,10 +2114,17 @@
 
   /** The part the act lands on: the selected block, else the one at
    * the reading height - a top-level part, as the select path names. */
+  // the element a menu act names: the menu clears the selection before
+  // its act runs, so the act hands its own part over here
+  let actElement: HTMLElement | null = null;
+
   function actPartIndex(): number | null {
     if (!contentHost || !view.board) return null;
     const blocks = contentBlocks();
-    let element: HTMLElement | null = selected?.element ?? null;
+    let element: HTMLElement | null = actElement ?? selected?.element ?? null;
+    actElement = null;
+    // a part inside a group acts through its top-level part
+    if (element) element = blocks.find((block) => block === element || block.contains(element)) ?? element;
     if (!element) {
       const readingLine = contentHost.getBoundingClientRect().top + contentHost.clientHeight / 3;
       let best = Number.MAX_SAFE_INTEGER;
@@ -3291,6 +3363,7 @@
       <span class="dim3">no board - space space opens the picker</span>
     {/if}
     {#if stripState}<span class="chip warn" data-control="strip:state">{stripState}</span>{/if}
+    {#if copyNote}<span class="chip" role="status" data-control="instrument:note">{copyNote}</span>{/if}
     {#if deck}
       <span class="chip on" data-control="deck:line">deck: {deck.name}</span>
       <button type="button" class="chip" data-control="deck:copy" onclick={copyCueCommand}>copy cue command</button>
@@ -3554,7 +3627,6 @@
     <main class="content" bind:this={contentHost} aria-label="board content"></main>
     {#if view.instrument}
       <main class="content instrument" bind:this={instrumentHost} aria-label="{view.instrument.kind} instrument" data-instrument={view.instrument.kind}>
-        {#if copyNote}<p class="instrument-note" role="status" data-control="instrument:note">{copyNote}</p>{/if}
         {#if view.instrument.kind === "tasks"}
           {#each taskSections as section (section.title)}
             <p class="sec instrument-label">{section.title}</p>

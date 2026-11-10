@@ -300,6 +300,16 @@ button::selection {
   border-left: 1px solid var(--w-line);
 }
 
+/* z folds a group to its title (round 16) */
+.block-group.closed > :not(.group-title) {
+  display: none;
+}
+
+.block-group.closed > .group-title::after {
+  content: " \2026";
+  opacity: 0.5;
+}
+
 /* the padding is the spacing between parts: a part's own first and
    last margins would add to it (they cannot collapse through padding) */
 .block-group > .block > :first-child {

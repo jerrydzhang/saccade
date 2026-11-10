@@ -516,6 +516,63 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
 
     phase("duplicate search", phase_search)
 
+    # the select menus (round 16's KINDS, t-35 step 3): a group's menu
+    # folds it, a part's menu cites it; the head names the part
+    def phase_menus() -> None:
+        open_board("saccade-and-migration.yaml")
+        page.click('[data-control="strip"]')
+        page.keyboard.press("s")
+        page.wait_for_selector(".select-label")
+
+        def label_for(selector: str) -> str | None:
+            return page.evaluate(
+                """(selector) => {
+                    const block = document.querySelector(selector);
+                    const id = block?.getAttribute('data-block-id');
+                    const chip = [...document.querySelectorAll('.select-label')].find(c => c.getAttribute('data-target-block') === id);
+                    return chip ? chip.textContent : null;
+                }""",
+                selector,
+            )
+
+        group_label = label_for(".board > .block-group")
+        check("a group carries a select label", group_label is not None, str(group_label))
+        if group_label is None:
+            page.keyboard.press("Escape")
+            return
+        page.keyboard.type(group_label)
+        page.wait_for_selector(".ctx-menu")
+        head = page.text_content(".ctx-menu-head") or ""
+        acts = page.evaluate("() => [...document.querySelectorAll('.ctx-menu-act')].map(e => e.textContent.trim())")
+        check(
+            "a group's menu names the part and folds and cites it",
+            "/content/" in head and any("Fold" in a for a in acts) and any("Copy citation" in a for a in acts),
+            f"head={head!r} acts={acts}",
+        )
+        page.keyboard.press("z")
+        folded = page.evaluate("() => document.querySelector('.board > .block-group').classList.contains('closed')")
+        check("z folds the group to its title", folded is True)
+        page.evaluate("() => document.querySelector('.board > .block-group').classList.remove('closed')")
+
+        page.keyboard.press("s")
+        page.wait_for_selector(".select-label")
+        text_label = label_for(".board > .block-group > .block-text")
+        if text_label is not None:
+            page.keyboard.type(text_label)
+            page.wait_for_selector(".ctx-menu")
+            head = page.text_content(".ctx-menu-head") or ""
+            acts = page.evaluate("() => [...document.querySelectorAll('.ctx-menu-act')].map(e => e.textContent.trim())")
+            check(
+                "a part inside a group cites its nested path",
+                "/group/content/" in head and any("Copy citation" in a for a in acts) and any("Copy the text" in a for a in acts),
+                f"head={head!r} acts={acts}",
+            )
+            page.keyboard.press("Escape")
+        else:
+            check("a part inside a group carries a label", False, "no chip")
+
+    phase("select menus", phase_menus)
+
     # phase 4: theme and narrow width
     def phase_theme() -> None:
         page.evaluate("() => window.__saccadeApp.setTheme('dark')")

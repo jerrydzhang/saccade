@@ -14,6 +14,7 @@ export type TargetKind =
   | "incorporation"
   | "unknown"
   | "citation"
+  | "group"
   | "control";
 
 /** Whether a target carries prose: text targets narrow by their text
