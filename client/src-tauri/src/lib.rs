@@ -112,7 +112,7 @@ pub fn run() {
             words::start(
                 saccade_app_core::SocketTransport::default_path()
                     .map(|path| path.to_path_buf())
-                    .ok(),
+                    .map_err(|fail| fail.to_string()),
             );
             // the window registry: which window state each window shows
             // (t-19); the shell's own memory, never a record fact

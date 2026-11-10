@@ -25,13 +25,15 @@ let table: WordsTable = {};
 // whether the shell's feed holds a live Herdr connection; null where
 // there is no shell (the browser) - nothing to report there
 let connected: boolean | null = null;
-const connectionListeners = new Set<(connected: boolean | null) => void>();
+let problem: string | null = null;
+export type WordsConnection = { connected: boolean | null; problem: string | null };
+const connectionListeners = new Set<(state: WordsConnection) => void>();
 
 /** Follow the feed's connection: the strip says "Herdr unreachable"
  * when it is down (t-34@r6 change 6). */
-export function onWordsConnection(listener: (connected: boolean | null) => void): () => void {
+export function onWordsConnection(listener: (state: WordsConnection) => void): () => void {
   connectionListeners.add(listener);
-  listener(connected);
+  listener({ connected, problem });
   return () => connectionListeners.delete(listener);
 }
 let generation = 0;
@@ -77,11 +79,14 @@ async function followLoop(): Promise<void> {
         generation: number;
         words: WordsTable;
         connected?: boolean;
+        problem?: string;
       };
       const now = snapshot.connected ?? null;
-      if (now !== connected) {
+      const why = snapshot.problem ?? null;
+      if (now !== connected || why !== problem) {
         connected = now;
-        for (const listener of connectionListeners) listener(connected);
+        problem = why;
+        for (const listener of connectionListeners) listener({ connected, problem });
       }
       if (snapshot.generation > generation) {
         generation = snapshot.generation;

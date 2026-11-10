@@ -3433,11 +3433,21 @@
       : null,
   );
   let herdrConnected = $state<boolean | null>(null);
-  $effect(() => onWordsConnection((next) => (herdrConnected = next)));
+  let herdrProblem = $state<string | null>(null);
+  $effect(() =>
+    onWordsConnection((next) => {
+      herdrConnected = next.connected;
+      herdrProblem = next.problem;
+    }),
+  );
 
   let stripState = $derived.by(() => {
     if (view.status === "loading") return "loading";
-    if (view.instrument && herdrConnected === false) return "Herdr unreachable - no live states";
+    // down with a reason; down without one is the feed's first moment,
+    // before its first attempt - nothing to say yet
+    if (view.instrument && herdrConnected === false && herdrProblem !== null) {
+      return `Herdr unreachable - no live states${herdrProblem ? `: ${herdrProblem}` : ""}`;
+    }
     if (view.status === "invalid") return "refused - see below";
     if (lookNoticeKind === "problem") return "look configuration problem - see help";
     return null;
