@@ -477,11 +477,32 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
     phase("copy multi-unit and flow math", phase_copy_multi_and_flow)
 
     # phase 3: duplicate-expression search, both occurrences reachable;
-    # the search bar is on demand now, so the phase opens it with the
-    # real Ctrl+F keystroke first
+    # find is a space command (round 16, t-34@r6): space shows the
+    # which-key menu, / opens the search bar; Ctrl-f pages
     def phase_search() -> None:
         open_board("repeated-math.yaml")
+        page.keyboard.press(" ")
+        page.wait_for_selector('[data-control="leader:menu"]')
+        leader_text = page.text_content('[data-control="leader:menu"]') or ""
+        check(
+            "space shows the which-key menu of this window's commands",
+            "Find text" in leader_text and "Find a board or file" in leader_text,
+            leader_text[:160],
+        )
+        page.keyboard.press("q")
+        closed = page.evaluate("() => document.querySelector('[data-control=\"leader:menu\"]') === null")
+        check("a key that is no command closes the which-key menu", closed is True)
+        # Ctrl-f pages (a board long enough to page through)
+        open_board("saccade-and-migration.yaml")
+        before = page.evaluate("() => document.querySelector('main.content').scrollTop")
         page.keyboard.press("Control+f")
+        page.wait_for_timeout(150)
+        after = page.evaluate("() => document.querySelector('main.content').scrollTop")
+        search_shown = page.evaluate("() => document.querySelector('input[type=search]') !== null")
+        check("Ctrl-f pages down and opens no search", after > before and not search_shown, f"{before}->{after} search={search_shown}")
+        open_board("repeated-math.yaml")
+        page.keyboard.press(" ")
+        page.keyboard.press("/")
         page.wait_for_function("() => document.querySelector('input[type=search]') !== null")
         page.fill("input[type=search]", "0 < \\eta < 2/b")
         page.wait_for_function("() => (document.querySelector('.search-state')?.textContent ?? '').trim().startsWith('1 / 2')")
@@ -913,7 +934,7 @@ def run_checks(page, base_url: str, shots_dir: pathlib.Path, engine: str) -> int
             help_text = page.text_content('[data-control="help:overlay"]') or ""
             check(
                 "? in the pipeline names the instrument's keys",
-                "pipeline" in help_text and "the task's activity" in help_text,
+                "keys - tasks" in help_text and "the task's activity" in help_text,
                 help_text[:160],
             )
             page.keyboard.press("Escape")

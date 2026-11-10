@@ -17,7 +17,21 @@ export type OpenMenu = {
   y: number;
   acts: MenuAct[];
   onClose: () => void;
+  /** A heading line above the acts (the prototype's menu head). */
+  title?: string;
+  /** Enter fires the first act (the prototype's select menus). */
+  enterFirst?: boolean;
+  /** Any other key closes the menu (the prototype's which-key: space
+   * then a key that is no command does nothing and closes). */
+  closeOnOtherKey?: boolean;
+  /** A data-control id for the panel, for the lanes. */
+  control?: string;
 };
+
+/** How a key shows in a menu: the space key reads "spc". */
+export function keyLabel(key: string): string {
+  return key === " " ? "spc" : key;
+}
 
 /** Open one menu at the pointer (or beside a selection). The panel
  * closes on Escape, on any click outside, or on an act; the caller's
@@ -26,6 +40,13 @@ export function openContextMenu(open: OpenMenu): () => void {
   const panel = document.createElement("div");
   panel.className = "ctx-menu";
   panel.setAttribute("role", "menu");
+  if (open.control) panel.dataset.control = open.control;
+  if (open.title) {
+    const head = document.createElement("div");
+    head.className = "ctx-menu-head";
+    head.textContent = open.title;
+    panel.append(head);
+  }
   const handlers: Array<[HTMLElement, () => void]> = [];
   for (const act of open.acts) {
     const row = document.createElement("button");
@@ -34,7 +55,7 @@ export function openContextMenu(open: OpenMenu): () => void {
     row.setAttribute("role", "menuitem");
     const key = document.createElement("span");
     key.className = "ctx-menu-key";
-    key.textContent = act.key;
+    key.textContent = keyLabel(act.key);
     const label = document.createElement("span");
     label.className = "ctx-menu-label";
     label.textContent = act.label;
@@ -63,12 +84,21 @@ export function openContextMenu(open: OpenMenu): () => void {
       close();
       return;
     }
-    const act = open.acts.find((candidate) => candidate.key === event.key);
+    const act =
+      open.acts.find((candidate) => candidate.key === event.key) ??
+      (open.enterFirst && event.key === "Enter" ? open.acts[0] : undefined);
     if (act) {
       event.preventDefault();
       event.stopPropagation();
       close();
       act.onAct();
+      return;
+    }
+    // a lone modifier is not a key choice
+    if (open.closeOnOtherKey && !["Shift", "Control", "Alt", "Meta"].includes(event.key)) {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
     }
   };
   const onOutside = (event: MouseEvent) => {

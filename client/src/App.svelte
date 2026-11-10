@@ -1026,12 +1026,30 @@
 
   function closeSearch(): void {
     searchOpen = false;
+    returnKeys();
+  }
+
+  /** Focus goes back to the document whenever a temporary field closes
+   * or a button has been clicked, so the window's keys work at once
+   * (t-34@r6 change 7: the only text fields are temporary). */
+  function returnKeys(): void {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) active.blur();
+  }
+
+  function onButtonClick(event: MouseEvent): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    // only the window's own buttons (the strip, the document, the
+    // rows): an overlay or dialog keeps its focus, it owns its keys
+    const button = target.closest("button");
+    if (button && button.closest(".strip, main.content") && !button.closest(".draft-editor")) button.blur();
   }
 
   // Key-driven chrome: the select-first keymap (t-14 "Interaction")
   // plus the standing search and copy-mode keys. No visible mode
   // buttons: every mode is a key, and ? lists them on demand.
-  type KeyMode = "normal" | "labels" | "leader" | "gg";
+  type KeyMode = "normal" | "labels" | "gg";
   let keyMode = $state<KeyMode>("normal");
   let selected: SelectableTarget | null = $state(null);
   let targets: SelectableTarget[] = [];
@@ -1454,6 +1472,104 @@
     return rankedPicker(query, candidates, model.recent.map(formatLocation), openKey);
   });
 
+  // -- this window's commands (round 16's commands(), t-34@r6) ----------
+  //
+  // One table per window: the space menu (which-key), the help sheet
+  // and nothing else read it, so they cannot drift apart. Each entry
+  // shows only where it applies.
+  function spaceCommands(): MenuAct[] {
+    const cmds: MenuAct[] = [{ key: " ", label: "Find a board or file (picker)", onAct: () => openPicker() }];
+    if (!view.instrument && view.board) {
+      const taskBoard = view.location?.machine.startsWith("tracker:") === true && view.board.task !== undefined && view.board.task !== null;
+      if (taskBoard) {
+        cmds.push({ key: "h", label: historyMode ? "Leave history" : "History", onAct: () => void toggleHistory() });
+        cmds.push({ key: "m", label: marginaliaMode ? "Leave marginalia" : "Marginalia", onAct: () => void toggleMarginalia() });
+      }
+      if (historyMode) {
+        cmds.push({ key: "n", label: "Next change", onAct: () => jumpToChange(1) });
+        cmds.push({ key: "N", label: "Previous change", onAct: () => jumpToChange(-1) });
+        cmds.push({ key: "c", label: "Current revision", onAct: () => void historyCurrent() });
+      }
+      const publishLabel =
+        drafts.length > 0
+          ? `Publish ${drafts.length} draft annotation${drafts.length === 1 ? "" : "s"} (one commit)`
+          : "Publish drafts (none yet)";
+      cmds.push({ key: "p", label: publishLabel, onAct: () => openPublish() });
+      cmds.push({ key: "/", label: "Find text", onAct: () => openSearch() });
+    }
+    cmds.push({ key: "l", label: "Link to a window (labels)", onAct: () => void enterLinkLabels() });
+    if (linkTargetId !== null) cmds.push({ key: "u", label: "Unlink this window", onAct: () => void unlinkHere() });
+    return cmds;
+  }
+
+  /** The keys of this window for the help sheet (round 16's showHelp):
+   * the motion and acts, then the space commands from the one table. */
+  function helpKeys(): Array<[string, string]> {
+    if (view.instrument) {
+      const rows: Array<[string, string]> = [
+        ["s", "select (labels, then the menu)"],
+        ["Enter", view.instrument.kind === "agents" ? "open the session's task board (through the link)" : "open the board (through the link)"],
+        ["e", view.instrument.kind === "tasks" ? "the task's activity" : "the session's details"],
+        ["j k", "scroll"],
+        ["gg G", "top, bottom"],
+        ["' \"", "jump to a window, window picker"],
+        ["?", "this sheet"],
+      ];
+      if (view.instrument.kind === "agents") rows.splice(3, 0, ["a w b", "copy the attach command / workspace path / branch"]);
+      return rows;
+    }
+    return [
+      ["s", "select (labels, then the menu)"],
+      ["Enter", "the selected part's menu"],
+      ["o i w", "open elsewhere: through the link / once / a new window"],
+      ["j k", "scroll"],
+      ["Ctrl-f Ctrl-b", "page"],
+      ["d u", "half page (Ctrl-d Ctrl-u too)"],
+      ["gg G", "top, bottom"],
+      ["Ctrl-o Ctrl-i", "back, forward"],
+      ["+ - =", "zoom, reset"],
+      ["h l", historyMode ? "step time" : deck ? "slides" : "(in history: step time)"],
+      ["n N", "changes (history)"],
+      ["t H L", "track a part, walk its changes (history)"],
+      ["a", "annotate after the part at the reading line"],
+      ["Ctrl-Shift-c", "copy source / plain"],
+      ["' \"", "jump to a window, window picker"],
+      ["?", "this sheet"],
+    ];
+  }
+
+  /** What this window is, for the menu and help heads. */
+  function windowKind(): string {
+    return view.instrument ? view.instrument.kind : "viewer";
+  }
+
+  /** space: the which-key menu of this window's commands, at the foot of
+   * the window; a key that is no command closes it. */
+  function openLeader(): void {
+    if (closeMenu) closeMenu();
+    const cmds = spaceCommands();
+    closeMenu = openContextMenu({
+      x: Math.max(8, window.innerWidth / 2 - 140),
+      y: window.innerHeight - 60 - cmds.length * 22,
+      acts: cmds,
+      title: `space ...  ${windowKind()} (this window only)`,
+      closeOnOtherKey: true,
+      control: "leader:menu",
+      onClose: () => {
+        closeMenu = null;
+      },
+    });
+  }
+
+  /** c in history: back to the current revision, the reading part kept. */
+  async function historyCurrent(): Promise<void> {
+    if (!historyMode) return;
+    const anchor = readingAnchorKey();
+    historyMode.at = historyMode.newest;
+    await paintHistoryRevision();
+    restoreReadingAnchor(anchor);
+  }
+
   function openPicker(): void {
     pickerOpen = true;
     pickerQuery = "";
@@ -1463,6 +1579,7 @@
 
   function closePicker(): void {
     pickerOpen = false;
+    returnKeys();
   }
 
   function pickerMove(delta: number): void {
@@ -2508,11 +2625,6 @@
   });
 
   function onWindowKey(event: KeyboardEvent): void {
-    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "f") {
-      event.preventDefault();
-      openSearch();
-      return;
-    }
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "c") {
       event.preventDefault();
       model.setCopyMode(view.copyMode === "plain" ? "source" : "plain");
@@ -2612,29 +2724,6 @@
         const aliveTargets = step.alive.map((index) => targets[index]).filter((t) => t !== undefined);
         if (hideLabels) hideLabels();
         hideLabels = showLabels(aliveTargets, aliveTargets.map((t) => labels[targets.indexOf(t)] ?? ""));
-        return;
-      }
-      case "leader": {
-        event.preventDefault();
-        keyMode = "normal";
-        // space leads this instrument's own commands only (t-14)
-        if (event.key === " " && !pickerOpen) {
-          openPicker();
-        } else if (event.key === "h") {
-          void toggleHistory();
-        } else if (event.key === "m") {
-          void toggleMarginalia();
-        } else if (event.key === "p") {
-          openPublish();
-        } else if (event.key === "l") {
-          // space l: link this window by labels (t-14)
-          void enterLinkLabels();
-        } else if (event.key === "u") {
-          // space u: unlink this window
-          void unlinkHere();
-        }
-        // the other leader commands (marginalia, publish) land with
-        // their own chapters
         return;
       }
       case "gg": {
@@ -2821,7 +2910,7 @@
       }
       case " ":
         event.preventDefault();
-        keyMode = "leader";
+        openLeader();
         return;
     }
     if (event.ctrlKey && !event.shiftKey) {
@@ -2870,9 +2959,11 @@
   $effect(() => {
     window.addEventListener("keydown", onWindowKey);
     window.addEventListener("contextmenu", onContextMenu);
+    window.addEventListener("click", onButtonClick);
     return () => {
       window.removeEventListener("keydown", onWindowKey);
       window.removeEventListener("contextmenu", onContextMenu);
+      window.removeEventListener("click", onButtonClick);
     };
   });
 
@@ -3274,53 +3365,16 @@
   <div class="help-overlay" role="dialog" aria-label="keys and commands" data-control="help:overlay">
     <div class="help-panel">
       <div class="help-section">
-        <p class="help-title">motion</p>
-        <p class="help-row"><span class="ctx-menu-key">j k</span> line down / up</p>
-        <p class="help-row"><span class="ctx-menu-key">Ctrl-f Ctrl-b</span> page down / up</p>
-        <p class="help-row"><span class="ctx-menu-key">Ctrl-d Ctrl-u</span> half page down / up (d u)</p>
-        <p class="help-row"><span class="ctx-menu-key">gg G</span> top / bottom</p>
-        <p class="help-row"><span class="ctx-menu-key">Ctrl-o Ctrl-i</span> back / forward</p>
+        <p class="help-title">keys - {windowKind()}</p>
+        {#each helpKeys() as [key, label] (key)}
+          <p class="help-row"><span class="ctx-menu-key">{key}</span> {label}</p>
+        {/each}
       </div>
       <div class="help-section">
-        <p class="help-title">select</p>
-        <p class="help-row"><span class="ctx-menu-key">s</span> labels on what can be selected</p>
-        <p class="help-row"><span class="ctx-menu-key">label</span> select it and open its menu</p>
-        <p class="help-row"><span class="ctx-menu-key">text</span> narrows the text targets</p>
-        <p class="help-row"><span class="ctx-menu-key">Enter</span> the selected target's acts</p>
-        <p class="help-row"><span class="ctx-menu-key">right-click</span> the same menu at the pointer</p>
-        <p class="help-row"><span class="ctx-menu-key">Escape</span> leaves the mode</p>
-      </div>
-      {#if view.instrument}
-      <div class="help-section">
-        <p class="help-title">{view.instrument.kind === "tasks" ? "pipeline" : "agents"}</p>
-        <p class="help-row"><span class="ctx-menu-key">Enter</span> opens the row's board through the link</p>
-        <p class="help-row"><span class="ctx-menu-key">e</span> {view.instrument.kind === "tasks" ? "the task's activity: the lane and its events" : "the session's details"}</p>
-        {#if view.instrument.kind === "agents"}
-        <p class="help-row"><span class="ctx-menu-key">a w b</span> copy the attach command / workspace path / branch</p>
-        {/if}
-      </div>
-      {:else}
-      <div class="help-section">
-        <p class="help-title">viewer</p>
-        <p class="help-row"><span class="ctx-menu-key">space</span> this instrument's commands</p>
-        <p class="help-row"><span class="ctx-menu-key">Ctrl+f</span> search (Escape closes)</p>
-        <p class="help-row"><span class="ctx-menu-key">Ctrl+Shift+C</span> copy source / plain</p>
-        <p class="help-row"><span class="ctx-menu-key">?</span> this list</p>
-      </div>
-      {/if}
-      <div class="help-section">
-        <p class="help-title">windows</p>
-        <p class="help-row"><span class="ctx-menu-key">'</span> labels on every suite window; type a label to jump</p>
-        <p class="help-row"><span class="ctx-menu-key">"</span> windows here, then detached; enter resumes; ^x twice discards</p>
-        <p class="help-row"><span class="ctx-menu-key">space l</span> link this window by labels</p>
-        <p class="help-row"><span class="ctx-menu-key">space u</span> unlink this window</p>
-      </div>
-      <div class="help-section">
-        <p class="help-title">two acts</p>
-        <p class="help-row"><span class="ctx-menu-key">Enter</span> the primary act, here</p>
-        <p class="help-row"><span class="ctx-menu-key">o</span> open elsewhere through the link (shift- or middle-click too)</p>
-        <p class="help-row"><span class="ctx-menu-key">i</span> open elsewhere once, the link unchanged</p>
-        <p class="help-row"><span class="ctx-menu-key">w</span> open in a new window</p>
+        <p class="help-title">space ...</p>
+        {#each spaceCommands() as command (command.key)}
+          <p class="help-row"><span class="ctx-menu-key">{command.key === " " ? "spc" : command.key}</span> {command.label}</p>
+        {/each}
       </div>
       {#if lookNotice}
       <div class="help-section">

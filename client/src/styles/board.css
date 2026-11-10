@@ -756,46 +756,63 @@ code.raw-html {
   outline-offset: 1px;
 }
 
+/* menus (round 16, the ledger): a head line, then one act per row, the
+   key in the key colour; the edge and shadow every floating structure
+   has, no rounding */
 .ctx-menu {
   position: fixed;
   z-index: 70;
   display: grid;
-  min-width: 220px;
-  background: var(--app-bg);
-  border: 1px solid var(--pop-line);
+  min-width: 250px;
+  max-width: min(460px, calc(100vw - 16px));
+  padding: 4px 0;
+  background: var(--pop);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  font: var(--fs-ui)/1.45 var(--f-ui);
+}
+
+.ctx-menu-head {
+  padding: 2px 12px 4px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ctx-menu-act {
   display: grid;
-  grid-template-columns: 3.2em 1fr;
+  grid-template-columns: 2.4em 1fr;
   gap: 6px;
   align-items: baseline;
   text-align: left;
-  padding: 5px 8px;
-  font-family: var(--f-ui);
-  font-size: var(--fs-small);
+  padding: 3px 12px;
+  font: inherit;
   color: var(--ink);
   background: none;
   border: none;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .ctx-menu-act:hover,
 .ctx-menu-act:focus {
   background: var(--acc);
-  color: var(--app-bg);
+  color: var(--acc-ink);
   outline: none;
 }
 
 .ctx-menu-key {
-  font-family: var(--f-ui);
-  font-size: var(--fs-small);
-  color: var(--acc);
+  font-family: var(--f-id);
+  font-weight: 700;
+  color: var(--c-key);
 }
 
 .ctx-menu-act:hover .ctx-menu-key,
 .ctx-menu-act:focus .ctx-menu-key {
-  color: var(--app-bg);
+  color: var(--acc-ink);
 }
 
 .help-overlay {
@@ -809,11 +826,13 @@ code.raw-html {
 
 .help-panel {
   display: grid;
-  grid-template-columns: repeat(3, auto);
+  grid-template-columns: repeat(auto-fit, minmax(260px, auto));
   gap: 24px;
   padding: 16px 20px;
-  background: var(--app-bg);
-  border: 1px solid var(--pop-line);
+  max-width: calc(100vw - 32px);
+  background: var(--pop);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
 }
 
 .help-title {
