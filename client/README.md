@@ -209,8 +209,11 @@ agents glance - reading `/view/v1` only; `/api/v1` stays `sac`'s own.
   concluded last 24h (the window the page computes; staleness is
   rendering). A row is task, title, agents (each agent's live state
   shape joined through the agents page's terminal addresses and the
-  words), latest commit, age. A row selects on click or by label;
-  Enter goes through the link to the board; the row menu's `e` shows
+  words), latest revision and commit, age, on the ledger's one-line
+  grid (t-34@r6). `j` `k` move a row cursor; a row also selects on
+  click or by label; Enter goes through the link to the board - in a
+  new, linked window when this is the only window, in place where there
+  is no shell (the browser); the row menu's `e` shows
   the task's activity - a lane on a 6h/24h axis (the last 6 hours
   taking the right two thirds) and the events beside it, from the
   history page. No dispatch: the suite never launches an agent
@@ -253,15 +256,22 @@ Keys:
   on the rest); typing a label selects its target and opens its one
   context menu beside it; typing anything else narrows the text targets
   by their text; right-click opens the same menu at the pointer; `Enter`
-  opens the selected target's acts; `?` lists keys and commands on
-  demand
+  fires the menu's first act; each kind of part has its own menu
+  (round 16's KINDS: annotate after, history of this part, copy
+  citation, fold, follow, open elsewhere); `?` lists this window's keys
+  and its `space` commands (lib/commands.ts and the one command table)
 - motion: `j` `k` lines, `Ctrl-f` `Ctrl-b` pages, `Ctrl-d` `Ctrl-u` and
   `d` `u` half pages, `gg` `G` ends, `Ctrl-o` `Ctrl-i` back and forward
-- `space` leads the viewer's own commands: `space space` the picker
-  (id, name, word start, substring, scattered letters; recency ties;
-  the open item last; kind and name only; a typed location always
-  resolves), `space h` history, `space m` marginalia, `space p`
-  publish, `space l` link this window by labels, `space u` unlink
+- `space` shows the which-key menu of this window's commands (one
+  table; a key that is no command closes it): `space space` the picker
+  (one project's tasks and boards, recent places and the page's
+  citations; `project/` switches project; id, name, word start,
+  substring, scattered letters; recency ties; the open item last; a
+  typed location always resolves; every letter types, arrows and
+  `Ctrl-n` `Ctrl-p` move), `space h` history, `space m` marginalia,
+  `space p` publish, `space /` find text, `space l` link this window by
+  labels, `space u` unlink; in history also `n` `N` and `c` the current
+  revision
 - the window jump: `'` labels on every visible suite window, typing
   one jumps (the key is a placeholder, t-14); `"` windows on this
   device, then detached ones - Enter focuses an attached window or
@@ -276,13 +286,18 @@ Keys:
   the instrument's declaration (lib/acts.ts): the viewer follows
   here; the tasks and agents instruments (t-18) declare
   Enter-through-the-link and arrive without rework
-- in history: `h` `l` step time, `n` `N` jump to changes, `t` tracks the
+- in history: a docked log of every revision (the shown one expanded
+  with hash, time, session and the parts it changed; any entry goes
+  there), the diff marked at every depth - inside groups, added parts
+  whole, removed parts kept and struck - with a ruler tick per change;
+  `h` `l` step time, `n` `N` jump to changes, `t` tracks the
   reading-height part, `H` `L` walk its changes
 - zoom: `+` `-` `=`, carried by the window's state (t-24@r20);
   figures and diagrams enlarge as their primary act; an incorporation
   expands to exactly its cited components
-- `Ctrl+F` opens the search bar; `Escape` closes it; `Enter` and
-  `Shift+Enter` walk the matches
+- `space /` opens the search bar; `Escape` closes it and the keys
+  return to the window; `Enter` and `Shift+Enter` walk the matches.
+  `Ctrl-f` pages (round 16)
 - copy is Source by default; `Ctrl+Shift+C` toggles Plain; `Ctrl+C`
   copies the selection in the current mode (a formula is copied whole
   in its current mode whatever fraction of it is selected)
