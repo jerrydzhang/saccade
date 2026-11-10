@@ -245,7 +245,7 @@ button::selection {
 }
 
 .board {
-  max-width: 52rem;
+  max-width: 42rem;
   margin: 0 auto;
   font: var(--wt-world) var(--fs-world)/var(--lh-world) var(--f-world);
   min-width: 0;
@@ -264,31 +264,50 @@ button::selection {
 
 .md-heading {
   font-family: var(--f-head);
+  font-weight: 700;
   line-height: 1.3;
-  margin: 0.6rem 0 0.3rem;
+  margin: 0.83em 0;
 }
 
-h1.md-heading {
+/* sized by the authored depth (round 16: # 1.35em, ## 1.12em, the rest
+   the body's size) */
+.md-heading.md-h1 {
   font-size: 1.35em;
 }
 
-h2.md-heading {
+.md-heading.md-h2 {
   font-size: 1.12em;
 }
 
-h3.md-heading,
-h4.md-heading,
-h5.md-heading,
-h6.md-heading {
+.md-heading.md-h3 {
   font-size: 1em;
 }
 
-/* groups: space and a plain label; no box, no rule */
+/* groups: a plain label, then a quiet rule down the group's extent so
+   where it ends is visible (t-34@r6 look F). The rule is the children's
+   own edge: inside a group they are spaced by padding, not margin, so
+   the edge runs unbroken; a nested group nests its rule. */
 .block-group {
   border: none;
   border-radius: 0;
   padding: 0;
   margin: 1.3rem 0;
+}
+
+.block-group > .block {
+  margin: 0;
+  padding: 8px 0 8px 14px;
+  border-left: 1px solid var(--w-line);
+}
+
+/* the padding is the spacing between parts: a part's own first and
+   last margins would add to it (they cannot collapse through padding) */
+.block-group > .block > :first-child {
+  margin-top: 0;
+}
+
+.block-group > .block > :last-child {
+  margin-bottom: 0;
 }
 
 .group-title {
@@ -380,9 +399,22 @@ code.raw-html {
   margin: 0.15rem 0;
 }
 
+/* Wide tables leave the reading column (t-34@r6 look E): a table takes
+   the width its content asks, up to the window's, centred on the
+   column, and scrolls sideways only past that. Set in the heading face
+   at the prototype's smaller size. */
 .md-table {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  max-width: calc(100vw - 48px);
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+  overflow-x: auto;
   border-collapse: collapse;
   margin: 0.6rem 0;
+  font: 0.8em/1.45 var(--f-head);
 }
 
 .md-table th,
@@ -1288,30 +1320,51 @@ code.raw-html {
 
 main.instrument {
   overflow-y: auto;
+  padding: 0 0 45vh;
 }
 
 .instrument-label {
   /* the section's plain label, carried by the .sec primitive */
-  padding-left: 0;
-  padding-right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.instrument-label:first-child {
+  padding-top: 6px;
 }
 
 .instrument-table {
   margin-bottom: 10px;
 }
 
-/* the one grid every row shares: the columns the instrument names.
-   Tasks: task | title | agents | latest commit | age. Agents: shape |
-   incarnation | detail | task | time. Numbers and times sit right in
-   tabular figures (.num). */
-.instrument-head {
-  color: var(--ink-3);
-  font-size: var(--fs-ui);
-  border-bottom: none;
+/* the ledger's grids (round 16): tasks read id | title | agents |
+   latest commit | age; agents read shape | incarnation | detail | task |
+   time. No column headers; the section label is the only heading. */
+.instrument-row[data-instrument="tasks"] {
+  grid-template-columns: 3em minmax(0, 1.4fr) 7em minmax(0, 1fr) 3em;
 }
 
-.instrument-head .st-cell {
-  width: 9px;
+.instrument-row[data-instrument="agents"] {
+  grid-template-columns: 9px 3em minmax(0, 1fr) 4.5em 3.4em;
+}
+
+@media (max-width: 600px) {
+  .instrument-row[data-instrument="tasks"] {
+    grid-template-columns: 3em minmax(0, 1fr) auto 3em;
+  }
+
+  .instrument-row[data-instrument="tasks"] .commit-cell {
+    display: none;
+  }
+
+  .instrument-row[data-instrument="agents"] {
+    grid-template-columns: 9px 3em minmax(0, 1fr) 4.2em;
+  }
+
+  .instrument-row[data-instrument="agents"] .tid {
+    display: none;
+  }
 }
 
 .instrument-row {
@@ -1323,6 +1376,11 @@ main.instrument {
   font: var(--fs-ui) var(--f-sec);
   cursor: pointer;
   min-height: var(--row-h);
+  padding: 0 var(--pad-x);
+}
+
+.instrument-row:hover {
+  color: var(--ink-hi);
 }
 
 .instrument-row .instrument-title,
@@ -1332,11 +1390,13 @@ main.instrument {
   white-space: nowrap;
 }
 
-/* a commit is an identifier, but the column reads as data: full width
-   kept small, right-aligned */
+/* the latest commit: the page names its hash only, so the column shows
+   the short hash, quiet; the prototype's revision and message need the
+   page to carry them (t-35 step 7) */
 .commit-cell {
   font-family: var(--f-id);
-  font-size: var(--fs-ui);
+  color: var(--ink-3);
+  text-align: left;
 }
 
 .agent-cell {
@@ -1353,7 +1413,7 @@ main.instrument {
 }
 
 .instrument-empty {
-  padding: 2px 0 10px;
+  padding: 2px var(--pad-x) 6px;
   margin: 0;
 }
 

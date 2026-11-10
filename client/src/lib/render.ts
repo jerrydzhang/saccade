@@ -266,7 +266,9 @@ function renderNode(
       return el("p", { class: "md-paragraph", ...lineAttr }, ...renderChildren(node.children as PhrasingContent[], node, blockOffset, blockLine, hooks, blockId));
     case "heading": {
       const tag = node.depth <= 3 ? ((["h2", "h3", "h4"] as const)[node.depth - 1] ?? "h4") : "h4";
-      return el(tag, { class: "md-heading", ...lineAttr }, ...renderChildren(node.children as PhrasingContent[], node, blockOffset, blockLine, hooks, blockId));
+      // the tag keeps the outline under group titles (one level down);
+      // the size follows the authored depth, as the prototype sets it
+      return el(tag, { class: `md-heading md-h${Math.min(node.depth, 3)}`, ...lineAttr }, ...renderChildren(node.children as PhrasingContent[], node, blockOffset, blockLine, hooks, blockId));
     }
     case "thematicBreak":
       return el("hr", { class: "md-rule" });

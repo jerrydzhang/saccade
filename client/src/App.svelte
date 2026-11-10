@@ -3505,9 +3505,6 @@
           {#each taskSections as section (section.title)}
             <p class="sec instrument-label">{section.title}</p>
             <div class="instrument-table" role="table" aria-label="{section.title} tasks" data-control="instrument:section">
-              <div class="row instrument-head" role="row" aria-hidden="true">
-                <span class="tid">task</span><span>title</span><span>agents</span><span class="num">latest commit</span><span class="num">age</span>
-              </div>
               {#each section.rows as row (row.task)}
                 <button
                   type="button"
@@ -3531,7 +3528,7 @@
                       </span>
                     {/each}
                   </span>
-                  <span class="num commit-cell">{row.latestCommit}</span>
+                  <span class="commit-cell" title={row.latestCommit}>{row.latestCommit.slice(0, 7)}</span>
                   <span class="num">{taskAge(row.at, Math.floor(Date.now() / 1000))}</span>
                 </button>
               {:else}
@@ -3540,11 +3537,12 @@
             </div>
           {/each}
         {:else}
-          {#each agentSections as section, index (section.word ?? "absent")}
-            <p class="sec instrument-label">{section.word ?? "absent"}</p>
-            <div class="row instrument-head" role="row" aria-hidden="true">
-              <span class="st-cell"></span><span class="sid">incarnation</span><span>detail</span><span>task</span><span class="num">time</span>
-            </div>
+          {#if agentSections.every((section) => section.rows.length === 0)}
+            <p class="sec instrument-label">agents</p>
+            <p class="dim3 instrument-empty">none - no session reports to this tracker</p>
+          {/if}
+          {#each agentSections.filter((section) => section.rows.length > 0) as section, index (section.word ?? "absent")}
+            <p class="sec instrument-label">{#if section.word}<span class="st {section.word}"></span>{/if}{section.word ?? "absent"}</p>
             <div class="instrument-table" role="table" aria-label="{section.word ?? "absent"} sessions" data-control="instrument:section">
               {#each section.rows as row (row.incarnation + String(index))}
                 <button
