@@ -361,6 +361,14 @@ class SessionState:
         # outliving the sandbox
         self.server: subprocess.Popen[bytes] | None = None
         self.server_port = 0
+        # the t36 lane mode's own machinery: the feed proxy on the
+        # core socket path (started before the app spawns) and the
+        # in-sandbox seed server the tracker checks open locations
+        # against
+        self.feed_proxy: object | None = None
+        self.seed_server: object | None = None
+        self.tracker_base = ""
+        self.tracker_tasks: dict = {}
 
     def chain_status(self) -> dict:
         return {
@@ -442,6 +450,14 @@ def teardown(state: SessionState) -> int:
         except subprocess.TimeoutExpired:
             state.weston.kill()
             state.weston.wait(timeout=5)
+    if state.seed_server is not None:
+        seed_stop = getattr(state.seed_server, "stop", None)
+        if callable(seed_stop):
+            seed_stop()
+    if state.feed_proxy is not None:
+        proxy_stop = getattr(state.feed_proxy, "stop", None)
+        if callable(proxy_stop):
+            proxy_stop()
     if state.server is not None and state.server.poll() is None:
         state.server.terminate()
         try:
@@ -501,6 +517,36 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
         inventory = enumerate_windows(state.client)
         suite = invoke_suite_window(state.client, SUITE_WINDOWS_SCRIPT, [])
         return {"ok": True, "windows": inventory, "suite": suite}, False
+    if command == "feed":
+        proxy = state.feed_proxy
+        if proxy is None or not getattr(proxy, "started", False):
+            raise WebDriverError("invalid argument", "no feed proxy in this session (t36 lane mode only)")
+        action = request.get("action")
+        if action == "status":
+            return {"ok": True, "feed": proxy.recordings()}, False
+        if action == "inject-status":
+            delivered = proxy.inject_status(
+                str(request.get("terminal") or "t-1"),
+                state=str(request.get("state") or "working"),
+                app=str(request.get("app") or "pi"),
+                msg=str(request.get("msg") or ""),
+                progress=request.get("progress"),
+                title=request.get("title"),
+            )
+            return {"ok": True, "delivered": delivered}, False
+        if action == "inject-unknown":
+            delivered = proxy.inject_unknown(str(request.get("event_type") or "deck-cue"))
+            return {"ok": True, "delivered": delivered}, False
+        if action == "inject-finished":
+            delivered = proxy.inject_finished(
+                str(request.get("terminal") or "t-1"), reason=str(request.get("reason") or "exited")
+            )
+            return {"ok": True, "delivered": delivered}, False
+        raise WebDriverError("invalid argument", f"unknown feed action: {action!r}")
+    if command == "tracker":
+        if not state.tracker_base:
+            raise WebDriverError("invalid argument", "no seed server in this session (t36 lane mode only)")
+        return {"ok": True, "base": state.tracker_base, "tasks": state.tracker_tasks}, False
     if command == "open-window":
         assert state.client is not None
         state_id = request.get("state_id")
@@ -683,6 +729,53 @@ def tracker_finish(state: SessionState) -> int:
     """Teardown, then the lane's verdict: any failed check fails the run."""
     teardown(state)
     return 1 if any(not ok for ok, _name, _detail in RESULTS) else 0
+
+
+def t36_prelude(state: SessionState, logs: pathlib.Path) -> None:
+    """The t36 lane mode's setup, BEFORE the app spawns: the feed
+    proxy binds the core socket path (the app dials it at startup),
+    then a real sac serve on a throwaway db carries the group-made
+    seed boards the tracker checks open. Every step is a recorded
+    check; a failure here leaves the chain down and the verdict red."""
+    import t36_feed_proxy
+    import t36_seeds
+
+    serve_bin = os.environ.get("SAC_APP_SERVE_BIN", "")
+    if not serve_bin.startswith("/"):
+        print("containment refusal: SAC_APP_SERVE_BIN must be an absolute sandbox path", file=sys.stderr)
+        raise SystemExit(1)
+
+    proxy = t36_feed_proxy.FeedProxy(t36_feed_proxy.default_socket_path())
+    proxy.start()
+    state.feed_proxy = proxy
+    check("the feed proxy listens on the core socket path", proxy.started, t36_feed_proxy.default_socket_path())
+
+    # the server shells out to git, which the scrubbed env would never
+    # find: the pinned git rides /lane beside the server
+    os.environ["PATH"] = "/lane:" + os.environ.get("PATH", "/usr/bin:/bin")
+    root = state.shots.parent / "seed"
+    try:
+        server = t36_seeds.SeedServer(serve_bin, root)
+        server.start()
+    except t36_seeds.SeedRefused as error:
+        check("the seed server came up", False, str(error)[:200])
+        teardown(state)
+        raise SystemExit(1)
+    state.seed_server = server
+    state.tracker_base = server.base
+    check("the t36 seed server answers", server.process is not None and server.process.poll() is None, server.base)
+    try:
+        commits = server.seed()
+        state.tracker_tasks = {entry["task"]: entry for entry in commits}
+        check(
+            "the t36 seed boards committed (groups on the real wire)",
+            len(commits) == 4 and all(entry.get("revision") is not None for entry in commits),
+            json.dumps([[entry["task"], entry.get("revision")] for entry in commits]),
+        )
+    except t36_seeds.SeedRefused as error:
+        check("the t36 seed boards committed (groups on the real wire)", False, str(error)[:200])
+        teardown(state)
+        raise SystemExit(1)
 
 
 def run_tracker_sequence(state: SessionState) -> int:
@@ -994,6 +1087,11 @@ def main() -> int:
     state.board = board
     state.wayland_name = f"wayland-{os.getpid() % 97}"
     try:
+        # the t36 prelude runs BEFORE anything spawns: the feed proxy
+        # must hold the core socket path before the app dials it, and
+        # the seed server must answer before a tracker location opens
+        if os.environ.get("SESSION_MODE") == "t36":
+            t36_prelude(state, logs)
         weston = start_weston(weston_bin, state.wayland_name, logs)
         if weston is None:
             return 1

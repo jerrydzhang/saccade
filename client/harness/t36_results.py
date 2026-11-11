@@ -98,6 +98,12 @@ GATES: tuple[dict, ...] = (
 
 GATE_IDS = tuple(g["id"] for g in GATES)
 
+# The held-break check ids (t-36 phase-2): bodies that exercise one
+# named held break each, not a whole scenario group. F01 is the
+# words-feed unknown-event survival probe (A7 oracle) - the held break
+# S19 expects red. make_result accepts these beside the S-ids.
+HELD_BREAK_IDS = ("F01",)
+
 
 def gate_of(gate_id: str) -> dict:
     for gate in GATES:
@@ -140,8 +146,8 @@ def make_result(scenario_id: str, lane: str, name: str, status: str, detail: str
     scenario id S01..S20 or a gate id G00..); lanes are validated
     against the lane set; adapter ids ride as recorded data and are
     guard-checked by t36_adapters, not here."""
-    if scenario_id in GATE_IDS:
-        gate_of(scenario_id)  # registry membership, refused if absent
+    if scenario_id in GATE_IDS or scenario_id in HELD_BREAK_IDS:
+        gate_of(scenario_id) if scenario_id in GATE_IDS else None  # registry membership
     else:
         scenario_of(scenario_id)
     if lane not in LANES:

@@ -1169,12 +1169,13 @@ def session_env(resolved: dict, run_root: pathlib.Path, token: str, lifetime: fl
     return env
 
 
-def session_binds(resolved: dict) -> list[tuple[str, str]]:
+def session_binds(resolved: dict, mode: str = "plain") -> list[tuple[str, str]]:
     """Read-only binds: the canary, both lane modules, the pinned
     binaries (covered by the /nix/store bind - stated explicitly for
     review) and the board's parent directory. The screenshooter stays
     bound: shot captures compositor frames beside WebDriver shots.
-    The tracker sequence adds its own sac binary at /lane/sac."""
+    The tracker sequence adds its own sac binary at /lane/sac; the
+    t36 mode adds the seed and feed-proxy modules beside it."""
     binds = [
         (resolved["canary"], CANARY_SANDBOX_PATH),
         (resolved["session_py"], SESSION_PAYLOAD_SANDBOX_PATH),
@@ -1190,6 +1191,9 @@ def session_binds(resolved: dict) -> list[tuple[str, str]]:
         binds.append((resolved["serve_bin"], "/lane/sac"))
     if resolved.get("git_bin"):
         binds.append((resolved["git_bin"], "/lane/git"))
+    if mode == "t36":
+        binds.append((str((HERE / "t36_feed_proxy.py").resolve()), "/lane/t36_feed_proxy.py"))
+        binds.append((str((HERE / "t36_seeds.py").resolve()), "/lane/t36_seeds.py"))
     return binds
 
 
@@ -1318,13 +1322,14 @@ def daemon_hold_supervisor(
     os._exit(0)
 
 
-def session_up(board_arg: str, lifetime: float) -> int:
+def session_up(board_arg: str, lifetime: float, mode: str = "plain") -> int:
     """Gated. One sandbox, one daemonized supervisor holder, one control
     socket. Idempotent while the session is alive; a stale record is
-    cleared, never adopted."""
+    cleared, never adopted. The t36 mode adds the feed proxy and the
+    in-sandbox seed server (SAC_APP_SERVE_BIN required)."""
     isolation_gate("webdriver")
 
-    resolved = session_resolved(board_arg, tracker_db_arg)
+    resolved = session_resolved(board_arg, tracker_db_arg, require_serve_bin=(mode == "t36"))
     if resolved is None:
         return 1
     if lifetime <= 0 or lifetime > 4 * 3600:
@@ -1358,11 +1363,16 @@ def session_up(board_arg: str, lifetime: float) -> int:
     token = uuid.uuid4().hex
     run_root = isolation.make_run_root("session")
     env = session_env(resolved, run_root, token, lifetime)
+    if mode == "t36":
+        env["SESSION_MODE"] = "t36"
+        # the payload's own seed server rides /lane/sac (session_tracker's
+        # convention); the prelude refuses without it
+        env["SAC_APP_SERVE_BIN"] = "/lane/sac"
     cmd = isolation.build_command(
         resolved["bwrap"],
         run_root,
         [resolved["python"], SESSION_PAYLOAD_SANDBOX_PATH],
-        session_binds(resolved),
+        session_binds(resolved, mode),
     )
     print("[session] gate command:", " ".join(cmd), flush=True)
     supervisor = isolation.PidfdSupervisor(cmd, env)
@@ -2062,6 +2072,8 @@ def session_main(rest: list[str], board_arg: str) -> int:
         return int(exit.code or 2)
     if verb == "up":
         return session_up(board_arg, lifetime)
+    if verb == "up-t36":
+        return session_up(board_arg, lifetime, mode="t36")
     if verb == "down":
         return session_down()
     if verb == "status":
