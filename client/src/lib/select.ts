@@ -83,10 +83,25 @@ export function narrowStep(
   typed: string,
 ): NarrowState & { selected: number | null } {
   if (typed.length !== 1) return { ...state, selected: null };
-  const pending = state.pendingLabel + typed;
-  const labelMatch = state.alive.filter(
-    (index) => labels[index] !== undefined && labels[index].length > 0 && labels[index].startsWith(pending),
-  );
+  const matching = (candidate: string): number[] =>
+    state.alive.filter(
+      (index) => labels[index] !== undefined && labels[index].length > 0 && labels[index].startsWith(candidate),
+    );
+  // a letter that names no label in its own case names one in the
+  // other: no label ever needs Shift (round 16 folds the typed key to
+  // the labels' case). Only a letter that names no label at all
+  // narrows the text targets.
+  let pending = state.pendingLabel + typed;
+  let labelMatch = matching(pending);
+  if (labelMatch.length === 0) {
+    const flipped = typed === typed.toLowerCase() ? typed.toUpperCase() : typed.toLowerCase();
+    const other = state.pendingLabel + flipped;
+    const otherMatch = matching(other);
+    if (otherMatch.length > 0) {
+      pending = other;
+      labelMatch = otherMatch;
+    }
+  }
   if (labelMatch.length > 0) {
     const first = labelMatch[0];
     if (first !== undefined && labelMatch.length === 1 && labels[first] === pending) {
