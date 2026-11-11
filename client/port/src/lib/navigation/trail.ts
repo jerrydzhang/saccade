@@ -45,12 +45,14 @@ export function createTrail(host: TrailHost): Trail {
   const entries: { location: string; departure: SavedPlace | null }[] = [];
   let cursor = -1;
 
+  function captureDeparture(): void {
+    const current = cursor >= 0 ? entries[cursor] : undefined;
+    if (current !== undefined) current.departure = host.capture();
+  }
+
   return {
     opened(location) {
-      const current = cursor >= 0 ? entries[cursor] : undefined;
-      if (current !== undefined) {
-        entries[cursor] = { location: current.location, departure: host.capture() };
-      }
+      captureDeparture();
       entries.splice(cursor + 1);
       entries.push({ location, departure: null });
       cursor = entries.length - 1;
@@ -62,6 +64,7 @@ export function createTrail(host: TrailHost): Trail {
       // on) - Back never invents a position.
       const previous = entries[cursor - 1];
       if (previous === undefined || previous.departure === null) return false;
+      captureDeparture();
       host.restore(previous.departure);
       cursor -= 1;
       return true;
@@ -74,6 +77,7 @@ export function createTrail(host: TrailHost): Trail {
       // when it left that entry (its own departure), or nothing when
       // it never moved on.
       if (next.departure === null) return false;
+      captureDeparture();
       host.restore(next.departure);
       cursor += 1;
       return true;
@@ -86,7 +90,7 @@ export function createTrail(host: TrailHost): Trail {
           location: entry.location,
           hasDeparture: entry.departure !== null,
         })),
-        canBack: cursor > 0 && entries[cursor]?.departure !== null,
+        canBack: cursor > 0 && entries[cursor - 1]?.departure != null,
         canForward: cursor < entries.length - 1 && entries[cursor + 1]?.departure != null,
       };
     },

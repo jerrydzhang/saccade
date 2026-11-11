@@ -40,6 +40,8 @@ test("explicit openings add entries; the departure capture lands on the entry be
   ]);
   assert.equal(captures.length, 1);
   assert.deepEqual(log, []);
+  assert.equal(trail.view().canBack, true, "availability names the previous entry's saved departure");
+  assert.equal(trail.view().canForward, false);
 });
 
 test("Back restores the departure place and moves the cursor; Forward retraces", () => {
@@ -49,6 +51,14 @@ test("Back restores the departure place and moves the cursor; Forward retraces",
   assert.equal(h.trail.back(), true);
   assert.deepEqual(h.log, ["restore:/p-cap-0"]);
   assert.equal(h.trail.view().cursor, 0);
+  assert.equal(h.trail.view().canBack, false);
+  assert.equal(h.trail.view().canForward, true, "leaving the newest entry captures its return place");
+  assert.equal(h.trail.forward(), true);
+  assert.deepEqual(h.log, ["restore:/p-cap-0", "restore:/p-cap-1"]);
+  assert.equal(h.trail.view().cursor, 1);
+  assert.equal(h.trail.view().canBack, true);
+  assert.equal(h.trail.view().canForward, false);
+  assert.equal(h.trail.view().depth, 2, "Back/Forward never create trail entries");
 });
 
 test("Back restores exactly the recorded departure; repeated backs need departures", () => {
@@ -62,9 +72,14 @@ test("Back restores exactly the recorded departure; repeated backs need departur
   assert.deepEqual(h.log, ["restore:/p-cap-1", "restore:/p-cap-0"]);
   // at the first entry: no further back
   assert.equal(h.trail.back(), false);
-  // forward retraces through the recorded departure of the next entry
+  // B's latest departure was captured on the second Back, not only
+  // on the earlier opening of C. Forward retraces that current place.
   assert.equal(h.trail.forward(), true);
-  assert.deepEqual(h.log, ["restore:/p-cap-1", "restore:/p-cap-0", "restore:/p-cap-1"]);
+  assert.deepEqual(h.log, ["restore:/p-cap-1", "restore:/p-cap-0", "restore:/p-cap-3"]);
+  assert.equal(h.trail.back(), true);
+  assert.deepEqual(h.log, ["restore:/p-cap-1", "restore:/p-cap-0", "restore:/p-cap-3", "restore:/p-cap-4"],
+    "Forward also captures the entry it leaves, for a later Back");
+  assert.equal(h.trail.view().depth, 3);
 });
 
 test("a new opening from the middle truncates forward history", () => {
