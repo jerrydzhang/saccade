@@ -34,7 +34,7 @@ import pathlib
 import re
 
 SCHEMA = "t36-run-manifest/1"
-INVENTORY_REVISION = "t36-inventory/1"
+INVENTORY_REVISION = "t36-inventory/2"
 
 # The harness lanes a check result can name. The scenario inventory's
 # lane kinds map onto these: [P] pure and [C] component run without the
@@ -68,6 +68,56 @@ SCENARIOS: tuple[dict, ...] = (
 
 SCENARIO_IDS = tuple(s["id"] for s in SCENARIOS)
 
+# The legacy lane gates (t36-inventory/2): the session tracker
+# sequence's own checks, pinned here so their free-text results have
+# stable ids in the TAP inventory. Matching is by substring because
+# several check names carry dynamic task prefixes ("t-7's seed board
+# committed at revision 1"). A failed gate is a FAIL entry with its
+# evidence; checks the lane never reached STOP against it. G00 is the
+# synthetic lane-completion gate: a lane that exits without any
+# recorded check line still fails visibly in TAP.
+GATES: tuple[dict, ...] = (
+    {"id": "G00", "match": None, "name": "the lane run completed (synthetic)"},
+    {"id": "G01", "match": "a real sac serve answers on the sandbox loopback", "name": "the seed server answers"},
+    {"id": "G02", "match": "two boards committed on the real wire", "name": "the wire takes the seed boards"},
+    {"id": "G03", "match": "seed board committed at revision 1", "name": "a seed board commits at revision 1"},
+    {"id": "G04", "match": "the tracker UI takes real input", "name": "the tracker UI takes real input"},
+    {"id": "G05", "match": "a tracker location loads through the real server under the real CSP", "name": "a tracker location loads under the real CSP"},
+    {"id": "G06", "match": "opens the draft editor", "name": "a opens the draft editor"},
+    {"id": "G07", "match": "the draft editor's cancel closes it", "name": "the draft editor's cancel closes it"},
+    {"id": "G08", "match": "the citation opens the cited revision through the real wire", "name": "the citation opens the cited revision"},
+    {"id": "G09", "match": "landing seed commits at revision 1 (text only)", "name": "the landing seed commits text-only"},
+    {"id": "G10", "match": "the landing seed opens at revision 1", "name": "the landing seed opens at revision 1"},
+    {"id": "G11", "match": "landing figure lands at revision 2", "name": "the landing figure commit lands"},
+    {"id": "G12", "match": "a landed figure renders on re-open", "name": "a landed figure renders on re-open"},
+    {"id": "G13", "match": "the tracker server stopped", "name": "the tracker server stopped"},
+    {"id": "G14", "match": "a stopped server refuses in bounded time", "name": "a stopped server refuses in bounded time"},
+    {"id": "G15", "match": "the landing-on-a-real-server pin runs", "name": "the landing pin runs"},
+    {"id": "G16", "match": "the stopped-server open takes input", "name": "the stopped-server open takes input"},
+)
+
+GATE_IDS = tuple(g["id"] for g in GATES)
+
+
+def gate_of(gate_id: str) -> dict:
+    for gate in GATES:
+        if gate["id"] == gate_id:
+            return gate
+    raise ResultError(f"unknown gate id: {gate_id!r} (inventory {INVENTORY_REVISION})")
+
+
+def gate_for(text: str) -> dict | None:
+    """The gate a lane check line belongs to, longest matching needle
+    first (so the more specific landing-seed matcher wins over the
+    generic seed one). None means the line is not a pinned gate and
+    stays free-text only."""
+    best: dict | None = None
+    for gate in GATES:
+        needle = gate["match"]
+        if needle and needle in text and (best is None or len(needle) > len(best["match"] or "")):
+            best = gate
+    return best
+
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
 STATUS_STOP = "stop"
@@ -86,10 +136,14 @@ def scenario_of(scenario_id: str) -> dict:
 
 
 def make_result(scenario_id: str, lane: str, name: str, status: str, detail: str = "", adapters: tuple[str, ...] = ()) -> dict:
-    """One check result. ids and lanes are validated against the
-    inventory; adapter ids ride as recorded data and are guard-checked
-    by t36_adapters, not here."""
-    scenario_of(scenario_id)
+    """One check result. ids are validated against the inventory (a
+    scenario id S01..S20 or a gate id G00..); lanes are validated
+    against the lane set; adapter ids ride as recorded data and are
+    guard-checked by t36_adapters, not here."""
+    if scenario_id in GATE_IDS:
+        gate_of(scenario_id)  # registry membership, refused if absent
+    else:
+        scenario_of(scenario_id)
     if lane not in LANES:
         raise ResultError(f"unknown lane: {lane!r} (lanes: {', '.join(LANES)})")
     if status not in STATUSES:
@@ -190,13 +244,17 @@ def make_manifest(
     app_ref: str,
     adapter_set_revision: str,
     serve_bin: str = "",
+    serve_ref: str = "",
     seeds: dict | None = None,
     prototype: dict | None = None,
     run_id: str = "",
     started: str = "",
 ) -> dict:
     """A run manifest. Provenance fields are caller-supplied facts
-    recorded verbatim; validation is validate_manifest's job."""
+    recorded verbatim; validation is validate_manifest's job. The
+    serve binary's build ref is provenance too (t-36@r58: a store
+    path alone shape-validated a stale binary - the ref is what
+    catches serve skew)."""
     if lane not in LANES:
         raise ResultError(f"unknown lane: {lane!r}")
     manifest: dict = {
@@ -206,7 +264,7 @@ def make_manifest(
         "adapter_set_revision": adapter_set_revision,
         "checks_inventory": INVENTORY_REVISION,
         "app": {"bin": app_bin, "ref": app_ref},
-        "serve": {"bin": serve_bin},
+        "serve": {"bin": serve_bin, "ref": serve_ref},
         "run_id": run_id,
         "started": started,
     }
@@ -259,8 +317,11 @@ def validate_manifest(manifest: dict, require_seeds: bool = False, require_proto
         _refusal(manifest, "serve.bin", "expected a string path to the real sac binary", refusals)
     elif serve.get("bin"):
         serve_bin = serve["bin"]
-        if not os.path.isabs(serve_bin) or not os.access(serve_bin, os.X_OK):
-            _refusal(manifest, "serve.bin", "expected an executable absolute path when present", refusals)
+        if not serve_bin.startswith("/nix/store/") or not os.path.isfile(serve_bin) or not os.access(serve_bin, os.X_OK):
+            _refusal(manifest, "serve.bin", "expected an executable /nix/store path when present", refusals)
+        serve_ref = serve.get("ref")
+        if not isinstance(serve_ref, str) or not _REF.match(serve_ref or ""):
+            _refusal(manifest, "serve.ref", "a serve binary must carry its declared build ref (t-36@r58: the ref is what catches serve skew)", refusals)
 
     seeds = manifest.get("seeds")
     if seeds is not None:

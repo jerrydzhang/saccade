@@ -100,6 +100,12 @@ class TapTest(unittest.TestCase):
         self.assertIn("adapters: A4", tap)
 
 
+def found_store_bash() -> str:
+    found = shutil.which("bash")
+    assert found is not None and found.startswith("/nix/store/")
+    return found
+
+
 def _valid_manifest(app_bin: str) -> dict:
     return t36_results.make_manifest(
         lane="session",
@@ -107,7 +113,8 @@ def _valid_manifest(app_bin: str) -> dict:
         app_bin=app_bin,
         app_ref="4d59c35",
         adapter_set_revision=t36_adapters.ADAPTER_SET_REVISION,
-        serve_bin="/usr/bin/env",
+        serve_bin=found_store_bash(),
+        serve_ref="4d59c35",
         seeds={"db_path": "/tmp/x.db", "db_hash": "a" * 64, "commits": [{"task": "t-5", "revision": 1, "message": "seed"}]},
         prototype={"source": "t-22@r3", "sha256": "b" * 64},
     )
@@ -145,6 +152,24 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(t36_results.validate_manifest(manifest), [])
         refusals = t36_results.validate_manifest(manifest, require_seeds=True)
         self.assertTrue(any(r.startswith("seeds") for r in refusals))
+
+    def test_serve_bin_must_be_store_path(self) -> None:
+        manifest = _valid_manifest(str(self.app_bin))
+        manifest["serve"]["bin"] = "/usr/bin/sac"
+        refusals = t36_results.validate_manifest(manifest, require_seeds=True)
+        self.assertTrue(any(r.startswith("serve.bin") for r in refusals))
+
+    def test_missing_serve_ref_refused(self) -> None:
+        manifest = _valid_manifest(str(self.app_bin))
+        manifest["serve"]["ref"] = ""
+        refusals = t36_results.validate_manifest(manifest, require_seeds=True)
+        self.assertTrue(any(r.startswith("serve.ref") for r in refusals))
+        self.assertIn("declared build ref", refusals[[r.startswith("serve.ref") for r in refusals].index(True)])
+
+    def test_empty_serve_bin_still_valid_without_ref(self) -> None:
+        manifest = _valid_manifest(str(self.app_bin))
+        manifest["serve"] = {"bin": "", "ref": ""}
+        self.assertEqual(t36_results.validate_manifest(manifest), [])
 
     def test_bad_seed_hash_refused(self) -> None:
         manifest = _valid_manifest(str(self.app_bin))

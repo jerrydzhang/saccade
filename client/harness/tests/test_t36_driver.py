@@ -30,6 +30,7 @@ def _options(**overrides) -> argparse.Namespace:
         "board": "/tmp/t36-board.yaml",
         "tracker_db": "/tmp/t36.db",
         "serve_bin": store_bin,
+        "serve_ref": "4d59c35",
     }
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -90,11 +91,24 @@ class ProvenanceGateTest(unittest.TestCase):
             self.plans(serve_bin="")
         self.assertIn("real sac binary", str(caught.exception))
 
+    def test_missing_serve_ref_refused(self) -> None:
+        with self.assertRaises(t36_driver.ProvenanceRefused) as caught:
+            self.plans(serve_ref="")
+        self.assertIn("serve build ref missing", str(caught.exception))
+        self.assertIn("--serve-ref", str(caught.exception))
+
+    def test_non_store_serve_bin_refused(self) -> None:
+        with self.assertRaises(t36_driver.ProvenanceRefused) as caught:
+            self.plans(serve_bin="/usr/bin/sac")
+        self.assertIn("/nix/store", str(caught.exception))
+
     def test_plan_carries_provenance_in_manifest(self) -> None:
         plans = self.plans()
         baseline = plans[0]["manifest"]
         self.assertEqual(baseline["app"]["ref"], "4d59c35")
         self.assertEqual(baseline["app"]["bin"], plans[0]["app_bin"])
+        self.assertEqual(baseline["serve"]["ref"], "4d59c35")
+        self.assertEqual(baseline["serve"]["bin"], plans[0]["serve_bin"])
         self.assertEqual(baseline["adapter_set_revision"], t36_driver.t36_adapters.ADAPTER_SET_REVISION)
 
 
@@ -166,6 +180,152 @@ class CheckSubsetTest(unittest.TestCase):
     def test_unknown_subset_refused(self) -> None:
         with self.assertRaises(t36_results.ResultError):
             t36_driver.check_subset("S99")
+
+
+# the shape run 1 actually produced (t-36@r58): the lane's free-text
+# stream dies at the tracker-load gate before any t36 TAP existed
+RUN1_LOG = """[webdriver] ok: private headless weston up
+[webdriver] ok: tauri-driver listening on loopback
+[webdriver] ok: webdriver session created for the packaged app
+[webdriver] ok: app frontend up and board loaded
+[webdriver] ok: a real sac serve answers on the sandbox loopback
+[webdriver] ok: t-0's seed board committed at revision 1
+[webdriver] ok: t-1's seed board committed at revision 1
+[webdriver] ok: the tracker UI takes real input
+[webdriver] FAIL: a tracker location loads through the real server under the real CSP status=invalid errors=1 task refused
+[webdriver] ok: a real sac serve answers on the sandbox loopback
+[webdriver] some lane chatter that is not a check line
+"""
+
+
+class LaneResultsTest(unittest.TestCase):
+    def test_gate_lines_become_tap_entries(self) -> None:
+        results = t36_driver.lane_results_from_log(RUN1_LOG)
+        by_id = {r["id"]: r for r in results}
+        self.assertEqual(by_id["G01"]["status"], "pass")
+        self.assertEqual(by_id["G04"]["status"], "pass")
+        self.assertEqual(by_id["G05"]["status"], "fail")
+        self.assertIn("status=invalid", by_id["G05"]["detail"])
+
+    def test_dynamic_names_keep_their_evidence(self) -> None:
+        results = t36_driver.lane_results_from_log(RUN1_LOG)
+        seed = next(r for r in results if r["id"] == "G03")
+        self.assertIn("t-0's seed board committed at revision 1", seed["name"])
+
+    def test_unmatched_lines_stay_free_text(self) -> None:
+        results = t36_driver.lane_results_from_log(RUN1_LOG)
+        self.assertFalse(any("chatter" in r["name"] for r in results))
+
+    def test_specific_matcher_wins(self) -> None:
+        results = t36_driver.lane_results_from_log('[webdriver] ok: t-2\'s landing seed commits at revision 1 (text only)')
+        self.assertEqual([r["id"] for r in results], ["G09"])
+
+    def test_declared_checks_stop_against_the_failed_gate(self) -> None:
+        results = t36_driver.lane_results_from_log(RUN1_LOG, declared_checks=("S12", "S13"))
+        stops = [r for r in results if r["id"] in ("S12", "S13")]
+        self.assertEqual(len(stops), 2)
+        for stop in stops:
+            self.assertEqual(stop["status"], "stop")
+            self.assertIn("not reached", stop["detail"])
+            self.assertIn("a tracker location loads", stop["detail"])
+            self.assertIn("G05", stop["detail"])
+
+    def test_declared_checks_stop_without_gate_failure(self) -> None:
+        results = t36_driver.lane_results_from_log("[webdriver] ok: a real sac serve answers on the sandbox loopback", declared_checks=("S12",))
+        stop = next(r for r in results if r["id"] == "S12")
+        self.assertIn("produced no result for this check", stop["detail"])
+
+    def test_unknown_declared_id_refused(self) -> None:
+        with self.assertRaises(t36_results.ResultError):
+            t36_driver.lane_results_from_log("", declared_checks=("S99",))
+
+    def test_gate_failure_rules_even_with_repeated_passes(self) -> None:
+        # run 1's log repeats the server-up gate after the failure; the
+        # repeated passes never cancel the FAIL
+        results = t36_driver.lane_results_from_log(RUN1_LOG)
+        server_up = [r for r in results if r["id"] == "G01"]
+        self.assertEqual(len(server_up), 2)
+        self.assertTrue(all(r["status"] == "pass" for r in server_up))
+        self.assertTrue(any(r["id"] == "G05" and r["status"] == "fail" for r in results))
+        self.assertEqual(t36_results.tap_exit_code(t36_results.emit_tap(results)), 1)
+
+    def test_run1_shape_yields_failing_tap_with_skips(self) -> None:
+        results = t36_driver.lane_results_from_log(RUN1_LOG, declared_checks=("S12", "S18"))
+        tap = t36_results.emit_tap(results)
+        self.assertIn("not ok", tap)
+        self.assertIn("G05/session", tap)
+        self.assertIn("# SKIP stopped: not reached: the lane stopped at failed check", tap)
+        self.assertEqual(t36_results.tap_exit_code(tap), 1)
+
+    def test_tap_file_always_written(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        results = t36_driver.lane_results_from_log(RUN1_LOG, declared_checks=("S12",))
+        manifest = {"schema": t36_results.SCHEMA}
+        path = t36_driver.write_run_tap(pathlib.Path(tmp.name), "candidate", results, manifest)
+        text = path.read_text(encoding="ascii")
+        self.assertTrue(text.startswith("TAP version 13"))
+        self.assertIn("1..", text)
+        self.assertIn("not ok", text)
+
+    def test_lane_exit_without_lines_fails_visibly(self) -> None:
+        entry = t36_driver.lane_run_result(1, [])
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["id"], "G00")
+        self.assertEqual(entry["status"], "fail")
+        self.assertIn("exited 1", entry["detail"])
+        tap = t36_results.emit_tap([entry])
+        self.assertEqual(t36_results.tap_exit_code(tap), 1)
+
+    def test_gate_failure_already_explains_the_exit(self) -> None:
+        results = t36_driver.lane_results_from_log(RUN1_LOG)
+        self.assertIsNone(t36_driver.lane_run_result(1, results))
+
+    def test_clean_lane_yields_no_synthetic_entry(self) -> None:
+        results = t36_driver.lane_results_from_log("[webdriver] ok: a real sac serve answers on the sandbox loopback")
+        self.assertIsNone(t36_driver.lane_run_result(0, results))
+        self.assertEqual(t36_results.tap_exit_code(t36_results.emit_tap(results)), 0)
+
+
+class ServeRefCliTest(unittest.TestCase):
+    """The refusal surface: no serve ref, no run - exit 2 from the CLI
+    itself, not just from build_plans."""
+
+    def store_bash(self) -> str:
+        found = shutil.which("bash")
+        assert found is not None and found.startswith("/nix/store/")
+        return found
+
+    def test_cli_refuses_without_serve_ref(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        board = pathlib.Path(tmp.name) / "board.yaml"
+        board.write_text("grammar: 1\n", encoding="ascii")
+        db = pathlib.Path(tmp.name) / "baseline.db"
+        db.write_bytes(b"k")
+        code = t36_driver.main([
+            "--baseline-bin", self.store_bash(), "--baseline-ref", "4d59c35",
+            "--candidate-bin", self.store_bash(), "--candidate-ref", "b0c33c2",
+            "--board", str(board), "--tracker-db", str(db),
+            "--serve-bin", self.store_bash(),
+        ])
+        self.assertEqual(code, 2)
+
+    def test_cli_accepts_serve_ref_in_dry_run(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        board = pathlib.Path(tmp.name) / "board.yaml"
+        board.write_text("grammar: 1\n", encoding="ascii")
+        db = pathlib.Path(tmp.name) / "baseline.db"
+        db.write_bytes(b"k")
+        code = t36_driver.main([
+            "--baseline-bin", self.store_bash(), "--baseline-ref", "4d59c35",
+            "--candidate-bin", self.store_bash(), "--candidate-ref", "b0c33c2",
+            "--board", str(board), "--tracker-db", str(db),
+            "--serve-bin", self.store_bash(), "--serve-ref", "4d59c35",
+            "--checks", "S08,S18",
+        ])
+        self.assertEqual(code, 0)
 
 
 if __name__ == "__main__":

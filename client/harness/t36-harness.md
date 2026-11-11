@@ -69,7 +69,8 @@ python3 client/harness/t36_prototype.py          # boot + shim + input
 python3 client/harness/t36_driver.py --baseline-bin <store-bin> \
     --baseline-ref <sha> --candidate-bin <store-bin> \
     --candidate-ref <sha> --board <abs.yaml> --tracker-db <abs.db> \
-    --serve-bin <abs-sac> --checks S08,S18            # dry-run plans
+    --serve-bin <store-sac> --serve-ref <sha> --checks S08,S18
+    # dry-run plans; the run refuses without any ref
 python3 client/harness/t36_seeds.py --root /tmp/t36-seed-smoke
 
 Deviations announced (the problem was not silently modified)
@@ -118,11 +119,14 @@ Known stops to carry into the red run
 Manifest shape (t36-run-manifest/1)
 -----------------------------------
 schema, lane, harness_commit, adapter_set_revision,
-checks_inventory, app{bin,ref}, serve{bin}, run_id, started,
-seeds{db_path, db_hash, repo, serve_bin, commits[{task, revision,
-message, commit}]}, prototype{source, sha256, serving, libs}.
-Validation refuses: non-store app bins, empty refs, wrong schema,
-bad hashes, and - with require_seeds - a seedless run.
+checks_inventory (t36-inventory/2), app{bin,ref}, serve{bin,ref},
+run_id, started, seeds{db_path, db_hash, repo, serve_bin,
+commits[{task, revision, message, commit}]}, prototype{source,
+sha256, serving, libs}. Validation refuses: non-store app bins, empty
+refs, a serve binary without its declared build ref or on a
+non-store path (t-36@r58 - a store path alone shape-validated a
+stale serve binary; the ref is what catches serve skew), wrong
+schema, bad hashes, and - with require_seeds - a seedless run.
 
 TAP shape
 ---------
@@ -131,3 +135,16 @@ per result ordered by (id, lane, name); "ok N - S08/session <name>",
 "not ok N - ... # SKIP stopped: <reason>" for the R3 stops, plain
 "not ok" for failures; failures carry a yaml detail block and adapters
 a comment. tap_exit_code: any non-skip "not ok" fails the run.
+
+TAP always exists (t-36@r58)
+----------------------------
+The driver writes tap-<role>.tap on every path. The lane's own
+free-text check lines are parsed into the pinned legacy gates
+(t36_results.GATES, ids G01..; G00 is the synthetic lane-completion
+entry for a lane that exited without any recorded check line). A
+failed gate is a FAIL entry with its evidence; declared checks the
+lane never reached STOP against it ("not reached: the lane stopped at
+failed check ..."). The per-check diff lands beside the run roots
+once both roles have TAP. Run 1's failure shape (the tracker-load
+gate refusing t-1 on serve skew) is a test fixture: it produces a
+failing TAP with SKIPs instead of a pre-TAP early exit.

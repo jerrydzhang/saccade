@@ -135,6 +135,7 @@ class RealSeedTest(unittest.TestCase):
                 app_ref="test",
                 adapter_set_revision="t36-adapters/1",
                 serve_bin=t36_seeds.resolve_sac_bin(),
+                serve_ref="4d59c35",
                 seeds=record,
             )
             refusals = t36_results.validate_manifest(manifest, require_seeds=True)
