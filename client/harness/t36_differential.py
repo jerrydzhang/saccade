@@ -24,12 +24,14 @@ import time
 
 import t36_adapters
 import t36_results
+import t36_port
 from t36_checks import (
     CheckSpec,
     CHECKS,
     RequestFn,
     _json_evaluate,
     _key,
+    _ok,
     _premise,
     _select_by_chip,
     _selected_now,
@@ -305,6 +307,13 @@ def check_s08_fold_reveal(request: RequestFn, pace: float) -> dict:
     real-input navigation reaches an anchor inside a folded container.
     The stop records that product-surface gap for the port slice; A4
     carries the unfold delta when the surface exists."""
+    # the port flavor drives the real navigation: the port's citations
+    # carry part paths (data-cite-select), activation is a plain click
+    # on the link, and the anchored open unfolds enclosing containers
+    # (the chunk-E2 machinery). The oracle - navigation reveals its
+    # actual anchor - rides the port's own surfaces.
+    if t36_port.is_port(request):
+        return _s08_port(request, pace)
     raise CheckStopped(
         "the app's citation surface is board-level only: hydrateCitations"
         " builds task@rK and never a part path, so no real-input navigation"
@@ -316,6 +325,111 @@ def check_s08_fold_reveal(request: RequestFn, pace: float) -> dict:
     )
 
 
+def _wait_port_loaded(request, pace: float, needle: str, timeout: float = 15.0) -> dict:
+    """Wait until the port readout names a loaded board whose location
+    carries the needle. The observation-side load wait, port flavor."""
+    import time as _time
+
+    from t36_checks import _json_evaluate, _sleep
+
+    deadline = _time.monotonic() + timeout
+    obs: dict | None = None
+    while True:
+        value = _json_evaluate(request, t36_port._READOUT_EVAL)
+        if isinstance(value, dict):
+            obs = value
+            board = value.get("board") or {}
+            if board.get("status") == "loaded" and needle in str(board.get("location") or ""):
+                return value
+        if _time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.4)
+    board = (obs or {}).get("board") or {}
+    raise CheckStopped(
+        f"the port board never loaded {needle!r}; last: status={board.get('status')!r}"
+        f" location={board.get('location')!r}"
+    )
+
+
+def _s08_port(request: RequestFn, pace: float) -> dict:
+    import json as _json
+
+    from t36_checks import _json_evaluate, _premise
+
+    # the cited board with the group, then the citing board whose
+    # incorporation names the first group child (the seed set's t-0/t-2)
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    tasks = tracker.get("tasks") or {}
+    cited = next((t for t, e in tasks.items() if "group-made" in str(e.get("message") or "")), None)
+    citing = next((t for t, e in tasks.items() if "other group child" in str(e.get("message") or "")), None)
+    _premise(cited is not None and citing is not None,
+             f"the S08 seeds are missing on the tracker: {_json.dumps(tasks)[:200]}")
+    host = str(tracker.get("base") or "").replace("http://", "")
+
+    # fold the destination's group first: open the cited board, fold
+    # the group part, and verify the child stopped rendering (the
+    # fold's own observable: folded content renders no elements)
+    t36_port.open_via_port_picker(request, f"{host}/seedtracker/{cited}", pace)
+    cited_obs = _wait_port_loaded(request, pace, f"/{cited}")
+    cited_location = str((cited_obs.get("board") or {}).get("location"))
+    revision = cited_location.rsplit("@r", 1)[-1] if "@r" in cited_location else None
+    group_part = "/content/0/group"
+    child_part = "/content/0/group/content/0"
+    t36_port.fold_part(request, group_part, pace)
+    _premise(t36_port.part_rect(request, child_part) is None,
+             f"the child part {child_part!r} still renders after the fold; the fold premise failed")
+
+    # the citing board, then the real navigation: a plain click on the
+    # citation link (the port's primary act)
+    t36_port.open_via_port_picker(request, f"{host}/seedtracker/{citing}", pace)
+    _wait_port_loaded(request, pace, f"/{citing}")
+    link_rect = _json_evaluate(
+        request,
+        "const el = document.querySelector('[data-port-control=\"citation\"]');"
+        " if (!el) return null; const r = el.getBoundingClientRect();"
+        " return {x: r.x, y: r.y, width: r.width, height: r.height,"
+        " open: el.getAttribute('data-port-open'), cite: el.getAttribute('data-cite-select') || null};",
+    )
+    _premise(isinstance(link_rect, dict) and link_rect.get("width"),
+             "the citing board renders no citation link (data-port-control=citation)")
+    x = link_rect["x"] + link_rect["width"] / 2
+    y = link_rect["y"] + link_rect["height"] / 2
+    request({"cmd": "input", "kind": "coords", "x": x, "y": y}, 30)
+    arrived = _wait_port_loaded(request, pace, cited, timeout=20.0)
+    board = arrived.get("board") or {}
+    location = str(board.get("location") or "")
+    child_after = t36_port.part_rect(request, child_part)
+    anchored = _json_evaluate(
+        request,
+        "const el = document.querySelector("
+        + _json.dumps(t36_port.part_selector(child_part)) + ");"
+        " if (!el) return {present: false};"
+        " const r = el.getBoundingClientRect();"
+        " return {present: true, top: r.top, visible: r.width > 0 && r.height > 0};",
+    )
+    if not child_after or not (anchored or {}).get("present"):
+        return {
+            "status": t36_results.STATUS_FAIL,
+            "detail": (
+                f"the citation activation landed on {location!r} but the anchor part"
+                f" {child_part!r} is not rendered: navigation did not reveal the actual"
+                " anchor through folds"
+            ),
+        }
+    pinned_ok = revision is not None and location.endswith(f"@r{revision}")
+    return {
+        "status": t36_results.STATUS_PASS,
+        "detail": (
+            f"the citation click opened {location!r} anchored at {child_part!r}"
+            f" (the element renders, viewport top {anchored.get('top')}); the fold"
+            " premise was verified on the direct visit (the child stopped rendering)"
+            + ("" if pinned_ok else f"; the location carries no pinned revision (follows current: {location!r})")
+            + "; whether the fold state itself survived the round trip is not"
+              " separately observable through existing state (recorded)"
+        ),
+    }
+
+
 def check_s14_trail_flags(request: RequestFn, pace: float) -> dict:
     """S14 the trail records explicit openings only, app side.
 
@@ -325,6 +439,12 @@ def check_s14_trail_flags(request: RequestFn, pace: float) -> dict:
     prototype side reads its trails from the saved snapshots (the shim
     carries them). The differential needs the app half; the stop
     records the readout gap."""
+    # the port flavor reads the trail from the port's own observation
+    # contract (chunk E): explicit openings, the cursor, back/forward
+    # state. The keys still pin (chunk E has no back/forward bindings),
+    # so the values are read, not driven.
+    if t36_port.is_port(request):
+        return _s14_port(request, pace)
     raise CheckStopped(
         "the app exposes no trail readout: inspection() carries no trail"
         " entries, back/forward state or restored flags, and the check adds no"
@@ -332,6 +452,79 @@ def check_s14_trail_flags(request: RequestFn, pace: float) -> dict:
         " saved snapshots (A5 would drop the restored flags) - the differential"
         " stops until the app projects its trail"
     )
+
+
+def _s14_port(request: RequestFn, pace: float) -> dict:
+    import json as _json
+
+    from t36_checks import _premise
+
+    def trail_now() -> dict:
+        obs = t36_port.readout(request)
+        t36_port.require_fields(obs, "trail", "viewport")
+        return obs.get("trail") or {}
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    tasks = tracker.get("tasks") or {}
+    first = next((t for t, e in tasks.items() if "incorporation" in str(e.get("message") or "")), None)
+    landing = next((t for t, e in tasks.items() if "landing" in str(e.get("message") or "")), None)
+    _premise(first is not None and landing is not None,
+             f"the trail-opening seeds are missing: {_json.dumps(tasks)[:200]}")
+    host = str(tracker.get("base") or "").replace("http://", "")
+
+    t36_port.open_via_port_picker(request, f"{host}/seedtracker/{first}", pace)
+    _wait_port_loaded(request, pace, f"/{first}")
+    t36_port.open_via_port_picker(request, f"{host}/seedtracker/{landing}", pace)
+    _wait_port_loaded(request, pace, f"/{landing}")
+    trail = trail_now()
+    depth = trail.get("depth")
+    cursor = trail.get("cursor")
+    entries = trail.get("entries") or []
+    locations = [str(e.get("location") or "") for e in entries]
+    opened_both = all(f"/{t}" in "/".join(locations) for t in (first, landing))
+    if not (isinstance(depth, int) and depth >= 2 and cursor == depth - 1 and opened_both):
+        return {
+            "status": t36_results.STATUS_FAIL,
+            "detail": (
+                f"the trail did not record the explicit openings: depth={depth!r}"
+                f" cursor={cursor!r} entries={_json.dumps(locations)[:200]}"
+            ),
+        }
+    if trail.get("canBack") is not True or trail.get("canForward") is not False:
+        return {
+            "status": t36_results.STATUS_FAIL,
+            "detail": (
+                f"the back/forward state disagrees with the trail: canBack={trail.get('canBack')!r}"
+                f" canForward={trail.get('canForward')!r} at depth {depth}"
+            ),
+        }
+
+    # the fold act must not record an opening (explicit openings only)
+    before_fold = _json.dumps(trail_now(), sort_keys=True)
+    group_part = next((p.get("part") for p in ((t36_port.readout(request).get("content") or {}).get("parts") or [])
+                       if p.get("kind") == "group"), None)
+    fold_note = "no group part on the shown board; the fold drive was skipped"
+    if group_part:
+        t36_port.fold_part(request, group_part, pace)
+        fold_note = f"the fold of {group_part!r} ran through the act menu"
+        after = trail_now()
+        if _json.dumps(after, sort_keys=True) != before_fold:
+            return {
+                "status": t36_results.STATUS_FAIL,
+                "detail": (
+                    f"the fold act changed the trail (explicit openings only):"
+                    f" {_json.dumps(_json.loads(before_fold))[:150]} -> {_json.dumps(after)[:150]}"
+                ),
+            }
+    return {
+        "status": t36_results.STATUS_PASS,
+        "detail": (
+            f"the trail recorded the two explicit openings (depth {depth}, cursor {cursor},"
+            f" entries {locations}) with canBack true and canForward false; {fold_note};"
+            " the trail stayed untouched. The back/forward key bindings still pin"
+            " (chunk E has none), so the state is read from the readout, not driven"
+        ),
+    }
 
 
 # -- P3: the stop registry for the remaining groups -----------------------

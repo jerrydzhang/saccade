@@ -461,6 +461,11 @@ def check_s12_label_case_fold(request: RequestFn, pace: float = DEFAULT_PACE) ->
     chip; type its label lowercased - different case than displayed.
     Baseline verdict: FAIL - nothing selects. A case-folded matcher
     selects the chip's target and the check passes."""
+    # the port flavor: the same oracle over the port's own select
+    # session (labels over data-port-label chips, narrowing through the
+    # shared matcher, exact-single selection ends the session)
+    if t36_port.is_port(request):
+        return _s12_port(request, pace)
     _key(request, "escape")
     _sleep(pace, 0.3)
     _key(request, "s")
@@ -495,6 +500,64 @@ def check_s12_label_case_fold(request: RequestFn, pace: float = DEFAULT_PACE) ->
             f" (target {chip.get('id')!r}); nothing selected"
             " - labels match only when typed in the displayed case (the case-fold fix is held)"
         ),
+    }
+
+
+def _s12_port(request: RequestFn, pace: float) -> dict:
+    import time
+
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    _key(request, "s")
+    deadline = time.monotonic() + 5.0 * pace
+    chips: list = []
+    while True:
+        chips = _json_evaluate(
+            request,
+            "return JSON.stringify([...document.querySelectorAll('[data-port-label]')].map("
+            "c => ({label: c.getAttribute('data-port-label'), part: c.getAttribute('data-port-part')})));",
+        )
+        if isinstance(chips, list) and chips:
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.3)
+    if not isinstance(chips, list) or not chips:
+        raise _Premise("select mode painted no chips on the port")
+    upper = [c for c in chips if str(c.get("label") or "") and c.get("label") != str(c["label"]).lower()]
+    if not upper:
+        raise _Premise(f"no uppercase chip on this board probes the case fold: {json.dumps(chips)[:300]}")
+    chip = upper[0]
+    displayed = str(chip["label"])
+    typed = displayed.lower()
+    for letter in typed:
+        _key(request, letter)
+        _sleep(pace, 0.3)
+    _sleep(pace, 0.5)
+    layer_count = _json_evaluate(
+        request,
+        "return document.querySelectorAll('[data-port-label]').length;",
+    )
+    if layer_count == 0:
+        return {
+            "status": t36_results.STATUS_PASS,
+            "detail": (f"typed {typed!r} on the port and the select session ended with a selection"
+                       f" (the chip layer closed) - the displayed label {displayed!r} matched"
+                       " across case; the part path rode data-port-part"),
+        }
+    if layer_count == len(chips):
+        return {
+            "status": t36_results.STATUS_FAIL,
+            "detail": (f"typed {typed!r}; the displayed label is {displayed!r}; all"
+                       f" {len(chips)} chips remain - nothing narrowed (labels match only"
+                       " when typed in the displayed case on the port too; the shared"
+                       " matcher carries the same namespace rule)"),
+        }
+    return {
+        "status": t36_results.STATUS_FAIL,
+        "detail": (f"typed {typed!r}; the chip layer narrowed from {len(chips)} to"
+                   f" {layer_count} but never reached the exact single match for"
+                   f" {displayed!r} - no selection fired"),
     }
 
 

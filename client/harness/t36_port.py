@@ -30,9 +30,10 @@ from t36_observation import CheckStopped
 PORT_SURFACE = "__saccadePort"
 OPEN_DOOR = "__suiteOpenAt"
 
-# the readout fields that land with the Board instrument (slice 2);
-# requiring them today is the honest adapter: the port cannot produce
-# them yet, so a check needing one stops naming the field
+# the readout fields the Board instrument's slice-2 chunks carried
+# (trail and viewport live since chunk E, t-36@r70): a check needing
+# one requires it, and a missing field names the stale build - the
+# stop says the shown build predates the field, never guesses
 SLICE2_FIELDS = ("trail", "viewport")
 
 _FLAVOR_PROBE = (
@@ -70,12 +71,12 @@ def readout(request) -> dict:
 def require_fields(obs: dict, *fields: str) -> None:
     """The REQUIRE_FIELDS-stop rule: a field the shown build cannot
     produce (absent, or null where a value is required) stops the check
-    naming the field and where it lands. The port's slice-2 fields
-    (trail, viewport) ride the Board instrument."""
+    naming the field. trail/viewport have landed (chunk E); a missing
+    one means the shown build predates it."""
     for field in fields:
         if field not in obs or obs[field] is None:
-            landing = "the Board instrument (slice 2)" if field in SLICE2_FIELDS else "a later port slice"
-            raise CheckStopped(f"the port readout does not carry {field!r} yet ({landing}); required here")
+            note = "the shown port build predates chunk E; rebuild at the current head" if field in SLICE2_FIELDS else "a later port slice carries it"
+            raise CheckStopped(f"the port readout does not carry {field!r} ({note}); required here")
 
 
 def open_spec(request, spec: str) -> None:
@@ -98,24 +99,110 @@ def part_selector(part: str) -> str:
     return f'[data-port-part="{part}"]'
 
 
+
 # the inventory the port flavor serves today: F01 and S16 are
 # flavor-independent (the feed proxy verbs and the shipped-bundle
-# prototype differential exercise no old-app selector), S20's body
-# carries its port observation branch. Everything else stops with the
-# recorded premise - driving old-app selectors into the fresh app is
-# exactly what the adapter must not do.
-PORT_SERVED = frozenset({"F01", "S16", "S20"})
+# prototype differential exercise no old-app selector); S08 rides the
+# part-path citations with fold reveal (chunk E2), S10 the gg/G
+# reading context (the input foundation), S12 the select session's
+# labels and exact-single selection, S14 the trail readout, S20 its
+# port observation branch. Everything else stops with the recorded
+# premise - driving old-app selectors into the fresh app is exactly
+# what the adapter must not do.
+PORT_SERVED = frozenset({"F01", "S08", "S10", "S12", "S14", "S16", "S20"})
+
+# the recorded non-runnables: their verdicts are registry stops that
+# name why the scenario does not execute through this harness at all -
+# flavor-independent, so the flavor gate passes them through and their
+# own bodies give the recorded reason
+NOT_DRIVEN = frozenset({"S01", "S03", "S04", "S05", "S06", "S07", "S11", "S19"})
+
+# the port surfaces still missing (chunk E landed picker, select
+# labels, the act menu with fold, part-path citations, trail and
+# viewport): find (/), live updates (S15), copy (S13), the
+# back/forward key bindings and the tasks instrument
+_STILL_MISSING = (
+    "find (/), live board updates (S15's oracle), copy (S13),"
+    " the back/forward key bindings and the tasks surface"
+)
 
 
 def ensure_served(check_id: str, obs: dict | None = None) -> None:
     """The flavor-aware gate run_check consults: on the port flavor a
-    check outside the served set stops with the recorded premise. The
-    trail/viewport fields REQUIRE_FIELDS-stop through require_fields at
-    the bodies that need them."""
-    if check_id in PORT_SERVED:
+    check outside the served set stops with the recorded premise; the
+    recorded non-runnables pass through (their bodies carry the
+    recorded reason). The trail/viewport fields REQUIRE_FIELDS-stop
+    through require_fields at the bodies that need them."""
+    if check_id in PORT_SERVED or check_id in NOT_DRIVEN:
         return
     raise CheckStopped(
-        f"the port slice-1 surface does not serve this scenario yet (the adapter serves"
-        f" {', '.join(sorted(PORT_SERVED))}); the port's own picker/keymap/menu surfaces"
-        " land with later slices - recorded gap, not a failure"
+        f"the port surface does not serve this scenario yet (the adapter serves"
+        f" {', '.join(sorted(PORT_SERVED))}); still missing: {_STILL_MISSING}"
+        " - recorded gap, not a failure"
     )
+
+
+def part_rect(request, part: str) -> dict:
+    """The rendered part's viewport rect from the port's own content
+    structure (data-port-part mirrors the model's canonical path).
+    None when the part is not rendered now (folded content renders no
+    elements - the fold's own observable)."""
+    from t36_checks import _json_evaluate
+
+    value = _json_evaluate(
+        request,
+        "const el = document.querySelector("
+        + json.dumps(part_selector(part)) + ");"
+        " if (!el) return null; const r = el.getBoundingClientRect();"
+        " return {x: r.x, y: r.y, width: r.width, height: r.height};",
+    )
+    return value if isinstance(value, dict) else None
+
+
+def open_via_port_picker(request, spec: str, pace: float, timeout: float = 15.0) -> None:
+    """Open a location through the port's own picker: space-space opens
+    it, the spec is typed into data-port-control="picker-input", Enter
+    submits through the one open funnel. Real input throughout; the
+    load is the caller's to wait."""
+    import time
+
+    from t36_checks import _json_evaluate, _key, _sleep, _type
+
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    _key(request, " ", " ")
+    deadline = time.monotonic() + timeout
+    while True:
+        opened = _json_evaluate(
+            request,
+            "return !!document.querySelector('[data-port-control=\"picker-input\"]');",
+        )
+        if opened is True:
+            break
+        if time.monotonic() >= deadline:
+            raise CheckStopped("the port picker never opened on space space")
+        _sleep(pace, 0.3)
+    _type(request, "port:picker-input", spec)
+    _sleep(pace, 0.5)
+    _key(request, "enter")
+    _sleep(pace, 0.5)
+
+
+def fold_part(request, part: str, pace: float) -> None:
+    """Fold or unfold a group part through the port's own act menu: a
+    right-click at the part opens the menu, z carries the fold act
+    (close-before-execute is the session module's own rule)."""
+    from t36_checks import _json_evaluate, _key, _sleep
+
+    rect = part_rect(request, part)
+    if not rect:
+        raise CheckStopped(f"the part {part!r} is not rendered (nothing to right-click)")
+    x = rect["x"] + rect["width"] / 2
+    y = rect["y"] + rect["height"] / 2
+    request({"cmd": "input", "kind": "rightclick", "x": x, "y": y}, 30)
+    _sleep(pace, 0.6)
+    menu = _json_evaluate(request, 'return !!document.querySelector("[data-port-menu]");')
+    if menu is not True:
+        raise CheckStopped(f"the act menu never opened on the right-click of {part!r}")
+    _key(request, "z")
+    _sleep(pace, 0.6)

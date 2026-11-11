@@ -21,6 +21,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 HARNESS = HERE.parent
 sys.path.insert(0, str(HARNESS))
 
+import unittest.mock
+
 import t36_checks  # noqa: E402
 import t36_port  # noqa: E402
 import t36_results  # noqa: E402
@@ -550,21 +552,26 @@ class PortAdapterTest(unittest.TestCase):
     def test_require_fields_stops_on_slice2_fields(self) -> None:
         with self.assertRaises(t36_checks.CheckStopped) as caught:
             t36_port.require_fields({"content": {}}, "trail")
-        self.assertIn("Board instrument", str(caught.exception))
+        self.assertIn("predates chunk E", str(caught.exception))
         t36_port.require_fields({"trail": {"rows": []}}, "trail")  # present passes
 
     def test_ensure_served_premise(self) -> None:
         with self.assertRaises(t36_checks.CheckStopped) as caught:
-            t36_port.ensure_served("S12")
-        self.assertIn("port slice-1", str(caught.exception))
-        t36_port.ensure_served("F01")
-        t36_port.ensure_served("S20")
+            t36_port.ensure_served("S09")
+        self.assertIn("the port surface does not serve", str(caught.exception))
+        self.assertIn("copy", str(caught.exception))  # the still-missing list
+        # the served set widened with chunk E; the recorded non-runnables
+        # pass through (their bodies carry the recorded reason)
+        for served in ("F01", "S08", "S10", "S12", "S14", "S16", "S20"):
+            t36_port.ensure_served(served)
+        for not_driven in ("S01", "S03", "S05", "S07", "S11", "S19"):
+            t36_port.ensure_served(not_driven)
 
     def test_run_check_port_gate_stops_unserved_before_the_body(self) -> None:
         fake = self.PortFake()
-        result = t36_checks.run_check(fake, t36_checks.CHECKS["S12"], pace=0)
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S09"], pace=0)
         self.assertEqual(result["status"], "stop")
-        self.assertIn("port slice-1", result["detail"])
+        self.assertIn("the port surface does not serve", result["detail"])
 
     def test_run_check_served_body_runs_on_port(self) -> None:
         fake = self.PortFake()
@@ -583,3 +590,134 @@ class PortAdapterTest(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         self.assertIn("the port readout answers", result["detail"])
         self.assertIn("'main'", result["detail"])
+
+
+class PortWidenedBodiesTest(unittest.TestCase):
+    """The chunk-E widened port branches: S10's viewport oracle, S12's
+    narrowing observation, S14's trail readout - fakes only."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        t36_checks.ensure_registered()
+
+    class ChunkEFake(FakeSession):
+        """A port-flavored fake carrying the chunk-E readout fields and
+        the port surfaces; the driving hooks mutate the readout."""
+
+        def __init__(self) -> None:
+            super().__init__(delivered=True)
+            self.viewport_top = 0.0
+            self.label_count = 3
+            self.location = "host:/board/t36-tall-board.yaml"
+            self.typed_spec = None
+            self.menu_open = False
+            self.trail = {"depth": 2, "cursor": 1,
+                          "entries": [{"location": "127.0.0.1:1/seedtracker/t-1", "hasDeparture": False},
+                                      {"location": "127.0.0.1:1/seedtracker/t-3", "hasDeparture": False}],
+                          "canBack": True, "canForward": False}
+
+        def __call__(self, payload: dict, timeout: float = 60.0) -> dict:
+            if payload.get("cmd") == "tracker":
+                return {"ok": True, "base": "http://127.0.0.1:1", "tasks": {
+                    "t-1": {"task": "t-1", "revision": 2, "message": "t36 seed: the citing account, incorporation into a group child"},
+                    "t-3": {"task": "t-3", "revision": 2, "message": "t36 seed: the landing figure, inside a group"}}}
+            if payload.get("cmd") == "input" and payload.get("kind") == "type":
+                if payload.get("target") == "port:picker-input":
+                    self.typed_spec = payload.get("text")
+            if payload.get("cmd") == "input" and payload.get("kind") == "key":
+                keys = payload.get("keys") or []
+                if "G" in keys:
+                    self.viewport_top = 900.0
+                if keys == ["g", "g"] or (self.viewport_top and keys == ["g"]):
+                    # the shipped matcher's gg completes: back to top
+                    self.viewport_top = 0.0
+                if "enter" in keys and self.typed_spec:
+                    self.location = self.typed_spec
+                    self.typed_spec = None
+                if "z" in keys:
+                    self.menu_open = False  # close-before-execute
+            if payload.get("cmd") == "input" and payload.get("kind") == "rightclick":
+                self.menu_open = True
+            return FakeSession.__call__(self, payload, timeout)
+
+        def _evaluate(self, script: str) -> object:
+            if "readout === 'function'" in script:
+                return True
+            if "JSON.stringify(window.__saccadePort.readout())" in script:
+                return json.dumps({
+                    "app": {"name": "saccade-app-port", "slice": 1},
+                    "window": {"label": "main"},
+                    "board": {"status": "loaded", "asked": self.location,
+                              "location": self.location,
+                              "task": "t-0", "pinnedRevision": None},
+                    "errors": [], "render": [], "content": {"parts": [
+                        {"part": "/content/0", "kind": "text", "line": 3},
+                        {"part": "/content/1", "kind": "group", "line": 4},
+                    ]},
+                    "diagnostics": [], "doors": {"jumpChip": None, "delivered": []},
+                    "trail": self.trail,
+                    "viewport": {"left": 0, "top": self.viewport_top, "width": 1024, "height": 1280},
+                })
+            if "data-port-label" in script and "length" in script:
+                return self.label_count
+            if "data-port-label" in script:
+                return json.dumps([
+                    {"label": "C", "part": "/content/0"},
+                    {"label": "a", "part": "/content/1"},
+                    {"label": "b", "part": "/content/2"},
+                ][: self.label_count])
+            if "JSON.stringify" in script and (
+                ".port-select-labels" in script or "data-port-menu" in script or "picker-input" in script
+            ):
+                return json.dumps({"menu": False, "labels": False, "picker": False})
+            if "picker-input" in script:
+                return True  # the picker-open probe: space space opened it
+            if "getBoundingClientRect" in script:
+                return {"x": 10.0, "y": 10.0, "width": 100.0, "height": 40.0}
+            if "data-port-menu" in script and "!!" in script:
+                return self.menu_open
+            if ".port-select-labels" in script or "data-port-menu" in script:
+                return False
+            return FakeSession._evaluate(self, script)
+
+    def test_s10_port_uses_viewport_readout(self) -> None:
+        fake = self.ChunkEFake()
+        with unittest.mock.patch.object(pathlib.Path, "write_text", lambda self, data, **kw: None):
+            result = t36_checks.run_check(fake, t36_checks.CHECKS["S10"], pace=0)
+        self.assertEqual(result["status"], "pass", result["detail"])
+        self.assertIn("viewport readout", result["detail"])
+
+    def test_s12_port_case_decided_fails(self) -> None:
+        fake = self.ChunkEFake()
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S12"], pace=0)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("nothing narrowed", result["detail"])
+
+    def test_s12_port_case_folded_passes(self) -> None:
+        fake = self.ChunkEFake()
+        original = fake._evaluate
+
+        def typed(script: str) -> object:
+            if "data-port-label" in script and "length" in script:
+                return 0  # the session ended: the selection fired
+            return original(script)
+
+        fake._evaluate = typed  # type: ignore[assignment]
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S12"], pace=0)
+        self.assertEqual(result["status"], "pass", result["detail"])
+        self.assertIn("across case", result["detail"])
+
+    def test_s14_port_flags_inconsistent_back_state(self) -> None:
+        fake = self.ChunkEFake()
+        fake.trail["canForward"] = True  # disagrees with cursor at the last entry
+        with unittest.mock.patch.object(pathlib.Path, "write_text", lambda self, data, **kw: None):
+            result = t36_checks.run_check(fake, t36_checks.CHECKS["S14"], pace=0)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("back/forward state disagrees", result["detail"])
+
+    def test_s14_port_green_on_consistent_trail(self) -> None:
+        fake = self.ChunkEFake()
+        with unittest.mock.patch.object(pathlib.Path, "write_text", lambda self, data, **kw: None):
+            result = t36_checks.run_check(fake, t36_checks.CHECKS["S14"], pace=0)
+        self.assertEqual(result["status"], "pass", result["detail"])
+        self.assertIn("explicit openings", result["detail"])

@@ -57,6 +57,7 @@ READY_SECONDS = 15
 LISTEN_SECONDS = 90
 APP_READY_SECONDS = 45
 TARGET_ID = re.compile(r"^[A-Za-z0-9:_-]{1,120}$")
+PORT_TARGET_ID = re.compile(r"^port:[A-Za-z0-9:_-]{1,114}$")
 SHOT_NAME = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 
 RESULTS: list[tuple[bool, str, str]] = []
@@ -139,6 +140,10 @@ def wait_listening(port: int, timeout: float) -> bool:
 
 
 def target_selector(target: str) -> str:
+    if target.startswith("port:") and PORT_TARGET_ID.match(target):
+        # the port's own control namespace (data-port-control), e.g.
+        # port:picker-input - the same stable-id rule, port side
+        return f'[data-port-control="{target[5:]}"]'
     if not TARGET_ID.match(target):
         raise WebDriverError("invalid argument", f"target id is not a stable data-control id: {target!r}")
     return f'[data-control="{target}"]'

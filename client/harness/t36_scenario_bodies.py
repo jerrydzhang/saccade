@@ -208,6 +208,11 @@ def check_s10_sequences(request: RequestFn, pace: float = 1.0) -> dict:
     observable through existing state: the check asserts the
     observables and records that limitation rather than inventing a
     deeper oracle."""
+    # the port flavor: the same oracle over the port's own surfaces -
+    # the open door for the tall board, the viewport readout for the
+    # scroll observation, the reading context's own gg/G bindings
+    if t36_port.is_port(request):
+        return _s10_port(request, pace)
     # the sequence premise needs a scrollable board: the lane's
     # viewport is 1024x1280 and the seed boards fit it, so the body
     # generates its own tall host board and opens it through the
@@ -587,3 +592,85 @@ def check_s20_relaunch(request: RequestFn, pace: float = 1.0) -> dict:
             "detail": (f"the relaunch restored the persisted window surface: {len(labels)} window(s) before,"
                        f" {len(after)} after; labels are fresh (the persisted surface is the window set,"
                        f" not the names)" + flavor_note)}
+
+
+def _s10_port(request: Callable, pace: float) -> dict:
+    import time
+
+    from t36_checks import _json_evaluate, _key, _premise, _sleep
+
+    # the tall board rides /board (the lane binds /tmp at /board); the
+    # port's own open door puts it on screen
+    tall = pathlib.Path("/tmp/t36-tall-board.yaml")
+    blocks = "".join(f"  - text: sequence premise block {n}\n" for n in range(1, 41))
+    tall.write_text(f"grammar: 1\ntask: t-0\ncontent:\n{blocks}", encoding="ascii")
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    t36_port.open_spec(request, "host:/board/t36-tall-board.yaml")
+    deadline = time.monotonic() + 15.0 * pace
+    obs: dict | None = None
+    while True:
+        value = t36_port.readout(request)
+        board = value.get("board") or {}
+        if board.get("status") == "loaded" and "t36-tall-board" in str(board.get("location") or ""):
+            obs = value
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.4)
+    _premise(obs is not None, "the tall host board never loaded on the port")
+    t36_port.require_fields(obs, "viewport")
+
+    def top() -> float:
+        return float((t36_port.readout(request).get("viewport") or {}).get("top") or 0.0)
+
+    surfaces = (
+        "return JSON.stringify({menu: !!document.querySelector(\"[data-port-menu]\"),"
+        " labels: !!document.querySelector(\".port-select-labels\"),"
+        " picker: !!document.querySelector(\"[data-port-control=\\\"picker-input\\\"]\")});"
+    )
+    before_top = top()
+    _key(request, "G")
+    deadline = time.monotonic() + 5.0 * pace
+    mid = before_top
+    while True:
+        mid = top()
+        if mid > before_top + 100:
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.2)
+    _premise(mid > before_top + 100,
+             "G did not scroll the reading context on the port (the board may fit the viewport)")
+    _key(request, "g")
+    _sleep(pace, 0.15)
+    _key(request, "g")
+    deadline = time.monotonic() + 5.0 * pace
+    after_gg = mid
+    while True:
+        after_gg = top()
+        if after_gg <= before_top + 2:
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.2)
+    gg_ok = after_gg <= before_top + 2
+    state_before = _json_evaluate(request, surfaces)
+    _key(request, "q")
+    _sleep(pace, 0.5)
+    state_after = _json_evaluate(request, surfaces)
+    top_after_q = top()
+    nothing_opened = state_before == state_after
+    nothing_scrolled = abs(top_after_q - after_gg) <= 2.0
+    if not gg_ok:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"gg did not return to top on the port: {before_top} -> G {mid} -> gg {after_gg}"}
+    if not (nothing_opened and nothing_scrolled):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"the unmatched key changed observable state on the port:"
+                           f" {state_before} -> {state_after}, scroll {after_gg} -> {top_after_q}")}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": ("gg ran through the shipped matcher on the port (G scrolled down, gg back to"
+                       " top through the viewport readout) and the unmatched key changed nothing"
+                       " observable; the matcher's consume-vs-fallthrough internals stay unobserved"
+                       " (the shipped state machine is the oracle here)")}
