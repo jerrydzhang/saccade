@@ -60,6 +60,9 @@ export type RenderOutcome = {
 /** The board frame's published domain data: what the window's
  * observation readout projects and the component renders. */
 export type BoardData = Readonly<{
+  /** The load that produced THIS frame; retained frames keep their
+   * own token while a newer request is pending. */
+  generation: number;
   /** The location the open ASKED for, formatted. */
   asked: string;
   /** The location that answered (a bare tracker location resolves to
@@ -102,9 +105,8 @@ export interface BoardUI extends HydrationHost {
   isFolded(part: string): boolean;
   /** Open the act menu for a target (selection or right-click). */
   openMenuFor(target: Readonly<{ part: string; kind: string; label: string }>, at?: { x: number; y: number }): void;
-  /** Publish rendering outcomes for the shown generation: content and
-   * outcomes publish consistently, through the normal refresh
-   * pipeline. */
+  /** Update outcomes for the actual shown frame's generation;
+   * rendering never enters or invalidates the loading queue. */
   reportRenderOutcomes(generation: number, outcomes: readonly RenderOutcome[]): void;
 }
 
@@ -124,6 +126,7 @@ function readyFrame(value: Readonly<BoardData>): PreparedContent<ContentFrame<Bo
 }
 
 const EMPTY_FRAME: BoardData = {
+  generation: 0,
   asked: "",
   location: "",
   resolved: null,
@@ -227,8 +230,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     toggleFold(part) {
       if (foldedSet.has(part)) foldedSet.delete(part);
       else foldedSet.add(part);
-      const frame: BoardData = { ...lastFrame, folded: [...foldedSet] };
-      void buffer.updates.refresh(() => readyFrame(frame));
+      buffer.updates.updateDisplayed((frame) => ({
+        ...frame, value: { ...frame.value, folded: [...foldedSet] },
+      }));
     },
     isFolded(part) {
       return foldedSet.has(part);
@@ -240,9 +244,11 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       if (released || reported !== generation) return;
       const key = JSON.stringify(outcomes);
       if (key === publishedOutcomesKey) return;
-      publishedOutcomesKey = key;
-      const frame: BoardData = { ...lastFrame, renderOutcomes: [...outcomes] };
-      void buffer.updates.refresh(() => readyFrame(frame));
+      buffer.updates.updateDisplayed((frame) => {
+        if (frame.value.generation !== reported) return frame;
+        publishedOutcomesKey = key;
+        return { ...frame, value: { ...frame.value, renderOutcomes: [...outcomes] } };
+      });
     },
     subscribeSelect(observer) {
       return selectSession.subscribe(observer);
@@ -345,6 +351,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           status: "invalid",
           board: null,
           errors: [issue],
+          generation: token,
           renderOutcomes: [],
           targets: [],
           folded: [...foldedSet],
@@ -366,6 +373,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
             status: "invalid",
             board: null,
             errors: [{ code: "decoder-mismatch", message }, ...result.errors],
+            generation: token,
             renderOutcomes: [],
             targets: [],
             folded: [...foldedSet],
@@ -381,6 +389,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           status: "invalid",
           board: null,
           errors: result.errors,
+          generation: token,
           renderOutcomes: [],
           targets: [],
           folded: [...foldedSet],
@@ -388,6 +397,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       };
     }
     lastFrame = {
+      generation: token,
       asked: askedSpec,
       location: formatLocation(resolvedLocation),
       resolved: resolvedLocation,
@@ -470,8 +480,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         }
       }
       if (unfolded) {
-        const frame: BoardData = { ...lastFrame, folded: [...foldedSet] };
-        void buffer.updates.refresh(() => readyFrame(frame));
+        buffer.updates.updateDisplayed((frame) => ({
+          ...frame, value: { ...frame.value, folded: [...foldedSet] },
+        }));
         return { kind: "pending" };
       }
       const bounds = buffer.geometry.bounds(anchor.path);

@@ -79,7 +79,9 @@ at the generation boundary. -->
       element.replaceChildren();
       return;
     }
-    const generation = controller.currentGeneration();
+    // A pending load may still display this older frame. Never stamp
+    // its hydration with the newer request's live generation.
+    const generation = frame.generation;
     const hooks: RenderHooks = {
       unitIndex: new Map(),
       folded: new Set(content.folded),

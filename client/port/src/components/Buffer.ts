@@ -599,6 +599,22 @@ export class SliceBufferHost<
 
   private updates(): ContentUpdates<ContentFrame<T>> {
     return {
+      updateDisplayed: (update) => {
+        if (this.destroyed || this.state.kind !== "alive") return;
+        const state = this.state;
+        const content = state.content;
+        const current = content.kind === "available" ? content.value
+          : content.kind === "pending" ? content.previous : null;
+        if (current === null) return;
+        const next = update(current);
+        if (next === current) return;
+        // Keep pending/failure metadata and the load queue intact.
+        if (content.kind === "available") {
+          this.set(() => ({ ...state, content: { ...content, value: next } }));
+        } else if (content.kind === "pending") {
+          this.set(() => ({ ...state, content: { ...content, previous: next } }));
+        }
+      },
       refresh: async (
         prepare: () => PreparedContent<ContentFrame<T>> | Promise<PreparedContent<ContentFrame<T>>>,
       ): Promise<RefreshOutcome> => {

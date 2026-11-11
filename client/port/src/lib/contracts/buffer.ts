@@ -102,9 +102,13 @@ export type PreparedContent<T extends object> =
   | Readonly<{ kind: "failed"; issue: KnownIssue }>;
 export type RefreshOutcome = "applied" | "failed" | "superseded" | "destroyed";
 export interface ContentUpdates<T extends object> {
-  // Latest intent governs publication; request/result ordering is
-  // local to this buffer. A synchronous ready result needs no pending
-  // display frame.
+  // Update the displayed value (or the previous value while loading).
+  // This is synchronous state updating, never queue invalidation. No
+  // displayed value means no callback; return the same value for no change.
+  updateDisplayed(update: (current: Readonly<T>) => Readonly<T>): void;
+  // Load/replace content through the buffer's latest-request queue.
+  // Ordinary display changes use updateDisplayed, not this queue.
+  // A synchronous ready result needs no pending display frame.
   refresh(
     prepare: () => PreparedContent<T> | Promise<PreparedContent<T>>,
   ): Promise<RefreshOutcome>;
