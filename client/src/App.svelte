@@ -484,6 +484,15 @@
     jumpChipShown = null;
   };
 
+  // the shell's elsewhere door (open_in_window evals this name): another
+  // window's open-elsewhere act delivers a location spec here, and this
+  // window opens it through its own model - the same path as a citation
+  // followed here - so the receiving window owns the trail entry; focus
+  // never moves, the shell already guaranteed that
+  (window as unknown as Record<string, unknown>).__suiteOpenAt = (spec: string) => {
+    void model.openInput(spec);
+  };
+
   function blurForJump(): void {
     (document.activeElement as HTMLElement | null)?.blur();
   }
