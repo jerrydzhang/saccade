@@ -273,11 +273,12 @@ class RegistryTest(unittest.TestCase):
         for check_id in ("S18", "F01", "S12"):
             self.assertIn(check_id, t36_checks.CHECKS)
 
-    def test_unknown_inventory_id_stops(self) -> None:
+    def test_unknown_inventory_id_refused(self) -> None:
+        import t36_results
+
         fake = FakeSession()
-        results = t36_checks.run_checks(fake, ["S17"])
-        self.assertEqual(results[0]["status"], "stop")
-        self.assertIn("no executable body", results[0]["detail"])
+        with self.assertRaises(t36_results.ResultError):
+            t36_checks.run_checks(fake, ["S99"])
 
     def test_runner_runs_in_named_order(self) -> None:
         fake = FakeSession()
@@ -301,3 +302,85 @@ class RegistryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DifferentialRegistryTest(unittest.TestCase):
+    """P2/P3 registration: the differential bodies and the named stop
+    registry cover every scenario group."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import sys as _sys
+        import pathlib as _pathlib
+
+        harness = _pathlib.Path(__file__).resolve().parent.parent
+        if str(harness) not in _sys.path:
+            _sys.path.insert(0, str(harness))
+        import t36_differential
+
+        t36_differential.register()
+
+    def test_every_scenario_group_is_registered(self) -> None:
+        import t36_results
+
+        for scenario_id in t36_results.SCENARIO_IDS:
+            self.assertIn(scenario_id, t36_checks.CHECKS, f"{scenario_id} has no registered body or stop")
+
+    def test_p2_bodies_carry_their_adapters(self) -> None:
+        self.assertEqual(t36_checks.CHECKS["S16"].adapters, ("A2",))
+        self.assertEqual(t36_checks.CHECKS["S17"].adapters, ("A6",))
+        self.assertEqual(t36_checks.CHECKS["S08"].adapters, ("A4",))
+        self.assertEqual(t36_checks.CHECKS["S14"].adapters, ("A5",))
+
+    def test_differential_without_prototype_stops(self) -> None:
+        import t36_differential
+
+        t36_differential.attach(None)
+        fake = FakeSession()
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S16"], pace=0)
+        self.assertEqual(result["status"], "stop")
+        self.assertIn("no prototype session attached", result["detail"])
+
+    def test_stop_bodies_record_their_reason(self) -> None:
+        fake = FakeSession()
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S14"], pace=0)
+        self.assertEqual(result["status"], "stop")
+        self.assertIn("no trail readout", result["detail"])
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S08"], pace=0)
+        self.assertEqual(result["status"], "stop")
+        self.assertIn("part inside a group", result["detail"])
+
+    def test_compare_applies_named_adapters_only(self) -> None:
+        import t36_differential as _diff
+
+        outcome = _diff.compare(
+            "S17", {"rows": [{"kind": "task", "loc": "t-1"}]},
+            {"rows": [{"kind": "task", "loc": "t-1"}]}, adapters=("A6",),
+        )
+        self.assertEqual(outcome["mismatches"], [])
+        self.assertTrue(any("A6" in note for note in outcome["notes"]))
+        outcome = _diff.compare(
+            "S08", {"location": "t-0@r1"}, {"location": "t-0@r1"}, adapters=("A4",),
+        )
+        self.assertEqual(outcome["mismatches"], [])
+        # a mismatch outside the adapter's transformation still reports
+        outcome = _diff.compare(
+            "S17",
+            {"rows": [{"kind": "task", "loc": "t-1"}]},
+            {"rows": [{"kind": "task", "loc": "t-1"}, {"kind": "figure", "loc": "x"}]},
+            adapters=("A6",),
+        )
+        self.assertTrue(outcome["mismatches"])
+
+    def test_full_inventory_stops_or_runs(self) -> None:
+        fake = FakeSession()
+        import t36_results
+
+        results = t36_checks.run_checks(fake, list(t36_results.SCENARIO_IDS), pace=0)
+        by_id = {r["id"]: r["status"] for r in results}
+        # the app halves that judge baseline behavior fail; the gaps stop
+        self.assertEqual(by_id["S17"], "stop")  # no task rows on the fake's board
+        self.assertEqual(by_id["S14"], "stop")
+        self.assertEqual(by_id["S16"], "stop")  # no prototype attached
+        for scenario_id in ("S01", "S02", "S19"):
+            self.assertEqual(by_id[scenario_id], "stop", scenario_id)

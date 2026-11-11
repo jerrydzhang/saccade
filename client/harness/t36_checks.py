@@ -159,6 +159,11 @@ def _select_by_chip(request: RequestFn, target_id: str, pace: float) -> str:
     return label
 
 
+def _premise(condition: object, message: str) -> None:
+    if not condition:
+        raise CheckStopped(message)
+
+
 def _selected_now(request: RequestFn) -> dict:
     value = _json_evaluate(
         request,
@@ -532,9 +537,26 @@ def run_check(request: RequestFn, spec: CheckSpec, pace: float = DEFAULT_PACE) -
     )
 
 
+_REGISTERED = False
+
+
+def ensure_registered() -> None:
+    """Pull in the differential module once (it registers its bodies
+    and the P3 stop registry into CHECKS). Lazy: plain app-only runs
+    never import it."""
+    global _REGISTERED
+    if _REGISTERED:
+        return
+    import t36_differential
+
+    t36_differential.register()
+    _REGISTERED = True
+
+
 def run_checks(request: RequestFn, check_ids: list[str], pace: float = DEFAULT_PACE) -> list[dict]:
     """The inventory runner: each named check, registry order for
     unknown ids refused, one result per check."""
+    ensure_registered()
     results: list[dict] = []
     for check_id in check_ids:
         spec = CHECKS.get(check_id)
