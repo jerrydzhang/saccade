@@ -612,7 +612,9 @@ export class SliceBufferHost<
         }
         this.set((state) => {
           if (state.kind !== "alive") return state;
-          const previous = state.content.kind === "available" ? state.content.value : null;
+          const previous = state.content.kind === "available"
+            ? state.content.value
+            : state.content.kind === "pending" ? state.content.previous : null;
           return { ...state, content: { kind: "pending", previous } };
         });
         try {
@@ -650,10 +652,13 @@ export class SliceBufferHost<
       if (state.kind !== "alive") return state;
       // Refresh retains the last usable content on failure and
       // reports the diagnostic; no fake revision advance.
-      if (state.content.kind === "available") {
+      const previous = state.content.kind === "available"
+        ? state.content.value
+        : state.content.kind === "pending" ? state.content.previous : null;
+      if (previous !== null) {
         return {
           ...state,
-          content: { ...state.content, lastFailure: failure },
+          content: { kind: "available", value: previous, lastFailure: failure },
         };
       }
       return { ...state, content: { kind: "unavailable", failure } };

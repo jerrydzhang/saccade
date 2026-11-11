@@ -159,15 +159,15 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   const foldedSet = new Set<string>();
   // The follow intent (scenario 15): a normally opened board follows
   // current through a bounded poll; a pinned open never follows.
+  let followAddress: Address | null = null;
+  let openIntent = 0;
   const follow = createFollow({
-    async currentRevision() {
-      if (resolved === null) return null;
-      const source = sourceFor(resolved.machine);
+    async currentRevision(task) {
+      if (followAddress === null) return null;
+      const source = sourceFor(followAddress.machine);
       if (!(source instanceof TrackerSource)) return null;
-      const task = /t-(\d+)$/.exec(resolved.path.split("/").pop() ?? "");
-      if (task === null) return null;
       try {
-        const page = await source.currentBoardPage(Number(task[1]));
+        const page = await source.currentBoardPage(task);
         return page.location ?? null;
       } catch {
         return null; // a failing poll retries silently; refresh
@@ -177,18 +177,19 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     shownRevision() {
       return lastFrame.resolved !== null ? lastFrame.resolved.path : null;
     },
-    refresh() {
-      if (resolved !== null) void places.request({ machine: resolved.machine, path: barePath(resolved.path) });
+    async refresh() {
+      const address = followAddress;
+      if (address === null) return;
+      return buffer.updates.refresh(async () => {
+        const prepared = await load(address);
+        return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
+      });
     },
     // the DOM timer id and Node's Timeout meet across lib mixes; the
     // id is opaque to the follow module
     schedule: (ms, run) => setTimeout(run, ms) as unknown as number,
     cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
   });
-  function barePath(pinned: string): string {
-    const bare = pinned.replace(/@r\d+$/, "");
-    return bare;
-  }
   // The outcomes key of the currently published frame: re-rendering
   // the same outcomes must not republish a new frame (the frame
   // publication re-runs the component's render effect, which reports
@@ -397,12 +398,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       targets: boardTargetsOf(result.board),
       folded: [...foldedSet],
     };
-    // scenario 15: a pinned open holds; a bare tracker open follows
-    if (/@r\d+$/.test(address.path)) {
-      follow.stop();
-    } else {
-      follow.start(0);
-    }
     return { kind: "ready", value: lastFrame };
   }
 
@@ -429,10 +424,25 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       return { address, position: { kind: "default" } };
     },
     async request(address: Address): Promise<RefreshOutcome> {
-      return buffer.updates.refresh(async () => {
-        const prepared = await load(address);
-        return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
-      });
+      // Follow the asked bare address, never the pinned resolution.
+      // An explicit open invalidates any in-flight poll immediately.
+      const intent = ++openIntent;
+      follow.stop();
+      followAddress = null;
+      try {
+        return await buffer.updates.refresh(async () => {
+          const prepared = await load(address);
+          return prepared.kind === "ready" ? readyFrame(prepared.value) : prepared;
+        });
+      } finally {
+        if (!released && intent === openIntent) {
+          const task = /^t-(\d+)$/.exec(address.path);
+          if (task !== null && address.machine.startsWith("tracker:")) {
+            followAddress = { ...address };
+            follow.start(Number(task[1]));
+          }
+        }
+      }
     },
     acceptsAnchor(data: AnchorData): data is BoardAnchor {
       return (

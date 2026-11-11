@@ -65,20 +65,27 @@ function rekeyToFixtureNamespace(globbed: Record<string, string>): Record<string
   return out;
 }
 
+// Plain Node can exercise the tracker/controller contracts without
+// Vite's bundled fixtures. Vite supplies import.meta.env and still
+// transforms the literal globs (the macro itself is not a runtime API).
 const fixtureRaw = rekeyToFixtureNamespace(
-  import.meta.glob<string>("../../../fixtures/*.{yaml,md}", {
-    query: "?raw",
-    import: "default",
-    eager: true,
-  }) as Record<string, string>,
+  import.meta.env !== undefined
+    ? import.meta.glob<string>("../../../fixtures/*.{yaml,md}", {
+        query: "?raw",
+        import: "default",
+        eager: true,
+      }) as Record<string, string>
+    : {},
 );
 
 const fixtureAssetUrls = rekeyToFixtureNamespace(
-  import.meta.glob<string>("../../../fixtures/assets/*", {
-    query: "?url",
-    import: "default",
-    eager: true,
-  }) as Record<string, string>,
+  import.meta.env !== undefined
+    ? import.meta.glob<string>("../../../fixtures/assets/*", {
+        query: "?url",
+        import: "default",
+        eager: true,
+      }) as Record<string, string>
+    : {},
 );
 
 const fixtureBase = "/fixtures";
@@ -147,7 +154,7 @@ interface TauriInvoke {
 }
 
 export function tauriInvoke(): TauriInvoke {
-  const w = window as unknown as {
+  const w = (typeof window === "undefined" ? {} : window) as unknown as {
     __TAURI_INTERNALS__?: { invoke: TauriInvoke };
   };
   const invoke = w.__TAURI_INTERNALS__?.invoke;

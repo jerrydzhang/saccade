@@ -11,12 +11,12 @@ export const FOLLOW_POLL_MS = 3000;
 export interface FollowDeps {
   /** The tracker's current pinned spec for the followed task
    * (t-N@rK), or null when the poll could not answer. */
-  currentRevision(): Promise<string | null>;
+  currentRevision(task: number): Promise<string | null>;
   /** The pinned spec the shown frame was resolved at (t-N@rK), or
    * null when nothing resolved. */
   shownRevision(): string | null;
   /** Re-request the bare address through the normal pipeline. */
-  refresh(): void;
+  refresh(): void | Promise<unknown>;
   schedule(ms: number, run: () => void): number;
   cancel(id: number): void;
 }
@@ -29,31 +29,43 @@ export interface Follow {
 
 export function createFollow(deps: FollowDeps): Follow {
   let timer: number | null = null;
+  let generation = 0;
 
   function stop(): void {
+    generation += 1;
     if (timer !== null) {
       deps.cancel(timer);
       timer = null;
     }
   }
 
-  async function poll(): Promise<void> {
-    const current = await deps.currentRevision();
-    if (current === null) return;
-    const shown = deps.shownRevision();
-    if (shown === null) return;
-    if (pinnedEqual(shown, current)) return;
-    deps.refresh();
+  function arm(task: number, token: number): void {
+    if (token !== generation) return;
+    timer = deps.schedule(FOLLOW_POLL_MS, () => {
+      timer = null;
+      void poll(task, token);
+    });
+  }
+
+  async function poll(task: number, token: number): Promise<void> {
+    try {
+      const current = await deps.currentRevision(task);
+      if (token !== generation || current === null) return;
+      const shown = deps.shownRevision();
+      if (shown === null || !pinnedEqual(shown, current)) await deps.refresh();
+    } catch {
+      // A failed read retries. Refresh failures report through the
+      // normal pipeline; neither kind ends the follow intent.
+    } finally {
+      // Schedule after completion: slow reads/refreshes never overlap.
+      arm(task, token);
+    }
   }
 
   return {
     start(task) {
       stop();
-      void task; // the task rides in the deps' closures (the source
-      // reads it); the follow itself only polls
-      timer = deps.schedule(FOLLOW_POLL_MS, () => {
-        void poll();
-      });
+      arm(task, generation);
     },
     stop,
   };

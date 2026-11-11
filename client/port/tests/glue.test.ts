@@ -240,7 +240,10 @@ test("a failed refresh retains the last usable frame and reports", async () => {
         places: {
           ...stubPlaces(),
           async request() {
-            await buffer.updates.refresh(() => ({
+            // Production source reads are asynchronous: exercise the
+            // pending(previous) -> failed transition, not only a
+            // synchronous failure that skips the pending state.
+            await buffer.updates.refresh(async () => ({
               kind: "failed" as const,
               issue: knownIssue({ code: "asset-missing", message: "no such board" }),
             }));
@@ -265,6 +268,7 @@ test("a failed refresh retains the last usable frame and reports", async () => {
     address: { machine: "", path: "" },
     position: { kind: "default" },
   });
+  await new Promise((resolve) => setImmediate(resolve));
   const after = instrument.snapshot();
   if (after.kind === "alive" && after.content.kind === "available") {
     const frame = after.content.value.props["content"] as Frame;

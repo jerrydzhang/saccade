@@ -14,7 +14,7 @@ function harness() {
   const follow = createFollow({
     currentRevision: async () => current,
     shownRevision: () => shown,
-    refresh: () => log.push("refresh"),
+    refresh: () => { log.push("refresh"); },
     schedule: (_ms, run) => {
       job = run;
       return 1;
@@ -27,7 +27,11 @@ function harness() {
     follow,
     log,
     tick: async () => {
-      job?.();
+      // A real setTimeout consumes its callback. Keeping it around
+      // concealed the production one-shot polling defect.
+      const run = job;
+      job = null;
+      run?.();
       await new Promise((resolve) => setImmediate(resolve));
     },
     set current(value: string | null) {
@@ -65,6 +69,28 @@ test("a failing poll is silent and retries; stop cancels", async () => {
   h.current = "t-1@r10";
   await h.tick();
   assert.deepEqual(h.log, ["refresh"], "stopped: no further polls run");
+});
+
+test("stopping during an in-flight read suppresses stale refresh and rearming", async () => {
+  let finish!: (value: string | null) => void;
+  let job: (() => void) | null = null;
+  let refreshes = 0;
+  const follow = createFollow({
+    currentRevision: () => new Promise((resolve) => { finish = resolve; }),
+    shownRevision: () => "t-1@r1",
+    refresh: () => { refreshes += 1; },
+    schedule: (_ms, run) => { job = run; return 1; },
+    cancel: () => { job = null; },
+  });
+  follow.start(1);
+  const run = job!;
+  job = null;
+  (run as () => void)();
+  follow.stop();
+  finish("t-1@r2");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(refreshes, 0);
+  assert.equal(job, null);
 });
 
 test("pinned comparison tolerates the machine/path prefix each surface carries", () => {
