@@ -226,7 +226,10 @@ export function createViewport(): SliceBufferViewport {
       }
     },
     moveTo(position) {
-      if (element !== null) element.scrollTop = position.top;
+      if (element !== null) {
+        element.scrollLeft = position.left;
+        element.scrollTop = position.top;
+      }
     },
   };
   return viewport;
@@ -552,11 +555,12 @@ export class SliceBufferHost<
         const location = stillAttached.places.revealAnchor(anchor as A);
         if (location.kind === "found") {
           const offset = place.position.viewportOffset;
-          this.viewport.reveal({
-            left: location.bounds.left + (offset?.left ?? 0),
-            top: location.bounds.top + (offset?.top ?? 0),
-            right: location.bounds.right + (offset?.left ?? 0),
-            bottom: location.bounds.bottom + (offset?.top ?? 0),
+          // Restore the recorded reading position, not merely the
+          // minimum scroll needed to expose an already-visible part.
+          // Capture stores viewportOffset = content bounds - scroll.
+          this.viewport.moveTo({
+            left: location.bounds.left - (offset?.left ?? 0),
+            top: location.bounds.top - (offset?.top ?? 0),
           });
           job.finish("restored");
           return;

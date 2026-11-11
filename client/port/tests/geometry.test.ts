@@ -64,4 +64,6 @@ test("part bounds and viewport reveal share content coordinates after scrolling"
   assert.deepEqual(access.geometry.bounds("/content/0"), expected, "scrolling does not change content bounds");
   viewport.reveal(expected);
   assert.equal(scroller.scrollTop, 390, "reveal scrolls to the measured content bounds");
+  viewport.moveTo({ left: 60, top: 35 });
+  assert.deepEqual(viewport.metrics().position, { left: 60, top: 35 }, "exact restoration moves both axes");
 });
