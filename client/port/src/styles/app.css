@@ -68,6 +68,21 @@ body {
   padding: 0.25rem 0.5rem;
 }
 
+/* Placement only: the select chips overlay the labeled parts. */
+.port-select-labels {
+  position: relative;
+  pointer-events: none;
+}
+
+.port-select-label {
+  position: absolute;
+  padding: 0 0.25rem;
+  border: 1px solid var(--port-color-muted);
+  background: var(--port-color-bg, #fff);
+  font-size: 0.75rem;
+  line-height: 1.25;
+}
+
 .port-placeholder,
 .port-state-line {
   padding: var(--port-space-block);

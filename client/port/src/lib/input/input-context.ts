@@ -75,6 +75,14 @@ export type InputContext = Readonly<{
   [contextBrand]: true;
   kind: "commands" | "text-entry";
   commands: ReadCommands;
+  // CONTRACT AMENDMENT (slice 2): sessions with a dynamic alphabet
+  // (label narrowing) cannot declare their letters as bindings. The
+  // SHARED matcher consults this hook for a stroke no declared
+  // binding claims, before its own fallback. It is part of the
+  // context's declaration surface - one dispatch chain, never a
+  // competing keyboard parser; returning nothing falls through to
+  // the default unmatched rule.
+  onUnmatched?: (stroke: KeyInput) => KeyResolution | undefined;
 }>;
 
 // Neither constructor captures input or enters a mode; the owning

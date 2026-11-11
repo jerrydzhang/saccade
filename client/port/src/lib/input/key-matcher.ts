@@ -129,6 +129,10 @@ export function createMatcher(context: InputContext, options: MatcherOptions = {
     }
     const exact = firstExact(declared, lone);
     if (exact !== null) return { kind: "invoke", action: exact.action };
+    // A session with a dynamic alphabet (the context's own
+    // declaration surface) claims the stroke before the fallback.
+    const session = context.onUnmatched?.(stroke);
+    if (session !== undefined) return session;
     return context.kind === "text-entry" ? { kind: "native-editing" } : { kind: "consume" };
   }
 

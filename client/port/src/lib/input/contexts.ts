@@ -45,12 +45,14 @@ export function windowContext(actions: WindowActions): InputContext {
 }
 
 // The Board instrument's reading context: viewport reading commands
-// declared by the content owner. The viewport operations belong to the
-// buffer's own viewport port (start = top, end = bottom); the
-// instrument wires them at connect time.
+// and the select-mode entry, declared by the content owner. The
+// viewport operations belong to the buffer's own viewport port
+// (start = top, end = bottom); the instrument wires them at connect
+// time.
 export interface ReadingActions {
   scrollToTop(): void;
   scrollToBottom(): void;
+  enterSelect(): void;
 }
 
 export function boardReadingContext(actions: ReadingActions): InputContext {
@@ -70,6 +72,14 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
         run: () => actions.scrollToBottom(),
       },
       keys: [sequence(shift("G"))],
+    },
+    {
+      action: {
+        id: "board.select",
+        label: "select a target by label",
+        run: () => actions.enterSelect(),
+      },
+      keys: [sequence(key("s"))],
     },
   ]);
   validateNoCollisions(context);

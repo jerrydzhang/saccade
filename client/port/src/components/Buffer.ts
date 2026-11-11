@@ -98,7 +98,7 @@ export interface BufferAccess<T extends object> {
   readonly geometry: TargetGeometry;
   readonly updates: ContentUpdates<ContentFrame<T>>;
   readonly interactions: InputCapture;
-  setReadingContext(context: InputContext): void;
+  setReadingContext(context: InputContext | null): void;
 }
 export interface InstrumentAttachment<UI extends object, A extends AnchorData> {
   readonly presentation: UI;
@@ -180,6 +180,9 @@ export interface SliceBufferViewport extends Viewport {
   // The window's presentation attaches its scroller element; before
   // that, the viewport reads zeros and scrolls nothing.
   attachElement(element: HTMLElement | null): void;
+  // The attached scroller (null before attachment) - the geometry
+  // service's measurement root.
+  attachedElement(): HTMLElement | null;
 }
 
 export function createViewport(): SliceBufferViewport {
@@ -187,6 +190,9 @@ export function createViewport(): SliceBufferViewport {
   const viewport: SliceBufferViewport = {
     attachElement(next) {
       element = next;
+    },
+    attachedElement() {
+      return element;
     },
     metrics() {
       if (element === null) return { position: { left: 0, top: 0 }, width: 0, height: 0 };
@@ -593,11 +599,29 @@ class SliceBufferHost<
   }
 
   private geometry(): TargetGeometry {
+    const viewport = this.viewport as SliceBufferViewport;
     return {
-      // No measurement machinery exists in slice 1: geometry reads
-      // null, and the change subscription stays silent until the
-      // presentation service lands.
-      bounds: () => null,
+      // Measurement reads the attached presentation: a part's bounds
+      // are its rendered element's box, VIEWPORT-RELATIVE (the same
+      // frame the viewport's own metrics report), so visibility is a
+      // plain interval test. No element, no bounds: missing geometry
+      // is never proof of missing content (scenario 12).
+      bounds: (id: string): Bounds | null => {
+        const element = viewport.attachedElement();
+        if (element === null) return null;
+        const part = element.querySelector(
+          `[data-port-part=${JSON.stringify(id)}]`,
+        );
+        if (!(part instanceof HTMLElement)) return null;
+        const host = element.getBoundingClientRect();
+        const box = part.getBoundingClientRect();
+        return {
+          left: box.left - host.left,
+          top: box.top - host.top,
+          right: box.right - host.left,
+          bottom: box.bottom - host.top,
+        };
+      },
       subscribeChanges: () => () => {},
     };
   }
