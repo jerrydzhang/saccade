@@ -303,6 +303,13 @@
     saccadeApp =
       pkgs: root:
         pkgs.callPackage ./saccade-app.nix {repoRoot = root;};
+    # the port's packaging lives in nix/saccade-app-port.nix, shaped
+    # like the app's and entirely additive: the port frontend dist and
+    # the port's own native binary, built from the shared shell crate
+    # with its own tauri conf. The saccade-app entry above is untouched.
+    saccadeAppPort =
+      pkgs: root:
+        pkgs.callPackage ./saccade-app-port.nix {repoRoot = root;};
   in {
     # the consumer-facing overlay: a NixOS configuration sets
     # nixpkgs.overlays = [ inputs.saccade.overlays.default ] and gets
@@ -561,6 +568,11 @@
               saccade-app = (saccadeApp clientPkgs ../.).app;
               saccade-app-web = (saccadeApp pkgs ../.).web;
               saccade-app-tauri-driver = (saccadeApp pkgs ../.).driver;
+
+              # the port (t-36 phase-3): its own binary for the lanes to
+              # boot by store path, same pin discipline as the app
+              saccade-app-port = (saccadeAppPort clientPkgs ../.).app;
+              saccade-app-port-web = (saccadeAppPort pkgs ../.).web;
 
               default = pkgs.symlinkJoin {
                 name = "saccade";
