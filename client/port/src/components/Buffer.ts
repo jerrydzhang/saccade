@@ -670,9 +670,9 @@ export class SliceBufferHost<
     const viewport = this.viewport as SliceBufferViewport;
     return {
       // Measurement reads the attached presentation: a part's bounds
-      // are its rendered element's box, VIEWPORT-RELATIVE (the same
-      // frame the viewport's own metrics report), so visibility is a
-      // plain interval test. No element, no bounds: missing geometry
+      // are in content coordinates, matching viewport scroll offsets
+      // and reveal(). Translate from DOM viewport coordinates through
+      // the scroller's inner border edge. No element, no bounds: missing geometry
       // is never proof of missing content (scenario 12).
       bounds: (id: string): Bounds | null => {
         const element = viewport.attachedElement();
@@ -683,11 +683,13 @@ export class SliceBufferHost<
         if (!(part instanceof HTMLElement)) return null;
         const host = element.getBoundingClientRect();
         const box = part.getBoundingClientRect();
+        const left = element.scrollLeft - host.left - element.clientLeft;
+        const top = element.scrollTop - host.top - element.clientTop;
         return {
-          left: box.left - host.left,
-          top: box.top - host.top,
-          right: box.right - host.left,
-          bottom: box.bottom - host.top,
+          left: box.left + left,
+          top: box.top + top,
+          right: box.right + left,
+          bottom: box.bottom + top,
         };
       },
       subscribeChanges: () => () => {},
