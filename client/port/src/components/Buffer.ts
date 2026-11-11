@@ -56,6 +56,7 @@ import type {
   SavedPlace,
 } from "../lib/contracts/places.ts";
 import type { Component } from "svelte";
+import { createHostMatcher, type HostMatcher } from "../lib/input/host.ts";
 
 // Logical content metadata is published with its data.
 export type TargetDefinition = Readonly<{
@@ -295,6 +296,16 @@ class SliceBufferHost<
   private refreshToken = 0;
   private destroyed = false;
   private readingContext: InputContext | null = null;
+  private inputHost: HostMatcher | null = null;
+
+  // The reading context's host half: replacing or capturing a context
+  // builds a fresh matcher, so a pending prefix never leaks across a
+  // handoff (scenario 10: a partial sequence never survives one).
+  private installReading(context: InputContext | null): void {
+    this.readingContext = context;
+    if (this.inputHost !== null) this.inputHost.dispose();
+    this.inputHost = context === null ? null : createHostMatcher(context);
+  }
   private leases: Set<InputLeaseImpl> = new Set();
   private readonly framePresentations = new WeakMap<ContentFrame<T>, TargetPresentations>();
   private restoreJobs: Set<RestoreJobImpl> = new Set();
@@ -325,14 +336,14 @@ class SliceBufferHost<
       updates: this.updates(),
       interactions: this.interactions(),
       setReadingContext: (context) => {
-        this.readingContext = context;
+        this.installReading(context);
       },
     };
     // Controller construction calls connect synchronously exactly once.
     const attachment = this.connect(access);
     this.attachment = attachment;
     const input = attachment.input;
-    if (this.readingContext === null) this.readingContext = input;
+    if (this.readingContext === null) this.installReading(input);
     const host: HostBuffer<T> = this;
     return { host, presentation: attachment.presentation };
   }
@@ -369,16 +380,24 @@ class SliceBufferHost<
     this.set((state) => (state.kind === "alive" ? { ...state, active: false } : state));
   }
 
-  // No bindings are installed in slice 1: the matcher arrives with its
-  // own ratified contract, and until then keys stay native.
-  handleKey(_input: KeyInput): KeyDisposition {
-    return "allow-default";
+  // The installed reading context resolves through the host matcher:
+  // invoke runs the action, prefix schedules the ratified expiry
+  // drain (SEQUENCE_TIMEOUT_MS = 1000), unmatched application keys are
+  // consumed - never dispatched to anything underneath (scenario 10).
+  handleKey(input: KeyInput): KeyDisposition {
+    if (this.destroyed || this.inputHost === null) return "allow-default";
+    const resolution = this.inputHost.stroke(input);
+    return this.inputHost.apply(resolution);
   }
 
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
     this.refreshToken += 1;
+    if (this.inputHost !== null) {
+      this.inputHost.dispose();
+      this.inputHost = null;
+    }
     for (const job of [...this.restoreJobs]) job.cancel();
     this.restoreJobs.clear();
     for (const lease of [...this.leases]) lease.release();
@@ -586,7 +605,7 @@ class SliceBufferHost<
   private interactions(): InputCapture {
     return {
       capture: (context: InputContext) => {
-        this.readingContext = context;
+        this.installReading(context);
         const lease = new InputLeaseImpl(() => {
           this.leases.delete(lease);
         });

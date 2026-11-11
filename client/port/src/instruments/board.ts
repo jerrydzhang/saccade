@@ -22,6 +22,7 @@ import type {
 } from "../lib/contracts/buffer.ts";
 import { commandContext } from "../lib/contracts/input.ts";
 import type { InputContext } from "../lib/contracts/input.ts";
+import { boardReadingContext } from "../lib/input/contexts.ts";
 import type {
   Address,
   BoardAnchor,
@@ -331,7 +332,15 @@ function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachment<Boa
     },
   };
 
-  const reading: InputContext = commandContext(() => []);
+  // The reading context is built where the buffer access is in hand:
+  // the viewport operations belong to the buffer's own port (start =
+  // top, end = bottom), and the content owner declares the bindings
+  // (gg top, G bottom). Contexts validate at construction - a
+  // collision is an error at load, never silent shadowing.
+  const reading: InputContext = boardReadingContext({
+    scrollToTop: () => buffer.viewport.start(),
+    scrollToBottom: () => buffer.viewport.end(),
+  });
 
   return {
     presentation: host,

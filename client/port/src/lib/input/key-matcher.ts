@@ -1,0 +1,189 @@
+// The shared key matcher over the ratified input-context contract.
+// Lifted into the port from client/port-staging/key-matcher.ts
+// (t-36@r65) with ONE ratified change: collision detection at load
+// (validateNoCollisions, t-36@r49 standing policy "collisions = error
+// at load", confirmed by the r65 disposition). The staged first-wins
+// fallback stays only as dead-code safety behind the validation.
+//
+// Scenario clauses (t-36@r50 acceptance-scenarios.txt, scenario 10):
+// unmatched application keys are consumed in the command context;
+// text entry matches declared commands first, other typing edits the
+// field natively and never reaches the board keymap; help and
+// execution read the same binding declarations; sequences run through
+// the one matcher; a partial sequence never fires early and never
+// survives a handoff; SEQUENCE_TIMEOUT_MS = 1000 (vim timeoutlen,
+// t-36@r49), pending abandoned at expiry, received keys then match
+// their own bindings if declared, else are consumed (adapter A1).
+
+import {
+  commandsOf,
+  strokeMatches,
+  commandContext,
+  textEntryContext,
+  formatStroke,
+  type Action,
+  type CommandBinding,
+  type ContextMatcher,
+  type InputContext,
+  type KeyInput,
+  type KeyResolution,
+  type KeySequence,
+  type StrokePattern,
+} from "./input-context.ts";
+
+// The ratified value (t-36@r49; the value is a tweakable default -
+// changing it is a mechanical task; changing what expiry means is a
+// ratification).
+export const SEQUENCE_TIMEOUT_MS = 1000;
+
+export type MatcherOptions = Readonly<{
+  // Injectable clock for deterministic tests; Date.now by default.
+  now?: () => number;
+}>;
+
+// COLLISIONS ARE ERRORS AT LOAD (t-36@r49 standing policy, wired by
+// r65). Two bindings of DIFFERENT actions claiming the same stroke
+// spelling refuse the whole context: silent shadowing is exactly the
+// reliability bug t-36 exists to kill. Alternatives for one action
+// stay legal.
+export function validateNoCollisions(context: InputContext): void {
+  const owner = new Map<string, string>();
+  const clashes: string[] = [];
+  for (const binding of commandsOf(context)) {
+    for (const sequence of binding.keys) {
+      const spelling = sequence.map(formatStroke).join(" ");
+      const held = owner.get(spelling);
+      if (held !== undefined && held !== binding.action.id) {
+        clashes.push(`'${spelling}' declared by both ${held} and ${binding.action.id}`);
+      }
+      owner.set(spelling, binding.action.id);
+    }
+  }
+  if (clashes.length > 0) {
+    throw new Error(`input collision at load: ${clashes.join("; ")}`);
+  }
+}
+
+// One declared sequence with its action, flattened from the current
+// binding table. Read fresh on every resolve/expire: queries read
+// current commands, never a frozen copy (contract).
+type Declared = Readonly<{ sequence: KeySequence; action: Action }>;
+
+function declaredOf(context: InputContext): readonly Declared[] {
+  const out: Declared[] = [];
+  for (const binding of commandsOf(context) as readonly CommandBinding[]) {
+    for (const sequence of binding.keys) {
+      out.push({ sequence, action: binding.action });
+    }
+  }
+  return out;
+}
+
+function prefixMatches(declared: Declared, strokes: readonly KeyInput[]): boolean {
+  if (declared.sequence.length < strokes.length) return false;
+  return strokes.every((stroke, index) => strokeMatches(declared.sequence[index] as StrokePattern, stroke));
+}
+
+function exactMatches(declared: Declared, strokes: readonly KeyInput[]): boolean {
+  return declared.sequence.length === strokes.length && prefixMatches(declared, strokes);
+}
+
+function firstExact(declared: readonly Declared[], strokes: readonly KeyInput[]): Declared | null {
+  // Unreachable behind validateNoCollisions; order fallback retained
+  // as dead-code safety for unvalidated foreign contexts.
+  return declared.find((candidate) => exactMatches(candidate, strokes)) ?? null;
+}
+
+function anyPrefix(declared: readonly Declared[], strokes: readonly KeyInput[]): boolean {
+  return declared.some((candidate) => candidate.sequence.length > strokes.length && prefixMatches(candidate, strokes));
+}
+
+export interface ContextMatcherWithTimeout extends ContextMatcher {
+  // The ratified expiry: abandon the pending sequence; the received
+  // keys then match their own bindings if declared, else fall to the
+  // context's own fallback rule. Returns drained resolutions in stroke
+  // order; [] when nothing is pending or the timeout has not run out.
+  // The host schedules the check (the timer is presentation-side);
+  // this method carries the semantics.
+  expire(now?: number): KeyResolution[];
+}
+
+export function createMatcher(context: InputContext, options: MatcherOptions = {}): ContextMatcherWithTimeout {
+  const now = options.now ?? Date.now;
+  // The pending buffer: strokes typed so far that at least one
+  // declared sequence still matches as a prefix.
+  let pending: KeyInput[] = [];
+  let pendingAt: number | null = null;
+
+  // A stroke that matches no pending continuation resolves fresh, as
+  // if no sequence were pending (the executed prototype behavior: an
+  // unrelated key resolves on its own and the pending buffer
+  // survives, inst16.html:499).
+  function resolveFresh(stroke: KeyInput): KeyResolution {
+    const declared = declaredOf(context);
+    const lone = [stroke];
+    if (anyPrefix(declared, lone)) {
+      pending = lone;
+      pendingAt = now();
+      return { kind: "prefix" };
+    }
+    const exact = firstExact(declared, lone);
+    if (exact !== null) return { kind: "invoke", action: exact.action };
+    return context.kind === "text-entry" ? { kind: "native-editing" } : { kind: "consume" };
+  }
+
+  return {
+    resolve(stroke: KeyInput): KeyResolution {
+      const declared = declaredOf(context);
+      if (pending.length === 0) return resolveFresh(stroke);
+      const next = [...pending, stroke];
+      // A partial sequence never fires early: while some declared
+      // sequence could still continue, the stroke only extends the
+      // pending buffer (vim timeout semantics).
+      if (anyPrefix(declared, next)) {
+        pending = next;
+        pendingAt = now();
+        return { kind: "prefix" };
+      }
+      const exact = firstExact(declared, next);
+      if (exact !== null) {
+        pending = [];
+        pendingAt = null;
+        return { kind: "invoke", action: exact.action };
+      }
+      // Unrelated to the pending sequence: resolved on its own.
+      return resolveFresh(stroke);
+    },
+
+    expire(nowMs?: number): KeyResolution[] {
+      const at = nowMs ?? now();
+      if (pending.length === 0 || pendingAt === null) return [];
+      if (at - pendingAt < SEQUENCE_TIMEOUT_MS) return [];
+      const strokes = pending;
+      const declared = declaredOf(context);
+      pending = [];
+      pendingAt = null;
+      // "Received keys then match their own bindings if declared, else
+      // are consumed": the completed spelling of the buffer, if
+      // declared, is its own binding (the completed-but-still-
+      // extendable case, vim's longest match on timeout); otherwise
+      // each stroke falls back per the context's own unmatched rule.
+      const exact = declared.find((candidate) => exactMatches(candidate, strokes));
+      if (exact !== undefined) return [{ kind: "invoke", action: exact.action }];
+      return strokes.map((stroke) => {
+        const own = declared.find((candidate) => exactMatches(candidate, [stroke]));
+        if (own !== undefined) return { kind: "invoke", action: own.action } as KeyResolution;
+        return context.kind === "text-entry" ? { kind: "native-editing" } : { kind: "consume" };
+      });
+    },
+
+    reset(): void {
+      // A partial sequence never survives a handoff: dropped without
+      // firing (the own-bindings drain is ratified for expiry only).
+      pending = [];
+      pendingAt = null;
+    },
+  };
+}
+
+export { commandContext, textEntryContext };

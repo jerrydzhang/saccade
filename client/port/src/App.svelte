@@ -9,11 +9,15 @@ from the registry's reviewed erasure boundary. -->
   import { createPortWindow, type PortWindow, type StripView } from "./App.ts";
   import type { RenderPair } from "./lib/instruments/registry.ts";
   import type { BufferState } from "./lib/contracts/buffer.ts";
+  import type { PickerState } from "./lib/input/picker.ts";
 
   let port: PortWindow | null = null;
   let scroller: HTMLElement | null = $state(null);
   let frame: BufferState<RenderPair> | null = $state(null);
   let strip: StripView | null = $state(null);
+  let picker = $state<PickerState>({ open: false });
+  let pickerInput: HTMLInputElement | null = $state(null);
+  let pickerValue = $state("");
 
   onMount(() => {
     const windowPort = createPortWindow();
@@ -24,10 +28,15 @@ from the registry's reviewed erasure boundary. -->
     const offStrip = windowPort.subscribeStrip((view) => {
       strip = view;
     });
+    const offPicker = windowPort.subscribePicker((state) => {
+      picker = state;
+      if (state.open) pickerValue = "";
+    });
     void windowPort.boot();
     return () => {
       offFrame();
       offStrip();
+      offPicker();
       windowPort.destroy();
       port = null;
     };
@@ -35,6 +44,14 @@ from the registry's reviewed erasure boundary. -->
 
   $effect(() => {
     if (port !== null) port.attachViewport(scroller);
+  });
+
+  // The picker opens focused: typing edits the field natively (the
+  // window key seam skips field targets); Enter submits through the
+  // one open funnel, Escape closes. Text entry never falls through to
+  // the board keymap.
+  $effect(() => {
+    if (picker.open) pickerInput?.focus();
   });
 </script>
 
@@ -52,6 +69,23 @@ from the registry's reviewed erasure boundary. -->
       <span class="port-strip-chip">{strip.jumpChip}</span>
     {/if}
   </header>
+  {#if picker.open}
+    <div class="port-picker">
+      <input
+        bind:this={pickerInput}
+        bind:value={pickerValue}
+        data-port-control="picker-input"
+        placeholder="open: host:8811/repo/t-N, /absolute/path, machine:/absolute/path"
+        onkeydown={(event) => {
+          if (event.key === "Enter") {
+            port?.submitPicker(pickerValue);
+          } else if (event.key === "Escape") {
+            port?.closePicker();
+          }
+        }}
+      />
+    </div>
+  {/if}
   <main class="port-content" bind:this={scroller}>
     {#if frame !== null && frame.kind === "alive"}
       {#if frame.content.kind === "available"}

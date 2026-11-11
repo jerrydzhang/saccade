@@ -54,6 +54,20 @@ body {
   overflow-y: auto;
 }
 
+/* Placement only (t-36@r64: no design language until every
+   instrument composes): a row between strip and content. */
+.port-picker {
+  display: flex;
+  padding: var(--port-space-block);
+  border-top: 1px solid var(--port-color-muted);
+}
+
+.port-picker input {
+  flex: 1;
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+}
+
 .port-placeholder,
 .port-state-line {
   padding: var(--port-space-block);

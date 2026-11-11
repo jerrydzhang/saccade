@@ -39,6 +39,9 @@ import {
   type PortObservation,
 } from "./lib/observation.ts";
 import { tauriInvoke } from "./lib/sources.ts";
+import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
+import { windowContext } from "./lib/input/contexts.ts";
+import { createPickerController, type PickerState } from "./lib/input/picker.ts";
 import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
@@ -57,6 +60,10 @@ export interface PortWindow {
   destroy(): void;
   subscribeFrame(observer: (state: BufferState<RenderPair>) => void): () => void;
   subscribeStrip(observer: (strip: StripView) => void): () => void;
+  openPicker(): void;
+  closePicker(): void;
+  submitPicker(spec: string): void;
+  subscribePicker(observer: (state: PickerState) => void): () => void;
   readout(): PortObservation;
 }
 
@@ -77,6 +84,22 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // The window's one buffer starts active; focus switching is a later
   // slice's surface.
   instrument.activate();
+
+  // The open-location picker: the window's open surface, submitting
+  // through the ONE open funnel below (openSpec). Text-entry
+  // semantics: the key seam skips field targets, so typing inside the
+  // picker stays native (scenario 10).
+  const picker = createPickerController((spec) => openSpec(spec));
+
+  // The window's own context: space-space opens the picker, Escape
+  // closes overlays. Unmatched strokes flow to the active buffer's
+  // reading context through the one chain (never an inactive buffer).
+  const windowHost: HostMatcher = createHostMatcher(
+    windowContext({
+      openPicker: () => picker.open(),
+      closeOverlays: () => picker.close(),
+    }),
+  );
 
   // -- observation state ------------------------------------------------
   let doors: { jumpChip: string | null; delivered: DoorDelivery[] } = {
@@ -182,7 +205,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
     openSpec(`${detail.machine}:${detail.path}`);
   });
 
-  // -- the key routing seam (no bindings installed in slice 1) ----------
+  // -- the key routing seam: window context, then the active buffer ---
   window.addEventListener("keydown", (event) => {
     if (event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
@@ -192,13 +215,18 @@ export function createPortWindow(windowId = "main"): PortWindow {
     ) {
       return;
     }
-    instrument.handleKey({
+    // Modifier chords stay native until the IME/native-editing
+    // boundary set is pinned (draft-open, grouped decision): the port
+    // never eats an OS or browser chord while the boundary is unset.
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
+    const disposition = dispatchStroke(windowHost, instrument, {
       key: event.key,
       ctrl: event.ctrlKey,
       shift: event.shiftKey,
       alt: event.altKey,
       meta: event.metaKey,
     });
+    if (disposition === "consume") event.preventDefault();
   });
 
   // -- the lanes' test-open channel: the one startup open ----------------
@@ -301,7 +329,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
       };
     },
     readout,
+    openPicker: () => picker.open(),
+    closePicker: () => picker.close(),
+    submitPicker: (spec) => picker.submit(spec),
+    subscribePicker(observer) {
+      return picker.subscribe(observer);
+    },
     destroy() {
+      windowHost.dispose();
       unsubscribeFrame();
       instrument.destroy();
     },
