@@ -162,3 +162,23 @@ body {
 .citation-link {
   color: var(--port-color-accent);
 }
+
+/* Placement only: the find bar. */
+.port-find {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: var(--port-space-block);
+  border-top: 1px solid var(--port-color-muted);
+}
+
+.port-find input {
+  flex: 1;
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+}
+
+.port-find-status {
+  color: var(--port-color-muted);
+  font-size: 0.875rem;
+}

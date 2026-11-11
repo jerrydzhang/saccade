@@ -63,7 +63,7 @@ test("collisions between different actions are errors at load", () => {
 });
 
 test("the real port contexts validate at construction", () => {
-  windowContext({ openPicker: () => {}, closeOverlays: () => {} });
+  windowContext({ openPicker: () => {}, closeOverlays: () => {}, openFind: () => {} });
   boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, enterSelect: () => {} });
 });
 
@@ -124,6 +124,7 @@ test("the window chain: space-space opens the picker at the window level; other 
     windowContext({
       openPicker: () => windowEvents.push("picker"),
       closeOverlays: () => windowEvents.push("close"),
+      openFind: () => windowEvents.push("find"),
     }),
     { scheduler },
   );

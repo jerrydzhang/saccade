@@ -40,13 +40,23 @@ import {
 } from "./lib/observation.ts";
 import { tauriInvoke } from "./lib/sources.ts";
 import { selectToPart } from "./lib/board/targets.ts";
+import type { Board } from "./lib/board/model.ts";
 import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
+import { createFindSession, type FindOccurrence } from "./lib/find/session.ts";
+import { findUnitsOf } from "./lib/find/units.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
 import { SourceUnavailableError } from "./lib/board/errors.ts";
 import { knownIssue } from "./lib/contracts/buffer.ts";
 import type { BufferState } from "./lib/contracts/buffer.ts";
+
+export interface FindView {
+  readonly open: boolean;
+  readonly query: string;
+  readonly count: number;
+  readonly active: number;
+}
 
 export interface StripView {
   location: string | null;
@@ -67,6 +77,11 @@ export interface PortWindow {
   trailView(): TrailView;
   openPicker(): void;
   closePicker(): void;
+  findEnter(): void;
+  findType(text: string): readonly FindOccurrence[];
+  findMove(delta: number): { part: string | null; count: number; active: number };
+  findEscape(): void;
+  subscribeFind(observer: (view: FindView) => void): () => void;
   submitPicker(spec: string): void;
   subscribePicker(observer: (state: PickerState) => void): () => void;
   readout(): PortObservation;
@@ -96,13 +111,48 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // picker stays native (scenario 10).
   const picker = createPickerController((spec) => openSpec(spec));
 
-  // The window's own context: space-space opens the picker, Escape
-  // closes overlays. Unmatched strokes flow to the active buffer's
-  // reading context through the one chain (never an inactive buffer).
+  // -- Find: a facility of the shown revision (scenario 16) ----------
+  // Bare / enters (ratified entry; adapter A2 carries the prototype's
+  // space-/ difference); typing is native in the field; movement is
+  // never trail navigation; Escape ends; a reference activation ends
+  // it (navigateAway); a click alone never closes it.
+  const find = createFindSession(() =>
+    findUnitsOf(
+      lastFrame.kind === "alive" && lastFrame.content.kind === "available"
+        ? ((lastFrame.content.value.props["content"] as { board?: Board | null }).board ?? null)
+        : null,
+    ),
+  );
+  const findObservers = new Set<(view: FindView) => void>();
+  function findView(): FindView {
+    return {
+      open: find.isOpen(),
+      query: find.query(),
+      count: find.occurrences().length,
+      active: find.occurrences().length > 0 ? find.active() : -1,
+    };
+  }
+  function notifyFind(): void {
+    const view = findView();
+    for (const observer of [...findObservers]) observer(view);
+  }
+
+  // The window's own context: space-space opens the picker, / enters
+  // Find, Escape closes overlays. Unmatched strokes flow to the
+  // active buffer's reading context through the one chain (never an
+  // inactive buffer).
   const windowHost: HostMatcher = createHostMatcher(
     windowContext({
       openPicker: () => picker.open(),
-      closeOverlays: () => picker.close(),
+      closeOverlays: () => {
+        picker.close();
+        if (find.isOpen()) find.escape();
+        notifyFind();
+      },
+      openFind: () => {
+        find.enter();
+        notifyFind();
+      },
     }),
   );
 
@@ -229,6 +279,11 @@ export function createPortWindow(windowId = "main"): PortWindow {
       console.log("[port] shifted citation open deferred (suite slice)");
       return;
     }
+    if (find.isOpen()) {
+      // a reference activation ends Find (scenario 16); the open rides
+      find.navigateAway();
+      notifyFind();
+    }
     const part = typeof detail.select === "string" ? selectToPart(detail.select) : null;
     openSpec(`${detail.machine}:${detail.path}`, part === "" ? null : part);
   });
@@ -336,6 +391,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
         width: metrics.width,
         height: metrics.height,
       },
+      find: findView(),
     });
   }
 
@@ -370,6 +426,35 @@ export function createPortWindow(windowId = "main"): PortWindow {
     trailView: () => trail.view(),
     openPicker: () => picker.open(),
     closePicker: () => picker.close(),
+    findEnter: () => {
+      find.enter();
+      notifyFind();
+    },
+    findType: (text) => {
+      const out = find.type(text);
+      notifyFind();
+      return out;
+    },
+    findMove: (delta) => {
+      const occurrence = find.move(delta);
+      notifyFind();
+      return {
+        part: occurrence === null ? null : occurrence.unit.id,
+        count: find.occurrences().length,
+        active: find.occurrences().length > 0 ? find.active() : -1,
+      };
+    },
+    findEscape: () => {
+      find.escape();
+      notifyFind();
+    },
+    subscribeFind(observer) {
+      findObservers.add(observer);
+      observer(findView());
+      return () => {
+        findObservers.delete(observer);
+      };
+    },
     submitPicker: (spec) => picker.submit(spec),
     subscribePicker(observer) {
       return picker.subscribe(observer);

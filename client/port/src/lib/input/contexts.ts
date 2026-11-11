@@ -14,11 +14,12 @@ import { validateNoCollisions } from "./key-matcher.ts";
 
 // The window's own surfaces. The picker is the open-location input (a
 // window surface, not a board-content action): space-space opens it,
-// Escape closes overlays. Bindings beyond these ride the slices that
-// build their surfaces (find, jump).
+// / enters Find, Escape closes overlays. Bindings beyond these ride
+// the slices that build their surfaces (jump).
 export interface WindowActions {
   openPicker(): void;
   closeOverlays(): void;
+  openFind(): void;
 }
 
 export function windowContext(actions: WindowActions): InputContext {
@@ -30,6 +31,14 @@ export function windowContext(actions: WindowActions): InputContext {
         run: () => actions.openPicker(),
       },
       keys: [sequence(key(" "), key(" "))],
+    },
+    {
+      action: {
+        id: "window.enter-find",
+        label: "find in this revision",
+        run: () => actions.openFind(),
+      },
+      keys: [sequence(key("/"))],
     },
     {
       action: {

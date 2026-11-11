@@ -66,6 +66,8 @@ export type PortObservation = {
   }>;
   /** The attached viewport's live metrics. */
   viewport: Readonly<{ left: number; top: number; width: number; height: number }>;
+  /** The find facility of the shown revision (scenario 16). */
+  find: Readonly<{ open: boolean; query: string; count: number; active: number }>;
 };
 
 export type ContentPart = Readonly<{
@@ -157,6 +159,7 @@ export function buildReadout(
     doors: DoorsState;
     trail: PortObservation["trail"];
     viewport: PortObservation["viewport"];
+    find: PortObservation["find"];
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -181,6 +184,7 @@ export function buildReadout(
     doors: input.doors,
     trail: input.trail,
     viewport: input.viewport,
+    find: input.find,
   };
 }
 
