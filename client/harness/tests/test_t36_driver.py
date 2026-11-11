@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import unittest.mock
 import pathlib
 import shutil
 import sys
@@ -443,25 +444,37 @@ class T36LaneWiringTest(unittest.TestCase):
         t36_checks.run_checks = fake_run_checks  # type: ignore[assignment]
         import isolation
 
-        runtime = pathlib.Path(isolation.RUNTIME_ROOT + "-1000")
-        pre_existing = set(runtime.glob("t36-*"))
+        # the executor's run roots land in the test's tmp dir: a fake
+        # lane never writes the shared runtime namespace (fake roots
+        # there read as run evidence - the r73 confusion)
+        tmp_roots: list[str] = []
+
+        def fake_make_run_root(prefix: str) -> pathlib.Path:
+            root = pathlib.Path(tmp.name) / f"root-{prefix}-{len(tmp_roots)}"
+            (root / "logs").mkdir(parents=True)
+            (root / "shots").mkdir()
+            tmp_roots.append(str(root))
+            return root
+
         try:
             options = self._options(tmp.name)
             deps = FakeDeps(options)
             out_root = pathlib.Path(tmp.name) / "out"
             out_root.mkdir()
-            code = t36_driver.execute_t36_lane(options, [
-                t36_driver.build_plan(
-                    "baseline", options.baseline_bin, options.baseline_ref, options.board,
-                    options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-b", "now",
-                ),
-                t36_driver.build_plan(
-                    "candidate", options.candidate_bin, options.candidate_ref, options.board,
-                    options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-c", "now",
-                ),
-            ], out_root, deps)
+            with unittest.mock.patch.object(isolation, "make_run_root", fake_make_run_root):
+                code = t36_driver.execute_t36_lane(options, [
+                    t36_driver.build_plan(
+                        "baseline", options.baseline_bin, options.baseline_ref, options.board,
+                        options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-b", "now",
+                    ),
+                    t36_driver.build_plan(
+                        "candidate", options.candidate_bin, options.candidate_ref, options.board,
+                        options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-c", "now",
+                    ),
+                ], out_root, deps)
         finally:
             t36_checks.run_checks = real_run_checks  # type: ignore[assignment]
+        self.assertEqual(len(tmp_roots), 2)  # one run root per role, in the tmp dir
 
         self.assertEqual(code, 1)  # failures exist in the grounded shape
         self.assertEqual(ups, ["baseline", "candidate"])  # fresh session per role, in order
@@ -474,9 +487,9 @@ class T36LaneWiringTest(unittest.TestCase):
         # the merged role TAPs exist in the run roots this pass
         # created, with gate and check entries and the manifest riding
         # as comments
-        created = sorted(set(runtime.glob("t36-*")) - pre_existing, key=lambda p: p.stat().st_mtime)
+        created = sorted((pathlib.Path(r) for r in tmp_roots), key=lambda p: p.stat().st_mtime)
         self.assertEqual(len(created), 2)
-        baseline_root = next(r for r in created if r.name.startswith("t36-baseline-"))
+        baseline_root = next(r for r in created if r.name.startswith("root-t36-baseline-"))
         first = (baseline_root / "tap-baseline.tap").read_text(encoding="ascii")
         self.assertIn("# manifest:", first)
         self.assertIn("F01/session", first)
