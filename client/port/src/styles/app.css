@@ -83,6 +83,31 @@ body {
   line-height: 1.25;
 }
 
+/* Placement only: the act menu. */
+.port-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.25rem;
+  border: 1px solid var(--port-color-muted);
+  background: var(--port-color-bg, #fff);
+  max-width: 24rem;
+}
+
+.port-menu-label {
+  color: var(--port-color-muted);
+  font-size: 0.875rem;
+}
+
+.port-menu-act {
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.125rem 0.25rem;
+  cursor: pointer;
+}
+
 .port-placeholder,
 .port-state-line {
   padding: var(--port-space-block);

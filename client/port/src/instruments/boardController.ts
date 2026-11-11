@@ -23,6 +23,7 @@ import type {
 import type { InputContext } from "../lib/contracts/input.ts";
 import { boardReadingContext } from "../lib/input/contexts.ts";
 import { createSelectSession, type SelectSessionView } from "../lib/select/session.ts";
+import { createBoardMenu } from "../lib/menu/acts.ts";
 import { boardTargetsOf, type BoardTarget } from "../lib/board/targets.ts";
 export { boardTargetsOf } from "../lib/board/targets.ts";
 export type { BoardTarget, BoardTargetKind } from "../lib/board/targets.ts";
@@ -73,6 +74,10 @@ export type BoardData = Readonly<{
    * Labels exist only for visible presentations (the select
    * session); target existence never depends on geometry. */
   targets: readonly BoardTarget[];
+  /** Folded group part paths: the header stays rendered, the content
+   * does not. Model existence is untouched (scenario 12: folded-in
+   * children keep existing, lose presentation). */
+  folded: readonly string[];
 }>;
 
 /** The board controller's face to its own component: rendering needs
@@ -84,11 +89,29 @@ export interface BoardUI extends HydrationHost {
   subscribeSelect(observer: (view: SelectSessionView | null) => void): () => void;
   /** The last label-selected target (identity = part path), if any. */
   getSelection(): BoardTarget | null;
+  /** The menu's live view; null when closed. */
+  subscribeMenu(observer: (view: MenuView | null) => void): () => void;
+  /** The menu session (invocation paths for the component). */
+  menuSession(): import("../lib/menu/session.ts").MenuSession;
+  /** Fold or unfold a group part path (republishes the frame). */
+  toggleFold(part: string): void;
+  /** Whether a group part path is folded. */
+  isFolded(part: string): boolean;
+  /** Open the act menu for a target (selection or right-click). */
+  openMenuFor(target: Readonly<{ part: string; kind: string; label: string }>, at?: { x: number; y: number }): void;
   /** Publish rendering outcomes for the shown generation: content and
    * outcomes publish consistently, through the normal refresh
    * pipeline. */
   reportRenderOutcomes(generation: number, outcomes: readonly RenderOutcome[]): void;
 }
+
+/** The live menu view the component paints. */
+export type MenuView = Readonly<{
+  open: true;
+  label: string;
+  acts: readonly { key: string; label: string }[];
+  at: Readonly<{ x: number; y: number }> | null;
+}>;
 
 /** The live select-session view the component paints chips from. */
 /** Wrap a prepared domain frame as the buffer's published content:
@@ -106,6 +129,7 @@ const EMPTY_FRAME: BoardData = {
   errors: [],
   renderOutcomes: [],
   targets: [],
+  folded: [],
 };
 
 function failureIssue(code: string, message: string): KnownIssue {
@@ -127,6 +151,9 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   let askedSpec = "";
   let lastFrame: BoardData = EMPTY_FRAME;
   let released = false;
+  // Folded group part paths: view state, survives refreshes of this
+  // buffer (folds are never rewound by anything but their own act).
+  const foldedSet = new Set<string>();
   // The outcomes key of the currently published frame: re-rendering
   // the same outcomes must not republish a new frame (the frame
   // publication re-runs the component's render effect, which reports
@@ -150,6 +177,28 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         }
         return `missing: ${String(error)}`;
       }
+    },
+    subscribeMenu(observer) {
+      menuObservers.add(observer);
+      observer(menuView());
+      return () => {
+        menuObservers.delete(observer);
+      };
+    },
+    menuSession() {
+      return boardMenu.session;
+    },
+    toggleFold(part) {
+      if (foldedSet.has(part)) foldedSet.delete(part);
+      else foldedSet.add(part);
+      const frame: BoardData = { ...lastFrame, folded: [...foldedSet] };
+      void buffer.updates.refresh(() => readyFrame(frame));
+    },
+    isFolded(part) {
+      return foldedSet.has(part);
+    },
+    openMenuFor(target, at) {
+      boardMenu.openFor(target, at);
     },
     reportRenderOutcomes(reported, outcomes) {
       if (released || reported !== generation) return;
@@ -262,6 +311,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           errors: [issue],
           renderOutcomes: [],
           targets: [],
+          folded: [...foldedSet],
         },
       };
     }
@@ -282,6 +332,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
             errors: [{ code: "decoder-mismatch", message }, ...result.errors],
             renderOutcomes: [],
             targets: [],
+            folded: [...foldedSet],
           },
         };
       }
@@ -296,6 +347,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
           errors: result.errors,
           renderOutcomes: [],
           targets: [],
+          folded: [...foldedSet],
         },
       };
     }
@@ -308,6 +360,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       errors: [],
       renderOutcomes: [],
       targets: boardTargetsOf(result.board),
+      folded: [...foldedSet],
     };
     return { kind: "ready", value: lastFrame };
   }
@@ -377,8 +430,39 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     reading,
     onSelected(target) {
       selection = target;
+      // scenario 9: selection opens the act menu (a no-op for
+      // act-less kinds)
+      boardMenu.openFor({ part: target.part, kind: target.kind, label: target.text.split("\n")[0] ?? target.text });
     },
   });
+
+  // -- the menu (scenario 9): selection opens the target's acts ------
+  const menuObservers = new Set<(view: MenuView | null) => void>();
+  const boardMenu = createBoardMenu({
+    isFolded: (part) => foldedSet.has(part),
+    toggleFold: (part) => host.toggleFold(part),
+    capture: (context) => buffer.interactions.capture(context),
+    restore: (context) => buffer.setReadingContext(context),
+    reading: reading,
+  });
+  function menuView(): MenuView | null {
+    if (!boardMenu.session.isOpen()) return null;
+    const target = boardMenu.session.target();
+    if (target === null) return null;
+    const acts = boardMenu.session.acts();
+    return {
+      open: true,
+      label: target.label,
+      acts: acts.map((act) => ({ key: act.key, label: act.action.label })),
+      at: null,
+    };
+  }
+  function notifyMenu(): void {
+    const view = menuView();
+    for (const observer of [...menuObservers]) observer(view);
+  }
+  boardMenu.setOnNotify(() => notifyMenu());
+
 
   // The reading context declares gg top, G bottom, s select; contexts
   // validate at construction - a collision is an error at load.
@@ -391,6 +475,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       released = true;
       generation += 1;
       selectSession.exit();
+      boardMenu.session.outsidePointerDown();
     },
   };
 }

@@ -34,6 +34,9 @@ export type RenderHooks = {
   authoredMath?: Map<number, string>;
   /** Raw HTML and other render-time findings. */
   onDiagnostic: (diagnostic: Diagnostic) => void;
+  /** Folded group part paths: the header stays, the content does not
+   * render (PORT addition; model existence is untouched). */
+  folded?: ReadonlySet<string>;
 };
 
 /**
@@ -80,15 +83,17 @@ export function unitIdAt(
 
 export function renderBoard(board: Board, hooks: RenderHooks): HTMLElement {
   const root = el("div", { class: "board" });
-  // Block ids continue across nesting levels so they are unique
-  // document-wide.
-  const counter = { value: 0 };
-  const walk = (blocks: Block[], container: HTMLElement): void => {
-    for (const block of blocks) {
-      container.append(renderBlock(block, `b${counter.value++}`, hooks));
-    }
+  // PORT ADAPTATION (recorded): block ids are the CANONICAL content
+  // paths (/content/i, nested /content/i/content/j) - the model's
+  // target identity, so the DOM mirror (data-port-part) matches the
+  // observation contract and geometry lookups. The slice-1 b0/b0.1
+  // counter scheme is retired.
+  const walk = (blocks: Block[], container: HTMLElement, prefix: string): void => {
+    blocks.forEach((block, index) => {
+      container.append(renderBlock(block, `${prefix}/content/${index}`, hooks));
+    });
   };
-  walk(board.content, root);
+  walk(board.content, root, "");
   return root;
 }
 
@@ -144,9 +149,16 @@ function renderBlockBody(block: Block, blockId: string, hooks: RenderHooks): HTM
       if (block.title) {
         section.append(el("h2", { class: "group-title" }, block.title));
       }
+      // Folded groups keep their header and drop their rendered
+      // content: the children keep MODEL existence (targets) but have
+      // no presentation - no geometry, no labels, never selectable.
+      if (hooks.folded !== undefined && hooks.folded.has(blockId)) {
+        section.setAttribute("data-port-folded", "");
+        return section;
+      }
       let childCounter = 0;
       for (const child of block.content) {
-        section.append(renderBlock(child, `${blockId}.${childCounter++}`, hooks));
+        section.append(renderBlock(child, `${blockId}/content/${childCounter++}`, hooks));
       }
       return section;
     }
@@ -176,7 +188,7 @@ function renderBlockBody(block: Block, blockId: string, hooks: RenderHooks): HTM
       );
       let childCounter = 0;
       for (const child of block.content) {
-        div.append(renderBlock(child, `${blockId}.${childCounter++}`, hooks));
+        div.append(renderBlock(child, `${blockId}/content/${childCounter++}`, hooks));
       }
       return div;
     }

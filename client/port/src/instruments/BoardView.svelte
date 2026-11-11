@@ -8,13 +8,14 @@ at the generation boundary. -->
 <script lang="ts">
   import { hydrate } from "../lib/board/hydrate.ts";
   import { renderBoard, type RenderHooks } from "../lib/render.ts";
-  import type { BoardData, BoardUI, RenderOutcome, SelectSessionView } from "./board.ts";
+  import type { BoardData, BoardUI, MenuView, RenderOutcome, SelectSessionView } from "./board.ts";
 
   let { content, controller }: { content: BoardData; controller: BoardUI } = $props();
 
   let host: HTMLElement | null = $state(null);
   let renderNotes: string[] = $state([]);
   let select: SelectSessionView | null = $state(null);
+  let menu: MenuView | null = $state(null);
 
   // The select session's live view: chips painted over the labeled
   // parts' rendered boxes. Presentation only - the narrowing logic
@@ -23,8 +24,41 @@ at the generation boundary. -->
     const off = controller.subscribeSelect((view) => {
       select = view;
     });
-    return off;
+    const offMenu = controller.subscribeMenu((view) => {
+      menu = view;
+    });
+    return () => {
+      off();
+      offMenu();
+    };
   });
+
+  // Right-click opens the same act list at the pointer (scenario 9's
+  // third invocation path); plain clicks on act-carrying parts run
+  // the first act directly (the fourth path).
+  function onContextMenu(event: MouseEvent): void {
+    const part = partFromEvent(event);
+    if (part === null) return;
+    const target = content.targets.find((entry) => entry.part === part);
+    if (target === undefined) return;
+    event.preventDefault();
+    const box = host?.getBoundingClientRect();
+    const at =
+      box === undefined
+        ? undefined
+        : { x: event.clientX - box.left, y: event.clientY - box.top };
+    controller.openMenuFor(
+      { part: target.part, kind: target.kind, label: target.text.split("\n")[0] ?? target.text },
+      at,
+    );
+  }
+
+  function partFromEvent(event: MouseEvent): string | null {
+    const element = (event.target as HTMLElement | null)?.closest?.("[data-port-part]");
+    if (element === null || element === undefined) return null;
+    const part = element.getAttribute("data-port-part");
+    return part === null ? null : part;
+  }
 
   function chipBox(part: string): { left: number; top: number } | null {
     const element = host;
@@ -48,6 +82,7 @@ at the generation boundary. -->
     const generation = controller.currentGeneration();
     const hooks: RenderHooks = {
       unitIndex: new Map(),
+      folded: new Set(content.folded),
       onDiagnostic: (diagnostic) => {
         renderNotes.push(diagnostic.message);
       },
@@ -64,7 +99,7 @@ at the generation boundary. -->
   });
 </script>
 
-<div class="port-board-view" bind:this={host}>
+<div class="port-board-view" bind:this={host} role="document" oncontextmenu={onContextMenu}>
   </div>
   {#if select !== null}
     <div class="port-select-labels" aria-hidden="true">
@@ -74,6 +109,20 @@ at the generation boundary. -->
           <span class="port-select-label" data-port-label={entry.label} data-port-part={entry.part}
             style="left: {box.left}px; top: {box.top}px">{entry.label}</span>
         {/if}
+      {/each}
+    </div>
+  {/if}
+  {#if menu !== null}
+    <div class="port-menu" data-port-menu="">
+      <div class="port-menu-label">{menu.label}</div>
+      {#each menu.acts as act, index (act.key)}
+        <button
+          class="port-menu-act"
+          data-port-menu-act={act.key}
+          onclick={(event) => {
+            event.stopPropagation();
+            controller.menuSession().choose(index);
+          }}>{act.key} {act.label}</button>
       {/each}
     </div>
   {/if}
