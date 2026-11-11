@@ -212,9 +212,15 @@ fn feed_loop(shared: Arc<Shared>, socket: PathBuf, backoff: Duration) {
         let why = loop {
             match connection.next_event(first) {
                 // a clean EOF, before any frame or mid-stream: the
-                // connection is done; reconnect on the backoff
-                Ok(CoreEvent::Other) => {
+                // connection is done; reconnect on the backoff. An event
+                // this build does not read is skipped, never an end:
+                // treating one as an end dropped the feed on every
+                // unknown event, emptying the live states each time
+                Ok(CoreEvent::End) => {
                     break format!("the core at {} closed the event stream", socket.display())
+                }
+                Ok(CoreEvent::Other) => {
+                    first = false;
                 }
                 Ok(event) => {
                     first = false;
@@ -285,7 +291,7 @@ fn apply(shared: &Shared, event: CoreEvent) {
                 row.at = at;
             });
         }
-        CoreEvent::Other => {}
+        CoreEvent::Other | CoreEvent::End => {}
     }
 }
 
@@ -419,6 +425,41 @@ mod tests {
         // quiet is a normal answer: no landing, no move
         let stale = feed.wait(snapshot.generation, Duration::from_millis(120));
         assert_eq!(stale.generation, snapshot.generation);
+    }
+
+    #[test]
+    fn an_unknown_event_keeps_the_connection_and_the_words() {
+        // the human's core sends event types this build does not read;
+        // each one used to end the feed's connection and empty the table
+        let lines = vec![
+            r#"{"jsonrpc":"2.0","id":1,"result":{"channel":null,"seq":1,"terminals":[{"address":"t1","state":"live"}]}}"#.into(),
+            r#"{"jsonrpc":"2.0","method":"event","params":{"seq":2,"terminal":"t1","type":"created","data":{}}}"#.into(),
+            status_line(3, "t1", "working", "after an unknown event"),
+        ];
+        let (socket, _dir) = fake_core(&lines);
+        let feed = WordsFeed::spawn(Some(socket), Duration::from_millis(10));
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut snapshot = feed.wait(0, Duration::from_millis(400));
+        while snapshot
+            .words
+            .get("t1")
+            .and_then(|row| row.state.clone())
+            .is_none()
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the word after the unknown event never landed"
+            );
+            snapshot = feed.wait(snapshot.generation, Duration::from_millis(500));
+        }
+        assert!(
+            snapshot.connected,
+            "the unknown event did not drop the connection"
+        );
+        assert_eq!(
+            snapshot.words["t1"].msg.as_deref(),
+            Some("after an unknown event")
+        );
     }
 
     #[test]
