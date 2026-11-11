@@ -259,6 +259,23 @@ class WebDriver:
     def perform_actions(self, actions: list[dict]) -> None:
         self.request("POST", f"/session/{self.session}/actions", {"actions": actions})
 
+    def window_handles(self) -> list[str]:
+        """All window/webview handles of the session (R5: the session
+        lane's window surface rides the WebDriver handle list)."""
+        value = self.request("GET", f"/session/{self.session}/window/handles")
+        if not isinstance(value, list) or not all(isinstance(h, str) for h in value):
+            raise WebDriverError("unknown error", f"window handles answered {value!r}")
+        return value
+
+    def current_window(self) -> str:
+        value = self.request("GET", f"/session/{self.session}/window")
+        if not isinstance(value, str):
+            raise WebDriverError("unknown error", f"current window answered {value!r}")
+        return value
+
+    def switch_to_window(self, handle: str) -> None:
+        self.request("POST", f"/session/{self.session}/window", {"handle": handle})
+
     def screenshot(self) -> bytes:
         value = self.request("GET", f"/session/{self.session}/screenshot", timeout=30.0)
         if not isinstance(value, str):

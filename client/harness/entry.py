@@ -55,7 +55,7 @@ VIEWER = HERE.parent
 
 FAST_STEPS = [
     ("harness", [sys.executable, "-B", "harness/harness_checks.py"]),
-    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/tracker_mock.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py", "harness/deck_probe.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py"]),
+    ("payload-lint", [sys.executable, "-m", "pyflakes", "harness/entry.py", "harness/isolation.py", "harness/containment_canary.py", "harness/browser_lane.py", "harness/tracker_mock.py", "harness/native_lane.py", "harness/webdriver_client.py", "harness/webdriver_session.py", "harness/remote_lane.py", "harness/via_b.py", "harness/harness_checks.py", "harness/deck_probe.py", "harness/t36_results.py", "harness/t36_adapters.py", "harness/t36_driver.py", "harness/t36_observation.py", "harness/t36_prototype.py", "harness/t36_windows.py"]),
     ("typecheck", ["npm", "run", "check"]),
     ("contracts", ["npm", "run", "test"]),
     # the read-only herdr-core client is a pure crate: its contract
@@ -2030,7 +2030,7 @@ def session_checks(board_arg: str, tracker_db_candidate: str, query: str, lifeti
 
 def parse_session_verb(rest: list[str]) -> tuple[str, dict, float]:
     if not rest:
-        print("[session] a verb is required: up/down/status/inspect/observe/input/shot/checks/tracker", file=sys.stderr)
+        print("[session] a verb is required: up/down/status/inspect/observe/input/shot/checks/tracker/windows/open-window/focus-window/observe-window/evaluate-window", file=sys.stderr)
         raise SystemExit(2)
     verb, args = rest[0], rest[1:]
     lifetime = SESSION_DEFAULT_LIFETIME_SECONDS
@@ -2049,7 +2049,7 @@ def parse_session_verb(rest: list[str]) -> tuple[str, dict, float]:
             raise SystemExit(2)
         query = args[index + 1]
         args = args[:index] + args[index + 2 :]
-    if args and verb not in ("input", "observe", "shot"):
+    if args and verb not in ("input", "observe", "shot", "open-window", "focus-window", "observe-window", "evaluate-window"):
         print(f"[session] verb {verb!r} takes no positional arguments", file=sys.stderr)
         raise SystemExit(2)
     return verb, {"args": args, "query": query}, lifetime
@@ -2084,6 +2084,32 @@ def session_main(rest: list[str], board_arg: str) -> int:
         if "props" in fields:
             request["props"] = [p for p in fields["props"].split(",") if p]
         return session_command(request)
+    if verb == "windows":
+        return session_command({"cmd": "windows"})
+    if verb == "open-window":
+        fields, _bare = parse_verb_fields(options["args"], {"state"})
+        return session_command({"cmd": "open-window", "state_id": fields.get("state")})
+    if verb == "focus-window":
+        fields, _bare = parse_verb_fields(options["args"], {"label"})
+        if "label" not in fields:
+            print("[session] focus-window needs label=<window label>", file=sys.stderr)
+            return 2
+        return session_command({"cmd": "focus-window", "label": fields["label"]})
+    if verb == "observe-window":
+        fields, _bare = parse_verb_fields(options["args"], {"window", "target", "props"})
+        if "window" not in fields or "target" not in fields:
+            print("[session] observe-window needs window=<label> and target=<id>", file=sys.stderr)
+            return 2
+        request_window: dict = {"cmd": "observe-window", "window": fields["window"], "target": fields["target"]}
+        if "props" in fields:
+            request_window["props"] = [p for p in fields["props"].split(",") if p]
+        return session_command(request_window)
+    if verb == "evaluate-window":
+        fields, bare = parse_verb_fields(options["args"], {"window"})
+        if "window" not in fields or not bare:
+            print("[session] evaluate-window needs window=<label> and a quoted script", file=sys.stderr)
+            return 2
+        return session_command({"cmd": "evaluate-window", "window": fields["window"], "script": " ".join(bare)})
     print(f"[session] unknown verb: {verb!r}", file=sys.stderr)
     return 2
 

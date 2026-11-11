@@ -173,6 +173,30 @@ OBSERVE_SCRIPT = (
 
 INSPECT_SCRIPT = "return (window.__saccadeApp && window.__saccadeApp.inspection()) || null;"
 
+# R5 window surface: each suite webview knows its own tauri window
+# label from the runtime's own metadata (read-only), and the shell's
+# suite_windows command is the existing enumeration door. No product
+# file is touched; the invoke calls ride the evaluate door.
+WINDOW_LABEL_SCRIPT = (
+    "return (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.metadata"
+    " && window.__TAURI_INTERNALS__.metadata.currentWindow)"
+    " ? (window.__TAURI_INTERNALS__.metadata.currentWindow.label || null) : null;"
+)
+SUITE_WINDOWS_SCRIPT = (
+    "return (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)"
+    " ? window.__TAURI_INTERNALS__.invoke('suite_windows') : null;"
+)
+OPEN_SUITE_WINDOW_SCRIPT = (
+    "return (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)"
+    " ? window.__TAURI_INTERNALS__.invoke('open_suite_window', { stateId: arguments[0] })"
+    " : null;"
+)
+FOCUS_SUITE_WINDOW_SCRIPT = (
+    "return (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke)"
+    " ? window.__TAURI_INTERNALS__.invoke('focus_suite_window', { label: arguments[0] })"
+    " : null;"
+)
+
 
 def perform_input(client: WebDriver, request: dict) -> dict:
     """Real input only. click/type target an element through its stable
@@ -347,6 +371,39 @@ class SessionState:
         }
 
 
+def enumerate_windows(client: WebDriver) -> list[dict]:
+    """Every webview handle with the tauri window label it carries, read
+    from the page's own runtime metadata. The original handle is always
+    restored; a handle whose page cannot answer labels a null."""
+    original = client.current_window()
+    windows: list[dict] = []
+    try:
+        for handle in client.window_handles():
+            client.switch_to_window(handle)
+            try:
+                label = client.execute(WINDOW_LABEL_SCRIPT)
+            except WebDriverError:
+                label = None
+            windows.append({"handle": handle, "label": label if isinstance(label, str) else None})
+    finally:
+        client.switch_to_window(original)
+    return windows
+
+
+def window_label_of(inventory: list[dict], label: str) -> str | None:
+    for entry in inventory:
+        if entry.get("label") == label:
+            return str(entry.get("handle"))
+    return None
+
+
+def invoke_suite_window(client: WebDriver, script: str, args: list) -> object:
+    """One read/act door through the shell's existing tauri commands.
+    The answer is whatever the invoke resolves to; a refused command
+    surfaces as the evaluate error, never a fabricated ok."""
+    return client.execute(script, args)
+
+
 def teardown(state: SessionState) -> int:
     """Owned-handle teardown in dependency order: session delete (the
     remote end ends the app), then the driver chain through our handles,
@@ -439,6 +496,71 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
         assert state.client is not None
         chosen = state.client.execute("return String(window.getSelection())")
         return {"ok": True, "selection": chosen}, False
+    if command == "windows":
+        assert state.client is not None
+        inventory = enumerate_windows(state.client)
+        suite = invoke_suite_window(state.client, SUITE_WINDOWS_SCRIPT, [])
+        return {"ok": True, "windows": inventory, "suite": suite}, False
+    if command == "open-window":
+        assert state.client is not None
+        state_id = request.get("state_id")
+        if state_id is not None and not isinstance(state_id, str):
+            raise WebDriverError("invalid argument", "open-window needs an optional string state_id")
+        label = invoke_suite_window(state.client, OPEN_SUITE_WINDOW_SCRIPT, [state_id])
+        if not isinstance(label, str) or not label:
+            raise WebDriverError("unknown error", f"open_suite_window answered {label!r}")
+        return {"ok": True, "label": label, "windows": enumerate_windows(state.client)}, False
+    if command == "focus-window":
+        assert state.client is not None
+        label = request.get("label")
+        if not isinstance(label, str) or not label:
+            raise WebDriverError("invalid argument", "focus-window needs a string label")
+        invoke_suite_window(state.client, FOCUS_SUITE_WINDOW_SCRIPT, [label])
+        return {"ok": True, "focused": label}, False
+    if command == "observe-window":
+        assert state.client is not None
+        label = request.get("window")
+        target = request.get("target")
+        if not isinstance(label, str) or not label:
+            raise WebDriverError("invalid argument", "observe-window needs a string window label")
+        if not isinstance(target, str):
+            raise WebDriverError("invalid argument", "observe-window needs a target id")
+        props = request.get("props")
+        if props is not None and not (isinstance(props, list) and all(isinstance(p, str) for p in props)):
+            raise WebDriverError("invalid argument", "props must be a list of CSS property names")
+        inventory = enumerate_windows(state.client)
+        handle = window_label_of(inventory, label)
+        if handle is None:
+            raise WebDriverError("no such window", f"no webview carries label {label!r}: {inventory}")
+        original = state.client.current_window()
+        state.client.switch_to_window(handle)
+        try:
+            observed = state.client.execute(OBSERVE_SCRIPT, [target_selector(target), props or []])
+        finally:
+            state.client.switch_to_window(original)
+        return {"ok": True, "window": label, "target": target, "observed": observed}, False
+    if command == "evaluate-window":
+        assert state.client is not None
+        label = request.get("window")
+        script = request.get("script")
+        if not isinstance(label, str) or not label:
+            raise WebDriverError("invalid argument", "evaluate-window needs a string window label")
+        if not isinstance(script, str) or not script.strip():
+            raise WebDriverError("invalid argument", "evaluate-window needs a script")
+        args = request.get("args")
+        if args is not None and not (isinstance(args, list) and all(isinstance(a, (str, int, float)) for a in args)):
+            raise WebDriverError("invalid argument", "evaluate-window args must be scalars")
+        inventory = enumerate_windows(state.client)
+        handle = window_label_of(inventory, label)
+        if handle is None:
+            raise WebDriverError("no such window", f"no webview carries label {label!r}: {inventory}")
+        original = state.client.current_window()
+        state.client.switch_to_window(handle)
+        try:
+            value = state.client.execute(script, args or [])
+        finally:
+            state.client.switch_to_window(original)
+        return {"ok": True, "window": label, "value": value}, False
     if command == "shot":
         assert state.client is not None
         name = request.get("name")
