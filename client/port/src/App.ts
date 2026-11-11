@@ -39,6 +39,7 @@ import {
   type PortObservation,
 } from "./lib/observation.ts";
 import { tauriInvoke } from "./lib/sources.ts";
+import { selectToPart } from "./lib/board/targets.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
@@ -171,7 +172,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
   };
 
   // -- opens: every surface funnels through one path ---------------------
-  function openSpec(spec: string): void {
+  function openSpec(spec: string, part?: string | null): void {
     const address = parseOpenSpec(spec);
     if (address === null) {
       note = `not a location: ${JSON.stringify(spec)}`;
@@ -181,28 +182,39 @@ export function createPortWindow(windowId = "main"): PortWindow {
     }
     note = null;
     // One operation schedules the content request; the refresh
-    // pipeline publishes. No polling loop here.
+    // pipeline publishes. A citation naming a part anchors the open
+    // there (fold reveal rides the placement, scenario 8).
     const place = {
       bufferId: instrument.id,
       address,
-      position: { kind: "default" as const },
+      position:
+        typeof part === "string" && part.length > 0
+          ? {
+              kind: "anchor" as const,
+              anchor: { kind: "board-part" as const, path: part },
+              viewportOffset: { left: 0, top: 0 },
+            }
+          : { kind: "default" as const },
     };
     instrument.places.restore(place);
     notifyStrip();
   }
 
   // citation activation: the hydration-created links hand off to the
-  // window through this event (shifted opens elsewhere defer to the
-  // suite slice - reported, never silently flattened)
+  // window through this event; a citation naming a select path opens
+  // anchored there (the grammar path mapped to the canonical part);
+  // shifted opens elsewhere defer to the suite slice - reported,
+  // never silently flattened
   window.addEventListener("suite-open-citation", (event) => {
-    const detail = (event as CustomEvent<{ machine: string; path: string; shifted: boolean }>)
+    const detail = (event as CustomEvent<{ machine: string; path: string; select?: string | null; shifted: boolean }>)
       .detail;
     if (!detail || typeof detail.path !== "string") return;
     if (detail.shifted) {
       console.log("[port] shifted citation open deferred (suite slice)");
       return;
     }
-    openSpec(`${detail.machine}:${detail.path}`);
+    const part = typeof detail.select === "string" ? selectToPart(detail.select) : null;
+    openSpec(`${detail.machine}:${detail.path}`, part === "" ? null : part);
   });
 
   // -- the key routing seam: window context, then the active buffer ---

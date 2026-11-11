@@ -19,6 +19,24 @@ export type BoardTarget = Readonly<{
 
 /** The model-derived targets of a decoded board: every content part,
  * nested included (the walk the observation readout already uses). */
+/** A grammar select path (which names block kinds between content
+ * segments, e.g. /content/0/group/content/1) to the canonical part
+ * path (/content/0/content/1). Non-content segments are dropped. */
+export function selectToPart(select: string): string {
+  // Grammar select paths alternate the literal segment "content"
+  // with indices and kind names between: /content/0/group/content/1.
+  // The canonical part keeps the content/index pairs only.
+  const segments = select.split("/");
+  let out = "";
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (segments[index] === "content" && /^\d+$/.test(segments[index + 1] ?? "")) {
+      out += `/content/${segments[index + 1]}`;
+      index += 1;
+    }
+  }
+  return out;
+}
+
 /** The canonical part paths strictly enclosing a part path (its
  * ancestor containers, outermost first). `/content/0/content/1` ->
  * [`/content/0`]. */

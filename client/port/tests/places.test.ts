@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { partAncestors } from "../src/lib/board/targets.ts";
+import { partAncestors, selectToPart } from "../src/lib/board/targets.ts";
 import { SliceBufferHost as BufferController } from "../src/components/Buffer.ts";
 import type { BufferBuild, BuiltBuffer } from "../src/components/Buffer.ts";
 import type { BoardAnchor } from "../src/lib/contracts/places.ts";
@@ -14,6 +14,13 @@ import type { InstrumentAttachment } from "../src/components/Buffer.ts";
 import type { InputContext } from "../src/lib/contracts/input.ts";
 import { commandContext } from "../src/lib/contracts/input.ts";
 import type { Bounds, Viewport } from "../src/lib/contracts/buffer.ts";
+
+test("grammar select paths map to canonical part paths", () => {
+  assert.equal(selectToPart("/content/0/group/content/1"), "/content/0/content/1");
+  assert.equal(selectToPart("/content/3"), "/content/3");
+  assert.equal(selectToPart("group/content/2"), "/content/2");
+  assert.deepEqual(partAncestors(selectToPart("/content/0/group/content/1")), ["/content/0"]);
+});
 
 test("part ancestors walk outermost-first", () => {
   assert.deepEqual(partAncestors("/content/0"), []);

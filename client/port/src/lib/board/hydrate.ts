@@ -94,6 +94,7 @@ async function hydrateCitations(
     const task = span.dataset.citeTask ?? "";
     const revision = span.dataset.citeRevision ?? "";
     const path = `${task}@r${revision}`;
+    const select = span.dataset.citeSelect ?? null;
     const link = el(
       "a",
       {
@@ -111,7 +112,7 @@ async function hydrateCitations(
       // elsewhere through the link
       window.dispatchEvent(
         new CustomEvent("suite-open-citation", {
-          detail: { machine: location.machine, path, shifted: event.shiftKey },
+          detail: { machine: location.machine, path, select, shifted: event.shiftKey },
         }),
       );
     });
@@ -121,7 +122,7 @@ async function hydrateCitations(
       // a middle click opens elsewhere, exactly as a shifted click
       window.dispatchEvent(
         new CustomEvent("suite-open-citation", {
-          detail: { machine: location.machine, path, shifted: true },
+          detail: { machine: location.machine, path, select, shifted: true },
         }),
       );
     });
