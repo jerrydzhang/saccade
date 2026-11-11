@@ -1,0 +1,110 @@
+/* The port window's structural styles (slice 1, placement only):
+ * the shell frame, the strip row, the scroll surface and the minimal
+ * block layout the board renderer emits. Values come from tokens.css;
+ * nothing here makes a design-language decision. */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+#app {
+  height: 100%;
+}
+
+.port-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-family: var(--port-font-sans);
+  color: var(--port-color-foreground);
+  background: var(--port-color-background);
+}
+
+.port-strip {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: var(--port-space-strip);
+  border-bottom: 1px solid var(--port-color-line);
+  font-size: 0.875rem;
+}
+
+.port-strip-name {
+  font-family: var(--port-font-mono);
+  color: var(--port-color-muted);
+}
+
+.port-strip-location {
+  font-family: var(--port-font-mono);
+}
+
+.port-strip-status {
+  color: var(--port-color-muted);
+}
+
+.port-strip-note,
+.port-strip-chip {
+  color: var(--port-color-accent);
+}
+
+.port-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.port-placeholder,
+.port-state-line {
+  padding: var(--port-space-block);
+  color: var(--port-color-muted);
+}
+
+.port-board-view {
+  max-width: var(--port-measure);
+  margin: 0 auto;
+  padding: 1rem 1.25rem 4rem 1.25rem;
+}
+
+/* the board renderer's minimal block layout (placement only) */
+.block {
+  padding: var(--port-space-block);
+}
+
+.group-title {
+  margin: 0.5rem 0;
+}
+
+.annotation-label,
+.unknown-label,
+.provenance,
+.diagram-caption,
+.figure-placeholder {
+  color: var(--port-color-muted);
+  font-size: 0.8125rem;
+}
+
+.block-figure .figure-frame img {
+  max-width: 100%;
+}
+
+.diagram-frame svg {
+  max-width: 100%;
+}
+
+.math-error,
+.mermaid-error,
+.render-error {
+  color: #8a1f1f;
+}
+
+.md-code,
+.raw-html {
+  font-family: var(--port-font-mono);
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+}
+
+.citation-link {
+  color: var(--port-color-accent);
+}
