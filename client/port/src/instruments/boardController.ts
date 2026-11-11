@@ -42,11 +42,13 @@ import { SourceUnavailableError } from "../lib/board/errors.ts";
 import type { Board, FigureBlock } from "../lib/board/model.ts";
 import { decodeBoard } from "../lib/board/decode.ts";
 import { crateVerdict } from "../lib/board/validate.ts";
+import { createFollow } from "../lib/board/follow.ts";
 import type { HydrationHost } from "../lib/board/hydrate.ts";
 import { formatLocation, instrumentPath } from "../lib/location.ts";
 import { hostedTrackerLocation, parseLocation } from "../lib/location.ts";
 import { registerTracker } from "../lib/tracker.ts";
 import { sourceFor, type Location } from "../lib/sources.ts";
+import { TrackerSource } from "../lib/tracker.ts";
 
 export type RenderOutcome = {
   kind: "math" | "mermaid" | "figure" | "image" | "html" | "node";
@@ -155,6 +157,38 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   // Folded group part paths: view state, survives refreshes of this
   // buffer (folds are never rewound by anything but their own act).
   const foldedSet = new Set<string>();
+  // The follow intent (scenario 15): a normally opened board follows
+  // current through a bounded poll; a pinned open never follows.
+  const follow = createFollow({
+    async currentRevision() {
+      if (resolved === null) return null;
+      const source = sourceFor(resolved.machine);
+      if (!(source instanceof TrackerSource)) return null;
+      const task = /t-(\d+)$/.exec(resolved.path.split("/").pop() ?? "");
+      if (task === null) return null;
+      try {
+        const page = await source.currentBoardPage(Number(task[1]));
+        return page.location ?? null;
+      } catch {
+        return null; // a failing poll retries silently; refresh
+        // failures retain content and report through the pipeline
+      }
+    },
+    shownRevision() {
+      return lastFrame.resolved !== null ? lastFrame.resolved.path : null;
+    },
+    refresh() {
+      if (resolved !== null) void places.request({ machine: resolved.machine, path: barePath(resolved.path) });
+    },
+    // the DOM timer id and Node's Timeout meet across lib mixes; the
+    // id is opaque to the follow module
+    schedule: (ms, run) => setTimeout(run, ms) as unknown as number,
+    cancel: (id) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
+  });
+  function barePath(pinned: string): string {
+    const bare = pinned.replace(/@r\d+$/, "");
+    return bare;
+  }
   // The outcomes key of the currently published frame: re-rendering
   // the same outcomes must not republish a new frame (the frame
   // publication re-runs the component's render effect, which reports
@@ -363,6 +397,12 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       targets: boardTargetsOf(result.board),
       folded: [...foldedSet],
     };
+    // scenario 15: a pinned open holds; a bare tracker open follows
+    if (/@r\d+$/.test(address.path)) {
+      follow.stop();
+    } else {
+      follow.start(0);
+    }
     return { kind: "ready", value: lastFrame };
   }
 
@@ -509,6 +549,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     release() {
       released = true;
       generation += 1;
+      follow.stop();
       selectSession.exit();
       boardMenu.session.outsidePointerDown();
     },
