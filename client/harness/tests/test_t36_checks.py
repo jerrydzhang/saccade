@@ -175,6 +175,14 @@ class S18Test(unittest.TestCase):
         result = t36_checks.run_check(fake, t36_checks.CHECKS["S18"], pace=0)
         self.assertEqual(result["status"], "pass", result["detail"])
 
+    def test_authored_task_metadata_never_counts_as_delivery(self) -> None:
+        # grounded false pass: the boot board declares task: t-0; only
+        # the location moving to t-0@r1 is delivery
+        fake = FakeSession(delivered=False)
+        spec = t36_checks.CHECKS["S18"]
+        result = t36_checks.run_check(fake, spec, pace=0)
+        self.assertEqual(result["status"], "fail")
+
     def test_multi_window_start_is_a_stop(self) -> None:
         fake = FakeSession(windows=2)
         result = t36_checks.run_check(fake, t36_checks.CHECKS["S18"], pace=0)

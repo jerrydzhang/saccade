@@ -237,11 +237,7 @@ def check_s18_linked_delivery(request: RequestFn, pace: float = DEFAULT_PACE) ->
         }
     receiver = new_labels[-1]
     readout = _receiver_readout(request, receiver)
-    received = (
-        readout.get("task") == "t-0"
-        or str(readout.get("path") or "").endswith("t-0@r1")
-        or str(readout.get("stripLocation") or "").endswith("t-0@r1")
-    )
+    received = _delivered(readout)
     suite_open_at = readout.get("suiteOpenAt")
     if not received:
         evidence.append(
@@ -278,7 +274,7 @@ def check_s18_linked_delivery(request: RequestFn, pace: float = DEFAULT_PACE) ->
             _key(request, "enter")
             _sleep(pace, 2.5)
             readout = _receiver_readout(request, receiver)
-            if not (readout.get("task") == "t-0" or str(readout.get("path") or "").endswith("t-0@r1")):
+            if not _delivered(readout):
                 evidence.append(
                     f"i (ask answered with the receiver's chip {other_chip!r}): the receiver still shows"
                     f" {readout.get('path')!r}; window.__suiteOpenAt is {readout.get('suiteOpenAt')!r}"
@@ -306,7 +302,7 @@ def check_s18_linked_delivery(request: RequestFn, pace: float = DEFAULT_PACE) ->
     else:
         w_label = sorted(fresh)[-1]
         readout = _receiver_readout(request, w_label)
-        if not (readout.get("task") == "t-0" or str(readout.get("path") or "").endswith("t-0@r1")):
+        if not _delivered(readout):
             evidence.append(
                 f"w: viewer {w_label!r} opened but shows {readout.get('path')!r}, never the citation;"
                 f" window.__suiteOpenAt is {readout.get('suiteOpenAt')!r}"
@@ -321,6 +317,17 @@ def check_s18_linked_delivery(request: RequestFn, pace: float = DEFAULT_PACE) ->
         "status": t36_results.STATUS_PASS,
         "detail": f"o, i and w all delivered {spec} to the right window; focus and links behaved",
     }
+
+
+def _delivered(readout: dict) -> bool:
+    """Delivery means the receiver's LOCATION moved to the cited
+    revision (path or strip shows t-0@r1). identity.task is authored
+    board metadata, never a location - a board declaring task: t-0
+    must not false-pass this probe (caught live)."""
+    return (
+        str(readout.get("path") or "").endswith("t-0@r1")
+        or str(readout.get("stripLocation") or "").endswith("t-0@r1")
+    )
 
 
 def _receiver_chip(request: RequestFn, label: str) -> str | None:
