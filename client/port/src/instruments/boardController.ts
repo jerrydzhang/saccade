@@ -199,17 +199,26 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   // again - only a real outcome change may republish).
   let publishedOutcomesKey = "";
 
+  function displayedGeneration(): number | null {
+    const state = buffer.snapshot();
+    if (released || state.kind !== "alive") return null;
+    const frame = state.content.kind === "available" ? state.content.value
+      : state.content.kind === "pending" ? state.content.previous : null;
+    return frame?.value.generation ?? null;
+  }
+
   const host: BoardUI = {
-    currentGeneration: () => generation,
+    displayedGeneration,
     async loadFigureAsset(location: Location, block: FigureBlock) {
       if (released) return "stale";
-      const token = generation;
+      const token = displayedGeneration();
+      if (token === null) return "stale";
       try {
         const asset = await sourceFor(location.machine).loadAsset(location, block.input);
-        if (token !== generation) return "stale";
+        if (token !== displayedGeneration()) return "stale";
         return asset.bytes;
       } catch (error) {
-        if (token !== generation) return "stale";
+        if (token !== displayedGeneration()) return "stale";
         if (error instanceof SourceUnavailableError) {
           if (error.code === "asset-denied") return `denied: ${error.message}`;
           return `missing: ${error.message}`;
@@ -241,8 +250,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       boardMenu.openFor(target, at);
     },
     reportRenderOutcomes(reported, outcomes) {
-      if (released || reported !== generation) return;
-      const key = JSON.stringify(outcomes);
+      if (released || reported !== displayedGeneration()) return;
+      const key = JSON.stringify([reported, outcomes]);
       if (key === publishedOutcomesKey) return;
       buffer.updates.updateDisplayed((frame) => {
         if (frame.value.generation !== reported) return frame;

@@ -94,7 +94,7 @@ at the generation boundary. -->
     const collected: RenderOutcome[] = [];
     void hydrate(container, controller, location, generation, collected).then(
       (outcomes) => {
-        if (controller.currentGeneration() !== generation) return;
+        if (controller.displayedGeneration() !== generation) return;
         controller.reportRenderOutcomes(generation, outcomes);
       },
     );

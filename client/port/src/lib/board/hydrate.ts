@@ -26,11 +26,11 @@ import { TrackerSource } from "../tracker.ts";
 import { el } from "../render.ts";
 import type { FigureBlock } from "./model.ts";
 
-/** What hydration needs from the instrument's controller: the open
- * generation it drops itself against, and the figure/image byte loader.
- * A load answered after a newer open reports "stale". */
+/** What hydration needs: the actually displayed frame's identity and
+ * figure/image byte loader. A requested-but-unshown replacement does
+ * not invalidate retained content; an actual replacement does. */
 export interface HydrationHost {
-  currentGeneration(): number;
+  displayedGeneration(): number | null;
   loadFigureAsset(
     location: Location,
     block: FigureBlock,
@@ -44,7 +44,7 @@ export async function hydrate(
   generation: number,
   collected: RenderOutcome[],
 ): Promise<RenderOutcome[]> {
-  const stale = (): boolean => host.currentGeneration() !== generation;
+  const stale = (): boolean => host.displayedGeneration() !== generation;
 
   const mathPending = Array.from(container.querySelectorAll<HTMLElement>('[data-pending="math"]'));
   for (const span of mathPending) {
