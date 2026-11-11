@@ -563,3 +563,72 @@ class T36LaneWiringTest(unittest.TestCase):
                 "--lane", "teleport",
             ])
         self.assertEqual(caught.exception.code, 2)
+
+
+class T36RelaunchWiringTest(unittest.TestCase):
+    """The S20 relaunch wiring: the role's first up boots into the
+    role's own run root (artifacts and persisted state land where the
+    executor owns them), the request closure follows the relaunched
+    payload's socket, and the relaunch is bounded hard - an overrun is
+    a recorded timeout verdict, never an indefinite wait."""
+
+    def test_relaunch_rebinds_socket_and_bounds_the_up(self) -> None:
+        import threading
+        import time as time_module
+        from unittest import mock
+
+        state = {"socket": "sock-a", "ups": [], "requests": []}
+
+        class RelaunchDeps(t36_driver.T36Deps):
+            def __init__(self) -> None:
+                super().__init__(self._up, self._up_reuse, self._live_socket,
+                                 self._request, self._down, self._prototype_factory)
+
+            def _up(self, plan: dict, run_root: str = "") -> int:
+                state["ups"].append(("up", run_root))
+                state["socket"] = f"sock-{len(state['ups'])}"
+                return 0
+
+            def _up_reuse(self, plan: dict, run_root: str = "") -> int:
+                time_module.sleep(1.0)  # longer than the patched bound
+                return 0
+
+            def _live_socket(self):
+                return {"socket": state["socket"]}, state["socket"]
+
+            def _request(self, socket_path: str, payload: dict, timeout: float = 60.0) -> dict:
+                state["requests"].append(socket_path)
+                return {"ok": True}
+
+            def _down(self) -> int:
+                return 0
+
+            def _prototype_factory(self):
+                return None, None
+
+        deps = RelaunchDeps()
+
+        def session_request(payload, timeout=60.0):
+            live = deps.live_socket()
+            return deps.request(live[1], payload, timeout)
+
+        def relaunch() -> None:
+            deps.down()
+            worker = threading.Thread(target=lambda: deps.up_reuse({}, "root"), daemon=True)
+            worker.start()
+            worker.join(timeout=t36_driver.RELAYOUT_TIMEOUT_SECONDS)
+            if worker.is_alive():
+                raise t36_checks.CheckStopped("timeout verdict")
+
+        # the socket follows the relaunched payload
+        with mock.patch.object(t36_driver, "RELAYOUT_TIMEOUT_SECONDS", 0.2):
+            with self.assertRaises(t36_checks.CheckStopped) as caught:
+                relaunch()
+        self.assertIn("timeout verdict", str(caught.exception))
+        session_request({"probe": 1})
+        self.assertEqual(state["requests"][-1], "sock-a")  # unchanged before a fresh up
+        # a fresh up rebinds the socket and carries the run root
+        deps.up({}, "root")
+        session_request({"probe": 2})
+        self.assertEqual(state["requests"][-1], "sock-1")
+        self.assertEqual(state["ups"][0], ("up", "root"))

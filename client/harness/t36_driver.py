@@ -33,6 +33,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -41,6 +42,11 @@ import t36_adapters  # noqa: E402
 import t36_results  # noqa: E402
 
 ROLES = ("baseline", "candidate")
+
+# the S20 relaunch's hard deadline (the ratified bounding): above
+# session_up's own 90s ready bound, so the verdict names the relaunch,
+# not the inner boot
+RELAYOUT_TIMEOUT_SECONDS = 150.0
 
 
 class ProvenanceRefused(Exception):
@@ -322,9 +328,13 @@ def real_deps(options: argparse.Namespace) -> T36Deps:
     import entry as entry_module
     import t36_prototype
 
-    def up(plan: dict, reuse_root: str = "") -> int:
+    def up(plan: dict, run_root: str = "") -> int:
         # a live session from a previous run is never adopted: down
-        # first, so every role starts from a fresh app
+        # first, so every role starts from a fresh app. The role's own
+        # run root is the boot root from the first up: the payload's
+        # artifacts and the app's persisted state live where the
+        # executor owns them, and S20's relaunch then genuinely
+        # relaunches into a root the first run populated.
         if entry_module.load_session_record() is not None:
             entry_module.session_down()
         os.environ["SAC_APP_BIN"] = plan["app_bin"]
@@ -332,7 +342,7 @@ def real_deps(options: argparse.Namespace) -> T36Deps:
         os.environ["SACCADE_DB"] = options.tracker_db
         return entry_module.session_up(
             options.board, entry_module.SESSION_DEFAULT_LIFETIME_SECONDS,
-            mode="t36", reuse_root=reuse_root,
+            mode="t36", reuse_root=run_root,
         )
 
     def live_socket():
@@ -395,29 +405,46 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
         manifest_path = run_root / "manifest.json"
         t36_results.write_manifest(str(manifest_path), plan["manifest"])
         results: list[dict] = []
-        up_code = deps.up(plan)
+        up_code = deps.up(plan, str(run_root))
         if up_code != 0:
             results.append(_lane_up_failed(f"up-t36 exited {up_code}; no session came up"))
         else:
-            live = deps.live_socket()
-            if live is None:
+            if deps.live_socket() is None:
                 results.append(_lane_up_failed("the session record vanished after up"))
             else:
-                _record, socket_path = live
-                session_request = lambda payload, timeout=60.0: deps.request(socket_path, payload, timeout)  # noqa: E731
+                def session_request(payload: dict, timeout: float = 60.0) -> dict:
+                    # the socket path is re-read per request: a relaunch
+                    # (S20) replaces the payload, and the new control
+                    # socket serves the rest of the role
+                    live_now = deps.live_socket()
+                    if live_now is None:
+                        raise RuntimeError("no live session socket")
+                    _r, current = live_now
+                    return deps.request(current, payload, timeout)
 
                 def relaunch() -> None:
                     # S20's orchestration: down, then up-t36 into the
                     # SAME run root - the app's persisted data dir
-                    # survives, the tracker and its store do not; the
-                    # socket path is the run root's own, so the live
-                    # request closure keeps working
+                    # survives, the tracker and its store do not. The
+                    # up is bounded hard (the ratified bounding): an
+                    # overrun is a recorded timeout verdict, never an
+                    # indefinite wait.
                     from t36_observation import CheckStopped
 
                     deps.down()
-                    code = deps.up_reuse(plan, str(run_root))
-                    if code != 0:
-                        raise CheckStopped(f"the relaunch up-t36 exited {code}")
+                    worker = threading.Thread(
+                        target=lambda: deps.up_reuse(plan, str(run_root)),
+                        daemon=True,
+                    )
+                    worker.start()
+                    worker.join(timeout=RELAYOUT_TIMEOUT_SECONDS)
+                    if worker.is_alive():
+                        raise CheckStopped(
+                            f"the relaunch did not come up within {RELAYOUT_TIMEOUT_SECONDS:.0f}s; timeout verdict recorded"
+                        )
+                    live_now = deps.live_socket()
+                    if live_now is None:
+                        raise CheckStopped("the relaunch left no live session record")
 
                 prototype, prototype_stop = deps.prototype_factory()
                 try:
