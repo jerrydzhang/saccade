@@ -18,7 +18,7 @@ import type {
   Unsubscribe,
   Viewport,
 } from "./buffer.ts";
-type ViewportMetrics = ReturnType<Viewport["metrics"]>;
+export type ViewportMetrics = ReturnType<Viewport["metrics"]>;
 
 // Compatibility shape, not a new stored location grammar. A board
 // revision is an index within its board location, currently encoded in

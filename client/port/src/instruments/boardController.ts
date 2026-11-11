@@ -33,6 +33,7 @@ import type {
   ContentCapture,
   ContentPlaces,
 } from "../lib/contracts/places.ts";
+import type { ViewportMetrics } from "../lib/contracts/places.ts";
 export type { BoardAnchor };
 import type { AnchorData, AnchorLocation } from "../lib/contracts/places.ts";
 import type { InstrumentDefinition, InstrumentProps } from "../lib/instruments/contract.ts";
@@ -366,12 +367,25 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   }
 
   const places: ContentPlaces<BoardAnchor> = {
-    captureDisplayed(): ContentCapture<BoardAnchor> {
-      // Slice 1 captures default positions only; anchor capture lands
-      // with the Board instrument slice.
+    captureDisplayed(viewport: ViewportMetrics): ContentCapture<BoardAnchor> {
       const address: Address = resolved
         ? { machine: resolved.machine, path: resolved.path }
         : { machine: "", path: "" };
+      // The reading anchor (hybrid default, r49): the target identity
+      // when the reading position sits inside one, else the default
+      // position. Geometry is live measurement; a target with no
+      // measurable presentation is skipped, never guessed.
+      const viewTop = viewport.position.top;
+      for (const target of lastFrame.targets) {
+        const bounds = buffer.geometry.bounds(target.part);
+        if (bounds === null) continue;
+        if (viewTop >= bounds.top && viewTop < bounds.bottom) {
+          return {
+            address,
+            position: { kind: "anchor", anchor: { kind: "board-part", path: target.part }, bounds },
+          };
+        }
+      }
       return { address, position: { kind: "default" } };
     },
     async request(address: Address): Promise<RefreshOutcome> {

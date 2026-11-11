@@ -55,6 +55,17 @@ export type PortObservation = {
     jumpChip: string | null;
     delivered: readonly DoorDelivery[];
   }>;
+  /** The window's trail (slice 2): explicit openings only, the
+   * cursor names the current entry. */
+  trail: Readonly<{
+    depth: number;
+    cursor: number;
+    entries: readonly { location: string; hasDeparture: boolean }[];
+    canBack: boolean;
+    canForward: boolean;
+  }>;
+  /** The attached viewport's live metrics. */
+  viewport: Readonly<{ left: number; top: number; width: number; height: number }>;
 };
 
 export type ContentPart = Readonly<{
@@ -144,6 +155,8 @@ export function buildReadout(
     state: BufferState<RenderPair>;
     diagnostics: readonly DiagnosticEntryView[];
     doors: DoorsState;
+    trail: PortObservation["trail"];
+    viewport: PortObservation["viewport"];
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -166,6 +179,8 @@ export function buildReadout(
         : null,
     diagnostics: input.diagnostics,
     doors: input.doors,
+    trail: input.trail,
+    viewport: input.viewport,
   };
 }
 

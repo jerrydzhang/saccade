@@ -40,6 +40,7 @@ import {
 } from "./lib/observation.ts";
 import { tauriInvoke } from "./lib/sources.ts";
 import { selectToPart } from "./lib/board/targets.ts";
+import { createTrail, type TrailView } from "./lib/navigation/trail.ts";
 import { createHostMatcher, dispatchStroke, type HostMatcher } from "./lib/input/host.ts";
 import { windowContext } from "./lib/input/contexts.ts";
 import { createPickerController, type PickerState } from "./lib/input/picker.ts";
@@ -56,11 +57,14 @@ export interface StripView {
 
 export interface PortWindow {
   attachViewport(element: HTMLElement | null): void;
-  openSpec(spec: string): void;
+  openSpec(spec: string, part?: string | null): void;
   boot(): Promise<void>;
   destroy(): void;
   subscribeFrame(observer: (state: BufferState<RenderPair>) => void): () => void;
   subscribeStrip(observer: (strip: StripView) => void): () => void;
+  trailBack(): boolean;
+  trailForward(): boolean;
+  trailView(): TrailView;
   openPicker(): void;
   closePicker(): void;
   submitPicker(spec: string): void;
@@ -112,6 +116,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
   const frameObservers = new Set<(state: BufferState<RenderPair>) => void>();
   const stripObservers = new Set<(strip: StripView) => void>();
   let lastFrame: BufferState<RenderPair> = instrument.snapshot();
+
+  // The window's trail (scenario 14): explicit openings only; the
+  // departure capture lands on the entry being left; Back/Forward
+  // restore recorded places - never folds, zoom or drafts. Key
+  // bindings for Back/Forward are pinned when the S14 body lands
+  // (prototype parity through the adapter); the surface is real now.
+  const trail = createTrail({
+    capture: () => instrument.places.capture(),
+    restore: (place) => instrument.places.restore(place),
+  });
 
   const unsubscribeFrame = instrument.subscribe((state) => {
     lastFrame = state;
@@ -183,7 +197,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
     note = null;
     // One operation schedules the content request; the refresh
     // pipeline publishes. A citation naming a part anchors the open
-    // there (fold reveal rides the placement, scenario 8).
+    // there (fold reveal rides the placement, scenario 8). The open
+    // is an EXPLICIT opening: the trail records it.
+    trail.opened(spec);
     const place = {
       bufferId: instrument.id,
       address,
@@ -307,11 +323,19 @@ export function createPortWindow(windowId = "main"): PortWindow {
   }
 
   function readout(): PortObservation {
+    const metrics = viewport.metrics();
     return buildReadout({
       windowLabel: nativeWindowLabel(),
       state: lastFrame,
       diagnostics: diagnostics.entries(),
       doors,
+      trail: trail.view(),
+      viewport: {
+        left: metrics.position.left,
+        top: metrics.position.top,
+        width: metrics.width,
+        height: metrics.height,
+      },
     });
   }
 
@@ -341,6 +365,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
       };
     },
     readout,
+    trailBack: () => trail.back(),
+    trailForward: () => trail.forward(),
+    trailView: () => trail.view(),
     openPicker: () => picker.open(),
     closePicker: () => picker.close(),
     submitPicker: (spec) => picker.submit(spec),
