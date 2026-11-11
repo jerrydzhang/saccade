@@ -559,6 +559,32 @@ def check_s20_relaunch(request: RequestFn, pace: float = 1.0) -> dict:
     if t36_checks._RELAUNCHER is None:
         raise CheckStopped("no relaunch callable attached (S20 needs the driver's two-session orchestration)")
     t36_checks._RELAUNCHER()
+
+    # the recovery act (the r73 diagnosis): the relaunched app's
+    # persisted tracker host points at the dead pre-relaunch seed
+    # server, and its windows bootstrap loops refused against it while
+    # the launch restore finds nothing. A human re-tells the app where
+    # the tracker is by opening a tracker location - real input through
+    # the picker, recorded as the recovery step; the window-set oracle
+    # is judged after it.
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "")
+    tasks = tracker.get("tasks") or {}
+    seed = next(iter(tasks), None)
+    _premise(seed is not None and base,
+             f"no seed server on the relaunched session: {json.dumps(tracker)[:160]}")
+    spec = f"{base.replace('http://', '')}/seedtracker/{seed}"
+    if t36_port.is_port(request):
+        t36_port.open_via_port_picker(request, spec, pace)
+    else:
+        _key(request, "escape")
+        _sleep(pace, 0.3)
+        _key(request, " ", " ")
+        _sleep(pace, 0.8)
+        _type(request, "picker:input", spec)
+        _sleep(pace, 0.5)
+        _key(request, "enter")
+
     deadline = time.monotonic() + 40.0 * pace
     after: list[dict] = []
     last_error: str = ""
@@ -591,7 +617,10 @@ def check_s20_relaunch(request: RequestFn, pace: float = 1.0) -> dict:
     return {"status": t36_results.STATUS_PASS,
             "detail": (f"the relaunch restored the persisted window surface: {len(labels)} window(s) before,"
                        f" {len(after)} after; labels are fresh (the persisted surface is the window set,"
-                       f" not the names)" + flavor_note)}
+                       f" not the names); the recovery act re-opened {spec!r} through the picker"
+                       " (the relaunched app's persisted tracker host points at the dead"
+                       " pre-relaunch server until a location re-tells it)"
+                       + flavor_note)}
 
 
 def _s10_port(request: Callable, pace: float) -> dict:

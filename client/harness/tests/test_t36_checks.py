@@ -539,6 +539,8 @@ class PortAdapterTest(unittest.TestCase):
                 return True
             if "JSON.stringify(window.__saccadePort.readout())" in script:
                 return json.dumps(self.readout)
+            if "picker-input" in script:
+                return True  # the port picker opens on space space
             return FakeSession._evaluate(self, script)
 
     def test_flavor_detected_port_and_legacy(self) -> None:
