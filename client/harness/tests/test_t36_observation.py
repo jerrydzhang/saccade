@@ -12,6 +12,7 @@ cleanly when the pinned Playwright WebKit is unavailable.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import sys
 import unittest
@@ -21,6 +22,7 @@ HARNESS = HERE.parent
 sys.path.insert(0, str(HARNESS))
 
 import t36_observation  # noqa: E402
+import t36_prototype  # noqa: E402
 import t36_results  # noqa: E402
 
 
@@ -91,6 +93,10 @@ class ReadoutScriptTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         from playwright.sync_api import sync_playwright
 
+        # the software-GL pins, defaults only (the devshell exports them;
+        # a bare run self-pins the same store paths)
+        for key, value in t36_prototype.webkit_launch_env().items():
+            os.environ.setdefault(key, value)
         cls._playwright = sync_playwright().start()
         cls._browser = cls._playwright.webkit.launch(headless=True)
 
