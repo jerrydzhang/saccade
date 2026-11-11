@@ -296,17 +296,23 @@ def check_s17_activity_place(request: RequestFn, pace: float) -> dict:
 def check_s08_fold_reveal(request: RequestFn, pace: float) -> dict:
     """S08 navigation reveals its actual anchor through folds, app side.
 
-    The fold act exists (select a group, z toggles .closed) but the
-    premise cannot be served with today's seeds: following a citation
-    lands board-level (t-0@r1), and no seeded citation names a part
-    INSIDE a group, so there is no anchor inside a folded container to
-    navigate to. The stop records the seed gap; extending
-    t36_seeds with a part-path citation board is the unlock."""
+    The fold act exists (select a group, z toggles .closed) and the
+    part-inside-group citation content now rides the seed set (the
+    second citing board's incorporation names the first group child).
+    What the baseline cannot serve: the app's CITATION SURFACE IS
+    BOARD-LEVEL ONLY - hydrateCitations builds task@rK and never a
+    part path, so every citation click lands on the board and no
+    real-input navigation reaches an anchor inside a folded container.
+    The stop records that product-surface gap for the port slice; A4
+    carries the unfold delta when the surface exists."""
     raise CheckStopped(
-        "no seeded citation names a part inside a group, so no anchor inside a"
-        " folded container can be navigated to; the fold act itself is grounded"
-        " (select a group, z toggles .closed) - extend the seed set with a"
-        " part-path citation to run this differential (A4 carries the unfold delta)"
+        "the app's citation surface is board-level only: hydrateCitations"
+        " builds task@rK and never a part path, so no real-input navigation"
+        " reaches an anchor inside a folded group; the fold act is grounded"
+        " (select a group, z toggles .closed) and the part-inside-group"
+        " citation content rides the seed set - the port slice that gives"
+        " citations part paths unlocks this differential (A4 carries the"
+        " unfold delta)"
     )
 
 

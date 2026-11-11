@@ -204,6 +204,22 @@ def perform_input(client: WebDriver, request: dict) -> dict:
     live center plus optional offsets; key acts on the focused element;
     coords is the explicit raw-coordinate escape hatch."""
     kind = request.get("kind")
+    if kind == "rightclick":
+        # a real context (right-button) click: element-addressed (the
+        # S09 alternative invocation) or viewport-addressed (elements
+        # without a data-control, e.g. group blocks - S13's group act)
+        target = request.get("target")
+        if isinstance(target, str) and target:
+            selector = target_selector(target)
+            x, y = element_center(client, target)
+            client.perform_actions(webdriver_client.context_click_actions(x, y))
+            return {"kind": "rightclick", "target": target, "x": x, "y": y}
+        x = float(request.get("x", -1))
+        y = float(request.get("y", -1))
+        if not (0 <= x <= 4096 and 0 <= y <= 4096):
+            raise WebDriverError("invalid argument", "rightclick needs a target id or x/y in viewport range")
+        client.perform_actions(webdriver_client.context_click_actions(x, y))
+        return {"kind": "rightclick", "x": x, "y": y}
     if kind == "hotkey":
         keys = request.get("keys")
         if not isinstance(keys, list) or len(keys) < 2 or not all(isinstance(k, str) and k for k in keys):
@@ -547,6 +563,35 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
         if not state.tracker_base:
             raise WebDriverError("invalid argument", "no seed server in this session (t36 lane mode only)")
         return {"ok": True, "base": state.tracker_base, "tasks": state.tracker_tasks}, False
+    if command == "tracker-commit":
+        # S15's mid-check commit through the real wire: the payload
+        # posts to its own seed server (the server lives in this
+        # sandbox's netns; the host cannot reach it). The commit shape
+        # is the seeds module's - one revised board.yaml, real wire.
+        import t36_seeds
+
+        if not state.tracker_base or state.seed_server is None:
+            raise WebDriverError("invalid argument", "no seed server in this session (t36 lane mode only)")
+        task = request.get("task")
+        if not isinstance(task, int):
+            raise WebDriverError("invalid argument", "tracker-commit needs the task number")
+        board_text = request.get("board")
+        if not isinstance(board_text, str) or "grammar:" not in board_text:
+            raise WebDriverError("invalid argument", "tracker-commit needs a board.yaml text")
+        # a wire refusal is a per-request answer, never a payload exit:
+        # an escaping SeedRefused would tear the whole session down
+        try:
+            reply = state.seed_server.post("/api/v1/boards/commit", {
+                "context": t36_seeds.SEED_CONTEXT,
+                "task": task,
+                "files": {"files": [{"path": "board.yaml",
+                                     "content": base64.b64encode(board_text.encode("utf-8")).decode("ascii")}]},
+                "message": str(request.get("message") or "t36 mid-check commit"),
+                "client": t36_seeds.SEED_CLIENT,
+            })
+        except t36_seeds.SeedRefused as error:
+            raise WebDriverError("unknown error", str(error)[:300]) from None
+        return {"ok": True, "revision": reply.get("revision"), "commit": reply.get("commit") or reply.get("hash")}, False
     if command == "open-window":
         assert state.client is not None
         state_id = request.get("state_id")
@@ -779,7 +824,7 @@ def t36_prelude(state: SessionState, logs: pathlib.Path) -> None:
         state.tracker_tasks = {entry["task"]: entry for entry in commits}
         gate(
             "the t36 seed boards committed (groups on the real wire)",
-            len(commits) == 4 and all(entry.get("revision") is not None for entry in commits),
+            len(commits) == 5 and all(entry.get("revision") is not None for entry in commits),
             json.dumps([[entry["task"], entry.get("revision")] for entry in commits]),
         )
     except t36_seeds.SeedRefused as error:

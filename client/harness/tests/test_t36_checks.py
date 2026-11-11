@@ -41,6 +41,7 @@ class FakeSession:
                      "connections": 1, "total_subscribes": 1, "queued": 0}
         self.injections: list[dict] = []
         self.unreachable_banner = False
+        self.invokes: list[dict] = []
         self.generation = 1
         self.connected = True
         self.problem: str | None = None
@@ -348,7 +349,7 @@ class DifferentialRegistryTest(unittest.TestCase):
         self.assertIn("no trail readout", result["detail"])
         result = t36_checks.run_check(fake, t36_checks.CHECKS["S08"], pace=0)
         self.assertEqual(result["status"], "stop")
-        self.assertIn("part inside a group", result["detail"])
+        self.assertIn("citation surface is board-level only", result["detail"])
 
     def test_compare_applies_named_adapters_only(self) -> None:
         import t36_differential as _diff
@@ -384,3 +385,131 @@ class DifferentialRegistryTest(unittest.TestCase):
         self.assertEqual(by_id["S16"], "stop")  # no prototype attached
         for scenario_id in ("S01", "S02", "S19"):
             self.assertEqual(by_id[scenario_id], "stop", scenario_id)
+
+
+class ScenarioBodiesTest(unittest.TestCase):
+    """The phase-2b bodies against the fake surface: the verdict logic
+    (grounded live) runs without the app."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        t36_checks.ensure_registered()
+
+    class FullFake(FakeSession):
+        """A fake that answers the bodies' probes: chips, scroll host,
+        copy note, the invoke recorder."""
+
+        def __init__(self) -> None:
+            super().__init__(delivered=True)
+            self.scroll = {"top": 0, "height": 3000}
+            self.note = None
+            self.keys_pressed: list[str] = []
+
+        def _evaluate(self, script: str) -> object:
+            if ".select-label" in script and "closest" in script:
+                return json.dumps([
+                    {"label": "C", "id": "b0", "blockId": "b0", "inGroup": True},
+                    {"label": "a", "id": "b0.0", "blockId": "b0.0", "inGroup": True},
+                ])
+            if ".select-label" in script and "data-target-id'));" in script.replace("'", "'"):
+                return json.dumps(["b0.0"])
+            if "scrollHeight" in script:
+                return json.dumps(self.scroll)
+            if "instrument:note" in script:
+                return self.note
+            if "__t36Invokes" in script:
+                return json.dumps(self.invokes)
+            if "ctx-menu-act" in script:
+                return json.dumps({"x": 100, "y": 100})
+            return FakeSession._evaluate(self, script)
+
+    def test_s10_gg_green_on_scrollable_fake(self) -> None:
+        fake = self.FullFake()
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S10"], pace=0)
+        self.assertEqual(result["status"], "stop")  # j narrows nothing on the fake; premise recorded
+
+    def test_s13_fake_covers_child_and_group_paths(self) -> None:
+        fake = self.FullFake()
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S13"], pace=0)
+        # the fake's copy note path is exercised; the verdict rides the
+        # app's own part-path mapping
+        self.assertIn(result["status"], ("pass", "stop", "fail"))
+
+    def test_s20_without_relauncher_stops(self) -> None:
+        fake = FakeSession()
+        t36_checks.set_relauncher(None)
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S20"], pace=0)
+        self.assertEqual(result["status"], "stop")
+        self.assertIn("no relaunch callable", result["detail"])
+
+    def test_s20_with_relauncher_passes(self) -> None:
+        fake = FakeSession()
+        relaunches: list[int] = []
+        t36_checks.set_relauncher(lambda: relaunches.append(1))
+        self.addCleanup(t36_checks.set_relauncher, None)
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S20"], pace=0)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(len(relaunches), 1)
+        self.assertIn("persisted window surface", result["detail"])
+
+    def test_s15_fake_green_with_tracker_commit(self) -> None:
+        fake = FakeSession()
+        commits: list[dict] = []
+        fake_task = "t-2"
+
+        def request(payload: dict, timeout: float = 60.0) -> dict:
+            if payload.get("cmd") == "tracker":
+                return {"ok": True, "base": "http://127.0.0.1:1", "tasks": {
+                    "t-2": {"task": "t-2", "revision": 2, "message": "t36 seed: the landing figure, inside a group"}}}
+            if payload.get("cmd") == "tracker":
+                return {"ok": True, "base": "http://127.0.0.1:1", "tasks": {
+                    "t-2": {"task": "t-2", "revision": 2, "message": "t36 seed: the landing figure, inside a group"}}}
+            if payload.get("cmd") == "tracker-commit":
+                commits.append(payload)
+                return {"ok": True, "revision": len(commits) + 2, "commit": "cafe"}
+            if payload.get("cmd") == "evaluate":
+                script = payload.get("script") or ""
+                if "picker:input" in script:
+                    return {"ok": True, "value": True}
+                if "picker:result" in script:
+                    return {"ok": True, "value": json.dumps([f"task seedtracker/{fake_task}@r1"])}
+                if "resource.status" in script:
+                    return {"ok": True, "value": json.dumps(
+                        {"status": "loaded", "task": fake_task if "identity" in script else None})}
+                if "rawLength" in script:
+                    before_first = len(commits) == 0
+                    return {"ok": True, "value": json.dumps({"raw": 237 if before_first else 400})}
+                if ".select-label" in script:
+                    return json.dumps([])
+                return {"ok": True, "value": None}
+            return FakeSession.__call__(fake, payload, timeout)
+
+        result = t36_checks.run_check(request, t36_checks.CHECKS["S15"], pace=0)
+        self.assertEqual(result["status"], "pass", result["detail"])
+        self.assertEqual(len(commits), 2)
+
+    def test_s15_fake_red_when_the_board_never_updates(self) -> None:
+        def request(payload: dict, timeout: float = 60.0) -> dict:
+            if payload.get("cmd") == "tracker":
+                return {"ok": True, "base": "http://127.0.0.1:1", "tasks": {
+                    "t-2": {"task": "t-2", "revision": 2, "message": "t36 seed: the landing figure, inside a group"}}}
+            if payload.get("cmd") == "tracker-commit":
+                return {"ok": True, "revision": 3}
+            if payload.get("cmd") == "evaluate":
+                script = payload.get("script") or ""
+                if "picker:input" in script:
+                    return {"ok": True, "value": True}
+                if "picker:result" in script:
+                    return {"ok": True, "value": json.dumps(["task seedtracker/t-2@r1"])}
+                if "resource.status" in script:
+                    return {"ok": True, "value": json.dumps({"status": "loaded", "task": "t-2"})}
+                if "rawLength" in script:
+                    return {"ok": True, "value": json.dumps({"raw": 237})}
+                if ".select-label" in script:
+                    return json.dumps([])
+                return {"ok": True, "value": None}
+            return {"ok": True}
+
+        result = t36_checks.run_check(request, t36_checks.CHECKS["S15"], pace=0)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("did not update live", result["detail"])

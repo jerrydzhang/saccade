@@ -403,9 +403,9 @@ class T36LaneWiringTest(unittest.TestCase):
 
             def __init__(self, options: argparse.Namespace) -> None:
                 self.options = options
-                super().__init__(self._up, self._live_socket, self._request, self._down, self._prototype_factory)
+                super().__init__(self._up, self._up, self._live_socket, self._request, self._down, self._prototype_factory)
 
-            def _up(self, plan: dict) -> int:
+            def _up(self, plan: dict, reuse_root: str = "") -> int:
                 ups.append(plan["role"])
                 return 0
 
@@ -495,9 +495,9 @@ class T36LaneWiringTest(unittest.TestCase):
 
         class UpFails(t36_driver.T36Deps):
             def __init__(self) -> None:
-                super().__init__(self._up, self._live_socket, self._request, self._down, self._prototype_factory)
+                super().__init__(self._up, self._up, self._live_socket, self._request, self._down, self._prototype_factory)
 
-            def _up(self, plan: dict) -> int:
+            def _up(self, plan: dict, reuse_root: str = "") -> int:
                 return 1
 
             def _live_socket(self):

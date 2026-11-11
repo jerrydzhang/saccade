@@ -1,0 +1,576 @@
+#!/usr/bin/env python3
+"""T-36 phase-2b scenario bodies: S09, S10, S13, S15, S20 and S08's
+sharpened stop. t36_checks imports and registers these; the grounding
+notes name what was observed live at the baseline binaries."""
+
+from __future__ import annotations
+
+import json
+import pathlib
+import re
+import time
+from typing import Callable
+
+import t36_checks
+import t36_results
+from t36_checks import (
+    RequestFn,
+    _evaluate,
+    _json_evaluate,
+    _key,
+    _ok,
+    _premise,
+    _select_by_chip,
+    _selected_now,
+    _sleep,
+    _type,
+    _wait_tracker_loaded,
+)
+from t36_observation import CheckStopped
+
+
+def _windows(request: RequestFn) -> list[dict]:
+    return _ok(request({"cmd": "windows"}, timeout=60)).get("windows") or []
+
+
+_PICKER_OPEN_JS = 'return !!document.querySelector(\'[data-control="picker:input"]\');'
+_PICKER_RESULTS_JS = ('return JSON.stringify([...document.querySelectorAll('
+                      '\'[data-control="picker:result"]\')].map('
+                      'e => (e.textContent || "").slice(0, 60)));')
+
+
+# -- shared open-through-the-picker helper --------------------------------
+
+
+def _open_tracker_board(request: RequestFn, pace: float, message_match: str) -> str:
+    """Open a seeded tracker board through the picker (real input);
+    returns the task id. A tracker board already shown means the host
+    is remembered (the short spec scores the exact task match top); a
+    fresh window needs the host-naming spec. The picker poll follows
+    the legacy open_via_picker's discipline: the spaces, then WAIT for
+    the picker before typing, then wait for the picker's own results
+    to carry the task before the enter - real latency both times."""
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "")
+    task = None
+    for task_id, entry in (tracker.get("tasks") or {}).items():
+        if message_match in str(entry.get("message") or ""):
+            task = task_id
+    _premise(task is not None, f"no seed task matching {message_match!r}: {json.dumps(tracker.get('tasks'))[:200]}")
+    current = _json_evaluate(
+        request,
+        'const i = window.__saccadeApp && window.__saccadeApp.inspection();'
+        ' return JSON.stringify({machine: i && i.resource ? i.resource.machine : null});',
+    )
+    machine = str((current or {}).get("machine") or "")
+    if machine.startswith("tracker:"):
+        spec = f"seedtracker/{task}"
+    else:
+        spec = f"{base.replace('http://', '')}/seedtracker/{task}"
+    row_needle = f"seedtracker/{task}"
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    picker_open = False
+    for _attempt in range(2):
+        _key(request, " ")
+        _sleep(pace, 0.4)
+        _key(request, " ")
+        deadline = time.monotonic() + 4.0 * pace
+        while True:
+            if _evaluate(request, _PICKER_OPEN_JS) is True:
+                picker_open = True
+                break
+            if time.monotonic() >= deadline:
+                break
+            _sleep(pace, 0.3)
+        if picker_open:
+            break
+        _key(request, "escape")
+        _sleep(pace, 0.4)
+    _premise(picker_open, "the picker never opened on space space")
+    _type(request, "picker:input", spec)
+    deadline = time.monotonic() + 8.0 * pace
+    while True:
+        results = _evaluate(request, _PICKER_RESULTS_JS)
+        if isinstance(results, list) and any(row_needle in str(row) for row in results):
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.4)
+    _key(request, "enter")
+    _wait_tracker_loaded(request, task, pace)
+    return task
+
+
+# -- S09: one action, every invocation agrees -----------------------------
+
+
+def check_s09_invocations_agree(request: RequestFn, pace: float = 1.0) -> dict:
+    """S09 one action, every invocation agrees - literal differential
+    (no ratified difference), grounded on the citing board's citation.
+
+    Script, from the same starting board each time: (1) plain click on
+    the citation; (2) select by label, press the menu's first act key
+    (f, Follow here); (3) right-click the citation, Enter fires the
+    first act; (4) right-click, click the act button by its viewport
+    position. Expect: every invocation follows here (the window shows
+    the cited revision) and the menu closes before executing.
+
+    Grounded live at 4d59c35: all four invocations followed here to
+    the cited revision with the menu closed - the TAP carried the four
+    locations verbatim."""
+    evidence: list[str] = []
+    locations: list[str] = []
+    task = _open_tracker_board(request, pace, "the citing account, incorporation")
+
+    def follow(what: str, act: Callable[[], None]) -> None:
+        act()
+        _sleep(pace, 1.5)
+        readout = _json_evaluate(
+            request,
+            'const i = window.__saccadeApp && window.__saccadeApp.inspection();'
+            ' return JSON.stringify({path: i ? i.resource.path : null,'
+            ' menuOpen: !!document.querySelector(".ctx-menu") });',
+        )
+        path = str((readout or {}).get("path") or "")
+        locations.append(f"{what}: {path!r} menuClosed={not (readout or {}).get('menuOpen')}")
+        if not path.endswith("t-0@r1"):
+            evidence.append(f"{what} did not follow here (path {path!r})")
+        if (readout or {}).get("menuOpen"):
+            evidence.append(f"{what} left the menu open while executing")
+        _key(request, "escape")
+        _sleep(pace, 0.3)
+        _key(request, " ", " ")
+        _sleep(pace, 0.8)
+        _type(request, "picker:input", f"seedtracker/{task}")
+        _sleep(pace, 0.5)
+        _key(request, "enter")
+        _wait_tracker_loaded(request, task, pace)
+
+    follow("plain click",
+           lambda: _ok(request({"cmd": "input", "kind": "click", "target": "board:open-citation"}, timeout=40)))
+
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    _key(request, "s")
+    _sleep(pace, 0.4)
+    chips = _json_evaluate(
+        request,
+        "return JSON.stringify([...document.querySelectorAll('.select-label')].map("
+        "c => ({label: c.textContent, id: c.getAttribute('data-target-id')})));",
+    )
+    chip = None
+    if isinstance(chips, list):
+        chip = next((c for c in chips if c.get("id") == "board:open-citation"), None)
+    _premise(chip is not None, "the citation chip did not paint for the menu-key invocation")
+    for letter in str(chip["label"]):
+        _key(request, letter)
+        _sleep(pace, 0.25)
+    _sleep(pace, 0.4)
+    follow("menu key f", lambda: _key(request, "f"))
+
+    _ok(request({"cmd": "input", "kind": "rightclick", "target": "board:open-citation"}, timeout=40))
+    _sleep(pace, 0.8)
+    follow("right-click Enter", lambda: _key(request, "enter"))
+
+    _ok(request({"cmd": "input", "kind": "rightclick", "target": "board:open-citation"}, timeout=40))
+    _sleep(pace, 0.8)
+    rect = _json_evaluate(
+        request,
+        'const b = document.querySelector(".ctx-menu .ctx-menu-act");'
+        " if (!b) return null;"
+        " const r = b.getBoundingClientRect();"
+        " return JSON.stringify({x: r.x + r.width / 2, y: r.y + r.height / 2});",
+    )
+    _premise(isinstance(rect, dict), "the menu's first act button was not readable for the click invocation")
+    follow("right-click act click",
+           lambda: _ok(request({"cmd": "input", "kind": "coords", "x": rect["x"], "y": rect["y"]}, timeout=40)))
+
+    if evidence:
+        return {"status": t36_results.STATUS_FAIL, "detail": "invocations disagree: " + "; ".join(evidence)}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": "all four invocations followed here to the cited revision with the menu closed: " + " | ".join(locations)}
+
+
+# -- S10: sequences through the shipped matcher ---------------------------
+
+
+def check_s10_sequences(request: RequestFn, pace: float = 1.0) -> dict:
+    """S10 sequences go through one matcher - the app as it SHIPS at
+    4d59c35 (the keyMode state machine: gg scrolls top; unmatched
+    application keys do nothing observable in the reading context).
+
+    Script: open the citing board (a tall board), scroll down (j
+    lines), press g then g, assert the scroller returned to top; press
+    an unmatched key (q), assert nothing moved and no surface opened.
+    The matcher's consume-vs-fallthrough internals are not separately
+    observable through existing state: the check asserts the
+    observables and records that limitation rather than inventing a
+    deeper oracle."""
+    # the sequence premise needs a scrollable board: the lane's
+    # viewport is 1024x1280 and the seed boards fit it, so the body
+    # generates its own tall host board and opens it through the
+    # app's own open surface - the same test-open channel the lane
+    # itself uses to put the first board on screen (the lane binds
+    # /tmp at /board)
+    tall = pathlib.Path("/tmp/t36-tall-board.yaml")
+    blocks = "".join(f"  - text: sequence premise block {n}\n" for n in range(1, 41))
+    tall.write_text(f"grammar: 1\ntask: t-0\ncontent:\n{blocks}", encoding="ascii")
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    _evaluate(request,
+              'return window.__saccadeApp.open("host", "/board/t36-tall-board.yaml");')
+    _sleep(pace, 0.5)
+    deadline = time.monotonic() + 15.0 * pace
+    loaded = False
+    while True:
+        value = _json_evaluate(
+            request,
+            'const i = window.__saccadeApp && window.__saccadeApp.inspection();'
+            ' return JSON.stringify({status: i ? i.resource.status : null});',
+        )
+        if isinstance(value, dict) and value.get("status") == "loaded":
+            loaded = True
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.5)
+    _premise(loaded, "the tall host board never loaded")
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    scroller = (
+        'const host = [...document.querySelectorAll("*")].find('
+        "n => n.scrollHeight > n.clientHeight + 40 && n.clientHeight > 200);"
+        " const el = host || document.scrollingElement;"
+        " return JSON.stringify({top: el.scrollTop, height: el.scrollHeight});"
+    )
+    before = _json_evaluate(request, scroller)
+    _premise(isinstance(before, dict) and (before.get("height") or 0) > (before.get("top") or 0),
+             "the board is not scrollable; the sequence premise needs a taller board")
+    for _ in range(10):
+        _key(request, "j")
+        _sleep(pace, 0.12)
+    mid = _json_evaluate(request, scroller)
+    _premise((mid or {}).get("top", 0) > (before or {}).get("top", 0),
+             "j did not scroll the reading context (the board may fit the viewport at this window size)")
+    _key(request, "g")
+    _sleep(pace, 0.15)
+    _key(request, "g")
+    _sleep(pace, 0.6)
+    after_gg = _json_evaluate(request, scroller)
+    gg_ok = (after_gg or {}).get("top", 1) <= (before or {}).get("top", 0) + 2
+    state_before = _json_evaluate(
+        request,
+        'return JSON.stringify({menu: !!document.querySelector(".ctx-menu"),'
+        ' search: !!document.querySelector("[data-control=search]"),'
+        ' labels: !!document.querySelector(".select-labels")});',
+    )
+    _key(request, "q")
+    _sleep(pace, 0.5)
+    state_after = _json_evaluate(
+        request,
+        'return JSON.stringify({menu: !!document.querySelector(".ctx-menu"),'
+        ' search: !!document.querySelector("[data-control=search]"),'
+        ' labels: !!document.querySelector(".select-labels")});',
+    )
+    top_after_q = _json_evaluate(request, scroller)
+    nothing_opened = state_before == state_after
+    nothing_scrolled = abs((top_after_q or {}).get("top", 0) - (after_gg or {}).get("top", 0)) <= 2
+    if not gg_ok:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"gg did not return to top: {before} -> j {mid} -> gg {after_gg}"}
+    if not (nothing_opened and nothing_scrolled):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the unmatched key changed observable state: {state_before} -> {state_after}, scroll {after_gg} -> {top_after_q}"}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": ("gg ran through the shipped matcher (scrolled back to top) and the unmatched"
+                       " key changed nothing observable; the matcher's consume-vs-fallthrough"
+                       " internals stay unobserved (the shipped state machine is the oracle here)")}
+
+
+# -- S13: nested targets and citation -------------------------------------
+
+
+def check_s13_nested_citation_copy(request: RequestFn, pace: float = 1.0) -> dict:
+    """S13 nested targets and citation, app side on group-made boards.
+
+    Grounded surfaces at 4d59c35: block targets carry data-block-id
+    (b0 group, b0.0/b0.1 children); a block's citation is computed by
+    the app from its own data-block-id (partPath: b0.0 ->
+    /content/0/group/content/0) plus the shown location; the menu's y
+    act fires the copy (the strip shows '<what> copied') and delivers
+    to the OS clipboard through write_clipboard. The clipboard text
+    itself is not readable through existing state (the OS clipboard
+    behind the native bridge), so the check verifies the copy act
+    fires on child and group and that the app's own part-path mapping
+    yields the distinct full paths - the readability gap is recorded
+    here, and the ground truth rides the same mapping the app runs.
+
+    Baseline finding recorded when present: the group's painted label
+    may not select (typing the painted uppercase letter narrowed to
+    text targets instead) - the group's acts then ride the real
+    right-click instead, and the label mismatch is carried in the
+    result detail."""
+    task = _open_tracker_board(request, pace, "the cited account")
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    _key(request, "s")
+    _sleep(pace, 0.4)
+    targets = _json_evaluate(
+        request,
+        "return JSON.stringify([...document.querySelectorAll('.select-label')].map(c => {"
+        " const id = c.getAttribute('data-target-id');"
+        " const block = document.querySelector('[data-block-id=\"' + id + '\"]')"
+        "   || document.querySelector('[data-control=\"' + id + '\"]');"
+        " return {label: c.textContent, id: id,"
+        " blockId: block ? (block.getAttribute('data-block-id') || '') : '',"
+        " inGroup: !!(block && block.closest('.block-group'))};}));",
+    )
+    _premise(isinstance(targets, list) and targets, "select mode painted no chips on the cited board")
+    # a group chip's element IS a .block-group (closest matches self);
+    # children carry the dotted block id
+    groups = [c for c in targets if isinstance(c, dict) and c.get("inGroup") and "." not in str(c.get("blockId") or "")]
+    children = [c for c in targets if isinstance(c, dict) and c.get("inGroup") and "." in str(c.get("blockId") or "")]
+    _premise(children, f"no group-child target on the board: {json.dumps(targets)[:300]}")
+    _premise(groups, f"no group target on the board: {json.dumps(targets)[:300]}")
+    location = _evaluate(
+        request,
+        'const loc = document.querySelector("[data-control=\\"board:location\\"]");'
+        " return loc ? loc.textContent : null;",
+    )
+    _premise(location, "the window's location is unreadable")
+
+    def mapped(block_id: str) -> str | None:
+        match = re.match(r"^b(\d+(?:\.\d+)*)$", str(block_id))
+        if match is None:
+            return None
+        indexes = match.group(1).split(".")
+        segments = [f"content/{indexes[0]}"]
+        segments += [f"group/content/{index}" for index in indexes[1:]]
+        return "/" + "/".join(segments)
+
+    def note_text() -> str | None:
+        value = _evaluate(
+            request,
+            'const n = document.querySelector("[data-control=\\"instrument:note\\"]");'
+            " return n ? n.textContent : null;",
+        )
+        return str(value) if value else None
+
+    def copy_act_fires(select_id: str, what: str) -> str | None:
+        """Select by chip, press y, wait for the copy note; returns the
+        note text ('the citation copied') or None when the act never
+        fired."""
+        label = _select_by_chip(request, select_id, pace)
+        _premise(_selected_now(request).get("selected"), f"{what} did not select by its label {label!r}")
+        _key(request, "y")
+        deadline = time.monotonic() + 3.0 * pace
+        while True:
+            note = note_text()
+            if note and "copied" in note:
+                return note
+            if time.monotonic() >= deadline:
+                return None
+            _sleep(pace, 0.25)
+
+    evidence: list[str] = []
+    child = children[0]
+    child_note = copy_act_fires(str(child["id"]), "the group child")
+    child_path = mapped(child.get("blockId"))
+    _premise(child_path is not None, f"the child's block id {child.get('blockId')!r} maps to no part path")
+    if child_note is None:
+        evidence.append("y on the group child never fired the copy (no '<what> copied' note within the window)")
+
+    group = groups[0]
+    label = _select_by_chip(request, str(group["id"]), pace)
+    group_selected = bool(_selected_now(request).get("selected"))
+    if not group_selected:
+        evidence.append(
+            f"the group's painted label {label!r} does not select (typing it narrowed"
+            " to text targets - the exact class of mismatch the differential exists to catch)"
+        )
+
+    # the group's acts ride the real right-click (the element carries
+    # no data-control; viewport coords from its own rect)
+    rect = _json_evaluate(
+        request,
+        'const g = document.querySelector("[data-block-id=' + "'" + str(group.get("blockId")) + "'" + ']");'
+        " if (!g) return null;"
+        " const r = g.getBoundingClientRect();"
+        " return JSON.stringify({x: r.x + r.width / 2, y: r.y + 12});",
+    )
+    _premise(isinstance(rect, dict), f"the group element {group.get('blockId')!r} has no viewport rect")
+    _ok(request({"cmd": "input", "kind": "rightclick", "x": rect["x"], "y": rect["y"]}, timeout=40))
+    _sleep(pace, 0.8)
+    _key(request, "y")
+    deadline = time.monotonic() + 3.0 * pace
+    group_note = None
+    while True:
+        note = note_text()
+        if note and "copied" in note:
+            group_note = note
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.25)
+    group_path = mapped(group.get("blockId"))
+    if group_note is None:
+        evidence.append("y on the group never fired the copy (no '<what> copied' note within the window)")
+    if child_path is not None and group_path is not None and child_path == group_path:
+        evidence.append(f"the child and the group map to the same part path ({child_path!r})")
+
+    # folding: the group's menu z; the child's select label then disappears
+    rect = _json_evaluate(
+        request,
+        'const g = document.querySelector("[data-block-id=' + "'" + str(group.get("blockId")) + "'" + ']");'
+        " if (!g) return null;"
+        " const r = g.getBoundingClientRect();"
+        " return JSON.stringify({x: r.x + r.width / 2, y: r.y + 12});",
+    )
+    _premise(isinstance(rect, dict), "the group element lost its viewport rect before the fold step")
+    _ok(request({"cmd": "input", "kind": "rightclick", "x": rect["x"], "y": rect["y"]}, timeout=40))
+    _sleep(pace, 0.8)
+    _key(request, "z")
+    _sleep(pace, 0.8)
+    _key(request, "s")
+    _sleep(pace, 0.4)
+    folded_chips = _json_evaluate(
+        request,
+        "return JSON.stringify([...document.querySelectorAll('.select-label')].map("
+        "c => c.getAttribute('data-target-id')));",
+    )
+    if isinstance(folded_chips, list) and str(child["id"]) in [str(x) for x in folded_chips]:
+        evidence.append("the folded group's child still carries a select label")
+    _key(request, "escape")
+
+    if evidence:
+        return {"status": t36_results.STATUS_FAIL, "detail": "nested citation mismatch: " + "; ".join(evidence)}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (f"on {task}: the copy act fired on the child (path {child_path!r}) and on the"
+                       f" group (path {group_path!r}) - the app's own mapping yields the distinct full"
+                       " paths against the shown revision - and folding removed the child's label."
+                       " The clipboard text itself is not readable through existing state (OS"
+                       " clipboard behind the native bridge); the gap is recorded, the ground truth"
+                       " rides the same mapping the app runs")}
+
+
+# -- S15: following current versus fixed ----------------------------------
+
+
+def check_s15_follows_current(request: RequestFn, pace: float = 1.0) -> dict:
+    """S15 following current versus fixed revision, app-only (real
+    tracker commits observed through the tracker read surface).
+
+    Script: open the landing board normally (current); commit a new
+    revision through the REAL wire (the payload's tracker-commit, the
+    seeds' own shape); the open board must update live. Then open the
+    explicit revision, commit again; the shown revision stays fixed.
+    No pin/follow toggle exists; the distinction is internal."""
+    task = _open_tracker_board(request, pace, "the landing figure")
+    task_number = int(str(task).removeprefix("t-"))
+    _key(request, "escape")
+
+    def raw_length() -> int | None:
+        value = _json_evaluate(
+            request,
+            'const i = window.__saccadeApp && window.__saccadeApp.inspection();'
+            ' return JSON.stringify({raw: i && i.identity ? i.identity.rawLength : null});',
+        )
+        return (value or {}).get("raw")
+
+    before = raw_length()
+    revised = (
+        f"grammar: 1\ntask: {task}\ncontent:\n"
+        "  - text: the landing board, revised live mid-check\n"
+        "  - group:\n      title: Live update\n      content:\n"
+        "        - text: the live-update group child\n"
+    )
+    commit = _ok(request({"cmd": "tracker-commit", "task": task_number, "board": revised,
+                          "message": "t36 mid-check: the live-update revision"}, timeout=60))
+    revision = commit.get("revision")
+    _premise(revision is not None, f"the mid-check commit did not land: {json.dumps(commit)[:200]}")
+    deadline = time.monotonic() + 20.0 * pace
+    live = False
+    snapshot = None
+    while True:
+        snapshot = raw_length()
+        if snapshot is not None and before is not None and snapshot != before:
+            live = True
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.8)
+    if not live:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the normally opened board did not update live: rawLength stayed {before} after r{revision} committed"}
+    live_length = snapshot
+
+    _key(request, "escape")
+    _sleep(pace, 0.3)
+    _key(request, " ", " ")
+    _sleep(pace, 0.8)
+    _type(request, "picker:input", f"seedtracker/{task}@r1")
+    _sleep(pace, 0.5)
+    _key(request, "enter")
+    deadline = time.monotonic() + 20.0 * pace
+    pinned_at = None
+    while True:
+        pinned_at = raw_length()
+        if pinned_at is not None:
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.6)
+    _premise(pinned_at is not None, "the explicit revision did not open")
+    revised_r3 = f"grammar: 1\ntask: {task}\ncontent:\n  - text: the landing board, third revision while pinned\n"
+    commit = _ok(request({"cmd": "tracker-commit", "task": task_number, "board": revised_r3,
+                          "message": "t36 mid-check: the pinned-board commit"}, timeout=60))
+    _premise(commit.get("revision") == (revision or 0) + 1,
+             f"the pinned-board commit did not land: {json.dumps(commit)[:160]}")
+    _sleep(pace, 3.0)
+    pinned_now = raw_length()
+    if pinned_now != pinned_at:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the explicitly opened revision moved: rawLength {pinned_at} -> {pinned_now} while current advanced"}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (f"the current board updated live ({before} -> {live_length} on r{revision});"
+                       f" the explicitly opened revision held ({pinned_at}) while r{commit.get('revision')} landed")}
+
+
+# -- S20: relaunch restores the persisted window surface ------------------
+
+
+def check_s20_relaunch(request: RequestFn, pace: float = 1.0) -> dict:
+    """S20's relaunch half: the persisted surface only - which windows
+    exist after a relaunch into the SAME run root (the app's own data
+    dir survives; the tracker and its window store do not, and the
+    scenario asserts no live content beyond that). The driver injects
+    the relaunch callable (down, up-t36 into the same root); app-only
+    runs without it stop with that recorded reason."""
+    before = _windows(request)
+    labels = sorted(w["label"] for w in before)
+    _premise(len(labels) >= 1, "no windows before the relaunch")
+    if t36_checks._RELAUNCHER is None:
+        raise CheckStopped("no relaunch callable attached (S20 needs the driver's two-session orchestration)")
+    t36_checks._RELAUNCHER()
+    deadline = time.monotonic() + 40.0 * pace
+    after: list[dict] = []
+    last_error: str = ""
+    while True:
+        try:
+            after = _windows(request)
+            if len(after) >= len(before):
+                break
+        except CheckStopped as stop:
+            last_error = stop.reason[:160]
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 1.0)
+    if len(after) < len(before):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"the relaunch did not restore the window surface: {len(before)} windows before,"
+                           f" {len(after)} after ({last_error or 'the window enumeration never answered'})")}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (f"the relaunch restored the persisted window surface: {len(labels)} window(s) before,"
+                       f" {len(after)} after; labels are fresh (the persisted surface is the window set,"
+                       " not the names)")}

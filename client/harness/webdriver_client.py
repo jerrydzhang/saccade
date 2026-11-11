@@ -158,6 +158,24 @@ def wheel_scroll_actions(x: float, y: float, dx: float, dy: float) -> list[dict]
     ]
 
 
+def context_click_actions(x: float, y: float) -> list[dict]:
+    """A real context (right-button) click at viewport coordinates:
+    the S09 menu-key-alternative invocation rides this."""
+    return [
+        {
+            "type": "pointer",
+            "id": "mouse",
+            "parameters": {"pointerType": "mouse"},
+            "actions": [
+                {"type": "pointerMove", "duration": 80, "x": round(x), "y": round(y), "origin": "viewport"},
+                {"type": "pointerDown", "button": 2},
+                {"type": "pause", "duration": 40},
+                {"type": "pointerUp", "button": 2},
+            ],
+        }
+    ]
+
+
 def key_press_actions(keys: list[str]) -> list[dict]:
     """Named keys as keyDown/keyUp pairs; a pressed-modifier sequence is
     the caller's responsibility, matching real single-key presses."""

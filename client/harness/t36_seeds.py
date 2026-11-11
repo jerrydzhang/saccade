@@ -81,6 +81,27 @@ content:
 """
 
 
+def board_citing_child(task: int, source_task: int, source_revision: int) -> str:
+    """The second citing seed: its incorporation names the OTHER group
+    child of the source, so the part-inside-group citation content
+    exists on the wire (S08's anchor fixture; S13's second nested
+    target). The incorporation's select names the child path - the
+    rendered cited content is that child, inside a group on the
+    source board."""
+    return f"""grammar: 1
+task: t-{task}
+content:
+  - text: the second citing account, naming the other group child
+  - incorporation:
+      source:
+        task: t-{source_task}
+        revision: {source_revision}
+        select: [/content/0/group/content/0]
+      content:
+        - text: the receiving text for the first group child
+"""
+
+
 def board_landing_r1(task: int) -> str:
     return f"""grammar: 1
 task: t-{task}
@@ -125,6 +146,7 @@ def seed_via(post) -> list[dict]:
         for name, key in (
             ("the cited seed account (group-made)", "cited"),
             ("the citing seed account (group-child citation)", "citing"),
+            ("the second citing account (the other group child)", "citing_child"),
             ("the landing seed account (figure lands in a group)", "landing"),
         ):
             reply = post("/api/v1/command", {
@@ -137,6 +159,7 @@ def seed_via(post) -> list[dict]:
             tasks[key] = int(str(reply["id"]).removeprefix("t-"))
         cited = tasks["cited"]
         citing = tasks["citing"]
+        citing_child = tasks["citing_child"]
         landing = tasks["landing"]
 
         def commit(task_id: int, files: list[dict], message: str) -> None:
@@ -153,6 +176,8 @@ def seed_via(post) -> list[dict]:
                "t36 seed: the cited account, group-made")
         commit(citing, [{"path": "board.yaml", "content": _b64(board_citing(citing, cited, 1))}],
                "t36 seed: the citing account, incorporation into a group child")
+        commit(citing_child, [{"path": "board.yaml", "content": _b64(board_citing_child(citing_child, cited, 1))}],
+               "t36 seed: the second citing account, the other group child")
         commit(landing, [{"path": "board.yaml", "content": _b64(board_landing_r1(landing))}],
                "t36 seed: the landing board, text only")
         commit(landing, [

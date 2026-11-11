@@ -41,6 +41,16 @@ RequestFn = Callable[[dict], dict]
 
 DEFAULT_PACE = 1.0
 
+# the driver injects the S20 relaunch callable per run (down, up-t36
+# into the same run root); bodies call it only when their scenario
+# names a relaunch, and app-only runs leave it unset
+_RELAUNCHER: Callable[[], None] | None = None
+
+
+def set_relauncher(relaunch: Callable[[], None] | None) -> None:
+    global _RELAUNCHER
+    _RELAUNCHER = relaunch
+
 
 class _Premise(CheckStopped):
     """A premise gap: the script cannot run against what exists."""
@@ -541,22 +551,54 @@ _REGISTERED = False
 
 
 def ensure_registered() -> None:
-    """Pull in the differential module once (it registers its bodies
-    and the P3 stop registry into CHECKS). Lazy: plain app-only runs
-    never import it."""
+    """Pull in the body modules once (the scenario bodies and the
+    differential + stop registry register into CHECKS). Lazy: plain
+    app-only runs never import them."""
     global _REGISTERED
     if _REGISTERED:
         return
     import t36_differential
+    import t36_scenario_bodies
 
+    # the scenario bodies first: the stop registry never overwrites a
+    # registered body
+    CHECKS.update({
+        spec.id: spec for spec in (
+            CheckSpec("S09", "one action, every invocation agrees", t36_scenario_bodies.check_s09_invocations_agree),
+            CheckSpec("S10", "sequences go through the shipped matcher", t36_scenario_bodies.check_s10_sequences),
+            CheckSpec("S13", "nested targets and citation", t36_scenario_bodies.check_s13_nested_citation_copy),
+            CheckSpec("S15", "following current versus fixed revision", t36_scenario_bodies.check_s15_follows_current),
+            CheckSpec("S20", "relaunch restores the persisted window surface", t36_scenario_bodies.check_s20_relaunch),
+        )
+    })
     t36_differential.register()
     _REGISTERED = True
+
+
+def _with_transport_retry(request: RequestFn) -> RequestFn:
+    """One retry on transient transport errors: real-conditions runs
+    see the occasional connection reset/refusal between checks (the
+    payload's per-connection loop); the retry is bounded to one and
+    covers only the transport, never a refused answer."""
+    def wrapped(payload: dict, timeout: float = 60.0) -> dict:
+        try:
+            return request(payload, timeout=timeout)
+        except (ConnectionResetError, ConnectionRefusedError, RuntimeError) as error:
+            if "connection" not in str(error).lower() and "closed" not in str(error).lower():
+                raise
+            time.sleep(1.0)
+            try:
+                return request(payload, timeout=timeout)
+            except (ConnectionResetError, ConnectionRefusedError, RuntimeError) as second:
+                raise CheckStopped(f"the session transport dropped twice ({second!r}); the lane or session is gone") from None
+    return wrapped
 
 
 def run_checks(request: RequestFn, check_ids: list[str], pace: float = DEFAULT_PACE) -> list[dict]:
     """The inventory runner: each named check, registry order for
     unknown ids refused, one result per check."""
     ensure_registered()
+    request = _with_transport_retry(request)
     results: list[dict] = []
     for check_id in check_ids:
         spec = CHECKS.get(check_id)

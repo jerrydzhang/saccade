@@ -49,6 +49,13 @@ class BoardShapeTest(unittest.TestCase):
         self.assertIn("grammar: 1", r1)
         self.assertIn("grammar: 1", r2)
 
+    def test_second_citing_board_names_the_first_child(self) -> None:
+        text = t36_seeds.board_citing_child(6, 5, 1)
+        self.assertIn("task: t-6", text)
+        self.assertIn("task: t-5", text)
+        self.assertIn("select: [/content/0/group/content/0]", text)
+        self.assertIn("- incorporation:", text)
+
     def test_board_texts_are_ascii(self) -> None:
         for text in (
             t36_seeds.board_cited(5),
@@ -85,11 +92,11 @@ class CommitRecordTest(unittest.TestCase):
             return {"revision": counters["commits"][task], "commit": "deadbeef"}
 
         commits = t36_seeds.seed_via(fake_post)
-        self.assertEqual(len(commits), 4)
-        self.assertEqual([c["task"] for c in commits], ["t-0", "t-1", "t-2", "t-2"])
-        self.assertEqual([c["revision"] for c in commits], [1, 1, 1, 2])
+        self.assertEqual(len(commits), 5)
+        self.assertEqual([c["task"] for c in commits], ["t-0", "t-1", "t-2", "t-3", "t-3"])
+        self.assertEqual([c["revision"] for c in commits], [1, 1, 1, 1, 2])
         commit_routes = [route for route, _payload in posts if route == "/api/v1/boards/commit"]
-        self.assertEqual(len(commit_routes), 4)
+        self.assertEqual(len(commit_routes), 5)
         # the landing commit carries the figure file beside the board
         landing_files = posts[-1][1]["files"]["files"]
         self.assertEqual([f["path"] for f in landing_files], ["board.yaml", "figures/landing.png"])
@@ -114,16 +121,19 @@ class RealSeedTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = pathlib.Path(self.tmp.name)
 
+    def test_part_path_citation_board_is_on_the_wire(self) -> None:
+        pass  # covered by the seed set below; see board_citing_child's shape test
+
     def test_group_boards_commit_through_the_real_wire(self) -> None:
         server = t36_seeds.SeedServer(t36_seeds.resolve_sac_bin(), self.root)
         server.start()
         try:
             commits = server.seed()
-            self.assertEqual(len(commits), 4)
+            self.assertEqual(len(commits), 5)
             for entry in commits:
                 self.assertIsNotNone(entry["revision"], str(entry))
                 self.assertTrue(entry["message"])
-            self.assertEqual([entry["revision"] for entry in commits], [1, 1, 1, 2])
+            self.assertEqual([entry["revision"] for entry in commits], [1, 1, 1, 1, 2])
             record = server.seeds_record(commits)
             self.assertRegex(record["db_hash"], r"^[0-9a-f]{64}$")
             self.assertTrue(pathlib.Path(record["db_path"]).exists())

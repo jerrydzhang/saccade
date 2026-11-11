@@ -303,13 +303,15 @@ def run_lane(plan: dict, run_root: pathlib.Path, options: argparse.Namespace, en
 
 class T36Deps:
     """The session surface the t36 lane executor drives. real() binds
-    the harness entry (up-t36, the live socket, down) and the Playwright
-    prototype session; tests inject fakes shaped by the grounded
-    answers. The fresh-session premise lives in the executor: up and
-    down per role, never a shared session."""
+    the harness entry (down, up-t36 - with up_reuse relaunching into an
+    existing run root so the app's persisted data dir survives, S20) -
+    and the Playwright prototype session; tests inject fakes shaped by
+    the grounded answers. The fresh-session premise lives in the
+    executor: down + up per role, never a shared session."""
 
-    def __init__(self, up, live_socket, request, down, prototype_factory) -> None:
+    def __init__(self, up, up_reuse, live_socket, request, down, prototype_factory) -> None:
         self.up = up
+        self.up_reuse = up_reuse
         self.live_socket = live_socket
         self.request = request
         self.down = down
@@ -320,11 +322,18 @@ def real_deps(options: argparse.Namespace) -> T36Deps:
     import entry as entry_module
     import t36_prototype
 
-    def up(plan: dict) -> int:
+    def up(plan: dict, reuse_root: str = "") -> int:
+        # a live session from a previous run is never adopted: down
+        # first, so every role starts from a fresh app
+        if entry_module.load_session_record() is not None:
+            entry_module.session_down()
         os.environ["SAC_APP_BIN"] = plan["app_bin"]
         os.environ["SACCADE_SERVE_BIN"] = options.serve_bin
         os.environ["SACCADE_DB"] = options.tracker_db
-        return entry_module.session_up(options.board, entry_module.SESSION_DEFAULT_LIFETIME_SECONDS, mode="t36")
+        return entry_module.session_up(
+            options.board, entry_module.SESSION_DEFAULT_LIFETIME_SECONDS,
+            mode="t36", reuse_root=reuse_root,
+        )
 
     def live_socket():
         return entry_module.session_live_socket()
@@ -357,7 +366,7 @@ def real_deps(options: argparse.Namespace) -> T36Deps:
         session.start()
         return session, stop
 
-    return T36Deps(up, live_socket, request, down, prototype_factory)
+    return T36Deps(up, up, live_socket, request, down, prototype_factory)
 
 
 def _lane_up_failed(detail: str) -> dict:
@@ -396,11 +405,27 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
             else:
                 _record, socket_path = live
                 session_request = lambda payload, timeout=60.0: deps.request(socket_path, payload, timeout)  # noqa: E731
+
+                def relaunch() -> None:
+                    # S20's orchestration: down, then up-t36 into the
+                    # SAME run root - the app's persisted data dir
+                    # survives, the tracker and its store do not; the
+                    # socket path is the run root's own, so the live
+                    # request closure keeps working
+                    from t36_observation import CheckStopped
+
+                    deps.down()
+                    code = deps.up_reuse(plan, str(run_root))
+                    if code != 0:
+                        raise CheckStopped(f"the relaunch up-t36 exited {code}")
+
                 prototype, prototype_stop = deps.prototype_factory()
                 try:
                     t36_differential.attach(prototype)
+                    t36_checks.set_relauncher(relaunch)
                     results = t36_checks.run_checks(request=session_request, check_ids=t36_inventory_ids(), pace=1.0)
                 finally:
+                    t36_checks.set_relauncher(None)
                     t36_differential.attach(None)
                     if prototype_stop is not None:
                         prototype_stop()

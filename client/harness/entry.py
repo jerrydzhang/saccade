@@ -1322,11 +1322,14 @@ def daemon_hold_supervisor(
     os._exit(0)
 
 
-def session_up(board_arg: str, lifetime: float, mode: str = "plain") -> int:
+def session_up(board_arg: str, lifetime: float, mode: str = "plain", reuse_root: str = "") -> int:
     """Gated. One sandbox, one daemonized supervisor holder, one control
     socket. Idempotent while the session is alive; a stale record is
     cleared, never adopted. The t36 mode adds the feed proxy and the
-    in-sandbox seed server (SAC_APP_SERVE_BIN required)."""
+    in-sandbox seed server (SAC_APP_SERVE_BIN required). reuse_root
+    relaunches into an existing run root: the run's own data and cache
+    dirs persist, so the app's launch-restore surface is exercisable
+    (S20's persisted-surface assertions)."""
     isolation_gate("webdriver")
 
     resolved = session_resolved(board_arg, tracker_db_arg, require_serve_bin=(mode == "t36"))
@@ -1361,7 +1364,16 @@ def session_up(board_arg: str, lifetime: float, mode: str = "plain") -> int:
     import isolation
 
     token = uuid.uuid4().hex
-    run_root = isolation.make_run_root("session")
+    if reuse_root:
+        reuse = pathlib.Path(reuse_root)
+        if not reuse.is_dir():
+            print(f"containment refusal: reuse_root does not exist: {reuse_root}", file=sys.stderr)
+            return 1
+        run_root = reuse
+        (run_root / "logs").mkdir(exist_ok=True)
+        (run_root / "shots").mkdir(exist_ok=True)
+    else:
+        run_root = isolation.make_run_root("session")
     env = session_env(resolved, run_root, token, lifetime)
     if mode == "t36":
         env["SESSION_MODE"] = "t36"
@@ -1575,10 +1587,10 @@ def parse_verb_fields(args: list[str], bare_kinds: set[str]) -> tuple[dict, list
 
 def build_input_request(args: list[str]) -> dict:
     if not args:
-        print("[session] input needs a kind: click/type/key/wheel/drag/coords", file=sys.stderr)
+        print("[session] input needs a kind: click/type/key/wheel/drag/coords/rightclick", file=sys.stderr)
         raise SystemExit(2)
     kind = args[0]
-    if kind not in ("click", "type", "key", "wheel", "drag", "coords"):
+    if kind not in ("click", "type", "key", "wheel", "drag", "coords", "rightclick"):
         print(f"[session] unknown input kind: {kind!r}", file=sys.stderr)
         raise SystemExit(2)
     fields, bare = parse_verb_fields(args[1:], {"target", "text", "dx", "dy", "x", "y", "steps"})
@@ -1614,7 +1626,7 @@ def build_input_request(args: list[str]) -> dict:
         print(f"[session] {kind} needs target=<id>", file=sys.stderr)
         raise SystemExit(2)
     request["target"] = target
-    for name in ("dx", "dy", "steps"):
+    for name in ("dx", "dy", "steps", "x", "y"):
         if name in fields:
             request[name] = parse_scalar(fields[name], name)
     return request
