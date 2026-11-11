@@ -39,6 +39,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import t36_adapters  # noqa: E402
+import t36_port  # noqa: E402
 import t36_results  # noqa: E402
 
 ROLES = ("baseline", "candidate")
@@ -421,6 +422,15 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
                         raise RuntimeError("no live session socket")
                     _r, current = live_now
                     return deps.request(current, payload, timeout)
+
+                # the flavor rides the run root: the port adapter's gate
+                # (run_check) re-probes per check, this record is the
+                # run's own provenance of what answered
+                try:
+                    flavor = "port" if t36_port.is_port(session_request) else "legacy"
+                except Exception:  # noqa: BLE001 - flavor detection never kills a role
+                    flavor = "legacy"
+                (run_root / "flavor.txt").write_text(flavor + "\n", encoding="ascii")
 
                 def relaunch() -> None:
                     # S20's orchestration: down, then up-t36 into the

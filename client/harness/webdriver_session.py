@@ -172,6 +172,12 @@ OBSERVE_SCRIPT = (
 )
 
 INSPECT_SCRIPT = "return (window.__saccadeApp && window.__saccadeApp.inspection()) || null;"
+# the port's observation surface (t-36 slice 1): the ready wait accepts
+# either app flavor - the oracle (the shown board loaded) is the same
+PORT_READY_SCRIPT = (
+    "return JSON.stringify((typeof window.__saccadePort === 'object' && window.__saccadePort)"
+    " ? window.__saccadePort.readout() : null);"
+)
 
 # R5 window surface: each suite webview knows its own tauri window
 # label from the runtime's own metadata (read-only), and the shell's
@@ -1217,6 +1223,19 @@ def main() -> int:
                     break
             else:
                 last_detail = f"execute returned {type(inspection).__name__}"
+                # the port flavor: no old inspection surface - the port
+                # readout answers the same ready oracle
+                try:
+                    port_value = client.execute(PORT_READY_SCRIPT)
+                    port_obs = json.loads(port_value) if isinstance(port_value, str) else None
+                except (WebDriverError, ValueError):
+                    port_obs = None
+                if isinstance(port_obs, dict):
+                    board = port_obs.get("board") or {}
+                    last_detail = f"port status={board.get('status')!r} location={board.get('location')!r}"
+                    if board.get("status") == "loaded":
+                        ready = True
+                        break
             time.sleep(0.5)
         check("app frontend up and board loaded", ready, f"board {board}; last: {last_detail}")
         if not ready:

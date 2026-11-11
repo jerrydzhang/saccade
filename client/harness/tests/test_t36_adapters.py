@@ -17,7 +17,11 @@ import t36_adapters  # noqa: E402
 
 class AdapterSetTest(unittest.TestCase):
     def test_seven_rows_with_ids_a1_to_a7(self) -> None:
-        self.assertEqual(t36_adapters.ADAPTER_IDS, tuple(f"A{n}" for n in range(1, 8)))
+        # the app-side adapter set grew the port rows (P1/P2, the
+        # slice-2 contract): the app-side ids stay A1..A7, the port rows
+        # follow under their own prefix
+        self.assertEqual(t36_adapters.ADAPTER_IDS[:7], tuple(f"A{n}" for n in range(1, 8)))
+        self.assertEqual(t36_adapters.ADAPTER_IDS[7:], ("P1", "P2"))
 
     def test_revision_is_a_printable_string(self) -> None:
         revision = t36_adapters.ADAPTER_SET_REVISION

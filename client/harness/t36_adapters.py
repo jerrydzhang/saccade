@@ -17,7 +17,7 @@ diff can name the adapter set it was judged under.
 
 from __future__ import annotations
 
-ADAPTER_SET_REVISION = "t36-adapters/1"
+ADAPTER_SET_REVISION = "t36-adapters/2"
 
 KIND_INPUT = "input"
 KIND_READOUT = "readout"
@@ -118,6 +118,31 @@ ADAPTERS: tuple[dict, ...] = (
         " set is explicit: no differential comparison may claim it.",
         verification=VERIFIED,
         evidence="t-36@r54 adapter table: 'Not an adapter: app-only oracle'",
+    ),
+    _adapter(
+        "P1",
+        "port-readout-resolver",
+        KIND_READOUT,
+        ("S20",),
+        "On the port flavor the checks' observation layer reads"
+        " window.__saccadePort.readout() (the port's own observation"
+        " contract) instead of the old inspection()/DOM scraping; the"
+        " oracles stay untouched. Fields the shown build cannot produce"
+        " REQUIRE_FIELDS-stop naming where they land (trail/viewport ride"
+        " the Board instrument, slice 2) - the old STOP rule, port side.",
+    ),
+    _adapter(
+        "P2",
+        "port-model-open",
+        KIND_INPUT,
+        ("S20",),
+        "On the port flavor an open drives the port's own model open door"
+        " (__suiteOpenAt - the same door the shared shell evals for"
+        " delivered opens; the receiving window opens through its own"
+        " model) instead of the old-app picker flow. Slice-1 serves no"
+        " picker, keymap beyond the routing seam, menu, or copy surface:"
+        " checks needing those stop with the recorded premise"
+        " (t36_port.ensure_served), never drive old-app selectors.",
     ),
 )
 

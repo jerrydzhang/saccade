@@ -12,6 +12,7 @@ import time
 from typing import Callable
 
 import t36_checks
+import t36_port
 import t36_results
 from t36_checks import (
     RequestFn,
@@ -570,7 +571,19 @@ def check_s20_relaunch(request: RequestFn, pace: float = 1.0) -> dict:
         return {"status": t36_results.STATUS_FAIL,
                 "detail": (f"the relaunch did not restore the window surface: {len(before)} windows before,"
                            f" {len(after)} after ({last_error or 'the window enumeration never answered'})")}
+    # the port flavor: the readout rides the observation layer (the
+    # app-side identity of the relaunched window); the oracle - the
+    # restored window set - stays unchanged
+    flavor_note = ""
+    try:
+        if t36_port.is_port(request):
+            obs = t36_port.readout(request)
+            board = obs.get("board") or {}
+            flavor_note = (f"; the port readout answers (window {(obs.get('window') or {}).get('label')!r},"
+                           f" board {board.get('location')!r} status {board.get('status')!r})")
+    except CheckStopped:
+        pass
     return {"status": t36_results.STATUS_PASS,
             "detail": (f"the relaunch restored the persisted window surface: {len(labels)} window(s) before,"
                        f" {len(after)} after; labels are fresh (the persisted surface is the window set,"
-                       " not the names)")}
+                       f" not the names)" + flavor_note)}

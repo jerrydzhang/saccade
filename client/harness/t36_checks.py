@@ -34,6 +34,7 @@ import time
 from typing import Callable
 
 import t36_adapters
+import t36_port
 import t36_results
 from t36_observation import CheckStopped, stop_result
 
@@ -536,6 +537,12 @@ def run_check(request: RequestFn, spec: CheckSpec, pace: float = DEFAULT_PACE) -
     machinery errors are stops with their evidence; only the body's
     own verdict can be pass or fail."""
     try:
+        # the flavor gate (the slice-2 adapter contract): on the port
+        # flavor a check outside the served set stops with the recorded
+        # premise instead of driving old-app selectors into the fresh
+        # app; the served bodies branch their observation layer
+        if t36_port.is_port(request):
+            t36_port.ensure_served(spec.id)
         verdict = spec.body(request, pace)
     except CheckStopped as stop:
         return stop_result(spec.id, spec.lane, spec.name, stop.reason)

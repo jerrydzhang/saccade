@@ -22,6 +22,7 @@ HARNESS = HERE.parent
 sys.path.insert(0, str(HARNESS))
 
 import t36_checks  # noqa: E402
+import t36_port  # noqa: E402
 import t36_results  # noqa: E402
 
 BOARD_SCRIPT_ID = "board:open-citation"
@@ -513,3 +514,72 @@ class ScenarioBodiesTest(unittest.TestCase):
         result = t36_checks.run_check(request, t36_checks.CHECKS["S15"], pace=0)
         self.assertEqual(result["status"], "fail")
         self.assertIn("did not update live", result["detail"])
+
+
+class PortAdapterTest(unittest.TestCase):
+    """The slice-2 port adapter: the flavor gate, the readout resolver,
+    the REQUIRE_FIELDS-stop rule, and the served-set premise."""
+
+    class PortFake(FakeSession):
+        def __init__(self, readout: dict | None = None) -> None:
+            super().__init__(delivered=True)
+            self.readout = readout or {
+                "app": {"name": "saccade-app-port", "slice": 1},
+                "window": {"label": "main"},
+                "board": {"status": "loaded", "asked": None, "location": "t-0@r1",
+                          "task": "t-0", "pinnedRevision": 1},
+                "errors": [], "render": [], "content": {"parts": []},
+                "diagnostics": [], "doors": {"jumpChip": None, "delivered": []},
+            }
+
+        def _evaluate(self, script: str) -> object:
+            if "readout === 'function'" in script:
+                return True
+            if "JSON.stringify(window.__saccadePort.readout())" in script:
+                return json.dumps(self.readout)
+            return FakeSession._evaluate(self, script)
+
+    def test_flavor_detected_port_and_legacy(self) -> None:
+        self.assertTrue(t36_port.is_port(self.PortFake()))
+        self.assertFalse(t36_port.is_port(FakeSession()))
+
+    def test_readout_parses(self) -> None:
+        obs = t36_port.readout(self.PortFake())
+        self.assertEqual(obs["board"]["status"], "loaded")
+
+    def test_require_fields_stops_on_slice2_fields(self) -> None:
+        with self.assertRaises(t36_checks.CheckStopped) as caught:
+            t36_port.require_fields({"content": {}}, "trail")
+        self.assertIn("Board instrument", str(caught.exception))
+        t36_port.require_fields({"trail": {"rows": []}}, "trail")  # present passes
+
+    def test_ensure_served_premise(self) -> None:
+        with self.assertRaises(t36_checks.CheckStopped) as caught:
+            t36_port.ensure_served("S12")
+        self.assertIn("port slice-1", str(caught.exception))
+        t36_port.ensure_served("F01")
+        t36_port.ensure_served("S20")
+
+    def test_run_check_port_gate_stops_unserved_before_the_body(self) -> None:
+        fake = self.PortFake()
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S12"], pace=0)
+        self.assertEqual(result["status"], "stop")
+        self.assertIn("port slice-1", result["detail"])
+
+    def test_run_check_served_body_runs_on_port(self) -> None:
+        fake = self.PortFake()
+        t36_checks.set_relauncher(None)
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S20"], pace=0)
+        # the gate let S20 through: the body's own stop (no relaunch
+        # callable) is the verdict, not the flavor premise
+        self.assertIn("no relaunch callable", result["detail"])
+
+    def test_s20_port_note_rides_the_pass_detail(self) -> None:
+        fake = self.PortFake()
+        relaunches: list[int] = []
+        t36_checks.set_relauncher(lambda: relaunches.append(1))
+        self.addCleanup(t36_checks.set_relauncher, None)
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S20"], pace=0)
+        self.assertEqual(result["status"], "pass")
+        self.assertIn("the port readout answers", result["detail"])
+        self.assertIn("'main'", result["detail"])
