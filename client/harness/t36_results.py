@@ -34,7 +34,7 @@ import pathlib
 import re
 
 SCHEMA = "t36-run-manifest/1"
-INVENTORY_REVISION = "t36-inventory/2"
+INVENTORY_REVISION = "t36-inventory/3"
 
 # The harness lanes a check result can name. The scenario inventory's
 # lane kinds map onto these: [P] pure and [C] component run without the
@@ -94,6 +94,9 @@ GATES: tuple[dict, ...] = (
     {"id": "G14", "match": "a stopped server refuses in bounded time", "name": "a stopped server refuses in bounded time"},
     {"id": "G15", "match": "the landing-on-a-real-server pin runs", "name": "the landing pin runs"},
     {"id": "G16", "match": "the stopped-server open takes input", "name": "the stopped-server open takes input"},
+    {"id": "G17", "match": "the feed proxy listens on the core socket path", "name": "the feed proxy holds the core socket"},
+    {"id": "G18", "match": "the t36 seed server answers", "name": "the t36 seed server answers"},
+    {"id": "G19", "match": "the t36 seed boards committed", "name": "the t36 group seeds commit"},
 )
 
 GATE_IDS = tuple(g["id"] for g in GATES)

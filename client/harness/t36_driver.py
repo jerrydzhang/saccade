@@ -125,6 +125,7 @@ def build_plan(
         raise ProvenanceRefused("manifest refused: " + "; ".join(refusals))
     return {
         "role": role,
+        "lane": "t36",
         "app_bin": app_bin,
         "app_ref": app_ref,
         "board": board,
@@ -170,6 +171,14 @@ def check_subset(spec: str) -> list[str]:
 
 
 LANE_CHECK_LINE = re.compile(r"^\[webdriver\] (ok|FAIL): (.+)$")
+
+LANES = ("tracker", "t36")
+
+
+def t36_inventory_ids() -> list[str]:
+    """The t36 lane's check inventory: every scenario group plus the
+    feed held-break probe, in stable order."""
+    return list(t36_results.SCENARIO_IDS) + ["F01"]
 
 
 def lane_results_from_log(log_text: str, lane: str = "session", declared_checks: tuple[str, ...] | list[str] = ()) -> list[dict]:
@@ -292,6 +301,128 @@ def run_lane(plan: dict, run_root: pathlib.Path, options: argparse.Namespace, en
     return completed.returncode
 
 
+class T36Deps:
+    """The session surface the t36 lane executor drives. real() binds
+    the harness entry (up-t36, the live socket, down) and the Playwright
+    prototype session; tests inject fakes shaped by the grounded
+    answers. The fresh-session premise lives in the executor: up and
+    down per role, never a shared session."""
+
+    def __init__(self, up, live_socket, request, down, prototype_factory) -> None:
+        self.up = up
+        self.live_socket = live_socket
+        self.request = request
+        self.down = down
+        self.prototype_factory = prototype_factory
+
+
+def real_deps(options: argparse.Namespace) -> T36Deps:
+    import entry as entry_module
+    import t36_prototype
+
+    def up(plan: dict) -> int:
+        os.environ["SAC_APP_BIN"] = plan["app_bin"]
+        os.environ["SACCADE_SERVE_BIN"] = options.serve_bin
+        os.environ["SACCADE_DB"] = options.tracker_db
+        return entry_module.session_up(options.board, entry_module.SESSION_DEFAULT_LIFETIME_SECONDS, mode="t36")
+
+    def live_socket():
+        return entry_module.session_live_socket()
+
+    def request(socket_path: str, payload: dict, timeout: float = 60.0) -> dict:
+        return entry_module.session_request(socket_path, payload, timeout=timeout)
+
+    def down() -> int:
+        return entry_module.session_down()
+
+    def prototype_factory():
+        try:
+            for key, value in t36_prototype.webkit_launch_env().items():
+                os.environ.setdefault(key, value)
+            cache = pathlib.Path("/tmp/t36-proto-cache")
+            materialized = t36_prototype.materialize(cache)
+            vendored = t36_prototype.vendor_libs(cache)
+            server = t36_prototype.PrototypeServer(
+                pathlib.Path(materialized["path"]).read_bytes(), vendored
+            )
+        except t36_prototype.PrototypeRefused as error:
+            print(f"[t36-driver] prototype half unavailable: {error}", file=sys.stderr, flush=True)
+            return None, None
+        session = t36_prototype.PrototypeSession(server)
+
+        def stop() -> None:
+            session.stop()
+            server.stop()
+
+        session.start()
+        return session, stop
+
+    return T36Deps(up, live_socket, request, down, prototype_factory)
+
+
+def _lane_up_failed(detail: str) -> dict:
+    return t36_results.make_result(
+        "G00", "session", "lane run", t36_results.STATUS_FAIL, detail
+    )
+
+
+def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: pathlib.Path, deps: T36Deps | None = None) -> int:
+    """The t36 lane: per role, a FRESH up-t36 session (the S18 premise
+    enforces one window; the driver never reuses a session across
+    roles), the prelude gate log parsed into gate entries, the check
+    inventory run over the live control socket with the prototype
+    half attached, the two merged into one TAP per role, then the
+    per-check diff exactly as the tracker lane lands it."""
+    import isolation
+
+    import t36_checks
+    import t36_differential
+
+    deps = deps or real_deps(options)
+    exit_codes: dict[str, int] = {}
+    role_results: dict[str, list[dict]] = {}
+    for plan in plans:
+        run_root = isolation.make_run_root(f"t36-{plan['role']}")
+        manifest_path = run_root / "manifest.json"
+        t36_results.write_manifest(str(manifest_path), plan["manifest"])
+        results: list[dict] = []
+        up_code = deps.up(plan)
+        if up_code != 0:
+            results.append(_lane_up_failed(f"up-t36 exited {up_code}; no session came up"))
+        else:
+            live = deps.live_socket()
+            if live is None:
+                results.append(_lane_up_failed("the session record vanished after up"))
+            else:
+                _record, socket_path = live
+                session_request = lambda payload, timeout=60.0: deps.request(socket_path, payload, timeout)  # noqa: E731
+                prototype, prototype_stop = deps.prototype_factory()
+                try:
+                    t36_differential.attach(prototype)
+                    results = t36_checks.run_checks(request=session_request, check_ids=t36_inventory_ids(), pace=1.0)
+                finally:
+                    t36_differential.attach(None)
+                    if prototype_stop is not None:
+                        prototype_stop()
+                prelude = run_root / "logs" / "t36-prelude.log"
+                if prelude.exists():
+                    gate_results = lane_results_from_log(prelude.read_text(errors="replace"))
+                    results = gate_results + results
+        tap_path = write_run_tap(run_root, plan["role"], results, plan["manifest"])
+        exit_codes[plan["role"]] = t36_results.tap_exit_code(t36_results.emit_tap(results))
+        role_results[plan["role"]] = results
+        deps.down()
+        print(
+            f"[t36-driver] {plan['role']} run root: {run_root} tap={tap_path}"
+            f" tap_exit={exit_codes[plan['role']]}",
+            flush=True,
+        )
+    if "baseline" in role_results and "candidate" in role_results:
+        diff_path = write_diff(out_root, diff_results(role_results["baseline"], role_results["candidate"]))
+        print(f"[t36-driver] per-check diff: {diff_path}", flush=True)
+    return max(exit_codes.values(), default=1)
+
+
 def write_diff(out_root: pathlib.Path, rows: list[dict]) -> pathlib.Path:
     path = out_root / "diff.json"
     path.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n", encoding="ascii")
@@ -309,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--serve-bin", help="absolute path to the real sac binary used for seeding and the lane")
     parser.add_argument("--serve-ref", help="the commit the serve binary was built from (t-36@r58: catches serve skew)")
     parser.add_argument("--checks", default="", help="optional comma-separated scenario subset (S08,S18)")
+    parser.add_argument("--lane", default="tracker", choices=list(LANES), help="tracker (default) or t36 (up-t36 + the check inventory with the prototype half)")
     parser.add_argument("--execute", action="store_true", help="run both lanes (default is --dry-run)")
     options = parser.parse_args(argv)
 
@@ -330,9 +462,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"provenance refusal: {error}", file=sys.stderr)
             return 2
 
+    if options.lane not in LANES:
+        print(f"provenance refusal: unknown lane {options.lane!r}", file=sys.stderr)
+        return 2
+
     if not options.execute:
         print(json.dumps({
             "mode": "dry-run",
+            "lane": options.lane,
             "run_id": run_id,
             "harness_commit": harness_commit,
             "adapter_set_revision": t36_adapters.ADAPTER_SET_REVISION,
@@ -340,6 +477,7 @@ def main(argv: list[str] | None = None) -> int:
             "plans": [
                 {
                     "role": plan["role"],
+                    "lane": plan["lane"],
                     "app_bin": plan["app_bin"],
                     "app_ref": plan["app_ref"],
                     "manifest": plan["manifest"],
@@ -350,6 +488,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     import isolation
+
+    if options.lane == "t36":
+        return execute_t36_lane(options, plans, isolation.make_run_root("t36-differential"))
 
     out_root = isolation.make_run_root("t36-differential")
     exit_codes: dict[str, int] = {}

@@ -71,6 +71,15 @@ python3 client/harness/t36_driver.py --baseline-bin <store-bin> \
     --candidate-ref <sha> --board <abs.yaml> --tracker-db <abs.db> \
     --serve-bin <store-sac> --serve-ref <sha> --checks S08,S18
     # dry-run plans; the run refuses without any ref
+
+--lane t36 runs the differential through the provenance system: per
+role a FRESH up-t36 session (feed proxy + seed server; S18's
+one-window premise is enforced per role, sessions never shared), the
+prelude gates teed to logs/t36-prelude.log and parsed into G17-G19
+entries, the full check inventory (SCENARIO_IDS + F01) run over the
+control socket with the prototype half attached, the gate TAP and the
+check TAP merged per role, and the per-check diff landing as today.
+Default lane stays tracker (the legacy sequence), unchanged.
 python3 client/harness/t36_seeds.py --root /tmp/t36-seed-smoke
 
 Deviations announced (the problem was not silently modified)

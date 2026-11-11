@@ -736,9 +736,19 @@ def t36_prelude(state: SessionState, logs: pathlib.Path) -> None:
     proxy binds the core socket path (the app dials it at startup),
     then a real sac serve on a throwaway db carries the group-made
     seed boards the tracker checks open. Every step is a recorded
-    check; a failure here leaves the chain down and the verdict red."""
+    check, teed to logs/t36-prelude.log so the driver's gate-TAP
+    merge can parse them; a failure here leaves the chain down and
+    the verdict red."""
     import t36_feed_proxy
     import t36_seeds
+
+    prelude_log_path = logs / "t36-prelude.log"
+
+    def gate(name: str, condition: bool, detail: str = "") -> None:
+        check(name, condition, detail)
+        line = f"[webdriver] {'ok' if condition else 'FAIL'}: {name} {detail if not condition else ''}".rstrip() + "\n"
+        with open(prelude_log_path, "a", encoding="utf-8") as log:
+            log.write(line)
 
     serve_bin = os.environ.get("SAC_APP_SERVE_BIN", "")
     if not serve_bin.startswith("/"):
@@ -748,7 +758,7 @@ def t36_prelude(state: SessionState, logs: pathlib.Path) -> None:
     proxy = t36_feed_proxy.FeedProxy(t36_feed_proxy.default_socket_path())
     proxy.start()
     state.feed_proxy = proxy
-    check("the feed proxy listens on the core socket path", proxy.started, t36_feed_proxy.default_socket_path())
+    gate("the feed proxy listens on the core socket path", proxy.started, t36_feed_proxy.default_socket_path())
 
     # the server shells out to git, which the scrubbed env would never
     # find: the pinned git rides /lane beside the server
@@ -758,22 +768,22 @@ def t36_prelude(state: SessionState, logs: pathlib.Path) -> None:
         server = t36_seeds.SeedServer(serve_bin, root)
         server.start()
     except t36_seeds.SeedRefused as error:
-        check("the seed server came up", False, str(error)[:200])
+        gate("the t36 seed server answers", False, str(error)[:200])
         teardown(state)
         raise SystemExit(1)
     state.seed_server = server
     state.tracker_base = server.base
-    check("the t36 seed server answers", server.process is not None and server.process.poll() is None, server.base)
+    gate("the t36 seed server answers", server.process is not None and server.process.poll() is None, server.base)
     try:
         commits = server.seed()
         state.tracker_tasks = {entry["task"]: entry for entry in commits}
-        check(
+        gate(
             "the t36 seed boards committed (groups on the real wire)",
             len(commits) == 4 and all(entry.get("revision") is not None for entry in commits),
             json.dumps([[entry["task"], entry.get("revision")] for entry in commits]),
         )
     except t36_seeds.SeedRefused as error:
-        check("the t36 seed boards committed (groups on the real wire)", False, str(error)[:200])
+        gate("the t36 seed boards committed (groups on the real wire)", False, str(error)[:200])
         teardown(state)
         raise SystemExit(1)
 

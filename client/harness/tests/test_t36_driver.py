@@ -5,11 +5,16 @@ constancy, and the per-check diff. Pure - no lane, no app, no nix."""
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import shutil
 import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+import t36_checks  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 HARNESS = HERE.parent
@@ -330,3 +335,231 @@ class ServeRefCliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class T36LaneWiringTest(unittest.TestCase):
+    """The t36 lane wiring: dry-run shape, the fake-inventory lane pass
+    (prelude gates merged with the check inventory, per-role fresh
+    sessions, the per-check diff), and the S18 fresh-session premise
+    honored by construction (up + down per role, never shared)."""
+
+    def _options(self, tmp: str, lane: str = "t36", **overrides):
+        store_bin = shutil.which("bash")
+        assert store_bin is not None and store_bin.startswith("/nix/store/")
+        board = pathlib.Path(tmp) / "board.yaml"
+        board.write_text("grammar: 1\n", encoding="ascii")
+        db = pathlib.Path(tmp) / "baseline.db"
+        db.write_bytes(b"k")
+        base = {
+            "baseline_bin": store_bin,
+            "baseline_ref": "4d59c35",
+            "candidate_bin": store_bin,
+            "candidate_ref": "671bac4",
+            "board": str(board),
+            "tracker_db": str(db),
+            "serve_bin": store_bin,
+            "serve_ref": "4d59c35",
+            "checks": "",
+            "execute": True,
+            "lane": lane,
+        }
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_dry_run_names_the_lane(self) -> None:
+        import contextlib
+        import io
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        options = self._options(tmp.name, execute=False)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = t36_driver.main([
+                "--baseline-bin", options.baseline_bin, "--baseline-ref", options.baseline_ref,
+                "--candidate-bin", options.candidate_bin, "--candidate-ref", options.candidate_ref,
+                "--board", options.board, "--tracker-db", options.tracker_db,
+                "--serve-bin", options.serve_bin, "--serve-ref", options.serve_ref,
+                "--lane", "t36",
+            ])
+        self.assertEqual(code, 0)
+        plan = json.loads(buffer.getvalue())
+        self.assertEqual(plan["lane"], "t36")
+        self.assertEqual(plan["plans"][0]["lane"], "t36")
+
+    def test_fake_inventory_lane_pass(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        options = self._options(tmp.name)
+        ups: list[str] = []
+        downs: list[int] = []
+
+        class FakeDeps(t36_driver.T36Deps):
+            # the grounded baseline shape: F01, S12, S18 fail; S16
+            # passes; everything else stops
+            verdicts = {
+                "F01": "fail", "S12": "fail", "S18": "fail", "S16": "pass",
+            }
+
+            def __init__(self, options: argparse.Namespace) -> None:
+                self.options = options
+                super().__init__(self._up, self._live_socket, self._request, self._down, self._prototype_factory)
+
+            def _up(self, plan: dict) -> int:
+                ups.append(plan["role"])
+                return 0
+
+            def _live_socket(self):
+                return {"socket": "fake"}, "fake-sock"
+
+            def _request(self, socket_path: str, payload: dict, timeout: float = 60.0) -> dict:
+                if payload.get("cmd") == "windows":
+                    return {"ok": True, "windows": [{"handle": "h-0", "label": "main"}], "suite": []}
+                return {"ok": True}
+
+            def _down(self) -> int:
+                downs.append(1)
+                return 0
+
+            def _prototype_factory(self):
+                return None, None
+
+        # the check inventory runs through the fake surface: replace
+        # run_checks' request path by stubbing the checks module for
+        # the duration of the call
+        real_run_checks = t36_checks.run_checks
+        captured: dict = {}
+        verdicts = {"F01": "fail", "S12": "fail", "S18": "fail", "S16": "pass"}
+
+        def fake_run_checks(request, check_ids, pace=1.0):
+            captured["ids"] = list(check_ids)
+            results = []
+            for check_id in check_ids:
+                status = verdicts.get(check_id, "stop")
+                detail = {"fail": "grounded baseline red", "pass": "agrees", "stop": "recorded gap"}[status]
+                results.append(t36_results.make_result(check_id, "session", "fake body", status, detail))
+            return results
+
+        t36_checks.run_checks = fake_run_checks  # type: ignore[assignment]
+        import isolation
+
+        runtime = pathlib.Path(isolation.RUNTIME_ROOT + "-1000")
+        pre_existing = set(runtime.glob("t36-*"))
+        try:
+            options = self._options(tmp.name)
+            deps = FakeDeps(options)
+            out_root = pathlib.Path(tmp.name) / "out"
+            out_root.mkdir()
+            code = t36_driver.execute_t36_lane(options, [
+                t36_driver.build_plan(
+                    "baseline", options.baseline_bin, options.baseline_ref, options.board,
+                    options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-b", "now",
+                ),
+                t36_driver.build_plan(
+                    "candidate", options.candidate_bin, options.candidate_ref, options.board,
+                    options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-c", "now",
+                ),
+            ], out_root, deps)
+        finally:
+            t36_checks.run_checks = real_run_checks  # type: ignore[assignment]
+
+        self.assertEqual(code, 1)  # failures exist in the grounded shape
+        self.assertEqual(ups, ["baseline", "candidate"])  # fresh session per role, in order
+        self.assertEqual(len(downs), 2)
+        self.assertEqual(captured["ids"], t36_driver.t36_inventory_ids())
+        self.assertEqual(captured["ids"][-1], "F01")
+        self.assertEqual(captured["ids"][0], "S01")
+        self.assertIn("S18", captured["ids"])
+
+        # the merged role TAPs exist in the run roots this pass
+        # created, with gate and check entries and the manifest riding
+        # as comments
+        created = sorted(set(runtime.glob("t36-*")) - pre_existing, key=lambda p: p.stat().st_mtime)
+        self.assertEqual(len(created), 2)
+        baseline_root = next(r for r in created if r.name.startswith("t36-baseline-"))
+        first = (baseline_root / "tap-baseline.tap").read_text(encoding="ascii")
+        self.assertIn("# manifest:", first)
+        self.assertIn("F01/session", first)
+        self.assertIn("S18/session", first)
+        # the diff lands in the out root
+        diffs = list(out_root.rglob("diff.json"))
+        self.assertEqual(len(diffs), 1)
+        rows = json.loads(diffs[0].read_text())
+        by_id = {row["id"]: row for row in rows}
+        self.assertEqual(by_id["F01"]["verdict"], "same")  # both roles fail identically
+
+    def test_up_failure_fails_the_role_visibly(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        options = self._options(tmp.name)
+
+        class UpFails(t36_driver.T36Deps):
+            def __init__(self) -> None:
+                super().__init__(self._up, self._live_socket, self._request, self._down, self._prototype_factory)
+
+            def _up(self, plan: dict) -> int:
+                return 1
+
+            def _live_socket(self):
+                return None
+
+            def _request(self, socket_path: str, payload: dict, timeout: float = 60.0) -> dict:
+                return {"ok": True}
+
+            def _down(self) -> int:
+                return 0
+
+            def _prototype_factory(self):
+                return None, None
+
+        import isolation
+
+        out_root = pathlib.Path(tmp.name) / "out"
+        out_root.mkdir()
+        code = t36_driver.execute_t36_lane(options, [
+            t36_driver.build_plan(
+                "baseline", options.baseline_bin, options.baseline_ref, options.board,
+                options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-b", "now",
+            ),
+        ], out_root, UpFails())
+        self.assertEqual(code, 1)
+        runtime = pathlib.Path(isolation.RUNTIME_ROOT + "-1000")
+        tap = sorted(runtime.glob("t36-*/tap-baseline.tap"), key=lambda p: p.stat().st_mtime)[-1].read_text(encoding="ascii")
+        self.assertIn("not ok 1 - G00/session lane run", tap)
+        self.assertIn("up-t36 exited 1", tap)
+
+    def test_prelude_gates_merge_into_the_role_tap(self) -> None:
+        # the prelude log the payload tees, parsed through the gates
+        prelude = (
+            "[webdriver] ok: the feed proxy listens on the core socket path\n"
+            "[webdriver] ok: the t36 seed server answers\n"
+            "[webdriver] FAIL: the t36 seed boards committed (groups on the real wire) refused\n"
+        )
+        results = t36_driver.lane_results_from_log(prelude)
+        by_id = {r["id"]: r for r in results}
+        self.assertEqual(by_id["G17"]["status"], "pass")
+        self.assertEqual(by_id["G18"]["status"], "pass")
+        self.assertEqual(by_id["G19"]["status"], "fail")
+        tap = t36_results.emit_tap(results)
+        self.assertEqual(t36_results.tap_exit_code(tap), 1)
+
+    def test_inventory_ids_shape(self) -> None:
+        ids = t36_driver.t36_inventory_ids()
+        self.assertEqual(ids[:5], ["S01", "S02", "S03", "S04", "S05"])
+        self.assertEqual(ids[-1], "F01")
+        self.assertEqual(len(ids), 21)
+
+    def test_unknown_lane_refused_at_cli(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        options = self._options(tmp.name, lane="teleport")
+        store_bin = shutil.which("bash")
+        with self.assertRaises(SystemExit) as caught:
+            t36_driver.main([
+                "--baseline-bin", store_bin, "--baseline-ref", "4d59c35",
+                "--candidate-bin", store_bin, "--candidate-ref", "671bac4",
+                "--board", options.board, "--tracker-db", options.tracker_db,
+                "--serve-bin", store_bin, "--serve-ref", "4d59c35",
+                "--lane", "teleport",
+            ])
+        self.assertEqual(caught.exception.code, 2)
