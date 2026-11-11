@@ -120,6 +120,11 @@ function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachment<Boa
   let askedSpec = "";
   let lastFrame: BoardData = EMPTY_FRAME;
   let released = false;
+  // The outcomes key of the currently published frame: re-rendering
+  // the same outcomes must not republish a new frame (the frame
+  // publication re-runs the component's render effect, which reports
+  // again - only a real outcome change may republish).
+  let publishedOutcomesKey = "";
 
   const host: BoardUI = {
     currentGeneration: () => generation,
@@ -141,6 +146,9 @@ function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachment<Boa
     },
     reportRenderOutcomes(reported, outcomes) {
       if (released || reported !== generation) return;
+      const key = JSON.stringify(outcomes);
+      if (key === publishedOutcomesKey) return;
+      publishedOutcomesKey = key;
       const frame: BoardData = { ...lastFrame, renderOutcomes: [...outcomes] };
       void buffer.updates.refresh(() => readyFrame(frame));
     },
@@ -153,6 +161,8 @@ function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachment<Boa
         issue: failureIssue("lane-unavailable", "the buffer was destroyed"),
       };
     const token = ++generation;
+    // a new open starts with no published outcomes
+    publishedOutcomesKey = "";
     const asked = formatLocation({
       machine: address.machine,
       path: address.path,
