@@ -525,6 +525,7 @@ class PortAdapterTest(unittest.TestCase):
     class PortFake(FakeSession):
         def __init__(self, readout: dict | None = None) -> None:
             super().__init__(delivered=True)
+            self.typed: str | None = None
             self.readout = readout or {
                 "app": {"name": "saccade-app-port", "slice": 1},
                 "window": {"label": "main"},
@@ -534,11 +535,18 @@ class PortAdapterTest(unittest.TestCase):
                 "diagnostics": [], "doors": {"jumpChip": None, "delivered": []},
             }
 
+        def __call__(self, payload: dict, timeout: float = 60.0) -> dict:
+            if payload.get("cmd") == "input" and payload.get("kind") == "type":
+                self.typed = payload.get("text")
+            return FakeSession.__call__(self, payload, timeout)
+
         def _evaluate(self, script: str) -> object:
             if "readout === 'function'" in script:
                 return True
             if "JSON.stringify(window.__saccadePort.readout())" in script:
                 return json.dumps(self.readout)
+            if "el.value" in script:
+                return self.typed  # the picker's input value
             if "picker-input" in script:
                 return True  # the port picker opens on space space
             return FakeSession._evaluate(self, script)
@@ -660,6 +668,8 @@ class PortWidenedBodiesTest(unittest.TestCase):
                     "trail": self.trail,
                     "viewport": {"left": 0, "top": self.viewport_top, "width": 1024, "height": 1280},
                 })
+            if "el.value" in script:
+                return self.typed_spec  # the picker's input value
             if "data-port-label" in script and "length" in script:
                 return self.label_count
             if "data-port-label" in script:
@@ -723,3 +733,107 @@ class PortWidenedBodiesTest(unittest.TestCase):
             result = t36_checks.run_check(fake, t36_checks.CHECKS["S14"], pace=0)
         self.assertEqual(result["status"], "pass", result["detail"])
         self.assertIn("explicit openings", result["detail"])
+
+
+class S15SignatureGateTest(unittest.TestCase):
+    """The S15 port observation's before/after must actually differ:
+    the signature (location + part-kind set) distinguishes the fixture's
+    landing r2 (text+group+figure) from the revision (text+group+text)
+    even though both are three parts."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        t36_checks.ensure_registered()
+
+    class S15Fake(FakeSession):
+        def __init__(self) -> None:
+            super().__init__(delivered=True)
+            self.freeze_commits = False
+            self.typed = None
+            self.location = "127.0.0.1:1/seedtracker/t-3@r2"
+            self.parts = [
+                {"part": "/content/0", "kind": "text", "line": 3},
+                {"part": "/content/1", "kind": "group", "line": 4},
+                {"part": "/content/1/content/0", "kind": "figure", "line": 6},
+            ]
+            self.committed = 0
+
+        def __call__(self, payload: dict, timeout: float = 60.0) -> dict:
+            if payload.get("cmd") == "tracker":
+                return {"ok": True, "base": "http://127.0.0.1:1", "tasks": {
+                    "t-3": {"task": "t-3", "revision": 2, "message": "t36 seed: the landing figure, inside a group"}}}
+            if payload.get("cmd") == "input" and payload.get("kind") == "type":
+                self.typed = payload.get("text")
+            if payload.get("cmd") == "input" and payload.get("kind") == "key":
+                if "enter" in (payload.get("keys") or []) and self.typed and self.typed.endswith("@r1"):
+                    self.location = "127.0.0.1:1/seedtracker/t-3@r1"
+                    self.parts = [{"part": "/content/0", "kind": "text", "line": 3}]
+            if (
+                getattr(self, "freeze_commits", False)
+                and payload.get("cmd") == "tracker-commit"
+                and self.committed == 0
+            ):
+                # the commit lands on the wire but the shown board does
+                # not move: no live update (the observation's target)
+                self.committed = 1
+                return {"ok": True, "revision": 3}
+            if payload.get("cmd") == "tracker-commit":
+                self.committed += 1
+                if self.committed == 1:
+                    # the port's live update: the following board moves to
+                    # the new revision and its parts change figure -> text
+                    self.location = "127.0.0.1:1/seedtracker/t-3@r3"
+                    self.parts[2] = {"part": "/content/1/content/0", "kind": "text", "line": 6}
+                    return {"ok": True, "revision": 3}
+                return {"ok": True, "revision": 4}
+            if payload.get("cmd") == "input" and payload.get("kind") == "type":
+                self.typed = payload.get("text")
+            if payload.get("cmd") == "input" and payload.get("kind") == "key":
+                keys = payload.get("keys") or []
+                if "enter" in keys and self.typed and self.typed.endswith("@r1"):
+                    self.location = "127.0.0.1:1/seedtracker/t-3@r1"
+                    self.parts = [{"part": "/content/0", "kind": "text", "line": 3}]
+            return FakeSession.__call__(self, payload, timeout)
+
+        def _evaluate(self, script: str) -> object:
+            if "readout === 'function'" in script:
+                return True
+            if "JSON.stringify(window.__saccadePort.readout())" in script:
+                return json.dumps({
+                    "app": {"name": "saccade-app-port", "slice": 1},
+                    "window": {"label": "main"},
+                    "board": {"status": "loaded", "asked": self.location,
+                              "location": self.location, "task": "t-3", "pinnedRevision": 2},
+                    "errors": [], "render": [],
+                    "content": {"parts": self.parts},
+                    "diagnostics": [], "doors": {"jumpChip": None, "delivered": []},
+                    "trail": {"depth": 1, "cursor": 0, "entries": [], "canBack": False, "canForward": False},
+                    "viewport": {"left": 0, "top": 0, "width": 1024, "height": 1280},
+                })
+            if "el.value" in script:
+                return self.typed
+            if "picker-input" in script:
+                return True
+            return FakeSession._evaluate(self, script)
+
+    def test_before_and_after_signatures_differ(self) -> None:
+        fake = self.S15Fake()
+        before = (fake.location, tuple(sorted((p["part"], p["kind"]) for p in fake.parts)))
+        fake({"cmd": "tracker-commit", "task": 3, "board": "x"})
+        after = (fake.location, tuple(sorted((p["part"], p["kind"]) for p in fake.parts)))
+        self.assertNotEqual(before, after)  # the proxy distinguishes the fixture
+
+    def test_s15_port_live_update_passes(self) -> None:
+        fake = self.S15Fake()
+        with unittest.mock.patch.object(pathlib.Path, "write_text", lambda self, data, **kw: None):
+            result = t36_checks.run_check(fake, t36_checks.CHECKS["S15"], pace=0)
+        self.assertEqual(result["status"], "pass", result["detail"])
+        self.assertIn("updated live", result["detail"])
+        self.assertIn("signature", result["detail"])
+
+    def test_s15_port_no_live_update_fails(self) -> None:
+        fake = self.S15Fake()
+        fake.freeze_commits = True
+        result = t36_checks.run_check(fake, t36_checks.CHECKS["S15"], pace=0)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("did not update live", result["detail"])

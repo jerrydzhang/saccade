@@ -472,6 +472,13 @@ def check_s15_follows_current(request: RequestFn, pace: float = 1.0) -> dict:
     seeds' own shape); the open board must update live. Then open the
     explicit revision, commit again; the shown revision stays fixed.
     No pin/follow toggle exists; the distinction is internal."""
+    # the port flavor: the same oracle over the port's own surfaces -
+    # the picker for opens, the shown location and canonical part-kind
+    # signature for revision/content changes (RECORDED ADAPTATION:
+    # the port has no rawLength; counts cannot distinguish this exact
+    # fixture). The tracker-commit verb is flavor-independent.
+    if t36_port.is_port(request):
+        return _s15_port(request, pace)
     task = _open_tracker_board(request, pace, "the landing figure")
     task_number = int(str(task).removeprefix("t-"))
     _key(request, "escape")
@@ -703,3 +710,121 @@ def _s10_port(request: Callable, pace: float) -> dict:
                        " top through the viewport readout) and the unmatched key changed nothing"
                        " observable; the matcher's consume-vs-fallthrough internals stay unobserved"
                        " (the shipped state machine is the oracle here)")}
+
+
+def _s15_port(request: RequestFn, pace: float) -> dict:
+    import json as _json
+    import time
+
+    from t36_checks import _ok, _premise, _sleep
+    from t36_port import open_via_port_picker
+
+    def readout() -> dict:
+        return t36_port.readout(request)
+
+    def parts_signature() -> tuple | None:
+        # the rendered-content signature: the shown location plus every
+        # part's canonical path and kind. A part count cannot tell this
+        # fixture's before from after (text+group+figure and
+        # text+group+text are both three parts) - the signature can.
+        board = readout().get("board") or {}
+        content = readout().get("content") or {}
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            return None
+        return (
+            str(board.get("location") or ""),
+            tuple(sorted((str(p.get("part")), str(p.get("kind"))) for p in parts)),
+        )
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "")
+    tasks = tracker.get("tasks") or {}
+    landing = next((t for t, e in tasks.items() if "landing" in str(e.get("message") or "")), None)
+    _premise(landing is not None, f"no landing seed task on the tracker: {_json.dumps(tasks)[:200]}")
+    host = base.replace("http://", "")
+
+    # open the landing board normally (current)
+    open_via_port_picker(request, f"{host}/seedtracker/{landing}", pace)
+    deadline = time.monotonic() + 15.0 * pace
+    while True:
+        board = (readout().get("board") or {})
+        if board.get("status") == "loaded" and f"/{landing}" in str(board.get("location") or ""):
+            break
+        if time.monotonic() >= deadline:
+            # the picker-consumed-enter evidence (the port finding): the
+            # overlay closed, the input carried the spec, and the shown
+            # location never moved
+            picker_gone = _json_evaluate(
+                request,
+                "return !document.querySelector('[data-port-control=\"picker-input\"]');",
+            )
+            raise CheckStopped(
+                f"the landing board never loaded on the port: {_json.dumps(board)[:160]}"
+                + ("; the picker closed without navigating (the port's first-open"
+                   " submit is unreliable - recorded product finding)" if picker_gone is True else "")
+            )
+        _sleep(pace, 0.4)
+    before = parts_signature()
+    _premise(before is not None, "the port readout carries no content parts")
+
+    revised = (
+        f"grammar: 1\ntask: {landing}\ncontent:\n"
+        "  - text: the landing board, revised live mid-check\n"
+        "  - group:\n      title: Live update\n      content:\n"
+        "        - text: the live-update group child\n"
+    )
+    task_number = int(str(landing).removeprefix("t-"))
+    commit = _ok(request({"cmd": "tracker-commit", "task": task_number, "board": revised,
+                          "message": "t36 mid-check: the live-update revision"}, timeout=60))
+    revision = commit.get("revision")
+    _premise(revision is not None, f"the mid-check commit did not land: {json.dumps(commit)[:200]}")
+
+    deadline = time.monotonic() + 20.0 * pace
+    live = False
+    live_signature = None
+    while True:
+        signature = parts_signature()
+        if signature is not None and signature != before:
+            live = True
+            live_signature = signature
+            break
+        if time.monotonic() >= deadline:
+            break
+        _sleep(pace, 0.8)
+    if not live:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"the normally opened board did not update live: the shown revision/content"
+                           f" signature stayed {before} after r{revision} committed"
+                           " - the raw-length oracle's recorded adaptation rides the"
+                           " location+part-kind signature")}
+
+    # the explicit revision: pinned
+    open_via_port_picker(request, f"{host}/seedtracker/{landing}@r1", pace)
+    deadline = time.monotonic() + 15.0 * pace
+    pinned_at = None
+    while True:
+        board = (readout().get("board") or {})
+        if board.get("status") == "loaded" and "r1" in str(board.get("location") or ""):
+            pinned_at = parts_signature()
+            if pinned_at is not None:
+                break
+        if time.monotonic() >= deadline:
+            raise CheckStopped(f"the explicit revision never opened on the port: {_json.dumps(board)[:160]}")
+        _sleep(pace, 0.4)
+    revised_r3 = f"grammar: 1\ntask: {landing}\ncontent:\n  - text: the landing board, third revision while pinned\n"
+    commit = _ok(request({"cmd": "tracker-commit", "task": task_number, "board": revised_r3,
+                          "message": "t36 mid-check: the pinned-board commit"}, timeout=60))
+    _premise(commit.get("revision") == (revision or 0) + 1,
+             f"the pinned-board commit did not land: {json.dumps(commit)[:160]}")
+    _sleep(pace, 3.0)
+    pinned_now = parts_signature()
+    if pinned_now != pinned_at:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"the explicitly opened revision moved: signature {pinned_at} -> {pinned_now}"
+                           " while current advanced")}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (f"the current board updated live (signature {before} -> {live_signature} on"
+                       f" r{revision}); the explicitly opened r1 held ({pinned_at}) while"
+                       f" r{commit.get('revision')} landed; the raw-length oracle's adaptation"
+                       " rides the location+part-kind signature (the port has no rawLength)")}

@@ -527,17 +527,27 @@ class T36LaneWiringTest(unittest.TestCase):
 
         import isolation
 
+        tmp_roots: list[pathlib.Path] = []
+
+        def fake_make_run_root(prefix: str) -> pathlib.Path:
+            root = pathlib.Path(tmp.name) / f"root-{prefix}-{len(tmp_roots)}"
+            (root / "logs").mkdir(parents=True)
+            (root / "shots").mkdir()
+            tmp_roots.append(root)
+            return root
+
         out_root = pathlib.Path(tmp.name) / "out"
         out_root.mkdir()
-        code = t36_driver.execute_t36_lane(options, [
-            t36_driver.build_plan(
-                "baseline", options.baseline_bin, options.baseline_ref, options.board,
-                options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-b", "now",
-            ),
-        ], out_root, UpFails())
+        with unittest.mock.patch.object(isolation, "make_run_root", fake_make_run_root):
+            code = t36_driver.execute_t36_lane(options, [
+                t36_driver.build_plan(
+                    "baseline", options.baseline_bin, options.baseline_ref, options.board,
+                    options.tracker_db, options.serve_bin, options.serve_ref, "0" * 40, "t-b", "now",
+                ),
+            ], out_root, UpFails())
         self.assertEqual(code, 1)
-        runtime = pathlib.Path(isolation.RUNTIME_ROOT + "-1000")
-        tap = sorted(runtime.glob("t36-*/tap-baseline.tap"), key=lambda p: p.stat().st_mtime)[-1].read_text(encoding="ascii")
+        self.assertEqual(len(tmp_roots), 1)  # the failed role's root, in the tmp dir
+        tap = (tmp_roots[0] / "tap-baseline.tap").read_text(encoding="ascii")
         self.assertIn("not ok 1 - G00/session lane run", tap)
         self.assertIn("up-t36 exited 1", tap)
 

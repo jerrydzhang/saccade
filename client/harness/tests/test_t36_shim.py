@@ -258,3 +258,214 @@ class PrototypeReadoutTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrototypeSessionStopTest(unittest.TestCase):
+    """The bg-33 bounding, revised per review: the close stays on the
+    OWNING thread (the sync API is thread-affine - a cross-thread close
+    throws 'Cannot switch to a different thread', verified live) and a
+    watchdog kills the driver's process subtree at the deadline. The
+    process-backed cases (healthy close exits the subtree; a wedged
+    driver returns at the bound with everything killed) are verified
+    LIVE - this suite covers the pure-python parts."""
+
+    def test_stop_closes_a_live_browser_quickly(self) -> None:
+        from t36_prototype import PrototypeSession
+
+        session = PrototypeSession.__new__(PrototypeSession)
+        session._driver_handles = []
+        closed: list[str] = []
+
+        class Browser:
+            def close(self) -> None:
+                closed.append("browser")
+
+        class Playwright:
+            def stop(self) -> None:
+                closed.append("playwright")
+
+        session._browser = Browser()
+        session._playwright = Playwright()
+        session.page = object()
+        session.stop()
+        self.assertEqual(sorted(closed), ["browser", "playwright"])
+        self.assertIsNone(session.page)
+
+    def test_stop_drops_references_before_closing(self) -> None:
+        # the r74 race: the close must run against captured handles, not
+        # the session's fields (the caller drops those at the top)
+        from t36_prototype import PrototypeSession
+
+        session = PrototypeSession.__new__(PrototypeSession)
+        session._driver_handles = []
+        seen: list[object] = []
+
+        class Browser:
+            def close(self) -> None:
+                seen.append(session._browser)  # must already be None
+
+        session._browser = Browser()
+        session._playwright = None
+        session.page = None
+        session.stop()
+        self.assertEqual(seen, [None])
+
+    def test_stop_without_handles_returns_immediately(self) -> None:
+        from t36_prototype import PrototypeSession
+
+        session = PrototypeSession.__new__(PrototypeSession)
+        session._browser = None
+        session._playwright = None
+        session._driver_handles = []
+        session.page = object()
+        session.stop()
+        self.assertIsNone(session.page)
+
+
+class ScopedTeardownTest(unittest.TestCase):
+    """The watchdog is rooted at the captured Playwright driver handle:
+    a wedged driver dies with its browsers at the bound while a
+    non-Playwright sibling child of the orchestrator survives (the
+    r73-bounded-stop review's scope ruling). Live, process-backed."""
+
+    def test_watchdog_kills_driver_subtree_and_spares_sibling(self) -> None:
+        import os
+        import subprocess
+        import sys
+        import time
+
+        sys.path.insert(0, "client/harness")
+        import t36_prototype
+        from t36_prototype import PrototypeSession, _children_of
+
+        for key, value in t36_prototype.webkit_launch_env().items():
+            os.environ.setdefault(key, value)
+
+        # the sentinel: an unrelated child of this process that must
+        # survive the teardown
+        sentinel = subprocess.Popen(
+            ["/proc/self/exe", "-c", "import time; time.sleep(60)"]
+            if False
+            else [sys.executable, "-c", "import time; time.sleep(60)"]
+        )
+        try:
+            self.assertIn(sentinel.pid, _children_of(os.getpid()))
+
+            from playwright.sync_api import sync_playwright
+
+            children_before = set(_children_of(os.getpid()))
+            pw = sync_playwright().start()
+            spawned = set(_children_of(os.getpid())) - children_before
+            self.assertTrue(spawned, "the playwright driver spawn was not captured")
+            browser = pw.webkit.launch(headless=True)
+            page = browser.new_page()
+            page.set_content("<h1>scoped</h1>")
+
+            session = PrototypeSession.__new__(PrototypeSession)
+            session._browser = browser
+            session._playwright = pw
+            session._driver_handles = [(pid, t36_prototype._starttime(pid)) for pid in sorted(spawned)]
+            session.page = page
+            session.TEARDOWN_TIMEOUT_SECONDS = 2.0
+
+            # wedged driver: the close cannot complete on its own
+            for pid in sorted(spawned):
+                os.kill(pid, 19)  # SIGSTOP
+
+            started = time.monotonic()
+            session.stop()
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 8.0, f"the teardown overran its bound: {elapsed:.1f}s")
+            time.sleep(0.5)
+            driver_pids_alive = [pid for pid in spawned if os.path.exists(f"/proc/{pid}")]
+            self.assertEqual(driver_pids_alive, [], f"driver pids leaked: {driver_pids_alive}")
+            self.assertTrue(os.path.exists(f"/proc/{sentinel.pid}"),
+                            "the sentinel was killed - the watchdog exceeded its scope")
+        finally:
+            sentinel.kill()
+            sentinel.wait()
+
+
+class WatchdogIdentityTest(unittest.TestCase):
+    """Fail-closed ownership: a missing launch identity (a None start
+    time) never kills - the sentinel survives even a wedged driver."""
+
+    def test_missing_launch_identity_never_kills(self) -> None:
+        import subprocess
+        import sys
+
+        sys.path.insert(0, "client/harness")
+        from t36_prototype import PrototypeSession
+
+        sentinel = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        wedged = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            session = PrototypeSession.__new__(PrototypeSession)
+
+            class HangingClose:
+                def close(self) -> None:
+                    wedged.wait(timeout=3)  # wedged cleanup; nothing may kill it
+
+            session._browser = HangingClose()
+            session._playwright = None
+            # the launch identity is MISSING (None): not ownership proof
+            session._driver_handles = [(wedged.pid, None)]
+            session.page = object()
+            session.TEARDOWN_TIMEOUT_SECONDS = 0.5
+            session.stop()
+            # the fail-closed rule: no launch identity, no kill - the
+            # wedged process survives (the close ends on its own fake
+            # timeout; the bound protects only proven ownership)
+            self.assertIsNone(wedged.poll(),
+                              "a driver with no launch identity was killed - ownership must be proven")
+            self.assertIsNone(sentinel.poll())
+        finally:
+            wedged.kill()
+            sentinel.kill()
+            wedged.wait()
+            sentinel.wait()
+
+    def test_descendant_identity_rechecked_before_kill(self) -> None:
+        # the subtree walk collects the root's real descendants (the
+        # victim's own child - a grandchild of this process), captures
+        # each start time at discovery, and re-checks before the kill
+        import os
+        import subprocess
+        import sys
+        import time
+
+        sys.path.insert(0, "client/harness")
+        from t36_prototype import _children_of, _kill_subtree, _starttime
+
+        victim = subprocess.Popen([
+            sys.executable, "-c",
+            "import subprocess, sys, time;\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            "print(child.pid, flush=True)\n"
+            "time.sleep(60)\n",
+        ], stdout=subprocess.PIPE)
+        try:
+            grandchild_pid = int(victim.stdout.readline().strip())
+            deadline = time.monotonic() + 3.0
+            while grandchild_pid not in _children_of(victim.pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertIn(grandchild_pid, _children_of(victim.pid))
+
+            _kill_subtree(victim.pid, _starttime(victim.pid))
+            poll_deadline = time.monotonic() + 3.0
+            while victim.poll() is None and time.monotonic() < poll_deadline:
+                time.sleep(0.05)
+            self.assertIsNotNone(victim.poll())  # killed, reaped by poll
+            self.assertFalse(os.path.exists(f"/proc/{grandchild_pid}"))  # killed, re-parented and reaped
+
+            # a None identity on the root kills nothing
+            spared = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+            try:
+                _kill_subtree(spared.pid, None)
+                self.assertIsNone(spared.poll())
+            finally:
+                spared.kill()
+                spared.wait()
+        finally:
+            victim.kill()
+            victim.wait()

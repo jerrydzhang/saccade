@@ -675,5 +675,12 @@ def run_checks(request: RequestFn, check_ids: list[str], pace: float = DEFAULT_P
         if spec is None:
             results.append(stop_result(check_id, "session", "unauthored check", "no executable body exists for this id yet (t-36 phase-2)"))
             continue
-        results.append(run_check(request, spec, pace))
+        # progress lines, flushed: a silent gap between START and END is
+        # the difference between 'tests progressing' and 'cleanup stuck'
+        started = time.monotonic()
+        print(f"[t36-check] {check_id} START", flush=True)
+        result = run_check(request, spec, pace)
+        elapsed = time.monotonic() - started
+        print(f"[t36-check] {check_id} END status={result.get('status')} {elapsed:.1f}s", flush=True)
+        results.append(result)
     return results

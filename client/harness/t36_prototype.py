@@ -40,9 +40,11 @@ import json
 import os
 import pathlib
 import shutil
+import signal
 import socket
 import subprocess
 import sys
+import time
 import threading
 import urllib.error
 import urllib.request
@@ -252,6 +254,7 @@ class PrototypeSession:
         self.viewport = viewport
         self._playwright = None
         self._browser = None
+        self._driver_handles: list[tuple[int, int | None]] = []
         self.page = None
 
     def start(self) -> None:
@@ -261,7 +264,14 @@ class PrototypeSession:
         # self-pins the same store paths (defaults only, never overrides)
         for key, value in webkit_launch_env().items():
             os.environ.setdefault(key, value)
+        children_before = set(_children_of(os.getpid()))
         self._playwright = sync_playwright().start()
+        # the driver process is the spawn delta: scoped-teardown root
+        # (the watchdog may only ever kill THIS subtree, never the
+        # orchestrator's other children - the app's detached lane
+        # supervisor is a sibling and must survive)
+        spawned = set(_children_of(os.getpid())) - children_before
+        self._driver_handles = [(pid, _starttime(pid)) for pid in sorted(spawned)]
         self._browser = self._playwright.webkit.launch(headless=True)
         self.page = self._browser.new_page(viewport={"width": self.viewport[0], "height": self.viewport[1]})
         page_errors = []
@@ -310,14 +320,115 @@ class PrototypeSession:
         assert self.page is not None
         self.page.screenshot(path=str(path))
 
+    # the teardown bound (the bg-33 bounding): Playwright's close and
+    # stop are cleanup RPCs with no library timeout - a wedged or dead
+    # prototype browser blocks the owning thread forever. The sync API
+    # is thread-affine (a close from another thread throws 'Cannot
+    # switch to a different thread' - verified live), so the close
+    # stays on the OWNING thread and a watchdog kills the driver's
+    # process subtree at the deadline; the driver's death closes the
+    # pipe, the close unblocks with a target-closed error, and the
+    # teardown completes. Verified live: the wedged case returns at
+    # the bound, the healthy case closes normally.
+    TEARDOWN_TIMEOUT_SECONDS = 20.0
+
     def stop(self) -> None:
-        if self._browser is not None:
-            self._browser.close()
-        if self._playwright is not None:
-            self._playwright.stop()
+        browser, playwright = self._browser, self._playwright
+        driver_handles = self._driver_handles
         self._browser = None
         self._playwright = None
+        self._driver_handles = []
         self.page = None
+        if browser is None and playwright is None:
+            return
+        fired = threading.Event()
+        fired_fired = False
+        started = time.monotonic()
+        print(f"[t36-prototype] teardown START (bound {self.TEARDOWN_TIMEOUT_SECONDS:.0f}s)", flush=True)
+
+        def watchdog() -> None:
+            if fired.wait(timeout=self.TEARDOWN_TIMEOUT_SECONDS):
+                return
+            nonlocal fired_fired
+            fired_fired = True
+            for pid, start in driver_handles:
+                # fail closed: a missing launch identity (None start)
+                # is NOT ownership proof - no kill
+                if start is not None and _starttime(pid) == start:
+                    _kill_subtree(pid, start)
+
+        watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+        watchdog_thread.start()
+        try:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:  # noqa: BLE001 - a watchdog-fired close ends in a target-closed error
+                    pass
+            if playwright is not None:
+                try:
+                    playwright.stop()
+                except Exception:  # noqa: BLE001 - teardown never raises
+                    pass
+        finally:
+            fired.set()
+            elapsed = time.monotonic() - started
+            print(f"[t36-prototype] teardown END {elapsed:.1f}s"
+                  + (" (watchdog deadline reached; scoped identity checks applied)" if fired_fired else " (clean)"),
+                  flush=True)
+
+
+def _children_of(pid: int) -> list[int]:
+    """The direct children of pid, from /proc."""
+    return _proc_children().get(pid, [])
+
+
+def _proc_children() -> dict[int, list[int]]:
+    children: dict[int, list[int]] = {}
+    for entry in pathlib.Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+            ppid = int(stat.rsplit(")", 1)[1].split()[1])
+            children.setdefault(ppid, []).append(int(entry.name))
+        except (OSError, ValueError, IndexError):
+            continue
+    return children
+
+
+def _starttime(pid: int) -> int | None:
+    """The process's start time in clock ticks (stat field 22): the
+    PID-reuse guard - a kill only fires when the start time still
+    matches what was captured."""
+    try:
+        stat = (pathlib.Path("/proc") / str(pid) / "stat").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        return int(stat.rsplit(")", 1)[1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _kill_subtree(root: int, root_start: int | None) -> None:
+    """SIGKILL root and its whole current subtree. Called only for a
+    driver whose start time still matches its launch capture; every
+    collected pid is re-checked against the start time captured at
+    discovery, immediately before the kill (fail closed on reuse)."""
+    children = _proc_children()
+    collected: list[tuple[int, int | None]] = [(root, root_start)]
+    frontier = [root]
+    while frontier:
+        current = frontier.pop()
+        for child in children.get(current, ()):
+            collected.append((child, _starttime(child)))
+            frontier.append(child)
+    for pid, start in collected:
+        if start is not None and _starttime(pid) == start:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
 
 class WebKitWebDriverSession:
