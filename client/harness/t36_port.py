@@ -117,12 +117,15 @@ PORT_SERVED = frozenset({"F01", "S08", "S10", "S12", "S14", "S16", "S20"})
 # own bodies give the recorded reason
 NOT_DRIVEN = frozenset({"S01", "S03", "S04", "S05", "S06", "S07", "S11", "S19"})
 
-# the port surfaces still missing (chunk E landed picker, select
-# labels, the act menu with fold, part-path citations, trail and
-# viewport): find (/), live updates (S15), copy (S13), the
-# back/forward key bindings and the tasks instrument
+# the port surfaces still missing (chunks E through G landed picker,
+# select labels, the act menu with fold, part-path citations, trail
+# and viewport, find, and the follow act): live board updates (S15's
+# oracle), copy (S13), the back/forward key bindings and the tasks
+# instrument. S09 stays a recorded stop by the coordinator's ruling
+# (the four-invocation agreement is a menu-surface dependency), not
+# because follow is absent.
 _STILL_MISSING = (
-    "find (/), live board updates (S15's oracle), copy (S13),"
+    "live board updates (S15's oracle), copy (S13),"
     " the back/forward key bindings and the tasks surface"
 )
 
