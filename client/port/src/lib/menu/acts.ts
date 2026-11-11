@@ -12,11 +12,9 @@ export interface BoardMenuDeps {
   isFolded(part: string): boolean;
   /** Fold or unfold a group part path. */
   toggleFold(part: string): void;
-  /** Capture the input lease while the menu is open. */
+  /** Capture input while open. Lease release returns to the CURRENT
+   * base; a menu never reinstalls its own saved reading context. */
   capture(context: InputContext): { release(): void };
-  /** Restore the reading context on close. */
-  restore(context: InputContext | null): void;
-  reading: InputContext;
 }
 
 export interface BoardMenu {
@@ -52,10 +50,7 @@ export function createBoardMenu(deps: BoardMenuDeps): BoardMenu {
       lease.release();
       lease = null;
     }
-    if (active !== null) {
-      active = null;
-      deps.restore(deps.reading);
-    }
+    active = null;
   }
 
   session.onClose(() => {

@@ -8,7 +8,6 @@ import test from "node:test";
 import { createBoardMenu, actsFor } from "../src/lib/menu/acts.ts";
 import { createMenuSession } from "../src/lib/menu/session.ts";
 import type { Action } from "../src/lib/contracts/input.ts";
-import { commandContext } from "../src/lib/contracts/input.ts";
 import type { InputContext } from "../src/lib/contracts/input.ts";
 
 test("groups carry fold/unfold; other kinds carry nothing yet", () => {
@@ -77,13 +76,11 @@ function menuHarness(folded: Set<string>) {
     capture: (context) => {
       events.push("capture");
       readingNow = context;
-      return { release: () => events.push("release") };
+      return { release: () => {
+        events.push("release", "restore");
+        readingNow = null; // the host lease owns the return
+      } };
     },
-    restore: (context) => {
-      events.push("restore");
-      readingNow = context ?? readingNow;
-    },
-    reading: commandContext(() => []),
   });
   return { menu, events, context: () => readingNow };
 }

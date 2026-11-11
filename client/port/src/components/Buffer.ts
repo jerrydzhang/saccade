@@ -304,14 +304,14 @@ export class SliceBufferHost<
   private readonly observers = new Set<(state: BufferState<ContentFrame<T>>) => void>();
   private refreshToken = 0;
   private destroyed = false;
-  private readingContext: InputContext | null = null;
+  private baseContext: InputContext | null = null;
+  private currentLease: InputLeaseImpl | null = null;
   private inputHost: HostMatcher | null = null;
 
   // The reading context's host half: replacing or capturing a context
   // builds a fresh matcher, so a pending prefix never leaks across a
   // handoff (scenario 10: a partial sequence never survives one).
   private installReading(context: InputContext | null): void {
-    this.readingContext = context;
     if (this.inputHost !== null) this.inputHost.dispose();
     this.inputHost = context === null ? null : createHostMatcher(context);
   }
@@ -345,14 +345,17 @@ export class SliceBufferHost<
       updates: this.updates(),
       interactions: this.interactions(),
       setReadingContext: (context) => {
-        this.installReading(context);
+        if (this.destroyed) return;
+        this.baseContext = context;
+        if (this.currentLease === null) this.installReading(context);
       },
     };
     // Controller construction calls connect synchronously exactly once.
     const attachment = this.connect(access);
     this.attachment = attachment;
     const input = attachment.input;
-    if (this.readingContext === null) this.installReading(input);
+    if (this.baseContext === null) this.baseContext = input;
+    if (this.currentLease === null) this.installReading(this.baseContext);
     const host: HostBuffer<T> = this;
     return { host, presentation: attachment.presentation };
   }
@@ -386,6 +389,7 @@ export class SliceBufferHost<
   }
 
   deactivate(): void {
+    this.inputHost?.reset();
     this.set((state) => (state.kind === "alive" ? { ...state, active: false } : state));
   }
 
@@ -394,7 +398,7 @@ export class SliceBufferHost<
   // drain (SEQUENCE_TIMEOUT_MS = 1000), unmatched application keys are
   // consumed - never dispatched to anything underneath (scenario 10).
   handleKey(input: KeyInput): KeyDisposition {
-    if (this.destroyed || this.inputHost === null) return "allow-default";
+    if (this.destroyed || this.state.kind !== "alive" || !this.state.active || this.inputHost === null) return "allow-default";
     const resolution = this.inputHost.stroke(input);
     return this.inputHost.apply(resolution);
   }
@@ -703,11 +707,18 @@ export class SliceBufferHost<
   private interactions(): InputCapture {
     return {
       capture: (context: InputContext) => {
-        this.installReading(context);
+        if (this.destroyed) return new InputLeaseImpl(() => {});
         const lease = new InputLeaseImpl(() => {
           this.leases.delete(lease);
+          if (this.currentLease !== lease) return;
+          this.currentLease = null;
+          if (!this.destroyed) this.installReading(this.baseContext);
         });
+        // Captures are not a stack: releasing a stale lease never
+        // resurrects an older interaction or replaces the latest one.
+        this.currentLease = lease;
         this.leases.add(lease);
+        this.installReading(context);
         return lease;
       },
     };

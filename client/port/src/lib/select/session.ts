@@ -29,12 +29,9 @@ export interface SelectSessionDeps {
    * target with no geometry is simply not visible yet - never proof
    * it does not exist. */
   visible(target: SelectableTarget): boolean;
-  /** Capture the input lease for the session's context. */
+  /** Capture input. Releasing the lease returns to the CURRENT base;
+   * the session must not reinstall a saved context itself. */
   capture(context: InputContext): { release(): void };
-  /** Restore the reading context (on exit and teardown). */
-  restore(context: InputContext | null): void;
-  /** The context to restore on exit. */
-  reading: InputContext;
   /** The exact-single selection landed; identity is the part path. */
   onSelected(target: SelectableTarget): void;
 }
@@ -65,10 +62,7 @@ export function createSelectSession(deps: SelectSessionDeps): SelectSession {
       lease.release();
       lease = null;
     }
-    if (active !== null) {
-      active = null;
-      deps.restore(deps.reading);
-    }
+    active = null;
     if (view !== null) {
       view = null;
       notify();

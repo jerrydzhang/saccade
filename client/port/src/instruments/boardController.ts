@@ -511,8 +511,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
       return bounds.top < viewBottom && bounds.bottom > viewTop;
     },
     capture: (context) => buffer.interactions.capture(context),
-    restore: (context) => buffer.setReadingContext(context),
-    reading,
     onSelected(target) {
       selection = target;
       // scenario 9: selection opens the act menu (a no-op for
@@ -527,8 +525,6 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     isFolded: (part) => foldedSet.has(part),
     toggleFold: (part) => host.toggleFold(part),
     capture: (context) => buffer.interactions.capture(context),
-    restore: (context) => buffer.setReadingContext(context),
-    reading: reading,
   });
   function menuView(): MenuView | null {
     if (!boardMenu.session.isOpen()) return null;

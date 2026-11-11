@@ -18,20 +18,19 @@ const key = (k: string): KeyInput => ({ key: k, ctrl: false, shift: false, alt: 
 
 function harness(targets: readonly SelectableTarget[], visible: (part: string) => boolean) {
   const events: string[] = [];
-  let readingNow: InputContext | null = commandContext(() => []);
+  const base = commandContext(() => []);
+  let readingNow: InputContext | null = base;
   const deps = {
     targets: () => targets,
     visible: (target: SelectableTarget) => visible(target.part),
     capture: (context: InputContext) => {
       events.push("capture");
       readingNow = context;
-      return { release: () => events.push("release") };
+      return { release: () => {
+        events.push("release", "restore");
+        readingNow = base; // the host lease owns return, not the session
+      } };
     },
-    restore: (context: InputContext | null) => {
-      events.push("restore");
-      readingNow = context ?? readingNow;
-    },
-    reading: commandContext(() => []),
     onSelected: (target: SelectableTarget) => events.push(`selected:${target.part}`),
   };
   const session = createSelectSession(deps);
