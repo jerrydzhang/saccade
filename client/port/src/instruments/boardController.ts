@@ -24,7 +24,7 @@ import type { InputContext } from "../lib/contracts/input.ts";
 import { boardReadingContext } from "../lib/input/contexts.ts";
 import { createSelectSession, type SelectSessionView } from "../lib/select/session.ts";
 import { createBoardMenu } from "../lib/menu/acts.ts";
-import { boardTargetsOf, type BoardTarget } from "../lib/board/targets.ts";
+import { boardTargetsOf, partAncestors, type BoardTarget } from "../lib/board/targets.ts";
 export { boardTargetsOf } from "../lib/board/targets.ts";
 export type { BoardTarget, BoardTargetKind } from "../lib/board/targets.ts";
 import type {
@@ -385,13 +385,34 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
         typeof data === "object" &&
         data !== null &&
         !Array.isArray(data) &&
-        (data as { kind?: unknown }).kind === "board-part"
+        (data as { kind?: unknown }).kind === "board-part" &&
+        typeof (data as { path?: unknown }).path === "string" &&
+        // the anchor must name a part of THIS frame's model
+        lastFrame.targets.some((target) => target.part === (data as { path: string }).path)
       );
     },
-    revealAnchor(_anchor: BoardAnchor): AnchorLocation {
-      // No anchor geometry in slice 1: reported missing, never a
-      // substituted container or a guessed position.
-      return { kind: "missing" };
+    revealAnchor(anchor: BoardAnchor): AnchorLocation {
+      // Fold reveal (scenario 8): unfold exactly the enclosing visual
+      // containers needed to expose the actual anchor - never a
+      // substituted container, never unrelated state. Unfolding
+      // republishes the frame; geometry becomes usable on the next
+      // call, after the re-render.
+      const enclosing = partAncestors(anchor.path);
+      let unfolded = false;
+      for (const ancestor of enclosing) {
+        if (foldedSet.has(ancestor)) {
+          foldedSet.delete(ancestor);
+          unfolded = true;
+        }
+      }
+      if (unfolded) {
+        const frame: BoardData = { ...lastFrame, folded: [...foldedSet] };
+        void buffer.updates.refresh(() => readyFrame(frame));
+        return { kind: "pending" };
+      }
+      const bounds = buffer.geometry.bounds(anchor.path);
+      if (bounds === null) return { kind: "pending" };
+      return { kind: "found", bounds };
     },
     defaultPosition(_viewport: ReturnType<Viewport["metrics"]>): Point {
       return { left: 0, top: 0 };

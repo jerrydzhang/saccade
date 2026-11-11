@@ -19,6 +19,19 @@ export type BoardTarget = Readonly<{
 
 /** The model-derived targets of a decoded board: every content part,
  * nested included (the walk the observation readout already uses). */
+/** The canonical part paths strictly enclosing a part path (its
+ * ancestor containers, outermost first). `/content/0/content/1` ->
+ * [`/content/0`]. */
+export function partAncestors(part: string): readonly string[] {
+  const out: string[] = [];
+  let index = part.lastIndexOf("/content/");
+  while (index > 0) {
+    out.unshift(part.slice(0, index));
+    index = part.lastIndexOf("/content/", index - 1);
+  }
+  return out;
+}
+
 export function boardTargetsOf(board: Board): readonly BoardTarget[] {
   const out: BoardTarget[] = [];
   const walk = (blocks: readonly import("./model.ts").Block[], prefix: string): void => {

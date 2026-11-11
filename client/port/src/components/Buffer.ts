@@ -279,7 +279,7 @@ const IDLE_RESTORE: RestoreStatus = "pending-content";
 // The slice-1 container host. One class per buffer; the factory mints
 // one per create call (registration constructed twice must get separate
 // controller/input/state).
-class SliceBufferHost<
+export class SliceBufferHost<
   T extends object,
   UI extends object,
   A extends AnchorData,
@@ -513,17 +513,80 @@ class SliceBufferHost<
       job.finish("cancelled");
       return;
     }
-    if (outcome === "applied") {
-      // Slice 1 restores at the default position of the requested
-      // address; anchor geometry lands with the Board instrument slice.
-      job.finish("restored");
-    } else if (outcome === "superseded") {
-      job.finish("superseded");
-    } else if (outcome === "destroyed") {
-      job.finish("cancelled");
-    } else {
-      job.finish("failed");
+    if (outcome !== "applied") {
+      if (outcome === "superseded") job.finish("superseded");
+      else if (outcome === "destroyed") job.finish("cancelled");
+      else job.finish("failed");
+      return;
     }
+    if (place.position.kind !== "anchor") {
+      job.finish("restored");
+      return;
+    }
+    // The anchor placement: reveal (which may unfold containers and
+    // republish), wait for usable geometry - pending is not absence
+    // (scenario 7), the wait ends by placement, by a confirmed-missing
+    // anchor (default position at the SAME place), or by the user's
+    // own viewport motion (latest intent wins, r63 default).
+    const anchor = place.position.anchor;
+    const viewportElement = this.scrollerElement();
+    let userMoved = false;
+    const onUserScroll = () => {
+      userMoved = true;
+    };
+    viewportElement?.addEventListener("scroll", onUserScroll, { passive: true });
+    try {
+      for (let attempt = 0; ; attempt += 1) {
+        if (this.destroyed || job.cancelled || userMoved) {
+          job.finish(userMoved ? "cancelled" : "cancelled");
+          return;
+        }
+        const stillAttached = this.attachment;
+        if (stillAttached === null) {
+          job.finish("cancelled");
+          return;
+        }
+        // acceptsAnchor vetted this anchor above; SavedPlace carries
+        // the unconstrained AnchorData, the attachment's places are
+        // A-typed.
+        const location = stillAttached.places.revealAnchor(anchor as A);
+        if (location.kind === "found") {
+          const offset = place.position.viewportOffset;
+          this.viewport.reveal({
+            left: location.bounds.left + (offset?.left ?? 0),
+            top: location.bounds.top + (offset?.top ?? 0),
+            right: location.bounds.right + (offset?.left ?? 0),
+            bottom: location.bounds.bottom + (offset?.top ?? 0),
+          });
+          job.finish("restored");
+          return;
+        }
+        if (location.kind === "missing") {
+          // Confirmed-missing anchor: the default position AT THE SAME
+          // requested place - never a viewer-state reset (scenario 7).
+          const stillAttached = this.attachment;
+          if (stillAttached !== null) {
+            const position = stillAttached.places.defaultPosition(this.viewport.metrics());
+            this.viewport.moveTo(position);
+          }
+          job.finish("defaulted");
+          return;
+        }
+        // pending: wait for the republish/re-render, then try again
+        if (attempt >= 200) {
+          job.finish("defaulted");
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    } finally {
+      viewportElement?.removeEventListener("scroll", onUserScroll);
+    }
+  }
+
+  private scrollerElement(): HTMLElement | null {
+    const viewport = this.viewport as SliceBufferViewport;
+    return typeof viewport.attachedElement === "function" ? viewport.attachedElement() : null;
   }
 
   private updates(): ContentUpdates<ContentFrame<T>> {
