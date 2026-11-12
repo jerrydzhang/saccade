@@ -15,7 +15,7 @@ PIN_DIR=/var/tmp/saccade-app-1000/debug-bin
 
 test -x "$BIN" || { echo "no debug binary at $BIN (run the cargo build first)" >&2; exit 1; }
 
-NIX_APP=$(cd "$ROOT" && nix build --accept-flake-config .#saccade-app-port --print-out-paths --no-link 2>/dev/null | tail -1)
+NIX_APP=$(cd "$ROOT" && nix build --accept-flake-config .#saccade-app-port --print-out-paths --no-link 2>/dev/null | grep -o '/nix/store/[a-z0-9]*-saccade-app-port-0\.1\.0' | tail -1)
 NIX_ELF="$NIX_APP/bin/.saccade-app-port-wrapped"
 test -f "$NIX_ELF" || { echo "the cached authoritative build names no ELF at $NIX_ELF" >&2; exit 1; }
 INTERP=$(patchelf --print-interpreter "$NIX_ELF")

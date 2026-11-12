@@ -57,6 +57,8 @@ export interface BufferDiagnostics {
   unexpected(context: BufferContext, cause: unknown): DiagnosticId;
 }
 
+import type { Action, ReadCommands } from "./input.ts";
+
 export type Point = Readonly<{ left: number; top: number }>;
 // Bounds are relative to this buffer's scrollable content origin.
 export type Bounds = Readonly<{
@@ -97,6 +99,21 @@ export type BufferState<T extends object> =
     }>
   | Readonly<{ kind: "destroyed" }>;
 
+// Logical content metadata is published with its data. Both types
+// relocated here (r105) so lib never imports components for a type
+// (audit defect e); components/Buffer re-exports them.
+export type TargetDefinition = Readonly<{
+  id: string;
+  primary: Action;
+  commands: ReadCommands;
+  // Pointer bindings reference actions; absence is not a hidden default act.
+  plainClick: Action | null;
+  modifiedClick: Action | null;
+}>;
+export type ContentFrame<T extends object> = Readonly<{
+  value: Readonly<T>;
+  targets: readonly TargetDefinition[];
+}>;
 export type PreparedContent<T extends object> =
   | Readonly<{ kind: "ready"; value: Readonly<T> }>
   | Readonly<{ kind: "failed"; issue: KnownIssue }>;

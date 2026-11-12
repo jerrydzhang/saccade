@@ -33,8 +33,10 @@ import type {
   InputLease,
   KnownIssue,
   Point,
+  ContentFrame,
   PreparedContent,
   RefreshOutcome,
+  TargetDefinition,
   Unsubscribe,
   Viewport,
 } from "../lib/contracts/buffer.ts";
@@ -58,19 +60,7 @@ import type {
 import type { Component } from "svelte";
 import { createHostMatcher, type HostMatcher } from "../lib/input/host.ts";
 
-// Logical content metadata is published with its data.
-export type TargetDefinition = Readonly<{
-  id: string;
-  primary: Action;
-  commands: ReadCommands;
-  // Pointer bindings reference actions; absence is not a hidden default act.
-  plainClick: Action | null;
-  modifiedClick: Action | null;
-}>;
-export type ContentFrame<T extends object> = Readonly<{
-  value: Readonly<T>;
-  targets: readonly TargetDefinition[];
-}>;
+export type { ContentFrame, TargetDefinition } from "../lib/contracts/buffer.ts";
 export interface TargetPresentation {
   activatePrimary(): void;
   activatePointer(kind: "plain" | "modified"): boolean;

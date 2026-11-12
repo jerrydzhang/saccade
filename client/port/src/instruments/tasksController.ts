@@ -20,6 +20,7 @@
 // 17 resolution).
 
 import type { BufferAccess, InstrumentAttachment } from "../components/Buffer.ts";
+import { failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
 import { knownIssue } from "../lib/contracts/buffer.ts";
 import type {
   KnownIssue,
@@ -103,10 +104,6 @@ export interface TasksUI {
   setTaskPorts(ports: TaskPorts): void;
 }
 
-function readyFrame(value: Readonly<TasksData>): PreparedContent<import("../components/Buffer.ts").ContentFrame<TasksData>> {
-  return { kind: "ready", value: { value, targets: [] } };
-}
-
 const EMPTY_FRAME: TasksData = {
   generation: 0,
   asked: "",
@@ -118,20 +115,9 @@ const EMPTY_FRAME: TasksData = {
   errors: [],
 };
 
-function failureIssue(code: string, message: string): KnownIssue {
-  return knownIssue({ code, message });
-}
-
 /** Whether the page still carries a row naming this task. */
 function lastFrameStillCarries(model: TasksPageModel, task: string): boolean {
   return model.groups.some((group) => group.rows.some((row) => row.task === task));
-}
-
-function issueOf(error: unknown): KnownIssue {
-  if (error instanceof SourceUnavailableError) {
-    return failureIssue(error.code, error.message);
-  }
-  return failureIssue("read-failed", String(error));
 }
 
 export function connectTasks(buffer: BufferAccess<TasksData>): InstrumentAttachment<TasksUI, TaskAnchor> {

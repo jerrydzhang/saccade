@@ -12,6 +12,7 @@
 // releasing on destruction.
 
 import type { BufferAccess, ContentFrame, InstrumentAttachment } from "../components/Buffer.ts";
+import { failureIssue, issueOf, readyFrame } from "../lib/instruments/scaffold.ts";
 import { knownIssue } from "../lib/contracts/buffer.ts";
 import type {
   KnownIssue,
@@ -137,12 +138,6 @@ export interface BoardUI extends HydrationHost {
 }
 
 /** The live select-session view the component paints chips from. */
-/** Wrap a prepared domain frame as the buffer's published content:
- * the logical content metadata rides with its data. */
-function readyFrame(value: Readonly<BoardData>): PreparedContent<ContentFrame<BoardData>> {
-  return { kind: "ready", value: { value, targets: [] } };
-}
-
 const EMPTY_FRAME: BoardData = {
   generation: 0,
   asked: "",
@@ -155,17 +150,6 @@ const EMPTY_FRAME: BoardData = {
   targets: [],
   folded: [],
 };
-
-function failureIssue(code: string, message: string): KnownIssue {
-  return knownIssue({ code, message });
-}
-
-function issueOf(error: unknown): KnownIssue {
-  if (error instanceof SourceUnavailableError) {
-    return failureIssue(error.code, error.message);
-  }
-  return failureIssue("read-failed", String(error));
-}
 
 export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachment<BoardUI, BoardAnchor> {
   // Controller state: the open generation, the resolved location the
