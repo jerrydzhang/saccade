@@ -538,6 +538,16 @@ export function createPortWindow(windowId = "main"): PortWindow {
   async function openElsewhere(spec: string, act: ElsewhereAct): Promise<void> {
     if (windowStore === null || windowStateId === null) {
       await ensureWindowState();
+      // A JUST-OPENED window's state can still be binding when the
+      // human's o arrives (the suite worker's base defect 1: the act
+      // silently dropped, 'nothing happened'). WAIT for the binding,
+      // bounded - the act runs when the store lands; only a genuinely
+      // unbound window refuses, with the note.
+      const deadline = Date.now() + 4000;
+      while ((windowStore === null || windowStateId === null) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        await ensureWindowState();
+      }
       if (windowStore === null || windowStateId === null) {
         note = elsewhereNote ?? "the window store is not serving this window";
         notifyStrip();
@@ -635,7 +645,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
           notifyStrip();
         },
         elsewhere: (spec: string, act: ElsewhereAct) => {
-          void openElsewhere(spec, act);
+          openElsewhere(spec, act).catch((error: unknown) => {
+            diagnostics.report(
+              refusalContext,
+              knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
+            );
+            note = `the open act failed: ${String(error).slice(0, 120)}`;
+            notifyStrip();
+          });
         },
       });
     }
@@ -644,7 +661,14 @@ export function createPortWindow(windowId = "main"): PortWindow {
       (tasks.presentation as TasksUI).setTaskPorts({
         open: (spec: string) => openSpec(spec),
         elsewhere: (spec: string, act: ElsewhereAct) => {
-          void openElsewhere(spec, act);
+          openElsewhere(spec, act).catch((error: unknown) => {
+            diagnostics.report(
+              refusalContext,
+              knownIssue({ code: "read-failed", message: `the open act failed: ${String(error)}` }),
+            );
+            note = `the open act failed: ${String(error).slice(0, 120)}`;
+            notifyStrip();
+          });
         },
         copy: (text: string) => {
           lastCopy = { payload: text, at: Date.now() };
@@ -1025,6 +1049,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       surface: activeSurface,
       windowLabel: nativeWindowLabel(),
       link: linkLabel,
+      bound: windowStore !== null && windowStateId !== null,
       ask: ask === null
         ? null
         : { act: ask.act, spec: ask.spec, chips: ask.chips },

@@ -53,6 +53,10 @@ export type PortObservation = {
     /** A live ask: the act that asked, the spec, the answerable
      * chips (S18). */
     ask: Readonly<{ act: string; spec: string; chips: readonly { window: string; chip: string }[] }> | null;
+    /** Whether this window's STATE is bound to the store (the suite
+     * worker's base defect 1: the acts' bounded wait and the tests'
+     * stopgap both read this instead of log lines). */
+    bound: boolean;
   }>;
   board: Readonly<{
     status: "empty" | "loading" | "loaded" | "invalid" | "unavailable" | "destroyed";
@@ -255,6 +259,7 @@ export function buildReadout(
     surface: "board" | "tasks";
     windowLabel: string | null;
     link: string | null;
+    bound: boolean;
     ask: Readonly<{ act: string; spec: string; chips: readonly { window: string; chip: string }[] }> | null;
     state: BufferState<RenderPair>;
     diagnostics: readonly DiagnosticEntryView[];
@@ -272,7 +277,7 @@ export function buildReadout(
   return {
     app: { name: "saccade-app-port", slice: 1 },
     surface: input.surface,
-    window: { label: input.windowLabel, link: input.link, ask: input.ask },
+    window: { label: input.windowLabel, link: input.link, ask: input.ask, bound: input.bound },
     board: {
       status: input.surface === "board" ? status : "empty",
       asked: frame && input.surface === "board" ? frame.asked : null,

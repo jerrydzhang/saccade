@@ -50,6 +50,7 @@ test("the readout carries the inspection while open, null when closed", () => {
   const base = {
     windowLabel: "main",
     link: null,
+    bound: true,
     ask: null,
     surface: "board" as const,
     state: { kind: "alive" as const, active: true, content: { kind: "empty" as const } } as Parameters<typeof buildReadout>[0]["state"],
