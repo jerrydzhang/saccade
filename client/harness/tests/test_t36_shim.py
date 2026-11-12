@@ -456,6 +456,11 @@ class WatchdogIdentityTest(unittest.TestCase):
             while victim.poll() is None and time.monotonic() < poll_deadline:
                 time.sleep(0.05)
             self.assertIsNotNone(victim.poll())  # killed, reaped by poll
+            # the grandchild was SIGKILLed too: re-parented to init and
+            # reaped there - give the reaping the same bounded wait
+            reap_deadline = time.monotonic() + 3.0
+            while os.path.exists(f"/proc/{grandchild_pid}") and time.monotonic() < reap_deadline:
+                time.sleep(0.05)
             self.assertFalse(os.path.exists(f"/proc/{grandchild_pid}"))  # killed, re-parented and reaped
 
             # a None identity on the root kills nothing

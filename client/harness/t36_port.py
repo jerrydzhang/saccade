@@ -163,19 +163,91 @@ def part_rect(request, part: str) -> dict:
     return value if isinstance(value, dict) else None
 
 
-def open_via_port_picker(request, spec: str, pace: float, timeout: float = 15.0) -> None:
-    """Open a location through the port's own picker: space-space opens
-    it, the spec is typed into data-port-control="picker-input", Enter
-    submits through the one open funnel. Real input throughout; the
-    load is the caller's to wait."""
+def type_text(request, target: str, text: str, pace: float, timeout: float = 15.0) -> None:
+    """Target-addressed real typing: a real click on the known field
+    (focus), the clear via the existing input verb, the actual focus
+    asserted through read-only observation, then per-character key
+    events - every click/clear/key/hotkey response _ok'd and the whole
+    operation bounded from BEFORE the click. The target is a port
+    control id (port:<name>). This distinguishes stale focus or an
+    appended old query from product meaning: the helper's own premise
+    (focused, cleared) is asserted, never assumed."""
     import time
 
-    from t36_checks import _json_evaluate, _key, _sleep, _type
+    from t36_checks import _evaluate, _ok, _sleep
 
+    deadline = time.monotonic() + timeout
+    if not target.startswith("port:"):
+        raise CheckStopped(f"type_text addresses port controls only; got {target!r}")
+    field_selector = f'[data-port-control="{target[5:]}"]'
+
+    def remaining() -> float:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise CheckStopped(f"the typing of {text!r} into {target!r} overran its bound")
+        return left
+
+    def focused_now() -> bool:
+        return bool(_evaluate(
+            request,
+            "const el = document.querySelector(" + json.dumps(field_selector) + ");"
+            " return !!el && document.activeElement === el;",
+            timeout=min(10.0, remaining()),
+        ))
+
+    def field_value():
+        return _evaluate(
+            request,
+            "const el = document.querySelector(" + json.dumps(field_selector) + ");"
+            " return el ? el.value : null;",
+            timeout=min(10.0, remaining()),
+        )
+
+    # the real click on the known field (focus), response checked,
+    # bounded by the remaining budget
+    _ok(request({"cmd": "input", "kind": "click", "target": target}, timeout=min(30.0, remaining())))
+    _sleep(pace, 0.3)
+    if not focused_now():
+        raise CheckStopped(
+            f"the field {target!r} is not focused after the click (stale or wrong focus)"
+        )
+
+    # the clear via the existing input verb (clear_element + empty send)
+    _ok(request({"cmd": "input", "kind": "type", "target": target, "text": ""}, timeout=min(30.0, remaining())))
+    _sleep(pace, 0.2)
+    # the clear and the focus are asserted BEFORE typing: an empty
+    # value under focus is the helper's own premise, never assumed
+    if not focused_now():
+        raise CheckStopped(f"the field {target!r} lost focus during the clear")
+    cleared = field_value()
+    if cleared not in ("", None):
+        raise CheckStopped(f"the clear did not empty {target!r} (value {cleared!r})")
+
+    for ch in text:
+        if ch == ":":
+            _ok(request({"cmd": "input", "kind": "hotkey", "keys": ["shift", ";"]}, timeout=min(30.0, remaining())))
+        else:
+            _ok(request({"cmd": "input", "kind": "key", "keys": [ch]}, timeout=min(30.0, remaining())))
+        _sleep(pace, 0.05)
+    if not focused_now():
+        raise CheckStopped(f"the field {target!r} lost focus during typing")
+
+def open_via_port_picker(request, spec: str, pace: float, timeout: float = 15.0) -> None:
+    """Open a location through the port's own picker: space-space opens
+    it, the spec is typed target-addressed into
+    data-port-control="picker-input" (the click, the clear, the focus
+    asserted, the per-char keys with the ':' chord, every response
+    _ok'd, the whole operation bounded), Enter submits through the one
+    open funnel. Real input throughout; the load is the caller's to
+    wait."""
+    import time
+
+    from t36_checks import _json_evaluate, _key, _sleep
+
+    deadline = time.monotonic() + timeout
     _key(request, "escape")
     _sleep(pace, 0.3)
     _key(request, " ", " ")
-    deadline = time.monotonic() + timeout
     while True:
         opened = _json_evaluate(
             request,
@@ -186,11 +258,9 @@ def open_via_port_picker(request, spec: str, pace: float, timeout: float = 15.0)
         if time.monotonic() >= deadline:
             raise CheckStopped("the port picker never opened on space space")
         _sleep(pace, 0.3)
-    _type(request, "port:picker-input", spec)
+    type_text(request, "port:picker-input", spec, pace, timeout=deadline - time.monotonic())
     # the submit readiness check: the input's value must equal the
-    # spec before Enter - a fresh-boot picker may otherwise race the
-    # Enter past an empty input
-    deadline = time.monotonic() + timeout
+    # spec before Enter (the value is a plain string - raw evaluate)
     from t36_checks import _evaluate
     while True:
         value = _evaluate(
@@ -201,10 +271,15 @@ def open_via_port_picker(request, spec: str, pace: float, timeout: float = 15.0)
         if value == spec:
             break
         if time.monotonic() >= deadline:
-            raise CheckStopped(f"the port picker never carried the spec (value {value!r})")
+            raise CheckStopped(
+                f"the port picker never carried the spec (value {value!r}; the typing"
+                " was verified focused and complete - the divergence is post-typing)"
+            )
         _sleep(pace, 0.2)
     _key(request, "enter")
     _sleep(pace, 0.5)
+
+
 
 
 def fold_part(request, part: str, pace: float) -> None:
@@ -216,8 +291,11 @@ def fold_part(request, part: str, pace: float) -> None:
     rect = part_rect(request, part)
     if not rect:
         raise CheckStopped(f"the part {part!r} is not rendered (nothing to right-click)")
+    # the group's rect encloses its children: the center lands on an
+    # act-less child (which opens nothing); the header strip at the top
+    # is the group's own hit area
     x = rect["x"] + rect["width"] / 2
-    y = rect["y"] + rect["height"] / 2
+    y = rect["y"] + min(6.0, rect["height"] / 4)
     request({"cmd": "input", "kind": "rightclick", "x": x, "y": y}, 30)
     _sleep(pace, 0.6)
     menu = _json_evaluate(request, 'return !!document.querySelector("[data-port-menu]");')

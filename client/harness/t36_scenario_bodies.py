@@ -220,22 +220,30 @@ def check_s10_sequences(request: RequestFn, pace: float = 1.0) -> dict:
     # itself uses to put the first board on screen (the lane binds
     # /tmp at /board)
     tall = pathlib.Path("/tmp/t36-tall-board.yaml")
-    blocks = "".join(f"  - text: sequence premise block {n}\n" for n in range(1, 41))
+    blocks = "".join(f"  - text: sequence premise block {n}\n" for n in range(1, 151))
     tall.write_text(f"grammar: 1\ntask: t-0\ncontent:\n{blocks}", encoding="ascii")
     _key(request, "escape")
     _sleep(pace, 0.3)
-    _evaluate(request,
-              'return window.__saccadeApp.open("host", "/board/t36-tall-board.yaml");')
-    _sleep(pace, 0.5)
+    open_answer = _evaluate(
+        request,
+        'return Promise.resolve(window.__saccadeApp.open("host", "/board/t36-tall-board.yaml"))'
+        '.then(function () { return "opened"; },'
+        ' function (e) { return "open-error: " + e; });')
+    _premise(open_answer == "opened",
+             f"the app's open refused the tall board: {open_answer!r}")
     deadline = time.monotonic() + 15.0 * pace
     loaded = False
     while True:
         value = _json_evaluate(
             request,
             'const i = window.__saccadeApp && window.__saccadeApp.inspection();'
-            ' return JSON.stringify({status: i ? i.resource.status : null});',
+            ' const parts = i && i.content && i.content.parts ? i.content.parts.length : 0;'
+            ' return JSON.stringify({status: i ? i.resource.status : null,'
+            ' location: i && i.resource ? i.resource.location : null, parts: parts});',
         )
-        if isinstance(value, dict) and value.get("status") == "loaded":
+        if isinstance(value, dict) and value.get("status") == "loaded" and (
+            "t36-tall-board" in str(value.get("location") or "") or (value.get("parts") or 0) >= 30
+        ):
             loaded = True
             break
         if time.monotonic() >= deadline:
@@ -638,17 +646,31 @@ def _s10_port(request: Callable, pace: float) -> dict:
     # the tall board rides /board (the lane binds /tmp at /board); the
     # port's own open door puts it on screen
     tall = pathlib.Path("/tmp/t36-tall-board.yaml")
-    blocks = "".join(f"  - text: sequence premise block {n}\n" for n in range(1, 41))
+    blocks = "".join(f"  - text: sequence premise block {n}\n" for n in range(1, 151))
     tall.write_text(f"grammar: 1\ntask: t-0\ncontent:\n{blocks}", encoding="ascii")
     _key(request, "escape")
     _sleep(pace, 0.3)
-    t36_port.open_spec(request, "host:/board/t36-tall-board.yaml")
+    # the open is awaited with its own error surfaced: a silent no-op
+    # open was indistinguishable from a slow load on BOTH flavors (the
+    # shared premise issue)
+    from t36_checks import _evaluate as _ev
+    open_answer = _ev(
+        request,
+        "return Promise.resolve(window.__suiteOpenAt(\"host:/board/t36-tall-board.yaml\"))"
+        ".then(function () { return 'opened'; },"
+        " function (e) { return 'open-error: ' + e; });",
+    )
+    _premise(open_answer == "opened",
+             f"the port's open door refused the tall board: {open_answer!r}")
     deadline = time.monotonic() + 15.0 * pace
     obs: dict | None = None
     while True:
         value = t36_port.readout(request)
         board = value.get("board") or {}
-        if board.get("status") == "loaded" and "t36-tall-board" in str(board.get("location") or ""):
+        parts = ((value.get("content") or {}).get("parts") or [])
+        # content-based: the tall board's observable is many parts,
+        # whatever location string the flavor renders
+        if board.get("status") == "loaded" and (len(parts) >= 30 or "t36-tall-board" in str(board.get("location") or "")):
             obs = value
             break
         if time.monotonic() >= deadline:
@@ -666,7 +688,11 @@ def _s10_port(request: Callable, pace: float) -> dict:
         " picker: !!document.querySelector(\"[data-port-control=\\\"picker-input\\\"]\")});"
     )
     before_top = top()
-    _key(request, "G")
+    # the G binding is the chord shift+g: a bare WebDriver uppercase
+    # codepoint arrives with shift=false (verified through a read-only
+    # keydown observer) and the port's matcher compares key AND shift
+    # exactly - the chord is the only correct delivery
+    request({"cmd": "input", "kind": "hotkey", "keys": ["shift", "g"]}, 30)
     deadline = time.monotonic() + 5.0 * pace
     mid = before_top
     while True:

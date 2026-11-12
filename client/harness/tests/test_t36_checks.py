@@ -538,6 +538,14 @@ class PortAdapterTest(unittest.TestCase):
         def __call__(self, payload: dict, timeout: float = 60.0) -> dict:
             if payload.get("cmd") == "input" and payload.get("kind") == "type":
                 self.typed = payload.get("text")
+            if payload.get("cmd") == "input" and payload.get("kind") == "hotkey":
+                keys = payload.get("keys") or []
+                if "shift" in keys and ";" in keys:
+                    self.typed = (self.typed or "") + ":"  # shift+; is the chord for ':'
+            if payload.get("cmd") == "input" and payload.get("kind") == "key":
+                keys = payload.get("keys") or []
+                if keys and len(keys[0]) == 1 and keys[0] not in ("escape", " "):
+                    self.typed = (self.typed or "") + keys[0]
             return FakeSession.__call__(self, payload, timeout)
 
         def _evaluate(self, script: str) -> object:
@@ -634,10 +642,19 @@ class PortWidenedBodiesTest(unittest.TestCase):
             if payload.get("cmd") == "input" and payload.get("kind") == "type":
                 if payload.get("target") == "port:picker-input":
                     self.typed_spec = payload.get("text")
-            if payload.get("cmd") == "input" and payload.get("kind") == "key":
+            if payload.get("cmd") == "input" and payload.get("kind") in ("key", "hotkey"):
                 keys = payload.get("keys") or []
-                if "G" in keys:
+                if "G" in keys or ("shift" in keys and "g" in keys):
                     self.viewport_top = 900.0
+                if payload.get("kind") == "hotkey" and "shift" in keys and ";" in keys:
+                    self.typed_spec = (self.typed_spec or "") + ":"
+                elif payload.get("kind") == "type":
+                    self.typed_spec = payload.get("text") or ""
+                elif payload.get("kind") == "key" and keys and len(keys[0]) == 1 and keys[0] not in ("escape", " ", "G", "g"):
+                    self.typed_spec = (self.typed_spec or "") + keys[0]
+                if "enter" in keys and self.typed_spec:
+                    self.location = self.typed_spec
+                    self.typed_spec = None
                 if keys == ["g", "g"] or (self.viewport_top and keys == ["g"]):
                     # the shipped matcher's gg completes: back to top
                     self.viewport_top = 0.0
@@ -670,6 +687,10 @@ class PortWidenedBodiesTest(unittest.TestCase):
                 })
             if "el.value" in script:
                 return self.typed_spec  # the picker's input value
+            if "document.activeElement === el" in script:
+                return True  # the click focused the field
+            if "__suiteOpenAt" in script and "open-error" in script:
+                return "opened"  # the awaited open door accepts the spec
             if "data-port-label" in script and "length" in script:
                 return self.label_count
             if "data-port-label" in script:
@@ -764,10 +785,18 @@ class S15SignatureGateTest(unittest.TestCase):
                     "t-3": {"task": "t-3", "revision": 2, "message": "t36 seed: the landing figure, inside a group"}}}
             if payload.get("cmd") == "input" and payload.get("kind") == "type":
                 self.typed = payload.get("text")
+            if payload.get("cmd") == "input" and payload.get("kind") == "hotkey":
+                keys = payload.get("keys") or []
+                if "shift" in keys and ";" in keys:
+                    self.typed = (self.typed or "") + ":"  # shift+; is the chord for ':'
             if payload.get("cmd") == "input" and payload.get("kind") == "key":
-                if "enter" in (payload.get("keys") or []) and self.typed and self.typed.endswith("@r1"):
-                    self.location = "127.0.0.1:1/seedtracker/t-3@r1"
-                    self.parts = [{"part": "/content/0", "kind": "text", "line": 3}]
+                keys = payload.get("keys") or []
+                if keys and len(keys[0]) == 1 and keys[0] not in ("escape", " "):
+                    self.typed = (self.typed or "") + keys[0]
+                if "enter" in keys and self.typed:
+                    self.location = self.typed
+                    if self.typed.endswith("@r1"):
+                        self.parts = [{"part": "/content/0", "kind": "text", "line": 3}]
             if (
                 getattr(self, "freeze_commits", False)
                 and payload.get("cmd") == "tracker-commit"

@@ -174,6 +174,7 @@ FIND_QUERY_PROTO = "Question"
 
 
 def check_s16_find_entry(request: RequestFn, pace: float) -> dict:
+    import json
     """S16, differential, adapter A2 (input): each side presses the
     Find entry it actually binds - at 4d59c35 BOTH sides bind space
     then / (the app's which-key table carries '/'; the prototype's
@@ -185,27 +186,84 @@ def check_s16_find_entry(request: RequestFn, pace: float) -> dict:
     search') and answers '1 / 1' on a matching query; the prototype's
     prompt paints 6 mark.found hints for a matching query."""
     prototype = _prototype()
-    # -- app half: space / opens find on the shown revision
-    _key(request, "escape")
-    _sleep(pace, 0.3)
-    _key(request, " ", "/")
-    _sleep(pace, 0.8)
-    opened = _json_evaluate(
-        request,
-        "return JSON.stringify({search: !!document.querySelector('[data-control=\"search\"]'),"
-        " state: (document.querySelector('[data-control=\"search:state\"]') || {}).textContent || null});",
-    )
-    _premise(isinstance(opened, dict) and opened.get("search"), "the app's find did not open on space /")
-    _type(request, "search", FIND_QUERY_APP)
-    _sleep(pace, 1.2)
-    state = _json_evaluate(
-        request,
-        "return JSON.stringify({state: (document.querySelector('[data-control=\"search:state\"]') || {}).textContent || null});",
-    )
-    _key(request, "escape")
-    app_matches = str((state or {}).get("state") or "")
-    match = re.match(r"^(\d+) / (\d+)$", app_matches.strip())
-    _premise(match is not None and int(match.group(2)) >= 1, f"the app's find answered {app_matches!r} for the query")
+    # -- app half: the find entry each flavor actually binds, observed
+    # through that flavor's own surface. The legacy app: space / and
+    # the search DOM (preserved literally). The port: bare / (the
+    # ratified entry) and the readout's find field.
+    if t36_port.is_port(request):
+        # the find must match on the SHOWN revision: the port branch
+        # opens the landing seed board first (the launch board carries
+        # no match for the query)
+        tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+        base = str(tracker.get("base") or "").replace("http://", "")
+        tasks = tracker.get("tasks") or {}
+        landing = next((t for t, e in tasks.items() if "landing" in str(e.get("message") or "")), None)
+        _premise(landing is not None, f"no landing seed task on the tracker: {json.dumps(tasks)[:160]}")
+        t36_port.open_via_port_picker(request, f"{base}/seedtracker/{landing}", pace)
+        deadline = time.monotonic() + 15.0 * pace
+        while True:
+            board = (t36_port.readout(request).get("board") or {})
+            if board.get("status") == "loaded" and f"/{landing}" in str(board.get("location") or ""):
+                break
+            if time.monotonic() >= deadline:
+                raise CheckStopped(f"the landing board never loaded on the port: {json.dumps(board)[:160]}")
+            _sleep(pace, 0.4)
+        _key(request, "escape")
+        _sleep(pace, 0.3)
+        _key(request, "/")
+        _sleep(pace, 0.8)
+
+        def find_now() -> dict:
+            value = t36_port.readout(request).get("find")
+            return value if isinstance(value, dict) else {}
+
+        find_state = find_now()
+        _premise(find_state.get("open") is True,
+                 f"the port's find did not open on / (readout find={json.dumps(find_state)[:160]})")
+        # the query is the shown board's own text ("landing" - the
+        # landing board's first block), so the expected nonzero count is
+        # pinned to a known match, and the actual queried text is
+        # recorded verbatim in the verdict evidence. The typing is
+        # target-addressed (a real click on the find field, the clear,
+        # the focus asserted, every response _ok'd, bounded)
+        query = "landing"
+        t36_port.type_text(request, "port:find-input", query, pace)
+        _sleep(pace, 1.2)
+        find_state = find_now()
+        count = find_state.get("count")
+        queried = find_state.get("query")
+        _premise(isinstance(count, int) and count >= 1,
+                 f"the port's find answered {json.dumps(find_state)[:160]} for {query!r}"
+                 f" on the landing board (expected a nonzero count for a known match)")
+        _premise(queried == query,
+                 f"the find's query text drifted: the readout carries {queried!r}, typed {query!r}")
+        _key(request, "escape")
+        _sleep(pace, 0.3)
+        find_closed = find_now()
+        _premise(find_closed.get("open") is False, "the port's find did not close on escape")
+        app_matches = f"{count} matches"
+        opened = {"search": True}
+    else:
+        _key(request, "escape")
+        _sleep(pace, 0.3)
+        _key(request, " ", "/")
+        _sleep(pace, 0.8)
+        opened = _json_evaluate(
+            request,
+            "return JSON.stringify({search: !!document.querySelector('[data-control=\"search\"]'),"
+            " state: (document.querySelector('[data-control=\"search:state\"]') || {}).textContent || null});",
+        )
+        _premise(isinstance(opened, dict) and opened.get("search"), "the app's find did not open on space /")
+        _type(request, "search", FIND_QUERY_APP)
+        _sleep(pace, 1.2)
+        state = _json_evaluate(
+            request,
+            "return JSON.stringify({state: (document.querySelector('[data-control=\"search:state\"]') || {}).textContent || null});",
+        )
+        _key(request, "escape")
+        app_matches = str((state or {}).get("state") or "")
+        match = re.match(r"^(\d+) / (\d+)$", app_matches.strip())
+        _premise(match is not None and int(match.group(2)) >= 1, f"the app's find answered {app_matches!r} for the query")
 
     # -- prototype half
     proto = prototype.find_on_board(FIND_QUERY_PROTO)
@@ -226,7 +284,8 @@ def check_s16_find_entry(request: RequestFn, pace: float) -> dict:
         "S16",
         comparison["mismatches"],
         f"find opens on the shown revision on both sides"
-        f" (app '{app_matches}' via space /; prototype {proto.get('marks')} marks via space /);"
+        f" (app '{app_matches}' via {'the readout /' if t36_port.is_port(request) else 'space /'};"
+        f" prototype {proto.get('marks')} marks via space /);"
         " A2 carries the input difference and the agreed bare-/ app entry",
     )
     verdict["detail"] = verdict["detail"] + " | " + "; ".join(comparison["notes"])
@@ -373,8 +432,18 @@ def _s08_port(request: RequestFn, pace: float) -> dict:
     cited_obs = _wait_port_loaded(request, pace, f"/{cited}")
     cited_location = str((cited_obs.get("board") or {}).get("location"))
     revision = cited_location.rsplit("@r", 1)[-1] if "@r" in cited_location else None
-    group_part = "/content/0/group"
-    child_part = "/content/0/group/content/0"
+    # the canonical paths derive from the readout, never assumed: the
+    # fixture proof (the opened revision really is the group-made one)
+    # and the port's own part paths are separate facts (the review
+    # correction: the grammar path /content/0/group is not the port's
+    # canonical shape; the port nests as /content/N/content/M)
+    parts = ((cited_obs.get("content") or {}).get("parts") or [])
+    group_parts = [p for p in parts if p.get("kind") == "group"]
+    _premise(bool(group_parts),
+             f"the fixture/revision proof failed - the opened {cited_location!r} carries no group"
+             f" part: {_json.dumps(parts)[:240]}")
+    group_part = str(group_parts[0]["part"])
+    child_part = f"{group_part}/content/0"
     t36_port.fold_part(request, group_part, pace)
     _premise(t36_port.part_rect(request, child_part) is None,
              f"the child part {child_part!r} still renders after the fold; the fold premise failed")
