@@ -21,11 +21,17 @@ export async function openPicker(app: AppDriver): Promise<void> {
 /** Open a location through the picker with real typing and Enter,
  * then wait until the shown board answers it. */
 export async function openLocation(app: AppDriver, location: string): Promise<PortObservation> {
+  await submitLocation(app, location);
+  const path = location.slice(location.indexOf("/") + 1);
+  return waitShown(app, path);
+}
+
+/** Submit a location through the picker (real typing and Enter);
+ * the caller waits for whatever surface it opens. */
+export async function submitLocation(app: AppDriver, location: string): Promise<void> {
   await openPicker(app);
   await app.type(location);
   await app.press("Enter");
-  const path = location.slice(location.indexOf("/") + 1);
-  return waitShown(app, path);
 }
 
 /** Wait until the window shows the open it asked for, `path`
@@ -56,4 +62,21 @@ export async function find(app: AppDriver, query: string): Promise<PortObservati
   await app.type(query);
   await expect.poll(async () => (await app.readout()).find.query).toBe(query);
   return (await app.readout()).find;
+}
+
+/** An act from a citation's act menu: the real right-click opens the
+ * menu, the act's key runs it (o, i, w, f, y). */
+export async function citationAct(app: AppDriver, key: string): Promise<void> {
+  await app.click("citation", { button: "right" });
+  await expect.poll(() => app.menuOpen()).toBe(true);
+  await app.press(key);
+}
+
+/** Answer a live ask with a window's chip, typed into the ask field. */
+export async function answerAsk(app: AppDriver, window: string): Promise<void> {
+  await expect.poll(() => app.shows("ask-input")).toBe(true);
+  const chip = (await app.readout()).window.ask?.chips.find((entry) => entry.window === window)?.chip;
+  if (chip === undefined) throw new Error(`the ask offers no chip for ${window}`);
+  await app.type(chip);
+  await app.press("Enter");
 }

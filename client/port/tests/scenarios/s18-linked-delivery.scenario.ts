@@ -5,14 +5,7 @@
 // delivery lands on the receiver and the link is untouched; w opens a
 // third viewer at the citation. Native windows only.
 import { expect, test } from "#scenario";
-import { openLocation, spec } from "./kit/helpers.ts";
-import type { AppDriver } from "./kit/driver.ts";
-
-async function citationAct(app: AppDriver, key: string): Promise<void> {
-  await app.click("citation", { button: "right" });
-  await expect.poll(() => app.menuOpen()).toBe(true);
-  await app.press(key);
-}
+import { citationAct, openLocation, spec } from "./kit/helpers.ts";
 
 test("S18 linked delivery: o, i and w deliver the citation", { tags: ["multi-window"] }, async ({ app, tracker }) => {
   const { citingChild: citing, cited } = tracker.tasks;

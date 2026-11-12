@@ -7,7 +7,7 @@ authoritative gate until scenarios cut over; nothing here replaces it yet.
 | project | what | command | runtime |
 | --- | --- | --- | --- |
 | unit | `tests/*.test.ts`, pure and component tests, in node | `just port-test` | about 1s |
-| browser | `tests/scenarios/*.scenario.ts` in headless WebKit | `just port-test-browser` | about 10s |
+| browser | `tests/scenarios/*.scenario.ts` and `*.browser.ts` in headless WebKit | `just port-test-browser` | about 10s |
 | native | the scenarios tagged `native` or `multi-window`, in the built app | `just port-test-native` | blocked (below) |
 
 `just test` runs the unit and browser projects after the cargo suite, and the
@@ -57,6 +57,9 @@ The rules:
   the file and line. When the fix lands the test "fails"; drop `fails` then.
 - If the readout lacks what a scenario needs, do not patch the app from
   here: record the missing field and skip or mark the test.
+- A browser-only scenario that needs the mocked shell is `<name>.browser.ts`
+  and imports `test` from `./kit/browser.ts` for its `bridged` fixture (see
+  `elsewhere.browser.ts`); the native project never collects those files.
 
 ## The kit
 
@@ -73,6 +76,17 @@ Every module is a test-infrastructure module; each line says why it exists.
   listeners do not detach.
 - `kit/native.ts`: the native driver. Per test, its own `tauri-driver` with
   fresh XDG dirs, and a WebdriverIO session against the built app.
+- `kit/shell-mock.ts` (with `shell-app.html`, `shell-entry.ts`,
+  `shell-install.ts`): the browser's mocked native shell. Tauri's official
+  `@tauri-apps/api/mocks` (mockIPC, mockWindows) answering each shell command
+  the port invokes, written from the Rust signature it cites. It models one
+  webview plus the shell's window registry as data and never routes between
+  pages; the entry page installs it inside the app's iframe before the port's
+  `main.ts` boots, since the mocks patch their own realm. Needed so the app's
+  half of multi-window (the link, the strip, the o/i/w decision, the shell
+  calls) runs in the browser.
+- `kit/tracker-wire.ts`: the fetch-only door into the running tracker
+  (commits, window-state reads), usable from both realms.
 - `kit/tracker.ts`, `kit/tracker-setup.ts`: the throwaway tracker, a real
   `sac serve` on a fresh temp db and repo on a free loopback port, seeded by
   `client/harness/t36_seeds.py` itself (one source for the seed boards until

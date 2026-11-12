@@ -17,7 +17,8 @@ import { expect, test as base, inject } from "vitest";
 import { Key, remote } from "webdriverio";
 
 import type { AppDriver, PortObservation, Tracker } from "./driver.ts";
-import { freePort, trackerWrites } from "./tracker.ts";
+import { freePort } from "./tracker.ts";
+import { trackerDoor } from "./tracker-wire.ts";
 
 // the session lane's own env names (client/harness/entry.py
 // session_env); WAYLAND_DISPLAY names the lane's private compositor
@@ -183,6 +184,20 @@ async function launch(runRoot: string): Promise<{ app: AppDriver; close: () => P
     async menuOpen() {
       return browser.$("[data-port-menu]").isExisting();
     },
+    async labels() {
+      return browser.execute(() =>
+        [...document.querySelectorAll("[data-port-label]")].map((element) => ({
+          label: element.getAttribute("data-port-label") ?? "",
+          part: element.getAttribute("data-port-part") ?? "",
+        })));
+    },
+    async strip() {
+      const field = async (name: string): Promise<string> => {
+        const element = browser.$(`[data-port-strip=${JSON.stringify(name)}]`);
+        return (await element.isExisting()) ? (await element.getText()).trim() : "";
+      };
+      return { location: await field("location"), status: await field("status"), link: await field("link") };
+    },
     async activeMatch() {
       return browser.execute(() =>
         document.querySelector("[data-port-find-active]")?.closest("[data-port-part]")?.getAttribute("data-port-part") ?? null);
@@ -233,7 +248,7 @@ export const test = base.extend<{ app: AppDriver; tracker: Tracker }>({
   // eslint-disable-next-line no-empty-pattern
   tracker: async ({}, use) => {
     const seeded = inject("tracker");
-    await use({ ...seeded, ...trackerWrites(seeded.base) });
+    await use({ ...seeded, ...trackerDoor(seeded.base) });
   },
 });
 
