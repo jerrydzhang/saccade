@@ -1376,3 +1376,121 @@ def check_s05_temporary_buffers(request: RequestFn, pace: float = 1.0) -> dict:
                        f" halves wait for the tasks surface and linked windows"
                        f" (recorded); the inspector->picker chain stays a pure-lane"
                        f" fixture by the scenario's own note")}
+
+
+def check_s04_deactivation(request: RequestFn, pace: float = 1.0) -> dict:
+    """S04 deactivation separates input from content - the felt
+    behaviour, driven for real.
+
+    Script: a board with a displayed figure; the figure's plain click
+    (its primary act, enlarge) opens the inspection; while it is open,
+    board scroll keys do NOTHING to the board beneath (no silent
+    fall-through); the inspector's own + - = act (zoom steps, reset);
+    Escape closes it, hands input back, and adds no trail entry.
+    """
+    import json as _json
+    import time as _time
+
+    if not t36_port.is_port(request):
+        raise CheckStopped(
+            "the old-app half is not grounded at baseline (the recorded registry"
+            " reason): its inspector differs in surface and the differential never"
+            " drove it; the port half carries the felt behaviour"
+        )
+
+    from t36_checks import _key, _ok, _premise, _sleep
+
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "").replace("http://", "")
+    tasks = tracker.get("tasks") or {}
+    landing = next((t for t, e in tasks.items() if "landing" in str(e.get("message") or "")), None)
+    _premise(landing is not None, "the landing seed (its figure) is missing from the tracker")
+    t36_port.open_via_port_picker(request, f"{base}/seedtracker/{landing}@r2", pace)
+
+    def readout() -> dict:
+        return t36_port.readout(request)
+
+    deadline = _time.monotonic() + 15.0 * pace
+    while True:
+        obs = readout()
+        board = obs.get("board") or {}
+        if board.get("status") == "loaded" and f"{landing}@r2" in str(board.get("location") or ""):
+            break
+        if _time.monotonic() >= deadline:
+            raise CheckStopped(f"the landing board never loaded: {board.get('location')!r}")
+        _sleep(pace, 0.4)
+
+    # the displayed figure (hydrated with its asset)
+    box = _json_evaluate(
+        request,
+        "const el = document.querySelector('.block-figure img.figure-img');"
+        " if (!el) return null; const r = el.getBoundingClientRect();"
+        " return JSON.stringify({x: r.x + r.width / 2, y: r.y + r.height / 2});",
+    )
+    _premise(isinstance(box, dict), "the landing board shows no hydrated figure (the premise needs a live asset)")
+
+    # the primary act: a plain click enlarges
+    _ok(request({"cmd": "input", "kind": "coords", "x": box["x"], "y": box["y"]}, timeout=30))
+    _sleep(pace, 1.0)
+    opened = readout()
+    inspection = opened.get("inspection")
+    if not (isinstance(inspection, dict) and inspection.get("zoom") == 1):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the figure's plain click did not open the inspection: {inspection!r}"}
+
+    # deactivation: board keys beneath do nothing (no scroll, no
+    # activation), and the inspection stays open through them
+    top_before = (opened.get("viewport") or {}).get("top")
+    _key(request, "j")
+    _sleep(pace, 0.3)
+    _ok(request({"cmd": "input", "kind": "hotkey", "keys": ["shift", "g"]}, timeout=30))
+    _sleep(pace, 0.8)
+    beneath = readout()
+    if (beneath.get("viewport") or {}).get("top") != top_before:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": (f"a board key reached the board beneath the inspection:"
+                           f" viewport.top {top_before} -> {(beneath.get('viewport') or {}).get('top')}")}
+    if not isinstance(beneath.get("inspection"), dict):
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": "the inspection closed under board keys (it owns every stroke while open)"}
+
+    # the inspector's own keys: + steps the zoom, = resets it
+    _key(request, "+")
+    _sleep(pace, 0.2)
+    _key(request, "+")
+    _sleep(pace, 0.2)
+    zoomed = readout().get("inspection") or {}
+    if zoomed.get("zoom") != 1.5:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the inspector's + did not step the zoom: {zoomed!r}"}
+    _key(request, "=")
+    _sleep(pace, 0.2)
+    reset = readout().get("inspection") or {}
+    if reset.get("zoom") != 1:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the inspector's = did not reset the zoom: {reset!r}"}
+
+    # Escape closes: no trail entry, input back with the board loaded
+    trail_before = _json.dumps(readout().get("trail"), sort_keys=True)
+    _key(request, "escape")
+    _sleep(pace, 0.6)
+    closed = readout()
+    if closed.get("inspection") is not None:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"Escape did not close the inspection: {closed.get('inspection')!r}"}
+    if _json.dumps(closed.get("trail"), sort_keys=True) != trail_before:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": "closing the inspection changed the trail (a temporary surface adds no entry)"}
+    board = closed.get("board") or {}
+    if board.get("status") != "loaded":
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": f"the board beneath did not survive the inspection: {board.get('status')!r}"}
+
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (f"the figure's plain click opened its inspection (part"
+                       f" {inspection.get('part')!r}, zoom 1); while it was open the board's"
+                       f" scroll keys moved nothing beneath (viewport.top {top_before} held)"
+                       f" and the inspection owned every stroke; + stepped the zoom to 1.5,"
+                       f" = reset it; Escape closed it with the trail unchanged and the board"
+                       f" still loaded - deactivation separated input from content, the felt"
+                       f" behaviour end to end")}

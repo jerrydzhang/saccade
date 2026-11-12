@@ -760,7 +760,6 @@ STOP_REASONS: dict[str, str] = {
     "S01": "pure lane (controlled ports, no DOM): not executable through the real-conditions harness; belongs to the component test suite",
     "S02": "pure and component lanes only; the native harness has no failure-injection port for a board source",
     "S03": "the pure lane owns the reporting contract; the app-only native half needs a diagnostics-raising flow that no real-input path exercises yet",
-    "S04": "the native-delta half needs the figure-inspection surface and a live-content source; not grounded at baseline",
     "S06": "pure and component lanes (presentation attachment is a component fixture concern)",
     "S09": "authored next: the four invocations (menu key, right-click Enter, right-click click, plain click) need right-click plumbing in webdriver_client before the literals can compare",
     "S10": "authored next: gg through the shared matcher and unmatched-key consumption are drivable, but the matcher's consume-vs-fallthrough oracle needs the input-context data the baseline ships as draft",
@@ -781,6 +780,11 @@ def register() -> None:
     CHECKS.setdefault("S16", CheckSpec(
         "S16", "find is a facility of the shown revision", check_s16_find_entry,
         adapters=("A2",),
+    ))
+    CHECKS.setdefault("S04", CheckSpec(
+        "S04", "deactivation separates input from content",
+        t36_scenario_bodies.check_s04_deactivation,
+        adapters=("P6",),
     ))
     CHECKS.setdefault("S17", CheckSpec(
         "S17", "task activity is a place, not a popup", check_s17_activity_place,

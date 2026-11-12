@@ -17,7 +17,7 @@ diff can name the adapter set it was judged under.
 
 from __future__ import annotations
 
-ADAPTER_SET_REVISION = "t36-adapters/5"
+ADAPTER_SET_REVISION = "t36-adapters/6"
 
 KIND_INPUT = "input"
 KIND_READOUT = "readout"
@@ -160,6 +160,20 @@ ADAPTERS: tuple[dict, ...] = (
         " through the shell's open door. The old-app half keeps its"
         " recorded FAIL evidence (the receiver never receives on any"
         " path); the oracle is untouched and the flip is expected.",
+    ),
+    _adapter(
+        "P6",
+        "port-figure-inspection",
+        KIND_INPUT,
+        ("S04",),
+        "On the port flavor the figure inspection is the window's own"
+        " temporary surface (S04): the figure's primary act enlarges"
+        " (the prototype's x-first figure kind), the inspector owns"
+        " every stroke while open (+ - = and Escape; anything else"
+        " consumed inert - no fall-through to the board beneath, which"
+        " keeps its updates), and closing adds no trail entry. The"
+        " old-app half keeps its recorded registry stop (never"
+        " grounded at baseline); the felt behaviour is the port's.",
     ),
     _adapter(
         "P5",
