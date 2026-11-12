@@ -55,7 +55,11 @@ import {
   type SuiteWindow,
 } from "./lib/elsewhere.ts";
 import { WindowStore } from "./lib/windows.ts";
-import { serverBase } from "./lib/tracker.ts";
+import { serverBase, TrackerSource } from "./lib/tracker.ts";
+import { formatLocation } from "./lib/location.ts";
+import { sourceFor } from "./lib/sources.ts";
+import { tasksPageOf } from "./lib/tasks/page.ts";
+import type { PickContext } from "./lib/picker/model.ts";
 import {
   zoomIn as inspectionZoomIn,
   zoomOut as inspectionZoomOut,
@@ -89,6 +93,10 @@ export interface PortWindow {
   trailForward(): boolean;
   trailView(): TrailView;
   openPicker(): void;
+  /** The picker's ranked-list context, refreshed on open (the
+   * tracker's task list arrives asynchronously). */
+  pickerContext(): PickContext;
+  subscribePickerContext(observer: (context: PickContext) => void): () => void;
   closePicker(): void;
   submitPicker(spec: string): void;
   subscribePicker(observer: (state: PickerState) => void): () => void;
@@ -171,6 +179,80 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // semantics: the key seam skips field targets, so typing inside the
   // picker stays native (scenario 10).
   const picker = createPickerController((spec) => openSpec(spec));
+
+  // The picker's context (F1, the scope rule: the window's ONE
+  // tracker): recents are this window's own trail (newest first),
+  // the task list loads from the tracker the window last reached,
+  // and unopened tasks compose their specs from that same base.
+  let pickerContextValue: PickContext = {
+    recent: [],
+    tasks: [],
+    specOf: (id) => id,
+    openHere: null,
+  };
+  const pickerContextObservers = new Set<(context: PickContext) => void>();
+
+  async function refreshPickerContext(): Promise<void> {
+    try {
+      await refreshPickerContextInner();
+    } catch (error) {
+      diagnostics.report(
+        refusalContext,
+        knownIssue({ code: "asset-denied", message: `picker context refresh failed: ${String(error)}` }),
+      );
+    }
+  }
+
+  async function refreshPickerContextInner(): Promise<void> {
+    const view = trail.view();
+    const recent = [...view.entries].reverse().map((entry) => entry.location);
+    const current = displayedFrame();
+    let openHere: string | null = null;
+    if (current.kind === "alive") {
+      const frame = current.content.kind === "available" ? current.content.value.props["content"] as
+        { location?: string } | undefined
+        : undefined;
+      openHere = frame?.location ?? null;
+    }
+    // the tracker machine rides the parser's own mapping (a host form
+    // becomes a tracker: machine) - never a raw split of the string
+    let trackerMachine: string | null = null;
+    for (const candidate of [openHere, ...recent]) {
+      if (typeof candidate !== "string") continue;
+      const address = parseOpenSpec(candidate);
+      if (address !== null && address.machine.startsWith("tracker:")) {
+        trackerMachine = address.machine;
+        break;
+      }
+    }
+    const tasks: { id: string; title: string }[] = [];
+    if (trackerMachine !== null) {
+      try {
+        const source = sourceFor(trackerMachine);
+        if (source instanceof TrackerSource) {
+          const model = tasksPageOf(await source.instrumentPage("tasks"));
+          for (const row of model.groups) {
+            for (const entry of row.rows) {
+              tasks.push({ id: entry.task, title: entry.title });
+            }
+          }
+        }
+      } catch {
+        // a dead tracker read: the picker still lists recents
+      }
+    }
+    pickerContextValue = {
+      recent,
+      tasks,
+      specOf: (id) =>
+        trackerMachine !== null
+          ? formatLocation({ machine: trackerMachine, path: id })
+          : id,
+      openHere,
+    };
+    for (const observer of [...pickerContextObservers]) observer(pickerContextValue);
+  }
+
 
   // -- the elsewhere surface (S18): the window's o/i/w OPEN acts -----
   // The window binds a window-store state on the home tracker (the
@@ -527,7 +609,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
   // captured field commands belong to the active instrument.
   const windowHost: HostMatcher = createHostMatcher(
     windowContext({
-      openPicker: () => picker.open(),
+      openPicker: () => {
+        void refreshPickerContext();
+        picker.open();
+      },
       closeOverlays: () => picker.close(),
       pickerIsOpen: () => picker.snapshot().open,
       trailBack: () => trail.back(),
@@ -885,8 +970,19 @@ export function createPortWindow(windowId = "main"): PortWindow {
     trailBack: () => trail.back(),
     trailForward: () => trail.forward(),
     trailView: () => trail.view(),
-    openPicker: () => picker.open(),
+    openPicker: () => {
+      void refreshPickerContext();
+      picker.open();
+    },
     closePicker: () => picker.close(),
+    pickerContext: () => pickerContextValue,
+    subscribePickerContext(observer) {
+      pickerContextObservers.add(observer);
+      observer(pickerContextValue);
+      return () => {
+        pickerContextObservers.delete(observer);
+      };
+    },
     submitPicker: (spec) => picker.submit(spec),
     subscribePicker(observer) {
       return picker.subscribe(observer);
