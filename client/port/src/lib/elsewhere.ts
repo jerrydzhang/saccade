@@ -29,7 +29,15 @@ export function elsewhereDecision(
   world: { linkLabel: string | null; windows: readonly SuiteWindow[] },
 ): ElsewhereDecision {
   if (act === "new") return { kind: "new-window", becomeLink: false };
-  if (act === "link" && world.linkLabel !== null) {
+  // a link only delivers while its window LIVES: the label must name
+  // a current window (a dead link - the window closed - is no link;
+  // the one-window/new/ask rules take over, never a silent delivery
+  // into a dead state)
+  if (
+    act === "link" &&
+    world.linkLabel !== null &&
+    world.windows.some((entry) => entry.label === world.linkLabel)
+  ) {
     return { kind: "deliver", label: world.linkLabel };
   }
   if (world.windows.length <= 1) {

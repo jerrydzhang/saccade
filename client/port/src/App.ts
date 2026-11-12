@@ -436,6 +436,9 @@ export function createPortWindow(windowId = "main"): PortWindow {
       if (linked === null || linked.length === 0) return;
       const windows = await suiteWindows();
       linkLabel = windows.find((entry) => entry.state_id === linked)?.label ?? null;
+      // a state that no window carries is a dead link: clear it, so
+      // the strip never names a ghost and o never delivers into one
+      if (linkLabel === null) await windowStore.clearLink(windowStateId).catch(() => {});
     } catch {
       // a dead store read: the link resolves null until the next
       // refresh; o asks rather than delivering into a guess
