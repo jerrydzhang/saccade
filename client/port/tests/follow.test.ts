@@ -3,7 +3,7 @@
 // failure, no follow for pinned opens. Pure tests with a manual timer.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createFollow, pinnedEqual } from "../src/lib/board/follow.ts";
 
 function harness() {

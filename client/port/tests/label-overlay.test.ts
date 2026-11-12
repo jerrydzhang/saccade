@@ -3,7 +3,7 @@
 // parts, the visibility contract F3 violated.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { chipPlacements, isWithinHost } from "../src/lib/select/overlay.ts";
 

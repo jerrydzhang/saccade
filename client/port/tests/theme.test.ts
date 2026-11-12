@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "vitest";
 
 const styles = path.resolve(import.meta.dirname, "../src/styles");
 const read = (name: string): string => fs.readFileSync(path.join(styles, name), "utf8");

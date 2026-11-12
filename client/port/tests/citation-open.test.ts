@@ -9,7 +9,7 @@
 // composed address keeps the cited task's pinned revision.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { formatLocation, parseLocation } from "../src/lib/location.ts";
 import { parseOpenSpec } from "../src/instruments/boardController.ts";
 

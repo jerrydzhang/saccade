@@ -3,7 +3,7 @@
 // controlled ports (the fetcher), never a re-stubbed policy.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { WindowStore, deviceId, windowsUrl } from "../src/lib/windows.ts";
 

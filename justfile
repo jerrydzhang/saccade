@@ -7,6 +7,30 @@ lint:
 
 test:
     cargo test -q
+    just port-test
+    just port-test-browser
+
+# The port's suite: one runner (vitest), three projects
+# (client/port/vitest.config.ts, client/port/tests/scenarios/README.md).
+# unit: the pure and component tests, in node.
+port-test:
+    cd client && node_modules/.bin/vitest run -c port/vitest.config.ts --project unit
+
+# browser: the scenarios in headless WebKit against the port served by
+# vite, with a throwaway seeded tracker from the built sac; the
+# saccade-app shell carries the pinned Playwright browsers and the
+# software-EGL mesa pin
+port-test-browser *args:
+    cargo build -q -p saccade --bin sac
+    nix develop .#saccade-app -c bash -c 'cd client && SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser "$@"' port-test-browser {{args}}
+
+# native: the scenarios tagged native or multi-window, against the
+# built port app through tauri-driver and WebdriverIO. It runs only
+# inside the session lane's sandbox and refuses elsewhere; the lane
+# has no payload mode that runs it yet (client/port/tests/scenarios/
+# README.md, native)
+port-test-native *args:
+    cd client && node_modules/.bin/vitest run -c port/vitest.config.ts --project native --tags-filter 'native || multi-window' {{args}}
 
 typecheck:
     tracker/native/typecheck.sh

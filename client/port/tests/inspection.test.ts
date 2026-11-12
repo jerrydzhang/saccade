@@ -2,7 +2,7 @@
 // context, and the readout's inspection field.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { ZOOM_MAX, ZOOM_MIN, zoomIn, zoomOut, zoomReset } from "../src/lib/figures/inspection.ts";
 import { createHostMatcher } from "../src/lib/input/host.ts";

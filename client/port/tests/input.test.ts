@@ -4,7 +4,7 @@
 // - no DOM, no Svelte; fake schedulers and recorders only.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { commandContext, key, sequence } from "../src/lib/input/input-context.ts";
 import { createMatcher, SEQUENCE_TIMEOUT_MS, validateNoCollisions } from "../src/lib/input/key-matcher.ts";
 import { createHostMatcher, dispatchStroke, type HostScheduler } from "../src/lib/input/host.ts";

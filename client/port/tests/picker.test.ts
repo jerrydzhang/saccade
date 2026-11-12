@@ -2,7 +2,7 @@
 // (the prototype's own rules, transcribed).
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { isPathMode, pickList, scoreOf, type PickContext, type PickEntry } from "../src/lib/picker/model.ts";
 

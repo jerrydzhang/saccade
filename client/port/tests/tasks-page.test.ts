@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 
 import { ageOf } from "../src/lib/tasks/page.ts";
-import test from "node:test";
+import { test } from "vitest";
 import type { ViewPage } from "../src/lib/pages.ts";
 import {
   taskRowOf,

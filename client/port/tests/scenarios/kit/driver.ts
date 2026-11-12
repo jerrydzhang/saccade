@@ -1,0 +1,67 @@
+// The one interface both scenario drivers implement (browser.ts:
+// WebKit through vitest browser mode; native.ts: the built app
+// through tauri-driver and WebdriverIO). Scenarios and helpers.ts
+// speak only this: state is read through the port's observation
+// readout, input is real keys and clicks, and controls are named by
+// their data-port-control id - never by a selector in a scenario.
+import type { PortObservation } from "../../../src/lib/observation.ts";
+
+export type { PortObservation };
+
+/** The throwaway seeded tracker every scenario run starts from. */
+export type SeededTracker = {
+  /** http://127.0.0.1:<port> */
+  base: string;
+  /** 127.0.0.1:<port>, the form a location spec carries */
+  host: string;
+  /** the served repo's name, the location's first path segment */
+  repo: string;
+  /** the t36 seed tasks (client/harness/t36_seeds.py), as t-N ids */
+  tasks: { cited: string; citing: string; citingChild: string; landing: string };
+};
+
+/** Writes into the throwaway tracker, mid-scenario. */
+export interface TrackerWrites {
+  createTask(name: string): Promise<string>;
+  commit(task: string, board: string, message: string): Promise<{ revision: number }>;
+}
+
+export type Tracker = SeededTracker & TrackerWrites;
+
+declare module "vitest" {
+  interface ProvidedContext {
+    tracker: SeededTracker;
+  }
+}
+
+/** A fresh app: one window, no launch restore, its own data. */
+export interface AppDriver {
+  /** The readout of a window: the focused one by default. */
+  readout(window?: string): Promise<PortObservation>;
+  /** Real key presses in order. Names: one character ("n", "/", " ")
+   * or a named key ("Escape", "Enter", "Backspace", "ArrowDown"). */
+  press(...keys: string[]): Promise<void>;
+  /** Real typing into whatever holds focus, character by character. */
+  type(text: string): Promise<void>;
+  /** A real click on a port control (its data-port-control id). */
+  click(control: string, options?: { button?: "left" | "right" }): Promise<void>;
+  /** A real click on a rendered content part (its canonical content
+   * path, as the readout's content.parts names it). "header" clicks
+   * the part's top strip - a group's own hit area, where its center
+   * would land on a child. */
+  clickPart(part: string, options?: { button?: "left" | "right"; at?: "center" | "header" }): Promise<void>;
+  /** Whether a port control is rendered now. */
+  shows(control: string): Promise<boolean>;
+  /** Whether an act menu is open now. */
+  menuOpen(): Promise<boolean>;
+  /** The content part visibly marked as find's active match, or null.
+   * PROPOSED observable: the port renders no such marker yet; this
+   * reads a data-port-find-active attribute on the match's part
+   * (find-next.scenario.ts, the known defect). */
+  activeMatch(): Promise<string | null>;
+  /** The labels of the live windows ("main" first). The browser has
+   * exactly one. */
+  windows(): Promise<string[]>;
+  /** Route input and the default readout to a window. */
+  focusWindow(label: string): Promise<void>;
+}

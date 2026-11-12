@@ -4,7 +4,7 @@
 // rides their existing suites and the focused probes.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { createLoadScope, issueOf, readyFrame } from "../src/lib/instruments/scaffold.ts";
 import { SourceUnavailableError } from "../src/lib/sources.ts";

@@ -7,7 +7,7 @@
 // offset).
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test, onTestFinished, vi } from "vitest";
 import { SliceBufferHost } from "../src/components/Buffer.ts";
 import type { InstrumentAttachment } from "../src/components/Buffer.ts";
 import { connectTasks } from "../src/instruments/tasksController.ts";
@@ -116,11 +116,11 @@ interface Harness {
   menuView(): unknown;
 }
 
-function harness(t: import("node:test").TestContext, rows: { task: string; title: string }[], bounds: Map<string, { top: number; bottom: number }>, scrollTop = 0): Harness {
+function harness(t: import("vitest").TestContext, rows: { task: string; title: string }[], bounds: Map<string, { top: number; bottom: number }>, scrollTop = 0): Harness {
   const machine = MACHINE;
   const source = sourceFor(machine) as TrackerSource;
   const page = tasksPageFixture(rows);
-  test.mock.method(source, "instrumentPage", async () => page);
+  vi.spyOn(source, "instrumentPage").mockImplementation(async () => page);
   const { scroller } = fakeScroller(bounds, scrollTop);
   const viewport = {
     metrics: () => ({
@@ -157,7 +157,7 @@ function harness(t: import("node:test").TestContext, rows: { task: string; title
   });
   const built = host.wire();
   built.host.activate();
-  t.after(() => built.host.destroy());
+  onTestFinished(() => built.host.destroy());
   const copied: string[] = [];
   attachment.presentation.setTaskPorts({
     open: (spec) => opened.push(spec),
@@ -391,7 +391,7 @@ test("a selection whose row leaves the page clears (scenario 12 identity)", asyn
     { task: "t-0", title: "the cited seed account" },
     { task: "t-1", title: "the citing seed account" },
   ]);
-  test.mock.method(source, "instrumentPage", async () => page);
+  vi.spyOn(source, "instrumentPage").mockImplementation(async () => page);
   const { scroller } = fakeScroller(ROW_BOUNDS);
   const viewport = {
     metrics: () => ({
@@ -420,7 +420,7 @@ test("a selection whose row leaves the page clears (scenario 12 identity)", asyn
   });
   const built = host.wire();
   built.host.activate();
-  t.after(() => built.host.destroy());
+  onTestFinished(() => built.host.destroy());
   attachment.presentation.setTaskPorts({ open: () => {} });
   await attachment.places.request({ machine, path: "tasks" });
   built.host.handleKey({ key: "s", ctrl: false, shift: false, alt: false, meta: false });
