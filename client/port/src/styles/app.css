@@ -78,7 +78,7 @@ body {
   position: absolute;
   padding: 0 0.25rem;
   border: 1px solid var(--port-color-muted);
-  background: var(--port-color-bg, #fff);
+  background: var(--port-world-background);
   font-size: 0.75rem;
   line-height: 1.25;
 }
@@ -89,8 +89,10 @@ body {
   flex-direction: column;
   gap: 0.125rem;
   padding: 0.25rem;
-  border: 1px solid var(--port-color-muted);
-  background: var(--port-color-bg, #fff);
+  border: 1px solid var(--port-color-line);
+  border-radius: var(--port-radius);
+  background: var(--port-world-background);
+  color: var(--port-world-foreground);
   max-width: 24rem;
 }
 
@@ -104,8 +106,18 @@ body {
   text-align: left;
   background: none;
   border: none;
+  border-radius: var(--port-radius);
   padding: 0.125rem 0.25rem;
   cursor: pointer;
+}
+
+.port-menu-act:hover,
+.port-menu-act:focus-visible {
+  background: var(--port-color-hover);
+}
+
+.port-menu-act[aria-current="true"] {
+  background: var(--port-color-selection);
 }
 
 .port-placeholder,
@@ -118,6 +130,11 @@ body {
   max-width: var(--port-measure);
   margin: 0 auto;
   padding: 1rem 1.25rem 4rem 1.25rem;
+  font-family: var(--port-font-world);
+  font-size: 1rem;
+  line-height: var(--port-world-leading);
+  background: var(--port-world-background);
+  color: var(--port-world-foreground);
 }
 
 /* the board renderer's minimal block layout (placement only) */

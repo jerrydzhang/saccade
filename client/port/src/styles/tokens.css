@@ -9,6 +9,7 @@
   /* type */
   --port-font-sans: sans-serif;
   --port-font-mono: monospace;
+  --port-font-world: Georgia, serif;
 
   /* color: neutral surfaces and text, no palette decisions */
   --port-color-background: #ffffff;
@@ -17,8 +18,17 @@
   --port-color-line: #cccccc;
   --port-color-accent: #00427a;
 
+  --port-color-faint: #777777;
+  --port-color-line-soft: #dddddd;
+  --port-color-selection: #dddddd;
+  --port-color-hover: #eeeeee;
+  --port-world-background: #ffffff;
+  --port-world-foreground: #111111;
+
   /* space and line */
   --port-space-strip: 0.375rem 0.75rem;
   --port-space-block: 1rem 0;
   --port-measure: 44rem;
+  --port-world-leading: 1.5;
+  --port-radius: 0;
 }
