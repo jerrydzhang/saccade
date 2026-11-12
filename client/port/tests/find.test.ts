@@ -22,19 +22,30 @@ test("Find captures a declared text-entry context; Enter/Shift-Enter/Escape use 
   assert.deepEqual(events, ["capture"], "re-entry does not acquire a second claim");
   assert.equal(captured.kind, "text-entry");
   assert.deepEqual(describeCommands(captured).map((command) => [command.actionId, command.keyLabels]), [
-    ["find.next", ["Enter"]], ["find.previous", ["Shift-Enter"]], ["find.close", ["Escape"]],
+    ["find.commit", ["Enter"]], ["find.close", ["Escape"]],
   ]);
   const host = createHostMatcher(captured);
   try {
     assert.equal(host.apply(host.stroke(stroke("n"))), "allow-default", "ordinary typing stays native");
     find.type("needle");
     assert.equal(find.view().count, 2);
+    // Enter COMMITS (the r110 ruling): the field closes, the lease
+    // releases, the matches stay - n/N step them afterwards
     assert.equal(host.apply(host.stroke(stroke("Enter"))), "consume");
-    assert.equal(host.apply(host.stroke(stroke("Enter", true))), "consume");
-    assert.deepEqual(events, ["capture", "/content/1", "/content/0"]);
-    host.apply(host.stroke(stroke("Escape")));
     assert.equal(find.view().open, false);
-    assert.deepEqual(events, ["capture", "/content/1", "/content/0", "release"]);
+    assert.equal(find.view().count, 2, "the committed search's matches stay");
+    assert.deepEqual(events, ["capture", "release"]);
+    // n steps forward, N steps back (the reading context's bindings,
+    // exercised through the interaction's step)
+    find.step(1);
+    find.step(-1);
+    assert.deepEqual(events, ["capture", "release", "/content/1", "/content/0"]);
+    // a cleared search: step no-ops, the query is gone
+    find.clearSearch();
+    assert.equal(find.view().count, 0);
+    assert.equal(find.hasSearch(), false);
+    find.step(1);
+    assert.deepEqual(events, ["capture", "release", "/content/1", "/content/0"]);
     find.close();
     assert.equal(events.filter((event) => event === "release").length, 1);
   } finally { host.dispose(); }

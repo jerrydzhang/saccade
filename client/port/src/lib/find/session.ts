@@ -129,6 +129,9 @@ export type FindSession = Readonly<{
    * click is navigateAway, any other click is this, and it is a
    * no-op. */
   click(): void;
+  /** Clear the search itself (the n/N ruling): the query and the
+   * active index drop; the field closes if it was open. */
+  clearSearch(): void;
 }>;
 
 export function createFindSession(units: () => readonly FindUnit[]): FindSession {
@@ -166,6 +169,14 @@ export function createFindSession(units: () => readonly FindUnit[]): FindSession
     },
     click: () => {
       // A click alone does not close Find (scenario 16).
+    },
+    clearSearch: () => {
+      // n/N's ruling (t-36 r110): a committed search lives until
+      // cleared - Escape here, or a new search's typing. Clearing
+      // drops the query and the active index; re-entry starts fresh.
+      query = "";
+      active = 0;
+      open = false;
     },
   };
 }

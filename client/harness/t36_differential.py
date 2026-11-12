@@ -238,11 +238,34 @@ def check_s16_find_entry(request: RequestFn, pace: float) -> dict:
                  f" on the landing board (expected a nonzero count for a known match)")
         _premise(queried == query,
                  f"the find's query text drifted: the readout carries {queried!r}, typed {query!r}")
+        # the r110 ruling, driven: Enter COMMITS - the field closes,
+        # the matches stay (count survives), and n/N step them in the
+        # reading context until cleared
+        _key(request, "enter")
+        _sleep(pace, 0.5)
+        committed = find_now()
+        _premise(committed.get("open") is False,
+                 f"Enter did not commit the search (field still open): {json.dumps(committed)[:160]}")
+        _premise(committed.get("count") == count,
+                 f"the committed search lost its matches: {json.dumps(committed)[:160]}")
+        active_before = committed.get("active")
+        _key(request, "n")
+        _sleep(pace, 0.5)
+        stepped = find_now()
+        _premise(stepped.get("count") == count and stepped.get("active") != active_before or count == 1,
+                 f"n did not step the committed search: {json.dumps(stepped)[:160]}")
+        if count > 1:
+            _key(request, "N")
+            _sleep(pace, 0.5)
+        # Escape clears the committed search
         _key(request, "escape")
-        _sleep(pace, 0.3)
-        find_closed = find_now()
-        _premise(find_closed.get("open") is False, "the port's find did not close on escape")
-        app_matches = f"{count} matches"
+        _sleep(pace, 0.5)
+        cleared = find_now()
+        _premise(cleared.get("count") in (0, None),
+                 f"Escape did not clear the committed search: {json.dumps(cleared)[:160]}")
+        find_closed = cleared
+        _premise(find_closed.get("open") is False, "the port's find field is not closed")
+        app_matches = f"{count} matches, committed and stepped with n"
         opened = {"search": True}
     else:
         _key(request, "escape")

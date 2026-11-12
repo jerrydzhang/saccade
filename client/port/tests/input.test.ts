@@ -101,7 +101,7 @@ test("the seam carve-out names exactly the two pinned chords", () => {
 
 test("the real port contexts validate at construction", () => {
   windowContext({ openPicker: () => {}, closeOverlays: () => {}, pickerIsOpen: () => false, trailBack: (): boolean => false, trailForward: (): boolean => false });
-  boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, scrollDown: () => {}, scrollUp: () => {}, enterSelect: () => {}, enterFind: () => {} });
+  boardReadingContext({ scrollToTop: () => {}, scrollToBottom: () => {}, scrollDown: () => {}, scrollUp: () => {}, enterSelect: () => {}, enterFind: () => {}, nextMatch: () => {}, prevMatch: () => {}, clearSearch: () => {} });
 });
 
 test("gg runs the scroll-top action through the host matcher; a lone g expires consumed", () => {
@@ -115,6 +115,9 @@ test("gg runs the scroll-top action through the host matcher; a lone g expires c
       scrollUp: () => ran.push("up"),
       enterSelect: () => {},
       enterFind: () => {},
+      nextMatch: () => ran.push("next"),
+      prevMatch: () => ran.push("prev"),
+      clearSearch: () => ran.push("clear"),
     }),
     { scheduler },
   );
@@ -134,7 +137,7 @@ test("gg runs the scroll-top action through the host matcher; a lone g expires c
 test("shift-G scrolls to bottom; unmatched keys are consumed, not native", () => {
   const ran: string[] = [];
   const host = createHostMatcher(
-    boardReadingContext({ scrollToTop: () => ran.push("top"), scrollToBottom: () => ran.push("bottom"), scrollDown: () => ran.push("down"), scrollUp: () => ran.push("up"), enterSelect: () => {}, enterFind: () => {} }),
+    boardReadingContext({ scrollToTop: () => ran.push("top"), scrollToBottom: () => ran.push("bottom"), scrollDown: () => ran.push("down"), scrollUp: () => ran.push("up"), enterSelect: () => {}, enterFind: () => {} , nextMatch: () => ran.push("next"), prevMatch: () => ran.push("prev"), clearSearch: () => ran.push("clear") }),
     { scheduler: manualScheduler() },
   );
   assert.equal(host.apply(host.stroke(stroke("G", { shift: true }))), "consume");
@@ -146,7 +149,7 @@ test("the matcher's expiry fires the completed spelling when it is its own bindi
   let clock = 0;
   const ran: string[] = [];
   const matcher = createMatcher(
-    boardReadingContext({ scrollToTop: () => ran.push("top"), scrollToBottom: () => ran.push("bottom"), scrollDown: () => ran.push("down"), scrollUp: () => ran.push("up"), enterSelect: () => {}, enterFind: () => {} }),
+    boardReadingContext({ scrollToTop: () => ran.push("top"), scrollToBottom: () => ran.push("bottom"), scrollDown: () => ran.push("down"), scrollUp: () => ran.push("up"), enterSelect: () => {}, enterFind: () => {} , nextMatch: () => ran.push("next"), prevMatch: () => ran.push("prev"), clearSearch: () => ran.push("clear") }),
     { now: () => clock },
   );
   // a binding of 'g' alone would make g-g ambiguous; here only gg is

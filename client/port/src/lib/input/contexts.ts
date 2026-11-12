@@ -148,6 +148,13 @@ export interface ReadingActions {
   scrollUp(): void;
   enterSelect(): void;
   enterFind(): void;
+  /** n/N: step the committed search's matches (the r110 ruling);
+   * a no-op when none exist. */
+  nextMatch(): void;
+  prevMatch(): void;
+  /** Escape: clear the committed search when one is live; an inert
+   * consume otherwise (the reading context claims the stroke). */
+  clearSearch(): void;
 }
 
 // The Tasks instrument's reading context: the same viewport reading
@@ -243,6 +250,30 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
         run: () => actions.scrollToBottom(),
       },
       keys: [sequence(shift("G"))],
+    },
+    {
+      action: {
+        id: "board.find-next",
+        label: "next match of the committed search",
+        run: () => actions.nextMatch(),
+      },
+      keys: [sequence(key("n"))],
+    },
+    {
+      action: {
+        id: "board.find-prev",
+        label: "previous match of the committed search",
+        run: () => actions.prevMatch(),
+      },
+      keys: [sequence(shift("n"))],
+    },
+    {
+      action: {
+        id: "board.find-clear",
+        label: "clear the committed search",
+        run: () => actions.clearSearch(),
+      },
+      keys: [sequence(key("Escape"))],
     },
     {
       action: {

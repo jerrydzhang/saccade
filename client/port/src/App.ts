@@ -811,6 +811,20 @@ export function createPortWindow(windowId = "main"): PortWindow {
     } else if (state.kind === "alive" && state.content.kind === "unavailable") {
       const failure = diagnostics.entries().at(-1);
       console.error(`[viewer] test open board FAILED: ${failure ? failure.message : "no board"}`);
+    }
+    // E4 (t-34@r6 change 4, the ratified floor): a COLD profile - a
+    // genuinely first launch with no opened content - shows the TASKS
+    // window, never a blank page. With no tracker reached yet the
+    // tasks surface carries its honest empty state; the picker (F1)
+    // supplies the first tracker and the list loads through it. Any
+    // open - the lane's test open, a restore, a delivery - leaves the
+    // surface to its own routing.
+    const after = displayedFrame();
+    if (after.kind !== "alive" || (after.content.kind !== "available" && after.content.kind !== "unavailable")) {
+      // the tasks instrument constructs through its own door (the
+      // buffer joins here, empty until a tracker is reached)
+      void instrumentFor("tasks");
+      setActive("tasks");
     } else if (requested) {
       console.error("[viewer] test open board FAILED: no board");
     }

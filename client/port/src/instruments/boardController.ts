@@ -566,6 +566,11 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     enterFind: () => {
       if (displayedData()?.board != null) find.enter();
     },
+    nextMatch: () => find.step(1),
+    prevMatch: () => find.step(-1),
+    clearSearch: () => {
+      if (find.hasSearch()) find.clearSearch();
+    },
   });
 
   const selectSession = createSelectSession({

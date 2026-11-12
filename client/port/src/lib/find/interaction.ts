@@ -32,9 +32,19 @@ export function createFindInteraction(deps: FindInteractionDeps) {
     if (occurrence !== null) deps.reveal(occurrence);
     notify();
   }
+  // The n/N ruling (t-36 r110): Enter COMMITS the search - the field
+  // closes, keys return to the document, and the matches stay (the
+  // session's query and active index survive the field's close);
+  // n / N step them in the reading context until the search is
+  // cleared (Escape, or a new search's typing).
+  function commit(): void {
+    session.escape();
+    lease?.release();
+    lease = null;
+    notify();
+  }
   const commands = [
-    { action: { id: "find.next", label: "next match", run: () => move(1) }, keys: [sequence(key("Enter"))] },
-    { action: { id: "find.previous", label: "previous match", run: () => move(-1) }, keys: [sequence(shift("Enter"))] },
+    { action: { id: "find.commit", label: "commit the search", run: commit }, keys: [sequence(key("Enter"))] },
     { action: { id: "find.close", label: "leave find", run: close }, keys: [sequence(key("Escape"))] },
   ];
   const context = textEntryContext(() => commands);
@@ -56,6 +66,21 @@ export function createFindInteraction(deps: FindInteractionDeps) {
     // refreshes must not call this: live content is not navigation.
     navigateAway: close,
     close,
+    // n/N in the reading context: step the committed search's
+    // matches; a no-op when none exist (nvim's n with no search)
+    step(delta: number): void {
+      if (session.occurrences().length === 0) return;
+      move(delta);
+    },
+    // whether a committed search is live (n/N and the clearing
+    // Escape consult this)
+    hasSearch(): boolean {
+      return session.query().length > 0;
+    },
+    clearSearch(): void {
+      session.clearSearch();
+      notify();
+    },
     subscribe(observer: (view: FindView) => void): () => void {
       observers.add(observer);
       observer(view());
