@@ -77,7 +77,7 @@ class FakeSession:
         if cmd == "status":
             # the lane's own board (host side): the tall fixture is
             # written beside it, where /board's bind serves it
-            return {"ok": True, "board": "/tmp/t36-dev-board.yaml"}
+            return {"ok": True, "board": "/tmp/t36-dev-board.yaml", "board_dir_host": "/tmp"}
         if cmd == "windows":
             return {"ok": True, "windows": [{"handle": f"h-{label}" , "label": label} for label in self.labels],
                     "suite": [{"label": label} for label in self.labels]}

@@ -404,9 +404,18 @@ def _wait_port_loaded(request, pace: float, needle: str, timeout: float = 15.0) 
             break
         _sleep(pace, 0.4)
     board = (obs or {}).get("board") or {}
+    # the live diagnostics ride along: a product refusal (an open
+    # refused "not a location", a source failure) explains itself in
+    # the stop record instead of leaving a wrong-task-looking landing
+    diagnostics = (obs or {}).get("diagnostics") or []
+    note = ""
+    if diagnostics:
+        import json as _json_note
+
+        note = "; diagnostics: " + _json_note.dumps(diagnostics)[:300]
     raise CheckStopped(
         f"the port board never loaded {needle!r}; last: status={board.get('status')!r}"
-        f" location={board.get('location')!r}"
+        f" location={board.get('location')!r}{note}"
     )
 
 

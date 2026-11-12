@@ -535,6 +535,11 @@ def native_lane(board_arg: str, tracker_db_arg: str) -> int:
     env["APP_BIN"] = app
     env["SCREENSHOOTER_BIN"] = shooter_bin
     env["BOARD_FILE"] = board_sandbox_path
+    # the host directory this lane's /board carries: check bodies write
+    # host fixtures (S10's tall board) beside the session board, where
+    # the /board bind serves them - the sandboxed lane itself can
+    # never see the host path, so it echoes this string back
+    env["SESSION_BOARD_DIR_HOST"] = str(board_dir)
     env["FONTCONFIG_FILE"] = fontconf
     env["SHOTS_DIR"] = str(run_root / "shots")
     env["__EGL_VENDOR_LIBRARY_DIRS"] = mesa_dir
@@ -1151,6 +1156,10 @@ def session_env(resolved: dict, run_root: pathlib.Path, token: str, lifetime: fl
     env["WEBKIT_DRIVER_BIN"] = resolved["webkit_driver"]
     env["APP_BIN"] = resolved["app"]
     env["BOARD_FILE"] = resolved["board_sandbox"]
+    # the host directory this lane's /board carries (see the native
+    # lane's identical pin): check-body host fixtures ride beside the
+    # session board
+    env["SESSION_BOARD_DIR_HOST"] = str(resolved["board_dir"])
     env["FONTCONFIG_FILE"] = resolved["fontconf"]
     env["SHOTS_DIR"] = str(run_root / "shots")
     env["__EGL_VENDOR_LIBRARY_DIRS"] = resolved["mesa_dir"]

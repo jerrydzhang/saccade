@@ -385,6 +385,9 @@ class SessionState:
         self.shooter_bin = ""
         self.shots = pathlib.Path(".")
         self.board = ""
+        # the host directory /board carries (echoed from the pinned
+        # env; the lane never sees the host itself)
+        self.board_dir_host = ""
         self.expires_epoch = 0.0
         self.torn_down = False
         # the tracker sequence's own server: spawned, fed, stopped and
@@ -507,6 +510,7 @@ def handle_request(state: SessionState, request: dict) -> tuple[dict, bool]:
         return {
             "ok": True,
             "board": state.board,
+            "board_dir_host": state.board_dir_host,
             "expires": state.expires_epoch,
             "chain": state.chain_status(),
         }, False
@@ -1155,6 +1159,7 @@ def main() -> int:
     state.shooter_bin = shooter_bin
     state.shots = shots
     state.board = board
+    state.board_dir_host = os.environ.get("SESSION_BOARD_DIR_HOST", "")
     state.wayland_name = f"wayland-{os.getpid() % 97}"
     try:
         # the t36 prelude runs BEFORE anything spawns: the feed proxy

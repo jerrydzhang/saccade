@@ -166,12 +166,20 @@ def part_rect(request, part: str) -> dict:
 def type_text(request, target: str, text: str, pace: float, timeout: float = 15.0) -> None:
     """Target-addressed real typing: a real click on the known field
     (focus), the clear via the existing input verb, the actual focus
-    asserted through read-only observation, then per-character key
-    events - every click/clear/key/hotkey response _ok'd and the whole
-    operation bounded from BEFORE the click. The target is a port
+    asserted through read-only observation, then the WHOLE text
+    through the type verb's send_keys - every response _ok'd and the
+    whole operation bounded from BEFORE the click. The target is a port
     control id (port:<name>). This distinguishes stale focus or an
     appended old query from product meaning: the helper's own premise
-    (focused, cleared) is asserted, never assumed."""
+    (focused, cleared) is asserted, never assumed.
+
+    The delivery channel is send_keys, not per-character key events:
+    the key verb synthesizes codepoints and the live lane delivered a
+    shifted symbol wrong ('@' landed as '2' - shift+2 without its
+    shift - recorded on the f447de1 run), while send_keys carried
+    full specs including '@' and ':' verbatim in the 6e30b80
+    authoritative run (S15 passed there). The value assertion after
+    typing is the guard: any divergence stops naming the field."""
     import time
 
     from t36_checks import _evaluate, _ok, _sleep
@@ -223,23 +231,26 @@ def type_text(request, target: str, text: str, pace: float, timeout: float = 15.
     if cleared not in ("", None):
         raise CheckStopped(f"the clear did not empty {target!r} (value {cleared!r})")
 
-    for ch in text:
-        if ch == ":":
-            _ok(request({"cmd": "input", "kind": "hotkey", "keys": ["shift", ";"]}, timeout=min(30.0, remaining())))
-        else:
-            _ok(request({"cmd": "input", "kind": "key", "keys": [ch]}, timeout=min(30.0, remaining())))
-        _sleep(pace, 0.05)
+    # the whole text through one send_keys (the delivery evidence in
+    # the docstring); bounded, response checked, the value asserted
+    _ok(request({"cmd": "input", "kind": "type", "target": target, "text": text}, timeout=min(30.0, remaining())))
+    _sleep(pace, 0.2)
     if not focused_now():
         raise CheckStopped(f"the field {target!r} lost focus during typing")
+    delivered = field_value()
+    if delivered != text:
+        raise CheckStopped(
+            f"the typing into {target!r} diverged: the field carries {delivered!r}, typed {text!r}"
+        )
 
 def open_via_port_picker(request, spec: str, pace: float, timeout: float = 15.0) -> None:
     """Open a location through the port's own picker: space-space opens
     it, the spec is typed target-addressed into
     data-port-control="picker-input" (the click, the clear, the focus
-    asserted, the per-char keys with the ':' chord, every response
-    _ok'd, the whole operation bounded), Enter submits through the one
-    open funnel. Real input throughout; the load is the caller's to
-    wait."""
+    asserted, the send_keys delivery with the value asserted, every
+    response _ok'd, the whole operation bounded), Enter submits through
+    the one open funnel. Real input throughout; the load is the caller's
+    to wait."""
     import time
 
     from t36_checks import _json_evaluate, _key, _sleep

@@ -200,18 +200,19 @@ def _tall_fixture_path(request: "RequestFn") -> pathlib.Path:
     """The tall-board fixture is written on the caller's host side,
     beside the session's own board: the native lane binds the board's
     PARENT DIRECTORY at /board (entry.py), so the fixture is servable
-    at host:/board/<name> exactly when it sits in that directory. A
-    session without a status board (pure lanes, scripted tests) falls
-    back to /tmp - the focused probe's own board lives there, so the
-    same path serves it."""
-    board = ""
+    at host:/board/<name> exactly when it sits in that directory. The
+    lane's status echoes the host directory (SESSION_BOARD_DIR_HOST);
+    a session without it (pure lanes, scripted tests) falls back to
+    /tmp - the focused probe's own board lives there, so the same
+    path serves it."""
+    board_dir = ""
     try:
         answer = request({"cmd": "status"}, 30)
         if isinstance(answer, dict) and answer.get("ok"):
-            board = str(answer.get("board") or "")
+            board_dir = str(answer.get("board_dir_host") or "")
     except Exception:
-        board = ""
-    parent = pathlib.Path(board).resolve().parent if board else pathlib.Path("/tmp")
+        board_dir = ""
+    parent = pathlib.Path(board_dir).resolve() if board_dir else pathlib.Path("/tmp")
     return parent / "t36-tall-board.yaml"
 
 
