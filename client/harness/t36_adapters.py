@@ -17,7 +17,7 @@ diff can name the adapter set it was judged under.
 
 from __future__ import annotations
 
-ADAPTER_SET_REVISION = "t36-adapters/3"
+ADAPTER_SET_REVISION = "t36-adapters/4"
 
 KIND_INPUT = "input"
 KIND_READOUT = "readout"
@@ -146,6 +146,20 @@ ADAPTERS: tuple[dict, ...] = (
         " S14-class readout gap), so the journeys cannot observe"
         " through it; the oracles stay untouched, the flip is the"
         " recorded readout gap.",
+    ),
+    _adapter(
+        "P4",
+        "port-elsewhere",
+        KIND_INPUT,
+        ("S18",),
+        "On the port flavor the OPEN acts ride the citation's own menu"
+        " (f/o/i/w/y, the r90 KINDS order) and the ask is the window's"
+        " ask field; new windows receive through their state's birth"
+        " location (the receiver restores it through its own model -"
+        " never an eval into a half-loaded webview), live windows"
+        " through the shell's open door. The old-app half keeps its"
+        " recorded FAIL evidence (the receiver never receives on any"
+        " path); the oracle is untouched and the flip is expected.",
     ),
     _adapter(
         "P2",

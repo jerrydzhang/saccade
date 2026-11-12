@@ -188,6 +188,153 @@ def _selected_now(request: RequestFn) -> dict:
 # -- P1: the three required reds -----------------------------------------
 
 
+def _s18_port(request: RequestFn, pace: float) -> dict:
+    """S18's port branch: the OPEN acts deliver under real conditions.
+
+    Script: one window, the citing board on screen; the citation's o
+    opens the receiver AT the cited board and remembers it (the readout
+    resolves the live link); i asks, the receiver's chip answers, the
+    delivery lands on the receiver and the link is untouched; w opens a
+    third viewer showing the citation. New windows receive through
+    their state's birth location (never an eval into a half-loaded
+    webview); live windows through the shell's open door."""
+    import time
+
+    def window_readout(label: str, fields: str) -> object:
+        answer = _ok(
+            request(
+                {
+                    "cmd": "evaluate-window",
+                    "window": label,
+                    "script": "const r = window.__saccadePort.readout();"
+                    " return JSON.stringify(" + fields + ");",
+                },
+                timeout=60,
+            )
+        ).get("value")
+        if isinstance(answer, str):
+            try:
+                return json.loads(answer)
+            except ValueError:
+                return answer
+        return answer
+
+    windows = _windows(request)
+    labels = sorted(w["label"] for w in windows)
+    if labels != ["main"]:
+        raise _Premise(f"the script needs exactly one window at start; found {labels}")
+    tracker = _ok(request({"cmd": "tracker"}, timeout=30))
+    base = str(tracker.get("base") or "")
+    tasks = tracker.get("tasks") or {}
+    citing = next(
+        (t for t, e in tasks.items() if "other group child" in str(e.get("message") or "")),
+        None,
+    )
+    cited = next((t for t, e in tasks.items() if "group-made" in str(e.get("message") or "")), None)
+    if citing is None or cited is None:
+        raise _Premise("the citing/cited seed tasks are missing from the tracker")
+    host = base.replace("http://", "")
+    spec_citing = f"{host}/seedtracker/{citing}"
+    t36_port.open_via_port_picker(request, spec_citing, pace)
+    deadline = time.monotonic() + 15.0 * pace
+    while True:
+        shown = window_readout("main", "r.board && r.board.location")
+        if citing in str(shown):
+            break
+        if time.monotonic() >= deadline:
+            raise _Premise(f"the citing board never loaded on the source: {shown!r}")
+        _sleep(pace, 0.4)
+
+    def open_citation_menu() -> None:
+        box = _json_evaluate(
+            request,
+            "const el = document.querySelector('[data-port-control=\"citation\"]');"
+            " if (!el) return null; const r = el.getBoundingClientRect();"
+            " return JSON.stringify({x: r.x + r.width / 2, y: r.y + r.height / 2});",
+        )
+        if not isinstance(box, dict):
+            raise _Premise("the citing board renders no citation link")
+        _ok(request({"cmd": "input", "kind": "rightclick", "x": box["x"], "y": box["y"]}, timeout=30))
+        _sleep(pace, 0.8)
+
+    # -- o: the receiver opens AT the cited board; the link remembers it
+    open_citation_menu()
+    _key(request, "o")
+    _sleep(pace, 3.5)
+    windows = _windows(request)
+    receiver = next((w["label"] for w in windows if w["label"] != "main"), None)
+    if receiver is None:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": "after o no second window existed (open_suite_window never ran)"}
+    received = window_readout(receiver, "r.board && r.board.location")
+    link_after_o = window_readout("main", "r.window && r.window.link")
+    evidence: list[str] = []
+    if received != f"seedtracker/{cited}@r1":
+        evidence.append(f"o: the receiver {receiver!r} shows {received!r}, never the cited board")
+    if link_after_o != receiver:
+        evidence.append(f"o: the source's link is {link_after_o!r}, not the receiver {receiver!r}")
+    source_still = window_readout("main", "r.board && r.board.location")
+    if citing not in str(source_still):
+        evidence.append(f"o: the source window moved too: {source_still!r}")
+
+    # -- i: the ask answers with the receiver's chip; the link stays
+    delivered_before = window_readout(receiver, "r.doors ? r.doors.delivered.length : -1")
+    open_citation_menu()
+    _key(request, "i")
+    _sleep(pace, 1.0)
+    ask_state = _json_evaluate(
+        request,
+        "return JSON.stringify({input: !!document.querySelector('[data-port-control=\"ask-input\"]'),"
+        " ask: (window.__saccadePort.readout().window || {}).ask || null});",
+    )
+    if not isinstance(ask_state, dict) or ask_state.get("input") is not True:
+        evidence.append(f"i: the ask never appeared: {json.dumps(ask_state)[:160]}")
+    else:
+        chip = window_readout(receiver, "r.doors && r.doors.jumpChip")
+        if not isinstance(chip, str) or len(chip) == 0:
+            evidence.append("i: the receiver's chip never broadcast (the ask shows no target)")
+        else:
+            t36_port.type_text(request, "port:ask-input", chip, pace)
+            _key(request, "enter")
+            _sleep(pace, 2.0)
+            delivered_after = window_readout(receiver, "r.doors ? r.doors.delivered.length : -1")
+            if not (isinstance(delivered_before, int) and isinstance(delivered_after, int)
+                    and delivered_after > delivered_before):
+                evidence.append(
+                    f"i (ask answered with chip {chip!r}): the receiver's deliveries did not grow"
+                    f" ({delivered_before} -> {delivered_after})"
+                )
+            link_after_i = window_readout("main", "r.window && r.window.link")
+            if link_after_i != receiver:
+                evidence.append(f"i: the link was rewritten: {link_after_i!r} (was {receiver!r})")
+
+    # -- w: a third viewer opens at the citation
+    open_citation_menu()
+    _key(request, "w")
+    _sleep(pace, 3.5)
+    windows = _windows(request)
+    third = [w["label"] for w in windows if w["label"] not in ("main", receiver)]
+    if not third:
+        evidence.append("w: no third window opened")
+    else:
+        third_location = window_readout(third[-1], "r.board && r.board.location")
+        if third_location != f"seedtracker/{cited}@r1":
+            evidence.append(f"w: the third viewer shows {third_location!r}, not the citation")
+
+    if evidence:
+        return {"status": t36_results.STATUS_FAIL,
+                "detail": "linked delivery broke: " + "; ".join(evidence)}
+    return {"status": t36_results.STATUS_PASS,
+            "detail": (
+                f"o opened the receiver {receiver!r} AT the cited board"
+                f" (seedtracker/{cited}@r1) with the source's link resolving to it and the"
+                f" source unmoved; i asked, the receiver's chip answered, the delivery"
+                f" landed on the receiver and the link stayed {receiver!r}; w opened a third"
+                f" viewer at the citation. New windows receive through their state's birth"
+                f" location; the live receiver through the shell's open door"
+            )}
+
+
 def check_s18_linked_delivery(request: RequestFn, pace: float = DEFAULT_PACE) -> dict:
     """S18 linked delivery, app side, under real conditions.
 
@@ -209,6 +356,13 @@ def check_s18_linked_delivery(request: RequestFn, pace: float = DEFAULT_PACE) ->
     Then press w; assert the new viewer shows the citation.
     Baseline verdict: FAIL - the receiver never receives on any path,
     with __suiteOpenAt undefined as the recorded evidence."""
+    # the port flavor: the same oracle through the port's own surfaces
+    # (the citation's OPEN acts, the ask field, the readout's link and
+    # delivery observations); the old-app half below keeps its recorded
+    # FAIL evidence (the receiver never receives on any path)
+    if t36_port.is_port(request):
+        return _s18_port(request, pace)
+
     windows = _windows(request)
     labels = sorted(w["label"] for w in windows)
     if labels != ["main"]:
