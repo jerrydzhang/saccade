@@ -560,6 +560,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   const reading: InputContext = boardReadingContext({
     scrollToTop: () => buffer.viewport.start(),
     scrollToBottom: () => buffer.viewport.end(),
+    scrollDown: () => buffer.viewport.scrollLines(1),
+    scrollUp: () => buffer.viewport.scrollLines(-1),
     enterSelect: () => selectSession.enter(),
     enterFind: () => {
       if (displayedData()?.board != null) find.enter();

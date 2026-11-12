@@ -144,6 +144,8 @@ export function inspectionContext(actions: InspectionActions): InputContext {
 export interface ReadingActions {
   scrollToTop(): void;
   scrollToBottom(): void;
+  scrollDown(): void;
+  scrollUp(): void;
   enterSelect(): void;
   enterFind(): void;
 }
@@ -210,6 +212,22 @@ export function tasksReadingContext(actions: TasksReadingActions): InputContext 
 
 export function boardReadingContext(actions: ReadingActions): InputContext {
   const context = commandContext(() => [
+    {
+      action: {
+        id: "board.scroll-down",
+        label: "scroll down a line",
+        run: () => actions.scrollDown(),
+      },
+      keys: [sequence(key("j"))],
+    },
+    {
+      action: {
+        id: "board.scroll-up",
+        label: "scroll up a line",
+        run: () => actions.scrollUp(),
+      },
+      keys: [sequence(key("k"))],
+    },
     {
       action: {
         id: "board.scroll-top",
