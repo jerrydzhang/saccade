@@ -334,7 +334,6 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
     link (no third window). The list never leaves: the surface holds
     tasks throughout, and no trail entry appears for a delivery that
     opened elsewhere."""
-    import json as _json
     import time as _time
 
     from t36_checks import _key, _ok, _premise, _sleep

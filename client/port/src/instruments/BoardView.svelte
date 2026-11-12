@@ -35,20 +35,20 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
   $effect(() => {
     const element = host;
     if (element === null) return;
-    for (const marked of element.querySelectorAll("[data-find-match]")) {
-      marked.removeAttribute("data-find-match");
-      marked.removeAttribute("data-find-active");
+    for (const marked of element.querySelectorAll("[data-port-find-match]")) {
+      marked.removeAttribute("data-port-find-match");
+      marked.removeAttribute("data-port-find-active");
     }
     if (find.query.length === 0) return;
     for (const part of find.unitParts) {
       const target = element.querySelector(`[data-port-part=${JSON.stringify(part)}]`);
-      if (target instanceof HTMLElement) target.setAttribute("data-find-match", "");
+      if (target instanceof HTMLElement) target.setAttribute("data-port-find-match", "");
     }
     if (find.activeUnit !== null) {
       const target = element.querySelector(
         `[data-port-part=${JSON.stringify(find.activeUnit)}]`,
       );
-      if (target instanceof HTMLElement) target.setAttribute("data-find-active", "");
+      if (target instanceof HTMLElement) target.setAttribute("data-port-find-active", "");
     }
   });
   const findOpen = $derived(find.open);

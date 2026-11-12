@@ -288,11 +288,11 @@ body {
 
 /* D2's marks and indicator: behaviour-level feedback, form open.
  * The match tint and the active tint ride the tokens. */
-[data-find-match] {
+[data-port-find-match] {
   background: var(--port-color-hover);
 }
 
-[data-find-active] {
+[data-port-find-active] {
   background: var(--port-color-selection);
 }
 

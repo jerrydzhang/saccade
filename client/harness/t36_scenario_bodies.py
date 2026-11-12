@@ -1671,7 +1671,7 @@ def check_d2_committed_find(request: RequestFn, pace: float = 1.0) -> dict:
     def active_mark() -> str | None:
         answer = _json_evaluate(
             request,
-            'const el = document.querySelector("[data-find-active]");'
+            'const el = document.querySelector("[data-port-find-active]");'
             " return JSON.stringify(el ? el.getAttribute('data-port-part') : null);",
         )
         return answer if isinstance(answer, str) else None
@@ -1712,6 +1712,14 @@ def check_d2_committed_find(request: RequestFn, pace: float = 1.0) -> dict:
     )
     _premise(isinstance(indicator2, str) and indicator2.startswith("2 /"),
              f"the indicator did not advance: {indicator2!r}")
+
+    # N steps back - the REAL chord (shift+n arrives as key "N"; the
+    # suite worker's base defect 1 found the binding naming "n")
+    request({"cmd": "input", "kind": "hotkey", "keys": ["shift", "n"]}, 30)
+    _sleep(pace, 0.6)
+    back = active_mark()
+    _premise(back == after_commit,
+             f"N did not step back ({moved!r} -> {back!r}, expected {after_commit!r})")
 
     # Escape clears: no marks, no indicator
     _key(request, "escape")

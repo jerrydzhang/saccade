@@ -260,11 +260,15 @@ def baseline_cache_store(key: str, results: list[dict], plan_manifest: dict, exi
 
 
 def t36_inventory_ids() -> list[str]:
-    """The t36 lane's check inventory: every scenario group plus the
-    feed held-break probe, in stable order. (An S17-last order once
+    """The t36 lane's check inventory: every scenario group, the
+    first-use defect checks (the D family, r121), and the feed
+    held-break probe, in stable order. (An S17-last order once
     papered over sequence leaks; per-check isolation made it
     unnecessary and it came out.)"""
-    return list(t36_results.SCENARIO_IDS) + ["F01"]
+    import t36_checks
+
+    d_family = [d for d in t36_results.HELD_BREAK_IDS if d.startswith("D") and d in t36_checks.CHECKS]
+    return list(t36_results.SCENARIO_IDS) + d_family + ["F01"]
 
 
 def lane_results_from_log(log_text: str, lane: str = "session", declared_checks: tuple[str, ...] | list[str] = ()) -> list[dict]:
@@ -577,15 +581,24 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
 
                 @contextlib.contextmanager
                 def fresh_session(check_id: str):
+                    from t36_observation import CheckStopped
+
                     deps.down()
                     root = isolation.make_run_root(f"t36-isolated-{check_id.lower()}")
                     current_root["path"] = str(root)
                     rc = deps.up(plan, str(root))
-                    if rc != 0:
-                        raise RuntimeError(f"the isolated session for {check_id} did not come up (rc={rc})")
-                    live = deps.live_socket()
+                    live = deps.live_socket() if rc == 0 else None
                     if live is None:
-                        raise RuntimeError(f"the isolated session for {check_id} left no live socket")
+                        # a session that cannot come up is that CHECK's
+                        # stop verdict (the lane continues) - a boot
+                        # hiccup must not kill the whole run
+                        def dead_request(payload: dict, timeout: float = 60.0) -> dict:
+                            raise CheckStopped(
+                                f"the isolated session for {check_id} did not come up (rc={rc})"
+                            )
+
+                        yield dead_request
+                        return
 
                     def isolated_request(payload: dict, timeout: float = 60.0) -> dict:
                         return deps.request(live[1], payload, timeout=timeout)

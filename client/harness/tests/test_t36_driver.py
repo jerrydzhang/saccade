@@ -571,7 +571,8 @@ class T36LaneWiringTest(unittest.TestCase):
         ids = t36_driver.t36_inventory_ids()
         self.assertEqual(ids[:5], ["S01", "S02", "S03", "S04", "S05"])
         self.assertEqual(ids[-1], "F01")
-        self.assertEqual(len(ids), 21)
+        # 20 scenario groups + the D family (2 landed so far) + F01
+        self.assertEqual(len(ids), 23)
 
     def test_unknown_lane_refused_at_cli(self) -> None:
         tmp = tempfile.TemporaryDirectory()

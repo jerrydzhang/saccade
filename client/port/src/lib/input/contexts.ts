@@ -265,7 +265,9 @@ export function boardReadingContext(actions: ReadingActions): InputContext {
         label: "previous match of the committed search",
         run: () => actions.prevMatch(),
       },
-      keys: [sequence(shift("n"))],
+      // a real Shift+n arrives as key "N" with shift set (G's own
+      // lesson, recorded): the binding names the arriving key
+      keys: [sequence(shift("N"))],
     },
     {
       action: {

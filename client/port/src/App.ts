@@ -777,7 +777,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
 
   // -- the key routing seam: inspection (modal), then the window
   // context, then the active buffer ---
-  window.addEventListener("keydown", (event) => {
+  const windowKeyDown = (event: KeyboardEvent): void => {
     if (event.defaultPrevented) return;
     // the inspection surface owns every stroke while it is open: its
     // own keys act, everything else is consumed inert - the board
@@ -830,7 +830,8 @@ export function createPortWindow(windowId = "main"): PortWindow {
       ? activeInstrument().handleKey(stroke)
       : dispatchStroke(windowHost, activeInstrument(), stroke);
     if (disposition === "consume") event.preventDefault();
-  });
+  };
+  window.addEventListener("keydown", windowKeyDown);
 
   // -- the lanes' test-open channel: the one startup open ----------------
   async function openTestBoard(): Promise<boolean> {
@@ -1020,6 +1021,7 @@ export function createPortWindow(windowId = "main"): PortWindow {
       };
     },
     destroy() {
+      window.removeEventListener("keydown", windowKeyDown);
       windowHost.dispose();
       unsubscribeBoardFrame();
       unsubscribeTasksFrame?.();
