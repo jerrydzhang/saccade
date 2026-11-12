@@ -125,7 +125,7 @@ import { menuPlacement } from "../lib/menu/geometry.ts";
     return part === null ? null : part;
   }
 
-  let menuElement: HTMLElement | null = null;
+  let menuElement: HTMLElement | null = $state(null);
   let menuAt = $state({ x: 4, y: 4 });
 
   $effect(() => {

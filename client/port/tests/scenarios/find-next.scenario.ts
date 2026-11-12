@@ -35,7 +35,7 @@ test("n steps the committed search's active match (readout)", async ({ app, trac
 // find-prev as shift("n"), but a real Shift+n arrives as key "N" and
 // the matcher is exact (src/lib/input/input-context.ts strokeMatches),
 // so N never fires on real input (G is bound as shift("G") and works).
-test.fails("KNOWN DEFECT: N steps the committed search back", async ({ app, tracker }) => {
+test("N steps the committed search back", async ({ app, tracker }) => {
   const before = await committedSearch(app, tracker);
   await app.press("n");
   await expect.poll(async () => (await app.readout()).find.active).toBe((before + 1) % 3);
@@ -43,7 +43,7 @@ test.fails("KNOWN DEFECT: N steps the committed search back", async ({ app, trac
   await expect.poll(async () => (await app.readout()).find.active, { timeout: 3_000 }).toBe(before);
 });
 
-test.fails("KNOWN DEFECT: n visibly moves the active match with every match on screen", async ({ app, tracker }) => {
+test("n visibly moves the active match with every match on screen", async ({ app, tracker }) => {
   await committedSearch(app, tracker);
   const shown = await app.activeMatch();
   await app.press("n");
