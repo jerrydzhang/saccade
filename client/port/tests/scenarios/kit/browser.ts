@@ -32,6 +32,8 @@ type PortWindow = Window & { __saccadePort?: { readout(): PortObservation } };
 // as a person types it - with Shift held (the keymap binds N as
 // shift+n)
 function keySyntax(key: string): string {
+  const chord = /^Ctrl-(.)$/.exec(key);
+  if (chord) return `{Control>}${chord[1]}{/Control}`;
   if (key.length > 1) return `{${key}}`;
   if (key === "{" || key === "[") return key + key;
   if (/^[A-Z]$/.test(key)) return `{Shift>}${key}{/Shift}`;

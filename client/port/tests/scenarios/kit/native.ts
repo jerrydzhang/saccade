@@ -44,7 +44,10 @@ async function stroke(browser: Browser, key: string): Promise<void> {
   const named = NAMED[key];
   const shifted = CHORDS[key] ?? (/^[A-Z]$/.test(key) ? key.toLowerCase() : null);
   const action = browser.action("key");
-  if (named !== undefined) {
+  const chord = /^Ctrl-(.)$/.exec(key);
+  if (chord) {
+    await action.down(Key.Control).down(chord[1]!).up(chord[1]!).up(Key.Control).perform();
+  } else if (named !== undefined) {
     await action.down(named).up(named).perform();
   } else if (shifted !== null) {
     await action.down(Key.Shift).down(shifted).up(shifted).up(Key.Shift).perform();

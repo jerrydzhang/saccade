@@ -61,6 +61,18 @@ The rules:
   and imports `test` from `./kit/browser.ts` for its `bridged` fixture (see
   `elsewhere.browser.ts`); the native project never collects those files.
 
+## Pending: written red, before the feature
+
+A test that gates a feature not built yet is tagged `pending`
+(`{ tags: ["pending"] }`). Every ordinary run skips it, so the gates stay
+green meanwhile; `just port-test-pending` runs exactly those (unit, then
+browser) and they fail until the feature lands. Never `test.fails`: a pending
+test passes when its feature works, and then its tag comes off. A pending
+test that needs a readout field the port lacks reads a PROPOSED field, named
+in `kit/driver.ts` (today `InputView`, the readout's `input`) for the feature
+to adopt or rename. A unit test for an unbuilt module imports it by a runtime
+path, so the suite still collects (see `tests/which-key.test.ts`).
+
 ## The kit
 
 Every module is a test-infrastructure module; each line says why it exists.

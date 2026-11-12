@@ -8,7 +8,7 @@
 // project's: s18-linked-delivery.scenario.ts.
 // Sources: t36_checks._s18_port, t36_differential._s17_port.
 import { expect, test } from "./kit/browser.ts";
-import { answerAsk, citationAct, openLocation, spec, submitLocation } from "./kit/helpers.ts";
+import { answerAsk, citationAct, openLocation, spec, submitLocation, whenBound } from "./kit/helpers.ts";
 import type { AppDriver, Tracker } from "./kit/driver.ts";
 import type { Shell } from "./kit/browser.ts";
 
@@ -158,7 +158,8 @@ test("S17 the task row's Enter delivers through the link and the list holds its 
   expect((await app.readout()).tasks!.selection).not.toBeNull();
 
   // Enter runs the primary, o: one window and no link opens a new
-  // window born at the row's board
+  // window born at the row's board (once the window state is bound)
+  await whenBound(app);
   await app.press("Enter");
   await expect.poll(() => shell.argsOf("open_suite_window").length).toBe(1);
   const born = shell.argsOf("open_suite_window")[0]!.stateId as string;

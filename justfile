@@ -24,6 +24,13 @@ port-test-browser *args:
     cargo build -q -p saccade --bin sac
     nix develop .#saccade-app -c bash -c 'cd client && SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser "$@"' port-test-browser {{args}}
 
+# pending: the tests tagged pending, written red before the feature
+# they gate (skipped in every other run); unit, then browser
+port-test-pending:
+    cd client && SAC_PORT_SUITE_PENDING=1 node_modules/.bin/vitest run -c port/vitest.config.ts --project unit --tags-filter pending || true
+    cargo build -q -p saccade --bin sac
+    nix develop .#saccade-app -c bash -c 'cd client && SAC_PORT_SUITE_PENDING=1 SACCADE_SERVE_BIN="$PWD/../target/debug/sac" node_modules/.bin/vitest run -c port/vitest.config.ts --project browser --tags-filter pending'
+
 # native: the scenarios tagged native or multi-window, in the built
 # port app, through the session lane's suite mode (entry.py session
 # suite: the enforced sandbox, the canary, a private Weston, then

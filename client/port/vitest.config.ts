@@ -34,6 +34,16 @@ const tags = [
   { name: "multi-window", description: "needs real native windows: native project only" },
 ];
 
+// pending: a scenario written RED, before the feature it gates. Skipped
+// in the ordinary runs (the gates stay green meanwhile); `just
+// port-test-pending` runs exactly these. The tag comes off when the
+// feature lands and the test passes.
+const pending = {
+  name: "pending",
+  description: "gates an unbuilt feature: red until it lands (just port-test-pending)",
+  skip: !process.env.SAC_PORT_SUITE_PENDING,
+};
+
 // WebKit's display-less EGL: the saccade-app devshell's pinned mesa
 // vendor dir with forced software rendering (the browser lane's own
 // recipe, client/harness/entry.py and browser_lane.py)
@@ -70,6 +80,7 @@ export default mergeConfig(
             environment: "node",
             include: ["tests/*.test.ts"],
             restoreMocks: true,
+            tags: [pending],
           },
         },
         {
@@ -83,7 +94,7 @@ export default mergeConfig(
             name: "browser",
             // *.browser.ts: browser-only scenarios (the mocked shell)
             include: ["tests/scenarios/*.scenario.ts", "tests/scenarios/*.browser.ts"],
-            tags: [tags[0]!, { ...tags[1]!, skip: true }],
+            tags: [tags[0]!, { ...tags[1]!, skip: true }, pending],
             globalSetup: ["tests/scenarios/kit/tracker-setup.ts"],
             testTimeout: 30_000,
             api: { port: browserPort, strictPort: true },
@@ -105,7 +116,7 @@ export default mergeConfig(
             name: "native",
             environment: "node",
             include: ["tests/scenarios/*.scenario.ts"],
-            tags,
+            tags: [...tags, pending],
             globalSetup: ["tests/scenarios/kit/tracker-setup.ts"],
             // one native app at a time: each test owns a fresh app
             fileParallelism: false,

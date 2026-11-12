@@ -4,7 +4,7 @@
 // hand-written deadline loop.
 import { expect } from "vitest";
 
-import type { AppDriver, PortObservation, SeededTracker } from "./driver.ts";
+import { inputOf, type AppDriver, type InputView, type PortObservation, type SeededTracker, type Tracker } from "./driver.ts";
 
 /** A location spec on the seeded tracker: host/repo/path. */
 export function spec(tracker: SeededTracker, path: string): string {
@@ -64,12 +64,19 @@ export async function find(app: AppDriver, query: string): Promise<PortObservati
   return (await app.readout()).find;
 }
 
+/** Wait until this window has bound its window state: an elsewhere
+ * act (o, i, w, a task row's Enter) pressed before that is dropped
+ * (src/App.ts openElsewhere; the readout carries no binding fact). */
+export async function whenBound(app: AppDriver): Promise<void> {
+  await expect.poll(() => app.windowBound(), { timeout: 15_000 }).toBe(true);
+}
+
 /** An act from a citation's act menu: the real right-click opens the
  * menu, the act's key runs it (o, i, w, f, y). The elsewhere acts wait
  * for this window's binding: an o pressed while the window state is
  * still binding is dropped (src/App.ts openElsewhere). */
 export async function citationAct(app: AppDriver, key: string): Promise<void> {
-  if ("oiw".includes(key)) await expect.poll(() => app.windowBound(), { timeout: 15_000 }).toBe(true);
+  if ("oiw".includes(key)) await whenBound(app);
   await app.click("citation", { button: "right" });
   await expect.poll(() => app.menuOpen()).toBe(true);
   await app.press(key);
@@ -82,4 +89,21 @@ export async function answerAsk(app: AppDriver, window: string): Promise<void> {
   if (chip === undefined) throw new Error(`the ask offers no chip for ${window}`);
   await app.type(chip);
   await app.press("Enter");
+}
+
+/** The readout's PROPOSED input field (kit/driver.ts InputView); a
+ * build without it fails the read, naming the field. */
+export async function readInput(app: AppDriver): Promise<InputView> {
+  const input = inputOf(await app.readout());
+  if (input === undefined) throw new Error("the readout carries no input field (the batch 3 proposed contract, kit/driver.ts InputView)");
+  return input;
+}
+
+/** A board long enough to page through: `blocks` short text blocks on
+ * a fresh task. Answers the task id. */
+export async function longBoard(tracker: Tracker, blocks = 150): Promise<string> {
+  const task = await tracker.createTask(`a long board: ${blocks} blocks`);
+  const body = Array.from({ length: blocks }, (_, index) => `  - text: paragraph ${index + 1} of a board long enough to page through\n`).join("");
+  await tracker.commit(task, `grammar: 1\ntask: ${task}\ncontent:\n${body}`, "a long board");
+  return task;
 }

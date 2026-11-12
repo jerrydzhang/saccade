@@ -46,8 +46,9 @@ declare module "vitest" {
 export interface AppDriver {
   /** The readout of a window: the focused one by default. */
   readout(window?: string): Promise<PortObservation>;
-  /** Real key presses in order. Names: one character ("n", "/", " ")
-   * or a named key ("Escape", "Enter", "Backspace", "ArrowDown"). */
+  /** Real key presses in order. Names: one character ("n", "/", " "),
+   * a named key ("Escape", "Enter", "Backspace", "ArrowDown"), or a
+   * Ctrl chord ("Ctrl-f"). */
   press(...keys: string[]): Promise<void>;
   /** Real typing into whatever holds focus, character by character. */
   type(text: string): Promise<void>;
@@ -82,4 +83,25 @@ export interface AppDriver {
   windows(): Promise<string[]>;
   /** Route input and the default readout to a window. */
   focusWindow(label: string): Promise<void>;
+}
+
+/** PROPOSED readout field (batch 3, not in the port yet): the input
+ * matcher's live state, the observable the which-key, help and timeout
+ * scenarios read. Strokes and keys use the port's own help labels
+ * (src/lib/input/input-context.ts formatStroke/formatSequence: "spc",
+ * "g g", "Ctrl-f", "Shift-G"). Absent until the feature lands. */
+export type InputView = {
+  /** The pending strokes of an unfinished sequence, or [] */
+  pending: string[];
+  /** The which-key popup's content while it is shown, else null: the
+   * pending prefix ("" for help) and every continuation in the active
+   * context's tables, with its full key sequence and label. */
+  whichKey: { prefix: string; entries: { keys: string; label: string; actionId: string }[] } | null;
+  /** The named tunables, read by the scenarios, never pinned there. */
+  tunables: { whichKeyDelayMs: number; whichKeySuspendsTimeout: boolean; sequenceTimeoutMs: number };
+};
+
+/** The proposed input field of a readout, or undefined before it lands. */
+export function inputOf(obs: PortObservation): InputView | undefined {
+  return (obs as PortObservation & { input?: InputView }).input;
 }
