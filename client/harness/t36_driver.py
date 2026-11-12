@@ -27,6 +27,7 @@ loop is exercised by the red run, not by unit tests.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -257,15 +258,10 @@ def baseline_cache_store(key: str, results: list[dict], plan_manifest: dict, exi
 
 def t36_inventory_ids() -> list[str]:
     """The t36 lane's check inventory: every scenario group plus the
-    feed held-break probe, in stable order - with S17 LAST: its body
-    closes the window it delivered to (so later checks would inherit
-    a stray), and the WebDriver close can wedge this stack's session
-    machinery after it (the S17->S18 race, caught twice at the r116
-    chunk gate). Running it last lets the strays die with the
-    session; the order is the lane's own stability decision, the
-    same list for both flavors."""
-    ids = [i for i in t36_results.SCENARIO_IDS if i != "S17"] + ["S17", "F01"]
-    return ids
+    feed held-break probe, in stable order. (An S17-last order once
+    papered over sequence leaks; per-check isolation made it
+    unnecessary and it came out.)"""
+    return list(t36_results.SCENARIO_IDS) + ["F01"]
 
 
 def lane_results_from_log(log_text: str, lane: str = "session", declared_checks: tuple[str, ...] | list[str] = ()) -> list[dict]:
@@ -547,8 +543,9 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
                     from t36_observation import CheckStopped
 
                     deps.down()
+                    reuse = current_root["path"] or str(run_root)
                     worker = threading.Thread(
-                        target=lambda: deps.up_reuse(plan, str(run_root)),
+                        target=lambda: deps.up_reuse(plan, reuse),
                         daemon=True,
                     )
                     worker.start()
@@ -562,11 +559,48 @@ def execute_t36_lane(options: argparse.Namespace, plans: list[dict], out_root: p
                         raise CheckStopped("the relaunch left no live session record")
 
                 prototype, prototype_stop = deps.prototype_factory()
+
+                # per-check isolation (i-3's review, r117): each check
+                # runs in its own fresh app - a fresh run root and data
+                # dir (no launch restore, one window, empty trail) and
+                # a freshly seeded tracker, so window topology, buffer
+                # state, tracker content and restore never cross check
+                # boundaries and order stops mattering. S20's internal
+                # relaunch reuses ITS OWN session's root (current_root
+                # below). The cost is one session-up per check, paid
+                # once for the whole class of sequence bugs.
+                current_root = {"path": ""}
+
+                @contextlib.contextmanager
+                def fresh_session(check_id: str):
+                    deps.down()
+                    root = isolation.make_run_root(f"t36-isolated-{check_id.lower()}")
+                    current_root["path"] = str(root)
+                    rc = deps.up(plan, str(root))
+                    if rc != 0:
+                        raise RuntimeError(f"the isolated session for {check_id} did not come up (rc={rc})")
+                    live = deps.live_socket()
+                    if live is None:
+                        raise RuntimeError(f"the isolated session for {check_id} left no live socket")
+
+                    def isolated_request(payload: dict, timeout: float = 60.0) -> dict:
+                        return deps.request(live[1], payload, timeout=timeout)
+
+                    try:
+                        yield isolated_request
+                    finally:
+                        deps.down()
+
                 try:
                     t36_differential.attach(prototype)
                     t36_checks.set_relauncher(relaunch)
                     check_ids = check_subset(options.checks) if options.checks else t36_inventory_ids()
-                    results = t36_checks.run_checks(request=session_request, check_ids=check_ids, pace=1.0)
+                    results = t36_checks.run_checks(
+                        request=session_request,
+                        check_ids=check_ids,
+                        pace=1.0,
+                        fresh_session=fresh_session,
+                    )
                 finally:
                     t36_checks.set_relauncher(None)
                     t36_differential.attach(None)

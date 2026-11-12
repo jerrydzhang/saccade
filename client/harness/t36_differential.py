@@ -465,29 +465,6 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
         return {"status": t36_results.STATUS_FAIL,
                 "detail": f"the strip did not name the linked window {linked_name!r}: {after_link!r}"}
 
-    # leave the lane in the one-window state later checks assume:
-    # close the delivered window (best effort - the delivery and the
-    # reuse are already proven; a close failure never fails the check
-    # but is reported)
-    closed_note = ""
-    try:
-        linked = str((delivered.get("window") or {}).get("link") or "")
-        if linked:
-            close = _ok(request({"cmd": "close-window", "label": linked}, timeout=30))
-            closed_note = f", the delivered window closed={close.get('closed')}"
-            # the close is ASYNC at the shell: the dying webview can
-            # linger in the window list, and a later check's o would
-            # deliver into it (the S17->S18 race, caught twice at the
-            # chunk gate). Poll until the list settles, bounded.
-            deadline = _time.monotonic() + 8.0
-            while _time.monotonic() < deadline:
-                handles = _ok(request({"cmd": "windows"}, timeout=30)).get("handles")
-                if isinstance(handles, list) and len(handles) <= 1:
-                    break
-                _sleep(pace, 0.4)
-    except Exception as error:  # noqa: BLE001 - best effort by contract
-        closed_note = f", the delivered window close errored: {error!r}"[:120]
-
     # the list never left: the surface held tasks throughout, and the
     # trail carries no entry for a delivery that opened elsewhere
     final = readout()
@@ -503,8 +480,7 @@ def _s17_port(request: RequestFn, pace: float) -> dict:
                        f" list held its surface throughout with trail depth"
                        f" {trail.get('depth')!r} (a delivery elsewhere never lands on the"
                        f" opening window's trail). The labels selected through real"
-                       f" keystrokes and the row menu carried o/i/w/y - F6's ratified order"
-                       f"{closed_note}")}
+                       f" keystrokes and the row menu carried o/i/w/y - F6's ratified order")}
 
 
 def check_s17_activity_place(request: RequestFn, pace: float) -> dict:

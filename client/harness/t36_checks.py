@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Callable
+from typing import Callable, ContextManager
 
 import t36_adapters
 import t36_port
@@ -832,23 +832,44 @@ def _with_transport_retry(request: RequestFn) -> RequestFn:
     return wrapped
 
 
-def run_checks(request: RequestFn, check_ids: list[str], pace: float = DEFAULT_PACE) -> list[dict]:
+def run_checks(
+    request: RequestFn,
+    check_ids: list[str],
+    pace: float = DEFAULT_PACE,
+    fresh_session: "Callable[[str], ContextManager[RequestFn]] | None" = None,
+) -> list[dict]:
     """The inventory runner: each named check, registry order for
-    unknown ids refused, one result per check."""
+    unknown ids refused, one result per check.
+
+    fresh_session (i-3's review, t-36 r117 - accepted): when given,
+    EACH CHECK runs in its own fresh app (a context manager yielding
+    that session's request fn). Isolation is the driver's because
+    four kinds of state cross check boundaries - window topology,
+    the main window's buffer state (shown board, folds, trail,
+    follow), tracker content, and launch restore - and no amount of
+    check-side hygiene can hold all four. Order then stops
+    mattering."""
     ensure_registered()
     request = _with_transport_retry(request)
     results: list[dict] = []
     for check_id in check_ids:
-        spec = CHECKS.get(check_id)
-        if spec is None:
-            results.append(stop_result(check_id, "session", "unauthored check", "no executable body exists for this id yet (t-36 phase-2)"))
+        if fresh_session is not None:
+            with fresh_session(check_id) as check_request:
+                results.append(_run_one(_with_transport_retry(check_request), check_id, pace))
             continue
-        # progress lines, flushed: a silent gap between START and END is
-        # the difference between 'tests progressing' and 'cleanup stuck'
-        started = time.monotonic()
-        print(f"[t36-check] {check_id} START", flush=True)
-        result = run_check(request, spec, pace)
-        elapsed = time.monotonic() - started
-        print(f"[t36-check] {check_id} END status={result.get('status')} {elapsed:.1f}s", flush=True)
-        results.append(result)
+        results.append(_run_one(request, check_id, pace))
     return results
+
+
+def _run_one(request: RequestFn, check_id: str, pace: float) -> dict:
+    spec = CHECKS.get(check_id)
+    if spec is None:
+        return stop_result(check_id, "session", "unauthored check", "no executable body exists for this id yet (t-36 phase-2)")
+    # progress lines, flushed: a silent gap between START and END is
+    # the difference between 'tests progressing' and 'cleanup stuck'
+    started = time.monotonic()
+    print(f"[t36-check] {check_id} START", flush=True)
+    result = run_check(request, spec, pace)
+    elapsed = time.monotonic() - started
+    print(f"[t36-check] {check_id} END status={result.get('status')} {elapsed:.1f}s", flush=True)
+    return result

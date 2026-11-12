@@ -433,7 +433,7 @@ class T36LaneWiringTest(unittest.TestCase):
         captured: dict = {}
         verdicts = {"F01": "fail", "S12": "fail", "S18": "fail", "S16": "pass"}
 
-        def fake_run_checks(request, check_ids, pace=1.0):
+        def fake_run_checks(request, check_ids, pace=1.0, fresh_session=None):
             captured["ids"] = list(check_ids)
             results = []
             for check_id in check_ids:
