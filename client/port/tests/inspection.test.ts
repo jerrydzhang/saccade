@@ -58,6 +58,7 @@ test("the readout carries the inspection while open, null when closed", () => {
     trail: { depth: 0, cursor: 0, entries: [], canBack: false, canForward: false },
     viewport: { left: 0, top: 0, width: 0, height: 0 },
     copy: null,
+    follow: null,
   };
   assert.equal(buildReadout({ ...base, inspection: null }).inspection, null);
   const open = buildReadout({ ...base, inspection: { part: "/content/0", zoom: 1.5 } });

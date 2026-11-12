@@ -8,6 +8,7 @@
   // kept scrolled into view. Composition only - the ranking lives in
   // lib/picker/model.ts.
   import { pickList, isPathMode, type PickContext } from "../lib/picker/model.ts";
+import { parseOpenSpec } from "../instruments/board.ts";
 
   let {
     context,
@@ -44,12 +45,20 @@
   });
 
   function open(index: number): void {
+    const typed = query.trim();
+    // A query that PARSES as a location IS the location (the
+    // prototype's own rule): a typed form never silently resolves
+    // through a row - the S15 defect, where the typed bare spec
+    // prefix-matched a recent PINNED entry (tier 300) and Enter
+    // reopened the stale pin, disarming the follow. Typed forms are
+    // also how a tracker is first reached.
+    if (typed.length > 0 && parseOpenSpec(typed) !== null) {
+      submit(typed);
+      return;
+    }
     const entry = entries[index];
     if (entry === undefined) {
-      // no row to open: the typed text is the location (the legacy
-      // path stays - typed locations are how a tracker is first
-      // reached)
-      if (query.trim().length > 0) submit(query.trim());
+      if (typed.length > 0) submit(typed);
       return;
     }
     submit(entry.spec);

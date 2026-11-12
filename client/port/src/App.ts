@@ -940,6 +940,10 @@ export function createPortWindow(windowId = "main"): PortWindow {
       },
       copy: lastCopy,
       inspection: inspection === null ? null : { part: inspection.part, zoom: inspection.zoom },
+      follow:
+        activeSurface === "board" && instruments.board !== undefined
+          ? ((instruments.board.presentation as BoardUI | null)?.followState() ?? null)
+          : null,
     });
   }
 

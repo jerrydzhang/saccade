@@ -106,6 +106,14 @@ export interface BoardUI extends HydrationHost {
   getSelection(): BoardTarget | null;
   /** The menu's live view; null when closed. */
   subscribeMenu(observer: (view: MenuView | null) => void): () => void;
+  /** The follow state as information (the S15 diagnosis): the
+   * followed address and whether the poll is armed. */
+  followState(): {
+    armed: boolean;
+    task: number | null;
+    address: string | null;
+    requests: readonly string[];
+  };
   /** The menu session (invocation paths for the component). */
   menuSession(): import("../lib/menu/session.ts").MenuSession;
   /** Fold or unfold a group part path (republishes the frame). */
@@ -155,6 +163,7 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
   // Controller state: the open generation, the resolved location the
   // shown frame was read at, and the outcomes its hydration reported.
   const scope = createLoadScope<BoardData>(EMPTY_FRAME);
+  const requestLog: string[] = [];
   let resolved: Location | null = null;
   // Folded group part paths: view state, survives refreshes of this
   // buffer (folds are never rewound by anything but their own act).
@@ -304,6 +313,14 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     },
     getSelection() {
       return selection;
+    },
+    followState() {
+      return {
+        armed: follow.running().armed,
+        task: follow.running().task,
+        address: followAddress === null ? null : formatLocation(followAddress),
+        requests: [...requestLog],
+      };
     },
   };
 
@@ -485,6 +502,8 @@ export function connectBoard(buffer: BufferAccess<BoardData>): InstrumentAttachm
     async request(address: Address): Promise<RefreshOutcome> {
       // Explicit opens AND trail restores arrive here. Follow refreshes
       // call load directly and do not end the interaction.
+      requestLog.push(formatLocation(address));
+      if (requestLog.length > 6) requestLog.shift();
       find.navigateAway();
       // Follow the asked bare address, never the pinned resolution.
       // An explicit open invalidates any in-flight poll immediately.

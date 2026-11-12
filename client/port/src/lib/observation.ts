@@ -91,6 +91,9 @@ export type PortObservation = {
    * zoom while open, null when closed (the temporary surface adds no
    * trail entry; the board beneath keeps its updates). */
   inspection: Readonly<{ part: string; zoom: number }> | null;
+  /** The board surface's follow state (the S15 diagnosis): whether
+   * the follow-current poll is armed and for which task. */
+  follow: Readonly<{ armed: boolean; task: number | null; address: string | null; requests: readonly string[] }> | null;
   /** The tasks surface's shown page (the pipeline): the rows with
    * their tasks and links, the label selection, and the groups'
    * titles. Null on every other surface. */
@@ -260,6 +263,7 @@ export function buildReadout(
     viewport: PortObservation["viewport"];
     copy: PortObservation["copy"];
     inspection: PortObservation["inspection"];
+    follow: PortObservation["follow"];
   }>,
 ): PortObservation {
   const { frame, status } = boardFrameOf(input.state);
@@ -289,6 +293,7 @@ export function buildReadout(
     find: input.surface === "board" ? findViewOf(input.state) : { open: false, query: "", count: 0, active: -1 },
     copy: input.copy,
     inspection: input.inspection,
+    follow: input.follow,
     tasks: input.surface === "tasks"
       ? tasksViewOf(tasksFrame, input.state)
       : null,

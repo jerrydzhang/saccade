@@ -25,6 +25,9 @@ export interface Follow {
   /** Begin following a bare address; replaces any earlier follow. */
   start(task: number): void;
   stop(): void;
+  /** Whether a follow poll is armed, and for which task (the S15
+   * diagnosis's readout surface). */
+  running(): { armed: boolean; task: number | null };
 }
 
 export function createFollow(deps: FollowDeps): Follow {
@@ -33,6 +36,7 @@ export function createFollow(deps: FollowDeps): Follow {
 
   function stop(): void {
     generation += 1;
+    armedTask = null;
     if (timer !== null) {
       deps.cancel(timer);
       timer = null;
@@ -62,12 +66,19 @@ export function createFollow(deps: FollowDeps): Follow {
     }
   }
 
+  let armedTask: number | null = null;
   return {
     start(task) {
       stop();
+      armedTask = task;
       arm(task, generation);
     },
     stop,
+    /** Whether a follow poll is armed, and for which task (the S15
+     * diagnosis's readout surface). */
+    running(): { armed: boolean; task: number | null } {
+      return { armed: armedTask !== null, task: armedTask };
+    },
   };
 }
 
