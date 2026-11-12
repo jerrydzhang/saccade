@@ -277,23 +277,6 @@ class WebDriver:
     def perform_actions(self, actions: list[dict]) -> None:
         self.request("POST", f"/session/{self.session}/actions", {"actions": actions})
 
-    def execute(self, script: str, args: list | None = None) -> object:
-        return self.request("POST", f"/session/{self.session}/execute/sync", {"script": script, "args": list(args or [])})
-
-    def perform_actions(self, actions: list[dict]) -> None:
-        self.request("POST", f"/session/{self.session}/actions", {"actions": actions})
-
-    def release_actions(self) -> None:
-        """Reset the input state table (W3C release actions): on this
-        WebKitWebDriver stack a pointer action wedges the table and
-        every later synthesized key loses its modifiers (':' lands as
-        ';', '@' as '2' - the t-36 typing diagnosis, proven by the
-        input-debug record: the first send_keys before any rightclick
-        delivered verbatim, the one after the fold's rightclick
-        diverged). Releasing after each pointer action restores the
-        synthesis."""
-        self.request("POST", f"/session/{self.session}/actions/release", {})
-
     def window_handles(self) -> list[str]:
         """All window/webview handles of the session (R5: the session
         lane's window surface rides the WebDriver handle list)."""
