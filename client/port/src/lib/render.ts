@@ -101,6 +101,26 @@ export function renderBoard(board: Board, hooks: RenderHooks): HTMLElement {
  * (chg-add, chg-mod, chg-del). Every block element carries the port's
  * structure attributes: data-port-part names the rendered part,
  * data-port-kind names its kind. */
+export function citationAttributes(source: {
+  task: string;
+  revision: number;
+  select?: string[] | null;
+}): Record<string, string> {
+  /** The data attributes a citation span carries: the source task,
+   * its revision, and - when the incorporation names one - the SELECT
+   * path, so hydration's link can open the citation ANCHORED at the
+   * named part. The select as display text alone loses the anchor
+   * (the S08 live finding: the arrival never unfolded the fold). */
+  const attributes: Record<string, string> = {
+    "data-cite-task": source.task,
+    "data-cite-revision": String(source.revision),
+  };
+  if (source.select && source.select.length > 0) {
+    attributes["data-cite-select"] = source.select.join("/");
+  }
+  return attributes;
+}
+
 export function renderBlock(block: Block, blockId: string, hooks: RenderHooks): HTMLElement {
   const element = renderBlockBody(block, blockId, hooks);
   element.setAttribute("data-port-part", blockId);
@@ -167,7 +187,12 @@ function renderBlockBody(block: Block, blockId: string, hooks: RenderHooks): HTM
       const select = block.source.select ? ` select ${block.source.select.join("/")}` : "";
       // The citation names its source as t-N@rK, the revision read
       // straight from the authored number; hydration turns it into a
-      // link to that revision.
+      // link to that revision. The SELECT path rides the span as an
+      // attribute, never as display text alone: hydration's link
+      // carries it (data-cite-select) so the citation activation can
+      // open anchored at the named part - without it the open is
+      // unanchored and a fold on the destination survives the arrival
+      // (the S08 live finding).
       div.append(
         el(
           "p",
@@ -177,8 +202,7 @@ function renderBlockBody(block: Block, blockId: string, hooks: RenderHooks): HTM
             "span",
             {
               class: "citation",
-              "data-cite-task": block.source.task,
-              "data-cite-revision": String(block.source.revision),
+              ...citationAttributes(block.source),
             },
             block.source.task,
           ),

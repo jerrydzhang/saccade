@@ -35,3 +35,26 @@ test("the colon join of a tracker machine is not a location", () => {
   // as a silent wrong open
   assert.equal(parseOpenSpec("tracker:seedtracker:t-0@r1"), null);
 });
+
+// The citation span's attributes (the S08 anchor finding): the select
+// path rides the span so hydration's link opens the citation anchored
+// at the named part - display text alone loses the anchor.
+import { citationAttributes } from "../src/lib/render.ts";
+
+test("a citation with a select carries it as a data attribute", () => {
+  assert.deepEqual(
+    citationAttributes({ task: "t-0", revision: 1, select: ["/content/0/group/content/0"] }),
+    {
+      "data-cite-task": "t-0",
+      "data-cite-revision": "1",
+      "data-cite-select": "/content/0/group/content/0",
+    },
+  );
+});
+
+test("a citation without a select carries no select attribute", () => {
+  assert.deepEqual(citationAttributes({ task: "t-2", revision: 3, select: null }), {
+    "data-cite-task": "t-2",
+    "data-cite-revision": "3",
+  });
+});
